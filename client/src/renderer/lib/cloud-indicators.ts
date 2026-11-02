@@ -27,6 +27,7 @@
 import { etn } from './etn.js';
 import { getQueryState, queryKeys, subscribeQuery } from './live/index.js';
 import { store } from '../state.js';
+import { t } from './i18n.js';
 
 /** Владелец видимого набора индикаторов: холст или дерево «Структур». */
 export type CloudIndicatorOwner = 'canvas' | 'structures';
@@ -107,22 +108,22 @@ function applyIndicators(id: string, info: IndicatorInfo): void {
       perm.textContent = '📝';
       perm.classList.remove('dim');
       perm.classList.add('active');
-      perm.title = 'Есть постоянный комментарий';
+      perm.title = t('cloud.hasPostoyannyyKommentariy');
     } else {
       // Explicitly dim: this may re-patch a previously active cell (the
       // permanent comment was deleted while the cloud stayed rendered).
       perm.classList.add('dim');
       perm.classList.remove('active');
-      perm.title = 'Постоянного комментария нет';
+      perm.title = t('cloud.postoyannogoKommentariyaNo');
     }
     chrono.textContent = `📅${info.chrono}`;
     chrono.classList.toggle('dim', info.chrono === 0);
     chrono.classList.toggle('active', info.chrono > 0);
-    chrono.title = `Хронологических комментариев: ${info.chrono}`;
+    chrono.title = t('cloud.hronologicheskihKommentariev', info.chrono);
     att.textContent = `📎${info.attachments}`;
     att.classList.toggle('dim', info.attachments === 0);
     att.classList.toggle('active', info.attachments > 0);
-    att.title = `Вложений: ${info.attachments}`;
+    att.title = t('cloud.attachments', info.attachments);
   }
 }
 

@@ -75,6 +75,7 @@ import {
 
 import { div, el } from './dom.js';
 import { buildUserMultiSelectWidget, buildUserSelectWidget } from './users.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Словарь операторов по виду значения (03-server-api.md §6.10)
@@ -94,50 +95,50 @@ import { buildUserMultiSelectWidget, buildUserSelectWidget } from './users.js';
  */
 export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropertyOp; label: string }>> = {
   text: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'contains', label: t('filter.label.contains') },
+    { op: 'eq', label: t('filter.label.equal') },
+    { op: 'in', label: t('filter.label.inList') },
+    { op: 'not_in', label: t('filter.label.notList') },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
   url: [
-    { op: 'contains', label: 'содержит' },
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'contains', label: t('filter.label.contains') },
+    { op: 'eq', label: t('filter.label.equal') },
+    { op: 'in', label: t('filter.label.inList') },
+    { op: 'not_in', label: t('filter.label.notList') },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
   date: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'eq', label: t('filter.label.equal') },
+    { op: 'gt', label: t('filter.label.greater') },
+    { op: 'lt', label: t('filter.label.less') },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
   number: [
-    { op: 'eq', label: 'равно' },
-    { op: 'gt', label: 'больше' },
-    { op: 'lt', label: 'меньше' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'eq', label: t('filter.label.equal') },
+    { op: 'gt', label: t('filter.label.greater') },
+    { op: 'lt', label: t('filter.label.less') },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
-  bool: [{ op: 'eq', label: 'равно' }],
+  bool: [{ op: 'eq', label: t('filter.label.equal') }],
   // Свойство-связь (0.8.1): значение хранится в рёбрах, не в property_values.
   // На сервере поддержан тот же набор, что у legacy `thought_ref` ниже.
   link: [
-    { op: 'eq', label: 'равно' },
-    { op: 'in', label: 'в списке' },
-    { op: 'not_in', label: 'не в списке' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'eq', label: t('filter.label.equal') },
+    { op: 'in', label: t('filter.label.inList') },
+    { op: 'not_in', label: t('filter.label.notList') },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
   // Legacy (миграция 040): таких свойств в живой БД не остаётся;
   // присутствие проверяется теми же кнопками «заполнено»/«не заполнено».
   thought_ref: [
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
   // Кросс-сетевая ссылка (задача 7849008a, требование 586ebe81):
   // отбор по хранимому адресу. eq/ne — точное совпадение; для наборов —
@@ -145,24 +146,24 @@ export const OPS_BY_TYPE: Record<PropertyValueType, Array<{ op: StructurePropert
   // адрес задан/не задан (ошибка 0e976df4: значение необязательное, пустую
   // ссылку иначе не отобрать — NULL не «не равно»).
   cross_network_ref: [
-    { op: 'eq', label: 'равно' },
-    { op: 'ne', label: 'не равно' },
-    { op: 'any_of', label: 'содержит любой из' },
-    { op: 'all_of', label: 'содержит все из' },
-    { op: 'none_of', label: 'не содержит ни одного из' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'eq', label: t('filter.label.equal') },
+    { op: 'ne', label: t('filter.label.notEqual') },
+    { op: 'any_of', label: t('filter.label.containsLyuboy') },
+    { op: 'all_of', label: t('filter.label.containsAll') },
+    { op: 'none_of', label: t('filter.notContainsNiOdnogo') },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
   // Ссылка на публикацию (0.11.1, задача f37b468d): отбор по id — та же
   // матрица, что у cross_network_ref, включая наличие значения (0e976df4).
   publication: [
-    { op: 'eq', label: 'равно' },
-    { op: 'ne', label: 'не равно' },
-    { op: 'any_of', label: 'содержит любой из' },
-    { op: 'all_of', label: 'содержит все из' },
-    { op: 'none_of', label: 'не содержит ни одного из' },
-    { op: 'not_empty', label: 'заполнено' },
-    { op: 'is_empty', label: 'не заполнено' },
+    { op: 'eq', label: t('filter.label.equal') },
+    { op: 'ne', label: t('filter.label.notEqual') },
+    { op: 'any_of', label: t('filter.label.containsLyuboy') },
+    { op: 'all_of', label: t('filter.label.containsAll') },
+    { op: 'none_of', label: t('filter.notContainsNiOdnogo') },
+    { op: 'not_empty', label: t('filter.label.zapolneno') },
+    { op: 'is_empty', label: t('filter.label.notZapolneno') },
   ],
 };
 
@@ -182,16 +183,16 @@ export interface FilterSortOption {
  * только исполнимое; исполнитель принимает всё, что здесь перечислено.
  */
 export const FILTER_SORTS: ReadonlyArray<FilterSortOption> = [
-  { v: 'alpha', label: 'по названию' },
-  { v: 'created', label: 'по дате создания' },
-  { v: 'viewed', label: 'по просмотру' },
-  { v: 'updated', label: 'по дате изменения' },
+  { v: 'alpha', label: t('filter.label.byTitle') },
+  { v: 'created', label: t('filter.label.byDateCreate') },
+  { v: 'viewed', label: t('filter.label.byProsmotru') },
+  { v: 'updated', label: t('filter.label.byDateChanges') },
 ];
 
 /** Единый набор направлений сортировки. */
 export const FILTER_ORDERS: ReadonlyArray<{ v: SortOrder; label: string }> = [
-  { v: 'asc', label: 'возрастание' },
-  { v: 'desc', label: 'убывание' },
+  { v: 'asc', label: t('filter.label.asc') },
+  { v: 'desc', label: t('filter.label.desc') },
 ];
 
 /** True — значение входит в единый набор сортировок конструктора. */
@@ -232,12 +233,12 @@ export function sortValueLabel(raw: string): string {
  * типа, панель «Хроники» и панель «Журнала активности» читают отсюда.
  */
 export const AUTHOR_OP_LABELS: Record<StructureAuthorOp, string> = {
-  eq: 'равен',
-  ne: 'не равен',
-  in: 'в списке',
-  not_in: 'не в списке',
-  empty: 'не заполнено',
-  not_empty: 'заполнено',
+  eq: t('filter.eq.equal'),
+  ne: t('filter.ne.notEqual'),
+  in: t('filter.label.inList'),
+  not_in: t('filter.label.notList'),
+  empty: t('filter.label.notZapolneno'),
+  not_empty: t('filter.label.zapolneno'),
 };
 
 // ---------------------------------------------------------------------------
@@ -679,41 +680,41 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   // «Ссылка на мысль по id» — служебная подпись вида условия, просочившаяся в
   // UI; значение пользователь указывает чип-полем мыслей, ID не видит
   // (решение заказчика 2026-10-14, задача a577875b).
-  id: 'Мысль',
-  type: 'Тип мысли',
-  link_type: 'Тип связи',
-  parents: 'Родители',
-  children: 'Потомки',
-  incoming_links: 'Есть входящие связи',
-  outgoing_links: 'Есть исходящие связи',
-  attachments: 'Есть вложения',
-  chronology: 'Есть дневниковые записи',
-  comment: 'Есть комментарий',
-  active: 'Актуальность',
-  trashed: 'Помечено на удаление',
-  keywords: 'Найти слова',
-  author: 'Автор',
-  editor: 'Редактор',
-  created_at: 'Дата создания',
-  updated_at: 'Дата изменения',
-  properties: 'Есть свойства',
-  targets: 'Цели записи',
-  record_time: 'Период записи',
-  record_title: 'Заголовок записи',
-  record_body: 'Текст записи',
-  record_author: 'Автор записи',
-  record_editor: 'Редактор записи',
-  occurred_at: 'Время события',
-  action: 'Тип действия',
-  entity_type: 'Вид сущности',
-  entity_title: 'Заголовок сущности',
-  entity_id: 'Сущность',
-  user: 'Автор события',
-  name: 'Имя вложения',
-  kind: 'Вид вложения',
-  mime_type: 'MIME-подтип',
-  owner: 'Владельцы',
-  size: 'Размер',
+  id: t('editor.thought'),
+  type: t('addDialog.label.typeThought'),
+  link_type: t('addDialog.label.typeLink'),
+  parents: t('filter.parents.parents'),
+  children: t('filter.children.children'),
+  incoming_links: t('canvas.hasIncomingLink'),
+  outgoing_links: t('canvas.hasOutgoingLink'),
+  attachments: t('filter.attachments.hasAttachments'),
+  chronology: t('filter.chronology.hasDnevnikovyeRecords'),
+  comment: t('filter.comment.hasKommentariy'),
+  active: t('filter.active.active'),
+  trashed: t('filter.trashed.markedDelete'),
+  keywords: t('filter.keywords.findSlova'),
+  author: t('filter.author.avtor'),
+  editor: t('filter.editor.editor'),
+  created_at: t('filter.created_at.dateCreate'),
+  updated_at: t('filter.updated_at.dateChanges'),
+  properties: t('filter.properties.hasProperties'),
+  targets: t('filter.targets.targetsRecords'),
+  record_time: t('filter.record_time.periodRecords'),
+  record_title: t('filter.record_title.titleRecords'),
+  record_body: t('filter.record_body.textRecords'),
+  record_author: t('filter.record_author.avtorRecords'),
+  record_editor: t('filter.record_editor.editorRecords'),
+  occurred_at: t('filter.occurred_at.timeEvents'),
+  action: t('filter.action.typeActions'),
+  entity_type: t('filter.entity_type.vidSuschnosti'),
+  entity_title: t('filter.entity_title.titleSuschnosti'),
+  entity_id: t('filter.entity_id.suschnost'),
+  user: t('filter.user.avtorEvents'),
+  name: t('filter.name.nameAttachments'),
+  kind: t('filter.kind.vidAttachments'),
+  mime_type: t('filter.mime_type.mimePodtip'),
+  owner: t('filter.owner.owners'),
+  size: t('filter.size.razmer'),
 };
 
 /** Данные сети, нужные для подписей строк (дерево отдаёт ту же структуру). */
@@ -853,7 +854,7 @@ export function buildAuthorConditionRow(opts: {
   row.append(opSelect);
 
   if (opts.op === 'empty' || opts.op === 'not_empty') {
-    row.append(el('span', 'author-cond-hint', 'значение не требуется'));
+    row.append(el('span', 'author-cond-hint', t('filter.valueNotTrebuetsya')));
     return row;
   }
   if (opts.op === 'in' || opts.op === 'not_in') {
@@ -2373,7 +2374,7 @@ export function validateFilterTree(
       if (current.op === 'not' && current.children.length !== 1) {
         issues.push({
           path,
-          message: `группа «не» обязана иметь ровно одного ребёнка (сейчас ${current.children.length})`,
+          message: t('filter.groupNotObyazanaImetRovnoOdnogo', current.children.length),
         });
       }
       current.children.forEach((child, index) => {
@@ -2385,12 +2386,12 @@ export function validateFilterTree(
     if (!operands.has(kind)) {
       issues.push({
         path,
-        message: `операнд «${kind}» недоступен в профиле «${profile}»`,
+        message: t('filter.operandUnavailableProfile', [kind, profile]),
       });
     } else if (!filterProfileOperators(profile, kind).includes(current.operator)) {
       issues.push({
         path,
-        message: `оператор «${current.operator}» недоступен для операнда «${kind}» в профиле «${profile}»`,
+        message: t('filter.operatorUnavailableOperandaProfile', [current.operator, kind, profile]),
       });
     }
     if (current.value.kind === 'subquery') {
@@ -2413,9 +2414,9 @@ function buildFilterAstSort(state: FilterCriteriaState): FilterAstSortKey[] {
 
 /** Пути замечаний профиля — для сообщения об отказе сборки. */
 function profileIssuesMessage(issues: FilterTreeIssue[], profile: FilterProfileId): string {
-  return `Отбор не соответствует профилю «${profile}»: ${issues
+  return t('filter.viewNotSootvetstvuetProfilyu', [profile, issues
     .map((issue) => `${issue.path}: ${issue.message}`)
-    .join('; ')}`;
+    .join('; ')]);
 }
 
 /**
@@ -2707,7 +2708,7 @@ export function applyLegacyHierarchyTraversal(tree: FilterTreeNode): void {
  * Сообщение о нечитаемом AST-теле определения (потеря при чтении).
  */
 const AST_UNREADABLE_MESSAGE =
-  'сохранённое определение отбора не читается (неизвестный операнд или оператор) — условия не показаны';
+  t('filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy');
 
 /**
  * Описания условий ПЛОСКОГО определения (`definition v1`), которые модель НЕ
@@ -2727,7 +2728,7 @@ function flatDefinitionLosses(
   const lost: string[] = [];
   if (def === null || def === undefined) return lost;
   if (typeof def !== 'object' || Array.isArray(def)) {
-    return ['сохранённое определение отбора повреждено и не читается'];
+    return [t('filter.sohranennoeOpredelenieViewPovrezhdenoNotChitaetsya')];
   }
   const rec = def as Record<string, unknown>;
   const conditions = rec['properties'];
@@ -2740,18 +2741,18 @@ function flatDefinitionLosses(
       const propertyId = entry?.['property_id'];
       const op = entry?.['op'];
       if (entry === null || typeof propertyId !== 'string' || typeof op !== 'string') {
-        lost.push('условие по свойству не распознано и отброшено');
+        lost.push(t('filter.conditionPropertyNotRaspoznanoOtbrosheno'));
         continue;
       }
       if (!registry.has(propertyId)) {
-        lost.push(`условие по свойству «${propertyId}» отброшено: свойства больше нет в сети`);
+        lost.push(t('filter.conditionPropertyOtbroshenoPropertiesGreaterNo', propertyId));
       }
     }
   }
   // Сортировка «по просмотру» ключа AST не имеет (см. FILTER_SORT_TO_AST_KEY) —
   // в редакторе не выражается. Сообщаем, чтобы ключ не терялся молча.
   if (rec['sort'] === 'viewed') {
-    lost.push('сортировка «по просмотру» в редакторе не выражается — ключ не показан');
+    lost.push(t('filter.sortProsmotruEditorNotVyrazhaetsyaKey'));
   }
   return lost;
 }
@@ -2864,27 +2865,27 @@ export const AST_OPERATOR_LABELS: Record<FilterAstOperator, string> = {
   // Тултипы операторов остаются полными словами (`AST_OPERATOR_DESCRIPTIONS`).
   eq: '=',
   ne: '≠',
-  contains: 'содержит',
-  not_contains: 'не содержит',
-  gt: 'больше',
-  gte: 'больше или равно',
-  lt: 'меньше',
-  lte: 'меньше или равно',
-  between: 'между',
-  not_between: 'не между',
-  in: 'в',
-  not_in: 'не в',
+  contains: t('filter.label.contains'),
+  not_contains: t('filter.not_contains.notContains'),
+  gt: t('filter.label.greater'),
+  gte: t('filter.gte.greaterEqual'),
+  lt: t('filter.label.less'),
+  lte: t('filter.lte.lessEqual'),
+  between: t('filter.between.between'),
+  not_between: t('filter.not_between.notBetween'),
+  in: t('filter.in.in'),
+  not_in: t('filter.not_in.not'),
   // Формулировки заказчика 2026-10-14 (ошибка 4258e694, п.7б).
-  any_of: 'любой из',
-  all_of: 'все из',
-  none_of: 'ни одного из',
-  is_empty: 'не заполнено',
-  not_empty: 'заполнено',
-  matches: 'есть слова',
-  in_hierarchy: 'в иерархии',
-  not_in_hierarchy: 'не в иерархии',
-  has: 'имеет свойство',
-  not_has: 'не имеет свойство',
+  any_of: t('filter.any_of.lyuboy'),
+  all_of: t('filter.all_of.all'),
+  none_of: t('filter.none_of.niOdnogo'),
+  is_empty: t('filter.label.notZapolneno'),
+  not_empty: t('filter.label.zapolneno'),
+  matches: t('filter.matches.hasSlova'),
+  in_hierarchy: t('filter.in_hierarchy.inIerarhii'),
+  not_in_hierarchy: t('filter.not_in_hierarchy.notIerarhii'),
+  has: t('filter.has.imeetProperty'),
+  not_has: t('filter.not_has.notImeetProperty'),
 };
 
 /** Подпись кода оператора AST (имя из словаря спецификации). */

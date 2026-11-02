@@ -810,7 +810,7 @@ export function createMarkdownField(opts: {
   view.tabIndex = -1;
   const area = div('md-field-area');
   area.tabIndex = -1;
-  area.setAttribute('aria-label', 'Текст комментария');
+  area.setAttribute('aria-label', t('markdownField.textKommentariya'));
 
   let currentMd = opts.md;
   let currentHtml = opts.html;
@@ -1102,7 +1102,7 @@ export function createMarkdownField(opts: {
     const idx = currentMd.indexOf(matchedText);
     if (idx === -1) {
       notice(
-        `Не удалось вставить ссылку: текст «${matchedText}» не найден в исходнике (изменён форматированием).`,
+        t('markdownField.notSucceededPasteLinkRefTextNot', matchedText),
       );
       return;
     }
@@ -1120,7 +1120,7 @@ export function createMarkdownField(opts: {
         showView();
       })
       .catch((err) => {
-        notice(`Не удалось сохранить ссылку: ${errText(err)}`, 'error');
+        notice(t('markdownField.notSucceededSaveLinkRef', errText(err)), 'error');
       });
   };
 
@@ -1589,7 +1589,7 @@ export function createMarkdownField(opts: {
       const template = opts.onInsertTemplate?.() ?? null;
       if (template !== null && template.trim() !== '') {
         extras.push(
-          menuAction('Вставить текст шаблона из типа мысли', () => {
+          menuAction(t('markdownField.pasteTextShablonaTypeThought'), () => {
             if (editor === null) return;
             if (area.classList.contains('hidden')) {
               // Поле в view-режиме: переключаем в edit и подставляем текст.
@@ -1996,7 +1996,7 @@ async function uploadAttachment(
   try {
     attachment = await etn.attachments.uploadFile(networkId, owner.ownerType, owner.ownerId, input);
   } catch {
-    notice('Не удалось добавить вложение.', 'error');
+    notice(t('attachments.notSucceededAddAttachment'), 'error');
     return null;
   }
   invalidateQueries(queryKeys.indicators(owner.ownerId));
@@ -2090,7 +2090,7 @@ async function insertResourceAt(
     }
     case 'file': {
       if (owner === undefined) {
-        notice('Не удалось вставить картинку: у поля нет владельца.');
+        notice(t('markdownField.notSucceededPasteImageFieldsNo'));
         return;
       }
       const source = result.source;
@@ -2154,7 +2154,7 @@ export function etnimgUrl(filePath: string): string {
 
 /** Markdown image alt text must not contain brackets. */
 function sanitizeAlt(text: string): string {
-  return text.replace(/[[\]]/g, '').trim() || 'изображение';
+  return text.replace(/[[\]]/g, '').trim() || t('markdownField.izobrazhenie');
 }
 
 /**

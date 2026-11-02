@@ -916,81 +916,81 @@ export function isRealtimeEvent(value: unknown): value is AnyRealtimeEvent {
 
 /** Russian one-word descriptions of realtime event types (status bar). */
 const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
-  'thought.created': 'создана мысль',
-  'thought.updated': 'изменена мысль',
-  'thought.deleted': 'удалена мысль',
-  'thought.reordered': 'изменён порядок мыслей',
-  'thought.properties.reordered': 'изменён порядок свойств',
-  'link.created': 'создана связь',
-  'link.updated': 'изменена связь',
-  'link.deleted': 'удалена связь',
-  'thought-type.created': 'создан тип мыслей',
-  'thought-type.updated': 'изменён тип мыслей',
-  'thought-type.deleted': 'удалён тип мыслей',
-  'link-type.created': 'создан тип связей',
-  'link-type.updated': 'изменён тип связей',
-  'link-type.deleted': 'удалён тип связей',
-  'property-definition.created': 'добавлено свойство типа',
-  'property-definition.updated': 'изменено свойство типа',
-  'property-definition.deleted': 'удалено свойство типа',
-  'property-registry.created': 'добавлено свойство',
-  'property-registry.updated': 'изменено свойство',
-  'property-registry.deleted': 'удалено свойство',
-  'comment.created': 'добавлен комментарий',
-  'comment.updated': 'изменён комментарий',
-  'comment.deleted': 'удалён комментарий',
-  'attachment.created': 'добавлено вложение',
-  'attachment.updated': 'изменено вложение',
-  'attachment.deleted': 'удалено вложение',
-  'attachment.owner.added': 'у вложения добавлен владелец',
-  'attachment.owner.removed': 'у вложения снят владелец',
-  'property-value.set': 'изменено свойство',
-  'property-value.deleted': 'удалено свойство',
-  'network.updated': 'изменена сеть',
-  'network.deleted': 'сеть удалена',
-  'member.added': 'добавлен участник сети',
-  'member.removed': 'участник покинул сеть',
-  'member.role_changed': 'изменена роль участника',
-  'presence.joined': 'участник подключился',
-  'presence.left': 'участник отключился',
-  'presence.focus_changed': 'участник сменил фокус',
-  'user-preference.updated': 'обновлены настройки',
-  'user-focus-preferences.updated': 'обновлена сортировка зон',
-  'user-focus-order.updated': 'обновлён порядок зоны',
-  'thought-view.updated': 'обновлён просмотр',
-  'saved-filter.created': 'сохранён отбор',
-  'saved-filter.updated': 'изменён отбор',
-  'saved-filter.deleted': 'удалён отбор',
-  'pinned-thoughts.updated': 'обновлены закреплённые',
-  'layer.merged': 'слит слой',
+  'thought.created': t('events.createdThought'),
+  'thought.updated': t('events.changedThought'),
+  'thought.deleted': t('events.deletedThought'),
+  'thought.reordered': t('events.changedOrderThoughts'),
+  'thought.properties.reordered': t('events.changedOrderProperties'),
+  'link.created': t('events.createdLink'),
+  'link.updated': t('events.changedLink'),
+  'link.deleted': t('events.deletedLink'),
+  'thought-type.created': t('events.createdTypeThoughts'),
+  'thought-type.updated': t('events.changedTypeThoughts'),
+  'thought-type.deleted': t('events.deletedTypeThoughts'),
+  'link-type.created': t('events.createdTypeLinks'),
+  'link-type.updated': t('events.changedTypeLinks'),
+  'link-type.deleted': t('events.deletedTypeLinks'),
+  'property-definition.created': t('events.addedPropertyType'),
+  'property-definition.updated': t('events.changedPropertyType'),
+  'property-definition.deleted': t('events.deletedPropertyType'),
+  'property-registry.created': t('events.addedProperty'),
+  'property-registry.updated': t('events.changedProperty'),
+  'property-registry.deleted': t('events.deletedProperty'),
+  'comment.created': t('events.addedKommentariy'),
+  'comment.updated': t('events.changedKommentariy'),
+  'comment.deleted': t('events.deletedKommentariy'),
+  'attachment.created': t('events.addedAttachment'),
+  'attachment.updated': t('events.changedAttachment'),
+  'attachment.deleted': t('events.deletedAttachment'),
+  'attachment.owner.added': t('events.uAttachmentsAddedOwner'),
+  'attachment.owner.removed': t('events.uAttachmentsUnsetOwner'),
+  'property-value.set': t('events.changedProperty'),
+  'property-value.deleted': t('events.deletedProperty'),
+  'network.updated': t('events.changedNetwork'),
+  'network.deleted': t('events.networkDeleted'),
+  'member.added': t('events.addedMemberNetwork'),
+  'member.removed': t('events.memberPokinulNetwork'),
+  'member.role_changed': t('events.changedRolMember'),
+  'presence.joined': t('events.memberPodklyuchilsya'),
+  'presence.left': t('events.memberOtklyuchilsya'),
+  'presence.focus_changed': t('events.memberSmenilFocus'),
+  'user-preference.updated': t('events.obnovlenySettings'),
+  'user-focus-preferences.updated': t('events.obnovlenaSortZon'),
+  'user-focus-order.updated': t('events.obnovlenOrderZony'),
+  'thought-view.updated': t('events.obnovlenProsmotr'),
+  'saved-filter.created': t('events.savedView'),
+  'saved-filter.updated': t('events.changedView'),
+  'saved-filter.deleted': t('events.deletedView'),
+  'pinned-thoughts.updated': t('events.obnovlenyZakreplennye'),
+  'layer.merged': t('events.mergedLayer'),
   // Object-lock indicators (task 2031df5e). Title is not used; clients show
   // holder's name in the card overlay, not in the status bar.
-  'edit.acquired': 'захвачен объект',
-  'edit.released': 'снят захват',
-  'edit.cleared': 'сброшен захват',
+  'edit.acquired': t('events.zahvachenObekt'),
+  'edit.released': t('events.unsetZahvat'),
+  'edit.cleared': t('events.sbroshenZahvat'),
   // Thought-type views (задача 65de7eaa) — отборы типов мыслей.
   // В статус-баре показываем только `run` (факт чтения/исполнения);
   // created/updated/deleted — это синхронизация набора кнопок на холсте,
   // отдельного уведомления не требуется.
-  'thought-type-view.created': 'добавлен отбор типа',
-  'thought-type-view.updated': 'изменён отбор типа',
-  'thought-type-view.deleted': 'удалён отбор типа',
-  'thought-type-view.run': 'исполнен отбор',
+  'thought-type-view.created': t('events.addedViewType'),
+  'thought-type-view.updated': t('events.changedViewType'),
+  'thought-type-view.deleted': t('events.deletedViewType'),
+  'thought-type-view.run': t('events.ispolnenView'),
   // Внетиповые отборы мысли (0.14.1, задача a28d444b) — те же правила.
-  'thought-custom-view.created': 'добавлен отбор мысли',
-  'thought-custom-view.updated': 'изменён отбор мысли',
-  'thought-custom-view.deleted': 'удалён отбор мысли',
-  'thought-custom-view.run': 'исполнен отбор',
+  'thought-custom-view.created': t('events.addedViewThought'),
+  'thought-custom-view.updated': t('events.changedViewThought'),
+  'thought-custom-view.deleted': t('events.deletedViewThought'),
+  'thought-custom-view.run': t('events.ispolnenView'),
   // Публикации и полки (0.11.1, задача c59ce742) — только строки статус-бара.
-  'publication.updated': 'изменена публикация',
-  'publication.order.reordered': 'изменён порядок публикации',
-  'publication.exclusions.changed': 'изменены исключения публикации',
-  'publication.rebuilt': 'публикация пересобрана',
-  'publication.trashed': 'публикация в корзине',
-  'publication.restored': 'публикация восстановлена',
-  'publication.purged': 'публикация удалена',
-  'shelf.updated': 'изменена полка',
-  'shelf.deleted': 'полка удалена',
+  'publication.updated': t('events.changedPublication'),
+  'publication.order.reordered': t('events.changedOrderPublication'),
+  'publication.exclusions.changed': t('events.changedIsklyucheniyaPublication'),
+  'publication.rebuilt': t('events.publicationPeresobrana'),
+  'publication.trashed': t('events.publicationTrash'),
+  'publication.restored': t('events.publicationRestored'),
+  'publication.purged': t('events.publicationDeleted'),
+  'shelf.updated': t('events.changedShelf'),
+  'shelf.deleted': t('events.shelfDeleted'),
 };
 
 /**
@@ -1019,7 +1019,7 @@ export function neighborsDirForEllipse(kind: 'top' | 'bottom'): 'parents' | 'chi
 /** Popup head text for the neighbours preview, direction-prefixed so the
  *  same thought's two ellipses read as two distinct lists. */
 export function neighborsPreviewHeading(dir: 'parents' | 'children', thoughtTitle: string): string {
-  return `${dir === 'parents' ? 'Входящие связи' : 'Исходящие связи'}: ${thoughtTitle}`;
+  return `${dir === 'parents' ? t('events.incomingLink') : t('events.outgoingLink')}: ${thoughtTitle}`;
 }
 
 /**
@@ -1340,10 +1340,10 @@ export function filterSavedByName<T extends { name: string }>(
  */
 export function duplicateFilterName(name: string, existingNames: readonly string[]): string {
   const taken = new Set(existingNames.map((n) => n.toLowerCase()));
-  const base = `${name} (копия)`;
+  const base = t('events.copy', name);
   if (!taken.has(base.toLowerCase())) return base;
   for (let i = 2; i < 1000; i += 1) {
-    const candidate = `${name} (копия ${i})`;
+    const candidate = t('events.copy2', [name, i]);
     if (!taken.has(candidate.toLowerCase())) return candidate;
   }
   return base;
@@ -1627,7 +1627,7 @@ export function resolveFocusFlightOrigin(
 // ---------------------------------------------------------------------------
 
 /** Единицы размера по возрастанию (байты → терабайты). */
-const FILE_SIZE_UNITS = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'] as const;
+const FILE_SIZE_UNITS = [t('events.b'), t('events.kb'), t('events.mb'), t('events.gb'), t('events.tb')] as const;
 
 /**
  * Форматирует размер в байтах как «<число> <единица>» с авто-выбором
@@ -1664,7 +1664,7 @@ export function formatFileSize(bytes: number): string {
 export const LAYER_MENU_LABEL_MAX = 32;
 
 /** Метка заголовка меню слоёв, когда слой сессии не выбран (основа). */
-export const LAYER_MENU_LABEL_FALLBACK = 'Основа';
+export const LAYER_MENU_LABEL_FALLBACK = t('events.base');
 
 /**
  * Полное имя слоя для тултипа кнопки-заголовка: имя слоя, а для основы —

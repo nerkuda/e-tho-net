@@ -76,7 +76,7 @@ describe('resolvePeriodInstants: время по ADR и непустой valid_t
 describe('вкладка «Дневник»: диалог даты/периода и шапка записи', () => {
   it('вкладка переименована в «Дневник» (требование 80b31f7a)', () => {
     const editorSrc = read(SRC.editor);
-    assert.ok(editorSrc.includes("title: 'Дневник'"), 'вкладка подписана «Дневник»');
+    assert.ok(editorSrc.includes("title: t('editor.title.dnevnik')"), 'вкладка подписана «Дневник»');
     assert.ok(!editorSrc.includes("title: 'Хроника'"), 'прежняя подпись «Хроника» убрана');
   });
 

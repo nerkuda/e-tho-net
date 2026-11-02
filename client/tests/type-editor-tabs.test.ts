@@ -213,7 +213,7 @@ describe('thought-type editor — tabs (задача b8301c16)', () => {
   it('views-tab объявляет заглушку «Отборы доступны только в Основе» и зовёт isInBaseLayer', () => {
     const src = readText(SOURCE_FILES.viewsTab);
     assert.ok(
-      src.includes('Отборы доступны только в Основе'),
+      src.includes("t('thoughtTypes.viewsDostupnyOnlyBase')"),
       'views-tab должен содержать текст заглушки для слоёв изменений',
     );
     assert.ok(

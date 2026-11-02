@@ -81,6 +81,7 @@ import { resolveWikiLinksInDom, searchLegacyWikiTarget } from '../editor/wiki-li
 import { currentScreenPair, isCurrentScreenPair, type ScreenPair } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
 import { imageOwnsCtrlPreview } from './zoom-anchor.js';
+import { t } from './i18n.js';
 
 /** Grace delay before closing the whole chain once the cursor leaves it, ms
  *  (task requirement: exactly 0.3 s — gives time to move the cursor into the
@@ -314,7 +315,7 @@ async function resolveChronoContent(trigger: HTMLElement): Promise<HoverPreviewC
       el(
         'div',
         'hp-chrono-dates',
-        `С ${fmtDate(entry.valid_from)} · По ${entry.valid_to === null ? '…' : fmtDate(entry.valid_to)}`,
+        t('hoverPreview.with', [fmtDate(entry.valid_from), entry.valid_to === null ? '…' : fmtDate(entry.valid_to)]),
       ),
     );
     const text = shortText(entry.body_md);
@@ -374,7 +375,7 @@ async function resolveAttachmentsContent(trigger: HTMLElement): Promise<HoverPre
     const meta =
       a.kind === 'url'
         ? (a.url ?? '')
-        : `${a.file_path ?? ''}${a.file_size !== null ? ` · ${a.file_size} Б` : ''}`;
+        : `${a.file_path ?? ''}${a.file_size !== null ? t('attachments.b', a.file_size) : ''}`;
     info.append(el('div', 'att-meta', meta));
     row.append(info);
     body.append(row);
@@ -695,7 +696,7 @@ async function resolveCrossNetworkThoughtContent(
   if (!net.accessible) {
     return {
       title: head,
-      body: crossNetworkUnavailableBody(net.name, 'Сеть недоступна — комментарий не прочитать.'),
+      body: crossNetworkUnavailableBody(net.name, t('hoverPreview.networkUnavailableKommentariyNotRead')),
     };
   }
   try {
@@ -703,7 +704,7 @@ async function resolveCrossNetworkThoughtContent(
   } catch {
     return {
       title: head,
-      body: crossNetworkUnavailableBody(net.name, 'Мысль недоступна в этой сети.'),
+      body: crossNetworkUnavailableBody(net.name, t('hoverPreview.thoughtUnavailableNetwork')),
     };
   }
   let comments: Comment[];
@@ -712,7 +713,7 @@ async function resolveCrossNetworkThoughtContent(
   } catch {
     return {
       title: head,
-      body: crossNetworkUnavailableBody(net.name, 'Не удалось прочитать комментарии этой сети.'),
+      body: crossNetworkUnavailableBody(net.name, t('hoverPreview.notSucceededReadKommentariiNetwork')),
     };
   }
   const permanent = comments.find((c) => c.kind === 'permanent');

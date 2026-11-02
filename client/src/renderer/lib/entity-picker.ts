@@ -783,7 +783,7 @@ export async function pickEntitiesModal(
       const renderChips = (): void => {
         chipsBox.replaceChildren();
         if (checked.size === 0) {
-          chipsBox.append(el('p', 'muted', 'Ничего не выбрано.'));
+          chipsBox.append(el('p', 'muted', t('entityPicker.nichegoNotSelected')));
           return;
         }
         for (const id of checked) {
@@ -1382,7 +1382,7 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
   const input = fieldInput({ extraClass: 'entity-chip-input' }) as HTMLInputElement;
   input.type = 'text';
   input.autocomplete = 'off';
-  input.placeholder = opts.placeholder ?? 'Добавить значение…';
+  input.placeholder = opts.placeholder ?? t('entityPicker.addValue');
   if (opts.inputTitle !== undefined) input.title = opts.inputTitle;
   if (opts.discardNotice !== undefined) {
     const message = opts.discardNotice;
@@ -1413,7 +1413,7 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     label: '✕',
     role: 'ghost',
     class: 'link-value-corner-btn',
-    title: 'Очистить значение',
+    title: t('valueEditor.clearValue'),
     onClick: () => {
       if (disabled || opts.getValues().length === 0) return;
       opts.onChange([]);
@@ -1602,8 +1602,8 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
     // (единый вид с полем значения свойства-связи, приёмка №2).
     const empty = opts.getValues().length === 0;
     input.placeholder = empty
-      ? (opts.placeholder ?? 'Добавить значение…')
-      : (opts.addPlaceholder ?? opts.placeholder ?? 'Добавить значение…');
+      ? (opts.placeholder ?? t('entityPicker.addValue'))
+      : (opts.addPlaceholder ?? opts.placeholder ?? t('entityPicker.addValue'));
     // Крестик очистки — только у ЗАПОЛНЕННОГО поля: у пустого значения
     // очищать нечего, а лишняя «×» рядом с приглашением читается как ошибка.
     clearBtn.hidden = empty;
@@ -1859,9 +1859,9 @@ export function normalizeParentTypeId(
 
 /** Заголовок диалога «…» по виду выбираемой сущности (см. {@link buildEntityCombo}). */
 const PICKER_TITLES: Record<Exclude<EntityKind, 'link-properties'>, string> = {
-  'thought-types': 'Выбрать тип мысли',
-  'link-types': 'Выбрать тип связи',
-  thoughts: 'Выбрать мысль',
+  'thought-types': t('entityPicker.selectTypeThought'),
+  'link-types': t('entityPicker.selectTypeLink'),
+  thoughts: t('entityPicker.thoughts.selectThought'),
   publications: t('publications.field.pickerTitle'),
 };
 
@@ -2215,7 +2215,7 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
         if (createName !== null) {
           entries.push({
             value: CREATE_ROW_ID,
-            label: `Создать новый „${createName}“`,
+            label: t('entityPicker.createNovyy', createName),
             create: true,
             indent: 0,
           });

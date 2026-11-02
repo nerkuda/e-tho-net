@@ -25,6 +25,7 @@ import {
   type ActivityActionFilter,
   type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
+import { t } from '../../lib/i18n.js';
 
 /** Подпись отброшенного миграцией условия: «Автор события — не заполнено». */
 function describeDroppedActivityCondition(leaf: FilterAstLeaf): string {
@@ -42,14 +43,14 @@ export const ENTITY_TYPE_OPTIONS: ReadonlyArray<{
   value: ActivityEntityType;
   label: string;
 }> = [
-  { value: 'thought', label: 'мысль' },
-  { value: 'link', label: 'связь' },
-  { value: 'thought_type', label: 'тип мысли' },
-  { value: 'link_type', label: 'тип связи' },
-  { value: 'property', label: 'свойство' },
-  { value: 'comment', label: 'комментарий' },
-  { value: 'attachment', label: 'вложение' },
-  { value: 'layer', label: 'слой' },
+  { value: 'thought', label: t('clipboard.thought') },
+  { value: 'link', label: t('clipboard.link') },
+  { value: 'thought_type', label: t('activity.label.typeThought') },
+  { value: 'link_type', label: t('activity.label.typeLink') },
+  { value: 'property', label: t('activity.label.property') },
+  { value: 'comment', label: t('filterForm.label.kommentariy') },
+  { value: 'attachment', label: t('activity.label.attachment') },
+  { value: 'layer', label: t('activity.label.layer') },
 ];
 
 /** Критерии отбора «Событий» — общая модель конструктора (профиль «события»). */

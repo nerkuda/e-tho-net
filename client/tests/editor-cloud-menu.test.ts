@@ -78,8 +78,8 @@ describe('меню облачка в редакторе — единый кон�
     const chip = functionBody(src, 'async function showLinkChipMenu(');
     assert.ok(
       chip.includes('await openThoughtCloudMenu(') &&
-        chip.includes("label: 'Удалить связь с мыслью'") &&
-        chip.includes("label: 'Поместить связь в корзину'"),
+        chip.includes("label: t('valueEditor.label.deleteLinkThought')") &&
+        chip.includes("label: t('valueEditor.label.pomestitLinkTrash')"),
       'the value chip menu = shared thought menu + «Удалить связь с мыслью» / «Поместить связь в корзину»',
     );
     assert.ok(
@@ -97,7 +97,7 @@ describe('меню облачка в редакторе — единый кон�
       'the editor chip opens the out-of-canvas facade (parent + network check inside)',
     );
     assert.ok(
-      helper.includes("openLabel: 'Открыть в редакторе'"),
+      helper.includes("openLabel: t('miniGraph.openLabel.openEditor')"),
       'in the editor the opener opens the thought in the editor, without moving the canvas focus',
     );
     assert.ok(helper.includes('focusHandler'), '«В фокус» comes from the shared builder');
@@ -128,8 +128,8 @@ describe('меню облачка в редакторе — единый кон�
     );
     const chip = functionBody(src, 'export function buildOutsideReadonlyEdgeChip(');
     assert.ok(
-      chip.includes("label: 'Удалить связь с мыслью'") &&
-        chip.includes("label: 'Поместить связь в корзину'") &&
+      chip.includes("label: t('valueEditor.label.deleteLinkThought')") &&
+        chip.includes("label: t('valueEditor.label.pomestitLinkTrash')") &&
         !chip.includes("label: 'Убрать из значения'"),
       '0d4f793a: the outside edge offers «Удалить связь с мыслью» / «Поместить связь в корзину»',
     );
@@ -151,7 +151,7 @@ describe('меню облачка в редакторе — единый кон�
       'no local copy of the sibling-parent chain in the local graph (task d8941b76)',
     );
     assert.ok(
-      menu.includes("openLabel: 'Открыть в редакторе'"),
+      menu.includes("openLabel: t('miniGraph.openLabel.openEditor')"),
       'opening does not move the canvas focus',
     );
     assert.ok(menu.includes('focusHandler'), '«В фокус» is available');

@@ -19,6 +19,7 @@ import type { Link, Thought } from '@etn/shared';
 
 import { buildMetadataBlock } from '../lib/metadata.js';
 import { registerTabContent, type EditorContext } from './editor.js';
+import { t } from '../lib/i18n.js';
 
 interface AuthorshipFields {
   id: string | null;
@@ -69,14 +70,14 @@ function buildMetadataTab(ctx: EditorContext): HTMLElement {
   // until the entity arrives.
   if (ctx.ownerType === 'thought') {
     if (ctx.thought === null) {
-      root.append(emptyState('Дождитесь загрузки мысли.'));
+      root.append(emptyState(t('metadataTab.waitLoadingThought')));
       return root;
     }
     root.append(buildMetadataBlock(thoughtFields(ctx.thought)));
     return root;
   }
   if (ctx.link === null) {
-    root.append(emptyState('Дождитесь загрузки связи.'));
+    root.append(emptyState(t('metadataTab.waitLoadingLink')));
     return root;
   }
   root.append(buildMetadataBlock(linkFields(ctx.link)));

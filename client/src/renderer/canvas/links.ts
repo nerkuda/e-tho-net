@@ -52,6 +52,7 @@ import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tre
 import { store } from '../state.js';
 import { findCloudAnywhere, getRef } from './canvas.js';
 import { showLinkContextMenu } from './context-menu.js';
+import { t } from '../lib/i18n.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -93,7 +94,7 @@ const TRASHED_STROKE = 'var(--link-default, #9aa3b2)';
 const TRASHED_DASH = '4 4';
 const TRASHED_OPACITY = '0.45';
 /** Суффикс подписи типа у помеченного ребра («входит в (в корзине)»). */
-const TRASHED_LABEL_SUFFIX = ' (в корзине)';
+const TRASHED_LABEL_SUFFIX = t('canvasLinks.inTrash');
 /**
  * Где на кривой живёт метка корзины (доля параметра Безье): НЕ в середине —
  * там подпись типа и бейдж-счётчик пачки, метка корзины их не перекрывает.
@@ -775,7 +776,7 @@ function drawVisualLine(
   if (trashed) {
     line.classList.add('link-trashed');
     const trashTitle = document.createElementNS(SVG_NS, 'title');
-    trashTitle.textContent = 'Связь в корзине';
+    trashTitle.textContent = t('canvasLinks.linkTrash');
     line.append(trashTitle);
   }
   // S11 (§10.3): mark bundles where at least one edge is overridden by the
@@ -797,8 +798,8 @@ function drawVisualLine(
       const holderName = resolveLockHolderName(lockRow.user_id) ?? lockRow.user_id;
       const title = document.createElementNS(SVG_NS, 'title');
       title.textContent = isOwn
-        ? 'Вы редактируете эту связь'
-        : `Редактирует ${holderName}`;
+        ? t('canvasLinks.youRedaktirueteEtuLink')
+        : t('canvas.redaktiruet', holderName);
       line.append(title);
       line.classList.add(isOwn ? 'link-locked-own' : 'link-locked-other');
     }
@@ -878,7 +879,7 @@ function drawTrashBadge(
   const badge = el('button', 'link-trash-badge');
   badge.type = 'button';
   badge.append(svgIcon('trash', Math.round(size * 0.55)));
-  setTooltip(badge, 'Связь в корзине — нажмите, чтобы восстановить');
+  setTooltip(badge, t('canvasLinks.linkTrashClickToRestore'));
   badge.addEventListener('click', (event) => {
     event.stopPropagation();
     const networkId = store.state.networkId;
@@ -1141,7 +1142,7 @@ function bundleTypeNames(bundle: Bundle): string {
     .map((edge) => {
       const type =
         edge.type_id !== null ? store.state.linkTypes.find((t) => t.id === edge.type_id) : undefined;
-      return type === undefined ? 'без типа' : `${type.name_forward} / ${type.name_reverse}`;
+      return type === undefined ? t('addDialog.placeholder.withoutType') : `${type.name_forward} / ${type.name_reverse}`;
     })
     .join(' · ');
 }
@@ -1154,7 +1155,7 @@ function showPopover(bundle: Bundle): void {
   // Trashed edge: the popover states it in words — the dimmed dashed line plus
   // the badge say «корзина», the text says it unambiguously (ошибка 355319d4).
   const trashed = bundleTrashed(bundle);
-  const title = bundleTypeNames(bundle) + (trashed ? ' · в корзине' : '');
+  const title = bundleTypeNames(bundle) + (trashed ? t('canvasLinks.inTrash2') : '');
   popover.append(el('div', 'link-popover-types', title));
   // Single-link bundles carry the Ctrl-hover preview marker for the link's
   // permanent comment (the engine shows nothing when it has none). A bundle of
@@ -1227,7 +1228,7 @@ async function onLineClick(bundle: Bundle, event: MouseEvent): Promise<void> {
     const type =
       edge.type_id !== null ? store.state.linkTypes.find((t) => t.id === edge.type_id) : undefined;
     return {
-      label: type?.name_forward ?? 'Связь без типа',
+      label: type?.name_forward ?? t('canvasLinks.linkWithoutType'),
       onClick: () => {
         void (async () => {
           if (opener === null) return;
@@ -1270,7 +1271,7 @@ function onLineContextMenu(bundle: Bundle, event: MouseEvent): void {
     const type =
       edge.type_id !== null ? store.state.linkTypes.find((t) => t.id === edge.type_id) : undefined;
     return {
-      label: type?.name_forward ?? 'Связь без типа',
+      label: type?.name_forward ?? t('canvasLinks.linkWithoutType'),
       onClick: () => showLinkContextMenu(event, edge.id),
     };
   });

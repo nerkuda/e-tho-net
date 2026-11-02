@@ -55,6 +55,7 @@ import { optionsSuggestSource, wireSuggest, type SuggestHandle } from './suggest
 import { iconButton, uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Контракт значения
@@ -231,26 +232,26 @@ export function canonicalGlobalToken(text: string): string {
  * по-прежнему принимает вводом, но не предлагает.
  */
 export const PERIOD_TOKEN_PRESETS: readonly { text: string; label: string }[] = [
-  { text: '$today', label: '$today — сегодня' },
-  { text: '$now', label: '$now — текущий момент' },
-  { text: '$today+1d', label: '$today+1d — завтра' },
-  { text: '$today-1d', label: '$today-1d — вчера' },
-  { text: '$weekStart', label: '$weekStart — начало недели' },
-  { text: '$weekEnd', label: '$weekEnd — конец недели' },
-  { text: '$weekStart-1w', label: '$weekStart-1w — начало прошлой недели' },
-  { text: '$weekStart+1w', label: '$weekStart+1w — начало будущей недели' },
-  { text: '$monthStart', label: '$monthStart — начало месяца' },
-  { text: '$monthEnd', label: '$monthEnd — конец месяца' },
-  { text: '$monthStart-1mo', label: '$monthStart-1mo — начало прошлого месяца' },
-  { text: '$monthEnd+1mo', label: '$monthEnd+1mo — конец будущего месяца' },
-  { text: '$yearStart', label: '$yearStart — начало года' },
-  { text: '$yearEnd', label: '$yearEnd — конец года' },
-  { text: '$yearStart-1y', label: '$yearStart-1y — начало прошлого года' },
-  { text: '$yearEnd+1y', label: '$yearEnd+1y — конец будущего года' },
-  { text: '$today+7d', label: '$today+7d — через неделю' },
-  { text: '$today-7d', label: '$today-7d — неделю назад' },
-  { text: '$today+30d', label: '$today+30d — через месяц' },
-  { text: '$today-30d', label: '$today-30d — месяц назад' },
+  { text: '$today', label: t('filterTokens.label.todaySegodnya') },
+  { text: '$now', label: t('filterTokens.label.nowCurrentMoment') },
+  { text: '$today+1d', label: t('periodEditor.label.today1dZavtra') },
+  { text: '$today-1d', label: t('periodEditor.label.today1dVchera') },
+  { text: '$weekStart', label: t('periodEditor.label.weekstartStartWeek') },
+  { text: '$weekEnd', label: t('periodEditor.label.weekendEndWeek') },
+  { text: '$weekStart-1w', label: t('periodEditor.weekstart1wStartProshloyWeek') },
+  { text: '$weekStart+1w', label: t('periodEditor.weekstart1wStartBuduscheyWeek') },
+  { text: '$monthStart', label: t('periodEditor.label.monthstartStartMonth') },
+  { text: '$monthEnd', label: t('periodEditor.label.monthendEndMonth') },
+  { text: '$monthStart-1mo', label: t('periodEditor.monthstart1moStartProshlogoMonth') },
+  { text: '$monthEnd+1mo', label: t('periodEditor.monthend1moEndBuduschegoMonth') },
+  { text: '$yearStart', label: t('periodEditor.label.yearstartStartYear') },
+  { text: '$yearEnd', label: t('periodEditor.label.yearendEndYear') },
+  { text: '$yearStart-1y', label: t('periodEditor.yearstart1yStartProshlogoYear') },
+  { text: '$yearEnd+1y', label: t('periodEditor.yearend1yEndBuduschegoYear') },
+  { text: '$today+7d', label: t('periodEditor.label.today7dViaWeek') },
+  { text: '$today-7d', label: t('periodEditor.label.today7dWeekBack') },
+  { text: '$today+30d', label: t('periodEditor.label.today30dViaMonth') },
+  { text: '$today-30d', label: t('periodEditor.label.today30dMonthBack') },
 ];
 
 /**
@@ -313,9 +314,7 @@ export function validatePeriodToken(text: string): string | null {
   if (!value.includes('$')) return null;
   if (isGlobalDateToken(value)) return null;
   return (
-    `«${value}» — не токен периода: доступны $today/$now, $weekStart/$weekEnd, ` +
-    '$monthStart/$monthEnd, $yearStart/$yearEnd и арифметика ±Nd/±Nw/±Nmo/±Ny ' +
-    '(легаси-написания с точкой принимаются; токены $thought.* требуют контекста мысли).'
+    t('periodEditor.notTokenPeriodDostupnyTodayNow', value)
   );
 }
 
@@ -484,8 +483,8 @@ export function formatPeriodLocalDisplay(fromRaw: string, toRaw: string): string
   const fromText = part(fromRaw);
   const toText = part(toRaw);
   if (fromText === '' && toText === '') return '';
-  if (fromText === '') return `по ${toText}`;
-  if (toText === '') return `с ${fromText}`;
+  if (fromText === '') return t('periodEditor.by', toText);
+  if (toText === '') return t('periodEditor.with', fromText);
   if (fromText === toText) return fromText;
   return `${fromText} - ${toText}`;
 }
@@ -550,11 +549,11 @@ function composeBound(bound: BoundState): string {
 function boundError(bound: BoundState, allowTokens: boolean): string | null {
   const text = bound.text.trim();
   if (text === '') return null;
-  if (text.includes('$') && !allowTokens) return 'Токены дат в этом поле отключены — укажите дату.';
+  if (text.includes('$') && !allowTokens) return t('periodEditor.tokensDatesFieldOtklyuchenyEnterDate');
   const tokenError = validatePeriodToken(text);
   if (tokenError !== null) return tokenError;
   if (parseBound(text).kind !== 'invalid') return null;
-  return `«${text}» — ожидается ГГГГ-ММ-ДД, полный ISO-инстанс или токен ($today/$now, границы недели/месяца/года ± арифметика).`;
+  return t('periodEditor.ozhidaetsyaGgggMmDdPolnyyIso', text);
 }
 
 // ---------------------------------------------------------------------------
@@ -600,17 +599,17 @@ const DIALOG_CLEAR_CLASS = 'pe-dialog-clear';
 /** Класс индикатора «Учитывать время». */
 const DIALOG_TIME_CLASS = 'pe-dialog-time';
 /** Подпись незаданного периода. */
-const DIALOG_PLACEHOLDER = 'Период не задан';
+const DIALOG_PLACEHOLDER = t('periodEditor.periodNotZadan');
 
 const MODE_ITEMS = [
-  { id: 'date', label: 'Дата' },
-  { id: 'datetime', label: 'Дата и время' },
-  { id: 'range', label: 'Диапазон' },
+  { id: 'date', label: t('datePeriod.label.date') },
+  { id: 'datetime', label: t('periodEditor.label.dateTime') },
+  { id: 'range', label: t('periodEditor.label.diapazon') },
 ] as const;
 
 const PANEL_MODE_ITEMS = [
-  { id: 'presets', label: 'Пресеты' },
-  { id: 'dates', label: 'Даты' },
+  { id: 'presets', label: t('periodEditor.label.presety') },
+  { id: 'dates', label: t('filterForm.dates') },
 ] as const;
 
 /**
@@ -620,22 +619,22 @@ const PANEL_MODE_ITEMS = [
  * единого языка; в поле показывается человекочитаемая подпись, не токен.
  */
 const PANEL_ANCHORS: readonly { id: string; label: string }[] = [
-  { id: '$today', label: 'сегодня' },
-  { id: '$now', label: 'сейчас' },
-  { id: '$weekStart', label: 'начало недели' },
-  { id: '$weekEnd', label: 'конец недели' },
-  { id: '$monthStart', label: 'начало месяца' },
-  { id: '$monthEnd', label: 'конец месяца' },
-  { id: '$yearStart', label: 'начало года' },
-  { id: '$yearEnd', label: 'конец года' },
+  { id: '$today', label: t('periodEditor.label.segodnya') },
+  { id: '$now', label: t('periodEditor.label.seychas') },
+  { id: '$weekStart', label: t('periodEditor.label.startWeek') },
+  { id: '$weekEnd', label: t('periodEditor.label.endWeek') },
+  { id: '$monthStart', label: t('periodEditor.label.startMonth') },
+  { id: '$monthEnd', label: t('periodEditor.label.endMonth') },
+  { id: '$yearStart', label: t('periodEditor.label.startYear') },
+  { id: '$yearEnd', label: t('periodEditor.label.endYear') },
 ];
 
 /** Единицы арифметики пресет-границы (код тока → краткая подпись). */
 const PANEL_UNITS: readonly { id: string; label: string }[] = [
-  { id: 'd', label: 'дн' },
-  { id: 'w', label: 'нед' },
-  { id: 'mo', label: 'мес' },
-  { id: 'y', label: 'лет' },
+  { id: 'd', label: t('filterValue.label.d') },
+  { id: 'w', label: t('filterValue.label.w') },
+  { id: 'mo', label: t('filterValue.label.mo') },
+  { id: 'y', label: t('periodEditor.label.years') },
 ];
 
 /** Разбор панельного токена на опору и арифметику. */
@@ -708,7 +707,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   if (panel) root.classList.add(PANEL_CLASS);
   if (dialog) root.classList.add(DIALOG_CLASS);
   root.setAttribute('role', 'group');
-  root.setAttribute('aria-label', opts.label ?? 'Период');
+  root.setAttribute('aria-label', opts.label ?? t('datePeriod.label.period'));
 
   let modes: ReturnType<typeof segmentedControl> | null = null;
   let panelModes: ReturnType<typeof segmentedControl> | null = null;
@@ -718,7 +717,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     modes = segmentedControl({
       items: MODE_ITEMS.map((m) => ({ id: m.id, label: m.label })),
       activeId: mode,
-      ariaLabel: 'Режим периода',
+      ariaLabel: t('periodEditor.ariaLabel.rezhimPeriod'),
       size: 's',
       onChange: (id) => {
         applyMode(id as PeriodMode, true);
@@ -730,7 +729,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       items: PANEL_MODE_ITEMS.map((m) => ({ id: m.id, label: m.label })),
       activeId: panelMode,
       extraClass: PANEL_MODE_CLASS,
-      ariaLabel: 'Режим периода: пресеты или даты',
+      ariaLabel: t('periodEditor.rezhimPeriodPresetyDates'),
       size: 's',
       onChange: (id) => {
         applyPanelMode(id as PeriodPanelMode);
@@ -811,7 +810,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     const input = fieldInput({
       extraClass: DATE_CLASS,
       value: bound.text,
-      placeholder: allowTokens ? 'ГГГГ-ММ-ДД или $today…' : 'ГГГГ-ММ-ДД',
+      placeholder: allowTokens ? t('periodEditor.ggggMmDdToday') : t('dateField.placeholder.ggggMmDd'),
       ariaLabel,
       disabled: opts.disabled === true,
     });
@@ -834,7 +833,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     input.addEventListener('blur', commit);
     if (allowTokens) {
       const handle = wireSuggest(input, {
-        sources: [optionsSuggestSource(tokenPresets, { header: 'Токены' })],
+        sources: [optionsSuggestSource(tokenPresets, { header: t('periodEditor.header.tokens') })],
         pickFirstOnEnter: false,
         onPick: (entry) => {
           input.value = entry.value;
@@ -869,11 +868,11 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
   const buildBound = (bound: BoundState, tag: string | null, ariaPrefix: string): HTMLElement => {
     const box = div(BOUND_CLASS);
     if (tag !== null) box.append(span(tag, TAG_CLASS));
-    box.append(buildDateField(bound, `${ariaPrefix} — дата`));
+    box.append(buildDateField(bound, t('periodEditor.date', ariaPrefix)));
     if (mode === 'datetime') {
-      box.append(buildTimeField(bound, `${ariaPrefix} — время`));
+      box.append(buildTimeField(bound, t('periodEditor.time', ariaPrefix)));
     } else if (mode === 'range') {
-      box.append(buildTimeField(bound, `${ariaPrefix} — время (необязательно)`));
+      box.append(buildTimeField(bound, t('periodEditor.timeOptional', ariaPrefix)));
     }
     const error = boundError(bound, allowTokens);
     if (error !== null) box.append(span(error, ERROR_CLASS));
@@ -922,7 +921,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       role: 'ghost',
       size: 's',
       class: DIALOG_VALUE_CLASS,
-      title: 'Изменить период',
+      title: t('periodEditor.title.editPeriod'),
       disabled: opts.disabled === true,
       onClick: openDialog,
     });
@@ -930,7 +929,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
 
     const clearBtn = iconButton({
       icon: svgIcon('x', 16),
-      title: 'Очистить период',
+      title: t('periodEditor.title.clearPeriod'),
       role: 'ghost',
       size: 's',
       class: DIALOG_CLEAR_CLASS,
@@ -939,7 +938,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     });
     clearBtn.hidden = empty;
 
-    const time = span('Учитывать время', DIALOG_TIME_CLASS);
+    const time = span(t('periodEditor.uchityvatTime'), DIALOG_TIME_CLASS);
     time.hidden = !hasTime;
 
     row.append(valueBtn, clearBtn, time);
@@ -960,18 +959,18 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     if (panel) {
       fields.append(
         panelMode === 'dates'
-          ? buildPanelDateBound(from, 'from', 'с', 'Начало')
-          : buildPanelPresetBound(from, 'с', 'Начало'),
+          ? buildPanelDateBound(from, 'from', t('admin.with'), t('periodEditor.start'))
+          : buildPanelPresetBound(from, t('admin.with'), t('periodEditor.start')),
         panelMode === 'dates'
-          ? buildPanelDateBound(to, 'to', 'по', 'Конец')
-          : buildPanelPresetBound(to, 'по', 'Конец'),
+          ? buildPanelDateBound(to, 'to', t('admin.by'), t('periodEditor.end'))
+          : buildPanelPresetBound(to, t('admin.by'), t('periodEditor.end')),
       );
       return;
     }
     if (mode === 'range') {
-      fields.append(buildBound(from, 'с', 'Начало'), buildBound(to, 'по', 'Конец'));
+      fields.append(buildBound(from, t('admin.with'), t('periodEditor.start')), buildBound(to, t('admin.by'), t('periodEditor.end')));
     } else {
-      fields.append(buildBound(from, null, 'Дата'));
+      fields.append(buildBound(from, null, t('datePeriod.label.date')));
     }
   };
 
@@ -994,7 +993,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     box.append(span(tag, TAG_CLASS));
     const field = dateField({
       value: dateOnly(bound.text),
-      ariaLabel: `${ariaPrefix} — дата`,
+      ariaLabel: t('periodEditor.date', ariaPrefix),
       disabled: opts.disabled === true,
       // Кнопка-календарь открывает диалог выбора даты/периода; диалог задаёт
       // ОБЕ границы, поле возвращает значение своей границы.
@@ -1063,7 +1062,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       extraClass: PRESET_ANCHOR_CLASS,
       readonly: true,
       value: composePanelLabel(parts),
-      ariaLabel: `${ariaPrefix} — базовый пресет`,
+      ariaLabel: t('periodEditor.bazovyyPreset', ariaPrefix),
       disabled: opts.disabled === true,
     });
     input.type = 'text';
@@ -1073,7 +1072,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
       type: 'number',
       extraClass: PRESET_NUM_CLASS,
       value: String(parts.n),
-      ariaLabel: `${ariaPrefix} — смещение (можно отрицательное)`,
+      ariaLabel: t('periodEditor.smeschenieCanOtricatelnoe', ariaPrefix),
       disabled: opts.disabled === true,
     });
     num.type = 'number';
@@ -1081,7 +1080,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
     num.step = '1';
 
     const unit = el('select', PRESET_UNIT_CLASS) as HTMLSelectElement;
-    unit.setAttribute('aria-label', `${ariaPrefix} — единица смещения`);
+    unit.setAttribute('aria-label', t('periodEditor.edinicaSmescheniya', ariaPrefix));
     for (const u of PANEL_UNITS) {
       const o = el('option', '', u.label) as HTMLOptionElement;
       o.value = u.id;
@@ -1109,7 +1108,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
         sources: [
           {
             when: 'always',
-            header: 'Базовые пресеты',
+            header: t('periodEditor.header.bazovyePresety'),
             load: () => PANEL_ANCHORS.map((a) => ({ value: a.id, label: a.label })),
           },
         ],
@@ -1125,7 +1124,7 @@ export function buildPeriodEditor(opts: PeriodEditorOptions): PeriodEditorHandle
 
     // Каретка ▾ — явное открытие полного списка (фокус открывает список сам).
     const caret = span('▾', PRESET_CARET_CLASS);
-    caret.setAttribute('title', 'Показать список пресетов');
+    caret.setAttribute('title', t('periodEditor.showListPresetov'));
     caret.addEventListener('mousedown', (event) => event.preventDefault());
     caret.addEventListener('click', () => handle?.open());
 

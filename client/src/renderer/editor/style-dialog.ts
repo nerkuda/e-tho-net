@@ -106,7 +106,7 @@ export function showThoughtStyleDialog(opts: {
   });
 
   const colorsRow = div('style-colors');
-  colorsRow.append(colorCaption('Текст', fgInput.picker), colorCaption('Фон', bgInput.picker));
+  colorsRow.append(colorCaption(t('styleDialog.text'), fgInput.picker), colorCaption(t('styleDialog.fon'), bgInput.picker));
   body.append(colorsRow);
 
   const toggles = div(TOGGLE_GROUP_CLASS);
@@ -132,17 +132,17 @@ export function showThoughtStyleDialog(opts: {
     });
     toggles.append(toggle.root);
   };
-  fontToggle('Ж', 'Жирный', resolved.bold, (v) => onApply({ font_bold: v }));
-  fontToggle('Н', 'Курсив', resolved.italic, (v) => onApply({ font_italic: v }));
-  fontToggle('П', 'Подчёркнутый', resolved.underline, (v) => onApply({ font_underline: v }));
-  fontToggle('З', 'Зачёркнутый', resolved.strike, (v) => onApply({ font_strike: v }));
+  fontToggle(t('styleDialog.zh'), t('styleDialog.zhirnyy'), resolved.bold, (v) => onApply({ font_bold: v }));
+  fontToggle(t('styleDialog.n'), t('styleDialog.kursiv'), resolved.italic, (v) => onApply({ font_italic: v }));
+  fontToggle(t('styleDialog.p'), t('styleDialog.podcherknutyy'), resolved.underline, (v) => onApply({ font_underline: v }));
+  fontToggle(t('styleDialog.z'), t('styleDialog.strikethrough'), resolved.strike, (v) => onApply({ font_strike: v }));
   body.append(toggles);
 
   let resetBtn: HTMLButtonElement | null = null;
   /** Отписка от кэша захватов; назначается после сборки диалога (нужен resetBtn). */
   let unbindLock: () => void = () => undefined;
   showDialog({
-    title: mode === 'type' ? 'Настройки типа мысли' : 'Настройки мысли',
+    title: mode === 'type' ? t('styleDialog.settingsTypeThought') : t('editor.settingsThought'),
     size: 'm',
     body,
     buttons: [
@@ -214,11 +214,11 @@ export function showLinkStyleDialog(opts: {
     value: resolved.color ?? '#5a6478',
     onChange: (hex) => void onApply({ color: hex }),
   });
-  body.append(colorCaption('Цвет линии', colorInput.picker));
+  body.append(colorCaption(t('styleDialog.cvetLinii'), colorInput.picker));
 
   const styleSelect = el('select', 'select-input');
   for (const s of LINK_STYLES) {
-    const option = el('option', undefined, s === 'solid' ? 'сплошная' : s === 'dashed' ? 'штрихи' : 'точки');
+    const option = el('option', undefined, s === 'solid' ? t('styleDialog.sploshnaya') : s === 'dashed' ? t('styleDialog.shtrihi') : t('styleDialog.tochki'));
     option.value = s;
     styleSelect.append(option);
   }
@@ -226,7 +226,7 @@ export function showLinkStyleDialog(opts: {
   styleSelect.addEventListener('change', () => {
     void onApply({ style: styleSelect.value as LinkStyle });
   });
-  body.append(colorCaption('Стиль', styleSelect));
+  body.append(colorCaption(t('styleDialog.stil'), styleSelect));
 
   const widthInput = fieldInput();
   widthInput.type = 'number';
@@ -241,13 +241,13 @@ export function showLinkStyleDialog(opts: {
       widthInput.value = String(resolved.width);
     }
   });
-  body.append(colorCaption('Толщина', widthInput));
+  body.append(colorCaption(t('styleDialog.tolschina'), widthInput));
 
   let resetBtn: HTMLButtonElement | null = null;
   /** Отписка от кэша захватов; назначается после сборки диалога (нужен resetBtn). */
   let unbindLock: () => void = () => undefined;
   showDialog({
-    title: mode === 'type' ? 'Настройки типа связи' : 'Настройки связи',
+    title: mode === 'type' ? t('styleDialog.settingsTypeLink') : t('styleDialog.settingsLink'),
     size: 'm',
     body,
     buttons: [

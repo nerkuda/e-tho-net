@@ -76,7 +76,7 @@ describe('поиск и копия сохранённых отборов (чис
 describe('строка сохранённых отборов (задача 2ebe4206)', () => {
   it('в строке: поле «имя отбора», дискета, крестик и многоточие', () => {
     const bar = readText(BAR_TS);
-    assert.match(bar, /placeholder = 'имя отбора'/, 'поле имени отбора');
+    assert.match(bar, /placeholder = t\('filterFooter\.placeholder\.nameView'\)/, 'поле имени отбора');
     assert.match(bar, /svgIcon\('save', 15\)/, 'кнопка-дискета «записать настройки отбора»');
     assert.match(bar, /svgIcon\('x', 15\)/, 'кнопка-крестик «удалить настройки отбора»');
     assert.match(bar, /class: 'sfb-more',\s*onClick: \(\) => openPicker\(\)/, 'кнопка с многоточием «выбрать отбор»');
@@ -95,24 +95,24 @@ describe('строка сохранённых отборов (задача 2ebe4
     );
     assert.match(bar, /await opts\.store\.update\(existing\.id, \{ definition \}\)/, 'занятое имя перезаписывает определение');
     assert.match(bar, /await opts\.store\.create\(name, definition\)/, 'свободное имя создаёт отбор');
-    assert.match(bar, /notice\('Введите имя отбора'\)/, 'пустое имя не записывается');
+    assert.match(bar, /notice\(t\('savedFilters\.enterNameView'\)\)/, 'пустое имя не записывается');
   });
 
   it('ошибка записи видна в UI: диалог ошибки, а не только консоль', () => {
     const bar = readText(BAR_TS);
     assert.match(
       bar,
-      /\} catch \(err\) \{\n\s*errorDialog\('Сохранить отбор', err\);\n\s*return;/,
+      /\} catch \(err\) \{\n\s*errorDialog\(t\('savedFilters\.saveView'\), err\);\n\s*return;/,
       'сбой create/update показывается диалогом «Сохранить отбор», а не глотается в консоль',
     );
-    assert.match(bar, /errorDialog\('Удалить отбор', err\)/, 'сбой удаления показывается диалогом');
-    assert.match(bar, /errorDialog\('Переименовать отбор', err\)/, 'сбой переименования показывается диалогом');
-    assert.match(bar, /errorDialog\('Скопировать отбор', err\)/, 'сбой копии показывается диалогом');
+    assert.match(bar, /errorDialog\(t\('savedFilters\.deleteView'\), err\)/, 'сбой удаления показывается диалогом');
+    assert.match(bar, /errorDialog\(t\('savedFilters\.pereimenovatView'\), err\)/, 'сбой переименования показывается диалогом');
+    assert.match(bar, /errorDialog\(t\('savedFilters\.copyView'\), err\)/, 'сбой копии показывается диалогом');
   });
 
   it('удаление подтверждается и снимает выбор', () => {
     const bar = readText(BAR_TS);
-    assert.match(bar, /await confirmDialog\(\s*'Удалить отбор',/, 'удаление требует подтверждения');
+    assert.match(bar, /await confirmDialog\(\s*t\('savedFilters\.deleteView'\),/, 'удаление требует подтверждения');
     assert.match(bar, /if \(opts\.selectedId\(\) === entry\.id\) opts\.setSelectedId\(null\)/, 'удалённый отбор снимает выбор');
   });
 });
@@ -220,7 +220,7 @@ describe('диалог выбора сохранённого отбора (за�
       /await opts\.store\.create\(copyName, entry\.definition\)/,
       'копия создаётся с определением исходного отбора',
     );
-    assert.match(bar, /promptDialog\('Переименовать отбор', 'Имя', entry\.name\)/, 'переименование через диалог ввода');
+    assert.match(bar, /promptDialog\(t\('savedFilters\.pereimenovatView'\), t\('savedFilters\.name'\), entry\.name\)/, 'переименование через диалог ввода');
   });
 
   it('после переименования/копии/удаления диалог перерисовывается на месте', () => {

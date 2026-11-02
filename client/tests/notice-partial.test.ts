@@ -100,12 +100,12 @@ test('сторож: все итоги со счётчиками проблем �
   );
   assert.match(
     read('src/renderer/trash.ts'),
-    /noticePartial\(`Удалено \$\{purged\}, осталось заблокировано \$\{skipped\}\.`, skipped\)/,
+    /noticePartial\(t\('trash\.deletedOstalosZablokirovano', \[purged, skipped\]\), skipped\)/,
     '«осталось заблокировано N» — частичный итог',
   );
   assert.match(
     read('src/renderer/screens/layer-thought-merge.ts'),
-    /noticePartial\(\s*`Слито мыслей[\s\S]*?result\.conflicts,/,
+    /noticePartial\(\s*t\('layerMerge\.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov'[\s\S]*?result\.conflicts,/,
     '«конфликтных блоков: N» — частичный итог',
   );
   assert.match(
@@ -125,7 +125,7 @@ test('сторож: все итоги со счётчиками проблем �
   );
   assert.match(
     read('src/renderer/editor/link-value-removal.ts'),
-    /Часть связей заблокирована и осталась в корзине\.', 'warning'\)/,
+    /t\('linkValueRemoval\.chastLinksZablokirovanaOstalasTrash'\), 'warning'\)/,
     'частичная блокировка рёбер — предупреждение',
   );
 });

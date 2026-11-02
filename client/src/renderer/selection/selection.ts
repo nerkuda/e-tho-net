@@ -114,20 +114,20 @@ export function mountSelection(selectionHost: HTMLElement): () => void {
   host.replaceChildren();
 
   const header = div('selection-header');
-  const title = span('Выделение', 'selection-title');
+  const title = span(t('selection.selection'), 'selection-title');
   const clearButton = uiButton({
     label: '✕',
     role: 'secondary',
     size: 's',
-    title: 'Очистить список',
+    title: t('addDialog.title.clearList'),
     onClick: () => clearSelection(),
   });
   header.append(title, clearButton);
   const menuBar = div('selection-menu');
   const menus: Array<[string, () => MenuItem[]]> = [
-    ['Выделение', buildSelectionMenu],
-    ['Действия', buildActionsMenu],
-    ['Свойства', buildPropertiesMenu],
+    [t('selection.selection'), buildSelectionMenu],
+    [t('selection.actions'), buildActionsMenu],
+    [t('editor.title.properties'), buildPropertiesMenu],
   ];
   for (const [label, build] of menus) {
     const btn = button(label, () => openMenuBelow(btn, build()), 'selection-menu-btn');
@@ -249,7 +249,7 @@ function render(): void {
     return;
   }
   const title = host.querySelector('.selection-title');
-  if (title !== null) title.textContent = `Выделение (${ids.length})`;
+  if (title !== null) title.textContent = t('selection.selection2', ids.length);
 
   // Точечное обновление по разнице: пропавшие строки убираются, существующие
   // переставляются, отсутствующие создаются, а изменившиеся (пришло новое имя
@@ -351,7 +351,7 @@ function buildRow(id: string, ref: ThoughtRef | null, title: string): HTMLElemen
     label: '✕',
     role: 'secondary',
     size: 's',
-    title: 'Убрать из выделения',
+    title: t('selection.title.removeSelection'),
     onClick: () => toggleSelection([id]),
   });
   // Keep the row click (focus) from firing alongside the removal.
@@ -552,20 +552,20 @@ function openMenuBelow(anchor: HTMLElement, items: MenuItem[]): void {
 function buildSelectionMenu(): MenuItem[] {
   return [
     {
-      label: 'Добавить подчиненные мысли',
+      label: t('selection.label.addPodchinennyeThought'),
       onClick: () => void addNeighborsOfAll('children'),
     },
     {
-      label: 'Добавить родительские мысли',
+      label: t('selection.label.addRoditelskieThought'),
       onClick: () => void addNeighborsOfAll('parents'),
     },
     {
-      label: 'Добавить мысль…',
+      label: t('selection.label.addThought'),
       onClick: () => void addPickedThought(),
     },
     MENU_SEPARATOR,
     {
-      label: 'Очистить список выделенных мыслей',
+      label: t('selection.label.clearListSelectionThoughts'),
       onClick: () => clearSelection(),
     },
   ];
@@ -584,12 +584,12 @@ function buildActionsMenu(): MenuItem[] {
     : store.state.selection.filter((id) => overridden.has(id));
   return [
     {
-      label: 'Скопировать мысли',
+      label: t('selection.label.copyThought'),
       disabled: !hasSelection,
       onClick: () => void copySelection(),
     },
     {
-      label: 'Слить в основу…',
+      label: t('selection.label.mergeBase'),
       disabled: mergeIds.length === 0,
       onClick: () =>
         openMergeDialog(
@@ -599,42 +599,42 @@ function buildActionsMenu(): MenuItem[] {
     },
     MENU_SEPARATOR,
     {
-      label: 'Добавить мысль в фокусе к родительским…',
+      label: t('selection.addThoughtFocusRoditelskim'),
       disabled: needFocus,
       onClick: () => void linkFocus('child'),
     },
     {
-      label: 'Сделать мысль в фокусе единственным родителем…',
+      label: t('selection.doThoughtFocusOnlyParent'),
       disabled: needFocus,
       onClick: () => void makeFocusOnlyParent(),
     },
     {
-      label: 'Добавить мысль в фокусе к подчиненным…',
+      label: t('selection.addThoughtFocusPodchinennym'),
       disabled: needFocus,
       onClick: () => void linkFocus('parent'),
     },
     {
-      label: 'Исключить мысль в фокусе из родителей',
+      label: t('selection.isklyuchitThoughtFocusParents'),
       disabled: needFocus,
       onClick: () => void unlinkFocus('child'),
     },
     {
-      label: 'Исключить мысль в фокусе из подчиненных',
+      label: t('selection.isklyuchitThoughtFocusPodchinennyh'),
       disabled: needFocus,
       onClick: () => void unlinkFocus('parent'),
     },
     MENU_SEPARATOR,
     {
-      label: 'Экспорт',
+      label: t('selection.label.export'),
       submenu: [
-        { label: 'zip-архив (.etnx)…', onClick: () => void runExport('etnx') },
+        { label: t('selection.label.zipArchiveEtnx'), onClick: () => void runExport('etnx') },
         { label: 'Markdown', onClick: () => void runExport('markdown') },
         { label: 'PDF', onClick: () => void runExport('pdf') },
         { label: 'HTML', onClick: () => void runExport('html') },
       ],
     },
     {
-      label: 'Импорт…',
+      label: t('contextMenu.import'),
       onClick: () => void runImport(),
     },
     MENU_SEPARATOR,
@@ -650,24 +650,24 @@ function buildActionsMenu(): MenuItem[] {
 function buildPropertiesMenu(): MenuItem[] {
   return [
     {
-      label: 'Пометить неактуальными',
+      label: t('selection.label.markNeaktualnymi'),
       onClick: () => void batch({ op: 'set_inactive', args: {} }),
     },
     {
-      label: 'Пометить актуальными',
+      label: t('selection.label.markAktualnymi'),
       onClick: () => void batch({ op: 'set_active', args: {} }),
     },
     MENU_SEPARATOR,
     {
-      label: 'Изменить настройки…',
+      label: t('selection.label.editSettings'),
       onClick: () => void openStyleDialog(),
     },
     {
-      label: 'Изменить тип мыслей…',
+      label: t('selection.label.editTypeThoughts'),
       onClick: () => void openTypeDialog(),
     },
     {
-      label: 'Изменить значение свойства…',
+      label: t('selection.label.editValueProperties'),
       onClick: () => showSelectionPropertiesDialog(store.state.selection),
     },
   ];
@@ -710,7 +710,7 @@ async function collectNeighbors(
     const neighbors = await etn.thoughts.neighbors(networkId, id, dir, 200);
     for (const neighbor of neighbors) out.push(neighbor.id);
   } catch (err) {
-    notice(`Не удалось получить соседей: ${errText(err)}`, 'error');
+    notice(t('selection.notSucceededPoluchitNeighbours', errText(err)), 'error');
   }
 }
 
@@ -752,23 +752,23 @@ export async function copySelection(): Promise<void> {
     );
     const valid = thoughts.filter((t): t is NonNullable<typeof t> => t !== null);
     if (valid.length === 0) {
-      notice('Не удалось получить мысли для копирования.', 'error');
+      notice(t('selection.notSucceededPoluchitThoughtKopirovaniya'), 'error');
       return;
     }
     const deps = makeSelectionSnapshotDeps(networkId);
     await buildMultiThoughtSnapshot(valid, deps);
-    notice(`Скопировано ${valid.length} ${pluraliseThoughtsRu(valid.length)}.`);
+    notice(t('selection.skopirovano', [valid.length, pluraliseThoughtsRu(valid.length)]));
   } catch (err) {
-    notice(`Не удалось скопировать: ${errText(err)}`, 'error');
+    notice(t('selection.notSucceededCopy', errText(err)), 'error');
   }
 }
 
 function pluraliseThoughtsRu(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'мысль';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'мысли';
-  return 'мыслей';
+  if (mod10 === 1 && mod100 !== 11) return t('clipboard.thought');
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return t('clipboard.thought2');
+  return t('clipboard.thoughts');
 }
 
 /** Build a SnapshotDeps bound to the selection panel / current network.
@@ -885,7 +885,7 @@ export function makeSelectionSnapshotDeps(networkId: string): SnapshotDeps {
 async function linkFocus(direction: 'parent' | 'child'): Promise<void> {
   const focusId = store.state.focus?.focused.id;
   if (focusId === undefined) return;
-  const linkTypeId = await pickLinkType('Тип связи с мыслью в фокусе');
+  const linkTypeId = await pickLinkType(t('selection.typeLinkThoughtFocus'));
   if (linkTypeId === undefined) return;
   await batch({
     op: 'link_to_focus',
@@ -956,19 +956,19 @@ async function makeFocusOnlyParent(): Promise<void> {
   if (focusId === undefined) return;
   const ids = store.state.selection;
   if (ids.length === 0) return;
-  const linkTypeId = await pickLinkType('Тип связи с мыслью в фокусе');
+  const linkTypeId = await pickLinkType(t('selection.typeLinkThoughtFocus'));
   if (linkTypeId === undefined) return;
   const focusTitle = store.state.focus?.focused.title ?? '';
   const confirmed = await confirmDialog(
-    'Сделать единственным родителем',
-    `У ${ids.length} выделенных мыслей будут удалены все входящие связи, кроме связи с мыслью «${focusTitle}». Продолжить?`,
+    t('selection.doOnlyParent'),
+    t('selection.uSelectionThoughtsWillDeletedAll', [ids.length, focusTitle]),
     true,
   );
   if (!confirmed) return;
   const networkId = requireNetworkId();
   const failed = await retypeFocusLinks(networkId, focusId, ids, linkTypeId);
   await batch({ op: 'set_only_parents', args: { parent_ids: [focusId], link_type_id: linkTypeId } });
-  if (failed > 0) notice(`Не удалось сменить тип связи у ${failed} мыслей.`, 'error');
+  if (failed > 0) notice(t('selection.notSucceededChangeTypeLinkThoughts', failed), 'error');
   scheduleRefresh();
 }
 
@@ -1029,7 +1029,7 @@ async function applyStyleToAll(patch: ThoughtStylePatch): Promise<boolean> {
   for (const id of ids) invalidateRef(id);
   scheduleRefresh();
   if (failed > 0) {
-    errorDialog('Настройки выделения', `Не удалось применить к ${failed} мыслям.`);
+    errorDialog(t('selection.settingsSelection'), t('selection.notSucceededApplyThoughts', failed));
   }
   return failed === 0;
 }
@@ -1069,16 +1069,16 @@ async function batch(input: {
   try {
     const result = await etn.thoughts.batch(networkId, { ids, op: input.op, args: input.args });
     if (result.failures.length > 0) {
-      notice(`Не удалось применить к ${result.failures.length} мыслям.`, 'error');
+      notice(t('selection.notSucceededApplyThoughts', result.failures.length), 'error');
     } else {
-      notice(`Применено к ${result.affected} мыслям.`);
+      notice(t('structures.primenenoThoughts', result.affected));
     }
     // The batch can change type/activity — refresh the cached refs so the
     // clouds repaint with the new icon/colours/dim state right away.
     for (const id of ids) invalidateRef(id);
     scheduleRefresh();
   } catch (err) {
-    errorDialog('Групповая операция', err);
+    errorDialog(t('selection.gruppovayaOperation'), err);
   }
 }
 
@@ -1124,10 +1124,10 @@ async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions):
       ...(options === undefined ? {} : { etnx: options }),
     };
     const { job_id } = await etn.system.export(networkId, payload);
-    notice(`Экспорт запущен (${job_id})…`);
+    notice(t('contextMenu.exportZapuschen', job_id));
     const job = await pollJob(job_id);
     if (job.status !== 'done') {
-      notice('Экспорт завершился с ошибкой.', 'error');
+      notice(t('contextMenu.exportZavershilsyaOshibkoy'), 'error');
       return;
     }
     const suggested =
@@ -1138,12 +1138,12 @@ async function runExport(format: ExportFormat, etnxOptions?: ExportEtnxOptions):
       targetPath,
     );
     if (result.error !== undefined) {
-      notice(`Не удалось сохранить файл: ${result.error}`, 'error');
+      notice(t('contextMenu.notSucceededSaveFile', result.error), 'error');
       return;
     }
-    notice(`Экспорт сохранён: ${result.saved_path}`);
+    notice(t('contextMenu.exportSaved', String(result.saved_path)));
   } catch (err) {
-    notice(`Экспорт не удался: ${errText(err)}`, 'error');
+    notice(t('contextMenu.exportNotSucceeded', errText(err)), 'error');
   }
 }
 
@@ -1171,19 +1171,19 @@ async function runImport(): Promise<void> {
   const focus = store.state.focus;
   const parentId = focus?.focused.id;
   if (parentId === undefined) {
-    notice('Сначала сфокусируйте мысль — она станет родителем импортированного графа.');
+    notice(t('selection.firstSfokusiruyteThoughtOnaStanetParent'));
     return;
   }
   let picked: Awaited<ReturnType<typeof etn.system.pickArchiveFile>>;
   try {
     picked = await etn.system.pickArchiveFile();
   } catch (err) {
-    notice(`Импорт не удался: ${errText(err)}`, 'error');
+    notice(t('contextMenu.importNotSucceeded', errText(err)), 'error');
     return;
   }
   if (picked.cancelled) return;
   if (picked.error !== undefined || picked.filePath === null) {
-    notice(`Импорт не удался: ${picked.error ?? 'файл не выбран'}`, 'error');
+    notice(t('contextMenu.importNotSucceeded', picked.error ?? t('contextMenu.fileNotSelected')), 'error');
     return;
   }
   const dialog = await showImportEtnxDialog(picked.filePath);
@@ -1197,16 +1197,15 @@ async function runImport(): Promise<void> {
     );
     if (result.cancelled) return;
     if (result.error !== undefined) {
-      notice(`Импорт не удался: ${result.error}`, 'error');
+      notice(t('contextMenu.importNotSucceeded', result.error), 'error');
       return;
     }
     const s = result.summary;
     notice(
-      `Импорт ${result.filename}: создано ${s.thoughts_created}, обновлено ${s.thoughts_updated}, ` +
-        `новых связей ${s.links_created}, вложений ${s.attachments_imported}.`,
+      t('contextMenu.importCreatedObnovlenoNovyhLinksAttachments', [result.filename, s.thoughts_created, s.thoughts_updated, s.links_created, s.attachments_imported]),
     );
   } catch (err) {
-    notice(`Импорт не удался: ${errText(err)}`, 'error');
+    notice(t('contextMenu.importNotSucceeded', errText(err)), 'error');
   }
 }
 

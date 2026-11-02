@@ -84,7 +84,7 @@ describe('скрываемость панели кнопкой (задача 2eb
     );
     assert.match(
       frame,
-      /visible \? 'Скрыть панель отбора' : 'Показать панель отбора'/,
+      /visible \? t\('filterPanel\.hidePanelView'\) : t\('filterPanel\.showPanelView'\)/,
       'подсказка кнопки зависит от состояния',
     );
     assert.match(frame, /const TOGGLE_CLASS = 'fp-toggle';/, 'кнопка живёт в классе каркаса');

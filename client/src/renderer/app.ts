@@ -106,6 +106,7 @@ import {
 } from './screens/tabs/tab-state.js';
 import { serverLabelOf, store, type WorkspaceView } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
+import { t } from './lib/i18n.js';
 
 /** Debounce for coalescing realtime-triggered refreshes, ms. */
 const REFRESH_DEBOUNCE_MS = 200;
@@ -757,7 +758,7 @@ export async function disconnect(): Promise<void> {
 /** The current network id, or throws (callers require an open network). */
 export function requireNetworkId(): string {
   const id = store.state.networkId;
-  if (id === null) throw new Error('Сеть не открыта.');
+  if (id === null) throw new Error(t('app.networkNotOpen'));
   return id;
 }
 
@@ -1214,7 +1215,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   if (targetId === null) {
-    notice('Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.');
+    notice(t('app.notSelectedThoughtKopirovaniyaSelectThought'));
     return;
   }
   const { buildSingleThoughtSnapshot } = await import('./canvas/clipboard.js');
@@ -1222,9 +1223,9 @@ async function globalCopy(targetId: string | null): Promise<void> {
     const thought = await etn.thoughts.get(networkId, targetId);
     const { makeSelectionSnapshotDeps } = await import('./selection/selection.js');
     await buildSingleThoughtSnapshot(thought, makeSelectionSnapshotDeps(networkId));
-    notice(`Скопировано: «${thought.title}»`);
+    notice(t('app.skopirovano', thought.title));
   } catch (err) {
-    errorDialog('Копировать', err);
+    errorDialog(t('listActions.copy'), err);
   }
 }
 
@@ -1236,7 +1237,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
  *  With multiple thoughts selected we fall back to the canvas focus. */
 async function globalPaste(targetId: string | null): Promise<void> {
   if (targetId === null) {
-    notice('Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.');
+    notice(t('app.notSelectedThoughtPasteKlikniteThought'));
     return;
   }
   const networkId = store.state.networkId;
@@ -1263,7 +1264,7 @@ async function globalPaste(targetId: string | null): Promise<void> {
   } catch (err) {
     // Clipboard read denied or unavailable — surface the error so the user
     // isn't left wondering why nothing happened.
-    notice(`Не удалось прочитать системный буфер: ${errText(err)}`, 'error');
+    notice(t('app.notSucceededReadSistemnyyBufer', errText(err)), 'error');
   }
 }
 

@@ -36,13 +36,13 @@ export function buildOnboarding(): HTMLElement {
     el(
       'p',
       'onboarding-sub',
-      'Self-hosted граф мыслей. Подключитесь к своему серверу ETN, чтобы начать.',
+      t('onboarding.selfHostedGraphThoughtsPodklyuchitesSvoemu'),
     ),
   );
 
   // --- saved profiles -------------------------------------------------------
   const profilesBox = div('profiles');
-  const profilesTitle = el('h2', 'profiles-title', 'Сохранённые серверы');
+  const profilesTitle = el('h2', 'profiles-title', t('onboarding.sohranennyeServery'));
   profilesTitle.hidden = true;
   const profileList = div('profile-list');
   const connectError = el('p', 'onboarding-error');
@@ -51,19 +51,19 @@ export function buildOnboarding(): HTMLElement {
   card.append(profilesBox);
 
   // --- new connection form ---------------------------------------------------
-  const formTitle = el('h2', 'form-title', 'Новое подключение');
+  const formTitle = el('h2', 'form-title', t('onboarding.novoePodklyuchenie'));
   const form = div('form-stack');
 
   const labelInput = fieldInput();
   labelInput.type = 'text';
-  labelInput.placeholder = 'Мой сервер (необязательно)';
-  const labelField = fieldRow({ label: 'Название', control: labelInput });
+  labelInput.placeholder = t('onboarding.moyServerOptional');
+  const labelField = fieldRow({ label: t('activity.name.title'), control: labelInput });
 
   const urlInput = fieldInput();
   urlInput.type = 'text';
   urlInput.placeholder = 'http://localhost:3000';
   urlInput.spellcheck = false;
-  const urlField = fieldRow({ label: 'Адрес сервера', control: urlInput });
+  const urlField = fieldRow({ label: t('onboarding.label.adresServer'), control: urlInput });
 
   const keyInput = fieldInput();
   keyInput.type = 'password';
@@ -73,7 +73,7 @@ export function buildOnboarding(): HTMLElement {
 
   const submitRow = div('form-row');
   const submit = uiButton({
-    label: 'Подключиться',
+    label: t('onboarding.label.podklyuchitsya'),
     role: 'primary',
     size: 'm',
     onClick: () => void submitForm(),
@@ -164,9 +164,9 @@ export function buildOnboarding(): HTMLElement {
   }): Promise<void> {
     const isCurrent = store.state.profileId === p.id;
     const msg = isCurrent
-      ? `Удалить сервер «${p.label}» (${p.baseUrl})? Активное подключение будет разорвано, локальные данные (вкладки, черновики, история) — удалены. Действие необратимо.`
-      : `Удалить сервер «${p.label}» (${p.baseUrl})? Локальные данные этого профиля будут удалены. Действие необратимо.`;
-    const ok = await confirmDialog('Удалить сохранённый сервер', msg, true);
+      ? t('onboarding.deleteServerAktivnoePodklyuchenieWillRazorvano', [p.label, p.baseUrl])
+      : t('onboarding.deleteServerLokalnyeDannyeThisProfilya', [p.label, p.baseUrl]);
+    const ok = await confirmDialog(t('onboarding.deleteSohranennyyServer'), msg, true);
     if (!ok) return;
     // Main disconnects first if the profile is active, then sweeps the row
     // and every per-profile table (ui_state, drafts, tabs, focus_history,
@@ -189,11 +189,11 @@ export function buildOnboarding(): HTMLElement {
     const baseUrl = urlInput.value.trim();
     const apiKey = keyInput.value.trim();
     if (!/^https?:\/\//i.test(baseUrl)) {
-      formError.textContent = 'Введите адрес сервера, например http://localhost:3000';
+      formError.textContent = t('onboarding.enterAdresServerNaprimerHttpLocalhost');
       return;
     }
     if (apiKey === '') {
-      formError.textContent = 'Введите API-key.';
+      formError.textContent = t('onboarding.enterApiKey');
       return;
     }
     submit.disabled = true;

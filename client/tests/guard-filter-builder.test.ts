@@ -378,7 +378,9 @@ const NO_SECOND_PHRASE_BUILDER = {
     '`composeFilterPhrase`.',
   pattern:
     /['"`]сортировка:|['"`](?:все условия|любое условие|в выборке|не в выборке|все в выборке)['"`]|^(?:export\s+)?const\s+GROUP_SEPARATOR\b/,
-  include: (rel: string) => rel !== PHRASE_MODULE,
+  // Словарь (`lib/locales/*`) хранит сами тексты — это не вторая сборка
+  // фразы, поэтому из правила исключён (задача 3c9f23dc).
+  include: (rel: string) => rel !== PHRASE_MODULE && !rel.startsWith('lib/locales/'),
   allow: (_rel: string, line: string) => isComment(line),
 };
 

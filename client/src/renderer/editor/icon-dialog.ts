@@ -322,7 +322,7 @@ export function showIconDialog(opts: {
   }
 
   pickerClose = createResourcePicker({
-    title: 'Иконка',
+    title: t('iconDialog.title.icon'),
     size: 'm',
     // Открытие на вкладке вида текущей иконки; без выбора — «Эмодзи».
     activeTab,
@@ -364,8 +364,8 @@ export function showIconDialog(opts: {
         onPick: (pick, ctx) => applyAttachmentPick(pick, ctx),
       }),
       urlSourceTab({
-        placeholder: 'URL изображения',
-        previewHint: 'Предпросмотр',
+        placeholder: t('iconDialog.placeholder.urlIzobrazheniya'),
+        previewHint: t('iconDialog.previewHint.preview'),
         ...(initialUrl !== undefined ? { initial: initialUrl } : {}),
         onApply: (url, ctx) => submit({ icon: url, kind: 'image', color: null })(ctx),
       }),

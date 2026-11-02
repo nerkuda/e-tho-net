@@ -176,19 +176,19 @@ import { FIELD_CLASS } from '../lib/ui/field.js';
 
 /** Human-readable property value-type labels. */
 const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
-  text: 'строка',
-  number: 'число',
-  date: 'дата',
-  bool: 'булево',
-  url: 'URL (сайт или файл)',
-  link: 'связь',
+  text: t('valueEditor.row'),
+  number: t('valueEditor.number'),
+  date: t('valueEditor.date'),
+  bool: t('typeManager.bool.bulevo'),
+  url: t('propertyList.url.urlSaytFile'),
+  link: t('clipboard.link'),
   // Legacy (миграция 040): в живой БД таких свойств не остаётся, но в
   // типах маркер оставлен для компиляции тестов и импорта архивов.
-  thought_ref: 'ссылка на мысль (legacy)',
+  thought_ref: t('typeManager.thought_ref.linkRefThoughtLegacy'),
   // Кросс-сетевая ссылка (задача 7849008a).
-  cross_network_ref: 'кросс-сетевая ссылка',
+  cross_network_ref: t('propertyList.cross_network_ref.krossSetevayaLinkRef'),
   // Ссылка на публикацию (0.11.1, задача f37b468d).
-  publication: 'публикация',
+  publication: t('propertyList.publication.publication'),
 };
 
 /** CSS-класс текущей (выделенной с клавиатуры) строки таблицы привязок. */
@@ -804,8 +804,8 @@ function buildParentPicker(opts: {
     options: optionRows,
     // Служебный корень иерархии — «без родителя», не вариант выбора.
     value: normalizeParentTypeId(value, rootId),
-    placeholder: 'без родителя',
-    emptyLabel: 'без родителя',
+    placeholder: t('typeManager.placeholder.withoutParent'),
+    emptyLabel: t('typeManager.placeholder.withoutParent'),
     expandAll: true,
     onChange,
   });
@@ -973,7 +973,7 @@ export function showThoughtTypeEditor(
 
   // Duplicate-name guard: type names are unique ignoring case (08-ui-spec.md
   // §8.4). The catalogue is loaded once on open; the server re-checks on apply.
-  const DUP_NAME_MSG = 'Тип с таким именем уже существует.';
+  const DUP_NAME_MSG = t('typeManager.typeTakimNameAlreadySuschestvuet');
   let allTypes: ThoughtType[] = [];
   let applyBtn: HTMLButtonElement | null = null;
   let saveBtn: HTMLButtonElement | null = null;
@@ -1017,7 +1017,7 @@ export function showThoughtTypeEditor(
   const topRow = div('editor-top-row');
   const iconBox = el('button', 'editor-icon-box') as HTMLButtonElement;
   iconBox.type = 'button';
-  setTooltip(iconBox, 'Иконка типа');
+  setTooltip(iconBox, t('typeManager.iconType'));
   const renderIcon = (): void => {
     applyThoughtIcon(iconBox, {
       icon: draft.icon,
@@ -1046,10 +1046,10 @@ export function showThoughtTypeEditor(
   nameInput.type = 'text';
   nameInput.value = draft.name;
   nameInput.maxLength = 200;
-  nameInput.placeholder = 'Название типа (обязательно)';
+  nameInput.placeholder = t('typeManager.titleTypeObyazatelno');
   const settingsBtn = iconButton({
     icon: svgIcon('settings', 14),
-    title: 'Настройки типа',
+    title: t('typeManager.title.settingsType'),
     onClick: openStyle,
   });
   topRow.append(iconBox, nameInput, settingsBtn);
@@ -1066,10 +1066,10 @@ export function showThoughtTypeEditor(
   // staged and re-checked by the server on apply (a type in use cannot be
   // reparented, no cycles, max 4 levels).
   const parentField = div(FIELD_CLASS);
-  const parentLabel = el('p', 'muted', 'Родитель (наследование свойств и стиля)');
+  const parentLabel = el('p', 'muted', t('typeManager.parentNasledovaniePropertiesStilya'));
   parentLabel.style.margin = '8px 0 2px';
   if (type?.is_root === true) {
-    const rootNote = el('p', 'muted', 'Корневой тип — родителя не имеет.');
+    const rootNote = el('p', 'muted', t('typeManager.kornevoyTypeParentNotImeet'));
     rootNote.style.margin = '0';
     parentField.append(rootNote);
   } else {
@@ -1095,7 +1095,7 @@ export function showThoughtTypeEditor(
   const descArea = fieldTextarea();
   descArea.value = draft.description;
   descArea.rows = 4;
-  descArea.placeholder = 'Комментарий: описание типа, правила применения…';
+  descArea.placeholder = t('typeManager.kommentariyDescriptionTypePravilaPrimeneniya');
   descArea.classList.add('type-editor-description');
   descriptionPane.append(descArea);
 
@@ -1185,7 +1185,7 @@ export function showThoughtTypeEditor(
     metadataBody.replaceChildren(
       current !== null
         ? buildMetadataRowsFromType(current)
-        : el('p', 'muted', 'id появится после первой записи типа.'),
+        : el('p', 'muted', t('typeManager.idPoyavitsyaAfterFirstRecordsType')),
     );
   }
   renderMetadataPane();
@@ -1278,7 +1278,7 @@ export function showThoughtTypeEditor(
     errorLine.clear();
     const name = nameInput.value.trim();
     if (name === '') {
-      errorLine.show('Название типа обязательно.', nameAddress());
+      errorLine.show(t('typeManager.titleTypeObyazatelno2'), nameAddress());
       return;
     }
     if (nameClash(name) !== null) {
@@ -1346,7 +1346,7 @@ export function showThoughtTypeEditor(
                   err.details.thoughts_count,
                 ))
               ) {
-                errorLine.show('Смена родителя отменена.');
+                errorLine.show(t('typeManager.changeParentOtmenena'));
                 return;
               }
               const reparentVersion = await readFreshTypeVersion(
@@ -1413,7 +1413,7 @@ export function showThoughtTypeEditor(
   /** Шапка диалога: «Новый тип мысли» пока тип не записан, дальше — «Тип мысли». */
   function syncDialogTitle(): void {
     if (dialogTitleEl === null) return;
-    dialogTitleEl.textContent = current === null ? 'Новый тип мысли' : 'Тип мысли';
+    dialogTitleEl.textContent = current === null ? t('typeManager.novyyTypeThought') : t('addDialog.label.typeThought');
   }
 
   function openStyle(): void {
@@ -1456,7 +1456,7 @@ export function showThoughtTypeEditor(
   // remove event — Esc, × and every footer button all land there).
   return new Promise<string | null>((resolve) => {
     showDialog({
-      title: type === null ? 'Новый тип мысли' : 'Тип мысли',
+      title: type === null ? t('typeManager.novyyTypeThought') : t('addDialog.label.typeThought'),
       size: 'l',
       // Постоянная шапка над вкладками: иконка · название · ⚙ и родитель
       // (ошибка 58807d03). Общая для всех вкладок — на «Свойствах» и
@@ -1975,7 +1975,7 @@ function buildStagedPropertySection(opts: {
       onOverrideApplied?.();
       await reload();
     } catch (err) {
-      errorDialog('Сбросить переопределение описания', err);
+      errorDialog(t('typeManager.resetOverrideDescription'), err);
     }
   }
 
@@ -2177,7 +2177,7 @@ function buildStagedPropertySection(opts: {
         openPropertyManagerEditor(reg, () => void reload());
       })
       .catch((err) => {
-        errorDialog('Править природу свойства', err);
+        errorDialog(t('typeManager.editNatureProperties'), err);
       });
   }
 
@@ -2185,9 +2185,8 @@ function buildStagedPropertySection(opts: {
    *  закрыть»). Values are NOT deleted — they become values-outside-type. */
   async function unbind(row: DraftProperty): Promise<void> {
     const ok = await confirmDialog(
-      'Отключить свойство',
-      `Отключить свойство «${row.key}» от типа? Значения останутся у мыслей и связей ` +
-        'и будут показаны в группе «Свойства вне типа».',
+      t('typeManager.otklyuchitProperty'),
+      t('typeManager.otklyuchitPropertyTypeValuesOstanutsyaThoughts', row.key),
       true,
     );
     if (!ok) return;
@@ -2213,12 +2212,12 @@ function buildStagedPropertySection(opts: {
     if (liveTypeId === null) {
       ownScroll.append(
         renderNewTypeHint({
-          message: 'Сохраните тип, чтобы добавлять свойства — у нового типа ещё нет id.',
+          message: t('typeManager.sohraniteTypeToDobavlyatPropertiesNovogo'),
           onSave,
         }),
       );
       inheritedScroll.append(
-        el('p', 'muted', 'Свойства появятся после сохранения типа.'),
+        el('p', 'muted', t('typeManager.propertiesPoyavyatsyaAfterSaveType')),
       );
       resetOwnRows();
       return;
@@ -2229,10 +2228,10 @@ function buildStagedPropertySection(opts: {
       const inhHead = el('thead');
       const inhHeadRow = el('tr');
       inhHeadRow.append(
-        el('th', undefined, 'Имя'),
-        el('th', undefined, 'Тип'),
-        el('th', undefined, 'Источник'),
-        el('th', undefined, 'По умолчанию'),
+        el('th', undefined, t('savedFilters.name')),
+        el('th', undefined, t('attachments.label.type')),
+        el('th', undefined, t('linksTab.istochnik')),
+        el('th', undefined, t('typeManager.byDefault')),
         el('th'),
       );
       inhHead.append(inhHeadRow);
@@ -2242,7 +2241,7 @@ function buildStagedPropertySection(opts: {
         const row = el('tr');
         const nameCell = el('td', undefined, def.key);
         const hint = def.mirrored === true
-          ? `Зеркальное свойство-связь: порождено свойством «${def.key}» другого типа через ограничение типов цели. Тип связи и направление не редактируются здесь.`
+          ? t('typeManager.zerkalnoePropertyLinkPorozhdenoPropertyDrugogo', def.key)
           : def.description;
         if (hint !== null) {
           setTooltip(nameCell, hint);
@@ -2251,7 +2250,7 @@ function buildStagedPropertySection(opts: {
         row.append(nameCell);
         row.append(el('td', 'muted', VALUE_TYPE_LABELS[def.value_type]));
         const sourceLabel = def.mirrored === true
-          ? `зеркало · ${def.defined_on_name}`
+          ? t('typeManager.zerkalo', def.defined_on_name)
           : def.defined_on_name;
         row.append(el('td', 'muted', sourceLabel));
         // Колонка «По умолчанию» — редактор дефолта привязки (0.8.2): без
@@ -2284,10 +2283,10 @@ function buildStagedPropertySection(opts: {
         if (liveTypeId !== null && def.mirrored !== true) {
           actions.append(
             uiButton({
-              label: 'описание…',
+              label: t('typeManager.label.description'),
               role: 'secondary',
               size: 's',
-              title: 'Переопределить описание свойства',
+              title: t('typeManager.title.pereopredelitDescriptionProperties'),
               onClick: () => showDescriptionOverrideDialog(def),
             }),
           );
@@ -2295,10 +2294,10 @@ function buildStagedPropertySection(opts: {
         if (liveTypeId !== null && def.description_overridden) {
           actions.append(
             uiButton({
-              label: 'сбросить ◆',
+              label: t('typeManager.label.reset'),
               role: 'secondary',
               size: 's',
-              title: 'Сбросить переопределение описания',
+              title: t('typeManager.resetOverrideDescription'),
               onClick: () => void clearDescriptionOverride(def),
             }),
           );
@@ -2309,18 +2308,18 @@ function buildStagedPropertySection(opts: {
       inhTable.append(inhBody);
       inheritedScroll.append(inhTable);
     } else {
-      inheritedScroll.append(el('p', 'muted', 'Унаследованных свойств нет.'));
+      inheritedScroll.append(el('p', 'muted', t('typeManager.unasledovannyhPropertiesNo')));
     }
 
     const table = el('table', 'table-list prop-table');
     const head = el('thead');
     const headRow = el('tr');
     headRow.append(
-      el('th', undefined, 'Имя'),
-      el('th', undefined, 'Тип'),
-      el('th', undefined, 'Сторона'),
-      el('th', undefined, 'Обязательное'),
-      el('th', undefined, 'По умолчанию'),
+      el('th', undefined, t('savedFilters.name')),
+      el('th', undefined, t('attachments.label.type')),
+      el('th', undefined, t('typeManager.storona')),
+      el('th', undefined, t('propertyManager.obyazatelnoe')),
+      el('th', undefined, t('typeManager.byDefault')),
       el('th'),
     );
     head.append(headRow);
@@ -2379,14 +2378,14 @@ function buildStagedPropertySection(opts: {
           label: '✎',
           role: 'secondary',
           size: 's',
-          title: 'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
+          title: t('typeManager.editNaturePropertiesNameTypeValues'),
           onClick: () => editNature(row),
         }),
         uiButton({
           label: '✕',
           role: 'secondary',
           size: 's',
-          title: 'Снять привязку свойства — значения не удаляются',
+          title: t('typeManager.unsetPrivyazkuPropertiesValuesNotDeleted'),
           onClick: () => void unbind(row),
         }),
       );
@@ -2398,7 +2397,7 @@ function buildStagedPropertySection(opts: {
     table.append(tbody);
     ownScroll.append(table);
     if (ownDraft.length === 0) {
-      ownScroll.append(el('p', 'muted', 'У типа нет собственных свойств.'));
+      ownScroll.append(el('p', 'muted', t('typeManager.uTypeNoSobstvennyhProperties')));
     }
     // После пересборки строк перепривязываем навигацию и row-reorder к новым
     // узлам (набор строк читается из `ownDraft` динамически).
@@ -2606,8 +2605,8 @@ function buildStagedPropertySection(opts: {
  *  списка «Добавить свойство»: «источник» / «назначение» / «—» (скаляры и
  *  структурные строки). */
 export function sideLabel(side: LinkPropertySide | null): string {
-  if (side === 'source') return 'источник';
-  if (side === 'target') return 'назначение';
+  if (side === 'source') return t('typeManager.istochnik');
+  if (side === 'target') return t('typeManager.naznachenie');
   return '—';
 }
 
@@ -2671,7 +2670,7 @@ async function openAttachDialog(opts: {
   try {
     registryRows = await etn.propertyRegistry.list(networkId);
   } catch (err) {
-    errorDialog('Добавить свойство', err);
+    errorDialog(t('properties.title.addProperty'), err);
     return null;
   }
   // Имена сторон берутся из каталога типов связей — догружаем недостающие,
@@ -2709,7 +2708,7 @@ async function openAttachDialog(opts: {
         editedTypeName,
       });
       if (warning !== null) {
-        const ok = await confirmDialog('Подключить свойство', warning, true);
+        const ok = await confirmDialog(t('typeManager.podklyuchitProperty'), warning, true);
         if (!ok) return;
       }
       close();
@@ -2741,7 +2740,7 @@ async function openAttachDialog(opts: {
     body.append(list.root);
 
     const close = showDialog({
-      title: 'Добавить свойство',
+      title: t('properties.title.addProperty'),
       body,
       size: 'l',
       // Высота стабильна: задана ролью, не содержимым списка (правило 9
@@ -2752,7 +2751,7 @@ async function openAttachDialog(opts: {
       buttons: [
         { label: t('actions.cancel') },
         {
-          label: 'Создать свойство',
+          label: t('typeManager.label.createProperty'),
           keepOpen: true,
           onClick: () => {
             openPropertyManagerEditor(
@@ -2764,7 +2763,7 @@ async function openAttachDialog(opts: {
           },
         },
         {
-          label: 'Выбрать',
+          label: t('actions.select'),
           primary: true,
           keepOpen: true,
           onClick: () => {
@@ -2854,22 +2853,19 @@ async function warnDescendantBindings(
   if (names.length === 0) return null;
   const nameList = names.map((n) => `«${n}»`).join(', ');
   return (
-    `Свойство «${row.name}» подключено к типам-потомкам ${nameList}. ` +
-    `Если подключить его к типу «${editedTypeName}», у потомков снимутся их собственные ` +
-    'подключения этого свойства (они станут наследовать его от вашего типа). ' +
-    'Значения свойств в мыслях и связях при этом не изменятся.'
+    t('typeManager.propertyConnectedTipamPotomkamPodklyuchitIts', [row.name, nameList, editedTypeName])
   );
 }
 
 /** Human-readable default value for a table cell. */
 function formatDefault(value: unknown): string {
   if (value === null || value === undefined) return '—';
-  if (typeof value === 'boolean') return value ? 'да' : 'нет';
+  if (typeof value === 'boolean') return value ? t('valueEditor.da') : t('valueEditor.no');
   if (Array.isArray(value)) {
     // Дефолт свойства-связи — набор целей (bb67e546): счётчик, подписи в
     // диалоге.
     const n = value.length;
-    const form = n % 10 === 1 && n % 100 !== 11 ? 'цель' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'цели' : 'целей';
+    const form = n % 10 === 1 && n % 100 !== 11 ? t('typeManager.target') : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? t('typeManager.targets') : t('typeManager.celey');
     return `${n} ${form}`;
   }
   return String(value);
@@ -2962,14 +2958,13 @@ function openDescriptionOverrideDialog(opts: {
   const area = fieldTextarea();
   area.value = def.description ?? '';
   area.rows = 5;
-  area.placeholder = 'Описание свойства для этого типа (пусто — наследуется от родителя)';
+  area.placeholder = t('typeManager.descriptionPropertiesThisTypeEmptyNasleduetsya');
 
   const body = div('form-stack');
   const hint = el(
     'p',
     'muted',
-    `Свойство «${def.key}» наследуется от типа «${def.defined_on_name}». ` +
-      'Здесь задаётся описание свойства только для этого типа (и его подчинённых, пока те не переопределят сами).',
+    t('typeManager.propertyNasleduetsyaTypeHereZadaetsyaDescription', [def.key, def.defined_on_name]),
   );
   hint.style.margin = '0';
   body.append(hint, area);
@@ -2993,7 +2988,7 @@ function openDescriptionOverrideDialog(opts: {
   }
 
   showDialog({
-    title: `Описание свойства — «${def.key}»`,
+    title: t('typeManager.descriptionProperties', def.key),
     body,
     size: 's',
     // Ошибка записи — в панели кнопок (требование 397c5a56).
@@ -3009,7 +3004,7 @@ function openDescriptionOverrideDialog(opts: {
       ...(def.description_overridden
         ? [
             {
-              label: 'Сбросить переопределение',
+              label: t('typeManager.label.resetOverride'),
               keepOpen: true,
               onClick: (close: () => void): void => {
                 void (async () => {
@@ -3095,12 +3090,9 @@ export async function confirmReparentImpactDialog(
   _currentParentId: string | null,
   thoughtsCount: number,
 ): Promise<boolean> {
-  const noun = thoughtsCount === 1 ? 'мысли' : thoughtsCount < 5 ? 'мыслей' : 'мыслей';
+  const noun = thoughtsCount === 1 ? t('clipboard.thought2') : thoughtsCount < 5 ? t('clipboard.thoughts') : t('clipboard.thoughts');
   const message =
-    `Смена родителя повлияет на ${thoughtsCount} ${noun}: у ${thoughtsCount === 1 ? 'неё' : 'них'} ` +
-    `изменится состав наследуемых свойств (появятся или исчезнут привязки), а переопределения ` +
-    `дефолтов и описаний могут стать висячими — значения сохранятся как «вне типа» и будут ` +
-    `видны только на чтение. Продолжить?`;
-  return confirmDialog('Смена родителя типа мысли', message);
+    t('typeManager.changeParentPovliyaetIzmenitsyaSostavNasleduemyh', [thoughtsCount, noun, thoughtsCount === 1 ? t('typeManager.nee') : t('typeManager.nih')]);
+  return confirmDialog(t('typeManager.changeParentTypeThought'), message);
 }
 

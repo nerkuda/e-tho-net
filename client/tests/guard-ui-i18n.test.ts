@@ -1,19 +1,27 @@
 /**
- * Сторож локализации (задача 57f09136, требование 0e5ff1c6 «Локализация: все
- * строки интерфейса — из словаря, с подстановками параметров»).
+ * Сторож локализации (задачи 57f09136, 3c9f23dc; требование 0e5ff1c6
+ * «Локализация: все строки интерфейса — из словаря, с подстановками
+ * параметров»).
  *
  * Правило: пользовательские строки берутся только из словаря (`lib/i18n.ts` +
  * каталоги `lib/locales/*`), а не пишутся литералами в разметке. Проверяются
  * три запрета/инварианта:
  *
- * 1. **Литералы в переведённых местах.** В `lib/ui/*`, `lib/dialog.ts` и в
- *    самом каркасе (`lib/i18n.ts`, `lib/lang.ts`) нет строковых литералов с
- *    кириллицей — только вызовы `t('…')`. Комментарии (в т.ч. JSDoc) не
- *    считаются: они не попадают в интерфейс.
- * 2. **Целостность словаря.** Каждый ключ из `t('…')` в исходниках рендерера
- *    есть в каталоге `ru` — опечатка не доедет до пользователя.
+ * 1. **Литералы в renderer.** Во всём `client/src/renderer` нет строковых
+ *    литералов с кириллицей — только вызовы `t('…')`/`tp('…')`. Границы
+ *    исключений минимальны и перечислены ниже.
+ * 2. **Целостность словаря.** Каждый ключ из `t('…')`/`tp('…')` в исходниках
+ *    рендерера есть в каталоге `ru` — опечатка не доедет до пользователя.
  * 3. **Полнота каталога.** У каждого ключа `ru` непустой русский текст —
  *    «перевод» не может остаться заглушкой.
+ *
+ * Исключения (только они и ничего больше):
+ * - `lib/locales/**` — сам словарь и тестовая локаль `zz`: там тексты и есть
+ *   содержимое;
+ * - строки-комментарии (`//`, `/*`, `*`) — в интерфейс не попадают;
+ * - строки с маркером `// i18n: technical` — технические сообщения: тексты
+ *   `throw new Error(…)` о контракте для разработчика и диагностика в
+ *   `console.*`. Пользовательская строка маркером не прикрывается.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -25,7 +33,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { assertGuardClean, listSourceFiles } from './guard-helpers.js';
-import { ru } from '../src/renderer/lib/locales/ru.js';
+import { ru, ruPlurals } from '../src/renderer/lib/locales/ru.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
@@ -33,46 +41,14 @@ const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 /** Строковый литерал, содержащий кириллицу. */
 const CYRILLIC_LITERAL = /['"`][^'"`\n]*[А-Яа-яЁё][^'"`\n]*['"`]/;
 
-/** Файлы, где пользовательских литералов быть не должно вовсе. */
-const TRANSLATED_FILES = (rel: string): boolean =>
-  rel.startsWith('lib/ui/') ||
-  // Подсистема «Публикации» (0.11.1, задача a3cfc018, замечание проверки):
-  // строки экрана и карточки — только из словаря.
-  rel.startsWith('screens/publications/') ||
-  rel === 'editor/publication-card.ts' ||
-  // Панель использования (спека f7623077, ошибка aca92904): новый экран и
-  // ссылка «Открыть использование…» из диалога удаления — строки только из
-  // словаря (требование 0e5ff1c6). Возврат литерала в диалог должен краснить.
-  rel === 'screens/usage-panel.ts' ||
-  // Статус-бар и черновики (de34b35b): новые строки статусов, подписей и
-  // уведомлений — только из словаря; возврат литерала обязан краснить.
-  rel === 'screens/workspace.ts' ||
-  rel === 'drafts.ts' ||
-  rel === 'lib/delete-dialog.ts' ||
-  rel === 'lib/dialog.ts' ||
-  // Текст отказа подключения к серверу (ошибка 390e9746): адрес, причины и
-  // формулировки — только из словаря; возврат литерала обязан краснить.
-  rel === 'lib/connect-failure.ts' ||
-  // Блокирующий диалог несовместимости и его причина (8623b9ff, 0afec967):
-  // все тексты — из словаря; литерал в диалоге обязан краснить.
-  rel === 'lib/compatibility-dialog.ts' ||
-  rel === 'lib/compatibility-reason.ts' ||
-  // Баннер рекомендованной версии (ed068706, задача b57910b5): тексты
-  // напоминания и нейтрального `unknown` — только из словаря.
-  rel === 'lib/update-banner.ts' ||
-  // Диалог обновления сервера (c9c96e5c, задача ca26c59d): версии, этапы,
-  // последствия запуска и ошибки — только из словаря; литерал обязан краснить.
-  rel === 'lib/server-update-dialog.ts' ||
-  rel === 'lib/server-update.ts' ||
-  // Полоса отборов и диалог отбора (0.14.1, задача c2bbffab): все подписи,
-  // меню, подтверждения и предупреждения — из словаря; литерал обязан краснить.
-  rel === 'canvas/focus-filter-strip.ts' ||
-  rel === 'screens/thought-type/filter-dialog.ts' ||
-  // Диалоги панели выделения (0.14.1, задача 6ebcd8d6): строки массового
-  // изменения значений — только из словаря; литерал обязан краснить.
-  rel === 'selection/dialogs.ts' ||
-  rel === 'lib/i18n.ts' ||
-  rel === 'lib/lang.ts';
+/** Маркер технической строки: осознанное исключение с обоснованием на месте. */
+const TECHNICAL_MARKER = 'i18n: technical';
+
+/**
+ * Область сканирования — весь renderer, кроме словаря и тестовой локали:
+ * их содержимое — сами тексты, а не разметка.
+ */
+const SCANNED_FILES = (rel: string): boolean => !rel.startsWith('lib/locales/');
 
 /** Комментарий (строчный, блочный или строка JSDoc) — не разметка. */
 function isCommentLine(line: string): boolean {
@@ -80,10 +56,10 @@ function isCommentLine(line: string): boolean {
   return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
 }
 
-/** Ключи, встречающиеся в коде как `t('ключ'…)` (комментарии не считаются). */
-function collectUsedKeys(): Map<string, string[]> {
+/** Ключи, встречающиеся в коде как `t('ключ'…)`/`tp('ключ'…)` (комментарии не считаются). */
+function collectUsedKeys(fn: 't' | 'tp'): Map<string, string[]> {
   const used = new Map<string, string[]>();
-  const call = /(?<![\w$.])t\(\s*'([^']+)'/g;
+  const call = new RegExp(`(?<![\\w$.])${fn}\\(\\s*'([^']+)'`, 'g');
   for (const abs of listSourceFiles(RENDERER_ROOT)) {
     const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
     if (rel.startsWith('lib/locales/')) continue; // сам словарь
@@ -101,30 +77,43 @@ function collectUsedKeys(): Map<string, string[]> {
   return used;
 }
 
-describe('guard: локализация lib/ui и каркаса диалога', () => {
-  it('в переведённых местах нет русских строковых литералов', () => {
+describe('guard: локализация renderer', () => {
+  it('в renderer нет русских строковых литералов вне словаря', () => {
     assertGuardClean(RENDERER_ROOT, [
       {
         name: 'no-russian-literals-outside-dictionary',
         description:
           'Пользовательские строки берутся из словаря `lib/i18n.ts` через ' +
-          "`t('ключ')`: в `lib/ui/*`, `lib/dialog.ts`, `lib/i18n.ts` и " +
-          '`lib/lang.ts` русских литералов в разметке нет (требование 0e5ff1c6).',
+          "`t('ключ')`/`tp('ключ')`: во всём `client/src/renderer`, кроме " +
+          '`lib/locales/**`, комментариев и строк с маркером ' +
+          '`// i18n: technical`, русских литералов в разметке нет ' +
+          '(требование 0e5ff1c6).',
         pattern: CYRILLIC_LITERAL,
-        include: TRANSLATED_FILES,
-        allow: (_rel, line) => isCommentLine(line),
+        include: SCANNED_FILES,
+        allow: (_rel, line) => isCommentLine(line) || line.includes(TECHNICAL_MARKER),
       },
     ]);
   });
 
   it('каждый ключ из t(…) есть в словаре ru', () => {
-    const missing = [...collectUsedKeys().keys()].filter(
+    const missing = [...collectUsedKeys('t').keys()].filter(
       (key) => !(key in ru),
     );
     assert.deepEqual(
       missing,
       [],
       `Ключи без строки в словаре ru: ${missing.join(', ')}`,
+    );
+  });
+
+  it('каждый ключ из tp(…) есть в каталоге форм ruPlurals', () => {
+    const missing = [...collectUsedKeys('tp').keys()].filter(
+      (key) => !(key in ruPlurals),
+    );
+    assert.deepEqual(
+      missing,
+      [],
+      `Ключи без форм в ruPlurals: ${missing.join(', ')}`,
     );
   });
 

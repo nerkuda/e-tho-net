@@ -141,15 +141,15 @@ async function renderUsers(content: HTMLElement): Promise<void> {
           const actions = div('admin-user-actions');
           actions.style.whiteSpace = 'nowrap';
           actions.append(
-            button('ключ', () => void generateKey(user), 'link-btn', 'Сгенерировать API-key'),
+            button(t('admin.key'), () => void generateKey(user), 'link-btn', t('admin.sgenerirovatApiKey')),
             span(' · '),
             button(
-              user.disabled ? 'включить' : 'отключить',
+              user.disabled ? t('admin.vklyuchit') : t('admin.otklyuchit'),
               () => void toggleDisabled(user),
               'link-btn',
             ),
             span(' · '),
-            button('удалить', () => void removeUserRow(user, content), 'link-btn'),
+            button(t('admin.delete'), () => void removeUserRow(user, content), 'link-btn'),
           );
           return actions;
         },
@@ -181,7 +181,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     label: t('admin.user.key'),
     role: 'secondary',
     size: 's',
-    title: 'Сгенерировать API-key текущему пользователю',
+    title: t('admin.title.sgenerirovatApiKeyTekuschemuUser'),
     disabled: true,
     onClick: () => {
       const user = currentUser();
@@ -192,7 +192,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     label: t('admin.user.disable'),
     role: 'secondary',
     size: 's',
-    title: 'Включить/отключить текущую учётную запись',
+    title: t('admin.title.vklyuchitOtklyuchitTekuschuyuUchetnuyuRecord'),
     disabled: true,
     onClick: () => {
       const user = currentUser();
@@ -203,7 +203,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     label: t('actions.delete'),
     role: 'secondary',
     size: 's',
-    title: 'Удалить текущего пользователя',
+    title: t('admin.title.deleteTekuschegoUser'),
     disabled: true,
     onClick: () => {
       const user = currentUser();
@@ -260,16 +260,16 @@ function addUserRow(): HTMLElement {
   box.style.marginTop = '10px';
   const usernameInput = fieldInput({ placeholder: 'username' });
   usernameInput.style.width = '160px';
-  const displayInput = fieldInput({ placeholder: 'Отображаемое имя' });
+  const displayInput = fieldInput({ placeholder: t('admin.placeholder.otobrazhaemoeName') });
   displayInput.style.width = '180px';
-  const admin = checkboxRow({ label: 'админ' });
+  const admin = checkboxRow({ label: t('admin.label.admin') });
   const adminCheck = admin.input;
   const adminLabel = admin.row;
   // «Добавить пользователя» is enabled only when `username` is non-empty
   // (08-ui-spec.md §10.1; the server rejects empty usernames with
   // VALIDATION_ERROR, so the button is useless until the field has a value).
   const submit = uiButton({
-    label: 'Добавить пользователя',
+    label: t('admin.label.addUser'),
     role: 'primary',
     size: 's',
     onClick: () => {
@@ -283,7 +283,7 @@ function addUserRow(): HTMLElement {
           showApiKey(result.apiKey);
           void renderUsers(contentOf(box));
         } catch (err) {
-          errorDialog('Добавить пользователя', err);
+          errorDialog(t('admin.label.addUser'), err);
         }
       })();
     },
@@ -310,21 +310,21 @@ async function generateKey(user: User): Promise<void> {
     type: 'number',
     min: 1,
     step: 1,
-    placeholder: 'серверный лимит',
+    placeholder: t('admin.placeholder.servernyyLimit'),
   });
   limitInput.style.width = '120px';
   const body = div('form-stack');
   const limitRow = div('hint-field');
-  limitRow.append(limitInput, span('пусто — серверный лимит', 'muted'));
-  body.append(fieldRow({ label: 'Лимит записи MCP (в мин.)', control: limitRow }));
+  limitRow.append(limitInput, span(t('admin.emptyServernyyLimit'), 'muted'));
+  body.append(fieldRow({ label: t('admin.limitRecordsMcpMin'), control: limitRow }));
   showDialog({
-    title: 'Сгенерировать API-key',
+    title: t('admin.sgenerirovatApiKey'),
     size: 's',
     body,
     buttons: [
       { label: t('actions.cancel') },
       {
-        label: 'Создать',
+        label: t('admin.label.create'),
         primary: true,
         keepOpen: true,
         onClick: (close) => {
@@ -333,7 +333,7 @@ async function generateKey(user: User): Promise<void> {
           if (raw !== '') {
             const n = Number(raw);
             if (!Number.isInteger(n) || n <= 0) {
-              errorDialog('Генерация ключа', new Error('Лимит должен быть положительным целым числом.'));
+              errorDialog(t('admin.generaciyaKey'), new Error(t('admin.limitMustBytPolozhitelnymCelymChislom')));
               return;
             }
             maxWritesPerMinute = n;
@@ -344,7 +344,7 @@ async function generateKey(user: User): Promise<void> {
               close();
               showApiKey(result.apiKey);
             } catch (err) {
-              errorDialog('Генерация ключа', err);
+              errorDialog(t('admin.generaciyaKey'), err);
             }
           })();
         },
@@ -360,7 +360,7 @@ function showApiKey(apiKey: string): void {
     el(
       'p',
       'dialog-text',
-      'Ключ показан один раз. Сохраните и передайте его пользователю — после закрытия он больше недоступен.',
+      t('admin.keyPokazanOdinRazSohranitePeredayte'),
     ),
   );
   const keyBox = div('api-key-box');
@@ -368,20 +368,20 @@ function showApiKey(apiKey: string): void {
   keyBox.append(code);
   keyBox.append(
     uiButton({
-      label: 'Копировать',
+      label: t('listActions.copy'),
       role: 'secondary',
       size: 's',
       onClick: () => {
         void navigator.clipboard.writeText(apiKey).then(
-          () => notice('Ключ скопирован.'),
-          () => notice('Не удалось скопировать ключ.'),
+          () => notice(t('admin.keySkopirovan')),
+          () => notice(t('admin.notSucceededCopyKey')),
         );
       },
     }),
   );
   box.append(keyBox);
   showDialog({
-    title: 'API-key (показан один раз)',
+    title: t('admin.title.apiKeyPokazanOdinRaz'),
     size: 'm',
     body: box,
     buttons: [{ label: t('actions.close'), primary: true }],
@@ -398,25 +398,25 @@ async function toggleDisabled(user: User): Promise<void> {
       { display_name: user.display_name, is_admin: user.is_admin, disabled: !user.disabled },
       1,
     );
-    notice('Учётная запись обновлена.');
+    notice(t('admin.uchetnayaRecordObnovlena'));
     // Re-render the list so the «включить»/«отключить» link and the
     // «Статус» cell reflect the new state (08-ui-spec.md §10.1).
     const content = document.querySelector<HTMLElement>('.admin-content');
     if (content !== null) void renderUsers(content);
   } catch (err) {
-    errorDialog('Изменить пользователя', err);
+    errorDialog(t('admin.editUser'), err);
   }
 }
 
 /** Deletes a user after confirmation. */
 async function removeUserRow(user: User, content: HTMLElement): Promise<void> {
-  if (!(await confirmDialog('Удалить пользователя', `Удалить «${user.username}»?`, true))) return;
+  if (!(await confirmDialog(t('admin.deleteUser'), t('admin.delete2', user.username), true))) return;
   try {
     await etn.admin.removeUser(user.id, 1);
-    notice('Пользователь удалён.');
+    notice(t('admin.userDeleted'));
     void renderUsers(content);
   } catch (err) {
-    errorDialog('Удалить пользователя', err);
+    errorDialog(t('admin.deleteUser'), err);
   }
 }
 
@@ -470,7 +470,7 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
         header: t('admin.col.actions'),
         width: '140px',
         render: (network) =>
-          button('удалить сеть', () => void removeNetworkRow(network, content), 'link-btn'),
+          button(t('admin.deleteNetwork'), () => void removeNetworkRow(network, content), 'link-btn'),
       },
     ],
     rows: [],
@@ -494,7 +494,7 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
     label: t('admin.network.delete'),
     role: 'secondary',
     size: 's',
-    title: 'Удалить текущую сеть',
+    title: t('admin.title.deleteTekuschuyuNetwork'),
     disabled: true,
     onClick: () => {
       const network = table.getCurrent()?.row ?? null;
@@ -536,16 +536,16 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
 /** Удаляет сеть после подтверждения и перерисовывает список. */
 async function removeNetworkRow(network: Network, content: HTMLElement): Promise<void> {
   if (
-    !(await confirmDialog('Удалить сеть', `Удалить сеть «${network.display_name}»?`, true))
+    !(await confirmDialog(t('admin.deleteNetwork2'), t('admin.deleteNetwork3', network.display_name), true))
   ) {
     return;
   }
   try {
     await etn.admin.removeNetwork(network.id);
-    notice('Сеть удалена.');
+    notice(t('admin.networkDeleted'));
     void renderNetworks(content);
   } catch (err) {
-    errorDialog('Удалить сеть', err);
+    errorDialog(t('admin.deleteNetwork2'), err);
   }
 }
 
@@ -562,7 +562,7 @@ function renderAudit(content: HTMLElement): void {
   filterRow.style.marginBottom = '8px';
   const categorySelect = el('select', 'select-input');
   categorySelect.style.width = '150px';
-  const categoryPlaceholder = el('option', undefined, 'Все категории');
+  const categoryPlaceholder = el('option', undefined, t('admin.allKategorii'));
   categoryPlaceholder.value = '';
   categorySelect.append(categoryPlaceholder);
   for (const category of ['auth', 'user', 'network', 'membership', 'data', 'system']) {
@@ -575,14 +575,14 @@ function renderAudit(content: HTMLElement): void {
   const toInput = fieldInput({ type: 'date' });
   toInput.style.width = '140px';
   filterRow.append(
-    span('Категория:'),
+    span(t('admin.kategoriya')),
     categorySelect,
-    span('с', undefined),
+    span(t('admin.with'), undefined),
     fromInput,
-    span('по', undefined),
+    span(t('admin.by'), undefined),
     toInput,
     uiButton({
-      label: 'Показать',
+      label: t('admin.label.show'),
       role: 'secondary',
       size: 's',
       onClick: () => void loadAudit(),
@@ -678,7 +678,7 @@ function renderAudit(content: HTMLElement): void {
     });
     tableWrap.replaceChildren(
       table.element,
-      el('p', 'faint', `Всего записей: ${loaded.length}`),
+      el('p', 'faint', t('admin.vsegoRecords', loaded.length)),
     );
     auditTable = table;
   }

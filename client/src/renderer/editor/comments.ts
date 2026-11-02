@@ -46,6 +46,7 @@ import { onReconnected, store } from '../state.js';
 import { registerMainSection, type EditorContext, type TabPaneLifecycle } from './editor.js';
 import { createMarkdownField, cancelMarkdownFieldEdit, disposeMarkdownField, setMarkdownField } from './markdown-field.js';
 import { registerChronoTab } from './chrono-tab.js';
+import { t } from '../lib/i18n.js';
 
 /** Reference to the currently mounted permanent-comment field, if any. */
 let mountedPermanent:
@@ -140,7 +141,7 @@ function wireCommentRealtime(): void {
 export function registerCommentSections(): void {
   registerMainSection((ctx, lifecycle) => ({
     id: 'permanent',
-    title: 'Комментарий',
+    title: t('comment.title.kommentariy'),
     buildBody: () => buildPermanentBody(ctx, lifecycle),
   }));
   registerChronoTab();
@@ -316,7 +317,7 @@ function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     field = createMarkdownField({
       md: permanent?.body_md ?? '',
       html: permanent?.body_html ?? '',
-      placeholder: 'Введите комментарий…',
+      placeholder: t('comment.placeholder.enterKommentariy'),
       // Чужой захват — правка не начинается: тост честно говорит «поля
       // заблокированы», и поле действительно не редактируется (ошибка
       // 132c80bd). Просмотр остаётся доступен — чтение не блокируется.

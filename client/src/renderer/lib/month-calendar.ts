@@ -45,11 +45,12 @@ import { modifierChordVariants } from './keymap-chords.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
+import { t } from './i18n.js';
 
 export { buildMonthWeeks } from './dates.js';
 export type { CalendarCell, CalendarWeek } from './dates.js';
 
-const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const WEEKDAYS = [t('calendar.pn'), t('calendar.vt'), t('calendar.sr'), t('calendar.cht'), t('calendar.pt'), t('calendar.sb'), t('calendar.vs')];
 
 /**
  * Подписи столбцов дней недели, начиная с первого дня недели сети
@@ -63,33 +64,33 @@ export function weekdayLabels(firstDayOfWeek = 1): string[] {
 }
 /** Полные названия месяцев для списка выбора (январь–декабрь). */
 const MONTHS = [
-  'Январь',
-  'Февраль',
-  'Март',
-  'Апрель',
-  'Май',
-  'Июнь',
-  'Июль',
-  'Август',
-  'Сентябрь',
-  'Октябрь',
-  'Ноябрь',
-  'Декабрь',
+  t('calendar.yanvar'),
+  t('calendar.fevral'),
+  t('calendar.mart'),
+  t('calendar.aprel'),
+  t('calendar.may'),
+  t('calendar.iyun'),
+  t('calendar.iyul'),
+  t('calendar.avgust'),
+  t('calendar.sentyabr'),
+  t('calendar.oktyabr'),
+  t('calendar.noyabr'),
+  t('calendar.dekabr'),
 ];
 /** Короткие подписи месяца в заголовке («сен 2026»). */
 const MONTHS_SHORT = [
-  'янв',
-  'фев',
-  'мар',
-  'апр',
-  'май',
-  'июн',
-  'июл',
-  'авг',
-  'сен',
-  'окт',
-  'ноя',
-  'дек',
+  t('calendar.yanv'),
+  t('calendar.fev'),
+  t('calendar.mar'),
+  t('calendar.apr'),
+  t('calendar.may2'),
+  t('calendar.iyun2'),
+  t('calendar.iyul2'),
+  t('calendar.avg'),
+  t('calendar.sen'),
+  t('calendar.okt'),
+  t('calendar.noya'),
+  t('calendar.dek'),
 ];
 
 /** Границы вводимого года. */
@@ -215,7 +216,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     label: '',
     role: 'ghost',
     size: 's',
-    title: 'Выбрать месяц',
+    title: t('calendar.title.selectMonth'),
     class: 'cal-month',
     onClick: () => toggleMonthList(),
   });
@@ -223,7 +224,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     label: '',
     role: 'ghost',
     size: 's',
-    title: 'Изменить год',
+    title: t('calendar.title.editYear'),
     class: 'cal-year',
     onClick: () => openYearInput(),
   });
@@ -235,7 +236,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     label: '‹',
     role: 'ghost',
     size: 's',
-    title: 'Предыдущий месяц',
+    title: t('calendar.title.predyduschiyMonth'),
     class: 'cal-nav cal-prev',
     onClick: () => shiftMonth(-1),
   });
@@ -243,7 +244,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     label: '○',
     role: 'ghost',
     size: 's',
-    title: 'Перейти к текущей дате',
+    title: t('calendar.title.pereytiTekuscheyDate'),
     class: 'cal-today',
     onClick: () => goToday(),
   });
@@ -251,7 +252,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     label: '›',
     role: 'ghost',
     size: 's',
-    title: 'Следующий месяц',
+    title: t('calendar.title.sleduyuschiyMonth'),
     class: 'cal-nav cal-next',
     onClick: () => shiftMonth(1),
   });
@@ -260,8 +261,8 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   const yearInput = fieldInput({
     type: 'number',
     extraClass: 'cal-year-input',
-    ariaLabel: 'Год',
-    title: 'Год',
+    ariaLabel: t('calendar.ariaLabel.year'),
+    title: t('calendar.ariaLabel.year'),
     min: MIN_YEAR,
     max: MAX_YEAR,
   });
@@ -364,7 +365,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     if (Date.now() - monthPopoverClosedAt < MONTH_REOPEN_GUARD_MS) return;
     monthPopover = openPopover({
       anchor: { element: monthBtn },
-      content: { title: 'Месяц', body: buildMonthList() },
+      content: { title: t('calendar.title.month'), body: buildMonthList() },
       extraClass: 'cal-months-popover',
       onClose: () => {
         monthPopover = null;
@@ -584,7 +585,7 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
             label: String(week.week),
             role: 'ghost',
             size: 's',
-            title: `Неделя ${week.week}: ${week.days[0]!.day} — ${week.days[6]!.day}`,
+            title: t('calendar.week', [week.week, week.days[0]!.day, week.days[6]!.day]),
             class: 'cal-week',
             onClick: () => opts.onPickWeek?.(week.days[0]!.day),
           }),

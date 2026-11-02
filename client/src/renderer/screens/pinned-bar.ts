@@ -58,6 +58,7 @@ import { pinAt } from '../pinned/pins.js';
 import { getRtStatus, store } from '../state.js';
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
+import { t } from '../lib/i18n.js';
 
 let host: HTMLElement | null = null;
 /** Signature of the inputs the panel depends on — avoids redundant re-renders. */
@@ -204,7 +205,7 @@ async function render(): Promise<void> {
     const empty = div('pinned-empty');
     empty.append(
       span('📌', 'pinned-empty-icon'),
-      span(pins.length === 0 ? 'закрепите мысль' : 'закреплённые скрыты', 'pinned-empty-label'),
+      span(pins.length === 0 ? t('pinned.zakrepiteThought') : t('pinned.zakreplennyeSkryty'), 'pinned-empty-label'),
     );
     host.append(empty);
     return;
@@ -213,7 +214,7 @@ async function render(): Promise<void> {
   // Chips in a row; those that don't fit move into the dropdown (§16).
   const chips = visible.map((id) => buildChip(id, refs.get(id)));
   const restIds: string[] = [];
-  const more = button('', () => openOverflowMenu(restIds, refs), 'pinned-more', 'Остальные закреплённые');
+  const more = button('', () => openOverflowMenu(restIds, refs), 'pinned-more', t('pinned.ostalnyeZakreplennye'));
   more.append(svgIcon('chevron-down', 11));
   for (const chip of chips) host.append(chip);
   host.append(more);

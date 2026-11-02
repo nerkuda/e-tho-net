@@ -1293,7 +1293,7 @@ describe('меню чипа-мысли в условии отбора (ошиб�
       'меню мысли открывает фасад вне холста (родитель «налево» — внутри)',
     );
     assert.ok(
-      body.includes("openLabel: 'Открыть в редакторе'"),
+      body.includes("openLabel: t('miniGraph.openLabel.openEditor')"),
       'контекст условия — «Открыть в редакторе» (фокус холста не сдвигается)',
     );
     assert.ok(body.includes('focusHandler'), '«В фокус» — от общего набора, а не своей командой');
@@ -1302,7 +1302,7 @@ describe('меню чипа-мысли в условии отбора (ошиб�
       'своей копии цепочки «резолв родителя → меню» у чипа условия нет (задача d8941b76)',
     );
     assert.ok(
-      body.includes("menuAction('Убрать из значения условия'"),
+      body.includes("menuAction(t('filterValue.removeValuesConditions')"),
       'команда значения — через словарь пунктов меню',
     );
     assert.ok(!body.includes('{ label:'), 'своего объекта-пункта у чипа условия нет');

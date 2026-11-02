@@ -44,6 +44,7 @@ import {
 
 import type { FilterTreeLeaf } from './filter-builder.js';
 import { VALUE_TYPE_LABELS } from './property-list.js';
+import { t } from './i18n.js';
 
 /** Токен, вставляемый в значение условия. */
 export interface ViewToken {
@@ -96,15 +97,15 @@ export interface FilterTokenData {
 
 /** Пояснения полей мысли — чтобы токены искались по подписи (п. A5б). */
 const THOUGHT_FIELD_TOKENS: Readonly<Record<string, string>> = {
-  $thought: 'мысль-контекст отбора',
-  '$thought.title': 'название мысли-контекста',
-  '$thought.synonyms': 'синонимы мысли одной строкой',
-  '$thought.type': 'тип мысли-контекста',
-  '$thought.active': 'актуальность мысли-контекста',
-  '$thought.author': 'автор мысли-контекста',
-  '$thought.editor': 'последний редактор мысли',
-  '$thought.created': 'дата создания мысли',
-  '$thought.updated': 'дата изменения мысли',
+  $thought: t('filterTokens.thoughtKontekstView'),
+  '$thought.title': t('filterTokens.titleThoughtKonteksta'),
+  '$thought.synonyms': t('filterTokens.synonymsThoughtOdnoyStrokoy'),
+  '$thought.type': t('filterTokens.typeThoughtKonteksta'),
+  '$thought.active': t('filterTokens.activeThoughtKonteksta'),
+  '$thought.author': t('filterTokens.avtorThoughtKonteksta'),
+  '$thought.editor': t('filterTokens.lastEditorThought'),
+  '$thought.created': t('filterTokens.dateCreateThought'),
+  '$thought.updated': t('filterTokens.dateChangesThought'),
 };
 
 /** Токен поля мысли с подписью-пояснением. */
@@ -227,8 +228,8 @@ function propertyTokens(
     const suffix = isListOp(op) ? ' […]' : '';
     out.push({
       text,
-      label: `${text}${suffix} — значение свойства «${prop.name}», ${VALUE_TYPE_LABELS[prop.value_type]}`,
-      section: 'Свойства сети',
+      label: t('filterTokens.valueProperties', [text, suffix, prop.name, VALUE_TYPE_LABELS[prop.value_type]]),
+      section: t('filterSort.label.propertiesNetwork'),
       ...(listOnly ? { listOnly: true } : {}),
     });
   }
@@ -248,41 +249,41 @@ function natureTokens(
       // «Опоры», поэтому там они не дублируются (п. A5а). Легаси-контракт
       // диалога (`buildTokensForField`) опоры включает — прежние хосты и тесты.
       if (includeDateAnchors) {
-        out.push({ text: '$today', label: '$today — сегодня', section: 'Глобальные' });
-        if (withTime) out.push({ text: '$now', label: '$now — текущий момент' });
+        out.push({ text: '$today', label: t('filterTokens.label.todaySegodnya'), section: t('filterTokens.section.globalnye') });
+        if (withTime) out.push({ text: '$now', label: t('filterTokens.label.nowCurrentMoment') });
       }
-      out.push(thoughtToken('$thought.created', 'Поля мысли'), thoughtToken('$thought.updated', 'Поля мысли'));
+      out.push(thoughtToken('$thought.created', t('filterTokens.fieldsThought')), thoughtToken('$thought.updated', t('filterTokens.fieldsThought')));
       break;
     case 'thought-id':
-      out.push(thoughtToken('$thought', 'Поля мысли'));
+      out.push(thoughtToken('$thought', t('filterTokens.fieldsThought')));
       break;
     case 'thought-type':
-      out.push(thoughtToken('$thought.type', 'Поля мысли'));
+      out.push(thoughtToken('$thought.type', t('filterTokens.fieldsThought')));
       break;
     case 'text':
-      out.push(thoughtToken('$thought.title', 'Поля мысли'), thoughtToken('$thought.synonyms', 'Поля мысли'));
-      out.push({ text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' });
+      out.push(thoughtToken('$thought.title', t('filterTokens.fieldsThought')), thoughtToken('$thought.synonyms', t('filterTokens.fieldsThought')));
+      out.push({ text: '$user', label: t('filterTokens.label.userCurrentUser'), section: t('filterTokens.section.globalnye') });
       break;
     case 'bool':
-      out.push(thoughtToken('$thought.active', 'Поля мысли'));
+      out.push(thoughtToken('$thought.active', t('filterTokens.fieldsThought')));
       break;
     case 'user':
-      out.push({ text: '$user', label: '$user — текущий пользователь', section: 'Глобальные' });
+      out.push({ text: '$user', label: t('filterTokens.label.userCurrentUser'), section: t('filterTokens.section.globalnye') });
       break;
     case 'context':
-      out.push({ text: '$today', label: '$today — сегодня', section: 'Глобальные' });
-      if (withTime) out.push({ text: '$now', label: '$now — текущий момент' });
-      out.push({ text: '$user', label: '$user — текущий пользователь' });
+      out.push({ text: '$today', label: t('filterTokens.label.todaySegodnya'), section: t('filterTokens.section.globalnye') });
+      if (withTime) out.push({ text: '$now', label: t('filterTokens.label.nowCurrentMoment') });
+      out.push({ text: '$user', label: t('filterTokens.label.userCurrentUser') });
       out.push(
-        thoughtToken('$thought', 'Поля мысли'),
-        thoughtToken('$thought.title', 'Поля мысли'),
-        thoughtToken('$thought.synonyms', 'Поля мысли'),
-        thoughtToken('$thought.type', 'Поля мысли'),
-        thoughtToken('$thought.active', 'Поля мысли'),
-        thoughtToken('$thought.author', 'Поля мысли'),
-        thoughtToken('$thought.editor', 'Поля мысли'),
-        thoughtToken('$thought.created', 'Поля мысли'),
-        thoughtToken('$thought.updated', 'Поля мысли'),
+        thoughtToken('$thought', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.title', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.synonyms', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.type', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.active', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.author', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.editor', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.created', t('filterTokens.fieldsThought')),
+        thoughtToken('$thought.updated', t('filterTokens.fieldsThought')),
       );
       break;
     default:
@@ -435,7 +436,7 @@ export function filterLeafTokenSource(
 } {
   return {
     when: 'always',
-    header: 'Токены контекста',
+    header: t('filterTokens.header.tokensKonteksta'),
     load: (query) =>
       filterLeafTokens(leaf, ctx)
         .filter((token) => {

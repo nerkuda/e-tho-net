@@ -80,17 +80,17 @@ describe('сторож: рутина — в статусбар, сбой и от
     const source = read('lib/etnimg-link.ts');
     assert.doesNotMatch(
       source,
-      /владелец вложения неизвестен[\s\S]{0,40}?'error'/,
+      /etnimg\.notSucceededOpenFileLinkRefVne[\s\S]{0,80}?'error'/,
       'нет контекста — подсказка, не сбой',
     );
     assert.doesNotMatch(
       source,
-      /Не удалось разобрать путь во вложении[\s\S]{0,40}?'error'/,
+      /etnimg\.notSucceededRazobratPathVlozhenii[\s\S]{0,80}?'error'/,
       'битый путь — подсказка, не сбой',
     );
     assert.match(
       source,
-      /Не удалось открыть файл вложения[\s\S]{0,60}?'error'/,
+      /etnimg\.notSucceededOpenFileAttachments[\s\S]{0,80}?'error'/,
       'сбой чтения списка вложений остаётся error-тостом',
     );
   });

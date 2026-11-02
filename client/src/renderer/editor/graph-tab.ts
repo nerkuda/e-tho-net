@@ -28,6 +28,7 @@ import {
 } from './editor.js';
 import { buildMiniGraph, readMiniGraphView, type MiniGraphView } from './mini-graph.js';
 import { graphEventAffects } from './mini-graph-model.js';
+import { t } from '../lib/i18n.js';
 
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
@@ -94,7 +95,7 @@ function buildGraphTab(ctx: EditorContext, lifecycle?: TabPaneLifecycle): HTMLEl
   root.style.flexDirection = 'column';
   root.style.flex = '1 1 auto';
   root.style.minHeight = '0';
-  root.append(el('div', 'graph-tab-body', 'Загрузка графа…'));
+  root.append(el('div', 'graph-tab-body', t('graphTab.loadingGraph')));
 
   const state: GraphPaneState = {
     root,
@@ -168,7 +169,7 @@ async function buildGraphBody(
   state.linkIds.clear();
   state.neighbourIds.clear();
   if (ctx.thought === null) {
-    root.append(el('p', 'muted', 'Граф недоступен — мысль ещё загружается.'));
+    root.append(el('p', 'muted', t('graphTab.graphUnavailableThoughtMoreZagruzhaetsya')));
     return root;
   }
   // Параллельно: соседи (оба направления), полный список связей мысли (для
@@ -213,7 +214,7 @@ async function buildGraphBody(
       for (const nb of neighbours) state.neighbourIds.add(nb.id);
     }
   } catch (err) {
-    root.append(el('p', 'muted', `Не удалось загрузить граф: ${errText(err)}`));
+    root.append(el('p', 'muted', t('graphTab.notSucceededLoadGraph', errText(err))));
     return root;
   }
 
@@ -222,7 +223,7 @@ async function buildGraphBody(
   // линии, поэтому числа на чипах и счётчике не могут разойтись с DOM.
 
   if (neighbours.length === 0) {
-    root.append(el('p', 'muted', 'У мысли нет прямых связей.'));
+    root.append(el('p', 'muted', t('graphTab.uThoughtNoPryamyhLinks')));
     return root;
   }
 

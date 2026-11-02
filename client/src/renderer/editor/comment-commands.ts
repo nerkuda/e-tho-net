@@ -693,7 +693,7 @@ function openToolbarSubmenu(
 
 function commandButton(id: string, host: CommentCommandHost): HTMLButtonElement {
   const def = COMMENT_COMMANDS[id];
-  if (def === undefined) throw new Error(`Неизвестная команда комментария: ${id}`);
+  if (def === undefined) throw new Error(`Неизвестная команда комментария: ${id}`); // i18n: technical
   const btn = iconButton({
     icon: renderIcon(def.icon),
     title: commandTitle(id, def),

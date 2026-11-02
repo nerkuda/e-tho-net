@@ -20,6 +20,7 @@ import { div, el, setTooltip } from './dom.js';
 import { notice } from './notice.js';
 import { ensureLoaded, resolve, subscribe } from './users.js';
 import { uiButton } from './ui/button.js';
+import { t } from './i18n.js';
 
 /** Plain record of authorship fields used by the block. */
 export interface MetadataFields {
@@ -50,10 +51,10 @@ export function buildMetadataBlock(fields: MetadataFields): HTMLElement {
     root.append(buildIdRow(fields.id));
     const grid = div('metadata-grid');
     grid.append(
-      buildAuthorRow('Автор создания', fields.createdBy),
-      buildDateRow('Дата создания', fields.createdAtMs),
-      buildAuthorRow('Последний редактор', fields.updatedBy),
-      buildDateRow('Дата изменения', fields.updatedAtMs),
+      buildAuthorRow(t('metadata.avtorCreate'), fields.createdBy),
+      buildDateRow(t('filter.created_at.dateCreate'), fields.createdAtMs),
+      buildAuthorRow(t('metadata.lastEditor'), fields.updatedBy),
+      buildDateRow(t('filter.updated_at.dateChanges'), fields.updatedAtMs),
     );
     root.append(grid);
   }
@@ -64,12 +65,12 @@ function buildIdRow(id: string | null): HTMLElement {
   const row = div('metadata-id-row');
   const label = el('span', 'metadata-id-label', 'id');
   if (id === null) {
-    const hint = el('span', 'muted metadata-id-hint', 'будет присвоен при сохранении');
+    const hint = el('span', 'muted metadata-id-hint', t('metadata.willPrisvoenSohranenii'));
     row.append(label, hint);
     return row;
   }
   const value = el('code', 'metadata-id-value', id);
-  setTooltip(value, 'Нажмите, чтобы выделить');
+  setTooltip(value, t('metadata.clickToVydelit'));
   // Selectable by click — easier than picking the small text with the caret
   // when the user wants to copy manually. The button covers the explicit-copy
   // path.
@@ -83,14 +84,14 @@ function buildIdRow(id: string | null): HTMLElement {
     }
   });
   const copyBtn = uiButton({
-    label: 'Копировать',
+    label: t('listActions.copy'),
     role: 'secondary',
     size: 's',
-    title: 'Скопировать ID в буфер обмена',
+    title: t('metadata.copyIdBuferObmena'),
     onClick: () => {
       void navigator.clipboard.writeText(id).then(
-        () => notice('ID скопирован.'),
-        () => notice('Не удалось скопировать ID.'),
+        () => notice(t('metadata.idSkopirovan')),
+        () => notice(t('contextMenu.notSucceededCopyId')),
       );
     },
   });
@@ -154,10 +155,10 @@ export function buildMetadataRows(fields: MetadataFields): HTMLElement {
     root.replaceChildren();
     root.append(buildIdRow(fields.id));
     root.append(
-      buildAuthorRow('Автор создания', fields.createdBy),
-      buildDateRow('Дата создания', fields.createdAtMs),
-      buildAuthorRow('Последний редактор', fields.updatedBy),
-      buildDateRow('Дата изменения', fields.updatedAtMs),
+      buildAuthorRow(t('metadata.avtorCreate'), fields.createdBy),
+      buildDateRow(t('filter.created_at.dateCreate'), fields.createdAtMs),
+      buildAuthorRow(t('metadata.lastEditor'), fields.updatedBy),
+      buildDateRow(t('filter.updated_at.dateChanges'), fields.updatedAtMs),
     );
   }
 }
@@ -184,10 +185,10 @@ export function renderAuthorPair(
   const editorName = updatedBy === null ? null : resolve(updatedBy) ?? `(${updatedBy})`;
   wrap.append(el('span', 'author-primary', created));
   if (editorName !== null && sameUser) {
-    const badge = el('span', 'author-edited faint', `(правка: ${editorName})`);
+    const badge = el('span', 'author-edited faint', t('metadata.edit', editorName));
     wrap.append(badge);
   } else if (editorName !== null) {
-    const badge = el('span', 'author-edited faint', `(правка: ${editorName})`);
+    const badge = el('span', 'author-edited faint', t('metadata.edit', editorName));
     wrap.append(badge);
   }
   return wrap;

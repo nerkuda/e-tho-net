@@ -18,6 +18,7 @@
 
 import { menuAction, type MenuItem } from '../lib/menu.js';
 import { rowReorderMenuItems } from '../lib/row-reorder.js';
+import { t } from '../lib/i18n.js';
 
 /** Состояние строки, от которого зависит состав меню. */
 export interface PropertyRowMenuState {
@@ -50,11 +51,11 @@ export interface PropertyRowMenuActions {
 
 /** Подписи пунктов — единый источник для меню и тестов. */
 export const PROPERTY_ROW_MENU_LABELS = {
-  edit: 'Изменить свойство',
-  clear: 'Очистить',
-  promote: 'Перенести в типовые свойства',
-  exclude: 'Исключить из типовых свойств',
-  remove: 'Удалить',
+  edit: t('properties.editProperty'),
+  clear: t('actions.reset'),
+  promote: t('properties.perenestiTipovyeProperties'),
+  exclude: t('properties.isklyuchitTipovyhProperties'),
+  remove: t('actions.delete'),
 } as const;
 
 /** Собирает пункты меню строки свойства по её состоянию. */

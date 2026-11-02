@@ -33,13 +33,12 @@ export function isPinned(thoughtId: string): boolean {
  */
 export function showPinLimitMessage(): void {
   showDialog({
-    title: 'Закреплённые мысли',
+    title: t('pinned.title.zakreplennyeThought'),
     size: 's',
     body: el(
       'div',
       'dialog-text',
-      `Закрепить можно не более ${PINNED_THOUGHTS_LIMIT} мыслей. ` +
-        'Сначала открепите лишние мысли из панели закреплённых.',
+      t('pinned.pinCanNotMoreThoughtsFirst', PINNED_THOUGHTS_LIMIT),
     ),
     buttons: [{ label: t('actions.apply'), primary: true }],
   });
@@ -56,7 +55,7 @@ export async function setPins(networkId: string, orderedIds: string[]): Promise<
     setQueryData(queryKeys.pins(), ids);
     return true;
   } catch (err) {
-    notice(`Не удалось изменить закреплённые: ${errText(err)}`, 'error');
+    notice(t('pinned.notSucceededEditZakreplennye', errText(err)), 'error');
     return false;
   }
 }

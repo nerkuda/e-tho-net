@@ -77,7 +77,7 @@ export function showExportEtnxDialog(
       },
     });
     const filenameField = fieldRow({
-      label: 'Имя файла',
+      label: t('importExport.label.nameFile'),
       control: filename.root,
       id: 'etnx-export-filename',
     });
@@ -93,19 +93,19 @@ export function showExportEtnxDialog(
     });
 
     const includeTypes = checkboxRow({
-      label: 'Включить типы мыслей и связей',
+      label: t('importExport.vklyuchitTypesThoughtsLinks'),
       checked: initial.include_types ?? true,
     });
     const includeAttachments = checkboxRow({
-      label: 'Включить вложения (файлы внутри архива)',
+      label: t('importExport.vklyuchitAttachmentsFilesVnutriArchive'),
       checked: initial.include_attachments ?? true,
     });
     const includeChronology = checkboxRow({
-      label: 'Включить хронологические комментарии',
+      label: t('importExport.label.vklyuchitHronologicheskieKommentarii'),
       checked: initial.include_chronology ?? true,
     });
     const includeSubtree = checkboxRow({
-      label: 'Включить подчинённые мысли',
+      label: t('importExport.label.vklyuchitPodchinennyeThought'),
       checked: initial.include_subtree ?? false,
     });
     depthInput.disabled = !includeSubtree.input.checked;
@@ -114,13 +114,13 @@ export function showExportEtnxDialog(
     });
 
     const depthField = fieldRow({
-      label: `Глубина подчинённости (1..${ETNX_SUBTREE_DEPTH_MAX})`,
+      label: t('importExport.glubinaPodchinennosti', ETNX_SUBTREE_DEPTH_MAX),
       control: depthInput,
       id: 'etnx-export-depth',
     });
 
     const optionsHead = el('h4', 'dialog-subhead');
-    optionsHead.textContent = 'Что включить в архив';
+    optionsHead.textContent = t('importExport.chtoVklyuchitArchive');
 
     const optionsStack = div('form-stack');
     optionsStack.append(
@@ -132,13 +132,13 @@ export function showExportEtnxDialog(
     );
 
     const hint = el('p', 'dialog-text');
-    hint.textContent = `Будет экспортировано мыслей: ${thoughtCount}.`;
+    hint.textContent = t('importExport.willEksportirovanoThoughts', thoughtCount);
 
     const body = div('form-stack');
     body.append(hint, filenameField, optionsHead, optionsStack);
 
     showDialog({
-      title: 'Экспорт в .etnx',
+      title: t('importExport.title.exportEtnx'),
       body,
       size: 'm',
       buttons: [
@@ -147,7 +147,7 @@ export function showExportEtnxDialog(
           onClick: () => finish(cancelled),
         },
         {
-          label: 'Экспортировать',
+          label: t('importExport.label.eksportirovat'),
           primary: true,
           onClick: () => {
             const targetPath = filenameInput.value.trim();

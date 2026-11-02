@@ -117,6 +117,7 @@ import { fieldInput, wrapClearable } from './ui/field.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
 import { toggleButton } from './ui/toggle.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Тона вложенности (требование 5ef1bce1)
@@ -561,7 +562,7 @@ const OPERATOR_MENU_SECTIONS: ReadonlyArray<{
 }> = [
   {
     key: 'compare',
-    title: 'Сравнение',
+    title: t('filterTree.title.sravnenie'),
     rows: [
       { yes: ['eq'], no: ['ne'] },
       { yes: ['contains'], no: ['not_contains'] },
@@ -580,9 +581,9 @@ const OPERATOR_MENU_SECTIONS: ReadonlyArray<{
       { yes: ['between'], no: ['not_between'] },
     ],
   },
-  { key: 'state', title: 'Состояние', rows: [{ yes: ['not_empty'], no: ['is_empty'] }] },
-  { key: 'words', title: 'Слова', rows: [{ yes: ['matches'], no: [] }] },
-  { key: 'property', title: 'Свойство', rows: [{ yes: ['has'], no: ['not_has'] }] },
+  { key: 'state', title: t('filterTree.title.state'), rows: [{ yes: ['not_empty'], no: ['is_empty'] }] },
+  { key: 'words', title: t('filterTree.title.slova'), rows: [{ yes: ['matches'], no: [] }] },
+  { key: 'property', title: t('filterTree.title.property'), rows: [{ yes: ['has'], no: ['not_has'] }] },
 ];
 
 /** Подпись оператора в дереве (словарь спецификации из конструктора). */
@@ -628,28 +629,28 @@ interface QuickPeriodUnit {
 const QUICK_PERIOD_UNITS: readonly QuickPeriodUnit[] = [
   {
     key: 'day',
-    forms: ['текущий день', 'прошлый день', 'следующий день'],
+    forms: [t('filterTree.currentDen'), t('filterTree.proshlyyDen'), t('filterTree.sleduyuschiyDen')],
     from: '$today',
     to: '$today',
     shiftUnit: 'd',
   },
   {
     key: 'week',
-    forms: ['текущая неделя', 'прошлая неделя', 'следующая неделя'],
+    forms: [t('filterTree.currentWeek'), t('filterTree.proshlayaWeek'), t('filterTree.sleduyuschayaWeek')],
     from: '$weekStart',
     to: '$weekEnd',
     shiftUnit: 'w',
   },
   {
     key: 'month',
-    forms: ['текущий месяц', 'прошлый месяц', 'следующий месяц'],
+    forms: [t('filterTree.currentMonth'), t('filterTree.proshlyyMonth'), t('filterTree.sleduyuschiyMonth')],
     from: '$monthStart',
     to: '$monthEnd',
     shiftUnit: 'mo',
   },
   {
     key: 'year',
-    forms: ['текущий год', 'прошлый год', 'следующий год'],
+    forms: [t('filterTree.currentYear'), t('filterTree.proshlyyYear'), t('filterTree.sleduyuschiyYear')],
     from: '$yearStart',
     to: '$yearEnd',
     shiftUnit: 'y',
@@ -720,12 +721,12 @@ export function filterTreePeriodMenu(): {
   groups: FilterTreeChoiceGroup[];
 } {
   return {
-    title: 'Период',
+    title: t('datePeriod.label.period'),
     groups: [
       {
-        label: 'Период',
+        label: t('datePeriod.label.period'),
         items: [
-          { key: FILTER_TREE_PERIOD_MANUAL_KEY, label: 'Задать вручную…' },
+          { key: FILTER_TREE_PERIOD_MANUAL_KEY, label: t('filterTree.label.zadatVruchnuyu') },
           ...filterTreeQuickPeriods().map((period) => ({ key: period.key, label: period.label })),
         ],
         columns: 4,
@@ -854,8 +855,8 @@ export const FILTER_TREE_OPERAND_GROUPS: Readonly<Record<FilterTreeOperandEntry[
   // Первая группа (контекстные операнды места) идёт БЕЗ заголовка — заголовок
   // «В этом месте» убран по требованию заказчика (2026-10-13).
   context: '',
-  operands: 'Характеристики',
-  properties: 'Свойства',
+  operands: t('filterTree.operands.harakteristiki'),
+  properties: t('editor.title.properties'),
 };
 
 /**
@@ -997,7 +998,7 @@ export function filterTreeOperandCatalogue(
         : { kind: 'property', property: id, direction: 'in' };
       const detail = direct
         ? VALUE_TYPE_LABELS[entry.value_type]
-        : `${VALUE_TYPE_LABELS[entry.value_type]} · обратная сторона`;
+        : t('filterSort.obratnayaStorona', VALUE_TYPE_LABELS[entry.value_type]);
       out.push({
         key: `property:${id}`,
         label: entry.name,
@@ -1089,12 +1090,12 @@ export function filterTreeOperatorValueType(
 
 /** Подпись коннектора группы: «все условия (И)» / «любое из условий (ИЛИ)». */
 export function filterTreeConnectorLabel(op: 'and' | 'or'): string {
-  return op === 'and' ? 'все условия (И)' : 'любое из условий (ИЛИ)';
+  return op === 'and' ? t('filterTree.allConditions') : t('filterTree.lyuboeConditions');
 }
 
 /** Подпись связатора-индикатора перед строкой (менять коннекцию нельзя — это индикатор). */
 export function filterTreeConnectorIndicator(op: 'and' | 'or'): string {
-  return op === 'and' ? 'И' : 'ИЛИ';
+  return op === 'and' ? t('filterTree.and') : t('filterTree.or');
 }
 
 /**
@@ -1109,18 +1110,18 @@ export const FILTER_TREE_CONNECTOR_CHOICES: ReadonlyArray<{ key: 'and' | 'or'; l
 
 /** Тип целевой сущности профиля — для заголовка «Показать <сущность> по условиям:». */
 const PROFILE_TARGET_LABELS: Readonly<Record<string, string>> = {
-  thought: 'мысли',
-  chronicle_record: 'записи дневника',
-  activity: 'события',
-  attachment: 'вложения',
-  link: 'связи',
-  publication: 'публикации',
+  thought: t('clipboard.thought2'),
+  chronicle_record: t('filterTree.chronicle_record.recordsDnevnika'),
+  activity: t('filterTree.activity.events'),
+  attachment: t('filterTree.attachment.attachments'),
+  link: t('clipboard.link2'),
+  publication: t('filterTree.publication.publication'),
 };
 
 /** Заголовок редактора: «Показать <сущность> по условиям:» (элемент fc65b647). */
 export function filterTreeTitle(profile: FilterProfileId): string {
   const target = getFilterProfile(profile).target;
-  return `Показать ${PROFILE_TARGET_LABELS[target] ?? target} по условиям:`;
+  return t('filterTree.showUsloviyam', PROFILE_TARGET_LABELS[target] ?? target);
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,7 +1132,7 @@ export function filterTreeTitle(profile: FilterProfileId): string {
 export function filterTreeValueKindLabel(value: FilterTreeValue): string {
   switch (value.kind) {
     case 'none':
-      return 'значение не требуется';
+      return t('filter.valueNotTrebuetsya');
     case 'scalar':
       return String(value.value);
     case 'token':
@@ -1141,7 +1142,7 @@ export function filterTreeValueKindLabel(value: FilterTreeValue): string {
         .map((item) => (typeof item === 'object' ? item.token : String(item)))
         .join(', ');
     case 'subquery':
-      return `под-выборка (${value.operator})`;
+      return t('filterTree.podSelection', value.operator);
     default:
       return '';
   }
@@ -1502,31 +1503,31 @@ export function filterTreeMoveRejectionReason(
   fromPath: FilterTreePath,
   toGroupPath: FilterTreePath,
 ): string {
-  if (fromPath.length === 0) return 'Корневую группу переносить нельзя';
+  if (fromPath.length === 0) return t('filterTree.kornevuyuGroupPerenositCannot');
   const sourceParent = filterTreeGroupAt(root, fromPath.slice(0, -1));
   const target = filterTreeGroupAt(root, toGroupPath);
-  if (sourceParent === null) return 'Исходное условие не найдено';
-  if (target === null) return 'Группа-приёмник не найдена';
+  if (sourceParent === null) return t('filterTree.ishodnoeConditionNotFound');
+  if (target === null) return t('filterTree.groupPriemnikNotFound');
   if (filterTreePathWithin(toGroupPath, fromPath)) {
-    return 'Группу нельзя вложить в саму себя или в её потомка';
+    return t('filterTree.groupCannotVlozhitSamuSebyaIts');
   }
   if (sourceParent.op === 'not' && sourceParent.children.length === 1) {
-    return 'Из группы НЕ нельзя убрать единственное условие';
+    return t('filterTree.fromGroupsNotCannotRemoveEdinstvennoe');
   }
   if (target.op === 'not' && target.children.length > 0) {
-    return 'В группу НЕ можно вложить только одно условие';
+    return t('filterTree.inGroupNotCanVlozhitOnly');
   }
-  return 'Перенос невозможен';
+  return t('filterTree.moveNevozmozhen');
 }
 
 /** Причина отказа `Shift`-копирования: исходник остаётся, важна только арность `НЕ`. */
 function filterTreeCloneRejectionReason(root: FilterTreeNode, toGroupPath: FilterTreePath): string {
   const target = filterTreeGroupAt(root, toGroupPath);
-  if (target === null) return 'Группа-приёмник не найдена';
+  if (target === null) return t('filterTree.groupPriemnikNotFound');
   if (target.op === 'not' && target.children.length > 0) {
-    return 'В группу НЕ можно вложить только одно условие';
+    return t('filterTree.inGroupNotCanVlozhitOnly');
   }
-  return 'Копирование невозможно';
+  return t('filterTree.copyImpossible');
 }
 
 /**
@@ -1932,7 +1933,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     // (сторож `guard-keymap-single-point`); клавиатурная активация — Enter в
     // поле/списке, а не на подписи причины.
     text.classList.add('ft-issue__text--action');
-    setTooltip(text, 'Перейти к строке с ошибкой');
+    setTooltip(text, t('filterTree.pereytiRowOshibkoy'));
     text.addEventListener('click', () => {
       focus();
       ctx.onFixPath?.(issue.path);
@@ -2082,7 +2083,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         label: isCollapsed ? '▸' : '▾',
         role: 'ghost',
         size: 's',
-        title: isCollapsed ? 'Развернуть группу' : 'Свернуть группу',
+        title: isCollapsed ? t('filterTree.expandGroup') : t('filterTree.collapseGroup'),
         class: 'ft-group__caret',
         onClick: () => {
           if (isCollapsed) collapsed.delete(key);
@@ -2100,13 +2101,13 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       prefix: span(filterTreeConnectorLabel(group.op), 'ft-group__connector-label'),
       role: 'ghost',
       size: 's',
-      title: 'Коннекция группы',
+      title: t('filterTree.title.konnekciyaGroups'),
       class: 'ft-group__connector',
     });
     connector.append(span('▾', 'ft-picker__caret'));
     connector.addEventListener('click', () => {
       openChoiceMenu(connector, {
-        title: 'Коннекция группы',
+        title: t('filterTree.title.konnekciyaGroups'),
         groups: [{ label: '', items: FILTER_TREE_CONNECTOR_CHOICES.map((c) => ({ ...c })) }],
         activeKey: group.op,
         onPick: (id) => {
@@ -2128,8 +2129,8 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
 
     if (!isRoot) {
       const not = toggleButton({
-        label: 'НЕ',
-        title: group.negated ? 'Снять отрицание группы' : 'Отрицать группу',
+        label: t('filterTree.label.not'),
+        title: group.negated ? t('filterTree.unsetNotGroups') : t('filterTree.otricatGroup'),
         pressed: group.negated,
         extraClass: 'ft-group__not',
         onChange: () => {
@@ -2143,8 +2144,8 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       // «НЕ» на корне не предлагается (элемент fc65b647): показываем маркер,
       // но переключение заблокировано.
       const marker = toggleButton({
-        label: 'НЕ',
-        title: 'Отрицание корневой группы не предлагается',
+        label: t('filterTree.label.not'),
+        title: t('filterTree.notKornevoyGroupsNotPredlagaetsya'),
         pressed: true,
         extraClass: 'ft-group__not',
         disabled: true,
@@ -2157,7 +2158,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       head.append(
         iconButton({
           icon: svgIcon('x'),
-          title: 'Удалить группу',
+          title: t('filterTree.title.deleteGroup'),
           role: 'ghost',
           size: 's',
           class: 'ft-group__remove',
@@ -2191,7 +2192,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     // Адрес группы-приёмника для hit-test перетаскивания (задача 31b228f0).
     body.dataset['groupPath'] = filterTreePathKey(group.bodyPath);
     if (group.children.length === 0) {
-      body.append(el('div', 'ft-group__empty', 'группа пуста — добавьте условие или группу'));
+      body.append(el('div', 'ft-group__empty', t('filterDiagnostics.groupPustaDobavteConditionGroup')));
     } else {
       group.children.forEach((child, index) => {
         const childPath = [...group.bodyPath, index];
@@ -2206,12 +2207,12 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         // Alt+↑/↓/←/→ (критерий доступности 7, сторож обнаружимости).
         item.tabIndex = 0;
         item.setAttribute('tabindex', '0');
-        item.setAttribute('aria-label', child.kind === 'group' ? 'Группа условий' : 'Условие отбора');
+        item.setAttribute('aria-label', child.kind === 'group' ? t('filterTree.groupConditions') : t('filterTree.conditionView'));
         const indicator = span(filterTreeConnectorIndicator(group.op), FILTER_TREE_CONNECTOR_CLASS);
         // Индикатор — ручка указателя; клавиатурный путь ведёт строка (`item`),
         // поэтому сам индикатор остаётся декоративным для скринридера.
         indicator.setAttribute('aria-hidden', 'true');
-        setTooltip(indicator, 'Перетащить условие или группу');
+        setTooltip(indicator, t('filterTree.peretaschitConditionGroup'));
         item.append(indicator);
         item.append(
           child.kind === 'group' ? renderGroup(childPath, depth + 1) : renderRow(child, childPath, item),
@@ -2222,7 +2223,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
     const actions = div('ft-group__actions');
     actions.append(
       uiButton({
-        label: '+ условие',
+        label: t('filterTree.label.condition'),
         role: 'ghost',
         size: 's',
         class: 'ft-add-condition',
@@ -2234,7 +2235,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         },
       }),
       uiButton({
-        label: '+ группу',
+        label: t('filterTree.label.group'),
         role: 'ghost',
         size: 's',
         class: 'ft-add-group',
@@ -2271,13 +2272,13 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       buildPickerButton({
         cls: 'ft-row__what',
         value: filterTreeOperandLabel(leaf, ctx.data),
-        title: 'Что отбираем',
+        title: t('filterTree.title.chtoSelect'),
         ...(activeEntry?.icon !== undefined ? { icon: activeEntry.icon } : {}),
         onOpen: (anchor) => {
           openChoiceMenu(anchor, {
-            title: 'Что',
+            title: t('filterTree.title.chto'),
             search: true,
-            placeholder: 'Поиск свойства…',
+            placeholder: t('filterTree.placeholder.searchProperties'),
             groups: groupEntries(entries),
             activeKey: activeEntryKey,
             onPick: (key) => {
@@ -2333,11 +2334,11 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
         buildPickerButton({
           cls: 'ft-row__op',
           value: filterTreeOperatorLabel(leaf.operator),
-          title: 'Оператор условия',
+          title: t('filterTree.title.operatorConditions'),
           onOpen: (anchor) => {
             const sections = filterTreeOperatorMenu(ctx.profile, leaf.entity.kind, valueType);
             openChoiceMenu(anchor, {
-              title: 'Оператор',
+              title: t('filterTree.title.operator'),
               grid: true,
               groups: sections.map((section) => ({
                 label: section.title,
@@ -2443,7 +2444,7 @@ export function buildFilterTree(ctx: FilterTreeContext): FilterTreeHandle {
       row.append(
         iconButton({
           icon: svgIcon('x'),
-          title: 'Удалить условие',
+          title: t('filterTree.title.deleteCondition'),
           role: 'ghost',
           size: 's',
           class: 'ft-row__remove',
@@ -2564,11 +2565,11 @@ function buildValuePlaceholder(leaf: FilterTreeLeaf): HTMLElement {
   if (!needsValue) return box;
   box.append(
     span(
-      leaf.value.kind === 'none' ? 'задайте значение' : filterTreeValueKindLabel(leaf.value),
+      leaf.value.kind === 'none' ? t('filterTree.zadayteValue') : filterTreeValueKindLabel(leaf.value),
       'ft-value__text',
     ),
   );
-  setTooltip(box, 'Виджет значения — следующая задача редактора');
+  setTooltip(box, t('filterTree.vidzhetValuesSleduyuschayaZadachaEditor'));
   return box;
 }
 
@@ -2760,7 +2761,7 @@ export function buildChoiceMenuBody(
       }
       list.append(rows);
     }
-    if (rendered === 0) list.append(el('div', 'ft-choice__empty', 'ничего не найдено'));
+    if (rendered === 0) list.append(el('div', 'ft-choice__empty', t('filterTree.nichegoNotFound')));
   };
 
   // Живой поиск: поле закреплено СВЕРХУ (sticky, CSS) и не прокручивается со
@@ -2770,8 +2771,8 @@ export function buildChoiceMenuBody(
   if (opts.search === true) {
     const field = fieldInput({
       type: 'search',
-      placeholder: opts.placeholder ?? 'Поиск…',
-      ariaLabel: 'Поиск в списке',
+      placeholder: opts.placeholder ?? t('actions.search'),
+      ariaLabel: t('filterTree.ariaLabel.searchList'),
       extraClass: 'ft-choice__search',
       onInput: (value) => {
         query = value;

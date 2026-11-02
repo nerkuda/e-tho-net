@@ -35,7 +35,7 @@ import { badge } from '../../lib/ui/badge.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
-  return badge(role === 'owner' ? 'владелец' : 'участник', {
+  return badge(role === 'owner' ? t('networks.owner') : t('networks.member'), {
     tone: role === 'owner' ? 'warn' : 'accent',
   });
 }
@@ -50,11 +50,11 @@ export function mountPicker(host: HTMLElement): () => void {
   const errorLine = errorParagraph();
   errorLine.hidden = true;
 
-  const title = el('h1', 'picker-title', 'Открыть сеть');
-  const subtitle = el('p', 'picker-sub muted', 'Выберите сеть или создайте новую. Закрыть — любой другой таб.');
+  const title = el('h1', 'picker-title', t('tabs.openNetwork'));
+  const subtitle = el('p', 'picker-sub muted', t('tabs.selectNetworkSozdayteNovuyuCloseLyuboy'));
 
   const createButton = uiButton({
-    label: '+ Создать сеть',
+    label: t('tabs.label.createNetwork'),
     role: 'primary',
     size: 'm',
     onClick: () => void showCreateDialog(),
@@ -90,14 +90,14 @@ export function mountPicker(host: HTMLElement): () => void {
   function renderList(networks: NetworkListItem[]): void {
     list.replaceChildren();
     if (networks.length === 0) {
-      list.append(el('p', 'muted', 'У вас пока нет сетей. Создайте первую!'));
+      list.append(el('p', 'muted', t('networks.uVasPokaNoNetworksSozdayte')));
       return;
     }
     for (const net of networks) {
       const item = div('network-item');
       const info = div('network-info');
       info.append(span(net.display_name, 'network-name'));
-      info.append(el('p', 'muted', `Владелец: ${net.owner.display_name ?? net.owner.id}`));
+      info.append(el('p', 'muted', t('networks.owner2', net.owner.display_name ?? net.owner.id)));
       item.append(info);
       const meta = div('network-meta');
       meta.append(roleBadge(net.role), span(`👥 ${net.members_count}`));
@@ -138,11 +138,11 @@ export function mountPicker(host: HTMLElement): () => void {
     const nameInput = fieldInput();
     nameInput.type = 'text';
     nameInput.maxLength = 200;
-    nameInput.placeholder = 'Название';
+    nameInput.placeholder = t('activity.name.title');
     const descInput = fieldInput();
     descInput.type = 'text';
     descInput.maxLength = 2000;
-    descInput.placeholder = 'Описание (необязательно)';
+    descInput.placeholder = t('networks.label.descriptionOptional');
     const dialogError = footerErrorLine();
     const body = div('form-stack');
     body.append(nameInput, descInput);
@@ -154,7 +154,7 @@ export function mountPicker(host: HTMLElement): () => void {
       if (busy) return;
       const name = nameInput.value.trim();
       if (name === '') {
-        dialogError.show('Введите название сети.', { field: () => nameInput });
+        dialogError.show(t('networks.enterTitleNetwork'), { field: () => nameInput });
         return;
       }
       busy = true;
@@ -172,7 +172,7 @@ export function mountPicker(host: HTMLElement): () => void {
       }
     }
     showDialog({
-      title: 'Создать мыслесеть',
+      title: t('networks.title.createMysleset'),
       body,
       size: 's',
       // Ошибка создания — в панели кнопок (требование 397c5a56).
@@ -186,7 +186,7 @@ export function mountPicker(host: HTMLElement): () => void {
       buttons: [
         { label: t('actions.cancel') },
         {
-          label: 'Создать',
+          label: t('admin.label.create'),
           primary: true,
           keepOpen: true,
           onClick: (close) => void create(close),

@@ -164,7 +164,7 @@ function emptyGroupIssue(path: string): FilterIssue {
     source: 'constructor',
     code: 'empty_group',
     path,
-    message: 'группа пуста — добавьте условие или группу',
+    message: t('filterDiagnostics.groupPustaDobavteConditionGroup'),
   };
 }
 
@@ -259,7 +259,7 @@ function contradictionIssues(group: FilterTreeGroup, groupPath: readonly number[
         out.push(
           contradictionIssue(
             b.path,
-            'условия требуют одновременного «заполнено» и «не заполнено» — ни одна мысль не подойдёт',
+            t('filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno'),
           ),
         );
         continue;
@@ -274,7 +274,7 @@ function contradictionIssues(group: FilterTreeGroup, groupPath: readonly number[
         out.push(
           contradictionIssue(
             b.path,
-            'нижняя граница диапазона не меньше верхней — ни одна мысль не подойдёт',
+            t('filterDiagnostics.nizhnyayaGranicaDiapazonaNotLessVerhney'),
           ),
         );
       }
@@ -409,7 +409,7 @@ export function lostConditionIssues(lost: readonly string[]): FilterIssue[] {
     source: 'constructor' as const,
     code: 'build_warning' as const,
     path: '',
-    message: `${condition}. Правка заменит сохранённое определение.`,
+    message: t('filterDiagnostics.editZamenitSohranennoeOpredelenie', condition),
   }));
 }
 
@@ -508,10 +508,10 @@ export function filterIssueReason(issue: FilterIssue): string {
     parts.push(`«${issue.label}»`);
   }
   if (issue.valueLabel !== null && issue.valueLabel !== undefined && issue.valueLabel !== '') {
-    parts.push(`значение «${issue.valueLabel}»`);
+    parts.push(t('filterDiagnostics.value', issue.valueLabel));
   }
   if (issue.deletedAt !== null && issue.deletedAt !== undefined && issue.deletedAt !== '') {
-    parts.push(`удалено ${issue.deletedAt}`);
+    parts.push(t('filterDiagnostics.deleted', issue.deletedAt));
   }
   return parts.join(' · ');
 }

@@ -66,32 +66,31 @@ type Section = 'user' | 'network' | 'client' | 'logs';
 
 /** Title rendered above a section. */
 const SECTION_TITLES: Record<Section, string> = {
-  user: 'Пользователь',
-  network: 'Мыслесеть',
-  client: 'Клиент',
-  logs: 'Логирование',
+  user: t('settings.user.user'),
+  network: t('settings.network.mysleset'),
+  client: t('settingsLogs.client'),
+  logs: t('settings.logs.logging'),
 };
 
 /** Tabs inside the «Мыслесеть» section (task O5). */
 type NetworkTab = 'description' | 'when_to_use' | 'conventions' | 'examples';
 
 const NETWORK_TAB_TITLES: Record<NetworkTab, string> = {
-  description: 'Описание',
-  when_to_use: 'Когда использовать',
-  conventions: 'Правила',
-  examples: 'Примеры',
+  description: t('propertyManager.label.description'),
+  when_to_use: t('settings.when_to_use.kogdaUse'),
+  conventions: t('settings.conventions.pravila'),
+  examples: t('settings.examples.examples'),
 };
 
 /** Hint shown under an empty markdown field (mirrors the old textarea placeholder). */
 const NETWORK_TAB_PLACEHOLDERS: Record<NetworkTab, string> = {
   description:
-    'Назначение сети в одном-двух абзацах. Увидит и человек, и AI-агент при выборе сети.',
+    t('settings.naznachenieNetworkOdnomDvuhAbzacahUvidit'),
   when_to_use:
-    'Когда агенту обращаться к этой сети. Для каждого use case — какие ещё поля сети читать.\n\n' +
-    'Пример:\n- Кодирование → conventions, structure\n- Ретроспектива проекта → examples, conventions',
+    t('settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse'),
   conventions:
-    'Правила записи: формат хронологий, пометка active, нейминг, ссылки на типы и шаблоны.',
-  examples: 'Примеры хороших и плохих записей — чтобы агент не выдумывал форму.',
+    t('settings.pravilaRecordsFormatHronologiyPometkaActive'),
+  examples: t('settings.examplesHoroshihPlohihRecordsToAgent'),
 };
 
 /** Maximum length of one network markdown field (task O5). */
@@ -103,13 +102,13 @@ const NETWORK_FIELDS_TEXT_MAX = 20_000;
  * `PATCH /networks/{id}`, что и остальные поля раздела.
  */
 const FIRST_DAY_OF_WEEK_OPTIONS = [
-  { value: '1', label: 'Понедельник' },
-  { value: '2', label: 'Вторник' },
-  { value: '3', label: 'Среда' },
-  { value: '4', label: 'Четверг' },
-  { value: '5', label: 'Пятница' },
-  { value: '6', label: 'Суббота' },
-  { value: '7', label: 'Воскресенье' },
+  { value: '1', label: t('settings.label.ponedelnik') },
+  { value: '2', label: t('settings.label.vtornik') },
+  { value: '3', label: t('settings.label.sreda') },
+  { value: '4', label: t('settings.label.chetverg') },
+  { value: '5', label: t('settings.label.pyatnica') },
+  { value: '6', label: t('settings.label.subbota') },
+  { value: '7', label: t('settings.label.voskresene') },
 ] as const;
 
 /**
@@ -244,7 +243,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   // -- footer ------------------------------------------------------------
   const footer = div('settings-footer');
   footer.append(
-    el('span', 'settings-footer-hint', 'Shift+Enter — применить, Ctrl+Enter — применить и закрыть'),
+    el('span', 'settings-footer-hint', t('settings.shiftEnterApplyCtrlEnterApply')),
     errorLine,
   );
   const btnGroup = div('settings-footer-buttons');
@@ -298,7 +297,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
     const me = store.state.me;
     if (me === null) {
-      root.append(el('p', 'muted', 'Профиль не загружен.'));
+      root.append(el('p', 'muted', t('settings.profileNotLoaded')));
       return root;
     }
 
@@ -306,7 +305,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     nameInput.type = 'text';
     nameInput.value = draft.displayName;
     nameInput.maxLength = DISPLAY_NAME_MAX_LENGTH;
-    nameInput.placeholder = 'Не задано';
+    nameInput.placeholder = t('settings.notZadano');
     nameInput.addEventListener('input', () => {
       draft.displayName = nameInput.value;
       markDirty();
@@ -318,13 +317,13 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     username.disabled = true;
 
     root.append(
-      el('h3', 'settings-section-title', 'Профиль пользователя'),
-      fieldRow({ label: 'Имя для отображения', control: nameInput }),
-      fieldRow({ label: 'Логин', control: username }),
+      el('h3', 'settings-section-title', t('settings.profileUser')),
+      fieldRow({ label: t('settings.label.nameOtobrazheniya'), control: nameInput }),
+      fieldRow({ label: t('settings.label.login'), control: username }),
       el(
         'p',
         'muted',
-        'Имя отображается в тулбаре и других местах интерфейса. Логин задаётся при создании учётной записи.',
+        t('settings.nameOtobrazhaetsyaTulbareOtherMestahInterfeysa'),
       ),
     );
     return root;
@@ -480,8 +479,8 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       networkId: requireNetworkId(),
       kind: 'thought-types',
       value: draft.networkNodeSectionTypeId,
-      emptyLabel: '— не задано —',
-      placeholder: 'Тип мысли…',
+      emptyLabel: t('settings.emptyLabel.notZadano'),
+      placeholder: t('settings.placeholder.typeThought'),
       disabled: !canEditNetwork,
       onChange: (typeId) => {
         draft.networkNodeSectionTypeId = typeId;
@@ -496,8 +495,8 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       networkId: requireNetworkId(),
       kind: 'thought-types',
       value: draft.networkInstructionsTypeId,
-      emptyLabel: '— не задано —',
-      placeholder: 'Тип мысли…',
+      emptyLabel: t('settings.emptyLabel.notZadano'),
+      placeholder: t('settings.placeholder.typeThought'),
       disabled: !canEditNetwork,
       onChange: (typeId) => {
         draft.networkInstructionsTypeId = typeId;
@@ -506,7 +505,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     });
 
     const showInactiveRow = checkboxRow({
-      label: 'Показывать неактуальные мысли и связи в этой сети',
+      label: t('settings.showNeaktualnyeThoughtLinkNetwork'),
       checked: draft.showInactive,
       onChange: (checked) => {
         draft.showInactive = checked;
@@ -519,7 +518,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     // тот же механизм (L3 `show_trash`): выключено — помеченные на удаление
     // мысли/связи скрыты на карте, в локальном графе редактора и в структурах.
     const showTrashRow = checkboxRow({
-      label: 'Показывать содержимое корзины в этой сети',
+      label: t('settings.showSoderzhimoeTrashNetwork'),
       checked: draft.showTrash,
       onChange: (checked) => {
         draft.showTrash = checked;
@@ -529,41 +528,41 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     const showTrashLabel = showTrashRow.row;
 
     const ownerHint = canEditNetwork
-      ? 'Эти поля задаёт владелец сети или администратор сервера; изменения сохраняются для всех участников.'
-      : 'Эти поля задаёт владелец сети или администратор сервера. Вы можете посмотреть их, но не изменить.';
+      ? t('settings.theseFieldsZadaetOwnerNetworkAdmin')
+      : t('settings.theseFieldsZadaetOwnerNetworkAdmin2');
 
     root.append(
-      el('h3', 'settings-section-title', 'Настройки сети'),
-      fieldRow({ label: 'Название сети', control: nameInput }),
-      fieldRow({ label: 'Первый день недели', control: firstDaySelect }),
+      el('h3', 'settings-section-title', t('settings.settingsNetwork')),
+      fieldRow({ label: t('networks.label.titleNetwork'), control: nameInput }),
+      fieldRow({ label: t('settings.label.firstDenWeek'), control: firstDaySelect }),
       el(
         'p',
         'muted',
-        'Общая настройка для всех календарных виджетов сети и календарных токенов $weekStart/$weekEnd. При создании сети значение берётся из локали ОС сервера.',
+        t('settings.commonSettingAllCalendarVidzhetovNetwork'),
       ),
       el(
         'p',
         'muted',
-        'Самоописание сети для людей и AI-агентов. Markdown: ссылки, списки, картинки. Во вкладке «Когда использовать» перечислите сценарии, для которых подходит сеть.',
+        t('settings.samoopisanieNetworkLyudeyAiAgentsMarkdown'),
       ),
       mdTabs.root,
       el(
         'p',
         'muted',
-        'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
+        t('settings.uzlovoyTypeRazdelaOpredelyaetStrukturuNetwork'),
       ),
-      fieldRow({ label: 'Узловой тип раздела', control: typeCombo.root }),
+      fieldRow({ label: t('settings.label.uzlovoyTypeRazdela'), control: typeCombo.root }),
       el(
         'p',
         'muted',
-        'Тип инструкций агентам задаёт, какие мысли отдаются витриной `etn.instructions` (ADR 717f04df). Без выбора витрина отвечает пустым списком. Тип, выбранный здесь, защищён от удаления так же, как узловой.',
+        t('settings.typeInstructionAgentsZadaetKakieThought'),
       ),
-      fieldRow({ label: 'Тип инструкций агентам', control: instructionsTypeCombo.root }),
+      fieldRow({ label: t('settings.label.typeInstructionAgents'), control: instructionsTypeCombo.root }),
       el('p', 'muted', ownerHint),
-      el('h3', 'settings-section-title settings-section-title-spaced', 'Видимость'),
+      el('h3', 'settings-section-title settings-section-title-spaced', t('settings.vidimost')),
       showInactiveLabel,
       showTrashLabel,
-      el('p', 'muted', 'Общая настройка для всех ваших клиентов в этой сети.'),
+      el('p', 'muted', t('settings.commonSettingAllVashihKlientovNetwork')),
     );
     return root;
   }
@@ -593,13 +592,13 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
     const themeGroup = choiceGroup();
     const lightOpt = radioRow({
-      label: 'Светлая',
+      label: t('settings.label.light'),
       name: 'settings-theme',
       value: 'light',
       checked: draft.theme === 'light',
     });
     const darkOpt = radioRow({
-      label: 'Тёмная',
+      label: t('settings.label.dark'),
       name: 'settings-theme',
       value: 'dark',
       checked: draft.theme === 'dark',
@@ -647,13 +646,13 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       langGroup,
       el('p', 'muted', t('settings.languageHint')),
       ...(unavailableNote === null ? [] : [unavailableNote]),
-      el('h3', 'settings-section-title settings-section-title-spaced', 'Тема'),
+      el('h3', 'settings-section-title settings-section-title-spaced', t('settings.tema')),
       themeGroup,
-      el('p', 'muted', 'Применяется на всех экранах. Действует только на этом клиенте.'),
-      el('h3', 'settings-section-title settings-section-title-spaced', 'Размер облачка'),
-      fieldRow({ label: `Ширина облачка, px (${CLOUD_WIDTH_MIN}–${CLOUD_WIDTH_MAX})`, control: widthInput }),
-      fieldRow({ label: `Отступ между облачками, px (${CLOUD_GAP_MIN}–${CLOUD_GAP_MAX})`, control: gapInput }),
-      el('p', 'muted', 'Хранится только на этом клиенте.'),
+      el('p', 'muted', t('settings.applyAllEkranahAppliesOnlyClient')),
+      el('h3', 'settings-section-title settings-section-title-spaced', t('settings.razmerOblachka')),
+      fieldRow({ label: t('settings.shirinaOblachkaPx', [CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX]), control: widthInput }),
+      fieldRow({ label: t('settings.otstupBetweenOblachkamiPx', [CLOUD_GAP_MIN, CLOUD_GAP_MAX]), control: gapInput }),
+      el('p', 'muted', t('settings.hranitsyaOnlyClient')),
     );
     return root;
   }
@@ -686,7 +685,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   // -- apply -------------------------------------------------------------
   async function applyDiff(): Promise<void> {
     const networkId = store.state.networkId;
-    if (networkId === null) throw new Error('Сеть не открыта.');
+    if (networkId === null) throw new Error(t('app.networkNotOpen'));
 
     const tasks: Array<Promise<void>> = [];
 
@@ -844,7 +843,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.cloudGap = draft.cloudGap;
       refreshApplyButtons();
       renderContent();
-      notice('Настройки сохранены.', 'success');
+      notice(t('settings.settingsSaved'), 'success');
       if (thenClose) closeDialog();
     } catch (err) {
       errorLine.show(errText(err));

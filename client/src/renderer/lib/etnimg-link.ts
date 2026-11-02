@@ -34,6 +34,7 @@ import { etn } from './etn.js';
 import { notice } from './notice.js';
 import { store } from '../state.js';
 import { findWikiCreateContext } from './wiki-create-context.js';
+import { t } from './i18n.js';
 
 /**
  * `etnimg://<host>/<path…>` URL → absolute file path, the inverse of
@@ -98,30 +99,30 @@ async function openEtnimgLink(anchor: HTMLElement, href: string): Promise<void> 
   const ctx = findWikiCreateContext(anchor);
   if (ctx === null) {
     notice(
-      'Не удалось открыть файл: ссылка вне поля комментария — владелец вложения неизвестен.',
+      t('etnimg.notSucceededOpenFileLinkRefVne'),
     );
     return;
   }
   const networkId = store.state.networkId;
   if (networkId === null) {
-    notice('Сначала откройте сеть.');
+    notice(t('wikiLink.firstOpenNetwork'));
     return;
   }
   const filePath = decodeEtnimgUrl(href);
   if (filePath === null) {
-    notice(`Не удалось разобрать путь во вложении: ${href}`);
+    notice(t('etnimg.notSucceededRazobratPathAttachment', href));
     return;
   }
   let attachments: Attachment[];
   try {
     attachments = await etn.attachments.list(networkId, ctx.ownerType, ctx.ownerId);
   } catch (err) {
-    notice(`Не удалось открыть файл вложения: ${errText(err)}`, 'error');
+    notice(t('etnimg.notSucceededOpenFileAttachments', errText(err)), 'error');
     return;
   }
   const attachment = findAttachmentByPath(attachments, filePath);
   if (attachment === null || attachment.file_path === null) {
-    notice('Вложение по этой ссылке не найдено у владельца комментария.');
+    notice(t('etnimg.attachmentLinkRefNotFoundOwnerKommentariya'));
     return;
   }
   // Same path as the «Вложения» tab's double-click: the main process opens
@@ -129,9 +130,9 @@ async function openEtnimgLink(anchor: HTMLElement, href: string): Promise<void> 
   // missing (remote-server attachments).
   try {
     const err = await etn.system.openAttachmentFile(attachment.file_path);
-    if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+    if (err !== '') notice(t('attachments.notSucceededOpen', err), 'error');
   } catch (err) {
-    notice(`Не удалось открыть: ${errText(err)}`, 'error');
+    notice(t('attachments.notSucceededOpen', errText(err)), 'error');
   }
 }
 

@@ -50,6 +50,7 @@ import {
   planSetDefault,
   sortViewsByPosition,
 } from './views-tab-pure.js';
+import { t } from '../../lib/i18n.js';
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -100,14 +101,14 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   const headerLabel = el(
     'span',
     'muted',
-    'Отборы — публикуют кнопки полосы под мыслью в фокусе',
+    t('thoughtTypes.viewsPublikuyutKnopkiPolosyPodThought'),
   );
   headerLabel.style.flex = '1';
   const addBtn = uiButton({
-    label: '+ отбор',
+    label: t('thoughtTypes.label.view'),
     role: 'secondary',
     size: 's',
-    title: 'Создать отбор',
+    title: t('thoughtTypes.title.createView'),
     onClick: () => void onAdd(),
   });
   headerRow.append(headerLabel, addBtn);
@@ -257,7 +258,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     // (та же команда, что у «Записать» в футере диалога).
     tableWrap.append(
       renderNewTypeHint({
-        message: 'Сохраните тип, чтобы добавлять отборы — у нового типа ещё нет id.',
+        message: t('thoughtTypes.sohraniteTypeToDobavlyatViewsNovogo'),
         onSave: opts.onSave,
       }),
     );
@@ -270,7 +271,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   function renderChangeLayerNotice(): void {
     tableWrap.replaceChildren();
     tableWrap.append(
-      el('p', 'muted views-tab-empty', 'Отборы доступны только в Основе.'),
+      el('p', 'muted views-tab-empty', t('thoughtTypes.viewsDostupnyOnlyBase')),
     );
     errorLine.textContent = '';
   }
@@ -279,7 +280,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   function renderRows(): void {
     tableWrap.replaceChildren();
     if (views.length === 0) {
-      tableWrap.append(el('p', 'muted views-tab-empty', 'У типа пока нет отборов.'));
+      tableWrap.append(el('p', 'muted views-tab-empty', t('thoughtTypes.uTypePokaNoViews')));
       errorLine.textContent = '';
       return;
     }
@@ -288,10 +289,10 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     const head = el('thead');
     const headRow = el('tr');
     headRow.append(
-      el('th', 'views-tab-col-name', 'Имя'),
-      el('th', 'views-tab-col-default', 'умлоч.'),
+      el('th', 'views-tab-col-name', t('savedFilters.name')),
+      el('th', 'views-tab-col-default', t('thoughtTypes.umloch')),
       el('th', 'views-tab-col-actions'),
-      el('th', 'views-tab-col-desc', 'Описание'),
+      el('th', 'views-tab-col-desc', t('propertyManager.label.description')),
     );
     head.append(headRow);
     table.append(head);
@@ -319,7 +320,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
 
     // По умолчанию — только галочка у помеченного.
     const defaultCell = el('td', 'views-tab-default');
-    defaultCell.title = view.is_default ? 'Открывается по умолчанию' : '';
+    defaultCell.title = view.is_default ? t('thoughtTypes.otkryvaetsyaDefault') : '';
     if (view.is_default) defaultCell.append(el('span', 'views-tab-default-mark', '✓'));
     tr.append(defaultCell);
 
@@ -329,7 +330,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       label: '▲',
       role: 'secondary',
       size: 's',
-      title: idx === 0 ? 'Уже первый — выше некуда' : 'Выше',
+      title: idx === 0 ? t('thoughtTypes.alreadyFirstAboveNowhere') : t('thoughtTypes.above'),
       onClick: () => void onMove(view, idx, idx - 1, sorted),
     });
     if (idx === 0) upBtn.disabled = true;
@@ -337,7 +338,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       label: '▼',
       role: 'secondary',
       size: 's',
-      title: idx === sorted.length - 1 ? 'Уже последний — ниже некуда' : 'Ниже',
+      title: idx === sorted.length - 1 ? t('thoughtTypes.alreadyLastBelowNowhere') : t('thoughtTypes.below'),
       onClick: () => void onMove(view, idx, idx + 1, sorted),
     });
     if (idx === sorted.length - 1) downBtn.disabled = true;
@@ -348,14 +349,14 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
         label: view.is_default ? '☆' : '⭐',
         role: 'secondary',
         size: 's',
-        title: view.is_default ? 'Снять признак «по умолчанию»' : 'Сделать отбором по умолчанию',
+        title: view.is_default ? t('thoughtTypes.unsetPriznakDefault') : t('thoughtTypes.doOtboromDefault'),
         onClick: () => (view.is_default ? void onClearDefault(view) : void onSetDefault(view)),
       }),
       uiButton({
         label: '🗑️',
         role: 'secondary',
         size: 's',
-        title: 'Удалить отбор',
+        title: t('savedFilters.deleteView'),
         onClick: () => void onDelete(view),
       }),
     );
@@ -395,12 +396,12 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     // изменений запрещена (задача d9b66617). Кнопка остаётся видимой, но
     // клик показывает понятное сообщение.
     if (!isInBaseLayer()) {
-      notice('Для добавления отборов переключитесь в Основу.', 'info');
+      notice(t('thoughtTypes.forAddViewsPereklyuchitesBase'), 'info');
       return;
     }
     const typeId = getTypeId();
     if (typeId === null) {
-      notice('Сначала сохраните тип, чтобы добавлять отборы.', 'info');
+      notice(t('thoughtTypes.firstSohraniteTypeToDobavlyatViews'), 'info');
       return;
     }
     openViewEditorDialog({
@@ -420,7 +421,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
     // сообщение, не открывая диалог (который всё равно вернёт ошибку
     // сервера или молча примет изменение).
     if (!isInBaseLayer()) {
-      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      notice(t('thoughtTypes.forChangesViewPereklyuchitesBase'), 'info');
       return;
     }
     openViewEditorDialog({
@@ -438,12 +439,12 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   async function onDelete(view: ThoughtTypeView): Promise<void> {
     // Удаление отбора в слое изменений запрещено (задача d9b66617).
     if (!isInBaseLayer()) {
-      notice('Для удаления отбора переключитесь в Основу.', 'info');
+      notice(t('thoughtTypes.forDeleteViewPereklyuchitesBase'), 'info');
       return;
     }
     const ok = await confirmDialog(
-      'Удалить отбор',
-      `Удалить отбор «${view.name}»? Это действие необратимо.`,
+      t('savedFilters.deleteView'),
+      t('thoughtTypes.deleteViewThisActionIrreversible', view.name),
       true,
     );
     if (!ok) return;
@@ -455,7 +456,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       renderRows();
       opts.onChanged?.();
     } catch (err) {
-      errorDialog('Удалить отбор', err);
+      errorDialog(t('savedFilters.deleteView'), err);
       void load();
     }
   }
@@ -463,7 +464,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   async function onSetDefault(view: ThoughtTypeView): Promise<void> {
     // Правка «по умолчанию» в слое изменений запрещена (задача d9b66617).
     if (!isInBaseLayer()) {
-      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      notice(t('thoughtTypes.forChangesViewPereklyuchitesBase'), 'info');
       return;
     }
     const plan = planSetDefault(views, view.id);
@@ -498,7 +499,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       renderRows();
       opts.onChanged?.();
     } catch (err) {
-      errorDialog('Сделать отбором по умолчанию', err);
+      errorDialog(t('thoughtTypes.doOtboromDefault'), err);
       views = prev;
       renderRows();
       void load();
@@ -508,7 +509,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   async function onClearDefault(view: ThoughtTypeView): Promise<void> {
     // Правка «по умолчанию» в слое изменений запрещена (задача d9b66617).
     if (!isInBaseLayer()) {
-      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      notice(t('thoughtTypes.forChangesViewPereklyuchitesBase'), 'info');
       return;
     }
     const plan = planClearDefault(views, view.id);
@@ -532,7 +533,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       renderRows();
       opts.onChanged?.();
     } catch (err) {
-      errorDialog('Снять признак «по умолчанию»', err);
+      errorDialog(t('thoughtTypes.unsetPriznakDefault'), err);
       views = prev;
       renderRows();
       void load();
@@ -547,7 +548,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
   ): Promise<void> {
     // Перестановка отбора в слое изменений запрещена (задача d9b66617).
     if (!isInBaseLayer()) {
-      notice('Для изменения отбора переключитесь в Основу.', 'info');
+      notice(t('thoughtTypes.forChangesViewPereklyuchitesBase'), 'info');
       return;
     }
     const plan = planReorder(sorted, fromIndex, toIndex);
@@ -589,7 +590,7 @@ export function buildViewsTab(opts: BuildViewsTabOpts): ViewsTab {
       renderRows();
       opts.onChanged?.();
     } catch (err) {
-      errorDialog('Переставить отбор', err);
+      errorDialog(t('thoughtTypes.perestavitView'), err);
       views = prev;
       renderRows();
       void load();

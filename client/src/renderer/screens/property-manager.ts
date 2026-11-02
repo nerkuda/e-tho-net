@@ -150,18 +150,18 @@ import type { CataloguePanel } from './type-catalogue.js';
  *  0.8.1 (требование 5a82c709) и недоступен в выборе — оставлен только в
  *  типах для компиляции тестов и импорта архивов. */
 const VALUE_TYPE_LABELS: Record<Exclude<PropertyValueType, 'thought_ref'> | 'thought_ref', string> = {
-  text: 'строка',
-  number: 'число',
-  date: 'дата',
-  bool: 'да/нет',
-  url: 'URL (сайт или файл)',
-  link: 'связь',
-  thought_ref: 'ссылка на мысль (legacy, недоступно)',
+  text: t('valueEditor.row'),
+  number: t('valueEditor.number'),
+  date: t('valueEditor.date'),
+  bool: t('valueEditor.daNo'),
+  url: t('propertyList.url.urlSaytFile'),
+  link: t('clipboard.link'),
+  thought_ref: t('propertyList.linkRefThoughtLegacyUnavailable'),
   // Кросс-сетевая ссылка (задача 7849008a): значение адресует мысль ДРУГОЙ
   // сети по `n:<network_id>#<thought_id>`; снапшот имени — служебные данные.
-  cross_network_ref: 'кросс-сетевая ссылка',
+  cross_network_ref: t('propertyList.cross_network_ref.krossSetevayaLinkRef'),
   // Ссылка на публикацию (0.11.1, задача f37b468d) — публикация текущей сети.
-  publication: 'публикация',
+  publication: t('propertyList.publication.publication'),
 };
 
 /** Виды значения, доступные пользователю в выборе — `thought_ref` скрыт. */
@@ -275,15 +275,14 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
     if (!isLink && (property.types_count > 0 || property.values_count > 0)) {
       const parts: string[] = [];
       if (property.types_count > 0) {
-        parts.push(`подключено к ${property.types_count} ${pluralType(property.types_count)}`);
+        parts.push(t('propertyManager.connected', [property.types_count, pluralType(property.types_count)]));
       }
       if (property.values_count > 0) {
-        parts.push(`заполнено ${property.values_count} ${pluralValue(property.values_count)}`);
+        parts.push(t('propertyManager.zapolneno', [property.values_count, pluralValue(property.values_count)]));
       }
       errorDialog(
-        'Удалить свойство',
-        `Свойство «${property.name}» нельзя удалить: ${parts.join(', ')}. ` +
-          'Сначала отключите его от всех типов и разберите значения в группе «Свойства вне типа».',
+        t('propertyManager.deleteProperty'),
+        t('propertyManager.propertyCannotDeleteFirstOtklyuchiteIts', [property.name, parts.join(', ')]),
       );
       return;
     }
@@ -317,16 +316,13 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
       })();
       const names = lt !== null ? `«${lt.name_forward} / ${lt.name_reverse}»` : `«${property.name}»`;
       prompt =
-        `Удалить свойство-связь ${names}? ` +
-        (linkEstimateOk && linksBecoming > 0
-          ? `${linksBecoming} ${pluralEdge(linksBecoming)} станут структурными ` +
-            `«Родители/Потомки» и появятся в иерархии мыслей. `
-          : '') +
-        'Это действие необратимо.';
+        t('propertyManager.deletePropertyLink2etoActionIrreversible', [names, (linkEstimateOk && linksBecoming > 0
+          ? t('propertyManager.stanutStrukturnymiParentsChildrenPoyavyatsyaIerarhii', [linksBecoming, pluralEdge(linksBecoming)])
+          : '')]);
     } else {
-      prompt = `Удалить свойство «${property.name}»? Это действие необратимо.`;
+      prompt = t('propertyManager.deletePropertyThisActionIrreversible', property.name);
     }
-    const ok = await confirmDialog('Удалить свойство', prompt, true);
+    const ok = await confirmDialog(t('propertyManager.deleteProperty'), prompt, true);
     if (!ok) return;
     try {
       const result = await etn.propertyRegistry.remove(networkId, property.id);
@@ -368,16 +364,15 @@ export function buildPropertiesPanel(opts: { errorLine: FooterErrorLine }): Cata
         const n = result.links_becoming_structural;
         if (n > 0) {
           notice(
-            `Удалено. ${n} ${pluralEdge(n)} ${n === 1 ? 'стало' : 'стали'} структурными ` +
-              '«Родители/Потомки».',
+            t('propertyManager.deletedStrukturnymiParentsChildren', [n, pluralEdge(n), n === 1 ? t('propertyManager.stalo') : t('propertyManager.stali')]),
           );
         } else {
-          notice('Свойство удалено.');
+          notice(t('propertyManager.propertyDeleted'));
         }
       }
       onChanged();
     } catch (err) {
-      errorDialog('Удалить свойство', err);
+      errorDialog(t('propertyManager.deleteProperty'), err);
     }
   }
 
@@ -736,7 +731,7 @@ function collectOppositeSideTypeIds(
  *  у обеих сторон одна и та же — «Значение по умолчанию для всех типов».
  *  Поле стоит в колонке своей таблицы, поэтому «для источников»/«для
  *  назначений» читается из контекста (тултип уточняет сторону). */
-export const COMMON_SIDE_DEFAULT_LABEL = 'Значение по умолчанию для всех типов';
+export const COMMON_SIDE_DEFAULT_LABEL = t('propertyManager.valueDefaultAllTypes');
 
 /** Ограничения и подсказка общего дефолта стороны свойства-связи (задача
  *  99312ffa): подпись, дословный тултип и набор допустимых типов-кандидатов.
@@ -750,8 +745,8 @@ export function commonSideDefaultSpec(
 ): { label: string; tooltip: string; allowedTypeIds: string[] } {
   const tooltip =
     side === 'source'
-      ? 'Значение по умолчанию для источников любых типов. Может быть переопределено значениями в строках таблицы выше'
-      : 'Значение по умолчанию для назначений любых типов. Может быть переопределено значениями в строках таблицы выше';
+      ? t('propertyManager.valueDefaultIstochnikovLyubyhTypesCan')
+      : t('propertyManager.valueDefaultNaznacheniyLyubyhTypesCan');
   return {
     label: COMMON_SIDE_DEFAULT_LABEL,
     tooltip,
@@ -856,7 +851,7 @@ export function buildDescriptionField(draft: PropertyDraft): HTMLElement {
   descArea.value = draft.description;
   descArea.rows = 3;
   descArea.placeholder =
-    'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)';
+    t('propertyManager.descriptionPropertiesOnoZnachitKakomFormate');
   descArea.addEventListener('input', () => {
     draft.description = descArea.value;
   });
@@ -955,7 +950,7 @@ export function openPropertyManagerEditor(
   let unbindLock: () => void = () => undefined;
 
   // Live duplicate-name check (case-insensitive, by `name_key`).
-  const DUP_NAME_MSG = 'Свойство с таким именем уже есть.';
+  const DUP_NAME_MSG = t('propertyManager.propertyTakimNameAlreadyHas');
   let allProperties: RegistryRow[] = [];
   let applyBtn: HTMLButtonElement | null = null;
   if (property !== null) {
@@ -1081,7 +1076,7 @@ export function openPropertyManagerEditor(
   // (требование 5a82c709): для существующего свойства оставляем только
   // варианты той же категории.
   typeSelect.value = draft.valueType;
-  const valueTypeField = fieldRow({ label: 'Вид значения', control: typeSelect });
+  const valueTypeField = fieldRow({ label: t('propertyManager.label.vidValues'), control: typeSelect });
   body.append(valueTypeField);
 
   // Для уже существующего свойства — отключаем выбор другой категории.
@@ -1097,7 +1092,7 @@ export function openPropertyManagerEditor(
   // Поле вынесено в {@link buildDescriptionField}: textarea обязана зеркалить
   // ввод в draft.description — иначе PATCH уходит со старым описанием
   // (ошибка 9f579e69: «не сохраняется комментарий свойства»).
-  body.append(fieldRow({ label: 'Описание', control: buildDescriptionField(draft) }));
+  body.append(fieldRow({ label: t('propertyManager.label.description'), control: buildDescriptionField(draft) }));
 
   // ---- Хосты секций -----------------------------------------------------
   const linkFlagsHost = div('form-row');
@@ -1108,7 +1103,7 @@ export function openPropertyManagerEditor(
   body.append(linkBodyHost);
   const metadataHost = div('form-stack');
   // Метаданные + использование — в сворачиваемой группе, свёрнуты.
-  const metaGroup = buildCollapsibleGroup('Метаданные', metadataHost, true);
+  const metaGroup = buildCollapsibleGroup(t('editor.title.metadata'), metadataHost, true);
   body.append(metaGroup);
 
   // ---- Эффект перерисовки формы при смене value_type --------------------
@@ -1133,10 +1128,10 @@ export function openPropertyManagerEditor(
   }
 
   function renderLinkFlags(): void {
-    linkFlagsHost.append(sectionLabel('Связь'));
+    linkFlagsHost.append(sectionLabel(t('editor.link')));
     linkFlagsHost.append(
       checkboxRow({
-        label: 'рисовать связь на карте по умолчанию',
+        label: t('propertyManager.risovatLinkMapDefault'),
         checked: draft.showOnMap,
         onChange: (checked) => {
           draft.showOnMap = checked;
@@ -1145,7 +1140,7 @@ export function openPropertyManagerEditor(
     );
     linkFlagsHost.append(
       checkboxRow({
-        label: 'заполненная ссылка блокирует удаление цели',
+        label: t('propertyManager.zapolnennayaLinkRefBlokiruetDeleteTargets'),
         checked: draft.blocksTargetDeletion,
         onChange: (checked) => {
           draft.blocksTargetDeletion = checked;
@@ -1155,18 +1150,18 @@ export function openPropertyManagerEditor(
   }
 
   function renderScalarBody(): void {
-    mainBodyHost.append(sectionLabel('Скалярное свойство'));
+    mainBodyHost.append(sectionLabel(t('propertyManager.skalyarnoeProperty')));
     // Имя свойства
     const nameInput = fieldInput() as HTMLInputElement;
     nameInput.type = 'text';
     nameInput.value = draft.name;
     nameInput.maxLength = 200;
-    nameInput.placeholder = 'Заголовок свойства (обязательно)';
+    nameInput.placeholder = t('propertyManager.titlePropertiesObyazatelno');
     nameInput.addEventListener('input', () => {
       draft.name = nameInput.value;
       revalidateName();
     });
-    mainBodyHost.append(fieldRow({ label: 'Имя свойства', control: nameInput }));
+    mainBodyHost.append(fieldRow({ label: t('propertyManager.label.nameProperties'), control: nameInput }));
 
     // Две колонки: таблица «Типы мыслей» слева, опции/множественность справа.
     const typesHost = div('form-stack');
@@ -1177,7 +1172,7 @@ export function openPropertyManagerEditor(
 
     const defaultsHost = div('form-stack');
     defaultsHost.append(
-      fieldRow({ label: 'Значение по умолчанию', control: buildValueEditor({
+      fieldRow({ label: t('propertyManager.label.valueDefault'), control: buildValueEditor({
         networkId,
         definition: scalarDefaultDefinition(draft),
         value: draft.defaultValue,
@@ -1194,13 +1189,13 @@ export function openPropertyManagerEditor(
   }
 
   function renderLinkBody(): void {
-    linkBodyHost.append(sectionLabel('Свойство-связь'));
+    linkBodyHost.append(sectionLabel(t('propertyManager.propertyLink')));
     // Имена сторон + таблицы + родительский тип + оформление.
     const nameForwardInput = fieldInput() as HTMLInputElement;
     nameForwardInput.type = 'text';
     nameForwardInput.value = draft.nameForward;
     nameForwardInput.maxLength = 200;
-    nameForwardInput.placeholder = 'От источника к назначению';
+    nameForwardInput.placeholder = t('propertyManager.fromIstochnikaNaznacheniyu');
     nameForwardInput.addEventListener('input', () => {
       draft.nameForward = nameForwardInput.value;
     });
@@ -1208,7 +1203,7 @@ export function openPropertyManagerEditor(
     nameReverseInput.type = 'text';
     nameReverseInput.value = draft.nameReverse;
     nameReverseInput.maxLength = 200;
-    nameReverseInput.placeholder = 'От назначения к источнику';
+    nameReverseInput.placeholder = t('propertyManager.fromNaznacheniyaIstochniku');
     nameReverseInput.addEventListener('input', () => {
       draft.nameReverse = nameReverseInput.value;
     });
@@ -1230,7 +1225,7 @@ export function openPropertyManagerEditor(
     buildTypeRowsTable(rightTypesHost, /* isLink */ true, /* side */ 'target', refreshCommonDefaults);
     const leftCol = div('form-stack');
     for (const part of linkSideColumnParts({
-      nameField: fieldRow({ label: 'Имя в источнике', control: nameForwardInput }),
+      nameField: fieldRow({ label: t('propertyManager.label.nameIstochnike'), control: nameForwardInput }),
       tableHost: leftTypesHost,
       commonDefaultHost: sourceDefaultsHost,
     })) {
@@ -1238,7 +1233,7 @@ export function openPropertyManagerEditor(
     }
     const rightCol = div('form-stack');
     for (const part of linkSideColumnParts({
-      nameField: fieldRow({ label: 'Имя в назначении', control: nameReverseInput }),
+      nameField: fieldRow({ label: t('propertyManager.label.nameNaznachenii'), control: nameReverseInput }),
       tableHost: rightTypesHost,
       commonDefaultHost: targetDefaultsHost,
     })) {
@@ -1255,20 +1250,20 @@ export function openPropertyManagerEditor(
       networkId,
       kind: 'link-types',
       value: normalizeParentTypeId(draft.parentLinkTypeId, linkTypeRootId),
-      placeholder: 'Без родителя',
-      emptyLabel: 'Без родителя',
+      placeholder: t('propertyManager.placeholder.withoutParent'),
+      emptyLabel: t('propertyManager.placeholder.withoutParent'),
       onChange: (id) => {
         draft.parentLinkTypeId = id;
       },
     });
     const styleBtn = uiButton({
-      label: 'Оформление…',
+      label: t('propertyManager.label.oformlenie'),
       role: 'secondary',
       size: 's',
       onClick: () => openLinkStyle(),
     });
     parentRow.append(parentCombo.root, styleBtn);
-    linkBodyHost.append(fieldRow({ label: 'Родительский тип связи', control: parentRow }));
+    linkBodyHost.append(fieldRow({ label: t('propertyManager.label.roditelskiyTypeLink'), control: parentRow }));
 
     // Имя в реестре для свойства-связи — копия `name_forward` (сервер
     // вычисляет `linkPropertyDisplayName`, см. заметку в shared).
@@ -1313,7 +1308,7 @@ export function openPropertyManagerEditor(
     side: 'source' | 'target' | null,
     onRowsChanged?: () => void,
   ): void {
-    host.append(sectionLabel(isLink ? (side === 'source' ? 'Типы источников' : 'Типы назначений') : 'Типы мыслей'));
+    host.append(sectionLabel(isLink ? (side === 'source' ? t('propertyManager.typesIstochnikov') : t('propertyManager.typesNaznacheniy')) : t('propertyManager.typesThoughts')));
     // Кнопка «Добавить тип» — ВВЕРХУ своей таблицы (как кнопки управления
     // списком в диалогах), компактной высоты `--list-btn-h`, с небольшими
     // отступами по вертикали — единым правилом дизайн-системы
@@ -1321,10 +1316,10 @@ export function openPropertyManagerEditor(
     const toolbar = div('form-row type-list-toolbar type-rows-toolbar');
     toolbar.append(
       uiButton({
-        label: 'Добавить тип',
+        label: t('propertyManager.label.addType'),
         role: 'secondary',
         size: 's',
-        title: 'Добавить привязку свойства к типу мысли',
+        title: t('propertyManager.addPrivyazkuPropertiesTipuThought'),
         onClick: () => void addRow(),
       }),
     );
@@ -1342,9 +1337,9 @@ export function openPropertyManagerEditor(
       const head = el('thead');
       const headRow = el('tr');
       headRow.append(
-        el('th', undefined, 'Тип мысли'),
-        el('th', undefined, 'Обязательное'),
-        el('th', undefined, 'Значение по умолчанию'),
+        el('th', undefined, t('addDialog.label.typeThought')),
+        el('th', undefined, t('propertyManager.obyazatelnoe')),
+        el('th', undefined, t('propertyManager.label.valueDefault')),
         el('th'),
       );
       head.append(headRow);
@@ -1353,7 +1348,7 @@ export function openPropertyManagerEditor(
       const rowsHere = rows();
       if (rowsHere.length === 0) {
         const empty = el('tr');
-        const emptyCell = el('td', 'muted', 'Нет привязок. Нажмите «Добавить тип».');
+        const emptyCell = el('td', 'muted', t('propertyManager.noPrivyazokClickAddType'));
         emptyCell.colSpan = 4;
         empty.append(emptyCell);
         tbody.append(empty);
@@ -1446,7 +1441,7 @@ export function openPropertyManagerEditor(
         label: '✕',
         role: 'secondary',
         size: 's',
-        title: 'Снять привязку',
+        title: t('chrono.title.unsetPrivyazku'),
         onClick: () => removeRow(row),
       });
       actionCell.append(rm);
@@ -1470,9 +1465,9 @@ export function openPropertyManagerEditor(
       // добавляет сам. Пустой поиск показывает полный список каталога.
       const title = isLink
         ? side === 'source'
-          ? 'Типы источников'
-          : 'Типы назначений'
-        : 'Типы мыслей';
+          ? t('propertyManager.typesIstochnikov')
+          : t('propertyManager.typesNaznacheniy')
+        : t('propertyManager.typesThoughts');
       const picked = await pickEntitiesModal({
         networkId,
         kind: 'thought-types',
@@ -1487,7 +1482,7 @@ export function openPropertyManagerEditor(
         commands: (ctx) => [
           {
             icon: 'check-check',
-            title: 'Отметить все',
+            title: t('propertyManager.title.otmetitAll'),
             onClick: () => {
               for (const t of store.state.thoughtTypes) {
                 if (!t.is_root) ctx.checked.add(t.id);
@@ -1607,7 +1602,7 @@ export function openPropertyManagerEditor(
     metadataHost.append(buildMetadataRowsFromProperty(property));
     metadataHost.append(buildUsagePanel(networkId, property.id, onChanged));
   } else {
-    metadataHost.append(el('p', 'muted', 'Метаданные появятся после сохранения.'));
+    metadataHost.append(el('p', 'muted', t('propertyManager.metadataPoyavyatsyaAfterSave')));
   }
 
   // ---- Привязка событий -------------------------------------------------
@@ -1618,7 +1613,7 @@ export function openPropertyManagerEditor(
       // Защита: запрет смены категории (требование 5a82c709).
       typeSelect.value = prev;
       errorLine.show(
-        'Сменить категорию (скаляр ↔ связь) нельзя: значения связи живут рёбрами, а не в таблице значений.',
+        t('propertyManager.changeKategoriyuSkalyarLinkCannotValues'),
       );
       return;
     }
@@ -1672,11 +1667,11 @@ export function openPropertyManagerEditor(
     // Базовые проверки.
     if (draft.valueType === 'link') {
       if (draft.nameForward.trim() === '' || draft.nameReverse.trim() === '') {
-        errorLine.show('Укажите имена обеих сторон.');
+        errorLine.show(t('propertyManager.enterNamesObeihStoron'));
         return;
       }
     } else if (draft.name.trim() === '') {
-      errorLine.show('Название свойства обязательно.');
+      errorLine.show(t('propertyManager.titlePropertiesObyazatelno2'));
       return;
     }
     const name = draft.valueType === 'link' ? draft.nameForward.trim() : draft.name.trim();
@@ -1724,13 +1719,12 @@ export function openPropertyManagerEditor(
         // категории (между скалярами идёт серверная конверсия).
         if (changes.value_type !== undefined && changes.value_type !== current.value_type) {
           const ok = await confirmDialog(
-            'Сменить тип значения',
-            `Сменить тип значения свойства «${current.name}»? ` +
-              'Значения во всех элементах будут преобразованы к новому типу; несовместимые — очищены.',
+            t('propertyManager.changeTypeValues'),
+            t('propertyManager.changeTypeValuesPropertiesValuesAll', current.name),
             true,
           );
           if (!ok) return;
-          notice('Ждите: выполняется обработка значений…');
+          notice(t('propertyManager.zhditeVypolnyaetsyaObrabotkaValues'));
         }
         const result = await etn.propertyRegistry.update(
           networkId,
@@ -1757,8 +1751,8 @@ export function openPropertyManagerEditor(
         if (changes.value_type !== undefined) {
           notice(
             result.dropped > 0 || result.converted > 0
-              ? `Обработка выполнена: преобразовано ${result.converted}, удалено ${result.dropped}.`
-              : 'Обработка выполнена.',
+              ? t('propertyManager.obrabotkaVypolnenaPreobrazovanoDeleted', [result.converted, result.dropped])
+              : t('propertyManager.obrabotkaVypolnena'),
           );
         }
         // Родительский тип связи (ошибка d56c1ae4): PATCH /properties его не
@@ -1911,7 +1905,7 @@ export function openPropertyManagerEditor(
   }
 
   showDialog({
-    title: property === null ? 'Новое свойство' : `Свойство — «${property.name}»`,
+    title: property === null ? t('propertyManager.novoeProperty') : t('propertyManager.property', property.name),
     body,
     size: 'xl',
     // Идентичность сущности для повторного открытия (ошибки c2d243bb,
@@ -2189,7 +2183,7 @@ export function isEmptyDefault(value: unknown): boolean {
  *  редакторов (диалог свойства и вкладка «Свойства» редактора типа). */
 export function emptyDefaultHint(): HTMLElement {
   const hint = span('—', 'muted prop-default-hint');
-  setTooltip(hint, 'Пусто — при создании мысли используется общее значение стороны привязки.');
+  setTooltip(hint, t('propertyManager.emptySozdaniiThoughtIspolzuetsyaObscheeValue'));
   return hint;
 }
 
@@ -2268,14 +2262,14 @@ export function buildScalarOptionsBlockImpl(draft: PropertyDraft): HTMLElement {
   const area = fieldTextarea({ extraClass: 'prop-options-area' }) as HTMLTextAreaElement;
   area.value = draft.optionsText;
   area.rows = 4;
-  area.placeholder = 'Варианты значения — по одному в строке';
+  area.placeholder = t('propertyManager.variantyValuesOdnomuRow');
   area.style.display = draft.choiceOn ? '' : 'none';
   area.addEventListener('input', () => {
     draft.optionsText = area.value;
   });
   host.append(
     checkboxRow({
-      label: 'выбирать из списка',
+      label: t('propertyManager.label.vybiratList'),
       checked: draft.choiceOn,
       onChange: (checked) => {
         draft.choiceOn = checked;
@@ -2286,7 +2280,7 @@ export function buildScalarOptionsBlockImpl(draft: PropertyDraft): HTMLElement {
   );
   host.append(
     checkboxRow({
-      label: 'несколько значений',
+      label: t('propertyManager.label.neskolkoValues'),
       checked: draft.multipleOn,
       onChange: (checked) => {
         draft.multipleOn = checked;
@@ -2330,26 +2324,26 @@ function cloneConfig(c: PropertyConfig | null): PropertyConfig | null {
 function pluralType(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'типу';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'типам';
-  return 'типов';
+  if (mod10 === 1 && mod100 !== 11) return t('propertyManager.tipu');
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return t('propertyManager.tipam');
+  return t('propertyManager.types');
 }
 
 function pluralValue(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'значение';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'значения';
-  return 'значений';
+  if (mod10 === 1 && mod100 !== 11) return t('propertyManager.value');
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return t('propertyManager.values');
+  return t('filterValue.values');
 }
 
 /** Склонение «связь/связи/связей» для подтверждения удаления свойства-связи. */
 function pluralEdge(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'связь';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'связи';
-  return 'связей';
+  if (mod10 === 1 && mod100 !== 11) return t('clipboard.link');
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return t('clipboard.link2');
+  return t('clipboard.links');
 }
 
 // ---------------------------------------------------------------------------
@@ -2384,7 +2378,7 @@ function buildUsagePanel(
   onChanged: () => void,
 ): HTMLElement {
   const host = div('form-stack');
-  const label = el('p', 'muted', 'Использование');
+  const label = el('p', 'muted', t('propertyManager.ispolzovanie'));
   label.style.margin = '12px 0 2px';
   host.append(label);
 
@@ -2411,15 +2405,15 @@ function buildUsagePanel(
     const head = el('thead');
     const headRow = el('tr');
     headRow.append(
-      el('th', undefined, 'Тип'),
-      el('th', undefined, 'Значений в типе'),
+      el('th', undefined, t('attachments.label.type')),
+      el('th', undefined, t('propertyManager.valuesType')),
     );
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
     if (usage.bindings.length === 0) {
       const emptyRow = el('tr');
-      const emptyCell = el('td', 'muted', 'Свойство ни к чему не подключено.');
+      const emptyCell = el('td', 'muted', t('propertyManager.propertyNiChemuNotConnected'));
       emptyCell.colSpan = 2;
       emptyRow.append(emptyCell);
       tbody.append(emptyRow);
@@ -2432,7 +2426,7 @@ function buildUsagePanel(
         label: b.owner_name,
         size: 's',
         class: 'link-btn',
-        title: 'Открыть тип',
+        title: t('propertyManager.title.openType'),
         // Промис обработчика ожидается: отказ чтения реестра обрабатывается
         // внутри (errorDialog), необработанного отказа в renderer нет
         // (ошибка b55fedb6).
@@ -2447,8 +2441,7 @@ function buildUsagePanel(
     table.append(tbody);
     tableWrap.replaceChildren(table);
     counts.textContent =
-      `Всего значений в типе: ${usage.values_in_type_count}. ` +
-      `Вне типа: ${usage.values_outside_type_count}.`;
+      t('propertyManager.vsegoValuesTypeVneType', [usage.values_in_type_count, usage.values_outside_type_count]);
   }
 
   /** Открывает редактор нужного типа: для thought_type — редактор типа мысли;
@@ -2475,7 +2468,7 @@ function buildUsagePanel(
       // Отказ чтения реестра (связь/сеть) — видимая ошибка, как у соседних
       // действий менеджера; молчаливого «кнопка не работает» больше нет
       // (ошибка b55fedb6).
-      errorDialog('Открыть тип', err);
+      errorDialog(t('propertyManager.title.openType'), err);
     }
   }
 
@@ -2717,7 +2710,7 @@ export function buildLinkTypesPanel(): CataloguePanel {
           if (item.prop === undefined) {
             setTooltip(
               cell,
-              'Для этого типа связи ещё нет свойства в реестре. Тип связи без свойства бесполезен — создайте свойство через «Добавить».',
+              t('propertyManager.forThisTypeLinkMoreNo'),
             );
           }
           return cell;

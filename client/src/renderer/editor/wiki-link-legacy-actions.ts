@@ -20,6 +20,7 @@ import { requireNetworkId } from '../app.js';
 import { etn } from '../lib/etn.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
+import { t } from '../lib/i18n.js';
 
 interface ResolvedName {
   thoughtId: string;
@@ -110,23 +111,23 @@ export const wikiLinkLegacyActions = ViewPlugin.fromClass(
 
       if (resolved === null) {
         // Cannot resolve — surface the failure as a notice + a manual fallback.
-        notice(`Не удалось найти мысль «${name}» для перевода на [[#<id>]].`, 'error');
+        notice(t('wikiLink.notSucceededFindThoughtPerevodaId', name), 'error');
         return;
       }
 
       items.push({
-        label: `Обновить формат на [[#<id>]] (${resolved.title})`,
+        label: t('wikiLink.obnovitFormatId', resolved.title),
         onClick: () => {
           const range = findNameRange(view, span);
           if (range === null) {
-            notice('Не удалось определить позицию ссылки в документе.', 'error');
+            notice(t('wikiLink.notSucceededOpredelitPoziciyuLinkRefDokumente'), 'error');
             return;
           }
           rewriteToId(view, range.start, range.end, name, resolved.thoughtId);
         },
       });
       items.push({
-        label: 'Открыть мысль',
+        label: t('wikiLink.label.openThought'),
         onClick: () => {
           void etn.thoughts
             .get(networkId, resolved.thoughtId)

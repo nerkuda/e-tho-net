@@ -30,6 +30,7 @@ import { etn } from '../lib/etn.js';
 import { ensureLink, throwOnFailures } from '../lib/link-ops.js';
 import { notice, noticePartial } from '../lib/notice.js';
 import { findWikiCreateContext, type WikiCreateCommentContext } from '../lib/wiki-create-context.js';
+import { t } from '../lib/i18n.js';
 
 /**
  * Runs the create flow for an unresolvable legacy link. Always takes the click
@@ -76,7 +77,7 @@ export async function tryCreateThoughtFromLegacyLink(
       parentId = parent.id;
       parentTitle = parent.title;
     } catch (err) {
-      notice(`Не удалось определить родителя для новой мысли: ${errText(err)}`, 'error');
+      notice(t('wikiLink.notSucceededOpredelitParentNovoyThought', errText(err)), 'error');
       return;
     }
   }
@@ -141,7 +142,7 @@ export async function tryCreateThoughtFromLegacyLink(
   }
   if (failed > 0 || created > 0) {
     noticePartial(
-      failed > 0 ? `Создано/связано: ${created}, ошибок: ${failed}` : `Готово: ${created}.`,
+      failed > 0 ? t('addDialog.createdSvyazanoErrors', [created, failed]) : t('addDialog.gotovo', created),
       failed,
     );
   }
@@ -153,7 +154,7 @@ export async function tryCreateThoughtFromLegacyLink(
   try {
     await options.onCreated(firstAddedId);
   } catch (err) {
-    notice(`Не удалось обновить ссылку: ${errText(err)}`, 'error');
+    notice(t('wikiLink.notSucceededObnovitLinkRef', errText(err)), 'error');
   }
 }
 

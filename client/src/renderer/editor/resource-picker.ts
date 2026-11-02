@@ -241,7 +241,7 @@ export function emojiSourceTab(
   const initial = opts.initial ?? null;
   return {
     id: 'emoji',
-    label: 'Эмодзи',
+    label: t('contextMenu.emodzi'),
     build: (ctx) => {
       const root = div('emoji-groups');
       let currentCell: HTMLElement | null = null;
@@ -457,12 +457,12 @@ export function thoughtIconSourceTab(opts: {
   };
   return {
     id: 'thought-icons',
-    label: 'Иконки мыслей',
+    label: t('resourcePicker.label.iconThoughts'),
     build: (ctx) => {
       const grid = div('icon-type-grid');
       const types = opts.types.filter((type) => type.icon !== null && type.icon !== '');
       if (types.length === 0) {
-        grid.append(el('p', 'muted', opts.emptyHint ?? 'Типы мыслей с иконками не заданы.'));
+        grid.append(el('p', 'muted', opts.emptyHint ?? t('resourcePicker.typesThoughtsIkonkamiNotZadany')));
         return wrap(grid);
       }
       for (const type of types) {
@@ -471,7 +471,7 @@ export function thoughtIconSourceTab(opts: {
           () => void opts.onPick(type.icon ?? '', type.icon_kind, type.icon_color ?? null, ctx),
           'icon-type-cell',
         );
-        cell.title = `Иконка типа «${type.name}»`;
+        cell.title = t('resourcePicker.iconType', type.name);
         if (type.icon_kind === 'image' && type.icon !== null) {
           const img = el('img');
           img.src = type.icon;

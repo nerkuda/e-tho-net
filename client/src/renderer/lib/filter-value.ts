@@ -115,6 +115,7 @@ import { buildUserMultiSelectWidget, buildUserSelectWidget } from './users.js';
 import type { ThoughtCloudInput } from './thought-cloud.js';
 import { etn } from './etn.js';
 import { resolveThoughtRefs } from './thought-ref-batch.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Классы вида — единственная точка имён (адресуются тестами и CSS)
@@ -249,8 +250,8 @@ const HIERARCHY_OPS: ReadonlySet<FilterAstOperator> = new Set(['in_hierarchy', '
 
 /** Значения-перечисления вида вложения (`kind`) — словарь спецификации. */
 const ATTACHMENT_KIND_OPTIONS: readonly FilterValueEnumOption[] = [
-  { value: 'file', label: 'Файл' },
-  { value: 'url', label: 'Ссылка' },
+  { value: 'file', label: t('filterValue.label.file') },
+  { value: 'url', label: t('filterValue.label.linkRef') },
 ];
 
 /** Ссылочные операнды: значение — мысль/тип/тип связи (элемент 21955e84). */
@@ -436,15 +437,15 @@ export function filterValueAcceptsPayload(
 
 /** Вид значения для объяснения отказа (пользовательский текст). */
 const DROP_PAYLOAD_LABELS: Readonly<Record<ThoughtDropPayload['kind'], string>> = {
-  thought: 'мысль',
-  type: 'тип',
-  string: 'строку',
-  date: 'дату',
+  thought: t('clipboard.thought'),
+  type: t('filterValue.type.type'),
+  string: t('filterValue.string.line'),
+  date: t('filterValue.date.date'),
 };
 
 /** Объяснение несовместимого броска: модель не меняется, причина видна. */
 export function filterValueDropRejectionText(payload: ThoughtDropPayload): string {
-  return `Это условие не принимает ${DROP_PAYLOAD_LABELS[payload.kind]}: его значение другого вида`;
+  return t('filterValue.thisConditionNotPrinimaetItsValue', DROP_PAYLOAD_LABELS[payload.kind]);
 }
 
 /**
@@ -542,15 +543,15 @@ export const FILTER_VALUE_KEYWORD_SCOPES = FILTER_PHRASE_KEYWORD_SCOPES;
 export function filterValueUnitLabel(leaf: FilterTreeLeaf): string {
   switch (leaf.entity.kind) {
     case 'parents':
-      return 'родителей';
+      return t('filterValue.parents');
     case 'children':
-      return 'потомков';
+      return t('filterValue.children');
     case 'attachments':
-      return 'вложений';
+      return t('filterValue.attachments');
     case 'chronology':
-      return 'дневниковых записей';
+      return t('filterValue.dnevnikovyhRecords');
     default:
-      return 'значений';
+      return t('filterValue.values');
   }
 }
 
@@ -571,7 +572,7 @@ function tokenNeedsTime(text: string): boolean {
 export function filterValueTokenSource(ctx: FilterValueContext): SuggestSource {
   return {
     when: 'always',
-    header: 'Опоры',
+    header: t('filterValue.header.opory'),
     load: (query: string): SuggestEntry[] => {
       const needle = query.trim().toLowerCase();
       return filterValueTokenOptions(ctx)
@@ -588,7 +589,7 @@ export function filterValueHumanLabel(value: FilterTreeValue): string {
     return typeof value.value === 'string' ? filterPhraseToken(value.value) : String(value.value);
   }
   if (value.kind === 'list') return value.items.map((item) => humanListItem(item)).join(' — ');
-  if (value.kind === 'subquery') return `под-выборка (${value.operator})`;
+  if (value.kind === 'subquery') return t('filterTree.podSelection', value.operator);
   return '';
 }
 
@@ -878,11 +879,11 @@ function triadControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HTMLEl
       : 'yes';
   return segmentedControl({
     items: [
-      { id: 'yes', label: 'да' },
-      { id: 'no', label: 'нет' },
+      { id: 'yes', label: t('valueEditor.da') },
+      { id: 'no', label: t('valueEditor.no') },
     ],
     activeId: current,
-    ariaLabel: 'Значение предиката',
+    ariaLabel: t('filterValue.ariaLabel.valuePredikata'),
     extraClass: 'fv-triad',
     onChange: (id) => {
       api.setValue({ kind: 'scalar', value: id === 'yes' });
@@ -900,11 +901,11 @@ function predicateControl(leaf: FilterTreeLeaf, api: FilterTreeValueSlotApi): HT
   const current: 'yes' | 'no' = leaf.operator === 'is_empty' ? 'no' : 'yes';
   return segmentedControl({
     items: [
-      { id: 'yes', label: 'да' },
-      { id: 'no', label: 'нет' },
+      { id: 'yes', label: t('valueEditor.da') },
+      { id: 'no', label: t('valueEditor.no') },
     ],
     activeId: current,
-    ariaLabel: 'Значение условия',
+    ariaLabel: t('filterValue.ariaLabel.valueConditions'),
     extraClass: 'fv-predicate',
     onChange: (id) => {
       leaf.operator = id === 'yes' ? 'not_empty' : 'is_empty';
@@ -946,8 +947,8 @@ function propertiesControl(
     initialOptions: options,
     loadOptions: (query) => filterEntityOptions(options, query),
     optionsWhen: 'always',
-    optionsHeader: 'Свойства',
-    placeholder: 'Добавить свойство…',
+    optionsHeader: t('editor.title.properties'),
+    placeholder: t('filterValue.placeholder.addProperty'),
     dropdownMinWidth: 420,
   });
   wrap.append(field.root);
@@ -1052,13 +1053,13 @@ function enumControl(
         : entries.filter((option) => option.title.toLowerCase().includes(needle));
     },
     initialOptions: entries,
-    optionsHeader: 'Значения',
+    optionsHeader: t('filterValue.optionsHeader.values'),
     titleOf: (id) => labelOf(id),
     // Нейтральное облачко: код перечисления — не мысль, дефолтный значок мысли
     // в чипе лишний (пустая иконка штатной фабрики облачка).
     cloudOf: (value) => ({ id: value, title: labelOf(value), icon: '' }),
-    placeholder: 'Добавить значение…',
-    addPlaceholder: 'Добавить значение…',
+    placeholder: t('entityPicker.addValue'),
+    addPlaceholder: t('entityPicker.addValue'),
   });
   box.append(field.root);
   return box;
@@ -1116,7 +1117,7 @@ function keywordsControl(
   const input = fieldInput({
     type: 'text',
     value: filterValueScalarText(leaf.value),
-    placeholder: 'слова…',
+    placeholder: t('filterValue.placeholder.slova'),
     onChange: (raw: string) => {
       const text = raw.trim();
       api.setValue(text === '' ? { kind: 'none' } : { kind: 'scalar', value: text });
@@ -1270,11 +1271,11 @@ function dateBoundControl(
   // 1. Период — первый пункт «Точная дата», далее группа «ОТНОСИТЕЛЬНЫЕ ДАТЫ»
   //    со всеми опорами профиля (п.11в).
   const anchorSelect = el('select', `${FILTER_VALUE_ANCHOR_CLASS} select-input`) as HTMLSelectElement;
-  const exactOption = el('option', '', 'Точная дата') as HTMLOptionElement;
+  const exactOption = el('option', '', t('filterValue.tochnayaDate')) as HTMLOptionElement;
   exactOption.value = 'exact';
   anchorSelect.append(exactOption);
   const group = el('optgroup', '') as HTMLOptGroupElement;
-  group.label = 'ОТНОСИТЕЛЬНЫЕ ДАТЫ';
+  group.label = t('filterValue.otnositelnyeDates');
   const offered = new Set<string>();
   for (const option of anchors) {
     const item = el('option', '', option.label) as HTMLOptionElement;
@@ -1316,7 +1317,7 @@ function dateBoundControl(
     //    Крестик поля не рисуем: очистка/сброс — одна кнопка строки.
     const field = dateField({
       value: current,
-      ariaLabel: 'Точная дата',
+      ariaLabel: t('filterValue.tochnayaDate'),
       hideClear: true,
       onPick: exactDatePicker(current, ctx),
       onChange: (iso: string) => onChange(iso === '' ? { kind: 'none' } : { kind: 'scalar', value: iso }),
@@ -1328,7 +1329,7 @@ function dateBoundControl(
       type: 'text',
       value: amount === 0 ? '' : `${amount > 0 ? '+' : '−'}${Math.abs(amount)}`,
       placeholder: '0',
-      title: 'Сдвиг опоры: +30, −30 или 0',
+      title: t('filterValue.sdvigOpory'),
       extraClass: FILTER_VALUE_SHIFT_CLASS,
       onChange: (raw: string) => {
         amount = parseShiftInput(raw);
@@ -1359,7 +1360,7 @@ function dateBoundControl(
       role: 'ghost',
       size: 's',
       class: FILTER_VALUE_DATE_RESET_CLASS,
-      title: 'Сбросить к «сегодня, 0»',
+      title: t('filterValue.title.resetSegodnya'),
       onClick: () => {
         anchor = '$today';
         amount = 0;
@@ -1391,7 +1392,7 @@ function exactDatePicker(
     const result = await openDatePeriodDialog({
       allowPeriod: false,
       allowTime: false,
-      title: 'Точная дата',
+      title: t('filterValue.tochnayaDate'),
       initial: { mode: 'date', from: fallback, to: fallback },
       // Настройка сети читается В МОМЕНТ открытия: панель могла быть собрана
       // до смены первого дня недели в «Все настройки» (ошибка b5278f9a).
@@ -1441,13 +1442,13 @@ export function filterValueShiftUnits(
   ctx: Pick<FilterValueContext, 'profile'>,
 ): readonly { key: string; label: string }[] {
   const units: { key: string; label: string }[] = [
-    { key: 'd', label: 'дн' },
-    { key: 'w', label: 'нед' },
-    { key: 'mo', label: 'мес' },
-    { key: 'y', label: 'год' },
+    { key: 'd', label: t('filterValue.label.d') },
+    { key: 'w', label: t('filterValue.label.w') },
+    { key: 'mo', label: t('filterValue.label.mo') },
+    { key: 'y', label: t('filterValue.label.year') },
   ];
   if (filterProfileHasTime(ctx.profile)) {
-    units.push({ key: 'h', label: 'час' }, { key: 'mi', label: 'мин' });
+    units.push({ key: 'h', label: t('filterValue.label.chas') }, { key: 'mi', label: t('filterValue.label.min') });
   }
   return units;
 }
@@ -1666,10 +1667,10 @@ export function openFilterThoughtMenu(opts: FilterThoughtMenuOptions): void {
       { anchor: opts.anchor },
       { id: opts.id, title: opts.title, dir: 'siblings', trashed: opts.trashed === true },
       {
-        openLabel: 'Открыть в редакторе',
+        openLabel: t('miniGraph.openLabel.openEditor'),
         openHandler: (id) => openThoughtInEditorById(id),
         focusHandler: () => focusThoughtOnMapById(opts.id),
-        extraItems: [menuAction('Убрать из значения условия', opts.onRemoveFromValue)],
+        extraItems: [menuAction(t('filterValue.removeValuesConditions'), opts.onRemoveFromValue)],
         ...(available ? {} : { unresolvable: true }),
       },
     );
@@ -1895,7 +1896,7 @@ function entityOperandControl(
       networkId: ctx.networkId,
       kind,
       value: currentValue === '' ? null : currentValue,
-      placeholder: 'выбрать…',
+      placeholder: t('filterValue.placeholder.select'),
       ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
       ...(kind === 'thoughts' && ctx.networkId !== ''
         ? {
@@ -1976,8 +1977,8 @@ function entityOperandControl(
           rememberOptions,
         ),
       ...(options.length > 0 ? { initialOptions: options, optionsWhen: 'always' as const } : {}),
-      optionsHeader: 'Значения',
-      placeholder: 'Добавить значение…',
+      optionsHeader: t('filterValue.optionsHeader.values'),
+      placeholder: t('entityPicker.addValue'),
       cloudOf,
       titleOf,
       ...(kind === 'thoughts' ? { thoughtPreview: true } : {}),
@@ -2070,7 +2071,7 @@ function defaultEntityPicker(
 ): EntityChipFieldOptions['picker'] | undefined {
   if (kind !== 'thoughts' || networkId === '') return undefined;
   return {
-    label: 'Выбрать или создать мысли',
+    label: t('valueEditor.title.selectCreateThought'),
     open: async (managed: readonly string[]): Promise<string[] | null> => {
       const { pickThoughtsDialog } = await import('../canvas/add-dialog.js');
       const result = await pickThoughtsDialog({
@@ -2078,8 +2079,8 @@ function defaultEntityPicker(
         allowCreate: true,
         allowLinkType: false,
         selectedIds: [...managed],
-        title: 'Выбрать или создать мысли',
-        applyLabel: 'Выбрать',
+        title: t('valueEditor.title.selectCreateThought'),
+        applyLabel: t('actions.select'),
       });
       if (result === null) return null;
       const ids: string[] = [];
@@ -2108,11 +2109,11 @@ function defaultEntityPicker(
 function hierarchyModeControl(leaf: FilterTreeLeaf, ctx: FilterValueContext): HTMLElement {
   return segmentedControl({
     items: [
-      { id: 'structural', label: 'по структуре' },
-      { id: 'all_links', label: 'по всем связям' },
+      { id: 'structural', label: t('filterValue.label.byStrukture') },
+      { id: 'all_links', label: t('filterValue.label.byVsemLinks') },
     ],
     activeId: leaf.mode ?? 'structural',
-    ariaLabel: 'Режим обхода иерархии',
+    ariaLabel: t('filterValue.ariaLabel.rezhimObhodaIerarhii'),
     extraClass: FILTER_VALUE_MODE_CLASS,
     onChange: (id) => {
       leaf.mode = id === 'all_links' ? 'all_links' : 'structural';

@@ -113,8 +113,8 @@ export function initNativeCopyTracking(target: EventTarget = window): void {
 export function clipboardSummary(): string {
   if (snapshot === null) return '';
   const count = snapshot.thoughts.length;
-  const noun = pluralise(count, 'мысль', 'мысли', 'мыслей');
-  const where = snapshot.sourceNetworkName ? ` из «${snapshot.sourceNetworkName}»` : '';
+  const noun = pluralise(count, t('clipboard.thought'), t('clipboard.thought2'), t('clipboard.thoughts'));
+  const where = snapshot.sourceNetworkName ? t('clipboard.from', snapshot.sourceNetworkName) : '';
   return `${count} ${noun}${where}`;
 }
 
@@ -194,6 +194,7 @@ import { notice } from '../lib/notice.js';
 import { errorDialog } from '../lib/dialog.js';
 import { errText } from '../lib/dom.js';
 import { parseAddLines, parseThoughtIdQuery } from '../lib/pure.js';
+import { t } from '../lib/i18n.js';
 
 /**
  * Paste the clipboard snapshot under `targetId` (workplan L26). Rewrites
@@ -205,7 +206,7 @@ export async function pasteThoughtsTo(targetId: string): Promise<void> {
   if (networkId === null) return;
   const snap = getClipboard();
   if (snap === null || snap.thoughts.length === 0) {
-    notice('Буфер обмена пуст.');
+    notice(t('clipboard.buferObmenaPust'));
     return;
   }
   const rewrittenThoughts = snap.thoughts.map((item) => {
@@ -255,10 +256,10 @@ export async function pasteThoughtsTo(targetId: string): Promise<void> {
       await remapCopiedThoughtComments(networkId, snap.thoughts, result.thought_id_map);
     }
     notice(
-      `Вставлено: ${result.created_thoughts.length} ${pluraliseRu(result.created_thoughts.length)}`,
+      t('clipboard.vstavleno', [result.created_thoughts.length, pluraliseRu(result.created_thoughts.length)]),
     );
   } catch (err) {
-    errorDialog('Вставить', err);
+    errorDialog(t('clipboard.paste'), err);
   }
 }
 
@@ -336,16 +337,16 @@ export async function pasteTextToCloud(text: string, targetId: string): Promise<
       });
       created += 1;
     } catch (err) {
-      notice(`Не удалось вставить «${line.title}»: ${errText(err)}`, 'error');
+      notice(t('clipboard.notSucceededPaste', [line.title, errText(err)]), 'error');
       failed += 1;
     }
   }
   if (created > 0 || linked > 0) {
     notice(
-      `Вставлено: ${created} ${pluraliseRu(created)}, ${linked} ${pluraliseLinksRu(linked)}.`,
+      t('clipboard.vstavleno2', [created, pluraliseRu(created), linked, pluraliseLinksRu(linked)]),
     );
   } else if (failed > 0) {
-    notice('Не удалось вставить ни одной строки.', 'error');
+    notice(t('clipboard.notSucceededPasteNiOdnoyRows'), 'error');
   }
 }
 
@@ -480,17 +481,17 @@ export async function systemClipboardHasThoughts(): Promise<boolean> {
 function pluraliseRu(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'мысль';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'мысли';
-  return 'мыслей';
+  if (mod10 === 1 && mod100 !== 11) return t('clipboard.thought');
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return t('clipboard.thought2');
+  return t('clipboard.thoughts');
 }
 
 function pluraliseLinksRu(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'связь';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'связи';
-  return 'связей';
+  if (mod10 === 1 && mod100 !== 11) return t('clipboard.link');
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return t('clipboard.link2');
+  return t('clipboard.links');
 }
 
 // ---------------------------------------------------------------------------

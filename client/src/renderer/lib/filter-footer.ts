@@ -72,6 +72,7 @@ import { fieldInput, wrapClearable } from './ui/field.js';
 import { iconButton, uiButton, type ButtonRole } from './ui/button.js';
 import { svgIcon } from './ui/icon.js';
 import { deepEqual } from './ui/state.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Вид и имена классов
@@ -314,7 +315,7 @@ export function filterFooterApplyBlocked(preview: FilterFooterPreview | undefine
  * Подсказка о переходе к проблемной строке — ОДИН текст на текстовый тултип
  * ({@link filterFooterTooltip}) и на разметочный тултип фразы.
  */
-export const FILTER_FOOTER_TIP_HINT = 'Нажмите на текст, чтобы перейти к строке с ошибкой';
+export const FILTER_FOOTER_TIP_HINT = t('filterFooter.clickTextToPereytiRowOshibkoy');
 
 /** Классы частей разметочного тултипа фразы (вид — `styles/filter-editor.css`). */
 const TIP_ISSUES_CLASS = 'ff-preview__tip-issues';
@@ -405,7 +406,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
           role: 'secondary',
           size: 's',
           class: 'ff-save',
-          title: 'Записать настройки отбора',
+          title: t('filterFooter.title.writeSettingsView'),
           onClick: save,
         })
       : null;
@@ -429,9 +430,9 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     const nameRow = div('ff-name');
     nameInput = fieldInput({
       type: 'text',
-      placeholder: 'имя отбора',
+      placeholder: t('filterFooter.placeholder.nameView'),
       maxLength: 200,
-      ariaLabel: 'Имя отбора',
+      ariaLabel: t('filterFooter.ariaLabel.nameView'),
       extraClass: 'ff-name__input',
       value: getName(),
       onInput: (value) => {
@@ -445,7 +446,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
       refresh();
     };
     const changed = span('●', FILTER_FOOTER_CHANGED_CLASS);
-    setTooltip(changed, 'отбор изменён с момента сохранения');
+    setTooltip(changed, t('filterFooter.viewChangedMomentaSave'));
     nameRow.append(wrapClearable(nameInput, clearName), changed);
     if (saveNode !== null) nameRow.append(saveNode);
     for (const spec of nameRowButtons()) nameRow.append(footerExtraButton(spec));
@@ -496,17 +497,17 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     // «Сохранить» уже стоит в строке имени (если строка есть); иначе — здесь.
     if (saveNode !== null && getName === undefined) actions.append(saveNode);
     const applyNode = uiButton({
-      label: 'Применить',
+      label: t('actions.apply'),
       role: 'primary',
       class: 'ff-apply',
-      title: 'Применить отбор',
+      title: t('filterFooter.title.applyView'),
       onClick: () => opts.onApply(),
     });
     const clearNode = uiButton({
-      label: 'Очистить',
+      label: t('actions.reset'),
       role: 'secondary',
       class: 'ff-clear',
-      title: 'Очистить условия отбора',
+      title: t('filterFooter.title.clearConditionsView'),
       onClick: () => opts.onClear(),
     });
     applyButton = applyNode;

@@ -67,6 +67,7 @@ import {
   resolveThoughtDropField,
 } from '../lib/thought-drop.js';
 import { DRAG_THRESHOLD_PX, requestZoneAnimation, suppressNextCanvasClick } from './canvas.js';
+import { t } from '../lib/i18n.js';
 
 type OrderableDir = 'parents' | 'children';
 type ZoneDir = 'parents' | 'children' | 'siblings';
@@ -449,7 +450,7 @@ function onCloudMouseUp(event: MouseEvent): void {
         event.shiftKey &&
         store.state.zoneSorts[g.dir].sort !== 'manual'
       ) {
-        notice('Упорядочивание работает при сортировке зоны «ручной» (правый клик по зоне → порядок).');
+        notice(t('dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy'));
       }
       break;
   }
@@ -778,7 +779,7 @@ async function linkToThought(draggedId: string, targetId: string, mode: LinkMode
     requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
-    noticeErr('Создать связь', err);
+    noticeErr(t('dragCloud.createLink'), err);
   }
 }
 
@@ -815,7 +816,7 @@ async function moveFocusDirection(draggedId: string, toDir: OrderableDir): Promi
       throwOnFailures(await ensureLink(networkId, sourceId, targetId, typeId));
     }
   } catch (err) {
-    noticeErr('Переместить мысль', err);
+    noticeErr(t('dragCloud.peremestitThought'), err);
   }
   requestZoneAnimation();
   scheduleRefresh();
@@ -844,7 +845,7 @@ async function reparentThought(draggedId: string, targetId: string): Promise<voi
     requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
-    noticeErr('Переместить в подчинение', err);
+    noticeErr(t('dragCloud.peremestitPodchinenie'), err);
   }
 }
 
@@ -879,7 +880,7 @@ export async function reorderZone(draggedId: string, dir: OrderableDir, insertIn
     requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
-    noticeErr('Изменить порядок', err);
+    noticeErr(t('contextMenu.editOrder'), err);
   }
 }
 

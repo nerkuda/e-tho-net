@@ -40,6 +40,7 @@ import { renderDefaultThoughtIcon } from './ui/thought-default-icon.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
 import { logUiEvent } from './ui-log.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Канон стиля и значка (перенесён из canvas/canvas.ts)
@@ -407,7 +408,7 @@ export interface ThoughtCloudOptions {
 }
 
 /** Подсказка метки корзины (S13). */
-const TRASH_BADGE_TOOLTIP = 'Мысль находится в корзине. Нажмите для удаления/восстановления';
+const TRASH_BADGE_TOOLTIP = t('thoughtCloud.thoughtNahoditsyaTrashClickDeleteRestore');
 
 /** Классы корня и внутренних частей по профилю (один набор на профиль). */
 const PROFILE_DOM: Record<CloudProfile, { root: string; icon: string; title: string; titleTag: 'div' | 'span' }> = {
@@ -491,7 +492,7 @@ function buildTrashMark(
  * бейдж в углу. Кликов не перехватывает: метка только читаемая.
  */
 function buildNetworkMark(profile: CloudProfile, label: string): HTMLElement {
-  const tooltip = `Мысль другой сети: ${label}`;
+  const tooltip = t('thoughtCloud.thoughtOtherNetwork', label);
   if (profile === 'chip') {
     const mark = span('', 'list-network-mark');
     mark.append(svgIcon('network', 10));
@@ -521,7 +522,7 @@ function applyLockIndicator(root: HTMLElement, lock: ThoughtCloudLock): void {
   const badge = span('🔒', 'cloud-lock-badge' + (lock.bySelf ? ' own' : ''));
   setTooltip(
     badge,
-    lock.bySelf ? 'Вы редактируете эту мысль.' : `Редактирует ${lock.holder ?? '?'}`,
+    lock.bySelf ? t('canvas.youRedaktirueteEtuThought') : t('canvas.redaktiruet', lock.holder ?? '?'),
   );
   for (const evt of ['click', 'dblclick', 'contextmenu'] as const) {
     badge.addEventListener(evt, (e) => {
@@ -535,7 +536,7 @@ function applyLockIndicator(root: HTMLElement, lock: ThoughtCloudLock): void {
 function buildRemoveButton(id: string, actions: ThoughtCloudActions): HTMLButtonElement {
   const btn = el('button', 'st-f-clear-inline', '✕');
   btn.type = 'button';
-  btn.title = 'Убрать из значения';
+  btn.title = t('thoughtCloud.removeValues');
   btn.addEventListener('click', (event) => {
     event.stopPropagation();
     actions.onRemove?.(id, event);

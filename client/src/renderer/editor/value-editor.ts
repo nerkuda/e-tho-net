@@ -248,7 +248,7 @@ export function buildValueEditor(opts: ValueEditorOptions): HTMLElement {
     case 'thought_ref':
     default:
       // Legacy (миграция 040): значений этого вида в живых базах нет.
-      return span('упразднено', 'muted');
+      return span(t('valueEditor.uprazdneno'), 'muted');
     case 'cross_network_ref':
       // Кросс-сетевая ссылка (задача 7849008a): адрес `n:<network>#<thought>`
       // в текстовом поле + кнопка «обновить снапшот» через IPC
@@ -329,8 +329,8 @@ function buildPublicationRefEditor(opts: ValueEditorOptions): HTMLElement {
     // Набранный текст — запрос поиска, а не значение: публикация выбирается
     // из списка (DoD-альтернатива ошибки bfe1bc24). Подсказка постоянная,
     // брошенный непустой запрос озвучивается при уходе (круг 2).
-    inputTitle: 'Значение — публикация из списка: начните вводить название и выберите строку',
-    discardNotice: 'Значение не добавлено: выберите публикацию из списка.',
+    inputTitle: t('valueEditor.valuePublicationListStartEnterTitle'),
+    discardNotice: t('valueEditor.valueNotAddedSelectPublicationList'),
   });
   root.append(field.root);
 
@@ -481,7 +481,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
    */
   const refreshNames = async (): Promise<void> => {
     if (opts.ownerType !== 'thought' || opts.ownerId === undefined) {
-      notice('Обновление имени доступно только для свойств мыслей.');
+      notice(t('valueEditor.obnovlenieNameDostupnoOnlyPropertiesThoughts'));
       return;
     }
     const key = opts.definition.key ?? '';
@@ -508,22 +508,22 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
       const unresolved = result.values.filter((v) => v.unresolved).length;
       noticePartial(
         unresolved === 0
-          ? 'Снапшоты обновлены.'
-          : `Обновлено ${result.values.length - unresolved} из ${result.values.length}; ${unresolved} нерезолвлено.`,
+          ? t('valueEditor.snapshotyObnovleny')
+          : t('valueEditor.obnovlenoNerezolvleno', [result.values.length - unresolved, result.values.length, unresolved]),
         unresolved,
       );
       notifyPropertyValuesRefreshed(key);
     } catch (err) {
-      notice(`Не удалось обновить имя: ${errText(err)}`, 'error');
+      notice(t('valueEditor.notSucceededObnovitName', errText(err)), 'error');
     }
   };
 
   /** Контекстное меню чипа: три команды значения (ошибка 9be98ae1). */
   const openChipMenu = (entry: CrossNetworkRefEntry, anchor: HTMLElement): void => {
     const items: MenuItem[] = [
-      { label: 'Открыть', onClick: () => void openEntry(entry) },
-      { label: 'Обновить имя', onClick: () => void refreshNames() },
-      { label: 'Удалить из значения', onClick: () => removeEntry(entry.address) },
+      { label: t('properties.label.open'), onClick: () => void openEntry(entry) },
+      { label: t('valueEditor.label.obnovitName'), onClick: () => void refreshNames() },
+      { label: t('valueEditor.label.deleteValues'), onClick: () => removeEntry(entry.address) },
     ];
     const rect = anchor.getBoundingClientRect();
     showMenuAt(rect.left, rect.bottom, items);
@@ -556,7 +556,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
     setTooltip(
       chip,
       entry.unresolved
-        ? `${entry.title} — ${netLabel} (нерезолвлено)`
+        ? t('valueEditor.nerezolvleno', [entry.title, netLabel])
         : `${entry.title} — ${netLabel} (${entry.address})`,
     );
     chip.setAttribute('role', 'button');
@@ -585,14 +585,14 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
   }) as HTMLInputElement;
   addInput.type = 'text';
   addInput.autocomplete = 'off';
-  addInput.placeholder = 'Название мысли в другой сети…';
+  addInput.placeholder = t('valueEditor.titleThoughtOtherNetwork');
   // Набранный текст — запрос поиска, а не значение: значение выбирается из
   // списка (DoD-альтернатива ошибки bfe1bc24). Подсказка постоянная, до ввода.
-  addInput.title = 'Значение — мысль из списка: начните вводить название и выберите строку';
+  addInput.title = t('valueEditor.valueThoughtListStartEnterTitle');
 
   const searchSource: SuggestSource = {
     when: 'typed',
-    header: 'Мысли других сетей',
+    header: t('valueEditor.header.thoughtOtherNetworks'),
     load: async (query): Promise<SuggestEntry[]> => {
       const trimmed = query.trim();
       if (trimmed === '') return [];
@@ -647,7 +647,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
     const related = (event as { relatedTarget?: unknown }).relatedTarget;
     if (related !== null && related !== undefined && root.contains(related as Node)) return;
     addInput.value = '';
-    notice('Значение не добавлено: выберите мысль из списка.', 'info');
+    notice(t('valueEditor.valueNotAddedSelectThoughtList'), 'info');
   });
 
   /**
@@ -659,8 +659,8 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
       networkId: opts.networkId,
       allowCreate: false,
       allowLinkType: false,
-      title: 'Выбор мысли из другой сети',
-      applyLabel: isMultiple ? 'Добавить' : 'Выбрать',
+      title: t('valueEditor.selectThoughtOtherNetwork'),
+      applyLabel: isMultiple ? t('addDialog.applyLabel.add') : t('actions.select'),
       crossNetwork: { excludeNetworkId: opts.networkId },
     }).then((result) => {
       if (result === null) return;
@@ -676,7 +676,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
         }
       }
       if (picked.length === 0) {
-        notice('Мысль другой сети не выбрана — кросс-сетевая ссылка на свою сеть запрещена.', 'info');
+        notice(t('valueEditor.thoughtOtherNetworkNotSelectedKross'), 'info');
         return;
       }
       if (!isMultiple) {
@@ -702,7 +702,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
   // Угловые кнопки — как у поля свойства-связи: «…» открывает диалог выбора,
   // «✕» очищает значение целиком.
   const corner = div('link-value-corner');
-  const pickBtn = button('…', openCrossPicker, 'link-value-corner-btn cross-network-ref-pick', 'Выбрать мысль другой сети…');
+  const pickBtn = button('…', openCrossPicker, 'link-value-corner-btn cross-network-ref-pick', t('valueEditor.selectThoughtOtherNetwork2'));
   const clearBtn = button(
     '✕',
     () => {
@@ -713,7 +713,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
       commit();
     },
     'link-value-corner-btn',
-    'Очистить значение',
+    t('valueEditor.clearValue'),
   );
   corner.append(pickBtn, clearBtn);
 
@@ -724,7 +724,7 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
       if (entry === undefined) continue;
       field.append(buildChip(entry));
     }
-    addInput.placeholder = ordered.length === 0 ? 'Название мысли в другой сети…' : '+ ещё одну мысль';
+    addInput.placeholder = ordered.length === 0 ? t('valueEditor.titleThoughtOtherNetwork') : t('valueEditor.moreOdnuThought');
     field.append(addInput);
     clearBtn.hidden = ordered.length === 0;
   };
@@ -787,17 +787,17 @@ function shortCrossNetworkLabel(networkId: string): string {
 export function valueTypeName(valueType: string): string {
   switch (valueType) {
     case 'text':
-      return 'строка';
+      return t('valueEditor.row');
     case 'number':
-      return 'число';
+      return t('valueEditor.number');
     case 'date':
-      return 'дата';
+      return t('valueEditor.date');
     case 'bool':
-      return 'да/нет';
+      return t('valueEditor.daNo');
     case 'url':
       return 'URL';
     case 'link':
-      return 'связь';
+      return t('clipboard.link');
     default:
       return valueType;
   }
@@ -1103,8 +1103,8 @@ function buildMultiTextChipsEditor(opts: {
     const input = fieldInput({ extraClass: 'prop-editor value-chips-input' }) as HTMLInputElement;
     input.type = 'text';
     input.autocomplete = 'off';
-    input.placeholder = kind === 'url' ? 'https://… или путь к файлу' : '+ ещё одно значение';
-    if (kind === 'url') input.title = 'URL или путь к файлу';
+    input.placeholder = kind === 'url' ? t('valueEditor.httpsPathFile') : t('valueEditor.moreOdnoValue');
+    if (kind === 'url') input.title = t('valueEditor.urlPathFile');
 
     // Свойство со списком вариантов: история не ведётся — выпадашку занимает
     // сам список, который открывается сразу при входе в поле добавления и до
@@ -1123,7 +1123,7 @@ function buildMultiTextChipsEditor(opts: {
     if (options.length > 0) {
       sources.push(
         optionsSuggestSource(options, {
-          header: 'Варианты',
+          header: t('valueEditor.header.varianty'),
           showAllUntilEdited: () => !edited,
         }),
       );
@@ -1152,7 +1152,7 @@ function buildMultiTextChipsEditor(opts: {
           label: '▾',
           role: 'secondary',
           size: 's',
-          title: 'Выбрать значение из списка',
+          title: t('valueEditor.title.selectValueList'),
           onClick: () => handle?.open(),
         });
         caret.style.marginLeft = '4px';
@@ -1204,7 +1204,7 @@ async function openUrlExternally(value: string): Promise<void> {
   const trimmed = value.trim();
   if (trimmed === '') return;
   const err = await etn.system.openExternal(trimmed);
-  if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+  if (err !== '') notice(t('attachments.notSucceededOpen', err), 'error');
 }
 
 /**
@@ -1223,8 +1223,8 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
   input.autocomplete = 'off';
   input.value = stored;
   if (kind === 'url') {
-    input.placeholder = opts.placeholder ?? 'https://… или путь к файлу';
-    input.title = 'URL или путь к файлу';
+    input.placeholder = opts.placeholder ?? t('valueEditor.httpsPathFile');
+    input.title = t('valueEditor.urlPathFile');
   } else if (opts.placeholder !== undefined) {
     input.placeholder = opts.placeholder;
   }
@@ -1294,7 +1294,7 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
   if (options.length > 0) {
     sources.push(
       optionsSuggestSource(options, {
-        header: 'Варианты',
+        header: t('valueEditor.header.varianty'),
         showAllUntilEdited: () => !edited,
       }),
     );
@@ -1327,7 +1327,7 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
         label: '▾',
         role: 'secondary',
         size: 's',
-        title: 'Выбрать значение из списка',
+        title: t('valueEditor.title.selectValueList'),
         onClick: () => handle?.open(),
       }),
     );
@@ -1335,7 +1335,7 @@ function buildScalarTextEditor(opts: ValueEditorOptions, kind: 'text' | 'url'): 
   }
   if (kind === 'url') {
     const openBtn = uiButton({
-      label: 'Открыть',
+      label: t('properties.label.open'),
       role: 'secondary',
       size: 's',
       onClick: () => void openUrlExternally(input.value),
@@ -1495,12 +1495,12 @@ function buildBoolEditor(opts: ValueEditorOptions): HTMLElement {
     const select = el('select', 'select-input') as HTMLSelectElement;
     select.append(
       el('option', undefined, '—'),
-      el('option', undefined, 'да'),
-      el('option', undefined, 'нет'),
+      el('option', undefined, t('valueEditor.da')),
+      el('option', undefined, t('valueEditor.no')),
     );
-    select.value = opts.value === null || opts.value === undefined ? '' : opts.value === true ? 'да' : 'нет';
+    select.value = opts.value === null || opts.value === undefined ? '' : opts.value === true ? t('valueEditor.da') : t('valueEditor.no');
     select.addEventListener('change', () => {
-      const next = select.value === '' ? null : select.value === 'да';
+      const next = select.value === '' ? null : select.value === t('valueEditor.da');
       void opts.save(next);
     });
     return select;
@@ -1600,7 +1600,7 @@ async function openThoughtCloudMenu(opts: {
       trashed: opts.trashed,
     },
     {
-      openLabel: 'Открыть в редакторе',
+      openLabel: t('miniGraph.openLabel.openEditor'),
       openHandler: (id) => openLinkRefInEditor(opts.networkId, id),
       focusHandler: () => focusLinkRef(opts.networkId, opts.id),
       ...(opts.extraItems !== undefined ? { extraItems: opts.extraItems } : {}),
@@ -1661,8 +1661,8 @@ async function showLinkChipMenu(
     trashed,
     anchor,
     extraItems: [
-      { label: 'Удалить связь с мыслью', onClick: onDelete },
-      { label: 'Поместить связь в корзину', onClick: onTrash },
+      { label: t('valueEditor.label.deleteLinkThought'), onClick: onDelete },
+      { label: t('valueEditor.label.pomestitLinkTrash'), onClick: onTrash },
     ],
   });
 }
@@ -1729,11 +1729,11 @@ export function buildOutsideReadonlyEdgeChip(
         ? {
             extraItems: [
               {
-                label: 'Удалить связь с мыслью',
+                label: t('valueEditor.label.deleteLinkThought'),
                 onClick: () => removal.removeTarget(edge.target_id, 'auto'),
               },
               {
-                label: 'Поместить связь в корзину',
+                label: t('valueEditor.label.pomestitLinkTrash'),
                 onClick: () => removal.removeTarget(edge.target_id, 'trash'),
               },
             ],
@@ -1744,8 +1744,8 @@ export function buildOutsideReadonlyEdgeChip(
   setTooltip(
     chip,
     removal !== undefined
-      ? `${fullTitle} — ребро внетиповой связи; удаление связи доступно в контекстном меню.`
-      : `${fullTitle} — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).`,
+      ? t('valueEditor.rebroVnetipovoyLinkDeleteLinkDostupno', fullTitle)
+      : t('valueEditor.rebraThisTypeLinkNotRedaktiruyutsya', fullTitle),
   );
   markThoughtCommentPreview(chip, edge.target_id, fullTitle);
   chip.setAttribute('role', 'button');
@@ -1932,8 +1932,8 @@ export function buildLinkValueEditor(opts: {
       searchTypeIds: filterIds,
       defaultNewThoughtTypeId: filterIds[0] ?? null,
       selectedIds: current,
-      title: 'Выбрать или создать мысли',
-      applyLabel: 'Выбрать',
+      title: t('valueEditor.title.selectCreateThought'),
+      applyLabel: t('actions.select'),
     }).then(async (result) => {
       if (result === null) return;
       const ids: string[] = [];
@@ -1950,7 +1950,7 @@ export function buildLinkValueEditor(opts: {
           });
           ids.push(created.id);
         } catch (err) {
-          notice(`Не удалось создать «${item.title}»: ${errText(err)}`, 'error');
+          notice(t('valueEditor.notSucceededCreate', [item.title, errText(err)]), 'error');
         }
       }
       setAndPersist(ids);
@@ -2063,11 +2063,11 @@ export function buildLinkValueEditor(opts: {
     addInput.type = 'text';
     addInput.autocomplete = 'off';
     addInput.placeholder = current.length === 0
-      ? (definition.required === true ? 'Название мысли… (обязательно)' : 'Название мысли…')
-      : '+ ещё одну мысль';
+      ? (definition.required === true ? t('valueEditor.titleThoughtObyazatelno') : t('valueEditor.titleThought'))
+      : t('valueEditor.moreOdnuThought');
     // Набранный текст — запрос поиска, а не значение: значение выбирается из
     // списка мысли (DoD-альтернатива ошибки bfe1bc24). Подсказка постоянная.
-    addInput.title = 'Значение — мысль из списка: начните вводить название и выберите строку';
+    addInput.title = t('valueEditor.valueThoughtListStartEnterTitle');
     const sources: SuggestSource[] = [];
     if (opts.historyPropertyId !== undefined) {
       sources.push(linkHistorySource(networkId, opts.historyPropertyId));
@@ -2095,7 +2095,7 @@ export function buildLinkValueEditor(opts: {
       if (typed === '') return;
       const related = (event as { relatedTarget?: unknown }).relatedTarget;
       if (related !== null && related !== undefined && root.contains(related as Node)) return;
-      notice('Значение не добавлено: выберите мысль из списка.', 'info');
+      notice(t('valueEditor.valueNotAddedSelectThoughtList'), 'info');
     });
     field.append(addInput);
     // Клик по свободному месту поля — фокус в живой поиск.
@@ -2109,14 +2109,14 @@ export function buildLinkValueEditor(opts: {
     // растягивается на высоту списка.
     const corner = div('link-value-corner');
     corner.append(
-      button('…', openPicker, 'link-value-corner-btn', 'Выбрать или создать мысли'),
+      button('…', openPicker, 'link-value-corner-btn', t('valueEditor.title.selectCreateThought')),
       button(
         '✕',
         () => {
           if (current.length > 0) removeEdges([...current], 'auto');
         },
         'link-value-corner-btn',
-        'Очистить значение',
+        t('valueEditor.clearValue'),
       ),
     );
     const wrap = div('link-value-wrap');

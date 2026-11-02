@@ -35,7 +35,7 @@ import { store } from '../state.js';
  * «представления сущностей, без ID»): до прихода админ-ростера и для того, кого
  * в нём нет, чипы и списки выбора показывают нейтральный текст, а не `id.slice`.
  */
-const UNKNOWN_USER_LABEL = 'неизвестный участник';
+const UNKNOWN_USER_LABEL = t('userSelect.neizvestnyyMember');
 
 /**
  * Подпись участника в списках выбора: «Имя (логин)». Записи-заглушки
@@ -253,7 +253,7 @@ export function buildUserSelectWidget(opts: {
 
   const render = (): void => {
     select.replaceChildren();
-    const placeholder = el('option', undefined, 'любой');
+    const placeholder = el('option', undefined, t('userSelect.lyuboy'));
     placeholder.value = '';
     select.append(placeholder);
     // Сортируем по display_name/username, чтобы список был стабилен.

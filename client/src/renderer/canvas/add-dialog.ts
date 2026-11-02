@@ -281,7 +281,7 @@ export async function openAddDialog(ctx: {
     allowCreate: true,
     allowLinkType: false,
     linkProperty: { rows: propertyRows },
-    applyLabel: 'Добавить',
+    applyLabel: t('addDialog.applyLabel.add'),
   });
   if (result === null) return;
   await insertIntoCanvas(networkId, ctx, result);
@@ -367,7 +367,7 @@ async function insertIntoCanvas(
     }
   }
   noticePartial(
-    failed > 0 ? `Создано/связано: ${created}, ошибок: ${failed}` : `Готово: ${created}.`,
+    failed > 0 ? t('addDialog.createdSvyazanoErrors', [created, failed]) : t('addDialog.gotovo', created),
     failed,
   );
   // Диалог добавления связи с карты пишет РЕБРО (в т.ч. типизированное, которое
@@ -405,8 +405,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     const lines: AddLine[] = [];
 
     const modeRow = div('add-mode-row');
-    const singleOpt = radioRow({ label: 'одна', name: 'add-mode', checked: !multi });
-    const multiOpt = radioRow({ label: 'несколько', name: 'add-mode', checked: multi });
+    const singleOpt = radioRow({ label: t('addDialog.label.odna'), name: 'add-mode', checked: !multi });
+    const multiOpt = radioRow({ label: t('addDialog.label.neskolko'), name: 'add-mode', checked: multi });
     const singleRadio = singleOpt.input;
     const multiRadio = multiOpt.input;
     modeRow.append(singleOpt.row, multiOpt.row);
@@ -432,7 +432,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     const input = fieldTextarea();
     input.rows = 2;
     input.placeholder =
-      allowCreate ? 'Введите название или вставьте список…' : 'Введите название для поиска…';
+      allowCreate ? t('addDialog.enterTitleVstavteList') : t('addDialog.enterTitleSearch');
 
     // Type of the created thought(s) — searchable picker over the catalogue
     // tree (L6/L21): rows carry the type's icon and style; the hierarchy root
@@ -445,8 +445,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       networkId,
       kind: 'thought-types',
       value: opts.defaultNewThoughtTypeId ?? null,
-      placeholder: 'без типа',
-      emptyLabel: 'без типа',
+      placeholder: t('addDialog.placeholder.withoutType'),
+      emptyLabel: t('addDialog.placeholder.withoutType'),
       // Однообразная ширина выпадашек диалога (ошибка 5c7f8376): список типов
       // шире узкого поля и не уступает по ширине списку свойства связи.
       dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
@@ -462,8 +462,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       networkId,
       kind: 'link-types',
       value: linkTypeId,
-      placeholder: 'без типа',
-      emptyLabel: 'без типа',
+      placeholder: t('addDialog.placeholder.withoutType'),
+      emptyLabel: t('addDialog.placeholder.withoutType'),
       // Та же ширина, что у списка типа мысли (ошибка 5c7f8376).
       dropdownMinWidth: ADD_DIALOG_DROPDOWN_MIN_WIDTH,
       onChange: (typeId) => {
@@ -510,17 +510,17 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     const body = div('form-stack');
     const typeRow = div('add-types-row');
     const thoughtTypeField = fieldRow({
-      label: 'Тип мысли',
+      label: t('addDialog.label.typeThought'),
       control: thoughtTypeCombo.root,
       class: 'add-types-field',
     });
     const linkTypeField = fieldRow({
-      label: 'Тип связи',
+      label: t('addDialog.label.typeLink'),
       control: linkTypeCombo.root,
       class: 'add-types-field',
     });
     const linkPropertyFieldWrap = fieldRow({
-      label: 'Свойство связи',
+      label: t('addDialog.label.propertyLink'),
       control: linkPropertyCombo.root,
       class: 'add-types-field add-link-property-combo',
     });
@@ -533,8 +533,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     if (typeRow.childElementCount > 0) body.append(typeRow);
     const hint =
       allowCreate
-        ? 'Enter — добавить в список, Ctrl+Enter — применить. В режиме «несколько» клик по найденной мысли добавляет её в список.'
-        : 'Выбор только из существующих мыслей: Enter или клик по найденной — в список, Ctrl+Enter — применить.';
+        ? t('addDialog.enterAddListCtrlEnterApply')
+        : t('addDialog.selectOnlySuschestvuyuschihThoughtsEnterKlik');
     const hintLine = el('p', 'muted', hint);
     hintLine.style.margin = '0';
     // Ошибка 81be082f, требование 79755f76: охват строки поиска задан
@@ -549,7 +549,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       const note = el(
         'p',
         'muted',
-        'Поиск идёт по всем вашим сетям; мысли текущей сети недоступны — выберите мысль другой сети.',
+        t('addDialog.searchIdetVsemVashimSetyamThought'),
       );
       note.style.margin = '0';
       body.insertBefore(note, candidates);
@@ -613,7 +613,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
                 // shows up among the candidates (no self-links).
                 lastCandidates = [];
                 candidates.replaceChildren(
-                  el('p', 'muted', 'Нельзя связать мысль с самой собой.'),
+                  el('p', 'muted', t('addDialog.cannotSvyazatThoughtSamoySoboy')),
                 );
                 return;
               }
@@ -622,7 +622,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
               if (isNotFoundError(err)) {
                 lastCandidates = [];
                 candidates.replaceChildren(
-                  el('p', 'muted', 'Мысль с указанным ID отсутствует.'),
+                  el('p', 'muted', t('addDialog.thoughtUkazannymIdOtsutstvuet')),
                 );
                 return;
               }
@@ -857,7 +857,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       }
       const first = lastCandidates[0];
       if (first === undefined) {
-        errorLine.show('Совпадений нет — создание новых мыслей отключено.');
+        errorLine.show(t('addDialog.sovpadeniyNoCreateNovyhThoughtsOtklyucheno'));
         return null;
       }
       return {
@@ -891,7 +891,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       );
       const resolvedId = existingId ?? exact?.id ?? null;
       if (resolvedId !== null && lines.some((l) => l.existingId === resolvedId)) {
-        errorLine.show('Эта мысль уже в списке.');
+        errorLine.show(t('addDialog.etaThoughtAlreadyList'));
         return;
       }
       lines.push({
@@ -925,13 +925,13 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
     function renderLines(): void {
       lineList.replaceChildren();
       const head = div('add-list-head');
-      head.append(span(`Выбрано: ${lines.length}`, 'muted'));
+      head.append(span(t('addDialog.selected', lines.length), 'muted'));
       head.append(
         uiButton({
           label: t('actions.reset'),
           role: 'secondary',
           size: 's',
-          title: 'Очистить список',
+          title: t('addDialog.title.clearList'),
           onClick: () => {
             lines.length = 0;
             renderLines();
@@ -944,8 +944,8 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         const status = line.existingId !== null ? span('🟡', 'al-status') : span('🟢', 'al-status');
         status.title =
           line.existingId !== null
-            ? 'Существующая мысль — тип мысли не меняется'
-            : 'Будет создана новая мысль';
+            ? t('addDialog.suschestvuyuschayaThoughtTypeThoughtNotMenyaetsya')
+            : t('addDialog.willCreatedNovayaThought');
         const title = el('span', 'al-title', line.title === '' ? line.raw : line.title);
         title.title = line.raw;
         row.append(status, title);
@@ -954,7 +954,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
             label: '×',
             role: 'secondary',
             size: 's',
-            title: 'Удалить строку',
+            title: t('addDialog.title.deleteLine'),
             onClick: () => {
               lines.splice(index, 1);
               renderLines();
@@ -1061,7 +1061,7 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
         if (line !== null) lines.push(line);
       }
       if (lines.length === 0) {
-        notice('Список мыслей пуст.', 'info');
+        notice(t('addDialog.listThoughtsPust'), 'info');
         return;
       }
       finish({
@@ -1141,16 +1141,16 @@ export function pickThoughtsDialog(opts: ThoughtPickerOptions): Promise<ThoughtP
       opts.anchor === undefined || opts.anchor === null
         ? ''
         : opts.anchor.direction === 'parent'
-          ? `вверх к «${anchorTitle}»`
-          : `вниз к «${anchorTitle}»`;
+          ? t('addDialog.up', anchorTitle)
+          : t('addDialog.down', anchorTitle);
     const title =
       opts.title ??
       (allowCreate
         ? directionText === ''
-          ? 'Добавить мысли'
-          : `Добавить мысль (${directionText})`
-        : 'Выбор мыслей');
-    const applyLabel = opts.applyLabel ?? (allowCreate ? 'Добавить' : 'Выбрать');
+          ? t('addDialog.addThought')
+          : t('addDialog.addThought2', directionText)
+        : t('addDialog.selectThoughts'));
+    const applyLabel = opts.applyLabel ?? (allowCreate ? t('addDialog.applyLabel.add') : t('actions.select'));
 
     const closeSelf = showDialog({
       title,
@@ -1261,7 +1261,7 @@ async function handleExternalDrop(direction: 'parent' | 'child', event: DragEven
       }
       scheduleRefresh();
     } catch (err) {
-      notice(`Не удалось создать мысль: ${errText(err)}`, 'error');
+      notice(t('addDialog.notSucceededCreateThought', errText(err)), 'error');
     }
   }
   for (const file of files) {
@@ -1280,7 +1280,7 @@ async function handleExternalDrop(direction: 'parent' | 'child', event: DragEven
       });
       scheduleRefresh();
     } catch (err) {
-      notice(`Не удалось создать мысль: ${errText(err)}`, 'error');
+      notice(t('addDialog.notSucceededCreateThought', errText(err)), 'error');
     }
   }
 }
