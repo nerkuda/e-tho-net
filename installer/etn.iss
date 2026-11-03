@@ -123,6 +123,36 @@
 ;     из install.json, поля на экране только показывают значения;
 ;   * установка только клиента серверных каталогов и правила не создаёт.
 ;
+; Ошибка 5b9743da (0.15.2) — «Переустановить клиент ETN», «Далее»/«Отмена» не
+; реагируют (мнимое зависание GUI):
+;   * зависание по опубликованной сборке не воспроизвелось: и в ВМ, и на машине
+;     пользователя процесс установщика жив, окно отвечает, «Далее» и «Отмена»
+;     активны и принимают нажатия; в журнале нет ни одной строки обработчика —
+;     значит, нажатие до установщика не дошло (окно было перекрыто другим);
+;   * следствие в коде: нажатие неактивной «Далее» не оставляло в журнале ни
+;     строки, а причина неактивности уезжала за нижний край поверхности
+;     страницы (длинные подписи состояния клиента) — состояние «кнопка мертва,
+;     объяснения нет» было неотличимо от зависания;
+;   * раскладка экрана компонентов гарантирует, что содержимое умещается:
+;     FitComponentsPage уступает (в порядке: пояснение режима, каталог данных,
+;     описания компонентов, ссылка), но выбор, состояния и причина остаются;
+;     пояснение режима не дублируется, когда показан текст фиксированной
+;     области (он говорит то же самое);
+;   * причина неактивности — одна функция ComponentsReasonText: она же пишется
+;     в журнал при каждой смене экрана вместе с состоянием кнопки;
+;   * вход в NextButtonClick и CancelButtonClick логируется: по журналу видно,
+;     дошло ли нажатие до установщика;
+;   * долгие операции (закрытие запущенного клиента, удаление старого NSIS-
+;     клиента) убраны из NextButtonClick в PrepareToInstall: Inno показывает на
+;     этом шаге страницу «Подготовка к установке», само копирование ещё не
+;     начато, а долгое ожидание идёт там, где мастер это предусматривает;
+;     ошибка возвращается строкой и печатается на той же странице, файлы не
+;     заменяются. Бюджеты ожидания прежние, но короче: 45 с на клиента и 10 с
+;     на исчезновение записи старого клиента (прежние 2 минуты неподвижного
+;     цикла в NextButtonClick и выглядели зависанием);
+;   * подпись состояния клиента в режиме «только для меня» поверх машинной
+;     копии больше не предлагает «выберите клиент, чтобы заменить его».
+;
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
 ; Проверка silent-контракта и предпроверок: installer/tests/silent-codes.ps1.
 ; Проверка init и ключа: installer/tests/init-key.ps1.
@@ -473,9 +503,11 @@ const
   { Ожидание исчезновения записи Uninstall после удаления старого клиента:
     деинсталлятор NSIS с _?= завершается синхронно, но старая версия могла
     проигнорировать параметр и удалять в фоне — запись исчезает с задержкой.
-    Опрос — раз в 250 мс, общий бюджет — 2 минуты (112642a4). }
-  LEGACY_GONE_WAIT_MS = 120000;
-  LEGACY_GONE_STEP_MS = 250;
+    Опрос — раз в 500 мс, общий бюджет — 10 секунд (112642a4). Бюджет сокращён
+    с 2 минут (ошибка 5b9743da): цикл не прокачивает сообщения, и долгое
+    ожидание выглядело зависанием; в норме запись исчезает сразу. }
+  LEGACY_GONE_WAIT_MS = 10000;
+  LEGACY_GONE_STEP_MS = 500;
   { Закрытие запущенного клиента (задача 98ad5eec): сначала мягко (taskkill
     без /F — WM_CLOSE, Electron завершает процесс сам), ожидание выхода 30 с;
     только после таймаута — принудительно (/F /T) и ожидание ещё 15 с.
@@ -1546,7 +1578,18 @@ begin
         Result := 'клиент уже установлен — при обновлении он будет заменён';
     end
     else
-      Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
+    begin
+      { Режим «только для меня» поверх машинной копии (ошибка 5b9743da):
+        «выберите клиент, чтобы заменить его» — неправда, выбор снят именно
+        потому, что без прав администратора машинную копию не заменить.
+        Подпись обязана совпадать с причиной неактивности «Далее», иначе экран
+        противоречит сам себе. }
+      if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+        Result := 'клиент установлен для всех пользователей — нужны права ' +
+          'администратора'
+      else
+        Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
+    end;
   end
   else if GLegacyClientFound and GClientSelected then
   begin
@@ -5501,23 +5544,6 @@ begin
     Result := 'причина не записана — смотрите журнал установки';
 end;
 
-{ Возврат на экран компонентов: ошибка закрытия запущенного клиента или
-  удаления старого клиента не должна выбрасывать пользователя из мастера —
-  выбор компонентов сохраняется. Перейти на страницу напрямую Inno не даёт,
-  поэтому «Назад» нажимается программно. }
-procedure ReturnToComponentsPage;
-var
-  Guard: Integer;
-begin
-  if (WizardForm = nil) or (GComponentsPage = nil) then Exit;
-  Guard := 0;
-  while (WizardForm.CurPageID <> GComponentsPage.ID) and (Guard < 20) do
-  begin
-    WizardForm.BackButton.OnClick(WizardForm.BackButton);
-    Guard := Guard + 1;
-  end;
-end;
-
 { Свободный порт рядом с занятым: подсказка на экране параметров. Поле не
   меняется — решение за пользователем. Пустая строка — свободного рядом нет. }
 function SuggestFreePort(const BasePort: String): String;
@@ -5875,11 +5901,15 @@ end;
   зависит от переноса текста, а раскладка, посчитанная один раз при создании,
   при росте подписей давала наложение и «мелькающие остатки» (ошибка
   860def0d, п.1). Скрытые контролы места не занимают; позиция им всё равно
-  назначается — при показе они встанут на своё место. }
-procedure LayoutComponentsPage;
+  назначается — при показе они встанут на своё место.
+
+  Возвращает нижнюю границу содержимого: по ней FitComponentsPage проверяет,
+  что страница уместилась (ошибка 5b9743da). }
+function LayoutComponentsPage: Integer;
 var
   Y: Integer;
 begin
+  Result := 0;
   if (GComponentsPage = nil) or (GServerCheck = nil) then Exit;
   Y := 0;
   GServerCheck.Top := Y;
@@ -5950,6 +5980,88 @@ begin
     GReasonLabel.Top := Y;
     Y := Y + GReasonLabel.Height;
   end;
+  Result := Y;
+end;
+
+{ Страховка раскладки экрана компонентов (ошибка 5b9743da): содержимое обязано
+  уместиться на поверхности страницы. Иначе нижние подписи («Каталог данных» и
+  причина неактивности «Далее») уезжают за край и пользователь видит окно, где
+  «Далее» неактивна, а причины нет — это читается как зависание установщика.
+
+  Порядок уступок — от наименее важного к важному: сначала пояснение режима
+  (оно дублирует текст области клиента), затем «Каталог данных» (фиксирован и
+  повторяется в итоговой сводке), затем описания компонентов, затем ссылка на
+  другие варианты. Выбор компонентов, их состояние и причина неактивности
+  «Далее» не скрываются никогда.
+
+  Базовые состояния видимости восстанавливаются перед каждой укладкой: смена
+  выбора обязана вернуть подсказки, скрытые в прошлой, более тесной, раскладке. }
+procedure FitComponentsPage;
+var
+  Step: Integer;
+begin
+  if GComponentsPage = nil then Exit;
+  if GServerHintLabel <> nil then GServerHintLabel.Visible := True;
+  if GClientHintLabel <> nil then GClientHintLabel.Visible := True;
+  if GServerAltLink <> nil then GServerAltLink.Visible := True;
+  if GDataNoteLabel <> nil then GDataNoteLabel.Visible := True;
+  if GScopeFixedLabel <> nil then
+    GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
+  { Пояснение режима не дублирует текст фиксированной области (ошибка
+    5b9743da): при обновлении клиента оба говорят одно и то же, а вместе они не
+    помещаются на страницу. Показываем подробный текст области, подсказку — только
+    когда области-текста нет. В режиме «только для меня» подсказку режима
+    заменяет подсказка сервера (она объясняет и режим, и как поставить сервер),
+    поэтому при нехватке места уступает именно пояснение режима. }
+  if GScopeHintLabel <> nil then
+    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
+      (not ClientScopeFixed);
+  for Step := 1 to 5 do
+  begin
+    if LayoutComponentsPage <= GComponentsPage.SurfaceHeight then Exit;
+    if (GScopeHintLabel <> nil) and GScopeHintLabel.Visible then
+      GScopeHintLabel.Visible := False
+    else if (GDataNoteLabel <> nil) and GDataNoteLabel.Visible then
+      GDataNoteLabel.Visible := False
+    else if (GClientHintLabel <> nil) and GClientHintLabel.Visible then
+      GClientHintLabel.Visible := False
+    else if (GServerHintLabel <> nil) and GServerHintLabel.Visible then
+      GServerHintLabel.Visible := False
+    else if (GServerAltLink <> nil) and GServerAltLink.Visible then
+      GServerAltLink.Visible := False
+    else
+      Exit;
+  end;
+  { Последняя укладка — с уже скрытыми блоками: позиции должны совпасть с
+    фактической видимостью. }
+  LayoutComponentsPage;
+end;
+
+{ Причина неактивности «Далее» — одна функция для экрана и журнала (ошибка
+  5b9743da): по спеке (элемент интерфейса «Экран установщика — выбор
+  компонентов и лицензия») кнопка неактивна без выбранного компонента или без
+  принятой лицензии, и причина обязана быть на экране. Раньше причина жила
+  только в обработчике экрана, уезжала за нижний край и в журнал не попадала —
+  по журналу нельзя было понять, почему «Далее» не отвечает. }
+function ComponentsReasonText: String;
+begin
+  if GBlockedDowngrade then
+    Result := 'Установлена более новая версия ' + ServerVersionText +
+      ' — понижение версии не поддерживается. Доступна только отмена.'
+  else if GComponentsNotice <> '' then
+    Result := GComponentsNotice
+  else if (not GServerSelected) and (not GClientSelected) then
+  begin
+    if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+      Result := 'Клиент установлен для всех пользователей: нужны права ' +
+        'администратора.'
+    else
+      Result := 'Выберите хотя бы один компонент.';
+  end
+  else if LicensePromptNeeded and (not GLicenseAccepted) then
+    Result := 'Примите условия лицензии MIT, чтобы продолжить.'
+  else
+    Result := '';
 end;
 
 procedure UpdateComponentsState(Sender: TObject);
@@ -6039,38 +6151,31 @@ begin
         'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
         'администратора.';
     FitLabel(GScopeHintLabel);
-    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope);
+    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
+      (not ClientScopeFixed);
   end;
   if GReasonLabel <> nil then
   begin
-    if GBlockedDowngrade then
-      GReasonLabel.Caption := 'Установлена более новая версия ' + ServerVersionText +
-        ' — понижение версии не поддерживается. Доступна только отмена.'
-    else if GComponentsNotice <> '' then
-      GReasonLabel.Caption := GComponentsNotice
-    else if (not GServerSelected) and (not GClientSelected) then
-    begin
-      if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-        GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
-          'обновление требует прав администратора — закройте установщик и ' +
-          'запустите его снова: в диалоге режима выберите «Установить для всех ' +
-          'пользователей».'
-      else
-        GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
-    end
-    else if LicensePromptNeeded and (not GLicenseAccepted) then
-      GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.'
-    else
-      GReasonLabel.Caption := '';
+    GReasonLabel.Caption := ComponentsReasonText;
     FitLabel(GReasonLabel);
   end;
   { Раскладка — после подписей и высот: иначе выросшая подпись наезжает на
-    следующие контролы (ошибка 860def0d, п.1). }
-  LayoutComponentsPage;
+    следующие контролы (ошибка 860def0d, п.1). FitComponentsPage дополнительно
+    гарантирует, что содержимое (и в первую очередь причина неактивности
+    «Далее») поместилось на поверхность страницы (ошибка 5b9743da). }
+  FitComponentsPage;
   if WizardForm <> nil then
+  begin
     WizardForm.NextButton.Enabled :=
       (not GBlockedDowngrade) and (GServerSelected or GClientSelected) and
       ((not LicensePromptNeeded) or GLicenseAccepted);
+    { Состояние кнопки и причина — в журнал при каждой смене (ошибка 5b9743da):
+      раньше нажатие неактивной «Далее» не оставляло в журнале ни строки, и
+      причина зависания не восстанавливалась по логу. }
+    LogLine('INFO', 'Экран компонентов: «Далее» ' +
+      Pick(WizardForm.NextButton.Enabled, 'активна', 'неактивна') +
+      IfStr(ComponentsReasonText = '', '', ' — причина: ' + ComponentsReasonText));
+  end;
 end;
 
 { Изменение выбора пользователем: уведомление об ошибке закрытия клиента или
@@ -7155,6 +7260,12 @@ begin
     ' client_selected=' + Pick(GClientSelected, '1', '0') +
     ' scope_user=' + Pick(GClientScopeUser, '1', '0') +
     ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
+  { Кнопка «Далее» и причина её неактивности (ошибка 5b9743da): прогон обязан
+    проверить, что неактивная кнопка всегда объяснена, а причина видна. }
+  if WizardForm <> nil then
+    LogLine('INFO', 'TESTLAYOUT next enabled=' +
+      Pick(WizardForm.NextButton.Enabled, '1', '0') +
+      ' reason_chars=' + IntToStr(Length(ComponentsReasonText)));
   DumpPageSurface('components', GComponentsPage);
   DumpControl('components', 'serverCheck', GServerCheck);
   DumpText('components', 'serverState', GServerStateLabel);
@@ -7416,6 +7527,10 @@ var
   Reason, PortText, FreePort: String;
 begin
   Result := True;
+  { Первая строка обработчика — в журнал (ошибка 5b9743da): по логу должно быть
+    видно, дошло ли нажатие до установщика вообще. Неактивная кнопка сюда не
+    попадает и следа не оставляет — именно это и выдавало себя за зависание. }
+  LogLine('INFO', 'Кнопка «Далее»: страница ' + IntToStr(CurPageID));
   if (GComponentsPage <> nil) and (CurPageID = GComponentsPage.ID) then
   begin
     UpdateComponentsState(nil);
@@ -7540,47 +7655,24 @@ begin
       LogLine('WARN', 'Не удалось удалить временный файл ключа: ' + KeyFilePath);
     GPendingKey := '';
   end;
-  { Готовность: до копирования файлов удаляется старый NSIS-клиент. Режим
-    установки выбран до мастера (диалог Inno, PrivilegesRequiredOverridesAllowed):
-    в неадминистративном режиме сервер недоступен, поэтому повышать права здесь
-    нечего и нельзя — self-exec установщика запрещён (2dd215f7). }
+  { Экран готовности файлы не копирует и долгих операций не выполняет (ошибка
+    5b9743da): закрытие запущенного клиента и удаление старого NSIS-клиента
+    перенесены в PrepareToInstall, где Inno сам показывает страницу «Подготовка
+    к установке» (кнопки скрыты, «Отмена» отключена) — пауза выглядит как
+    штатная подготовка, а не как окно с неотвечающими кнопками. Здесь остаётся
+    только отметка в журнале, что нажатие дошло до обработчика. }
   if CurPageID = wpReady then
-  begin
-    LogLine('INFO', 'Экран готовности: проверка перед установкой (silent=' +
+    LogLine('INFO', 'Экран готовности: нажата «Далее» (silent=' +
       Pick(GSilent, 'да', 'нет') + ', privileged_phase=' +
       Pick(GPrivilegedPhase, 'да', 'нет') + ', admin_mode=' +
       Pick(GAdminInstallMode, 'да', 'нет') + ')');
-    if GSilent or GPrivilegedPhase then Exit;
-    { Запущенный клиент закрывается до копирования: замена ETN.exe невозможна,
-      пока процесс работает. Отказ пользователя или неудача закрытия —
-      установка не начинается (код 20), выбор сохраняется. Машинный клиент
-      другого пользователя без прав не закроется: в административном режиме
-      установщик уже элевирован, поэтому попытка выполняется с его правами. }
-    Reason := '';
-    if GClientSelected and (not CloseRunningClient(True, Reason)) then
-    begin
-      GComponentsNotice := 'Установка не начата: ' + Reason;
-      SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
-        mbError, MB_OK, IDOK);
-      ReturnToComponentsPage;
-      Result := False;
-      Exit;
-    end;
-    Reason := '';
-    if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
-    begin
-      GComponentsNotice := 'Установка не начата: ' + Reason;
-      SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
-        mbError, MB_OK, IDOK);
-      ReturnToComponentsPage;
-      Result := False;
-      Exit;
-    end;
-  end;
 end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
+  { Нажатие «Отмены» — в журнал (ошибка 5b9743da): отмена открывает штатный
+    диалог подтверждения Inno, и по логу должно быть видно, что кнопка жива. }
+  LogLine('INFO', 'Кнопка «Отмена»: страница ' + IntToStr(CurPageID));
   if (GKeyPage <> nil) and (CurPageID = GKeyPage.ID) and (GPendingKey <> '') then
   begin
     { Закрытие без подтверждения: предупредить и удалить временный файл.
@@ -7601,10 +7693,16 @@ begin
   end;
 end;
 
-{ Подтверждение перед установкой. Права запрашивает Inno при старте (режим
-  выбран диалогом до мастера), поэтому здесь — только предпроверки окружения
-  до замены файлов (9b310991). Скриптовой элевации нет: self-exec установщика
-  запрещён платформой (2dd215f7). }
+{ Подготовка перед копированием файлов. Долгие операции (закрытие запущенного
+  клиента, удаление старого NSIS-клиента) выполняются здесь, а не в
+  NextButtonClick(wpReady) (ошибка 5b9743da): на время PrepareToInstall Inno
+  сам показывает страницу «Подготовка к установке» с отключённой «Отменой»,
+  поэтому ожидание завершения процессов больше не выглядит неподвижным окном с
+  неотвечающими кнопками. Ошибка возвращается строкой: Inno печатает её на этой
+  же странице, «Назад» и «Отмена» остаются доступны, файлы не заменяются.
+  Права запрашивает Inno при старте (режим выбран диалогом до мастера), поэтому
+  скриптовой элевации нет — self-exec установщика запрещён (2dd215f7); здесь
+  только предпроверки окружения до замены файлов (9b310991). }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Reason: String;
@@ -7612,6 +7710,36 @@ begin
   Result := '';
   NeedsRestart := False;
   if GSilent or GPrivilegedPhase then Exit;
+  LogLine('INFO', 'Подготовка к установке: предпроверки перед копированием файлов (server=' +
+    Pick(GServerSelected, 'да', 'нет') + ', client=' +
+    Pick(GClientSelected, 'да', 'нет') + ', admin_mode=' +
+    Pick(GAdminInstallMode, 'да', 'нет') + ')');
+  { Запущенный клиент закрывается до копирования: замена ETN.exe невозможна,
+    пока процесс работает. Отказ пользователя или неудача закрытия —
+    установка не начинается, выбор компонентов сохраняется. Машинный клиент
+    другого пользователя без прав не закроется: в административном режиме
+    установщик уже элевирован, поэтому попытка выполняется с его правами. }
+  if GClientSelected then
+  begin
+    Reason := '';
+    if not CloseRunningClient(True, Reason) then
+    begin
+      GComponentsNotice := 'Установка не начата: ' + Reason;
+      LogLine('ERROR', GComponentsNotice);
+      Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+      Exit;
+    end;
+  end;
+  { Старый NSIS-клиент удаляется до копирования файлов: его файлы и запись
+    деинсталляции не должны пережить установку. }
+  Reason := '';
+  if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
+  begin
+    GComponentsNotice := 'Установка не начата: ' + Reason;
+    LogLine('ERROR', GComponentsNotice);
+    Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+    Exit;
+  end;
   if not NeedElevation then Exit;
   if not GServerSelected then Exit;
   { Административный режим: этот экземпляр сам выполняет привилегированную
