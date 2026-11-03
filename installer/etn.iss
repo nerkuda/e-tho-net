@@ -94,8 +94,8 @@
 ; Задача 9b310991 (0.15.1) — каталог данных, порт, брандмауэр и предпроверки:
 ;   * каталог данных фиксирован %ProgramData%\ETN (ADR 144bcdb0), поля выбора
 ;     в 0.15.1 нет; сервер получает его через ETN_DATA_DIR; каталог программы —
-;     {autopf}\ETN (Program Files в машинной установке), служебные файлы
-;     службы — {app}\service (ADR db60302a);
+;     GetDefaultAppDir (Program Files при запуске от имени администратора,
+;     профиль при обычном), служебные файлы службы — {app}\service (ADR db60302a);
 ;   * экран «Параметры сервера»: порт (по умолчанию 4321) и чекбокс
 ;     «Разрешить подключения с других компьютеров в локальной сети»;
 ;   * чекбокс — единственный источник ETN_HOST: включён — 0.0.0.0,
@@ -153,6 +153,23 @@
 ;   * подпись состояния клиента в режиме «только для меня» поверх машинной
 ;     копии больше не предлагает «выберите клиент, чтобы заменить его».
 ;
+; Ошибка aa5af30c (0.15.2) — мастер не принимает ввод мыши на машине
+; пользователя:
+;   * причина — respawn мастера после диалога режима Inno (PrivilegesRequired=
+;     admin + PrivilegesRequiredOverridesAllowed=dialog): после перезапуска
+;     окно на этой машине не принимало ни клики, ни программные сообщения;
+;     без respawn мастер был живой;
+;   * продуктовая сборка вернулась к PrivilegesRequired=lowest и
+;     PrivilegesRequiredOverridesAllowed=commandline: мастер стартует и
+;     работает в одном процессе, без диалога режима и без respawn;
+;   * режим — по фактическим правам процесса: обычный запуск — только клиент
+;     «только для меня»; запуск от имени администратора — сервер и клиент «для
+;     всех» (GetDefaultAppDir → Program Files); попытка выбрать сервер в
+;     обычном запуске объясняет, что установщик надо запустить от имени
+;     администратора;
+;   * /ALLUSERS сохранён для тихого автообновления службы: LocalSystem уже
+;     элевирован, Inno включает административный режим без UAC и respawn.
+;
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
 ; Проверка silent-контракта и предпроверок: installer/tests/silent-codes.ps1.
 ; Проверка init и ключа: installer/tests/init-key.ps1.
@@ -204,12 +221,14 @@
   #define AppDir TestAppDir
   #define DataDir TestDataDir
 #else
-  ; Каталог программы выбирается по режиму установки: административный режим
-  ; (по умолчанию) — %ProgramFiles%\ETN; «только для меня» (диалог режима или
-  ; /CURRENTUSER) — %LOCALAPPDATA%\Programs\ETN без прав администратора.
-  ; Жёсткий {commonpf} здесь недопустим: в user-режиме экземпляр не сможет
-  ; создать каталог и записать деинсталлятор (Error 5: Отказано в доступе).
-  #define AppDir "{autopf}\ETN"
+  ; Каталог программы выбирается по ФАКТИЧЕСКИМ правам процесса (ошибка
+  ; aa5af30c): запуск от имени администратора — %ProgramFiles%\ETN, обычный
+  ; запуск — %LOCALAPPDATA%\Programs\ETN. При PrivilegesRequired=lowest Inno
+  ; всегда работает в неадминистративном режиме, поэтому {autopf} указывает на
+  ; профиль даже у элевированного процесса — вычислить каталог обязана
+  ; GetDefaultAppDir. Жёсткий {commonpf} здесь недопустим: в user-режиме
+  ; экземпляр не сможет создать каталог и записать деинсталлятор (Error 5).
+  #define AppDir "{code:GetDefaultAppDir}"
   #define DataDir "{commonappdata}\ETN"
 #endif
 
@@ -251,9 +270,12 @@
 ; должен трогать настоящий рабочий стол и меню «Пуск» пользователя.
 ;
 ; Пользовательская область (ошибка 0f8dd0f3, п.7 карточки 860def0d) задана
-; ЯВНО, а не через {autodesktop}/{autoprograms}: в административном режиме
-; установки (/ALLUSERS) авто-константы указывают на общие ярлыки и Program
-; Files, хотя выбран вариант «только для меня». Явный каталог клиента в
+; ЯВНО, а не через {autodesktop}/{autoprograms}: машинная копия клиента ставится
+; при элевированном запуске, когда Inno (PrivilegesRequired=lowest) остаётся в
+; неадминистративном режиме и авто-константы указывают на профиль, а не на
+; общие ярлыки. Машинные ярлыки заданы явно {commondesktop}/{commonprograms}
+; (в административном режиме /ALLUSERS они совпадают с авто-константами), а
+; пользовательские — {userdesktop}/{userprograms}. Явный каталог клиента в
 ; профиле совпадает с ClientInstallPath — область в install.json и реальное
 ; место файлов больше не расходятся.
 #ifdef TestMode
@@ -263,8 +285,8 @@
   #define ShortcutUserMenuDir ShortcutMenuDir
   #define ClientUserDir TestAppDir
 #else
-  #define ShortcutDesktopDir "{autodesktop}"
-  #define ShortcutMenuDir "{autoprograms}\ETN"
+  #define ShortcutDesktopDir "{commondesktop}"
+  #define ShortcutMenuDir "{commonprograms}\ETN"
   #define ShortcutUserDesktopDir "{userdesktop}"
   #define ShortcutUserMenuDir "{userprograms}\ETN"
   #define ClientUserDir "{localappdata}\Programs\ETN"
@@ -296,9 +318,8 @@ AppSupportURL=https://github.com/nerkuda/e-tho-net/issues
 AppUpdatesURL=https://github.com/nerkuda/e-tho-net/releases
 
 ; Каталог программы: имя ETN фиксировано (ADR 144bcdb0), расположение — по
-; режиму установки ({autopf}\ETN: административный режим — %ProgramFiles%\ETN,
-; «только для меня» (диалог режима или /CURRENTUSER) —
-; %LOCALAPPDATA%\Programs\ETN, без прав администратора).
+; фактическим правам процесса (ошибка aa5af30c): запуск от имени администратора
+; — %ProgramFiles%\ETN, обычный запуск — %LOCALAPPDATA%\Programs\ETN, без прав.
 ; Каталог данных — %ProgramData%\ETN (поля выбора в 0.15.1 нет).
 DefaultDirName={#AppDir}
 DisableDirPage=yes
@@ -317,36 +338,26 @@ DisableWelcomePage=yes
 CloseApplications=no
 RestartApplications=no
 
-; Элевация — штатная, силами Inno и до [Code] (ошибка 2dd215f7): скриптовый
-; self-exec установщика платформа запрещает (Exec/ShellExec/FileCopy по
-; {srcexe} до старта установки дают код 5). Права запрашивает Windows один раз
-; при старте; диалог режима позволяет выбрать установку «только для меня»
-; (/CURRENTUSER) — она идёт без элевации.
-;   admin    — режим по умолчанию: сервер и клиент «для всех пользователей»;
-;   dialog   — диалог режима на старте; /ALLUSERS и /CURRENTUSER его отменяют;
-;   UsePreviousPrivileges=no — диалог режима показывается при КАЖДОМ запуске.
-;              Так требует мастер: подсказки «закройте установщик и запустите
-;              снова, выбрав „для всех пользователей"» должны быть выполнимы.
-;              С yes (при уже установленной user-версии) Inno подавлял диалог:
-;              повторный запуск молча шёл в прошлом режиме — тупик (блокер
-;              приёмки 2dd215f7). Смена режима — повторный двойной клик, без
-;              флагов; /ALLUSERS и /CURRENTUSER по-прежнему отменяют диалог.
-#ifdef TestMode
-; В тестовой сборке привилегий нет (иначе UAC в CI): административный режим
-; моделируется хуком /TESTADMINMODE=1, неадминистративный — /TESTUSERONLYMODE=1.
+; Элевация и режим — по фактическим правам процесса (ошибка aa5af30c).
+; Продуктовая сборка работает с PrivilegesRequired=lowest: мастер стартует и
+; работает в одном процессе и НЕ перезапускается после диалога режима —
+; respawn оставлял на машине пользователя окно, не принимающее ввод.
+;   * обычный запуск (процесс не элевирован) — только клиент «только для меня»
+;     в профиль; сервер недоступен, причина и способ — на экране компонентов:
+;     запустить установщик от имени администратора (правый клик → Запуск от
+;     имени администратора);
+;   * запуск от имени администратора — сервер и клиент «для всех» в Program
+;     Files (IsAdmin); каталог программы вычисляет GetDefaultAppDir.
+; /ALLUSERS разрешён (commandline) для тихого автообновления: служба LocalSystem
+; запускает установщик уже элевированным — Inno включает административный режим
+; без UAC и без respawn. /CURRENTUSER не нужен: обычный запуск и так lowest.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
-#else
-PrivilegesRequired=admin
-PrivilegesRequiredOverridesAllowed=commandline dialog
-UsePreviousPrivileges=no
 ; Предупреждение Inno «per-user areas in admin mode» снято осознанно: пути
 ; {localappdata}/{userdesktop}/{userprograms} используются только установкой
-; клиента «только для меня», а в административном режиме она недоступна
-; (GAdminMachineScope и Check InstallClientUser отключают ветку); машинный
-; клиент ставится в {autopf}. Ярлыки и файлы per-user остаются под Check.
+; клиента «только для меня», а в элевированном (административном) запуске эта
+; ветка отключена Check-условиями (GAdminMachineScope/InstallClientUser).
 UsedUserAreasWarning=no
-#endif
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -377,23 +388,6 @@ UsePreviousTasks=no
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
-
-[Messages]
-; Диалог режима установки (PrivilegesRequiredOverridesAllowed=commandline
-; dialog) — то единственное место, где пользователь выбирает «для всех» или
-; «только для меня»: он показывается до мастера, вместе со штатным запросом
-; прав Windows (ошибка 2dd215f7). Стандартные тексты Inno говорят о
-; «привилегиях администратора» без последствий, поэтому здесь прямо сказано,
-; что именно ставится в каждом режиме и когда появится UAC. Text1 — текущий
-; режим по умолчанию admin, Text2 — lowest (тестовая сборка).
-PrivilegesRequiredOverrideTitle=Режим установки ETN
-PrivilegesRequiredOverrideInstruction=Выберите, для кого установить ETN
-PrivilegesRequiredOverrideText1=%1 может быть установлена для всех пользователей компьютера (сервер-служба и клиент; Windows запросит права администратора) или только для вас (клиент в вашем профиле, без прав администратора).
-PrivilegesRequiredOverrideText2=%1 может быть установлена только для вас (клиент в вашем профиле, без прав администратора) или для всех пользователей компьютера (сервер-служба и клиент; Windows запросит права администратора).
-PrivilegesRequiredOverrideAllUsers=Установить для всех пользователей (сервер и клиент)
-PrivilegesRequiredOverrideAllUsersRecommended=Установить для всех пользователей (рекомендуется: сервер и клиент)
-PrivilegesRequiredOverrideCurrentUser=Установить только для меня (клиент, без прав администратора)
-PrivilegesRequiredOverrideCurrentUserRecommended=Установить только для меня (клиент, без прав администратора)
 
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
@@ -524,9 +518,9 @@ var
   GPrivilegedPhase: Boolean;
   GIsElevated: Boolean;
   { Административный режим установки: установщик работает «для всех
-    пользователей» (PrivilegesRequired=admin или /ALLUSERS). Права запрашивает
-    сам Inno при старте (native respawn); скриптового самозапуска нет —
-    ошибка 2dd215f7. В TestMode моделируется /TESTADMINMODE=1. }
+    пользователей» (запуск от имени администратора или /ALLUSERS). Права даёт
+    элевированный процесс; Inno не перезапускает мастер (ошибка aa5af30c).
+    В TestMode моделируется /TESTADMINMODE=1. }
   GAdminInstallMode: Boolean;
   { Неадминистративный режим («только для меня»): сервер и клиент «для всех»
     недоступны, ставится только клиент в профиль пользователя (сценарий n2). }
@@ -681,6 +675,9 @@ var
 
   { Выбор компонентов и параметры }
   GServerSelected: Boolean;
+  { Пользователь (или тестовый хук) пытался выбрать сервер в обычном запуске:
+    сервер не выбирается, на экране — причина ServerUnavailableReason. }
+  GServerRequested: Boolean;
   GClientSelected: Boolean;
   GClientScopeUser: Boolean;
   GServerMode: String;
@@ -746,9 +743,9 @@ var
   GClientStateLabel: TNewStaticText;
   GClientHintLabel: TNewStaticText;
   GScopeHintLabel: TNewStaticText;
-  { Область клиента: выбора в мастере нет (её задаёт диалог режима), при
-    обновлении показывается текст выбранной области (ea8e223a, 4a66b7a5;
-    замечание приёмки 98ad5eec). }
+  { Область клиента: выбора в мастере нет (её задают фактические права
+    процесса), при обновлении показывается текст выбранной области (ea8e223a,
+    4a66b7a5; замечание приёмки 98ad5eec). }
   GScopeFixedLabel: TNewStaticText;
   GDataNoteLabel: TNewStaticText;
   GReasonLabel: TNewStaticText;
@@ -1310,6 +1307,27 @@ begin
     GInstalledClientScope := '';
 end;
 
+{ Каталог программы по фактическим правам процесса (ошибка aa5af30c).
+  PrivilegesRequired=lowest всегда оставляет Inno в неадминистративном режиме,
+  поэтому autopf у элевированного процесса указывал бы на профиль. Запуск от
+  имени администратора — Program Files; обычный запуск — профиль пользователя
+  (тот же каталог, что ClientUserDir). Функция вызывается и директивой
+  DefaultDirName, и при вычислении GServerDir в InitializeSetup, — путь всегда
+  один и тот же. }
+function GetDefaultAppDir(Param: String): String;
+begin
+#ifdef TestMode
+  { В тестовой сборке каталог изолирован и задан build.ps1; функция в этой
+    ветке не участвует в выборе режима. }
+  Result := ExpandConstant('{#AppDir}');
+#else
+  if IsAdmin then
+    Result := ExpandConstant('{commonpf}\ETN')
+  else
+    Result := ExpandConstant('{localappdata}\Programs\ETN');
+#endif
+end;
+
 function MachineAppDir: String;
 begin
 #ifdef TestMode
@@ -1397,7 +1415,7 @@ end;
   Показывается на экране компонентов; запущенный клиент ищется по обоим
   вариантам (ClientCloseRoots), потому что обновление может застать клиента
   прежней области. Каталог фиксирован ADR 144bcdb0, но область установки
-  пользователь выбирает в диалоге режима Inno.
+  определяют фактические права процесса (ошибка aa5af30c).
 
   Ограничение Administrator Protection (2dd215f7): в элевированном процессе
   {localappdata} может указывать на профиль SMAA, а не на профиль запустившего
@@ -1617,7 +1635,7 @@ end;
 { Область установки клиента при обновлении фиксирована: менять её нельзя
   (ea8e223a, 4a66b7a5 — иначе на машине остались бы файлы и ярлыки старой
   области). В этом состоянии выводится текст области (ClientScopeText):
-  выбора в мастере нет — его задаёт диалог режима Inno. }
+  выбора в мастере нет — его задают фактические права процесса. }
 function ClientScopeFixed: Boolean;
 begin
   Result := GClientState = 'installed';
@@ -1644,40 +1662,39 @@ begin
     end;
     Exit;
   end;
-  { Режим «только для меня» (2dd215f7): клиент «для всех» без прав
-    администратора не заменить — говорим, что сделать, вместо невнятного
-    «выберите хотя бы один компонент». UsePreviousPrivileges=no: диалог режима
-    показывается при каждом запуске, поэтому совет выполним. }
+  { Обычный запуск (ошибка aa5af30c): клиент «для всех» без прав администратора
+    не заменить — говорим, что сделать, вместо невнятного «выберите хотя бы
+    один компонент». Мастер не просит прав и не перезапускается: сервер и
+    клиент «для всех» ставятся запуском установщика от имени администратора. }
   if GUserOnlyMode and (GInstalledClientScope = 'machine') then
   begin
     Result := 'Клиент установлен для всех пользователей: его обновление ' +
-      'требует прав администратора. Закройте установщик и запустите его снова: ' +
-      'в диалоге режима выберите «Установить для всех пользователей».';
+      'требует прав администратора. Закройте установщик и запустите его от ' +
+      'имени администратора (правый клик → Запуск от имени администратора).';
     Exit;
   end;
   { Режим «только для меня»: клиент в профиле обновляется на месте; другой
-    вариант — запуск установщика с выбором «для всех пользователей». }
+    вариант — запуск установщика от имени администратора (см. выше). }
   if GUserOnlyMode then
   begin
     Result := 'Клиент установлен в варианте «только для меня» — обновление ' +
       'продолжится в ваш профиль. Чтобы поставить клиент «для всех ' +
-      'пользователей», закройте установщик и запустите его снова: в диалоге ' +
-      'режима выберите «Установить для всех пользователей».';
+      'пользователей», закройте установщик и запустите его от имени ' +
+      'администратора (правый клик → Запуск от имени администратора).';
     Exit;
   end;
   { Остальные состояния (тестовый прогон без моделируемого режима): та же
     формулировка пользователя (860def0d, n5), что и в режиме «только для
-    меня», — сменить вариант можно повторным запуском и выбором в диалоге
-    режима. «Удалите клиента и установите заново» больше не советуем:
-    UsePreviousPrivileges=no, диалог показывается при каждом запуске. }
+    меня», — сменить вариант можно повторным запуском с нужными правами.
+    «Удалите клиента и установите заново» больше не советуем. }
   if GClientScopeUser then
     Result := 'Клиент установлен в варианте «только для меня». Чтобы поставить ' +
       'клиент «для всех пользователей», закройте установщик и запустите его ' +
-      'снова: в диалоге режима выберите «Установить для всех пользователей».'
+      'от имени администратора (правый клик → Запуск от имени администратора).'
   else
     Result := 'Клиент установлен в варианте «для всех пользователей». Чтобы ' +
-      'поставить клиент «только для меня», закройте установщик и запустите его ' +
-      'снова: в диалоге режима выберите «Установить только для меня».';
+      'поставить клиент «только для меня», запустите установщик обычным ' +
+      'двойным кликом (без прав администратора).';
 end;
 
 { Понятное название режима запуска сервера (ошибка 860def0d, n6): «service» и
@@ -2132,7 +2149,8 @@ begin
       старый остаётся; на экране компонентов обещания удаления нет. }
     LogLine('WARN', 'Старый клиент ETN ' + Version + ' установлен для всех ' +
       'пользователей: удаление требует прав администратора — запустите ' +
-      'установщик, выбрав «Установить для всех пользователей»');
+      'установщик от имени администратора (правый клик → Запуск от имени ' +
+      'администратора)');
     Exit;
   end;
   if IsMachine then
@@ -3219,10 +3237,10 @@ begin
   { Привилегированная фаза — та, что пишет в каталог программы и каталог
     данных: silent (предусловие — уже элевирован), внутренняя фаза
     /PRIVILEGEDPHASE (тесты установщика; GUI её больше не запускает), либо
-    административный режим установки — его обеспечивает сам Inno
-    (PrivilegesRequired=admin), autopf = Program Files. Элевированный, но не
-    административный процесс пишет в профиль пользователя и привилегированной
-    фазой не считается — иначе сервер попал бы и в Program Files, и в профиль.
+    элевированный процесс (запуск от имени администратора или /ALLUSERS);
+    каталог программы при этом выбирает GetDefaultAppDir. Неэлевированный
+    процесс пишет в профиль пользователя и привилегированной фазой не
+    считается — иначе сервер попал бы и в Program Files, и в профиль.
     GAdminInstallMode, а не IsAdminInstallMode: в тестовой сборке режим
     моделируется хуком /TESTADMINMODE. }
   Result := GWorkAllowed and
@@ -5456,10 +5474,9 @@ begin
     FailPrecondition('/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена');
   if not GIsElevated then
     FailPrecondition('процесс не элевирован: нужны права администратора');
-  { Административный режим установки гарантирует сам Inno: в продуктовой
-    сборке PrivilegesRequired=admin, поэтому silent-прогон сразу идёт в
-    административном режиме. Скриптового перезапуска для этого больше нет:
-    self-exec установщика запрещён платформой (2dd215f7). }
+  { Административный режим установки даёт элевированный процесс или /ALLUSERS:
+    silent-прогон службы идёт с /ALLUSERS и уже элевирован, поэтому Inno не
+    перезапускает мастер (ошибка aa5af30c). }
   if not GInstallJsonPresent then
     FailPrecondition('нет ' + GInstallJsonPath + ' — сервер не устанавливался установщиком');
   if not GInstallJsonValid then
@@ -5512,8 +5529,8 @@ begin
     FailPrecondition('/PRIVILEGEDPHASE допустим только с /VERYSILENT');
   if not GIsElevated then
     FailPrecondition('привилегированная фаза запущена без прав администратора');
-  { Административный режим установки обеспечивает сам Inno
-    (PrivilegesRequired=admin); скриптового перезапуска нет (2dd215f7). }
+  { Административный режим обеспечивает элевированный процесс (или /ALLUSERS);
+    скриптового перезапуска нет (ошибка aa5af30c). }
   if (not GServerSelected) and (not GClientSelected) then
     FailPrecondition('не выбран ни один компонент: файл параметров пуст или повреждён');
   if GBlockedDowngrade then
@@ -5878,14 +5895,17 @@ end;
 
 { Единая точка чтения выбора: обработчики OnClick чекбоксов (компоненты,
   лицензия) и тестовый хук /TESTSELECT. Радиокнопок области в мастере нет:
-  в продуктовой сборке область задаёт диалог режима Inno (GAdminMachineScope /
-  GUserOnlyMode), при обновлении — install.json. Третий аргумент — только для
-  /TESTSELECT и сохранения текущей области в UpdateComponentsState. }
+  в продуктовой сборке область задают фактические права процесса
+  (GAdminMachineScope / GUserOnlyMode), при обновлении — install.json. Третий
+  аргумент — только для /TESTSELECT и сохранения текущей области. }
 procedure ApplySelection(const ServerChecked, ClientChecked,
   MachineScopeChecked: Boolean);
 begin
   { В режиме «только для меня» сервера нет: права на него не запрашивались
-    (2dd215f7). Флаг остаётся ложным даже если чекбокс программно отмечен. }
+    (ошибка aa5af30c: нет элевации — нет сервера). Флаг остаётся ложным даже
+    если чекбокс программно отмечен; попытка запоминается для причины на
+    экране. }
+  GServerRequested := ServerChecked;
   GServerSelected := ServerChecked and (not GUserOnlyMode);
   GClientSelected := ClientChecked;
   { В административном режиме область одна — «для всех» (GAdminMachineScope).
@@ -5949,7 +5969,8 @@ begin
 
   { Область клиента: при обновлении — поясняющий текст (ea8e223a), в
     административном режиме — постоянное объяснение; иначе (режим «только для
-    меня») — подсказка ниже. Радиокнопок нет: область задаёт диалог режима. }
+    меня») — подсказка ниже. Радиокнопок нет: область задают фактические права
+    процесса. }
   if GScopeFixedLabel <> nil then
   begin
     GScopeFixedLabel.Top := Y;
@@ -6037,6 +6058,16 @@ begin
   LayoutComponentsPage;
 end;
 
+{ Причина недоступности сервера в обычном (неэлевированном) запуске — одна
+  строка для экрана компонентов и журнала (ошибка aa5af30c). Права из мастера
+  не запрашиваются: чтобы получить сервер, пользователь закрывает установщик и
+  запускает его от имени администратора — мастер при этом остаётся одним
+  процессом, без respawn. }
+function ServerUnavailableReason: String;
+begin
+  Result := 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).';
+end;
+
 { Причина неактивности «Далее» — одна функция для экрана и журнала (ошибка
   5b9743da): по спеке (элемент интерфейса «Экран установщика — выбор
   компонентов и лицензия») кнопка неактивна без выбранного компонента или без
@@ -6050,6 +6081,8 @@ begin
       ' — понижение версии не поддерживается. Доступна только отмена.'
   else if GComponentsNotice <> '' then
     Result := GComponentsNotice
+  else if GUserOnlyMode and GServerRequested and (not GServerSelected) then
+    Result := ServerUnavailableReason
   else if (not GServerSelected) and (not GClientSelected) then
   begin
     if GUserOnlyMode and (GInstalledClientScope = 'machine') then
@@ -6075,8 +6108,9 @@ begin
       (not GClientScopeUser) or GAdminMachineScope);
   if GLicenseCheck <> nil then
     GLicenseAccepted := GLicenseCheck.Checked;
-  { Область клиента: выбора в мастере нет — её задаёт диалог режима Inno;
-    при обновлении выбранная область выводится текстом (ea8e223a, 4a66b7a5). }
+  { Область клиента: выбора в мастере нет — её задают фактические права
+    процесса; при обновлении выбранная область выводится текстом (ea8e223a,
+    4a66b7a5). }
   if GScopeFixedLabel <> nil then
   begin
     GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
@@ -6088,15 +6122,12 @@ begin
   end;
   if GServerHintLabel <> nil then
   begin
-    { В режиме «только для меня» сервер недоступен не случайно: служба Windows
-      требует прав администратора, а они не запрашивались (2dd215f7). Говорим,
-      что сделать, — иначе выключенный чекбокс выглядит поломкой. }
+    { В обычном запуске сервер недоступен не случайно: служба Windows требует
+      прав администратора, а их у процесса нет (ошибка aa5af30c). Говорим
+      ровно то, что нужно сделать; та же строка — причина в журнале и в
+      ComponentsReasonText. }
     if GUserOnlyMode then
-      GServerHintLabel.Caption :=
-        'Сервер не устанавливается в режиме «только для меня»: он работает как ' +
-        'служба Windows и требует прав администратора. Чтобы установить сервер, ' +
-        'закройте установщик и запустите его снова: в диалоге режима выберите ' +
-        '«Установить для всех пользователей» — Windows запросит права.'
+      GServerHintLabel.Caption := ServerUnavailableReason
     else
       GServerHintLabel.Caption :=
         'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
@@ -6143,8 +6174,8 @@ begin
       GScopeHintLabel.Caption :=
         'Режим «только для меня»: клиент ставится в ваш профиль, права ' +
         'администратора не нужны. Чтобы установить сервер или клиент «для всех ' +
-        'пользователей», закройте установщик и запустите его снова, выбрав в ' +
-        'диалоге режима «Установить для всех пользователей».'
+        'пользователей», закройте установщик и запустите его от имени ' +
+        'администратора (правый клик → Запуск от имени администратора).'
     else
       GScopeHintLabel.Caption :=
         '«Только для меня» — клиент в вашем профиле, права администратора не ' +
@@ -6268,10 +6299,10 @@ begin
   GClientHintLabel.Caption := '';
   FitLabel(GClientHintLabel);
 
-  { Область клиента: выбора в мастере нет — её задаёт диалог режима Inno
-    (радиокнопки убраны как недостижимые в продуктовой сборке, замечание
-    верификатора 2dd215f7 п.4). При обновлении — текст выбранной области
-    (ea8e223a). }
+  { Область клиента: выбора в мастере нет — её задают фактические права
+    процесса (радиокнопки убраны как недостижимые в продуктовой сборке,
+    замечание верификатора 2dd215f7 п.4). При обновлении — текст выбранной
+    области (ea8e223a). }
   GScopeFixedLabel := TNewStaticText.Create(GComponentsPage);
   GScopeFixedLabel.Parent := GComponentsPage.Surface;
   GScopeFixedLabel.Left := 20;
@@ -6746,6 +6777,7 @@ begin
   GExitCode := EXIT_OK;
   GWorkAllowed := True;
   GServerSelected := False;
+  GServerRequested := False;
   GClientSelected := False;
   GClientScopeUser := True;
   GAdminMachineScope := False;
@@ -6960,12 +6992,14 @@ begin
     клиента и предупреждение о его удалении видны на первом экране. }
   DetectLegacyClient;
 
-  { Режим установки выбирает Inno до [Code]: PrivilegesRequired=admin и
-    PrivilegesRequiredOverridesAllowed=commandline dialog (2dd215f7). В
-    TestMode привилегий нет — административный и неадминистративный режимы
-    моделируются хуками /TESTADMINMODE и /TESTUSERONLYMODE. }
-  GAdminInstallMode := IsAdminInstallMode;
+  { Режим по фактическим правам процесса (ошибка aa5af30c): обычный запуск —
+    клиент «только для меня», запуск от имени администратора — сервер и клиент
+    «для всех». IsAdminInstallMode остаётся в формуле для /ALLUSERS: тихое
+    автообновление службы включает административный режим Inno без respawn.
+    В TestMode привилегий нет — режимы моделируются хуками /TESTADMINMODE и
+    /TESTUSERONLYMODE, чтобы прогон не зависел от прав машины. }
 #ifdef TestMode
+  GAdminInstallMode := IsAdminInstallMode;
   if GTestAdminMode = '1' then
   begin
     GAdminInstallMode := True;
@@ -6976,10 +7010,12 @@ begin
     GAdminInstallMode := False;
     LogOrDefer('WARN', 'TESTUSERONLYMODE=1: режим «только для меня» смоделирован (тестовый режим)');
   end;
+#else
+  GAdminInstallMode := IsAdmin or IsAdminInstallMode;
 #endif
   { Привилегированная фаза всегда административная: вызывающий запускает её с
-    /ALLUSERS, и клиент «для меня» ставит не она. Silent-прогон в продуктовой
-    сборке тоже административный (PrivilegesRequired=admin). }
+    /ALLUSERS, и клиент «для меня» ставит не она. Silent-прогон с /ALLUSERS
+    тоже административный; без /ALLUSERS он элевацию требует предусловием. }
   GAdminMachineScope := GAdminInstallMode and (not GPrivilegedPhase);
   GUserOnlyMode := (not GAdminInstallMode) and (not GPrivilegedPhase) and
     (not GSilent);
@@ -7084,9 +7120,13 @@ begin
       ' machine_copy=' + Pick(ClientMachineCopyPresent, '1', '0') +
       ' need_elevation=' + Pick(NeedElevation, '1', '0') +
       ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
+      ' admin_mode=' + Pick(GAdminInstallMode, '1', '0') +
+      ' server_enabled=' + Pick(not GUserOnlyMode, '1', '0') +
       ' legacy=' + IfStr(GLegacyClientVersion = '', '-', GLegacyClientVersion) +
       ' legacy_machine=' + Pick(GLegacyClientMachine, '1', '0') +
       ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
+    LogLine('INFO', 'TESTSTATE_NOTICE server_notice=' +
+      IfStr(GUserOnlyMode, ServerUnavailableReason, ''));
     ExitProcess(EXIT_OK);
   end;
 
@@ -7121,7 +7161,7 @@ begin
   end;
 
   { /TESTELEVHELPER удалён вместе со скриптовой элевацией (2dd215f7):
-    режим установки выбирается диалогом Inno до мастера. }
+    режим определяют фактические права процесса; мастер не перезапускается. }
 
   { /TESTPRECHECK=1 — прогон предпроверок без окон: та же функция, что вызывают
     экран параметров сервера и привилегированная фаза. Результат — в журнале и
@@ -7512,9 +7552,9 @@ function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
 var
   S: String;
 begin
-  { Права уже запрошены Inno при старте (PrivilegesRequired=admin): к экрану
-    готовности UAC позади, и второй раз он не появится. В режиме «только для
-    меня» прав нет вовсе — сказано на экране компонентов (2dd215f7). }
+  { Права не запрашиваются ни на одном экране мастера: их даёт запуск от имени
+    администратора (или /ALLUSERS в silent). В обычном запуске прав нет вовсе —
+    сказано на экране компонентов (ошибка aa5af30c). }
   S := '';
   if GUserOnlyMode then
     S := 'Режим «только для меня»: права администратора не требуются.' +
@@ -7546,8 +7586,8 @@ begin
         if GUserOnlyMode and (GInstalledClientScope = 'machine') then
           GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
             'обновление требует прав администратора — закройте установщик и ' +
-            'запустите его снова: в диалоге режима выберите «Установить для всех ' +
-            'пользователей».'
+            'запустите его от имени администратора (правый клик → Запуск от ' +
+            'имени администратора).'
         else
           GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
       end;
@@ -7561,9 +7601,9 @@ begin
        (GServerSelected or (GClientSelected and (not GClientScopeUser))) then
     begin
       if GReasonLabel <> nil then
-        GReasonLabel.Caption := 'Для установки сервера или клиента «для всех ' +
-          'пользователей» закройте установщик и запустите его снова: в диалоге ' +
-          'режима выберите «Установить для всех пользователей».';
+        GReasonLabel.Caption := 'Для установки компонентов, требующих прав ' +
+          'администратора, закройте установщик и запустите его от имени ' +
+          'администратора (правый клик → Запуск от имени администратора).';
       LogLine('WARN', 'Экран компонентов: в режиме «только для меня» выбраны ' +
         'компоненты, требующие прав администратора');
       Result := False;

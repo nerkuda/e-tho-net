@@ -28,7 +28,7 @@
      16. B3/B5/Z3: состояние машины и галочки по умолчанию
          (not-installed/installed/update-available/repair/adopt/downgrade)
      17. B4: клиент «для всех» ставится, «для меня» — неэлевированной фазой;
-         область задаёт режим установки (диалог Inno), а не радиокнопки;
+         область задают фактические права процесса, а не радиокнопки;
          область сохраняется в install.json (mode=client) и восстанавливается;
          копия «только для меня» видна и в административном режиме
      18. Z2: last_log обновляется каждый запуск, повтор версии не меняет версию
@@ -236,6 +236,7 @@ function Invoke-StateProbe {
     return [pscustomobject]@{
         Code   = $code
         State  = (Get-LogLine -Pattern 'TESTSTATE ([^\r\n]+)')
+        Notice = (Get-LogLine -Pattern 'TESTSTATE_NOTICE server_notice=([^\r\n]*)')
         Autopf = (Get-LogLine -Pattern 'autopf=([^;\r\n]+)')
     }
 }
@@ -621,12 +622,14 @@ foreach ($required in @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SERV
     Add-StaticResult -Name "static:runner$required" -Ok $present `
         -Note 'флаг silent-обновления службы'
 }
-# B2: каталог программы выбирается по режиму установки ({autopf}), а не жёстко
-# из Program Files — иначе неэлевированный экземпляр падает с Error 5.
+# B2: каталог программы выбирается по фактическим правам процесса, а не жёстко
+# из Program Files — иначе неэлевированный экземпляр падает с Error 5. Ошибка
+# aa5af30c: {autopf} при PrivilegesRequired=lowest всегда указывает на профиль,
+# поэтому каталог вычисляет GetDefaultAppDir (IsAdmin → Program Files).
 # 9b310991: порт/хост/брандмауэр/каталог данных, подстановка шаблона службы,
 # предпроверки и удаление правила при удалении программы.
 $staticChecks = @(
-    @{ Name = 'static:autopf-appdir'; Pattern = [regex]::Escape('#define AppDir "{autopf}\ETN"'); Note = 'каталог программы по режиму установки' },
+    @{ Name = 'static:autopf-appdir'; Pattern = [regex]::Escape('#define AppDir "{code:GetDefaultAppDir}"'); Note = 'каталог программы по фактическим правам процесса' },
     @{ Name = 'static:defaultdir-app'; Pattern = [regex]::Escape('DefaultDirName={#AppDir}'); Note = '' },
     @{ Name = 'static:privileged-phase'; Pattern = [regex]::Escape('ValidatePrivilegedPhasePreconditions'); Note = 'отдельная привилегированная фаза' },
     @{ Name = 'static:context-admin-mode'; Pattern = [regex]::Escape('GIsElevated and GAdminInstallMode'); Note = 'привилегированный контекст — только admin mode' },
@@ -877,7 +880,7 @@ Add-StaticResult -Name 'static:ready-no-long-ops' `
 Add-StaticResult -Name 'static:ready-no-script-elevation' `
     -Ok ((-not ($nextBody -match [regex]::Escape('RunElevatedChild'))) -and
          (-not ($nextBody -match [regex]::Escape("ShellExec('runas'")))) `
-    -Note 'на экране готовности права не запрашиваются: режим выбран диалогом Inno до мастера'
+    -Note 'на экране готовности права не запрашиваются: их даёт запуск от имени администратора (или /ALLUSERS в silent)'
 $prepareBody = Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall'
 Add-StaticResult -Name 'static:prepare-long-ops' `
     -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('CloseRunningClient(True, Reason)'))) -and
@@ -888,7 +891,7 @@ Add-StaticResult -Name 'static:prepare-no-script-elevation' `
     -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('if not InPrivilegedContext then Exit'))) -and
          (-not ($prepareBody -match [regex]::Escape('RunElevatedChild'))) -and
          (-not ($prepareBody -match [regex]::Escape("ShellExec('runas'")))) `
-    -Note 'PrepareToInstall не поднимает второй экземпляр: привилегию даёт admin-режим Inno'
+    -Note 'PrepareToInstall не поднимает второй экземпляр: права даёт запуск от имени администратора или /ALLUSERS'
 Add-StaticResult -Name 'static:legacy-nsis-detect' `
     -Ok ((Test-IssCode -Text $issText -Pattern ([regex]::Escape("Pos('Uninstall ETN.exe', UninstallCmd)"))) -and
          (Test-IssCode -Text $issText -Pattern ([regex]::Escape('function FindLegacyClient'))) -and
@@ -1030,45 +1033,50 @@ $elevationDiagOk = ($issText -match '(?m)^SetupLogging=yes\s*$') -and
 Add-StaticResult -Name 'static:elevation-diagnostics' -Ok $elevationDiagOk `
     -Note 'отказ ShellExec: Win32-код в журнал, шим __COMPAT_LAYER логируется; SetupLogging включён'
 
-# Решение по ошибке 2dd215f7: элевация штатная, силами Inno ДО [Code].
-# PrivilegesRequired=admin + диалог режима: «для всех» — один запрос UAC на
-# старте, «только для меня» — штатный неадминистративный режим (/CURRENTUSER).
-# UsePreviousPrivileges=no — диалог режима показывается при каждом запуске:
-# с yes при уже установленной user-версии Inno подавлял диалог, и подсказки
-# «запустите снова и выберите „для всех"» становились тупиком (блокер приёмки).
+# Ошибка aa5af30c: respawn мастера после диалога режима Inno на машине
+# пользователя оставлял окно без ввода. Решение — вернуться к
+# PrivilegesRequired=lowest без dialog-override: мастер стартует и работает в
+# одном процессе, без перезапуска. Режим выбирается по фактическим правам
+# процесса: обычный запуск — только клиент «только для меня», запуск от имени
+# администратора — сервер и клиент «для всех пользователей».
+# /ALLUSERS остаётся разрешённым (commandline): тихое автообновление службы
+# запускает установщик из LocalSystem уже элевированным — Inno включает
+# административный режим без UAC и без respawn (см. installer-runner.test.ts).
 # Скриптовый self-exec установщика запрещён платформой (Exec/ShellExec/FileCopy
-# по {srcexe} до старта установки дают код 5), поэтому помощника элевации,
-# RunElevatedChild и перезапуска мастера с /ALLUSERS быть не должно.
-$testLowIdx = $issText.IndexOf('PrivilegesRequired=lowest')
-$testDefIdx = $issText.LastIndexOf('#ifdef TestMode', $testLowIdx)
-$elseIdx = $issText.IndexOf('#else', $testDefIdx)
-$endifIdx = $issText.IndexOf('#endif', $elseIdx)
-$adminIdx = $issText.IndexOf('PrivilegesRequired=admin', $elseIdx)
-$dialogIdx = $issText.IndexOf('PrivilegesRequiredOverridesAllowed=commandline dialog', $elseIdx)
-$prevIdx = $issText.IndexOf('UsePreviousPrivileges=no', $elseIdx)
-$prevYesIdx = $issText.IndexOf('UsePreviousPrivileges=yes', $elseIdx)
-$nativeModeOk = ($testDefIdx -ge 0) -and ($elseIdx -gt $testDefIdx) -and
-    ($endifIdx -gt $elseIdx) -and ($testLowIdx -gt $testDefIdx) -and
-    ($testLowIdx -lt $elseIdx) -and ($adminIdx -gt $elseIdx) -and
-    ($adminIdx -lt $endifIdx) -and ($dialogIdx -gt $elseIdx) -and
-    ($dialogIdx -lt $endifIdx) -and ($prevIdx -gt $elseIdx) -and
-    ($prevIdx -lt $endifIdx) -and ($prevYesIdx -lt 0)
-$nativeElevationOk = $nativeModeOk -and
-    (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GAdminInstallMode := IsAdminInstallMode'))) -and
+# по {srcexe} до старта установки дают код 5), поэтому второго экземпляра и
+# RunElevatedChild быть не должно.
+$setupSection = [regex]::Match($issText, '(?ms)^\[Setup\](.*?)^\[\w').Groups[1].Value
+$noRespawnOk = ($setupSection -match '(?m)^PrivilegesRequired=lowest\s*$') -and
+    ($setupSection -match '(?m)^PrivilegesRequiredOverridesAllowed=commandline\s*$') -and
+    ($setupSection -notmatch '(?m)^PrivilegesRequired=admin\s*$') -and
+    ($setupSection -notmatch '(?m)^PrivilegesRequiredOverridesAllowed=.*\bdialog\b') -and
+    ($setupSection -notmatch '(?m)^UsePreviousPrivileges=') -and
+    ($issText -notmatch '(?m)^PrivilegesRequiredOverrideTitle=') -and
+    ($issText -notmatch '(?m)^PrivilegesRequiredOverrideInstruction=')
+Add-StaticResult -Name 'static:no-respawn-mode' -Ok $noRespawnOk `
+    -Note 'продукт: lowest + commandline без dialog/UsePreviousPrivileges — мастер не перезапускается после диалога режима'
+
+$defaultDirBody = Get-IssFunctionBody -Text $issText -Name 'GetDefaultAppDir'
+$modeByRightsOk = ($issText -match [regex]::Escape('#define AppDir "{code:GetDefaultAppDir}"')) -and
+    (Test-IssCode -Text $issText -Pattern ([regex]::Escape('DefaultDirName={#AppDir}'))) -and
+    (Test-IssCode -Text $defaultDirBody -Pattern ([regex]::Escape('if IsAdmin then'))) -and
+    (Test-IssCode -Text $defaultDirBody -Pattern ([regex]::Escape("{commonpf}"))) -and
+    (Test-IssCode -Text $defaultDirBody -Pattern ([regex]::Escape("{localappdata}"))) -and
+    (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GAdminInstallMode := IsAdmin or IsAdminInstallMode'))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape("ParamExists('ELEVATEHELPER')")))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape("ShellExec('runas'")))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('RunElevatedChild')))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('RelaunchAdminInstallMode'))))
-Add-StaticResult -Name 'static:elevation-native' -Ok $nativeElevationOk `
-    -Note 'элевация штатная: admin + commandline dialog + UsePreviousPrivileges=no в продуктовой ветке, lowest в TestMode; self-exec установщика нет'
+Add-StaticResult -Name 'static:mode-by-process-rights' -Ok $modeByRightsOk `
+    -Note 'режим по фактическим правам процесса: IsAdmin → сервер и Program Files, обычный запуск → профиль; второго экземпляра нет'
 
-# Блокер приёмки: подсказки «закройте установщик и запустите снова, выбрав
-# „для всех"» должны быть выполнимы. UsePreviousPrivileges=no — диалог режима
-# показывается при каждом запуске, даже если ETN уже установлена «только для
-# меня»; с yes Inno молча брал прошлый режим и подсказка вела в тупик.
-$prevNoOk = ($prevIdx -gt $elseIdx) -and ($prevIdx -lt $endifIdx) -and ($prevYesIdx -lt 0)
-Add-StaticResult -Name 'static:mode-dialog-every-run' -Ok $prevNoOk `
-    -Note 'UsePreviousPrivileges=no: смена режима — повторный запуск и выбор в диалоге, без флагов'
+$serverReasonBody = Get-IssFunctionBody -Text $issText -Name 'ServerUnavailableReason'
+$serverReason = 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).'
+$serverReasonOk = (Test-IssCode -Text $serverReasonBody -Pattern ([regex]::Escape($serverReason))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState') -Pattern ([regex]::Escape('ServerUnavailableReason'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ComponentsReasonText') -Pattern ([regex]::Escape('ServerUnavailableReason')))
+Add-StaticResult -Name 'static:server-needs-admin-launch' -Ok $serverReasonOk `
+    -Note 'причина недоступности сервера в обычном запуске — дословно «запустите от имени администратора» (экран и журнал)'
 
 # Режим «только для меня» (2dd215f7): без прав администратора сервер и клиент
 # «для всех» недоступны. Сервер выключен и снят из выбора, область клиента —
@@ -1206,11 +1214,17 @@ $scopeFixedOk = Test-IssCode -Text $scopeFixedBody -Pattern ([regex]::Escape("GC
 $scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
 # Формулировка пользователя (ошибка 860def0d, n5): вариант установки и что
 # сделать, чтобы получить другой, — без термина «область установки».
-$scopeTextOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Клиент установлен в варианте «только для меня»'))) -and
-    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Клиент установлен в варианте «для всех пользователей»'))) -and
-    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('в диалоге режима выберите «Установить только для меня»'))) -and
-    (-not (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('удалите клиента и выполните установку заново')))) -and
-    (-not (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('область установки'))))
+# Строки Pascal переносятся по '+', поэтому фразы проверяем по телу функции,
+# склеенному через границы строк и строковых литералов: иначе «обычным двойным
+# кликом» разорвано между строками и кавычками конкатенации.
+$scopeTextFlat = ($scopeTextBody -replace '\r?\n\s*', ' ') -replace "'\s*\+\s*'", ''
+$scopeTextOk = (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('Клиент установлен в варианте «только для меня»'))) -and
+    (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('Клиент установлен в варианте «для всех пользователей»'))) -and
+    (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('Запуск от имени администратора'))) -and
+    (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('обычным двойным кликом'))) -and
+    (-not (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('в диалоге режима')))) -and
+    (-not (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('удалите клиента и выполните установку заново')))) -and
+    (-not (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('область установки'))))
 Add-StaticResult -Name 'static:client-scope-fixed-text' -Ok ($scopeLabelOk -and $scopeFixedOk -and $scopeTextOk) `
     -Note 'при установленном клиенте область выводится текстом в формулировке пользователя (радиокнопок нет)'
 Add-StaticResult -Name 'static:client-launch-original-user' `
@@ -1320,18 +1334,22 @@ Add-StaticResult -Name 'static:server-mode-human' -Ok $modeOk `
     -Note 'режим запуска на экране — по-человечески, без термина service'
 
 $readyMemoBody = Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo'
-# 2dd215f7: диалог режима Inno показывается до мастера, поэтому предупреждать
-# об UAC внутри мастера не нужно. Вместо него мастер объясняет режим «только
-# для меня» и точный путь к серверу или клиенту «для всех»: запустить установщик
-# снова и выбрать вариант в диалоге режима (UsePreviousPrivileges=no — диалог
-# будет показан при каждом запуске, подсказка выполнима).
+# Ошибка aa5af30c: режим больше не выбирается диалогом Inno до мастера (этот
+# диалог вызывал respawn и ломал ввод). В обычном запуске мастер объясняет
+# режим «только для меня» и что для сервера или клиента «для всех» нужно
+# закрыть установщик и запустить его от имени администратора; в диалоге режима
+# больше не предлагаем выбрать вариант.
+$serverReasonBody = Get-IssFunctionBody -Text $issText -Name 'ServerUnavailableReason'
+$reasonTextBody = Get-IssFunctionBody -Text $issText -Name 'ComponentsReasonText'
 $uacOk = (-not (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Windows запросит права администратора')))) -and
     (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Сервер не устанавливается в режиме «только для меня»'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Установить для всех'))) -and
+    (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GServerHintLabel.Caption := ServerUnavailableReason'))) -and
+    (Test-IssCode -Text $serverReasonBody -Pattern ([regex]::Escape('Запуск от имени администратора'))) -and
+    (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('GUserOnlyMode and GServerRequested and (not GServerSelected)'))) -and
+    (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('Result := ServerUnavailableReason'))) -and
     (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('GUserOnlyMode')))
 Add-StaticResult -Name 'static:mode-guidance' -Ok $uacOk `
-    -Note 'мастер объясняет режим «только для меня» и как перейти к варианту «для всех» (диалог режима при каждом запуске)'
+    -Note 'мастер объясняет режим «только для меня» и что сервер ставится запуском от имени администратора'
 
 $portBody = Get-IssFunctionBody -Text $issText -Name 'ServerPortStatus'
 $portOk = (-not (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('IPAddress]::Any')))) -and
@@ -2144,15 +2162,35 @@ Add-StateResult -Name 'user-only-mode:scope-guard' -Line $probe.State -Pairs @(
     'default_client=1', 'client_scope=user', 'need_elevation=0') `
     -Note 'область клиента принудительно user: клиент «для всех» требует прав'
 
-# Административный режим — режим по умолчанию продуктовой сборки
-# (PrivilegesRequired=admin). На чистой машине предлагаются сервер и клиент
-# «для всех», область фиксирована machine; UAC Inno уже показал на старте.
+# Административный режим — это запуск от имени администратора (в тихом
+# автообновлении — /ALLUSERS из LocalSystem). На чистой машине предлагаются
+# сервер и клиент «для всех», область фиксирована machine.
 Reset-State
 $probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1')
 Add-StateResult -Name 'admin-mode:defaults' -Line $probe.State -Pairs @(
     'default_server=1', 'default_client=1', 'client_scope=machine',
     'need_elevation=1') `
     -Note 'административный режим: сервер и клиент «для всех» по умолчанию'
+
+# Матрица режимов (ошибка aa5af30c): режим определяется фактическими правами
+# процесса, а не диалогом Inno. user-mode — обычный запуск: сервер выключен,
+# причина дословно «запустите от имени администратора»; admin-mode — запуск от
+# имени администратора (или /ALLUSERS из LocalSystem): сервер доступен,
+# причины нет. Строка причины — та же, что на экране компонентов.
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTUSERONLYMODE=1')
+Add-StateResult -Name 'mode-matrix:user' -Line $probe.State -Pairs @(
+    'server_enabled=0', 'need_elevation=0') `
+    -Note 'обычный запуск: сервер недоступен, прав не требует'
+Add-Result -Name 'mode-matrix:user-reason' -Expected 1 `
+    -Actual ([int]($probe.Notice -eq $serverReason)) -Note ("" + $probe.Notice)
+Reset-State
+$probe = Invoke-StateProbe -ExtraArgs @('/TESTADMINMODE=1')
+Add-StateResult -Name 'mode-matrix:admin' -Line $probe.State -Pairs @(
+    'server_enabled=1', 'need_elevation=1') `
+    -Note 'запуск от администратора: сервер доступен'
+Add-Result -Name 'mode-matrix:admin-no-reason' -Expected 1 `
+    -Actual ([int](-not $probe.Notice)) -Note ("" + $probe.Notice)
 
 # Замечание верификатора п.1: копия клиента «только для меня» видна и в
 # административном режиме (иначе /ALLUSERS поверх user-установки молча ставил
