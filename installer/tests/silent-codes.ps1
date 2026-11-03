@@ -162,14 +162,15 @@ function Get-FreeTcpPort {
 
 function New-InstallJson {
     param([string]$ProductVersion = '0.15.0', [string]$Mode = 'service',
-        [int]$Port = 0, [string]$Firewall = 'true')
+        [int]$Port = 0, [string]$Firewall = 'true', [string]$ClientScope = 'null')
     # Порт по умолчанию — свободный: предпроверка порта теперь настоящая, а на
     # машине разработчика 4321 может занимать запущенный сервер.
     if ($Port -le 0) { $Port = Get-FreeTcpPort }
     $dataEscaped = $dataDir.Replace('\', '\\')
     return '{"schema":1,"product_version":"' + $ProductVersion + '","mode":"' + $Mode +
         '","data_dir":"' + $dataEscaped + '","host":"0.0.0.0","port":' + $Port + ',' +
-        '"firewall":' + $Firewall + ',"client_scope":null,"installed_at":"2026-10-01T10:00:00","last_log":""}'
+        '"firewall":' + $Firewall + ',"client_scope":' + $ClientScope +
+        ',"installed_at":"2026-10-01T10:00:00","last_log":""}'
 }
 
 function New-ServerFiles {
@@ -867,13 +868,22 @@ $nextBody = Get-IssFunctionBody -Text $issText -Name 'NextButtonClick'
 Add-StaticResult -Name 'static:port-suggestion' `
     -Ok (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('SuggestFreePort'))) `
     -Note 'подсказка свободного порта при занятом'
-Add-StaticResult -Name 'static:ready-no-script-elevation' `
+Add-StaticResult -Name 'static:ready-no-long-ops' `
     -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('wpReady'))) -and
-         (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('ReturnToComponentsPage'))) -and
-         (-not ($nextBody -match [regex]::Escape('RunElevatedChild'))) -and
+         (-not ($nextBody -match [regex]::Escape('CloseRunningClient'))) -and
+         (-not ($nextBody -match [regex]::Escape('RemoveLegacyBeforeInstall'))) -and
+         (-not ($nextBody -match [regex]::Escape('ewWaitUntilTerminated')))) `
+    -Note 'NextButtonClick(wpReady) не ждёт процессов: долгие операции — в PrepareToInstall (5b9743da)'
+Add-StaticResult -Name 'static:ready-no-script-elevation' `
+    -Ok ((-not ($nextBody -match [regex]::Escape('RunElevatedChild'))) -and
          (-not ($nextBody -match [regex]::Escape("ShellExec('runas'")))) `
     -Note 'на экране готовности права не запрашиваются: режим выбран диалогом Inno до мастера'
 $prepareBody = Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall'
+Add-StaticResult -Name 'static:prepare-long-ops' `
+    -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('CloseRunningClient(True, Reason)'))) -and
+         (Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall(GIsElevated, Reason)'))) -and
+         (Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('Изменения не выполнялись')))) `
+    -Note 'закрытие клиента и удаление старого клиента — на странице «Подготовка к установке», ошибка строкой (5b9743da)'
 Add-StaticResult -Name 'static:prepare-no-script-elevation' `
     -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('if not InPrivilegedContext then Exit'))) -and
          (-not ($prepareBody -match [regex]::Escape('RunElevatedChild'))) -and
@@ -885,9 +895,9 @@ Add-StaticResult -Name 'static:legacy-nsis-detect' `
          (Test-IssCode -Text $issText -Pattern ([regex]::Escape('function RunLegacyUninstaller')))) `
     -Note 'старый NSIS-клиент: поиск в реестре и удаление его деинсталлятором'
 Add-StaticResult -Name 'static:legacy-removal-wired' `
-    -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall'))) -and
+    -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall'))) -and
          (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'InitializeSetup') -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall(True')))) `
-    -Note 'удаление старого клиента до установки: GUI и привилегированная фаза'
+    -Note 'удаление старого клиента до установки: «Подготовка к установке» и привилегированная фаза'
 
 # Блокер и замечания приёмки 112642a4.
 $legacyArgsBody = Get-IssFunctionBody -Text $issText -Name 'UninstallerArgs'
@@ -909,6 +919,29 @@ $clientStateBody = Get-IssFunctionBody -Text $issText -Name 'ClientStateText'
 Add-StaticResult -Name 'static:client-state-selected' `
     -Ok (Test-IssCode -Text $clientStateBody -Pattern ([regex]::Escape('GLegacyClientFound and GClientSelected'))) `
     -Note 'обещание удалить старый клиент — только при выбранном клиенте'
+# Ошибка 5b9743da: подпись клиента и причина неактивности «Далее» на экране
+# компонентов обязаны говорить одно и то же. Раньше в режиме «только для меня»
+# подпись предлагала «выберите клиент, чтобы заменить», а кнопка была неактивна
+# без видимой причины — экран противоречил сам себе.
+$reasonTextBody = Get-IssFunctionBody -Text $issText -Name 'ComponentsReasonText'
+Add-StaticResult -Name 'static:client-scope-reason-consistent' `
+    -Ok ((Test-IssCode -Text $clientStateBody -Pattern ([regex]::Escape('нужны права'))) -and
+         (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('нужны права'))) -and
+         (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('GInstalledClientScope = ''machine'''))) -and
+         (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('GUserOnlyMode')))) `
+    -Note 'машинный клиент в режиме «только для меня»: причина и подпись совпадают (5b9743da)'
+# Ошибка 5b9743da: нажатия «Далее» и «Отмена» оставляют след в журнале. Без этого
+# по логу нельзя было отличить «обработчик завис» от «клик не дошёл до окна».
+$cancelBody = Get-IssFunctionBody -Text $issText -Name 'CancelButtonClick'
+Add-StaticResult -Name 'static:button-entry-log' `
+    -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('Кнопка «Далее»: страница'))) -and
+         (Test-IssCode -Text $cancelBody -Pattern ([regex]::Escape('Кнопка «Отмена»: страница')))) `
+    -Note 'нажатия «Далее» и «Отмена» пишутся в журнал до любых проверок (5b9743da)'
+$updateStateBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
+Add-StaticResult -Name 'static:next-state-log' `
+    -Ok ((Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('«Далее» '))) -and
+         (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('причина: ')))) `
+    -Note 'состояние «Далее» и причина неактивности пишутся в журнал при каждой смене (5b9743da)'
 Add-StaticResult -Name 'static:summary-run-button-client' `
     -Ok (Test-IssCode -Text $pageChangedBody -Pattern ([regex]::Escape('GSummaryRunButton.Visible := (GExitCode = EXIT_OK) and GClientSelected'))) `
     -Note 'кнопка «Запустить клиент» — только когда клиент выбран'
@@ -1122,11 +1155,10 @@ $closeGuard = (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('if not Cl
     (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape('ExitProcess(EXIT_PRECONDITION)')))
 Add-StaticResult -Name 'static:client-close-code20' -Ok $closeGuard `
     -Note 'клиент не закрылся — код 20 и выход до копирования файлов'
-$readyBody = Get-IssFunctionBody -Text $issText -Name 'NextButtonClick'
 Add-StaticResult -Name 'static:client-close-gui-warning' `
-    -Ok ((Test-IssCode -Text $readyBody -Pattern ([regex]::Escape('CloseRunningClient(True, Reason)'))) -and
+    -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('CloseRunningClient(True, Reason)'))) -and
          (Test-IssCode -Text $issText -Pattern ([regex]::Escape('Закрыть клиент и продолжить установку?')))) `
-    -Note 'GUI: предупреждение и согласие до повышения прав'
+    -Note 'GUI: предупреждение и согласие перед копированием файлов (PrepareToInstall)'
 $clientPidsProduct = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'ClientPidsRunning' -Ifdef 'TestMode'
 $clientHooksIfdef = ($clientPidsProduct -ne '') -and
     (-not ($clientPidsProduct -match 'GTestClientPids')) -and
@@ -1253,13 +1285,15 @@ Add-StaticResult -Name 'static:components-descriptions' -Ok $componentsTextOk `
     -Note 'что такое сервер и клиент и чем различаются области — подписи на экране компонентов'
 
 $layoutBody = Get-IssFunctionBody -Text $issText -Name 'LayoutComponentsPage'
+$fitPageBody = Get-IssFunctionBody -Text $issText -Name 'FitComponentsPage'
 $layoutOk = (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GServerHintLabel.Height'))) -and
     (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GClientHintLabel.Height'))) -and
     (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GScopeHintLabel.Height'))) -and
     (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('FitLabel(GScopeHintLabel)'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('LayoutComponentsPage')))
+    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('FitComponentsPage'))) -and
+    (Test-IssCode -Text $fitPageBody -Pattern ([regex]::Escape('LayoutComponentsPage')))
 Add-StaticResult -Name 'static:components-relayout' -Ok $layoutOk `
-    -Note 'позиции — по фактическим высотам подписей после каждой смены текста'
+    -Note 'позиции — по фактическим высотам подписей после каждой смены текста, с проверкой «поместилось» (5b9743da)'
 
 $readyComponents = Get-IssFunctionBody -Text $issText -Name 'CreateComponentsPage'
 $readyOk = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('not GComponentsReady'))) -and
@@ -1554,12 +1588,20 @@ function Read-Layout {
 }
 
 function Add-LayoutChecks {
-    param([string]$Suffix, [string]$Note = '')
+    param(
+        [string]$Suffix,
+        [string]$Note = '',
+        [int]$ServerSelected = 1,
+        [int]$ClientSelected = 1,
+        [int]$NextEnabled = 1,
+        [int]$ScopeText = 1
+    )
     $lines = Get-LayoutLines
     Add-Result -Name "layout:${Suffix}:dump" -Expected 1 -Actual ([int]($lines.Count -gt 0)) `
         -Note ("строк снимка: " + $lines.Count + $Note)
     $state = @($lines | Where-Object { $_ -like 'state *' })[0]
-    $both = ($state -match 'server_selected=1') -and ($state -match 'client_selected=1')
+    $both = ($state -match ('server_selected=' + $ServerSelected)) -and
+        ($state -match ('client_selected=' + $ClientSelected))
     Add-Result -Name "layout:${Suffix}:default-selection" -Expected 1 -Actual ([int]$both) -Note $state
 
     $layout = Read-Layout -Lines $lines
@@ -1567,6 +1609,34 @@ function Add-LayoutChecks {
         Add-Result -Name "layout:${Suffix}:$page" -Expected 1 `
             -Actual ([int](($layout.Surfaces.ContainsKey($page)) -and ($layout.Controls.ContainsKey($page)))) `
             -Note "страница $page в снимке"
+    }
+    # 0. Кнопка «Далее» и причина её неактивности (ошибка 5b9743da). Пользователь
+    #    видел неактивную кнопку без объяснения и принимал это за зависание,
+    #    поэтому прогон проверяет не только состояние кнопки, но и то, что у
+    #    неактивной кнопки причина есть, она непустая, не сжата и помещается на
+    #    страницу, а у активной причины нет.
+    $components = @{}
+    foreach ($ctl in $layout.Controls['components']) { $components[$ctl.Name] = $ctl }
+    $next = @($lines | Where-Object { $_ -like 'next enabled=*' })[0]
+    $reasonChars = -1
+    if ($next -match 'reason_chars=(?<c>\d+)') { $reasonChars = [int]$Matches['c'] }
+    $nextActual = -1
+    if ($next -match 'enabled=(?<v>[01])') { $nextActual = [int]$Matches['v'] }
+    Add-Result -Name "layout:${Suffix}:next-enabled" -Expected $NextEnabled -Actual $nextActual -Note $next
+    $reason = $components['reason']
+    if ($NextEnabled -eq 0) {
+        $fitsPage = $reason -and $layout.Surfaces.ContainsKey('components') -and
+            (($reason.Top + $reason.Height) -le $layout.Surfaces['components'])
+        $reasonOk = ($reasonChars -gt 0) -and ($null -ne $reason) -and $reason.Visible -and
+            ($reason.Chars -gt 0) -and ($reason.Chars -eq $reasonChars) -and
+            ($reason.Height -ge 15) -and $fitsPage
+        Add-Result -Name "layout:${Suffix}:reason-visible" -Expected 1 -Actual ([int]$reasonOk) `
+            -Note ('причина неактивной «Далее» на экране и в границах страницы: chars=' + $reasonChars)
+    }
+    else {
+        $reasonOk = ($reasonChars -eq 0) -and (($null -eq $reason) -or ($reason.Chars -eq 0))
+        Add-Result -Name "layout:${Suffix}:reason-empty" -Expected 1 -Actual ([int]$reasonOk) `
+            -Note ('активная «Далее» причины не показывает: chars=' + $reasonChars)
     }
     # 1. Подпись с непустым текстом не сжата: высота не меньше строки. Высота 0
     #    допустима только для пустой подписи (chars=0).
@@ -1610,17 +1680,23 @@ function Add-LayoutChecks {
     }
     Add-Result -Name "layout:${Suffix}:content-fits" -Expected 1 -Actual ([int]($overflows.Count -eq 0)) `
         -Note ($overflows -join ', ')
-    # 4. Описания компонентов и разницы областей действительно на экране.
-    $components = @{}
-    foreach ($ctl in $layout.Controls['components']) { $components[$ctl.Name] = $ctl }
+    # 4. Описания компонентов и области клиента действительно на экране. В
+    #    режиме обновления область выводится фиксированным текстом (scopeFixed),
+    #    отдельного пояснения режима нет — это не пропажа, а дедупликация
+    #    (ошибка 5b9743da). В тесном состоянии (5b9743da: «только для меня» +
+    #    старый клиент) пояснение режима уступает место причине неактивности
+    #    «Далее» — там оно дублирует подсказку сервера, поэтому ScopeText=0.
+    $scopeShown = (($components.ContainsKey('scopeFixed')) -and $components['scopeFixed'].Visible -and
+        ($components['scopeFixed'].Height -ge 15)) -or
+        (($components.ContainsKey('scopeHint')) -and $components['scopeHint'].Visible -and
+        ($components['scopeHint'].Height -ge 15))
     $descriptions = $components.ContainsKey('serverHint') -and $components['serverHint'].Visible -and
         ($components['serverHint'].Height -ge 15) -and
         $components.ContainsKey('clientHint') -and $components['clientHint'].Visible -and
         ($components['clientHint'].Height -ge 15) -and
-        $components.ContainsKey('scopeHint') -and $components['scopeHint'].Visible -and
-        ($components['scopeHint'].Height -ge 15)
+        (($ScopeText -eq 0) -or $scopeShown)
     Add-Result -Name "layout:${Suffix}:descriptions" -Expected 1 -Actual ([int]$descriptions) `
-        -Note 'сервер, клиент и разница областей — видимые подписи с переносом'
+        -Note ('сервер, клиент и (если нужен) текст области клиента — видимые подписи с переносом; scope=' + $ScopeText)
     # 5. Сводка и кнопки итогового экрана: от левого края FinishedLabel.
     $finished = @{}
     foreach ($ctl in $layout.Controls['finished']) { $finished[$ctl.Name] = $ctl }
@@ -1635,14 +1711,55 @@ function Add-LayoutChecks {
 Reset-State
 $code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1'))
 Add-Result -Name 'layout:exit' -Expected 0 -Actual $code -Note 'снимок раскладки без установки'
-Add-LayoutChecks -Suffix 'clean'
+# На чистой машине выбраны оба компонента, но «Далее» неактивна до принятия
+# лицензии MIT — причина при этом обязана быть на экране (5b9743da).
+Add-LayoutChecks -Suffix 'clean' -NextEnabled 0
 
 # Длинное состояние клиента (найден старый NSIS-клиент) — проверка на реальном
-# сообщении, которое раньше выходило за край и обрезалось.
+# сообщении, которое раньше выходило за край и обрезалось. Лицензия не принята,
+# поэтому «Далее» неактивна по той же причине.
 Reset-State
 $code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTLEGACY=machine:0.14.1'))
 Add-Result -Name 'layout:legacy-exit' -Expected 0 -Actual $code -Note 'снимок с найденным старым клиентом'
-Add-LayoutChecks -Suffix 'legacy'
+Add-LayoutChecks -Suffix 'legacy' -NextEnabled 0
+
+# Точное состояние из ошибки 5b9743da (машина пользователя): запуск «только для
+# меня», найден старый NSIS-клиент 0.14.1 «для всех», лицензия ещё не принята.
+# Здесь причина неактивности «Далее» уезжала за нижний край (на снимке HEAD:
+# top=337 при поверхности 309 — не видна), а в журнале не было ни строки о
+# кнопке: неактивная «Далее» выглядела зависшей. После исправления причина на
+# экране, «Далее» в журнале, а лишняя подсказка режима уступает место.
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTUSERONLYMODE=1',
+    '/TESTLEGACY=machine:0.14.1'))
+Add-Result -Name 'layout:user-legacy-exit' -Expected 0 -Actual $code `
+    -Note 'снимок: «только для меня» + старый клиент 0.14.1 (состояние из ошибки)'
+Add-LayoutChecks -Suffix 'user-legacy' -ServerSelected 0 -ClientSelected 1 -NextEnabled 0 -ScopeText 0
+
+# Ошибка 5b9743da: повторный запуск в режиме «только для меня» поверх уже
+# установленного клиента — это сценарий «Переустановить клиент ETN». «Далее»
+# обязана быть активной и не показывать причины, а содержимое — помещаться на
+# страницу (текст области клиента и подсказка режима не дублируются).
+Reset-State
+New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'ETN.exe'), '')
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTUSERONLYMODE=1'))
+Add-Result -Name 'layout:client-user-exit' -Expected 0 -Actual $code `
+    -Note 'снимок: клиент «только для меня» уже установлен'
+Add-LayoutChecks -Suffix 'client-user' -ServerSelected 0 -ClientSelected 1 -NextEnabled 1
+
+# Клиент установлен «для всех пользователей», установщик запущен «только для
+# меня»: заменить машинную копию без прав администратора нельзя, выбор снят,
+# «Далее» неактивна. Неактивная кнопка обязана объяснить причину на экране —
+# ровно этот экран пользователь принял за зависание (5b9743da).
+Reset-State
+New-Item -ItemType Directory -Path (Join-Path $appDir 'client') -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'client\ETN.exe'), '')
+Write-InstallJson (New-InstallJson -Mode 'client' -ClientScope '"machine"')
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTUSERONLYMODE=1'))
+Add-Result -Name 'layout:client-machine-exit' -Expected 0 -Actual $code `
+    -Note 'снимок: клиент «для всех» в режиме «только для меня»'
+Add-LayoutChecks -Suffix 'client-machine' -ServerSelected 0 -ClientSelected 0 -NextEnabled 0
 
 
 # --- 1. /VERYSILENT без /SERVERONLY -----------------------------------------
