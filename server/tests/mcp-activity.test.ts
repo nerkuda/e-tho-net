@@ -375,12 +375,12 @@ describe(
           // владельцем той же строки стал целевой объект (задача 7678876a).
           assert.deepEqual(toolJson<unknown[]>(copyRes), []);
 
-          // Снимок связи — концы в формате REST («связь <id> → <id>»).
+          // Снимок связи — концы в формате REST (`link <id> → <id>`).
           for (const row of [
             ...rowsOf(ctx, 'link', linkId),
             ...rowsOf(ctx, 'link', secondLinkId),
           ]) {
-            assert.match(row.entity_title, new RegExp(`связь ${sourceId} → ${targetId}`));
+            assert.match(row.entity_title, new RegExp(`link ${sourceId} → ${targetId}`));
           }
 
           assert.deepEqual(
@@ -426,7 +426,7 @@ describe(
           // (контракт `etn.thoughts.write`) — строка только от создания.
           const rows = rowsOf(ctx, 'thought', thoughtId);
           assert.deepEqual(rows.map((r) => r.action), ['created']);
-          assert.match(rows[0]?.entity_title ?? '', /мысль типа .+, «Карточка»/);
+          assert.match(rows[0]?.entity_title ?? '', /thought of type .+, "Карточка"/);
           assert.equal(rows[0]?.layer_id, BASE_LAYER_ID);
         } finally {
           await handle.close();

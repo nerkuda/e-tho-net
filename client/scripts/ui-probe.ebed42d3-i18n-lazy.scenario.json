@@ -1,8 +1,18 @@
 {
   "name": "i18n-lazy-switch",
-  "description": "Ошибка ebed42d3: t()/tp() на уровне модуля фиксировали язык импорта — живая смена языка не перерисовывала подписи. В сборке стенда (--mode test) зарегистрирована тестовая локаль zz (lib/locales/test.ts). Проверяются подписи, которые до исправления вычислялись при импорте: подсказки пустых зон карты (ZONE_EMPTY_LABELS, canvas/canvas.ts — зоны родителей и родственников; зона детей в посеянной сети не пуста: у HOME есть посеянная мысль) и заголовки вкладок редактора (TABS_THOUGHT, editor/editor.ts); метка меню мыслесети — контроль пересборки экрана. Каждая подпись снимается до смены языка, после ru→zz и после обратного zz→ru. Запуск: npm -w @etn/client run build -- --mode test && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ebed42d3-i18n-lazy.scenario.json --out .tmp/ebed42d3/run1",
+  "description": "Ошибка ebed42d3: t()/tp() на уровне модуля фиксировали язык импорта — живая смена языка не перерисовывала подписи. В сборке стенда (--mode test) зарегистрирована тестовая локаль zz (lib/locales/test.ts). Проверяются подписи, которые до исправления вычислялись при импорте: подсказки пустых зон карты (ZONE_EMPTY_LABELS, canvas/canvas.ts — зоны родителей и родственников; зона детей в посеянной сети не пуста: у HOME есть посеянная мысль) и заголовки вкладок редактора (TABS_THOUGHT, editor/editor.ts); метка меню мыслесети — контроль пересборки экрана. Каждая подпись снимается до смены языка, после ru→zz и после обратного zz→ru. Стартовый язык — ru: у свежего сервера стенда язык по умолчанию en, поэтому первый шаг ставит server.language=ru по REST. Язык приложения выбирается радиогруппой settings-app-lang (задача 222666db; прежняя settings-lang — только для старого сервера без контракта языка). Запуск: npm -w @etn/client run build -- --mode test && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ebed42d3-i18n-lazy.scenario.json --out .tmp/ebed42d3/run1",
   "timeout": 150000,
   "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "serverLanguage",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": { "language": "ru" }
+      },
+      "expect": { "language": "ru" }
+    },
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
     { "name": "fill-server-url", "click": "input[placeholder^='http']" },
     { "name": "server-url-typed", "text": "{{serverUrl}}" },
@@ -35,12 +45,12 @@
       "name": "open-client-section",
       "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
     },
-    { "name": "test-locale-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"zz\"]') !== null" },
+    { "name": "test-locale-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]') !== null" },
     {
       "name": "pick-test-locale",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"zz\"]'); if (!r) throw new Error('нет локали zz'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]'); if (!r) throw new Error('нет локали zz'); r.click(); return r.checked; })()"
     },
-    { "name": "test-locale-picked", "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null", "expect": "zz" },
+    { "name": "test-locale-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "zz" },
     { "name": "apply-enabled", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'Применить' && !b.disabled)" },
     {
       "name": "apply-lang",
@@ -73,12 +83,12 @@
       "name": "open-client-again",
       "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
     },
-    { "name": "ru-radio-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]') !== null" },
+    { "name": "ru-radio-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]') !== null" },
     {
       "name": "pick-russian",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
     },
-    { "name": "russian-picked", "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null", "expect": "ru" },
+    { "name": "russian-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "ru" },
     { "name": "apply-enabled-again", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'TestApply' && !b.disabled)" },
     {
       "name": "apply-russian",

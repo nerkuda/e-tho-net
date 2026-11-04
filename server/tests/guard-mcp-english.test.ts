@@ -31,6 +31,20 @@ const EXTRA_FILES = ['server/src/contracts.ts', 'shared/src/types/mcp.ts'] as co
 /** Кириллица (основной блок + дополнение). */
 const CYRILLIC = /[\u0400-\u04FF]/;
 
+/**
+ * Строковый литерал — строка ПРИМЕРА ДАННЫХ (JSON в фенсе how-to/гайда), а не
+ * проза поверхности. Данные сетей не локализуются (ADR daab6ac4 §6): примеры
+ * сохраняют русские имена типов, свойств и значений, чтобы оставаться
+ * копируемыми в сеть с русскими именами (задача 7e5099ed п. 3). Поэтому
+ * кириллица допустима только в строке JSON-формы: она начинается с `{`, `[`
+ * или `"ключа` и содержит разделитель `":`. Проза этим условием не проходит.
+ */
+function isDataExampleLine(fragment: string): boolean {
+  const trimmed = fragment.trimStart();
+  if (!/^[{["]/.test(trimmed)) return false;
+  return /"[^"\n]*"\s*:/.test(trimmed);
+}
+
 interface Violation {
   file: string;
   line: number;
@@ -69,7 +83,7 @@ function scanSource(rel: string, text: string): Violation[] {
         : ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)
           ? node.text
           : null;
-    if (fragment !== null && CYRILLIC.test(fragment)) {
+    if (fragment !== null && CYRILLIC.test(fragment) && !isDataExampleLine(fragment)) {
       const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
       violations.push({
         file: rel,
@@ -122,5 +136,29 @@ describe('guard: поверхность MCP — английская (daab6ac4, 
     );
     assert.equal(violations.length, 1, 'сканер обязан видеть фрагменты шаблонной строки');
     assert.match(violations[0]!.text, /по-русски/);
+  });
+
+  it('пример данных: русские имена в JSON-строке гайда разрешены (ADR §6)', () => {
+    const violations = scanSource(
+      'server/src/mcp/synthetic.ts',
+      [
+        "const example = '  { \"entity\": { \"kind\": \"property\", \"property\": \"Статус задачи\" }, \"operator\": \"eq\", \"value\": \"на согласовании\" },';",
+        "const link = '{ \"type\": \"применяется к\" }';",
+        '',
+      ].join('\n'),
+    );
+    assert.deepEqual(
+      violations,
+      [],
+      'данные сети в примере не локализуются — кириллица в JSON-строке допустима',
+    );
+  });
+
+  it('пример данных не открывает лазейку прозе, начинающейся с кавычки', () => {
+    const violations = scanSource(
+      'server/src/mcp/synthetic.ts',
+      "const prose = '\"Русский текст\" без JSON-разделителя';\n",
+    );
+    assert.equal(violations.length, 1, 'проза с кириллицей обязана ловиться');
   });
 });

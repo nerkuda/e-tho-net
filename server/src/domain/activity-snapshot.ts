@@ -41,49 +41,49 @@ export function truncateTitle(value: string): string {
 
 /** Quote a single thought title for inclusion in a snapshot. */
 function quoteTitle(title: string): string {
-  return `«${title}»`;
+  return `"${title}"`;
 }
 
 /**
- * Snapshot for a thought: «мысль без типа, "Название"» / «мысль типа
- * `<type_id>`, "Название"». `type_id` оставляем id'шником — имя типа в
- * снимке задумано не резолвить, чтобы запись оставалась стабильной при
+ * Snapshot for a thought: `thought without type, "Title"` / `thought of type
+ * <type_id>, "Title"`. `type_id` оставляем id'шником — имя типа в снимке
+ * задумано не резолвить, чтобы запись оставалась стабильной при
  * удалении/переименовании самого типа.
  */
 export function snapshotThought(thought: Pick<Thought, 'title' | 'type_id'>): string {
-  const typeClause = thought.type_id === null ? 'без типа' : `типа ${thought.type_id}`;
-  return `мысль ${typeClause}, ${quoteTitle(thought.title)}`;
+  const typeClause = thought.type_id === null ? 'without type' : `of type ${thought.type_id}`;
+  return `thought ${typeClause}, ${quoteTitle(thought.title)}`;
 }
 
 /**
- * Snapshot for a link: «связь <source_id> → <target_id>» / «связь
- * <source_id> → <target_id> типа <type_id>». По тем же причинам, что и
+ * Snapshot for a link: `link <source_id> → <target_id>` / `link
+ * <source_id> → <target_id> of type <type_id>`. По тем же причинам, что и
  * для мысли, имена сторон не резолвим.
  */
 export function snapshotLink(
   link: Pick<Link, 'source_id' | 'target_id' | 'type_id'>,
 ): string {
-  const typeClause = link.type_id === null ? '' : ` типа ${link.type_id}`;
-  return `связь ${link.source_id} → ${link.target_id}${typeClause}`;
+  const typeClause = link.type_id === null ? '' : ` of type ${link.type_id}`;
+  return `link ${link.source_id} → ${link.target_id}${typeClause}`;
 }
 
-/** Snapshot for a thought type: «тип мысли "<name>"». */
+/** Snapshot for a thought type: `thought type "name"`. */
 export function snapshotThoughtType(type: Pick<ThoughtType, 'name'>): string {
-  return `тип мысли ${quoteTitle(type.name)}`;
+  return `thought type ${quoteTitle(type.name)}`;
 }
 
-/** Snapshot for a link type: «тип связи "<name>"». */
+/** Snapshot for a link type: `link type "name"`. */
 export function snapshotLinkType(type: Pick<LinkType, 'name_forward'>): string {
-  return `тип связи ${quoteTitle(type.name_forward)}`;
+  return `link type ${quoteTitle(type.name_forward)}`;
 }
 
-/** Snapshot for a network property: «свойство "<name>"». */
+/** Snapshot for a network property: `property "name"`. */
 export function snapshotProperty(prop: Pick<NetworkProperty, 'name'>): string {
-  return `свойство ${quoteTitle(prop.name)}`;
+  return `property ${quoteTitle(prop.name)}`;
 }
 
 /**
- * Snapshot for a comment: «комментарий к <owner_type> "<…>"». Сам текст
+ * Snapshot for a comment: `comment on <owner_type> "…"`. Сам текст
  * комментария длинный — оставляем первые ~80 символов `body_md` в кавычках,
  * чтобы лента оставалась разборчивой без перехода на полное тело.
  */
@@ -92,11 +92,11 @@ export function snapshotComment(
 ): string {
   const previewSource = comment.body_md.trim();
   const preview = previewSource.length > 80 ? `${previewSource.slice(0, 79)}…` : previewSource;
-  return `комментарий к ${comment.owner_type} ${quoteTitle(preview)}`;
+  return `comment on ${comment.owner_type} ${quoteTitle(preview)}`;
 }
 
 /**
- * Snapshot for an attachment: «вложение "<title|url|file_path>"». Подбираем
+ * Snapshot for an attachment: `attachment "<title|url|file_path>"`. Подбираем
  * первое непустое «человеческое» поле — заголовок, URL или путь к файлу.
  */
 export function snapshotAttachment(att: {
@@ -104,23 +104,23 @@ export function snapshotAttachment(att: {
   url?: string | null;
   file_path?: string | null;
 }): string {
-  const label = (att.title && att.title.trim()) || att.url || att.file_path || '(без названия)';
-  return `вложение ${quoteTitle(label)}`;
+  const label = (att.title && att.title.trim()) || att.url || att.file_path || '(untitled)';
+  return `attachment ${quoteTitle(label)}`;
 }
 
-/** Snapshot for a layer: «слой "<title>"». Для базы — фиксированный заголовок. */
+/** Snapshot for a layer: `layer "title"`. Для базы — фиксированный заголовок. */
 export function snapshotLayer(layer: Pick<Layer, 'title'>): string {
-  return `слой ${quoteTitle(layer.title)}`;
+  return `layer ${quoteTitle(layer.title)}`;
 }
 
-/** Snapshot for a publication: «публикация "<title>"» (0.11.1, d4452908). */
+/** Snapshot for a publication: `publication "title"` (0.11.1, d4452908). */
 export function snapshotPublication(publication: Pick<Publication, 'title'>): string {
-  return `публикация ${quoteTitle(publication.title)}`;
+  return `publication ${quoteTitle(publication.title)}`;
 }
 
-/** Snapshot for a shelf: «полка "<title>"» (0.11.1, d4452908). */
+/** Snapshot for a shelf: `shelf "title"` (0.11.1, d4452908). */
 export function snapshotShelf(shelf: Pick<Shelf, 'title'>): string {
-  return `полка ${quoteTitle(shelf.title)}`;
+  return `shelf ${quoteTitle(shelf.title)}`;
 }
 
 /**

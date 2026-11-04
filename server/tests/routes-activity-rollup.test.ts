@@ -556,8 +556,8 @@ describe('Activity maintenance (6bcccd2b)', { skip: !nativeAvailable() }, () => 
           // И свежие строки (trunc-c) на месте.
           const after = await listAllActivity(restCtx);
           assert.equal(after.length, 1);
-          // `entity_title` хранится как снимок формата «мысль без типа, «…»».
-          assert.match(after[0]!.entity_title, /«trunc-c»/);
+          // `entity_title` хранится снимком формата `thought without type, "…"`.
+          assert.match(after[0]!.entity_title, /"trunc-c"/);
           // Sanity-check: REST действительно что-то удалил.
           assert.ok(restResult.removed >= 2);
         } finally {

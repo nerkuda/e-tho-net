@@ -1058,7 +1058,7 @@ function resolveIdName(entityType: string, id: string): string | null {
   if (entityType === 'link') {
     return thoughtTitles.get(id) ?? typeNames.get(id) ?? null;
   }
-  // Снимок мысли: «мысль типа <id>, …».
+  // Снимок мысли: `thought of type <id>, …`.
   if (entityType === 'thought') {
     return typeNames.get(id) ?? null;
   }

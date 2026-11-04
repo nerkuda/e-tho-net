@@ -779,7 +779,7 @@ export function recordTypePropertyActivity(
     action: params.action,
     entityType: 'thought_type',
     entityId: params.typeId,
-    entityTitle: `тип мысли «${params.typeName}»`,
+    entityTitle: `thought type "${params.typeName}"`,
     layerId: params.layerId,
     occurredAtMs: params.occurredAtMs,
   });

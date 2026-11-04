@@ -43,7 +43,12 @@ export type DialogSize = 's' | 'm' | 'l' | 'xl';
 /** Вкладка диалога: подпись и ленивое содержимое панели (`lib/ui/tabs.ts`). */
 export interface DialogTab {
   id: string;
-  label: string;
+  /**
+   * Подпись вкладки. Функция — для подписей, обязанных обновиться при смене
+   * языка интерфейса (задача 7e5099ed): каркас перечитывает её вместе с
+   * {@link DialogOptions.onLangChange} и не пересоздаёт панель вкладки.
+   */
+  label: string | (() => string);
   content: HTMLElement | (() => HTMLElement);
 }
 
@@ -98,7 +103,13 @@ export interface DialogDirtyGuard {
 }
 
 /** A dialog footer button. */
-export interface DialogButton {  label: string;
+export interface DialogButton {
+  /**
+   * Подпись кнопки. Функция — для подписей, обязанных обновиться при смене
+   * языка интерфейса (задача 7e5099ed): каркас перечитывает её на открытом
+   * диалоге, состояние кнопки (disabled и т.п.) не затрагивается.
+   */
+  label: string | (() => string);
   primary?: boolean;
   danger?: boolean;
   /**
@@ -291,6 +302,13 @@ const dialogKeys = new WeakMap<HTMLDivElement, string>();
  */
 const langHooks = new WeakMap<HTMLDivElement, () => void>();
 
+/**
+ * Обновление подписей вкладок и кнопок-функций открытого диалога (задача
+ * 7e5099ed). Живёт отдельно от {@link DialogOptions.onLangChange}: подписи
+ * каркаса обновляются всегда, даже если вызывающий не передал свой хук.
+ */
+const langLabelUpdaters = new WeakMap<HTMLDivElement, () => void>();
+
 /** Подписка каркаса на смену языка поставлена (одна на модуль). */
 let langSubscribed = false;
 
@@ -311,6 +329,14 @@ function ensureLangSubscription(): void {
       if (title !== undefined) {
         const node = backdrop.querySelector<HTMLElement>('.dialog-title');
         if (node !== null) node.textContent = typeof title === 'function' ? title() : title;
+      }
+      const updateLabels = langLabelUpdaters.get(backdrop);
+      if (updateLabels !== undefined) {
+        try {
+          updateLabels();
+        } catch (err) {
+          console.error('[dialog] label update failed', err);
+        }
       }
       const hook = langHooks.get(backdrop);
       if (hook === undefined) continue;
@@ -737,17 +763,34 @@ export function showDialog(opts: DialogOptions): () => void {
   // высота задана ролью, а не содержимым.
   /** Дескриптор вкладок диалога — нужен переходу по клику на строку ошибки. */
   let tabsHandle: TabsHandle | null = null;
+  /**
+   * Обновления подписей-функций (вкладки и кнопки): смена языка перечитывает
+   * их на месте, не пересоздавая панели и не трогая состояние кнопок
+   * (задача 7e5099ed). Пусто — подписи статические.
+   */
+  const labelUpdaters: Array<() => void> = [];
   if (opts.tabs !== undefined && opts.tabs.length > 0) {
     // Признак вкладочного диалога: CSS фиксирует его высоту ролью, поэтому
     // переключение вкладок высоту не меняет (требование 13464c39).
     box.dataset['dialogTabs'] = 'true';
     const host = div('dialog-tabs-host');
     const tabs = uiTabs({
-      tabs: opts.tabs,
+      // Функция-подпись разрешается один раз здесь и перечитывается хуком
+      // ниже: фасад вкладок принимает готовую строку.
+      tabs: opts.tabs.map((tab) => ({
+        ...tab,
+        label: typeof tab.label === 'function' ? tab.label() : tab.label,
+      })),
       activeId: opts.activeTab,
       onChange: opts.onTabChange,
     });
     tabsHandle = tabs;
+    for (const tab of opts.tabs) {
+      const label = tab.label;
+      if (typeof label === 'function') {
+        labelUpdaters.push(() => tabs.setLabel(tab.id, label()));
+      }
+    }
     host.append(tabs.root);
     box.append(host);
   } else {
@@ -773,7 +816,7 @@ export function showDialog(opts: DialogOptions): () => void {
     }
     for (const item of opts.buttons) {
       const btn = uiButton({
-        label: item.label,
+        label: typeof item.label === 'function' ? item.label() : item.label,
         role: item.danger === true ? 'danger' : item.primary === true ? 'primary' : 'secondary',
         onClick: () => {
           item.onClick?.(close);
@@ -782,6 +825,12 @@ export function showDialog(opts: DialogOptions): () => void {
           if (item.keepOpen !== true) close();
         },
       });
+      const label = item.label;
+      if (typeof label === 'function') {
+        labelUpdaters.push(() => {
+          btn.textContent = label();
+        });
+      }
       if (item.confirm === true || (item.confirm === undefined && item.primary === true)) {
         if (primaryBtn === null) primaryBtn = btn;
       }
@@ -789,6 +838,14 @@ export function showDialog(opts: DialogOptions): () => void {
       footer.append(btn);
     }
     box.append(footer);
+  }
+
+  // Подписи-функции обновляются общей подпиской каркаса на смену языка.
+  if (labelUpdaters.length > 0) {
+    langLabelUpdaters.set(backdrop, () => {
+      for (const update of labelUpdaters) update();
+    });
+    ensureLangSubscription();
   }
 
   /** Слой `Escape` этого диалога в реестре диспетчера (ошибка 9ff6b606). */

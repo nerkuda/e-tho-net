@@ -1,0 +1,90 @@
+{
+  "name": "admin-panel-live-language",
+  "description": "Задача 7e5099ed п. 1: открытая админ-панель перерисовывается при живой смене языка. Сервер стенда свежий — язык по умолчанию en (ADR daab6ac4), поэтому первый шаг ставит server.language=ru по REST; клиент стартует в ru. Панель открывается пунктом меню «Администрирование», проверяются заголовок, подписи вкладок и кнопки футера, тексты вкладки «Сервер» — до смены языка, после ru→en (смена из самой вкладки «Сервер»: выбор en + «Сохранить») и после обратного en→ru. Проба — DOM: заголовок/вкладки/кнопка/тексты вкладки, а не скриншот. Запуск: npm -w @etn/client run build -- --mode test && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.7e5099ed-admin-lang.scenario.json --out .tmp/7e5099ed/admin",
+  "timeout": 150000,
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "serverLanguage",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": { "language": "ru" }
+      },
+      "expect": { "language": "ru" }
+    },
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 25000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-user-menu", "click": "button[title=\"Меню пользователя\"]" },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-admin-panel",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Администрирование'); if (!row) throw new Error('нет пункта «Администрирование»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    { "name": "admin-panel-visible", "timeout": 10000, "waitFor": "document.querySelectorAll('.dialog-backdrop .ui-tab').length === 4 && document.querySelector('.dialog-backdrop .dialog-title')?.textContent === 'Администрирование'" },
+
+    { "name": "title-ru", "probe": "document.querySelector('.dialog-backdrop .dialog-title')?.textContent ?? null", "expect": "Администрирование" },
+    { "name": "tabs-ru", "probe": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tab')).map((e) => (e.textContent || '').trim())", "expect": ["Пользователи", "Сети", "Аудит", "Сервер"] },
+    { "name": "buttons-ru", "probe": "Array.from(document.querySelectorAll('.dialog-backdrop .dialog-footer button')).map((e) => (e.textContent || '').trim())", "expect": ["Закрыть"] },
+
+    {
+      "name": "open-server-tab",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .ui-tab')).find((e) => (e.textContent || '').trim() === 'Сервер'); if (!b) throw new Error('нет вкладки «Сервер»'); b.click(); return true; })()"
+    },
+    { "name": "server-pane-loaded", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select') !== null" },
+    { "name": "server-select-ru", "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select')?.value ?? null", "expect": "ru" },
+    { "name": "server-heading-ru", "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content .settings-section-title')?.textContent ?? null", "expect": "Язык сервера по умолчанию" },
+    { "name": "server-hint-ru", "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content p.muted')?.textContent ?? null", "expect": "Нижняя ступень наследования языка интерфейса: её наследуют сети и пользователи без своего языка. На язык ответов API, MCP и CLI не влияет." },
+    { "name": "server-save-ru", "probe": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active .admin-content button')).map((e) => (e.textContent || '').trim())", "expect": ["Сохранить"] },
+
+    {
+      "name": "pick-english",
+      "eval": "(() => { const s = document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select'); if (!s) throw new Error('нет select языка'); s.value = 'en'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    { "name": "english-picked", "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select')?.value ?? null", "expect": "en" },
+    { "name": "save-enabled-en", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active .admin-content button')).some((b) => (b.textContent || '').trim() === 'Сохранить' && !b.disabled)" },
+    {
+      "name": "save-english",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active .admin-content button')).find((e) => (e.textContent || '').trim() === 'Сохранить'); if (!b) throw new Error('нет кнопки «Сохранить»'); b.click(); return true; })()"
+    },
+
+    { "name": "language-en-applied", "timeout": 20000, "waitFor": "document.documentElement.lang === 'en' && document.querySelector('.dialog-backdrop .dialog-title')?.textContent === 'Administration'" },
+    { "name": "tabs-en", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tab')).map((e) => (e.textContent || '').trim()).join('|') === 'Users|Networks|Audit|Server'" },
+    { "name": "buttons-en", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.dialog-backdrop .dialog-footer button')).map((e) => (e.textContent || '').trim()).join('|') === 'Close'" },
+    { "name": "server-pane-en", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content .settings-section-title')?.textContent === 'Default server language'" },
+    { "name": "server-select-en", "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select')?.value ?? null", "expect": "en" },
+    { "name": "server-save-en", "probe": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active .admin-content button')).map((e) => (e.textContent || '').trim())", "expect": ["Save"] },
+
+    {
+      "name": "pick-russian",
+      "eval": "(() => { const s = document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select'); if (!s) throw new Error('нет select языка'); s.value = 'ru'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    { "name": "russian-picked", "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select')?.value ?? null", "expect": "ru" },
+    { "name": "save-enabled-ru", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active .admin-content button')).some((b) => (b.textContent || '').trim() === 'Save' && !b.disabled)" },
+    {
+      "name": "save-russian",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active .admin-content button')).find((e) => (e.textContent || '').trim() === 'Save'); if (!b) throw new Error('нет кнопки «Save»'); b.click(); return true; })()"
+    },
+
+    { "name": "language-ru-applied", "timeout": 20000, "waitFor": "document.documentElement.lang === 'ru' && document.querySelector('.dialog-backdrop .dialog-title')?.textContent === 'Администрирование'" },
+    { "name": "tabs-ru-again", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tab')).map((e) => (e.textContent || '').trim()).join('|') === 'Пользователи|Сети|Аудит|Сервер'" },
+    { "name": "buttons-ru-again", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.dialog-backdrop .dialog-footer button')).map((e) => (e.textContent || '').trim()).join('|') === 'Закрыть'" },
+    { "name": "server-pane-ru-again", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content .settings-section-title')?.textContent === 'Язык сервера по умолчанию'" },
+    { "name": "server-select-ru-again", "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-content select')?.value ?? null", "expect": "ru" },
+
+    {
+      "name": "close-admin-panel",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .dialog-footer button')).find((e) => (e.textContent || '').trim() === 'Закрыть'); if (!b) throw new Error('нет кнопки «Закрыть»'); b.click(); return true; })()"
+    },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "lang-after", "probe": "document.documentElement.lang", "expect": "ru" }
+  ]
+}

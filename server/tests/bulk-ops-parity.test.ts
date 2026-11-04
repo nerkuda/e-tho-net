@@ -258,8 +258,9 @@ describe(
         }
 
         // Точечная проверка e8959ae7: удаление ТИПИЗИРОВАННОЙ связи пишет в
-        // журнал реальный type_id (REST-журнал выше уже содержит «связь P1 → A
-        // типа LT», но продублируем явной проверкой, чтобы тест читался сам).
+        // журнал реальный type_id (REST-журнал выше уже содержит
+        // «link P1 → A of type LT», но продублируем явной проверкой, чтобы
+        // тест читался сам).
         // Создаём ещё одну типизированную связь и удаляем её через MCP.
         const beforeTypeCheck = journalIds(ndb);
         await mcpBulk(handle!, restCtx.networkId, 'link_parents', [mA], {
@@ -274,7 +275,7 @@ describe(
         assert.equal(deletedRows.length, 1);
         assert.equal(
           deletedRows[0]!.entity_title,
-          'связь P1 → A типа LT',
+          'link P1 → A of type LT',
           'журнал удаления через MCP должен нести реальный type_id (e8959ae7)',
         );
       } finally {

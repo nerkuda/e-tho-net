@@ -384,8 +384,9 @@ export function openServerUpdateDialog(
     // daab6ac4 §4) — в том числе для штатных сбоев установщика, пришедших
     // через `/progress`. `failureOverride` (готовый текст из конверта `502`)
     // приоритетнее: он несёт уточнение `details.reason` ошибки. Сырой
-    // английский `job.error` — только фолбэк заданий без `reason` (сохранены
-    // до появления поля).
+    // английский `job.error` не показывается никогда: у задания без `reason`
+    // `failureText` — общий локализованный текст, а из `job.error` берётся
+    // только путь к журналу (`journalPath`, `server-update.ts`).
     const failure = state.failureOverride ?? view.failureText;
     failureLine.hidden = !view.failed || failure === null;
     failureLine.textContent =

@@ -30,19 +30,45 @@ import { createTable, type TableHandle } from '../lib/ui/table.js';
 export function openAdminPanel(): void {
   // Вкладки — общий механизм каркаса диалога (задача a57e7998): панели
   // строятся лениво при первом показе, переключение не пересобирает узел.
-  const pane = (render: (host: HTMLElement) => void): (() => HTMLElement) => () => {
+  /**
+   * Хосты построенных вкладок: нужны хуку смены языка, чтобы перечитать их
+   * тексты (задача 7e5099ed). `null` — вкладку ещё не открывали, при первом
+   * показе она построится на актуальном языке.
+   */
+  type AdminPaneId = 'users' | 'networks' | 'audit' | 'server';
+  const hosts: Record<AdminPaneId, HTMLElement | null> = {
+    users: null,
+    networks: null,
+    audit: null,
+    server: null,
+  };
+  const pane = (id: AdminPaneId, render: (host: HTMLElement) => void): (() => HTMLElement) => () => {
     const host = div('admin-content list-dialog-body');
+    hosts[id] = host;
     render(host);
     return host;
   };
 
   showDialog({
-    title: t('userMenu.admin'),
+    // Заголовок-функция: каркас перечитывает его при смене языка.
+    title: () => t('userMenu.admin'),
     size: 'l',
     tabs: [
-      { id: 'users', label: t('admin.tab.users'), content: pane((h) => void renderUsers(h)) },
-      { id: 'networks', label: t('admin.tab.networks'), content: pane((h) => void renderNetworks(h)) },
-      { id: 'audit', label: t('admin.tab.audit'), content: pane((h) => void renderAudit(h)) },
+      {
+        id: 'users',
+        label: () => t('admin.tab.users'),
+        content: pane('users', (h) => void renderUsers(h)),
+      },
+      {
+        id: 'networks',
+        label: () => t('admin.tab.networks'),
+        content: pane('networks', (h) => void renderNetworks(h)),
+      },
+      {
+        id: 'audit',
+        label: () => t('admin.tab.audit'),
+        content: pane('audit', (h) => void renderAudit(h)),
+      },
       // Язык сервера (ADR daab6ac4 §1–2, задача 222666db п. 3): единственная
       // административная настройка сервера, поэтому компактная вкладка в
       // существующей админ-панели — без нового крупного экрана. Вкладка видна
@@ -50,13 +76,23 @@ export function openAdminPanel(): void {
       // «Администрирование» (проверка `me.is_admin`).
       {
         id: 'server',
-        label: t('admin.tab.server'),
-        content: pane((h) => void renderServerSettings(h)),
+        label: () => t('admin.tab.server'),
+        content: pane('server', (h) => void renderServerSettings(h)),
       },
     ],
     // Правило 3 требования 11ddd910: под списком — кнопка решения. Панель
     // информационная, решение одно — «Закрыть».
-    buttons: [{ label: t('actions.close'), primary: true }],
+    buttons: [{ label: () => t('actions.close'), primary: true }],
+    // Живая смена языка (задача 7e5099ed): каркас перечитывает заголовок,
+    // подписи вкладок и кнопки; содержимое уже построенных панелей
+    // перерисовывается здесь (строки/фильтры сбрасываются — это цена смены
+    // языка на открытой панели, язык меняется редко).
+    onLangChange: () => {
+      if (hosts.users !== null) void renderUsers(hosts.users);
+      if (hosts.networks !== null) void renderNetworks(hosts.networks);
+      if (hosts.audit !== null) renderAudit(hosts.audit);
+      if (hosts.server !== null) void renderServerSettings(hosts.server);
+    },
   });
 }
 
@@ -671,7 +707,9 @@ function renderAudit(content: HTMLElement): void {
   // над текущей строкой нечего производить (правила 2 и 5 к нему не применимы).
   // Высота области списка — по раскладке `.list-dialog-body`, а не инлайном
   // (правило 9 требования 11ddd910).
-  content.append(searchRow, filterRow, tableWrap);
+  // `replaceChildren` (а не `append`): вкладка перерисовывается при смене
+  // языка (задача 7e5099ed), повторный `append` удвоил бы строки управления.
+  content.replaceChildren(searchRow, filterRow, tableWrap);
 
   /** Загруженные записи журнала — источник клиентского фильтра поиска. */
   let loaded: AuditLogEntry[] = [];
