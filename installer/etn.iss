@@ -293,18 +293,26 @@
 #endif
 
 ; ============================================================================
+; AppId — единственный источник идентификатора: из него Inno строит запись
+; деинсталляции `{AppId}_is1`, по нему же ищется и чистится запись прежней
+; области реестра (ошибка a7394117). Литералы в [Setup] и [Code] не дублируются.
+#define ProductAppId "6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70"
+#define TestUninstallAppId "B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E"
+#define ProductUninstallKey "{" + ProductAppId + "}_is1"
+#define TestUninstallKey "{" + TestUninstallAppId + "}_is1"
+
 [Setup]
 ; Идентификатор продукта: по нему Inno ведёт запись установки и обновление
 ; поверх прежней версии. Менять нельзя — иначе повторный запуск не увидит
-; предыдущую установку.
+; предыдущую установку. `{{` — литеральная скобка: AppId начинается с `{`.
 #ifdef TestUninstallable
 ; Проба настоящего деинсталлятора (installer/tests/silent-codes.ps1, приёмка
 ; 8b1f5980): у тестовой установки отдельный AppId, чтобы запись установки и
 ; удаление не касались продуктовой установки на машине. Определяется только
 ; вместе с TestMode (см. Uninstallable ниже).
-AppId={{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}
+AppId={{{#TestUninstallAppId}}
 #else
-AppId={{6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70}
+AppId={{{#ProductAppId}}
 #endif
 AppName=ETN
 AppVersion={#MyAppVersion}
@@ -499,14 +507,17 @@ const
   { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
     клиент electron-builder (NSIS) и запись установки Inno. }
   UNINSTALL_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
+  { Та же ветка в 32-битном представлении профиля пользователя (WOW6432Node):
+    запись прежней 32-битной установки могла остаться и там. }
+  UNINSTALL_KEY_WOW = 'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall';
   { Имя ключа записи деинсталляции Inno: AppId из [Setup] с суффиксом _is1
     (в реестре AppId записан с одной ведущей скобкой). У тестовой сборки с
     деинсталлятором свой AppId — продуктовую запись она не трогает.
     Ошибка a7394117: по этому ключу удаляется запись прежней области реестра. }
 #ifdef TestUninstallable
-  UNINSTALL_KEY_NAME = '{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1';
+  UNINSTALL_KEY_NAME = '{#TestUninstallKey}';
 #else
-  UNINSTALL_KEY_NAME = '{6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70}_is1';
+  UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';
 #endif
   { Ожидание исчезновения записи Uninstall после удаления старого клиента:
     деинсталлятор NSIS с _?= завершается синхронно, но старая версия могла
@@ -1504,6 +1515,76 @@ begin
       RootName + '\' + SubKey + ' (установка продолжается)');
 end;
 
+{ SID загруженного профиля пользователя. Служебные профили (LocalSystem,
+  LocalService, NetworkService) и псевдонимы (`.DEFAULT`, `…_Classes`)
+  пропускаются: записи установки в них не бывает, а трогать их незачем. }
+function IsUserProfileSid(const Name: String): Boolean;
+begin
+  Result := (CompareText(Copy(Name, 1, 4), 'S-1-') = 0) and
+    (Pos('_', Name) = 0) and
+    (CompareText(Name, 'S-1-5-18') <> 0) and
+    (CompareText(Name, 'S-1-5-19') <> 0) and
+    (CompareText(Name, 'S-1-5-20') <> 0);
+end;
+
+{ Ошибка a7394117 (доработка по ревью верификатора): при тихом /ALLUSERS
+  установщик запускает служба под LocalSystem, поэтому HKCU процесса — профиль
+  системы, а запись GUI-админ-установки лежит в профиле пользователя.
+  Перечисляем ЗАГРУЖЕННЫЕ профили (HKEY_USERS\<SID>) и удаляем в каждом запись
+  нашего AppId — обычную и WOW6432Node. Незагруженный профиль (пользователь
+  вышел) сюда не виден: это ограничение отмечено в карточке компонента.
+  Возвращает число удалённых ключей. }
+function DeleteUninstallRecordInUserHives: Integer;
+var
+  Names: TArrayOfString;
+  I: Integer;
+  Base, Profile, SubKey, RootName: String;
+begin
+  Result := 0;
+  Base := '';
+  RootName := 'HKU';
+#ifdef TestMode
+  { Песочница теста: профили моделируются поддеревом HKCU\<root>\Profiles,
+    реальные HKU в прогоне без прав администратора не читаются. }
+  if GTestUninstallRoot <> '' then
+  begin
+    Base := GTestUninstallRoot + '\Profiles';
+    RootName := 'HKCU\' + Base;
+  end;
+#endif
+  if Base <> '' then
+  begin
+    if not RegGetSubkeyNames(HKCU, Base, Names) then Exit;
+  end
+  else if not RegGetSubkeyNames(HKU, '', Names) then
+  begin
+    LogLine('WARN', 'Не удалось перечислить профили пользователей (HKU): ' +
+      'запись деинсталляции в них не проверена (установка продолжается)');
+    Exit;
+  end;
+  for I := 0 to GetArrayLength(Names) - 1 do
+  begin
+    Profile := Names[I];
+    if not IsUserProfileSid(Profile) then Continue;
+    SubKey := Profile + '\' + UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
+    if Base <> '' then
+    begin
+      SubKey := Base + '\' + SubKey;
+      Result := Result + DeleteUninstallRecordAt(HKCU, RootName, SubKey);
+    end
+    else
+      Result := Result + DeleteUninstallRecordAt(HKU, RootName, SubKey);
+    SubKey := Profile + '\' + UNINSTALL_KEY_WOW + '\' + UNINSTALL_KEY_NAME;
+    if Base <> '' then
+    begin
+      SubKey := Base + '\' + SubKey;
+      Result := Result + DeleteUninstallRecordAt(HKCU, RootName, SubKey);
+    end
+    else
+      Result := Result + DeleteUninstallRecordAt(HKU, RootName, SubKey);
+  end;
+end;
+
 { Удаляет запись деинсталляции в машинной (HKLM) или пользовательской (HKCU)
   области — в той, куда Inno её НЕ записал (ошибка a7394117). В тестовой
   сборке машинная область моделируется поддеревом HKCU: прав на HKLM в прогоне
@@ -1531,7 +1612,13 @@ begin
     Result := Result + DeleteUninstallRecordAt(HKLM32, 'HKLM32', SubKey);
   end
   else
+  begin
+    { HKCU процесса — это профиль того, кто запустил установщик. При
+      /ALLUSERS из службы LocalSystem это профиль системы, поэтому основную
+      работу делает обход загруженных профилей пользователей. }
     Result := DeleteUninstallRecordAt(HKCU, 'HKCU', SubKey);
+    Result := Result + DeleteUninstallRecordInUserHives;
+  end;
 end;
 
 { Ошибка a7394117: PrivilegesRequired=lowest пишет запись деинсталляции в

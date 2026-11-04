@@ -78,8 +78,10 @@
          обязан определяться как windows-service)
      30. a7394117: одна запись деинсталляции при смене области реестра —
          GUI-админ-установка (HKCU) и тихое /ALLUSERS-обновление (HKLM) не
-         оставляют дубля в «Программах и компонентах»; режим «только для меня»
-         машинную запись не трогает
+         оставляют дубля в «Программах и компонентах»; при обновлении из
+         службы (LocalSystem) запись ищется в загруженных профилях HKEY_USERS
+         (служебные SID и .DEFAULT не трогаются); режим «только для меня»
+         машинную запись и профили не трогает
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -669,7 +671,9 @@ $staticChecks = @(
     @{ Name = 'static:backup-entry'; Pattern = [regex]::Escape('function CreateDatabaseBackup(const Needed: Boolean): Boolean'); Note = 'бэкап: решение о необходимости передаёт вызывающий' },
     @{ Name = 'static:backup-keep-three'; Pattern = [regex]::Escape('BACKUPS_KEEP = 3'); Note = 'бэкап: три последних архива' },
     @{ Name = 'static:setup-mutex'; Pattern = [regex]::Escape('SetupMutex=ETNSetup'); Note = 'параллельный запуск установщика запрещён' },
-    @{ Name = 'static:uninstall-scope-cleanup'; Pattern = [regex]::Escape('RemoveDuplicateUninstallRecord;'); Note = 'запись деинсталляции прежней области удаляется после установки (a7394117)' }
+    @{ Name = 'static:uninstall-scope-cleanup'; Pattern = [regex]::Escape('RemoveDuplicateUninstallRecord;'); Note = 'запись деинсталляции прежней области удаляется после установки (a7394117)' },
+    @{ Name = 'static:uninstall-user-hives'; Pattern = [regex]::Escape("RegGetSubkeyNames(HKU, '', Names)"); Note = 'при /ALLUSERS запись ищется в загруженных профилях HKEY_USERS (a7394117)' },
+    @{ Name = 'static:appid-single-source'; Pattern = [regex]::Escape("UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';"); Note = 'имя ключа деинсталляции берётся из AppId, без второго литерала (a7394117)' }
 )
 foreach ($check in $staticChecks) {
     Add-StaticResult -Name $check.Name -Ok (Test-IssCode -Text $issText -Pattern $check.Pattern) -Note $check.Note
@@ -4277,6 +4281,18 @@ try {
     $uninstScopeRoot = 'Software\ETN-Test\Uninstall'
     $machineScopeKey = 'HKCU:\' + $uninstScopeRoot + '\Machine\' +
         '{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    $scopeProfilesRoot = 'HKCU:\' + $uninstScopeRoot + '\Profiles'
+    $profileSid = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
+    $profileRecord = $scopeProfilesRoot + '\' + $profileSid +
+        '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    $profileWowRecord = $scopeProfilesRoot + '\' + $profileSid +
+        '\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    $systemProfileRecord = $scopeProfilesRoot + '\S-1-5-18' +
+        '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    $defaultProfileRecord = $scopeProfilesRoot + '\.DEFAULT' +
+        '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    $classesHiveRecord = $scopeProfilesRoot + '\S-1-5-21-1111111111-2222222222-3333333333-1001_Classes' +
+        '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
     $scopeParams = New-ParamsFile -Mode 'service' -Name 'scope-uninstall.ini'
     function Reset-UninstallScope {
         foreach ($key in @($machineScopeKey, $testUninstallKey)) {
@@ -4284,16 +4300,30 @@ try {
                 Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
+        if (Test-Path -LiteralPath $scopeProfilesRoot) {
+            Remove-Item -LiteralPath $scopeProfilesRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
     function New-MachineScopeRecord {
         $null = New-Item -Path $machineScopeKey -Force
+    }
+    # Модель загруженных профилей: HKEY_USERS в прогоне без прав администратора
+    # не читается, поэтому обход HKU подменяется поддеревом HKCU (тот же
+    # /TESTUNINSTROOT). Служебные SID и .DEFAULT должны остаться нетронутыми.
+    function New-ProfileSandbox {
+        foreach ($key in @($profileRecord, $profileWowRecord, $systemProfileRecord,
+                $defaultProfileRecord, $classesHiveRecord)) {
+            $null = New-Item -Path $key -Force
+        }
     }
     Reset-State
     Reset-UninstallScope
 
     # 1. Элевированная GUI-установка: Inno пишет HKCU. Машинная запись прежней
     #    установки (модель) должна быть удалена — иначе она останется дублем.
+    #    Профили пользователей в этой ветке не трогаются.
     New-MachineScopeRecord
+    New-ProfileSandbox
     $installCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @('/PRIVILEGEDPHASE',
         "/PARAMS=`"$scopeParams`"", '/TESTELEVATED=1', '/TESTSERVICE=present',
         '/TESTHEALTH=ok', '/TESTADMINMODE=1', "/TESTUNINSTROOT=$uninstScopeRoot"))
@@ -4304,12 +4334,19 @@ try {
     Add-Result -Name 'uninst-scope:gui-admin-hklm-removed' -Expected 0 `
         -Actual ([int](Test-Path -LiteralPath $machineScopeKey)) `
         -Note 'машинная запись прежней установки удалена'
+    Add-Result -Name 'uninst-scope:gui-admin-profile-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $profileRecord)) `
+        -Note 'в ветке удаления HKLM профили пользователей не трогаются'
 
     # 2. Тихое /ALLUSERS-обновление: Inno пишет HKLM (в модели — заранее
     #    созданный ключ песочницы), запись HKCU от GUI-админ-установки удаляется.
+    #    Ключевое отличие: установщик запущен не тем пользователем (в жизни —
+    #    служба LocalSystem), поэтому запись ищется в загруженных профилях
+    #    HKEY_USERS (в прогоне — в песочнице профилей).
     #    Файл параметров удаляется установщиком после чтения (тест 22) —
     #    готовим новый, иначе привилегированная фаза получит пустой набор.
     New-MachineScopeRecord
+    New-ProfileSandbox
     $scopeParams = New-ParamsFile -Mode 'service' -Name 'scope-uninstall-update.ini'
     $updateCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @('/PRIVILEGEDPHASE',
         "/PARAMS=`"$scopeParams`"", '/TESTELEVATED=1', '/TESTSERVICE=present',
@@ -4325,6 +4362,21 @@ try {
     Add-Result -Name 'uninst-scope:one-record' -Expected 1 `
         -Actual ([int](Test-Path -LiteralPath $testUninstallKey) + [int](Test-Path -LiteralPath $machineScopeKey)) `
         -Note 'в «Программах и компонентах» одна запись (HKCU+HKLM)'
+    Add-Result -Name 'uninst-scope:profile-hkcu-removed' -Expected 0 `
+        -Actual ([int](Test-Path -LiteralPath $profileRecord)) `
+        -Note 'запись в чужом загруженном профиле удалена (аналог HKEY_USERS)'
+    Add-Result -Name 'uninst-scope:profile-wow-removed' -Expected 0 `
+        -Actual ([int](Test-Path -LiteralPath $profileWowRecord)) `
+        -Note 'WOW6432Node-вариант в чужом профиле удалён'
+    Add-Result -Name 'uninst-scope:system-profile-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $systemProfileRecord)) `
+        -Note 'служебный профиль S-1-5-18 не трогается'
+    Add-Result -Name 'uninst-scope:default-profile-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $defaultProfileRecord)) `
+        -Note '.DEFAULT не трогается'
+    Add-Result -Name 'uninst-scope:classes-hive-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $classesHiveRecord)) `
+        -Note 'служебная ветка *_Classes не трогается'
     $scopeLogText = ''
     $scopeLog = Get-LatestLog
     if ($scopeLog) { $scopeLogText = Get-Content -LiteralPath $scopeLog.FullName -Raw }
@@ -4336,6 +4388,7 @@ try {
     #    запись пользователя остаётся единственной, как и было до исправления).
     Reset-State
     New-MachineScopeRecord
+    New-ProfileSandbox
     $userCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @(
         '/TESTSELECT=client-user', '/TESTUSERINSTALL=1', '/TESTELEVATED=1'))
     Add-Result -Name 'uninst-scope:user-mode-code' -Expected 0 -Actual $userCode
@@ -4345,6 +4398,9 @@ try {
     Add-Result -Name 'uninst-scope:user-mode-hkcu' -Expected 1 `
         -Actual ([int](Test-Path -LiteralPath $testUninstallKey)) `
         -Note 'запись пользовательской установки на месте'
+    Add-Result -Name 'uninst-scope:user-mode-profile-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $profileRecord)) `
+        -Note 'в режиме «только для меня» профили пользователей не трогаются'
 } finally {
     # Деинсталлятор при отказе (мутация) оставляет установку и запись в HKCU:
     # убираем за собой, чтобы прогон не оставлял следов.
