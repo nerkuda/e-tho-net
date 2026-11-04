@@ -126,10 +126,12 @@ export function extractJournalPath(error: string | null): string | null {
 
 /**
  * Текст причины сбоя задания по машиночитаемому `reason` (задача 4f6c972a,
- * ADR daab6ac4 §4). Возвращает `null`, когда причины нет: вызывающий берёт
- * `job.error` фолбэком (задание сохранено до появления поля). Неизвестное
- * значение (сервер новее клиента) — общий локализованный текст, а не сырой
- * английский `error`.
+ * ADR daab6ac4 §4). Когда причины нет (`null` или поле отсутствует — задание
+ * сервера 0.15.1 и старше, сохранённое до появления поля), возвращается общий
+ * локализованный текст: английский `job.error` пользователю не показывается
+ * никогда, из него берётся только путь к журналу (`extractJournalPath`).
+ * Неизвестное значение (сервер новее клиента) — тоже общий локализованный
+ * текст, а не сырой английский `error`.
  *
  * `installer-*`-причины делят ключи с `502 UPDATE_INSTALLER_FAILED`: один и
  * тот же отказ установщика показывается одинаково и из конверта ошибки, и из
@@ -137,10 +139,12 @@ export function extractJournalPath(error: string | null): string | null {
  * параметры из задания (`exit_code`, `failed_stage`), а не из текста.
  */
 export function updateFailureText(
-  job: Pick<UpdateJob, 'reason' | 'exit_code' | 'failed_stage'>,
-): string | null {
-  const reason = job.reason;
-  if (reason === null) return null;
+  job: Pick<UpdateJob, 'exit_code' | 'failed_stage'> & {
+    reason?: UpdateJob['reason'];
+  },
+): string {
+  const reason = job.reason ?? null;
+  if (reason === null) return t('serverUpdate.failure.noReason');
   switch (reason) {
     case 'installer-target':
       return t('errors.code.UPDATE_INSTALLER_FAILED.installer-target');
@@ -222,8 +226,10 @@ export interface ServerUpdateViewModel {
   failed: boolean;
   /**
    * Причина сбоя (`failed`) — локализованный текст по машиночитаемому
-   * `reason` (ADR daab6ac4 §4). `job.error` (английский) — только фолбэк,
-   * когда `reason` нет: задание сохранено до появления поля.
+   * `reason` (ADR daab6ac4 §4). Когда `reason` нет (задание сервера 0.15.1
+   * и старше), показывается общий локализованный текст; английский
+   * `job.error` пользователю не показывается — из него берётся только путь
+   * к журналу (`journalPath`).
    */
   failureText: string | null;
   /**
@@ -305,7 +311,7 @@ export function serverUpdateViewModel(state: ServerUpdateState): ServerUpdateVie
     running: runningPhase || (job !== null && !isTerminalJobStage(job.stage)),
     done,
     failed,
-    failureText: failed ? (job === null ? null : (updateFailureText(job) ?? job.error)) : null,
+    failureText: failed && job !== null ? updateFailureText(job) : null,
     journalPath: failed
       ? (job?.log_path ?? extractJournalPath(job?.error ?? null))
       : null,

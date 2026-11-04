@@ -775,6 +775,33 @@ describe('восстановление прогресса при повторн�
       harness.stop();
     }
   });
+
+  it('задание без reason (сервер 0.15.1): общий текст и журнал, английский error не показан', async () => {
+    // Старое задание не несёт поля `reason` вовсе: показывается общий
+    // локализованный текст, путь к журналу — из старого серверного текста.
+    const failed = job('failed', {
+      error:
+        'The installer exited with code 10; the rollback was performed by the installer, ' +
+        'log: C:\\ProgramData\\ETN\\logs\\install-old.log',
+    });
+    delete (failed as { reason?: unknown }).reason;
+    const harness = mount({ getProgress: async () => ({ job: failed }) });
+    try {
+      await tick();
+      const text = dialog().flatText();
+      assert.ok(
+        text.includes(t('serverUpdate.failure.noReason')),
+        'без reason — общий локализованный текст',
+      );
+      assert.ok(!text.includes('The installer exited'), 'английский job.error не показан');
+      assert.ok(
+        text.includes('C:\\ProgramData\\ETN\\logs\\install-old.log'),
+        'путь к журналу извлечён из старого текста',
+      );
+    } finally {
+      harness.stop();
+    }
+  });
 });
 
 describe('интервал опроса прогресса', () => {

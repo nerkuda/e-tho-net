@@ -888,6 +888,11 @@ export const en = {
   'serverUpdate.failure.internal': 'the update job failed with an internal error',
   /** A newer server reported a reason this client does not know. */
   'serverUpdate.failure.unknown': 'the update failed for an unknown reason',
+  /**
+   * No reason reported: a job from server 0.15.1 or older, saved before the
+   * `reason` field existed. The log path, when present, is shown separately.
+   */
+  'serverUpdate.failure.noReason': 'the update failed; see the server log for details',
   /** Архив базы данных: `%1` — путь (сервер пока присылает `null`). */
   'serverUpdate.backupPath': 'Database backup: %1',
   /** Кнопка копирования пути. */

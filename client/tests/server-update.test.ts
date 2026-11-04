@@ -174,17 +174,44 @@ describe('server-update: снимок кеша и доступность обн�
 });
 
 describe('server-update: итог задания и пути', () => {
-  it('failed без reason: сырой job.error — только фолбэк (задание до миграции)', () => {
+  it('клиент 0.15.2 + задание без reason: общий текст, английский error не показан', () => {
+    const serverText =
+      'The installer exited with code 10; the rollback was performed by the installer, ' +
+      'log: C:\\ProgramData\\ETN\\logs\\install-20261029.log';
+    // Сервер 0.15.1 поля `reason` не присылает вовсе (в JSON его нет) —
+    // проверяем и `null`, и отсутствующее поле.
+    for (const reason of [null, undefined] as const) {
+      const failed = job('failed', { error: serverText });
+      if (reason === undefined) delete (failed as { reason?: unknown }).reason;
+      const view = serverUpdateViewModel(state({ job: failed, phase: 'failed' }));
+      assert.equal(view.failed, true);
+      assert.equal(
+        view.failureText,
+        t('serverUpdate.failure.noReason'),
+        'без reason — общий локализованный текст',
+      );
+      assert.ok(
+        !view.failureText?.includes('The installer exited'),
+        'английский job.error пользователю не показан',
+      );
+      assert.equal(
+        view.journalPath,
+        'C:\\ProgramData\\ETN\\logs\\install-20261029.log',
+        'путь к журналу извлекается из старого текста как фолбэк',
+      );
+      assert.equal(view.backupPath, null, 'выдуманный путь архива не появляется');
+    }
+  });
+
+  it('задание без reason: машиночитаемый log_path приоритетнее разбора текста', () => {
     const failed = job('failed', {
-      error:
-        'The installer exited with code 10; the rollback was performed by the installer, ' +
-        'log: C:\\ProgramData\\ETN\\logs\\install-20261029.log',
+      log_path: 'C:\\logs\\from-field.log',
+      error: 'The update failed; log: C:\\logs\\from-error.log',
     });
+    delete (failed as { reason?: unknown }).reason;
     const view = serverUpdateViewModel(state({ job: failed, phase: 'failed' }));
-    assert.equal(view.failed, true);
-    assert.equal(view.failureText, failed.error, 'без reason показывается фолбэк');
-    assert.equal(view.journalPath, 'C:\\ProgramData\\ETN\\logs\\install-20261029.log');
-    assert.equal(view.backupPath, null, 'выдуманный путь архива не появляется');
+    assert.equal(view.failureText, t('serverUpdate.failure.noReason'));
+    assert.equal(view.journalPath, 'C:\\logs\\from-field.log');
   });
 
   it('failed с reason: причина локализована, английский error не показывается', () => {

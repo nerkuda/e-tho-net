@@ -430,6 +430,7 @@ export const zh = {
     '服务器在更新任务完成前重启；任务不会自动继续',
   'serverUpdate.failure.internal': '更新任务因内部错误失败',
   'serverUpdate.failure.unknown': '更新因未知原因失败',
+  'serverUpdate.failure.noReason': '更新失败；详情请查看服务器日志',
   'serverUpdate.backupPath': '数据库归档：%1',
   'serverUpdate.copyPath': '复制路径',
   'serverUpdate.pathCopied': '路径已复制',
