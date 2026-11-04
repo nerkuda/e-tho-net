@@ -1496,14 +1496,104 @@ begin
   Result := RegKeyExists(HKLM, Key) or RegKeyExists(HKLM64, Key);
 end;
 
+{ Нормализация пути из значения реестра: снимаются кавычки и хвостовые
+  обратные слэши. Inno пишет InstallLocation с AddBackslash, а UninstallString
+  — в кавычках (см. Setup.Install.pas, RegisterUninstallInfo). }
+function NormalizeRecordPath(const Value: String): String;
+begin
+  Result := Trim(Value);
+  if (Length(Result) >= 2) and (Result[1] = '"') and
+    (Result[Length(Result)] = '"') then
+    Result := Trim(Copy(Result, 2, Length(Result) - 2));
+  while (Length(Result) > 3) and (Result[Length(Result)] = '\') do
+    Result := Copy(Result, 1, Length(Result) - 1);
+end;
+
+(* Каталог текущей машинной установки: {app} (обычно Program Files\ETN) либо
+  MachineAppDir. Сравнение без учёта регистра — пути Windows. *)
+function IsMachineInstallDir(const Dir: String): Boolean;
+var
+  Candidate, AppDir, MachineDir: String;
+begin
+  Result := False;
+  Candidate := NormalizeRecordPath(Dir);
+  if Candidate = '' then Exit;
+  AppDir := NormalizeRecordPath(ExpandConstant('{app}'));
+  MachineDir := NormalizeRecordPath(MachineAppDir);
+  Result := (AppDir <> '') and (CompareText(Candidate, AppDir) = 0);
+  if (not Result) and (MachineDir <> '') then
+    Result := CompareText(Candidate, MachineDir) = 0;
+end;
+
+{ Путь к exe из UninstallString: Inno пишет его в кавычках, возможен хвост
+  вида « /LOG». Без кавычек поддерживается путь до первого пробела. }
+function UninstallExeFromString(const Value: String): String;
+var
+  S: String;
+  P: Integer;
+begin
+  S := Trim(Value);
+  Result := '';
+  if S = '' then Exit;
+  if S[1] = '"' then
+  begin
+    P := 2;
+    while (P <= Length(S)) and (S[P] <> '"') do
+      P := P + 1;
+    if P <= Length(S) then
+      Result := Copy(S, 2, P - 2)
+    else
+      Result := Copy(S, 2, Length(S) - 1);
+  end
+  else
+  begin
+    P := Pos(' /', S);
+    if P > 0 then Result := Copy(S, 1, P - 1) else Result := S;
+  end;
+  Result := NormalizeRecordPath(Result);
+end;
+
+(* Ошибка 7dcbeb0c: под нашим AppId в реестре может лежать ЛЕГИТИМНАЯ
+  per-user установка клиента «только для меня» (%LOCALAPPDATA%\Programs\ETN).
+  Удаляем только запись машинной установки: InstallLocation или UninstallString
+  указывают в каталог текущей машинной установки ({app}). Запись без этих
+  значений или с чужим каталогом не трогаем: удалить чужое хуже, чем оставить
+  дубль, о котором сообщит журнал. *)
+function IsMachineUninstallRecord(const Root: Integer;
+  const SubKey: String): Boolean;
+var
+  Location, Cmd, Exe: String;
+begin
+  Result := False;
+  if RegQueryStringValue(Root, SubKey, 'InstallLocation', Location) and
+    IsMachineInstallDir(Location) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if RegQueryStringValue(Root, SubKey, 'UninstallString', Cmd) then
+  begin
+    Exe := UninstallExeFromString(Cmd);
+    if (Exe <> '') and IsMachineInstallDir(ExtractFileDir(Exe)) then
+      Result := True;
+  end;
+end;
+
 { Удаляет запись деинсталляции по одному корню реестра. Возвращает 1, если
-  запись была и удалена. Ошибка удаления установку не отменяет: WARN в журнал
-  (ошибка a7394117). }
+  запись была и удалена. Удаляется только запись машинной установки (ошибка
+  7dcbeb0c); чужая (per-user клиент) остаётся с записью в журнале. Ошибка
+  удаления установку не отменяет: WARN в журнал (ошибка a7394117). }
 function DeleteUninstallRecordAt(const Root: Integer; const RootName,
   SubKey: String): Integer;
 begin
   Result := 0;
   if not RegKeyExists(Root, SubKey) then Exit;
+  if not IsMachineUninstallRecord(Root, SubKey) then
+  begin
+    LogLine('INFO', 'Запись деинсталляции другой установки оставлена: ' +
+      RootName + '\' + SubKey);
+    Exit;
+  end;
   if RegDeleteKeyIncludingSubkeys(Root, SubKey) then
   begin
     Result := 1;
@@ -1531,9 +1621,11 @@ end;
   установщик запускает служба под LocalSystem, поэтому HKCU процесса — профиль
   системы, а запись GUI-админ-установки лежит в профиле пользователя.
   Перечисляем ЗАГРУЖЕННЫЕ профили (HKEY_USERS\<SID>) и удаляем в каждом запись
-  нашего AppId — обычную и WOW6432Node. Незагруженный профиль (пользователь
-  вышел) сюда не виден: это ограничение отмечено в карточке компонента.
-  Возвращает число удалённых ключей. }
+  нашего AppId — обычную и WOW6432Node. Удаляется только запись машинной
+  установки (ошибка 7dcbeb0c): per-user клиент в профиле пользователя
+  (%LOCALAPPDATA%\Programs\ETN) принадлежит другой установке и остаётся.
+  Незагруженный профиль (пользователь вышел) сюда не виден: это ограничение
+  отмечено в карточке компонента. Возвращает число удалённых ключей. }
 function DeleteUninstallRecordInUserHives: Integer;
 var
   Names: TArrayOfString;
@@ -1626,7 +1718,9 @@ end;
   режиме) и в HKLM при тихом /ALLUSERS-обновлении. Прежнюю запись Inno не
   мигрирует — после обновления в «Программах и компонентах» две строки.
   После успешной установки удаляем запись в области, куда Inno её не записал.
-  В режиме «только для меня» ничего не удаляем: запись одна, прав на HKLM нет. }
+  Удаляется только запись машинной установки — per-user клиент «только для
+  меня» сохраняется (ошибка 7dcbeb0c). В режиме «только для меня» ничего не
+  удаляем: запись одна, прав на HKLM нет. }
 procedure RemoveDuplicateUninstallRecord;
 var
   ForeignMachineScope: Boolean;

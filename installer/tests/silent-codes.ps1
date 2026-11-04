@@ -81,7 +81,10 @@
          оставляют дубля в «Программах и компонентах»; при обновлении из
          службы (LocalSystem) запись ищется в загруженных профилях HKEY_USERS
          (служебные SID и .DEFAULT не трогаются); режим «только для меня»
-         машинную запись и профили не трогает
+         машинную запись и профили не трогает; 7dcbeb0c: удаляется только
+         запись машинной установки (InstallLocation/UninstallString указывают
+         в {app}), per-user клиент «только для меня» и запись без этих
+         значений сохраняются
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -673,7 +676,8 @@ $staticChecks = @(
     @{ Name = 'static:setup-mutex'; Pattern = [regex]::Escape('SetupMutex=ETNSetup'); Note = 'параллельный запуск установщика запрещён' },
     @{ Name = 'static:uninstall-scope-cleanup'; Pattern = [regex]::Escape('RemoveDuplicateUninstallRecord;'); Note = 'запись деинсталляции прежней области удаляется после установки (a7394117)' },
     @{ Name = 'static:uninstall-user-hives'; Pattern = [regex]::Escape("RegGetSubkeyNames(HKU, '', Names)"); Note = 'при /ALLUSERS запись ищется в загруженных профилях HKEY_USERS (a7394117)' },
-    @{ Name = 'static:appid-single-source'; Pattern = [regex]::Escape("UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';"); Note = 'имя ключа деинсталляции берётся из AppId, без второго литерала (a7394117)' }
+    @{ Name = 'static:appid-single-source'; Pattern = [regex]::Escape("UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';"); Note = 'имя ключа деинсталляции берётся из AppId, без второго литерала (a7394117)' },
+    @{ Name = 'static:uninstall-record-owner'; Pattern = [regex]::Escape('if not IsMachineUninstallRecord(Root, SubKey) then'); Note = 'удаляется только запись машинной установки; per-user клиент сохраняется (7dcbeb0c)' }
 )
 foreach ($check in $staticChecks) {
     Add-StaticResult -Name $check.Name -Ok (Test-IssCode -Text $issText -Pattern $check.Pattern) -Note $check.Note
@@ -4293,6 +4297,19 @@ try {
         '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
     $classesHiveRecord = $scopeProfilesRoot + '\S-1-5-21-1111111111-2222222222-3333333333-1001_Classes' +
         '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    # 7dcbeb0c: легитимная per-user установка клиента «только для меня» живёт
+    # в профиле пользователя со своим InstallLocation. Машинная установка не
+    # должна её удалять. $userClientDir моделирует %LOCALAPPDATA%\Programs\ETN:
+    # каталог заведомо другой, чем {app} тестовой сборки.
+    $userClientDir = Join-Path $workRoot 'user-client'
+    $profileUserSid = 'S-1-5-21-1111111111-2222222222-3333333333-1002'
+    $profileUserRecord = $scopeProfilesRoot + '\' + $profileUserSid +
+        '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    # Запись без InstallLocation/UninstallString: принадлежность доказать
+    # нельзя — удалять нельзя (иначе снесём чужую установку вслепую).
+    $profileUnknownSid = 'S-1-5-21-1111111111-2222222222-3333333333-1003'
+    $profileUnknownRecord = $scopeProfilesRoot + '\' + $profileUnknownSid +
+        '\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
     $scopeParams = New-ParamsFile -Mode 'service' -Name 'scope-uninstall.ini'
     function Reset-UninstallScope {
         foreach ($key in @($machineScopeKey, $testUninstallKey)) {
@@ -4304,17 +4321,39 @@ try {
             Remove-Item -LiteralPath $scopeProfilesRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
-    function New-MachineScopeRecord {
+    # Значения записи машинной установки — как их пишет Inno: InstallLocation
+    # с хвостовым слэшем, UninstallString в кавычках.
+    function Set-MachineRecordValues([string]$Key) {
+        New-ItemProperty -Path $Key -Name 'InstallLocation' -Value ($appDir + '\') `
+            -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $Key -Name 'UninstallString' `
+            -Value ('"' + (Join-Path $appDir 'unins000.exe') + '"') `
+            -PropertyType String -Force | Out-Null
+    }
+    function Set-UserRecordValues([string]$Key) {
+        New-ItemProperty -Path $Key -Name 'InstallLocation' -Value ($userClientDir + '\') `
+            -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $Key -Name 'UninstallString' `
+            -Value ('"' + (Join-Path $userClientDir 'unins000.exe') + '"') `
+            -PropertyType String -Force | Out-Null
+    }
+    function New-MachineScopeRecord([switch]$UserLike) {
         $null = New-Item -Path $machineScopeKey -Force
+        if ($UserLike) { Set-UserRecordValues $machineScopeKey }
+        else { Set-MachineRecordValues $machineScopeKey }
     }
     # Модель загруженных профилей: HKEY_USERS в прогоне без прав администратора
     # не читается, поэтому обход HKU подменяется поддеревом HKCU (тот же
     # /TESTUNINSTROOT). Служебные SID и .DEFAULT должны остаться нетронутыми.
     function New-ProfileSandbox {
         foreach ($key in @($profileRecord, $profileWowRecord, $systemProfileRecord,
-                $defaultProfileRecord, $classesHiveRecord)) {
+                $defaultProfileRecord, $classesHiveRecord, $profileUserRecord,
+                $profileUnknownRecord)) {
             $null = New-Item -Path $key -Force
         }
+        Set-MachineRecordValues $profileRecord
+        Set-MachineRecordValues $profileWowRecord
+        Set-UserRecordValues $profileUserRecord
     }
     Reset-State
     Reset-UninstallScope
@@ -4337,6 +4376,20 @@ try {
     Add-Result -Name 'uninst-scope:gui-admin-profile-kept' -Expected 1 `
         -Actual ([int](Test-Path -LiteralPath $profileRecord)) `
         -Note 'в ветке удаления HKLM профили пользователей не трогаются'
+
+    # 1b. Та же ветка, но в «машинной» области лежит запись per-user установки
+    #     клиента (чужой InstallLocation). Удалять её нельзя (7dcbeb0c): иначе
+    #     у пользователя пропадёт запись «ETN» из его HKCU, а файлы останутся.
+    Reset-State
+    New-MachineScopeRecord -UserLike
+    $scopeParams = New-ParamsFile -Mode 'service' -Name 'scope-uninstall-foreign.ini'
+    $foreignCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+        "/PARAMS=`"$scopeParams`"", '/TESTELEVATED=1', '/TESTSERVICE=present',
+        '/TESTHEALTH=ok', '/TESTADMINMODE=1', "/TESTUNINSTROOT=$uninstScopeRoot"))
+    Add-Result -Name 'uninst-scope:foreign-machine-code' -Expected 0 -Actual $foreignCode
+    Add-Result -Name 'uninst-scope:foreign-machine-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $machineScopeKey)) `
+        -Note 'запись per-user установки в «машинной» области не удалена'
 
     # 2. Тихое /ALLUSERS-обновление: Inno пишет HKLM (в модели — заранее
     #    созданный ключ песочницы), запись HKCU от GUI-админ-установки удаляется.
@@ -4368,6 +4421,12 @@ try {
     Add-Result -Name 'uninst-scope:profile-wow-removed' -Expected 0 `
         -Actual ([int](Test-Path -LiteralPath $profileWowRecord)) `
         -Note 'WOW6432Node-вариант в чужом профиле удалён'
+    Add-Result -Name 'uninst-scope:profile-user-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $profileUserRecord)) `
+        -Note 'per-user клиент в профиле пользователя сохранён (7dcbeb0c)'
+    Add-Result -Name 'uninst-scope:profile-unknown-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $profileUnknownRecord)) `
+        -Note 'запись без InstallLocation/UninstallString не удаляется'
     Add-Result -Name 'uninst-scope:system-profile-kept' -Expected 1 `
         -Actual ([int](Test-Path -LiteralPath $systemProfileRecord)) `
         -Note 'служебный профиль S-1-5-18 не трогается'
