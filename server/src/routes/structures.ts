@@ -114,7 +114,7 @@ function parseQueryBody(
     if (!isFilterEmpty({ ...filter, parent_ids: undefined, link_filter: undefined })) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'Тело-AST (`ast`) и плоские критерии переданы одновременно — выберите один источник отбора (фасадные `parent_ids`/`link_filter` совместимы с `ast`).',
+        "An AST body (`ast`) and flat criteria were provided together — choose one filter source (facade `parent_ids`/`link_filter` are compatible with `ast`).",
         { field: 'ast' },
         requestId,
       );
@@ -126,7 +126,7 @@ function parseQueryBody(
     if (ast.sort !== undefined && ast.sort.length > 0 && (out.sort !== undefined || out.order !== undefined)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'Сортировка задана дважды: в теле ast (sort) и в полях sort/order — оставьте один источник.',
+        "Sorting is specified twice: in the ast body (sort) and in the sort/order fields — keep a single source.",
         { field: 'sort' },
         requestId,
       );
@@ -141,7 +141,7 @@ function parseQueryBody(
   if (limit < 1 || limit > maxLimit) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `limit должен быть целым числом 1..${maxLimit}.`,
+      `limit must be an integer in 1..${maxLimit}.`,
       { field: 'limit' },
       requestId,
     );
@@ -149,7 +149,7 @@ function parseQueryBody(
   if (offset < 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'offset должен быть целым числом ≥ 0.',
+      "offset must be an integer ≥ 0.",
       { field: 'offset' },
       requestId,
     );

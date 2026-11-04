@@ -280,7 +280,7 @@ function collectMergedRows(
   if (unknown.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'в слое нет перечисленных для слияния строк — обновите выбор и повторите.',
+      "the layer has none of the rows listed for merging — refresh the selection and retry.",
       { unknown },
     );
   }
@@ -328,12 +328,12 @@ function loadMergeTarget(ndb: NetworkDb, layerId: string): MergeTarget {
     throw new EtnError('NOT_FOUND', `layer ${layerId} not found`, { entity: 'layer', id: layerId });
   }
   if (layer.is_base === 1) {
-    throw new EtnError('VALIDATION_ERROR', 'основа не может быть слита: у неё нет родителя.', {
+    throw new EtnError('VALIDATION_ERROR', "the base layer cannot be merged: it has no parent.", {
       layer_id: layerId,
     });
   }
   if (layer.is_service === 1) {
-    throw new EtnError('VALIDATION_ERROR', 'служебный (резервный) слой нельзя слить.', {
+    throw new EtnError('VALIDATION_ERROR', "a service (reserve) layer cannot be merged.", {
       layer_id: layerId,
     });
   }
@@ -485,7 +485,7 @@ export function resetLayerOverride(
     setupMergeChain(ndb, target.id);
     const merged = collectMergedRows(ndb, layerId, selection);
     if (merged.length === 0) {
-      throw new EtnError('VALIDATION_ERROR', 'набор сброса пуст: укажите хотя бы одну строку слоя.', {
+      throw new EtnError('VALIDATION_ERROR', "the reset set is empty: specify at least one layer row.", {
         field: 'tables',
       });
     }
@@ -759,7 +759,7 @@ export function mergeLayer(
     if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'слияние нарушает уникальный ключ в родителе: независимая правка предка создала конфликтующую строку.',
+        "the merge violates a unique key in the parent: an independent change to the ancestor created a conflicting row.",
         { constraint: code },
       );
     }
@@ -784,7 +784,7 @@ function mergeLayerInner(
   if (conflicts.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `предок изменён после создания слоя: ${conflicts.length} расхождений. Слияние отклонено целиком.`,
+      `the ancestor changed after the layer was created: ${conflicts.length} divergences. The merge was rejected entirely.`,
       // `how_to` — hint-навигатор уровня 2 (ADR b2eebf8b, задача 940a499d):
       // имя процедурного промпта, объясняющего ошибку. Агент узнаёт об
       // инструкции в момент, когда она нужна.
@@ -841,7 +841,7 @@ function mergeLayerInner(
   if (missingClosure.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `набор слияния не замкнут: ${missingClosure.length} ссылок не разрешаются. Дополните выбор и повторите.`,
+      `the merge set is not closed: ${missingClosure.length} references cannot be resolved. Extend the selection and retry.`,
       // Hint-навигатор уровня 2 (ADR b2eebf8b) — см. конфликтную ветку выше.
       { missing_closure: missingClosure, how_to: 'etn.how_to_merge_partial' },
     );
@@ -1580,7 +1580,7 @@ export function mergeLayerThought(
     return ndb.transaction(() => {
       const selection = collectThoughtLayerRows(ndb, layerId, thoughtId);
       if (Object.keys(selection).length === 0) {
-        throw new EtnError('VALIDATION_ERROR', 'в слое нет изменений этой мысли — сливать нечего.', {
+        throw new EtnError('VALIDATION_ERROR', "the layer has no changes for this thought — nothing to merge.", {
           field: 'thought_id',
           thought_id: thoughtId,
         });
@@ -1605,7 +1605,7 @@ export function mergeLayerThought(
     if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'слияние нарушает уникальный ключ в родителе: независимая правка предка создала конфликтующую строку.',
+        "the merge violates a unique key in the parent: an independent change to the ancestor created a conflicting row.",
         { constraint: code },
       );
     }

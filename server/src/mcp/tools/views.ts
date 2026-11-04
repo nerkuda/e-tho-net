@@ -147,7 +147,7 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
           // эффективного набора. Не молча пустой массив.
           throw new EtnError(
             'NOT_FOUND',
-            `Отбор «${viewName}» не найден в эффективном наборе мысли ${args.thought_id}.`,
+            `View "${viewName}" was not found in the effective set of thought ${args.thought_id}.`,
             {
               entity: 'thought_type_view',
               view_name: viewName,

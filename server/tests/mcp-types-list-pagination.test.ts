@@ -221,7 +221,7 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
           },
         });
         assert.equal(tooBig.isError, true);
-        assert.match(toolText(tooBig), /ETN error \[VALIDATION_ERROR\]: limit должен быть целым числом не больше 500/);
+        assert.match(toolText(tooBig), /ETN error \[VALIDATION_ERROR\]: limit must be an integer not greater than 500/);
 
         const negative = await handle.client.callTool({
           name: 'etn.types.list',
@@ -232,7 +232,7 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
           },
         });
         assert.equal(negative.isError, true);
-        assert.match(toolText(negative), /ETN error \[VALIDATION_ERROR\]: offset должен быть целым числом не меньше 0/);
+        assert.match(toolText(negative), /ETN error \[VALIDATION_ERROR\]: offset must be an integer not less than 0/);
 
         const tooSmall = await handle.client.callTool({
           name: 'etn.types.list',
@@ -243,7 +243,7 @@ describe('etn.types.list pagination + max_chars (f9c7dbc5)', {
           },
         });
         assert.equal(tooSmall.isError, true);
-        assert.match(toolText(tooSmall), /ETN error \[VALIDATION_ERROR\]: max_chars должен быть целым числом не меньше 1000/);
+        assert.match(toolText(tooSmall), /ETN error \[VALIDATION_ERROR\]: max_chars must be an integer not less than 1000/);
       } finally {
         await handle.close();
       }

@@ -510,7 +510,7 @@ export class ThoughtTypeViewNameCollisionError extends Error {
     readonly existingName: string,
   ) {
     super(
-      `thought_type_view ${existingId} уже занимает имя "${existingName}" в текущем слое`,
+      `thought_type_view ${existingId} already occupies the name "${existingName}" in the current layer`,
     );
     this.name = 'ThoughtTypeViewNameCollisionError';
   }

@@ -815,7 +815,7 @@ describe('MCP etn.thoughts.query: AST наличия связей (60db9614)', {
       });
       assert.equal(withValue.isError, true, withValue.text);
       assert.match(withValue.text, /VALIDATION_ERROR/);
-      assert.match(withValue.text, /не принимает значение/);
+      assert.match(withValue.text, /does not accept a value/);
 
       const badState = await rawQuery(w.handle.client, {
         network_id: w.rest.networkId,
@@ -854,7 +854,7 @@ describe('MCP etn.thoughts.query: AST наличия связей (60db9614)', {
       });
       assert.equal(foreign.isError, true, toolText(foreign));
       assert.match(toolText(foreign), /VALIDATION_ERROR/);
-      assert.match(toolText(foreign), /не виден в точке применения/);
+      assert.match(toolText(foreign), /is not visible at the point of use/);
     } finally {
       await closePairedWorld(w);
     }

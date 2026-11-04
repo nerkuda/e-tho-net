@@ -516,7 +516,7 @@ describe('строковые токены датовых границ (99e7889d)
       assert.throws(
         () => runAst(ndb, ast(leaf({ kind: 'updated_at' }, 'between', [{ token: '$weekStart' }, ''])), ctx),
         (err: unknown) =>
-          err instanceof EtnError && err.code === 'VALIDATION_ERROR' && /Граница даты/.test(err.message),
+          err instanceof EtnError && err.code === 'VALIDATION_ERROR' && /Date bound/.test(err.message),
         'пустая граница — ошибка ввода, а не молчаливое расширение отбора',
       );
     } finally {

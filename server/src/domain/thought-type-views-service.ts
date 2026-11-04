@@ -144,7 +144,7 @@ function getViewOrThrow(ndb: NetworkDb, viewId: string, requestId?: string): Tho
   if (!row) {
     throw new EtnError(
       'NOT_FOUND',
-      'Отбор не найден.',
+      "View not found.",
       { entity: 'thought_type_view', id: viewId },
       requestId,
     );
@@ -160,7 +160,7 @@ function duplicateNameError(
 ): EtnError {
   return new EtnError(
     'DUPLICATE',
-    `Отбор с именем "${existingName}" уже есть в этом типе мысли.`,
+    `A view named "${existingName}" already exists in this thought type.`,
     {
       entity: 'thought_type_view',
       field: 'name',
@@ -284,7 +284,7 @@ export function createThoughtTypeView(
   if (!root) {
     throw new EtnError(
       'NOT_FOUND',
-      'Корневой тип мысли не найден — сеть не инициализирована.',
+      "Root thought type not found — the network is not initialized.",
       { entity: 'thought_type', id: 'root' },
       requestId,
     );
@@ -292,7 +292,7 @@ export function createThoughtTypeView(
   if (thoughtTypeId === root.id) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Корневому типу нельзя добавлять отборы через этот путь: создайте их в редакторе типов.',
+      "Views cannot be added to the root type through this path: create them in the type editor.",
       { entity: 'thought_type', id: thoughtTypeId, root_id: root.id },
       requestId,
     );
@@ -303,7 +303,7 @@ export function createThoughtTypeView(
   if (!typeRow) {
     throw new EtnError(
       'NOT_FOUND',
-      `Тип мысли ${thoughtTypeId} не найден.`,
+      `Thought type ${thoughtTypeId} not found.`,
       { entity: 'thought_type', id: thoughtTypeId },
       requestId,
     );
@@ -398,7 +398,7 @@ export function updateThoughtTypeView(
       if (expectedVersion !== undefined && current.version !== expectedVersion) {
         throw new EtnError(
           'VERSION_CONFLICT',
-          'Версия отбора изменилась с момента чтения.',
+          "The view version changed since it was read.",
           {
             entity: 'thought_type_view',
             id: viewId,
@@ -1067,7 +1067,7 @@ export async function executeViewDefinitionForThought(
   if (thought === null) {
     throw new EtnError(
       'NOT_FOUND',
-      `Мысль ${thoughtId} не найдена.`,
+      `Thought ${thoughtId} not found.`,
       { entity: 'thought', id: thoughtId },
       requestId,
     );
@@ -1237,7 +1237,7 @@ export async function executeViewDefinitionForThought(
         ) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'Сортировка задана дважды: в теле ast (sort) и в полях sort/order — оставьте один источник.',
+            "Sorting is specified twice: in the ast body (sort) and in the sort/order fields — keep a single source.",
             { field: 'sort' },
             requestId,
           );

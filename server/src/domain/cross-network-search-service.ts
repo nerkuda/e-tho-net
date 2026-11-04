@@ -121,7 +121,7 @@ function normalizeNetworkIds(ids: string[]): string[] {
   const unique = [...new Set(ids)];
   if (unique.length > CROSS_NETWORK_MAX) {
     throw new Error(
-      `Слишком много сетей в network_ids: ${unique.length} (макс. ${CROSS_NETWORK_MAX}).`,
+      `Too many networks in network_ids: ${unique.length} (max ${CROSS_NETWORK_MAX}).`,
     );
   }
   return unique;

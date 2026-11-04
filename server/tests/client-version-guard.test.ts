@@ -251,7 +251,7 @@ describe('client-version-guard — юнит-матрица', () => {
     const message = describeClientVersionRejection(outOfRange);
     assert.match(message, /2\.0\.0/);
     assert.match(message, />=1\.2\.0 <1\.3\.0/);
-    assert.match(message, /Обновите клиент/);
+    assert.match(message, /Update the client/);
 
     const missing = unitGuard(fakeReq('POST', { 'client-id': 'c1' }));
     assert.ok(missing !== null);

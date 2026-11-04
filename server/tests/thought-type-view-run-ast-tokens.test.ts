@@ -355,7 +355,7 @@ describe(
           payload: {},
         });
         assert.equal(res.statusCode, 422, 'движок объясняет пустое значение наборной операции');
-        assert.match(res.body?.toString() ?? '', /Массив значений операции in/);
+        assert.match(res.body?.toString() ?? '', /value array of operation in/);
       } finally {
         await closeRestContext(ctx);
       }
@@ -554,7 +554,7 @@ describe(
           sort: 'created',
         });
         assert.equal(conflicting.statusCode, 422, 'два источника сортировки — 422');
-        assert.match(conflicting.body ?? '', /оставьте один источник/);
+        assert.match(conflicting.body ?? '', /keep a single source/);
 
         // Без ast.sort тело `sort`/`order` работает как плоская сортировка.
         const ok = await runAdHoc(ctx, fx.context, {

@@ -162,7 +162,7 @@ export function recordActivity(ndb: NetworkDb, input: RecordActivityInput): void
         entity_type: input.entityType,
         entity_id: input.entityId,
       },
-      'activity_log insert failed; бизнес-операция продолжается',
+      "activity_log insert failed; the business operation continues",
     );
   }
 }
@@ -260,7 +260,7 @@ function resolveOccurredBound(
   if (typeof rawValue !== 'string' || rawValue.trim() === '') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      '«Время события»: ожидается миллисекунды, дата или токен.',
+      "\"Event time\": milliseconds, a date or a token are expected.",
       { field: 'occurred_at' },
       opts.requestId,
     );
@@ -270,7 +270,7 @@ function resolveOccurredBound(
   if (unknown.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `«Время события»: неизвестный токен «${unknown[0]!.raw}».`,
+      `"Event time": unknown token "${unknown[0]!.raw}".`,
       { field: 'occurred_at', token: unknown[0]!.raw },
       opts.requestId,
     );
@@ -288,7 +288,7 @@ function resolveOccurredBound(
   if (unresolved.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `«Время события»: ${unresolved[0]!.message}`,
+      `"Event time": ${unresolved[0]!.message}`,
       { field: 'occurred_at', token: unresolved[0]!.token },
       opts.requestId,
     );
@@ -297,7 +297,7 @@ function resolveOccurredBound(
   if (ms === null) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      '«Время события»: не удалось раскрыть значение времени.',
+      "\"Event time\": failed to resolve the time value.",
       { field: 'occurred_at' },
       opts.requestId,
     );
@@ -311,7 +311,7 @@ function activityStringList(value: unknown, operator: string, field: string, req
   if (Array.isArray(value) && value.every((v) => typeof v === 'string')) return value as string[];
   throw new EtnError(
     'VALIDATION_ERROR',
-    `Операнд «${field}»: оператор «${operator}» требует строку или список строк.`,
+    `Operand "${field}": operator "${operator}" requires a string or a list of strings.`,
     { field },
     requestId,
   );
@@ -358,7 +358,7 @@ function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): A
   });
   const between = (value: unknown): ActivityClause => {
     if (!Array.isArray(value) || value.length !== 2) {
-      activityUnsupported('«Время события»: оператор «между» требует две границы.', opts.requestId);
+      activityUnsupported("\"Event time\": the \"between\" operator requires two bounds.", opts.requestId);
     }
     const bounds = value as FilterAstListItem[];
     const a = lower(bounds[0], false);
@@ -398,7 +398,7 @@ function activityOccurredLeaf(node: FilterAstLeaf, opts: ActivityListOptions): A
       return { sql: `NOT ${inner.sql}`, args: inner.args };
     }
     default:
-      return activityUnsupported(`Оператор «${node.operator}» недопустим для «Времени события».`, opts.requestId);
+      return activityUnsupported(`Operator "${node.operator}" is not allowed for "Event time".`, opts.requestId);
   }
 }
 
@@ -411,7 +411,7 @@ function activityTextLeaf(node: FilterAstLeaf, column: string, opts: ActivityLis
   }
   const raw = typeof node.value === 'string' ? node.value : undefined;
   if (raw === undefined) {
-    return activityUnsupported(`Операнд «${column}»: оператор «${op}» требует строковое значение.`, opts.requestId);
+    return activityUnsupported(`Operand "${column}": operator "${op}" requires a string value.`, opts.requestId);
   }
   switch (op) {
     case 'eq':
@@ -426,7 +426,7 @@ function activityTextLeaf(node: FilterAstLeaf, column: string, opts: ActivityLis
         args: [buildLikePattern(raw.toLowerCase())],
       };
     default:
-      return activityUnsupported(`Операнд «${column}»: оператор «${op}» недопустим.`, opts.requestId);
+      return activityUnsupported(`Operand "${column}": operator "${op}" is not allowed.`, opts.requestId);
   }
 }
 
@@ -459,13 +459,13 @@ function activityEntityIdLeaf(ndb: NetworkDb, node: FilterAstLeaf, opts: Activit
     }
     case 'all_of': {
       if (!isSubquery) {
-        return activityUnsupported('«Сущность»: оператор all_of требует под-выборку мыслей.', opts.requestId);
+        return activityUnsupported("\"Entity\": the all_of operator requires a thought subquery.", opts.requestId);
       }
       const ids = activitySubqueryIds(ndb, (value as { query: FilterAstNode }).query, opts);
       return activityInClause('entity_id', ids, true);
     }
     default:
-      return activityUnsupported(`Оператор «${node.operator}» недопустим для «Сущности».`, opts.requestId);
+      return activityUnsupported(`Operator "${node.operator}" is not allowed for "Entity".`, opts.requestId);
   }
 }
 
@@ -502,7 +502,7 @@ function activityAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: Activi
     case 'entity_id':
       return activityEntityIdLeaf(ndb, node, opts);
     default:
-      return activityUnsupported(`Операнд «${node.entity.kind}» не виден в профиле «события».`, opts.requestId);
+      return activityUnsupported(`Operand "${node.entity.kind}" is not visible in the "events" profile.`, opts.requestId);
   }
 }
 
@@ -550,7 +550,7 @@ export function parseActivityListQuery(
     if (conflicts.length > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'AST-тело (`ast`) несовместимо с плоскими фильтрами.',
+        "An AST body (`ast`) is incompatible with flat filters.",
         { field: 'ast', conflicts },
         requestId,
       );

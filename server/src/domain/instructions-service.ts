@@ -293,8 +293,8 @@ export function getNetworkInstructions(
     if (resolvedId === null) {
       throw new EtnError(
         'NOT_FOUND',
-        `Инструкция ${query.instructionId} не найдена среди активных мыслей роли «instructions». ` +
-          'Принимается полный UUID или однозначный hex-префикс id (не короче 4 символов).',
+        `Instruction ${query.instructionId} was not found among active thoughts of the "instructions" role. ` +
+          "A full UUID or an unambiguous hex id prefix (at least 4 characters) is accepted.",
         { instruction_id: query.instructionId, network_id: networkId },
       );
     }
@@ -302,7 +302,7 @@ export function getNetworkInstructions(
     if (instructionsTypeIds.length === 0) {
       throw new EtnError(
         'NOT_FOUND',
-        `Инструкция ${query.instructionId} не найдена — роль «instructions» не покрывает ни одного типа.`,
+        `Instruction ${query.instructionId} not found — the "instructions" role covers no types.`,
         { instruction_id: query.instructionId, network_id: networkId },
       );
     }
@@ -327,14 +327,14 @@ export function getNetworkInstructions(
     if (row === undefined) {
       throw new EtnError(
         'NOT_FOUND',
-        `Инструкция ${query.instructionId} не найдена среди активных мыслей роли «instructions».`,
+        `Instruction ${query.instructionId} was not found among active thoughts of the "instructions" role.`,
         { instruction_id: query.instructionId, network_id: networkId },
       );
     }
     if (row.active !== 1 || row.marked_for_deletion !== 0) {
       throw new EtnError(
         'NOT_FOUND',
-        `Инструкция ${query.instructionId} неактуальна или помечена на удаление.`,
+        `Instruction ${query.instructionId} is inactive or marked for deletion.`,
         { instruction_id: query.instructionId, network_id: networkId },
       );
     }

@@ -67,7 +67,7 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     logger,
   });
   if (writePool === null) {
-    logger.info('Write pool disabled (ETN_WRITE_POOL_SIZE=0): записи идут в главном потоке');
+    logger.info("Write pool disabled (ETN_WRITE_POOL_SIZE=0): writes run on the main thread");
   } else {
     logger.info(
       {
@@ -176,7 +176,7 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
     // ниже не сможет усечь журнал.
     const drained = await drainWritePool();
     if (!drained.drained) {
-      logger.warn({ ...drained }, 'write pool: очередь не слилась в отведённое время');
+      logger.warn({ ...drained }, "write pool: the queue did not drain within the allotted time");
     }
     await closeWritePool();
     // Читатели закрываются ДО чекпойнта: их снапшоты мешали бы усечь журнал.

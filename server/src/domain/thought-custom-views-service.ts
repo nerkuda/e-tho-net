@@ -123,7 +123,7 @@ function getViewOrThrow(ndb: NetworkDb, viewId: string, requestId?: string): Tho
   if (view === null) {
     throw new EtnError(
       'NOT_FOUND',
-      'Отбор не найден.',
+      "View not found.",
       { entity: 'thought_custom_view', id: viewId },
       requestId,
     );
@@ -141,7 +141,7 @@ function getOwnerThoughtOrThrow(
   if (thought === null) {
     throw new EtnError(
       'NOT_FOUND',
-      `Мысль ${thoughtId} не найдена.`,
+      `Thought ${thoughtId} not found.`,
       { entity: 'thought', id: thoughtId },
       requestId,
     );
@@ -157,7 +157,7 @@ function duplicateNameError(
 ): EtnError {
   return new EtnError(
     'DUPLICATE',
-    `Отбор с именем "${existingName}" уже есть у этой мысли.`,
+    `A view named "${existingName}" already exists on this thought.`,
     {
       entity: 'thought_custom_view',
       field: 'name',
@@ -305,7 +305,7 @@ export function updateThoughtCustomView(
       if (expectedVersion !== undefined && current.version !== expectedVersion) {
         throw new EtnError(
           'VERSION_CONFLICT',
-          'Версия отбора изменилась с момента чтения.',
+          "The view version changed since it was read.",
           {
             entity: 'thought_custom_view',
             id: viewId,
@@ -440,7 +440,7 @@ function requireOwnedView(
   if (view === null || view.thought_id !== thoughtId) {
     throw new EtnError(
       'NOT_FOUND',
-      `У мысли ${thoughtId} нет отбора ${viewId}.`,
+      `Thought ${thoughtId} has no view ${viewId}.`,
       {
         entity: 'thought_custom_view',
         id: viewId,
@@ -472,7 +472,7 @@ export function writeThoughtCustomViews(
   for (const [index, item] of items.entries()) {
     if (item.action === 'create' && item.ref !== undefined) {
       if (declaredRefs.has(item.ref)) {
-        invalidViewItem(index, `ref "${item.ref}" объявлен в батче дважды.`, {
+        invalidViewItem(index, `ref "${item.ref}" is declared twice in the batch.`, {
           field: `views[${index}].ref`,
           ref: item.ref,
         }, requestId);
@@ -481,12 +481,12 @@ export function writeThoughtCustomViews(
     }
     if (item.action === 'create') {
       if (item.name === undefined) {
-        invalidViewItem(index, 'create требует name.', { field: `views[${index}].name` }, requestId);
+        invalidViewItem(index, "create requires name.", { field: `views[${index}].name` }, requestId);
       }
       if (item.definition === undefined) {
         invalidViewItem(
           index,
-          'create требует definition (JSON-строку).',
+          "create requires definition (a JSON string).",
           { field: `views[${index}].definition` },
           requestId,
         );
@@ -498,7 +498,7 @@ export function writeThoughtCustomViews(
       if (first !== undefined) {
         invalidViewItem(
           index,
-          `Два create одного имени «${item.name}» в батче (первый — views[${first}]).`,
+          `Two creates with the same name "${item.name}" in the batch (the first is views[${first}]).`,
           { field: `views[${index}].name`, first_index: first },
           requestId,
         );
@@ -512,7 +512,7 @@ export function writeThoughtCustomViews(
     if (hasId === hasRef) {
       invalidViewItem(
         index,
-        `${item.action} требует ровно одно из id или ref.`,
+        `${item.action} requires exactly one of id or ref.`,
         { field: `views[${index}]`, id: item.id ?? null, ref: item.ref ?? null },
         requestId,
       );
@@ -527,7 +527,7 @@ export function writeThoughtCustomViews(
       if (!hasPatch) {
         invalidViewItem(
           index,
-          'update требует хотя бы одно поле патча (name/description/definition/position/is_default).',
+          "update requires at least one patch field (name/description/definition/position/is_default).",
           { field: `views[${index}]` },
           requestId,
         );
@@ -643,7 +643,7 @@ export function writeThoughtCustomViews(
     if (viewId === undefined) {
       invalidViewItem(
         index,
-        `ref "${ref}" не удалось разрешить в этом батче.`,
+        `ref "${ref}" could not be resolved in this batch.`,
         { field: `views[${index}].ref`, ref, known_refs: [...idByRef.keys()] },
         requestId,
       );

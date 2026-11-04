@@ -126,12 +126,12 @@ describe('parsePublicationsRebuildArgs', () => {
     assert.throws(() => parsePublicationsRebuildArgs(['--network', 'n', '--all-active']), /--out/);
     assert.throws(
       () => parsePublicationsRebuildArgs(['--out', 'o', '--network', 'n', '--all-active', '--format', 'pdf']),
-      /формат/,
+      /format/,
     );
   });
 
   it('shows help on --help', () => {
-    assert.throws(() => parsePublicationsRebuildArgs(['--help']), /Использование/);
+    assert.throws(() => parsePublicationsRebuildArgs(['--help']), /Usage/);
   });
 });
 
@@ -251,7 +251,7 @@ describe('etn publications rebuild (integration)', { skip }, () => {
 
     const second = await captureConsole(() => main({ argv, env: env(fx, fx.key) }));
     assert.equal(second.result, 0, second.stderr.join('\n'));
-    assert.ok(second.stdout.join('\n').includes('без изменений 1'), second.stdout.join('\n'));
+    assert.ok(second.stdout.join('\n').includes('unchanged 1'), second.stdout.join('\n'));
     assert.equal(fs.readFileSync(mdPath, 'utf8'), content, 'содержимое изменилось при повторном запуске');
     assert.equal(fs.statSync(mdPath).mtimeMs, mtimeFirst, 'файл перезаписан без изменений');
   });
@@ -330,7 +330,7 @@ describe('etn publications rebuild (integration)', { skip }, () => {
       }),
     );
     assert.equal(bad.result, 1);
-    assert.ok(bad.stderr.join('\n').includes('не найден'), bad.stderr.join('\n'));
+    assert.ok(bad.stderr.join('\n').includes('not found'), bad.stderr.join('\n'));
   });
 
   it('отсутствующая публикация — предупреждение и код успеха', async () => {
@@ -350,8 +350,8 @@ describe('etn publications rebuild (integration)', { skip }, () => {
     );
     assert.equal(res.result, 0, res.stderr.join('\n'));
     const out = res.stdout.join('\n');
-    assert.ok(out.includes('публикация не найдена'), out);
-    assert.ok(out.includes('Публикаций для пересборки нет'), out);
+    assert.ok(out.includes('publication not found'), out);
+    assert.ok(out.includes('No publications to rebuild'), out);
   });
 
   it('--all-active берёт все актуальные публикации; --network-name выбирает сеть по имени', async () => {
@@ -393,7 +393,7 @@ describe('etn publications rebuild (integration)', { skip }, () => {
       }),
     );
     assert.equal(noKey.result, 1);
-    assert.ok(noKey.stderr.join('\n').includes('API-key'), noKey.stderr.join('\n'));
+    assert.ok(noKey.stderr.join('\n').includes('ETN_API_KEY'), noKey.stderr.join('\n'));
 
     const noAccess = await captureConsole(() =>
       main({
@@ -407,6 +407,6 @@ describe('etn publications rebuild (integration)', { skip }, () => {
       }),
     );
     assert.equal(noAccess.result, 1);
-    assert.ok(noAccess.stderr.join('\n').includes('Нет доступа'), noAccess.stderr.join('\n'));
+    assert.ok(noAccess.stderr.join('\n').includes('No access'), noAccess.stderr.join('\n'));
   });
 });

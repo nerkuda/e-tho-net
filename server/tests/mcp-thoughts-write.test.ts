@@ -452,7 +452,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
         assert.ok(
-          text.includes('на уровне элемента'),
+          text.includes('item level'),
           `expected correct-place hint for ref: ${text}`,
         );
         assert.ok(text.includes('"ref": "a"'), `expected correct example: ${text}`);
@@ -480,7 +480,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
         assert.ok(
-          text.includes('на уровне элемента'),
+          text.includes('item level'),
           `expected correct-place hint for ref: ${text}`,
         );
         assert.ok(text.includes('"ref": "a"'), `expected correct example: ${text}`);
@@ -507,7 +507,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
-        assert.ok(text.includes('thoughts') && text.includes('массивом'), text);
+        assert.ok(text.includes('thoughts') && text.includes('array'), text);
         assert.ok(text.includes('string'), `expected received type in error: ${text}`);
         assert.ok(
           text.includes(String(MCP_MAX_THOUGHTS_PER_WRITE)),

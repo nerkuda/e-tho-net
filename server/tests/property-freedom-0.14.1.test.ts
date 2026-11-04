@@ -441,7 +441,7 @@ describe(
         };
         // Текст — русский и пользовательский, без английской фразы и GUID
         // (0.14.1, круг 3 d9bc6012); машиночитаемые field/reason — для клиента.
-        assert.match(reverseError.error.message, /не принимает значение этого типа/);
+        assert.match(reverseError.error.message, /does not accept a value of this type/);
         assert.doesNotMatch(
           reverseError.error.message,
           /thought|required type|[0-9a-f]{8}-[0-9a-f]{4}/i,
@@ -465,7 +465,7 @@ describe(
         //    допустимая — версия. Ограничение действует в обе стороны.
         const forwardWrong = await putProperty(ctx, task, 'версия', taskPeer, 'source');
         assert.equal(forwardWrong.statusCode, 422, forwardWrong.body);
-        assert.match(forwardWrong.body, /не принимает значение этого типа/);
+        assert.match(forwardWrong.body, /does not accept a value of this type/);
         const forward = await putProperty(ctx, task, 'версия', version);
         assert.equal(forward.statusCode, 200, forward.body);
         assert.deepEqual(outTargets(), [version]);
@@ -548,7 +548,7 @@ describe(
         };
         assert.equal(typedBody.error.details.field, 'property');
         assert.equal(typedBody.error.details.reason, 'property-ambiguous');
-        assert.match(typedBody.error.message, /несколько свойств сети/);
+        assert.match(typedBody.error.message, /used by several network properties/);
         assert.doesNotMatch(typedBody.error.message, /ambiguous|source|target/i);
 
         // Внетиповой display-ключ у мысли без привязок — та же коллизия.
@@ -637,7 +637,7 @@ describe(
         // типы target-привязок (версию); задача как цель — 422.
         const wrongTarget = await putProperty(ctx, task, 'версия владельца', taskPeer);
         assert.equal(wrongTarget.statusCode, 422, wrongTarget.body);
-        assert.match(wrongTarget.body, /не принимает значение этого типа/);
+        assert.match(wrongTarget.body, /does not accept a value of this type/);
         const rightTarget = await putProperty(ctx, task, 'версия владельца', versionTarget);
         assert.equal(rightTarget.statusCode, 200, rightTarget.body);
       } finally {
@@ -1197,7 +1197,7 @@ describe(
           // версия недопустима → 422, ребра нет.
           const wrong = await add('версия mcp', version.id, 'target');
           assert.equal(wrong.isError, true, toolText(wrong));
-          assert.match(toolText(wrong), /не принимает значение этого типа/);
+          assert.match(toolText(wrong), /does not accept a value of this type/);
           assert.doesNotMatch(toolText(wrong), /thought|required type/i);
           assert.deepEqual(targets('in'), []);
 
@@ -1209,7 +1209,7 @@ describe(
           // Прямая сторона: версия допустима, задача — нет.
           const forwardWrong = await add('версия mcp', peer.id);
           assert.equal(forwardWrong.isError, true, toolText(forwardWrong));
-          assert.match(toolText(forwardWrong), /не принимает значение этого типа/);
+          assert.match(toolText(forwardWrong), /does not accept a value of this type/);
           const forward = await add('версия mcp', version.id);
           assert.notEqual(forward.isError, true, toolText(forward));
           assert.deepEqual(targets('out'), [version.id]);

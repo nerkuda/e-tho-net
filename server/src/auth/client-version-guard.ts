@@ -202,13 +202,13 @@ export function describeClientVersionRejection(rejection: ClientVersionRejection
   const { details } = rejection;
   switch (rejection.reason) {
     case CLIENT_VERSION_ERROR_REASON.missing:
-      return 'Изменяющий запрос desktop-клиента без заголовка Client-Version отклонён. Обновите клиент.';
+      return "A modifying desktop-client request without the Client-Version header was rejected. Update the client.";
     case CLIENT_VERSION_ERROR_REASON.invalid:
-      return `Заголовок Client-Version ${JSON.stringify(details.client_version ?? '')} не является корректной версией. Обновите клиент.`;
+      return `The Client-Version header ${JSON.stringify(details.client_version ?? '')} is not a valid version. Update the client.`;
     case CLIENT_VERSION_ERROR_REASON.outOfRange:
       return (
-        `Версия клиента ${JSON.stringify(details.client_version ?? '')} не поддерживается сервером ` +
-        `(совместимые версии: ${JSON.stringify(details.compatibility ?? '')}). Обновите клиент.`
+        `The client version ${JSON.stringify(details.client_version ?? '')} is not supported by the server ` +
+        `(compatible versions: ${JSON.stringify(details.compatibility ?? '')}). Update the client.`
       );
   }
 }

@@ -143,7 +143,7 @@ function readEntryToBuffer(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<Buff
         return;
       }
       if (stream === undefined) {
-        reject(new EtnError('VALIDATION_ERROR', 'Не удалось открыть поток для записи zip.'));
+        reject(new EtnError('VALIDATION_ERROR', "Failed to open a stream for writing the zip."));
         return;
       }
       const chunks: Buffer[] = [];
@@ -169,7 +169,7 @@ async function readArchive(
   if (zipBuffer.length > ETNX_MAX_BYTES) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Размер архива ${zipBuffer.length} байт превысил лимит ${ETNX_MAX_BYTES}.`,
+      `The archive size ${zipBuffer.length} bytes exceeded the limit ${ETNX_MAX_BYTES}.`,
       { limit: ETNX_MAX_BYTES, actual: zipBuffer.length },
     );
   }
@@ -199,7 +199,7 @@ async function readArchive(
         const name = entry.fileName;
         if (name === 'manifest.json') {
           if (manifestSeen) {
-            fail(new EtnError('VALIDATION_ERROR', 'В архиве несколько manifest.json.'));
+            fail(new EtnError('VALIDATION_ERROR', "The archive contains several manifest.json files."));
             return;
           }
           manifestSeen = true;
@@ -215,7 +215,7 @@ async function readArchive(
         if (name.startsWith('attachments/') && !name.endsWith('/')) {
           const rel = name.slice('attachments/'.length);
           if (rel === '' || rel.includes('..') || rel.includes('\\') || rel.startsWith('/')) {
-            fail(new EtnError('VALIDATION_ERROR', `Недопустимый путь в архиве: ${name}`));
+            fail(new EtnError('VALIDATION_ERROR', `Invalid path in the archive: ${name}`));
             return;
           }
           void readEntryToBuffer(zip, entry)
@@ -233,7 +233,7 @@ async function readArchive(
       zip.on('end', () => {
         if (aborted) return;
         if (manifestBytes === null) {
-          fail(new EtnError('VALIDATION_ERROR', 'В архиве нет manifest.json.'));
+          fail(new EtnError('VALIDATION_ERROR', "The archive has no manifest.json."));
           return;
         }
         let parsed: unknown;
@@ -241,7 +241,7 @@ async function readArchive(
           parsed = JSON.parse(manifestBytes.toString('utf-8'));
         } catch (e) {
           fail(
-            new EtnError('VALIDATION_ERROR', 'manifest.json не является валидным JSON.', {
+            new EtnError('VALIDATION_ERROR', "manifest.json is not valid JSON.", {
               cause: e instanceof Error ? e.message : String(e),
             }),
           );
@@ -1405,7 +1405,7 @@ export async function importFromEtnx(
     // `fail`) пробрасываем без изменений.
     if (err instanceof EtnError) throw err;
     logger.error({ err }, 'import: unexpected failure');
-    throw new EtnError('INTERNAL', 'Не удалось применить .etnx-архив.', {
+    throw new EtnError('INTERNAL', "Failed to apply the .etnx archive.", {
       cause: err instanceof Error ? err.message : String(err),
     });
   }
@@ -1671,7 +1671,7 @@ export function applyManifest(
       if (conflicts.length > 0) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `Импорт конфликтует с существующими мыслями целевой сети (${conflicts.length}).`,
+          `The import conflicts with existing thoughts of the target network (${conflicts.length}).`,
           { conflicts },
         );
       }

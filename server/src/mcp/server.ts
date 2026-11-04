@@ -141,9 +141,9 @@ function misplacedRefError(items: unknown[]): EtnError | null {
     if (!Object.prototype.hasOwnProperty.call(thought, 'ref')) continue;
     return new EtnError(
       'VALIDATION_ERROR',
-      `ref новой мысли ставится на уровне элемента thoughts[${index}], рядом с блоком ` +
-        '`thought`, а не внутри него: `{ "ref": "a", "thought": { "title": "…" } }`. ' +
-        'Внутри `thought` поля `ref` нет — перенесите его в элемент.',
+      `the ref of a new thought is set at the thoughts[${index}] item level, next to the ` +
+        "`thought` block, not inside it: `{ \"ref\": \"a\", \"thought\": { \"title\": \"…\" } }`. " +
+        "Inside `thought` there is no `ref` field — move it to the item.",
       {
         field: `thoughts.${index}.thought.ref`,
         correct_field: `thoughts.${index}.ref`,
@@ -181,10 +181,10 @@ function preflightToolArgs(name: string, args: unknown): EtnError | null {
   const received = thoughts === null ? 'null' : typeof thoughts;
   return new EtnError(
     'VALIDATION_ERROR',
-    `thoughts должен быть массивом, а получен ${received} — вероятно, аргумент передан ` +
-      `JSON-строкой или обрезан из-за размера/экранирования payload. ` +
-      `Разбейте вызов: не более ${MCP_MAX_THOUGHTS_PER_WRITE} мыслей на батч, ` +
-      `крупные тексты — отдельными вызовами (пошагово — etn.guide { topic: "how_to_write_batch" }).`,
+    `thoughts must be an array, but ${received} was received — the argument was probably passed ` +
+      `as a JSON string or truncated because of payload size/escaping. ` +
+      `Split the call: at most ${MCP_MAX_THOUGHTS_PER_WRITE} thoughts per batch, ` +
+      `large texts — in separate calls (step by step — etn.guide { topic: "how_to_write_batch" }).`,
     {
       field: 'thoughts',
       received,

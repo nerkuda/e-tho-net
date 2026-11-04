@@ -66,7 +66,7 @@ const SERVER_SRC = path.resolve(
 );
 
 /** Канон текста ошибки `contains` — литерал, независимый от кода. */
-const CANON_MESSAGE = 'Для операции contains value должен быть строкой.';
+const CANON_MESSAGE = 'For the contains operation, value must be a string.';
 /** Канон машинных деталей ошибки — литерал. */
 const CANON_DETAILS = { field: 'value', operator: 'contains', expected: 'string' };
 

@@ -495,7 +495,7 @@ export function validateDefinitionForTokens(
         path,
         token: u.raw,
         reason: 'unknown_token',
-        message: `Неизвестный токен «${u.raw}»: разрешены только $today, $now, $user, $weekStart/$weekEnd ($week.start/$week.end), $monthStart/$monthEnd, $yearStart/$yearEnd, $hourStart/$hourEnd, $thought.* и $thought.[имя свойства].`,
+        message: `Unknown token "${u.raw}": only $today, $now, $user, $weekStart/$weekEnd ($week.start/$week.end), $monthStart/$monthEnd, $yearStart/$yearEnd, $hourStart/$hourEnd, $thought.* and $thought.[property name] are allowed.`,
       });
     }
     // Токены и единицы времени — только в контексте со временем (ADR 0c02ab4f,
@@ -507,7 +507,7 @@ export function validateDefinitionForTokens(
             path,
             token: tok.raw,
             reason: 'time_context_required',
-            message: `Токен «${tok.raw}» содержит время ($now/$hourStart/$hourEnd или единицы h/mi) и допустим только в отборе со временем.`,
+            message: `Token "${tok.raw}" contains time ($now/$hourStart/$hourEnd or h/mi units) and is allowed only in a time-aware view.`,
           });
         }
       }
@@ -528,7 +528,7 @@ export function validateDefinitionForTokens(
               path,
               token: tok.raw,
               reason: 'incompatible_operation',
-              message: `Свойство «${prop.key}» множественное — операция «${op}» недопустима, используйте in/not_in.`,
+              message: `Property "${prop.key}" is multi-valued — operation "${op}" is not allowed, use in/not_in.`,
             });
           }
         }
@@ -551,7 +551,7 @@ export function validateDefinitionForTokens(
             path,
             token: tok.raw,
             reason: 'unknown_property',
-            message: `Свойство «${tok.propertyName}» не найдено в реестре сети.`,
+            message: `Property "${tok.propertyName}" was not found in the network registry.`,
           });
         }
       }
@@ -562,7 +562,7 @@ export function validateDefinitionForTokens(
   if (opts.collectAll === true) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'В definition обнаружены ошибки в токенах.',
+      "Token errors were found in the definition.",
       { field: 'definition', issues },
       requestId,
     );
@@ -893,7 +893,7 @@ export function resolveGlobalDateTokens(
       path: '',
       token: u.raw,
       reason: 'unknown_token',
-      message: `Неизвестный токен «${u.raw}».`,
+      message: `Unknown token "${u.raw}".`,
     });
   }
   for (const tok of known) {
@@ -902,7 +902,7 @@ export function resolveGlobalDateTokens(
         path: '',
         token: tok.raw,
         reason: 'unknown_token',
-        message: `Токен «${tok.raw}» требует контекста мысли; доступны $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd, $hourStart/$hourEnd и арифметика ±Nd/±Nw/±Nmo/±Ny/±Nh/±Nmi.`,
+        message: `Token "${tok.raw}" requires a thought context; available: $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd, $hourStart/$hourEnd and arithmetic ±Nd/±Nw/±Nmo/±Ny/±Nh/±Nmi.`,
       });
     }
   }
@@ -956,7 +956,7 @@ function resolveString(
       path,
       token: u.raw,
       reason: 'unknown_token',
-      message: `Неизвестный токен «${u.raw}».`,
+      message: `Unknown token "${u.raw}".`,
     });
   }
 
@@ -1022,7 +1022,7 @@ function resolveOneToken(
       path,
       token: tok.raw,
       reason: 'time_context_required',
-      message: `Токен «${tok.raw}» содержит время ($now/$hourStart/$hourEnd или единицы h/mi) и допустим только в отборе со временем.`,
+      message: `Token "${tok.raw}" contains time ($now/$hourStart/$hourEnd or h/mi units) and is allowed only in a time-aware view.`,
     });
     return null;
   }
@@ -1102,7 +1102,7 @@ function resolveThoughtProperty(
   const prop = ctx.properties.get(propName);
   if (prop === undefined) return '';
   if (prop.value === '') return '';
-  return applyDateArithmetic(tok, prop.value, `свойство «${propName}»`, ctx, now, unresolved, path);
+  return applyDateArithmetic(tok, prop.value, `property "${propName}"`, ctx, now, unresolved, path);
 }
 
 function resolveGlobal(
@@ -1254,7 +1254,7 @@ function applyDateArithmetic(
       path,
       token: tok.raw,
       reason: 'incompatible_operation',
-      message: `Арифметика дат применима только к датам; «${tok.raw}» указывает на ${source}.`,
+      message: `Date arithmetic applies only to dates; "${tok.raw}" points to ${source}.`,
     });
     return null;
   }
@@ -1269,7 +1269,7 @@ function applyDateArithmetic(
         path,
         token: tok.raw,
         reason: 'empty_value',
-        message: `Значение «${raw}» не разбирается как дата.`,
+        message: `The value "${raw}" cannot be parsed as a date.`,
       });
       return null;
     }

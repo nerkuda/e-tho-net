@@ -190,7 +190,7 @@ export interface UpdateChecker {
 
 /** Проверка уже выполняется: повторный запуск отклоняется. */
 export class UpdateCheckInProgressError extends Error {
-  constructor(message = 'Проверка обновлений уже идёт') {
+  constructor(message = "An update check is already running") {
     super(message);
     this.name = 'UpdateCheckInProgressError';
   }
@@ -254,35 +254,35 @@ export function installerAssetName(version: string): string {
  */
 export function parseUpdateFeed(payload: unknown): UpdateFeedRelease[] {
   if (!Array.isArray(payload)) {
-    throw new UpdateFeedFormatError('ответ фида — не список релизов');
+    throw new UpdateFeedFormatError("the feed response is not a list of releases");
   }
   const releases: UpdateFeedRelease[] = [];
   for (let index = 0; index < payload.length; index++) {
     const entry: unknown = payload[index];
     if (typeof entry !== 'object' || entry === null) {
-      throw new UpdateFeedFormatError(`элемент ${index} фида — не объект релиза`);
+      throw new UpdateFeedFormatError(`feed item ${index} is not a release object`);
     }
     const record = entry as Record<string, unknown>;
     const tagName = record.tag_name;
     if (typeof tagName !== 'string' || tagName.trim() === '') {
-      throw new UpdateFeedFormatError(`у элемента ${index} фида нет tag_name`);
+      throw new UpdateFeedFormatError(`feed item ${index} has no tag_name`);
     }
     const assetsRaw = record.assets;
     const assets: UpdateFeedAsset[] = [];
     if (assetsRaw !== undefined && assetsRaw !== null) {
       if (!Array.isArray(assetsRaw)) {
-        throw new UpdateFeedFormatError(`assets релиза ${tagName} — не список`);
+        throw new UpdateFeedFormatError(`assets of release ${tagName} are not a list`);
       }
       for (const assetRaw of assetsRaw) {
         if (typeof assetRaw !== 'object' || assetRaw === null) {
-          throw new UpdateFeedFormatError(`ассет релиза ${tagName} — не объект`);
+          throw new UpdateFeedFormatError(`an asset of release ${tagName} is not an object`);
         }
         const assetRecord = assetRaw as Record<string, unknown>;
         const name = assetRecord.name;
         const url = assetRecord.browser_download_url;
         if (typeof name !== 'string' || name === '' || typeof url !== 'string' || url === '') {
           throw new UpdateFeedFormatError(
-            `у ассета релиза ${tagName} нет name или browser_download_url`,
+            `an asset of release ${tagName} has no name or browser_download_url`,
           );
         }
         assets.push({ name, browser_download_url: url });
@@ -376,7 +376,7 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      throw new Error(`${label}: запрос не выполнен (${reason})`);
+      throw new Error(`${label}: the request failed (${reason})`);
     }
     if (!response.ok) {
       throw new Error(`${label}: HTTP ${response.status}`);
@@ -386,10 +386,10 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       text = await response.text();
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      throw new Error(`${label}: ответ не прочитан (${reason})`);
+      throw new Error(`${label}: the response was not read (${reason})`);
     }
     if (text.length > maxBytes) {
-      throw new Error(`${label}: ответ больше ${maxBytes} байт`);
+      throw new Error(`${label}: the response is larger than ${maxBytes} bytes`);
     }
     return text;
   }
@@ -399,16 +399,16 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
     try {
       if (parseSemver(options.currentVersion) === null) {
         throw new Error(
-          `Текущая версия сервера ${JSON.stringify(options.currentVersion)} не является semver`,
+          `The current server version ${JSON.stringify(options.currentVersion)} is not semver`,
         );
       }
 
-      const feedText = await requestText(options.feedUrl, 'Фид обновлений', MAX_FEED_BYTES);
+      const feedText = await requestText(options.feedUrl, "Update feed", MAX_FEED_BYTES);
       let payload: unknown;
       try {
         payload = JSON.parse(feedText);
       } catch {
-        throw new UpdateFeedFormatError('ответ фида — не JSON');
+        throw new UpdateFeedFormatError("the feed response is not JSON");
       }
       const releases = parseUpdateFeed(payload);
       const candidate = selectUpdateCandidate(releases, {
@@ -425,30 +425,30 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
           sha256: null,
           check_error: null,
         };
-        logger?.info({ channel: options.channel }, 'update check: обновлений нет');
+        logger?.info({ channel: options.channel }, "update check: no updates available");
         return { ...cache };
       }
 
       const installerName = installerAssetName(candidate.version);
       const installer = candidate.release.assets.find((asset) => asset.name === installerName);
       if (installer === undefined) {
-        throw new Error(`В релизе ${candidate.version} нет установщика ${installerName}`);
+        throw new Error(`Release ${candidate.version} has no installer ${installerName}`);
       }
       const sumsAsset = candidate.release.assets.find(
         (asset) => asset.name === SHA256SUMS_ASSET_NAME,
       );
       if (sumsAsset === undefined) {
-        throw new Error(`В релизе ${candidate.version} нет ${SHA256SUMS_ASSET_NAME}`);
+        throw new Error(`Release ${candidate.version} has no ${SHA256SUMS_ASSET_NAME}`);
       }
       const sumsText = await requestText(
         sumsAsset.browser_download_url,
-        `${SHA256SUMS_ASSET_NAME} релиза ${candidate.version}`,
+        `${SHA256SUMS_ASSET_NAME} of release ${candidate.version}`,
         MAX_SUMS_BYTES,
       );
       const sha256 = parseSha256Sums(sumsText).get(installerName);
       if (sha256 === undefined) {
         throw new Error(
-          `В ${SHA256SUMS_ASSET_NAME} релиза ${candidate.version} нет хеша для ${installerName}`,
+          `${SHA256SUMS_ASSET_NAME} of release ${candidate.version} has no hash for ${installerName}`,
         );
       }
 
@@ -469,7 +469,7 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
           available_version: candidate.version,
           current_version: options.currentVersion,
         },
-        'update check: доступна новая версия',
+        "update check: a new version is available",
       );
       return { ...cache };
     } catch (err) {
@@ -477,7 +477,7 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       cache = { ...cache, checked_at: now().toISOString(), check_error: message };
       logger?.warn(
         { err, feed: options.feedUrl, channel: options.channel },
-        'update check: проверка не выполнена',
+        "update check: the check was not performed",
       );
       return { ...cache };
     } finally {
@@ -565,7 +565,7 @@ export function startUpdateCheckScheduler(options: UpdateSchedulerOptions): Upda
         // Ручная проверка уже идёт — её результат и будет свежим кешем.
         return;
       }
-      logger?.warn({ err }, 'update check scheduler: проверка не выполнена');
+      logger?.warn({ err }, "update check scheduler: the check was not performed");
     }
   };
 

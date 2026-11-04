@@ -372,58 +372,58 @@ export function messageForIssue(
   }
   if (issue.code === 'invalid_type') {
     if (isAbsentIn(input, issue.path)) {
-      return template(spec?.msg ?? '{key} обязателен.', keyVars);
+      return template(spec?.msg ?? "{key} is required.", keyVars);
     }
     const nulls = field !== undefined && field.safeParse(null).success;
-    const suffix = nulls ? ' или null' : '';
+    const suffix = nulls ? " or null" : '';
     switch (issue.expected) {
       case 'string':
-        return template(spec?.msg ?? `{key} должен быть строкой${suffix}.`, keyVars);
+        return template(spec?.msg ?? `{key} must be a string${suffix}.`, keyVars);
       case 'int':
       case 'number':
-        return template(spec?.msg ?? `{key} должен быть целым числом${suffix}.`, keyVars);
+        return template(spec?.msg ?? `{key} must be an integer${suffix}.`, keyVars);
       case 'boolean':
-        return template(spec?.msg ?? `{key} должен быть логическим значением${suffix}.`, keyVars);
+        return template(spec?.msg ?? `{key} must be a boolean${suffix}.`, keyVars);
       case 'array':
-        return template(spec?.msg ?? '{key} должен быть массивом строк.', keyVars);
+        return template(spec?.msg ?? "{key} must be an array of strings.", keyVars);
       case 'object':
-        return template(spec?.msg ?? '{key} должен быть объектом.', keyVars);
+        return template(spec?.msg ?? "{key} must be an object.", keyVars);
       default:
-        return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
+        return template(spec?.msg ?? "Invalid {key}.", keyVars);
     }
   }
   if (issue.code === 'too_small') {
     if (issue.origin === 'string') {
-      return template(spec?.msg ?? '{key} обязателен.', keyVars);
+      return template(spec?.msg ?? "{key} is required.", keyVars);
     }
     if (issue.origin === 'array') {
-      return template(spec?.msg ?? '{key} должен быть непустым массивом.', keyVars);
+      return template(spec?.msg ?? "{key} must be a non-empty array.", keyVars);
     }
     return template(
-      spec?.msg ?? '{key} должен быть целым числом не меньше {min}.',
+      spec?.msg ?? "{key} must be an integer not less than {min}.",
       { ...vars, min: issue.minimum ?? 0 },
     );
   }
   if (issue.code === 'too_big') {
     if (issue.origin === 'array') {
       return template(
-        spec?.msg ?? '{key} должен содержать не более {max} элементов.',
+        spec?.msg ?? "{key} must contain at most {max} items.",
         { ...vars, max: issue.maximum ?? 0 },
       );
     }
     return template(
-      spec?.msg ?? '{key} должен быть целым числом не больше {max}.',
+      spec?.msg ?? "{key} must be an integer not greater than {max}.",
       { ...vars, max: issue.maximum ?? 0 },
     );
   }
   if (issue.code === 'invalid_value') {
-    return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
+    return template(spec?.msg ?? "Invalid {key}.", keyVars);
   }
   if (issue.code === 'unrecognized_keys') {
     const keys = Array.isArray(issue.keys) ? issue.keys.map(String).join(', ') : '';
-    return template(spec?.msg ?? 'Неизвестные поля: {keys}.', { ...keyVars, keys });
+    return template(spec?.msg ?? "Unknown fields: {keys}.", { ...keyVars, keys });
   }
-  return template(spec?.msg ?? 'Недопустимый {key}.', keyVars);
+  return template(spec?.msg ?? "Invalid {key}.", keyVars);
 }
 
 /** `EtnError` канонической ошибки поля с деталями и requestId. */
@@ -443,7 +443,7 @@ function fieldError(
 /** Проверка, что тело запроса — JSON-объект (BAD_REQUEST, как раньше). */
 function bodyObject(body: unknown, requestId: string): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw new EtnError('BAD_REQUEST', 'Тело запроса должно быть JSON-объектом.', undefined, requestId);
+    throw new EtnError('BAD_REQUEST', "Request body must be a JSON object.", undefined, requestId);
   }
   return body as Record<string, unknown>;
 }
@@ -493,7 +493,7 @@ export function parseRest<S extends z.ZodObject>(
         throw fieldError(
           requestId,
           key,
-          template(spec.msg ?? '{key} обязателен.', { key }),
+          template(spec.msg ?? "{key} is required.", { key }),
           { field: from.kind === 'header' ? (from.name ?? key) : key },
         );
       }
@@ -512,7 +512,7 @@ export function parseRest<S extends z.ZodObject>(
           throw fieldError(
             requestId,
             key,
-            template(spec.msg ?? '{key} должен быть целым числом не меньше {min}.', { key, min }),
+            template(spec.msg ?? "{key} must be an integer not less than {min}.", { key, min }),
             { field: key },
           );
         }
@@ -524,7 +524,7 @@ export function parseRest<S extends z.ZodObject>(
           throw fieldError(
             requestId,
             key,
-            template(spec.msg ?? 'Параметр {key} должен быть логическим значением (true/false).', { key }),
+            template(spec.msg ?? "Parameter {key} must be a boolean (true/false).", { key }),
             { field: key },
           );
         }
@@ -545,7 +545,7 @@ export function parseRest<S extends z.ZodObject>(
         throw fieldError(
           requestId,
           key,
-          template(spec.msg ?? 'Заголовок If-Match должен содержать целую версию.', { key }),
+          template(spec.msg ?? "If-Match header must contain an integer version.", { key }),
           { field: from.name ?? key },
         );
       }
@@ -732,7 +732,7 @@ export const LayersCreate = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    title: { from: { kind: 'body' }, msg: 'title обязателен.' },
+    title: { from: { kind: 'body' }, msg: "title is required." },
     parent_id: { from: { kind: 'body' } },
     comment: { from: { kind: 'body' } },
     git_branch: { from: { kind: 'body' } },
@@ -758,7 +758,7 @@ export const LayersUpdate = defineContract(
     comment: { from: { kind: 'body' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: 'Заголовок If-Match должен содержать целую версию.',
+      msg: "If-Match header must contain an integer version.",
     },
     // REST-only: полная замена набора цветов (null → дефолт темы).
     colors: { from: { kind: 'body' }, parse: (raw) => validateLayerColors(raw) },
@@ -807,17 +807,17 @@ export const LayersMerge = defineContract(
       mode: z.enum(LAYER_THOUGHT_MERGE_MODES).optional(),
     })
     .refine((v) => v.mode === undefined || v.thought_id !== undefined, {
-      message: 'режим слияния (mode) задаётся только вместе с thought_id.',
+      message: "merge mode is set only together with thought_id.",
       path: ['mode'],
     })
     .refine((v) => v.thought_id === undefined || v.tables === undefined, {
-      message: 'thought_id и tables взаимоисключающи: либо мысль, либо набор строк.',
+      message: "thought_id and tables are mutually exclusive: either a thought or a set of rows.",
       path: ['thought_id'],
     }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     layer_id: { from: { kind: 'param', name: 'layerId' } },
-    tables: { from: { kind: 'body' }, msg: 'tables должен быть объектом { таблица: [id, …] }.' },
+    tables: { from: { kind: 'body' }, msg: "tables must be an object { table: [id, …] }." },
     thought_id: { from: { kind: 'body' } },
     mode: { from: { kind: 'body' } },
   },
@@ -880,7 +880,7 @@ export const LayersResetOverride = defineContract(
     tables: z.record(z.string(), z.array(z.string().min(1)).min(1)),
   }),
   {
-    tables: { from: { kind: 'body' }, msg: 'tables должен быть объектом { таблица: [id, …] }.' },
+    tables: { from: { kind: 'body' }, msg: "tables must be an object { table: [id, …] }." },
   },
 );
 
@@ -970,9 +970,9 @@ const SearchFields = z
         v.in_subtree_of === undefined),
     {
       message:
-        `Поле ast несовместимо с плоскими мыслевыми параметрами (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+        `The ast field is incompatible with flat thought parameters (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
           ', ',
-        )}): передайте либо ast, либо плоские параметры.`,
+        )}): provide either ast or flat parameters.`,
     },
   )
   // Задача eb1a3f43, требование c98d5d19: веерный режим — `network_ids`
@@ -982,13 +982,13 @@ const SearchFields = z
   .refine(
     (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
     {
-      message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+      message: "Provide either network_id or network_ids, not both.",
     },
   )
   .refine(
     (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
     {
-      message: 'Нужно указать network_id или network_ids.',
+      message: "network_id or network_ids is required.",
     },
   );
 export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields, {});
@@ -1070,8 +1070,8 @@ const QueryPropertyFields = z
           (k) => !(QUERY_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k),
         );
         return (
-          `Условие свойства содержит неизвестные поля: ${unknown.join(', ')}. ` +
-          `Допустимы: ${QUERY_PROPERTY_CONDITION_KEYS.join(', ')}.`
+          `Property condition contains unknown fields: ${unknown.join(', ')}. ` +
+          `Allowed: ${QUERY_PROPERTY_CONDITION_KEYS.join(', ')}.`
         );
       },
     },
@@ -1081,7 +1081,7 @@ const QueryPropertyFields = z
   // молча выпадало из отбора, расширяя его до всей сети — теперь это явная
   // `VALIDATION_ERROR`.
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
-    message: 'Укажите property_id или property в условии свойства.',
+    message: "Provide property_id or property in the property condition.",
   })
   // `contains` принимает ТОЛЬКО строку (ошибка 9420a34c): массив молча
   // stringify-ился (`String(['al','pha'])` → `"al,pha"`) и отбор давал пустой
@@ -1105,7 +1105,7 @@ const QueryPropertyFields = z
   // у сравнения давало бы ошибку позже и с менее понятным текстом.
   .refine(
     (v) => v.operator === 'is_empty' || v.operator === 'not_empty' || v.value !== undefined,
-    { message: 'Укажите value условия свойства (кроме операторов is_empty/not_empty).' },
+    { message: "Provide the property condition value (except for is_empty/not_empty operators)." },
   )
   // Форма значения для сравнений — прежний контракт (скаляр или непустой
   // массив строк). Presence сюда не входит: `is_empty`/`not_empty` принимают
@@ -1118,7 +1118,7 @@ const QueryPropertyFields = z
       QUERY_PROPERTY_VALUE.safeParse(v.value).success,
     {
       message:
-        'value должен быть строкой, числом, логическим или непустым массивом строк.',
+        "value must be a string, number, boolean or a non-empty array of strings.",
     },
   );
 /**
@@ -1196,8 +1196,8 @@ const QueryFields = z
     (v) => v.ast === undefined || LEGACY_QUERY_CRITERIA.every((k) => v[k] === undefined),
     {
       message:
-        `Тело ast несовместимо со старыми критериями (${LEGACY_QUERY_CRITERIA.join(', ')}): ` +
-        'передайте либо ast, либо плоские критерии.',
+        `The ast body is incompatible with legacy criteria (${LEGACY_QUERY_CRITERIA.join(', ')}): ` +
+        "provide either ast or flat criteria.",
     },
   )
   // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
@@ -1206,13 +1206,13 @@ const QueryFields = z
   .refine(
     (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
     {
-      message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+      message: "Provide either network_id or network_ids, not both.",
     },
   )
   .refine(
     (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
     {
-      message: 'Нужно указать network_id или network_ids.',
+      message: "network_id or network_ids is required.",
     },
   );
 export const ThoughtsQuery = defineContract('etn.thoughts.query', QueryFields, {});
@@ -1317,13 +1317,13 @@ export const ThoughtsFindDuplicates = defineContract(
     .refine(
       (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
       {
-        message: 'Укажите либо network_id, либо network_ids, но не оба одновременно.',
+        message: "Provide either network_id or network_ids, not both.",
       },
     )
     .refine(
       (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
       {
-        message: 'Нужно указать network_id или network_ids.',
+        message: "network_id or network_ids is required.",
       },
     ),
   {},
@@ -1938,7 +1938,7 @@ export const TypesGet = defineContract(
     // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
     .strict()
     .refine((v) => (v.id === undefined) !== (v.name === undefined), {
-      message: 'Укажите ровно одно: id (идентификатор типа) или name (имя типа).',
+      message: "Provide exactly one: id (type identifier) or name (type name).",
     }),
   {},
 );
@@ -1960,7 +1960,7 @@ export const ViewsRun = defineContract(
     // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
     .strict()
     .refine((v) => (v.view_name === undefined) !== (v.ast === undefined), {
-      message: 'Укажите ровно одно: view_name (сохранённый отбор) или ast (тело-отбор).',
+      message: "Provide exactly one: view_name (saved view) or ast (filter body).",
     }),
   {},
 );
@@ -2114,13 +2114,13 @@ export const Instructions = defineContract(
     })
     .strict()
     .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
-      message: 'instruction_id и keywords взаимоисключимы',
+      message: "instruction_id and keywords are mutually exclusive",
     })
     .refine((v) => v.instruction_id === undefined || !instructionIdsPresent(v), {
-      message: 'instruction_id и instruction_ids взаимоисключимы',
+      message: "instruction_id and instruction_ids are mutually exclusive",
     })
     .refine((v) => !instructionIdsPresent(v) || v.keywords === undefined, {
-      message: 'instruction_ids и keywords взаимоисключимы',
+      message: "instruction_ids and keywords are mutually exclusive",
     })
     .refine(
       (v) =>
@@ -2128,7 +2128,7 @@ export const Instructions = defineContract(
         (v.keywords === undefined && v.instruction_id === undefined && !instructionIdsPresent(v)),
       {
         message:
-          'scope применим только к режиму перечня без keywords, instruction_id и instruction_ids',
+          "scope applies only to the list mode without keywords, instruction_id and instruction_ids",
       },
     )
     .refine(
@@ -2136,7 +2136,7 @@ export const Instructions = defineContract(
         (v.instruction_id === undefined && !instructionIdsPresent(v)) ||
         (v.limit === undefined && v.offset === undefined),
       {
-        message: 'limit/offset применимы только к режимам перечня, не к instruction_id/instruction_ids',
+        message: "limit/offset apply only to list modes, not to instruction_id/instruction_ids",
       },
     ),
   {},
@@ -2232,8 +2232,8 @@ export const LocksAcquire = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    entity_type: { from: { kind: 'body' }, msg: '{key} обязателен и должен быть непустой строкой.' },
-    entity_id: { from: { kind: 'body' }, msg: '{key} обязателен и должен быть непустой строкой.' },
+    entity_type: { from: { kind: 'body' }, msg: "{key} is required and must be a non-empty string." },
+    entity_id: { from: { kind: 'body' }, msg: "{key} is required and must be a non-empty string." },
   },
 );
 
@@ -2251,7 +2251,7 @@ export const LocksClear = defineContract(
   z.object({ network_id: NetworkId, user_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    user_id: { from: { kind: 'body' }, msg: '{key} обязателен и должен быть непустой строкой.' },
+    user_id: { from: { kind: 'body' }, msg: "{key} is required and must be a non-empty string." },
   },
 );
 
@@ -2268,7 +2268,7 @@ export const LocksList = defineContract(
       from: { kind: 'query' },
       parse: (raw: unknown, requestId: string) => {
         if (Array.isArray(raw) && raw.length > 1) {
-          throw new EtnError('VALIDATION_ERROR', 'user_id и client_id принимают ровно одно значение.', { field: 'user_id|client_id' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "user_id and client_id take exactly one value.", { field: 'user_id|client_id' }, requestId);
         }
         return Array.isArray(raw) ? raw[0] : raw;
       },
@@ -2277,7 +2277,7 @@ export const LocksList = defineContract(
       from: { kind: 'query' },
       parse: (raw: unknown, requestId: string) => {
         if (Array.isArray(raw) && raw.length > 1) {
-          throw new EtnError('VALIDATION_ERROR', 'user_id и client_id принимают ровно одно значение.', { field: 'user_id|client_id' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "user_id and client_id take exactly one value.", { field: 'user_id|client_id' }, requestId);
         }
         return Array.isArray(raw) ? raw[0] : raw;
       },
@@ -2331,7 +2331,7 @@ export const Ops = defineContract(
 
 const singleQueryValue = (raw: unknown, requestId: string): unknown => {
   if (Array.isArray(raw) && raw.length > 1) {
-    throw new EtnError('VALIDATION_ERROR', 'user_id, entity_type и entity_id принимают ровно одно значение.', { field: 'user_id|entity_type|entity_id' }, requestId);
+    throw new EtnError('VALIDATION_ERROR', "user_id, entity_type and entity_id take exactly one value.", { field: 'user_id|entity_type|entity_id' }, requestId);
   }
   return Array.isArray(raw) ? raw[0] : raw;
 };
@@ -2370,8 +2370,8 @@ const activityUntil = {
   network_id: { from: { kind: 'param', name: 'networkId' } },
   until_ms: {
     from: { kind: 'body' },
-    msg: 'until_ms обязателен и должен быть неотрицательным целым.',
-    check: (v: unknown) => (typeof v === 'number' && v < 0 ? 'until_ms должен быть неотрицательным целым.' : null),
+    msg: "until_ms is required and must be a non-negative integer.",
+    check: (v: unknown) => (typeof v === 'number' && v < 0 ? "until_ms must be a non-negative integer." : null),
   },
 } as const;
 export const RestActivityRollup = defineContract(
@@ -2421,13 +2421,13 @@ export const RestInstructions = defineContract(
       offset: z.number().int().min(0).optional(),
     })
     .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
-      message: 'instruction_id и keywords взаимоисключимы',
+      message: "instruction_id and keywords are mutually exclusive",
     })
     .refine((v) => v.instruction_id === undefined || !instructionIdsPresent(v), {
-      message: 'instruction_id и instruction_ids взаимоисключимы',
+      message: "instruction_id and instruction_ids are mutually exclusive",
     })
     .refine((v) => !instructionIdsPresent(v) || v.keywords === undefined, {
-      message: 'instruction_ids и keywords взаимоисключимы',
+      message: "instruction_ids and keywords are mutually exclusive",
     })
     .refine(
       (v) =>
@@ -2435,7 +2435,7 @@ export const RestInstructions = defineContract(
         (v.keywords === undefined && v.instruction_id === undefined && !instructionIdsPresent(v)),
       {
         message:
-          'scope применим только к режиму перечня без keywords, instruction_id и instruction_ids',
+          "scope applies only to the list mode without keywords, instruction_id and instruction_ids",
       },
     )
     .refine(
@@ -2443,7 +2443,7 @@ export const RestInstructions = defineContract(
         (v.instruction_id === undefined && !instructionIdsPresent(v)) ||
         (v.limit === undefined && v.offset === undefined),
       {
-        message: 'limit/offset применимы только к режимам перечня, не к instruction_id/instruction_ids',
+        message: "limit/offset apply only to list modes, not to instruction_id/instruction_ids",
       },
     ),
   {
@@ -2484,13 +2484,13 @@ export const RestPropertyPut = defineContract(
     owner_id: { from: { kind: 'param', name: 'id' } },
     key: {
       from: { kind: 'param' },
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'Ключ свойства не может быть пустым.' : null),
+      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "The property key must not be empty." : null),
     },
     value: {
       from: { kind: 'body' },
       t: PropertyValueSchema,
       req: true,
-      msg: 'Поле value обязательно.',
+      msg: "The value field is required.",
     },
     side: { from: { kind: 'body' } },
   },
@@ -2579,7 +2579,7 @@ export const RestPinsPut = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string().min(1)),
       req: true,
-      msg: 'ordered_ids обязателен.',
+      msg: "ordered_ids is required.",
     },
   },
 );
@@ -2602,12 +2602,12 @@ export const RestAuditQuery = defineContract(
     category: {
       from: { kind: 'query' },
       parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined),
-      msg: 'Недопустимая категория.',
+      msg: "Invalid category.",
     },
     from: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined) },
     to: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined) },
-    limit: { from: { kind: 'query', coerce: 'int', min: 1 }, msg: 'limit должен быть положительным целым.' },
-    offset: { from: { kind: 'query', coerce: 'int', min: 0 }, msg: 'offset должен быть неотрицательным целым.' },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 }, msg: "limit must be a positive integer." },
+    offset: { from: { kind: 'query', coerce: 'int', min: 0 }, msg: "offset must be a non-negative integer." },
   },
 );
 
@@ -2618,7 +2618,7 @@ export const RestAuditQuery = defineContract(
 const commentFieldsRest = {
   kind: {
     from: { kind: 'body' },
-    msg: 'kind обязателен (permanent|chronological).',
+    msg: "kind is required (permanent|chronological).",
   },
   // `body_md` больше не «обязателен и непуст» на уровне контракта (ошибка
   // 00115e7b): у хронологической записи содержание может держаться на
@@ -2684,12 +2684,12 @@ export const RestCommentCreateTargets = defineContract(
       // Явная обязательность даёт тот же 422 с `details.field=targets`, что и
       // `targets: []`; сообщение совпадает с веткой `parse`.
       req: true,
-      msg: 'targets обязателен: массив { owner_type, owner_id } (1 и более).',
+      msg: "targets is required: an array of { owner_type, owner_id } (one or more).",
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw) || raw.length === 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'targets обязателен: массив { owner_type, owner_id } (1 и более).',
+            "targets is required: an array of { owner_type, owner_id } (one or more).",
             { field: 'targets' },
             requestId,
           );
@@ -2699,7 +2699,7 @@ export const RestCommentCreateTargets = defineContract(
           if (typeof item !== 'object' || item === null) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'каждый элемент targets — объект { owner_type, owner_id }.',
+              "each targets item must be an object { owner_type, owner_id }.",
               { field: 'targets' },
               requestId,
             );
@@ -2715,7 +2715,7 @@ export const RestCommentCreateTargets = defineContract(
           ) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'каждый элемент targets — { owner_type: thought|link, owner_id: непустая строка }.',
+              "each targets item must be { owner_type: thought|link, owner_id: non-empty string }.",
               { field: 'targets' },
               requestId,
             );
@@ -2737,7 +2737,7 @@ export const RestCommentById = defineContract(
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: 'Заголовок If-Match должен содержать целую версию.',
+      msg: "If-Match header must contain an integer version.",
     },
   },
 );
@@ -2760,7 +2760,7 @@ export const RestCommentUpdate = defineContract(
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: 'Заголовок If-Match должен содержать целую версию.',
+      msg: "If-Match header must contain an integer version.",
     },
     title: { from: { kind: 'body' } },
     body_md: { from: { kind: 'body' } },
@@ -2788,10 +2788,10 @@ export const RestCommentAddTarget = defineContract(
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: 'Заголовок If-Match должен содержать целую версию.',
+      msg: "If-Match header must contain an integer version.",
     },
-    owner_type: { from: { kind: 'body' }, msg: 'owner_type (thought|link) и owner_id обязательны.' },
-    owner_id: { from: { kind: 'body' }, msg: 'owner_type (thought|link) и owner_id обязательны.' },
+    owner_type: { from: { kind: 'body' }, msg: "owner_type (thought|link) and owner_id are required." },
+    owner_id: { from: { kind: 'body' }, msg: "owner_type (thought|link) and owner_id are required." },
   },
 );
 
@@ -2810,7 +2810,7 @@ export const RestCommentDetachTarget = defineContract(
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: 'Заголовок If-Match должен содержать целую версию.',
+      msg: "If-Match header must contain an integer version.",
     },
     owner_type: { from: { kind: 'param', name: 'ownerType' } },
     owner_id: { from: { kind: 'param', name: 'ownerId' } },
@@ -2824,7 +2824,7 @@ export const RestCommentDetachTarget = defineContract(
 /** Конечное число → Math.trunc (как optionalIntField прежнего роута). */
 const truncInt = (v: unknown): unknown => {
   if (typeof v !== 'number' || !Number.isFinite(v)) {
-    throw new EtnError('VALIDATION_ERROR', 'значение должно быть числом.', { field: 'file_size' });
+    throw new EtnError('VALIDATION_ERROR', "value must be a number.", { field: 'file_size' });
   }
   return Math.trunc(v);
 };
@@ -2839,7 +2839,7 @@ const queryInt = (field: string) => (v: unknown): unknown => {
   const first = Array.isArray(v) ? v[0] : v;
   const n = typeof first === 'string' && first.trim() !== '' ? Number(first) : first;
   if (typeof n !== 'number' || !Number.isFinite(n)) {
-    throw new EtnError('VALIDATION_ERROR', 'значение должно быть числом.', { field });
+    throw new EtnError('VALIDATION_ERROR', "value must be a number.", { field });
   }
   return Math.trunc(n);
 };
@@ -2863,15 +2863,15 @@ export const RestAttachmentCreate = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_KINDS),
       req: true,
-      msg: 'kind обязателен (url|file).',
+      msg: "kind is required (url|file).",
     },
     url: { from: { kind: 'body' }, t: z.string().nullable() },
     file_path: { from: { kind: 'body' }, t: z.string().nullable() },
-    file_size: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'file_size должен быть числом.' },
+    file_size: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: "file_size must be a number." },
     mime_type: { from: { kind: 'body' }, t: z.string().nullable() },
     title: { from: { kind: 'body' }, t: z.string().nullable() },
     description: { from: { kind: 'body' }, t: z.string().nullable() },
-    position: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: 'position должен быть числом.' },
+    position: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: "position must be a number." },
   },
 );
 
@@ -2881,8 +2881,8 @@ export const RestAttachmentFileCreate = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     owner_id: { from: { kind: 'param', name: 'id' } },
-    mime_type: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: 'mime_type обязателен.' },
-    data_base64: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: 'data_base64 обязателен.' },
+    mime_type: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: "mime_type is required." },
+    data_base64: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: "data_base64 is required." },
     title: { from: { kind: 'body' }, t: z.string().nullable() },
   },
 );
@@ -2899,12 +2899,12 @@ export const RestAttachmentSearch = defineContract(
     exclude_owner_type: {
       from: { kind: 'query' },
       t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
-      msg: 'exclude_owner_type должен быть thought|link|publication.',
+      msg: "exclude_owner_type must be thought|link|publication.",
     },
-    exclude_owner_id: { from: { kind: 'query' }, t: z.string().optional(), msg: 'exclude_owner_id должен быть строкой.' },
-    kind: { from: { kind: 'query' }, t: z.enum(ATTACHMENT_KINDS).optional(), msg: 'kind должен быть url|file.' },
-    limit: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('limit'), msg: 'limit должен быть числом.' },
-    offset: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('offset'), msg: 'offset должен быть числом.' },
+    exclude_owner_id: { from: { kind: 'query' }, t: z.string().optional(), msg: "exclude_owner_id must be a string." },
+    kind: { from: { kind: 'query' }, t: z.enum(ATTACHMENT_KINDS).optional(), msg: "kind must be url|file." },
+    limit: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('limit'), msg: "limit must be a number." },
+    offset: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('offset'), msg: "offset must be a number." },
   },
 );
 
@@ -2913,7 +2913,7 @@ export const RestAttachmentRaw = defineContract(
   z.object({ network_id: NetworkId }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    path: { from: { kind: 'query' }, t: z.string().min(1), req: true, msg: 'path обязателен.' },
+    path: { from: { kind: 'query' }, t: z.string().min(1), req: true, msg: "path is required." },
   },
 );
 
@@ -2927,19 +2927,19 @@ export const RestAttachmentCopy = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: 'target_owner_type должен быть thought|link|publication.',
+      msg: "target_owner_type must be thought|link|publication.",
     },
     target_owner_ids: {
       from: { kind: 'body' },
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', 'target_owner_ids должен быть массивом строк.', { field: 'target_owner_ids' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "target_owner_ids must be an array of strings.", { field: 'target_owner_ids' }, requestId);
         }
         return raw.map((v) => {
           if (typeof v !== 'string' || v === '') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'target_owner_ids содержит не строку или пустую строку.',
+              "target_owner_ids contains a non-string or an empty string.",
               { field: 'target_owner_ids' },
               requestId,
             );
@@ -3008,7 +3008,7 @@ export const RestAttachmentOwnersAdd = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: 'owner_type должен быть thought|link|publication.',
+      msg: "owner_type must be thought|link|publication.",
     },
     owner_ids: {
       from: { kind: 'body' },
@@ -3016,7 +3016,7 @@ export const RestAttachmentOwnersAdd = defineContract(
         if (!Array.isArray(raw)) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'owner_ids должен быть непустым массивом строк.',
+            "owner_ids must be a non-empty array of strings.",
             { field: 'owner_ids' },
             requestId,
           );
@@ -3025,7 +3025,7 @@ export const RestAttachmentOwnersAdd = defineContract(
           if (typeof v !== 'string' || v === '') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'owner_ids содержит не строку или пустую строку.',
+              "owner_ids contains a non-string or an empty string.",
               { field: 'owner_ids' },
               requestId,
             );
@@ -3035,7 +3035,7 @@ export const RestAttachmentOwnersAdd = defineContract(
         if (ids.length === 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'owner_ids должен быть непустым массивом строк.',
+            "owner_ids must be a non-empty array of strings.",
             { field: 'owner_ids' },
             requestId,
           );
@@ -3064,15 +3064,15 @@ export const RestAttachmentOwnerRemove = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: 'owner_type должен быть thought|link|publication.',
+      msg: "owner_type must be thought|link|publication.",
     },
     owner_id: {
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: 'owner_id обязателен.',
+      msg: "owner_id is required.",
     },
-    confirm: { from: { kind: 'body' }, t: z.boolean(), msg: 'confirm должен быть логическим значением.' },
+    confirm: { from: { kind: 'body' }, t: z.boolean(), msg: "confirm must be a boolean." },
   },
 );
 
@@ -3082,7 +3082,7 @@ export const RestAttachmentContentPut = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     attachment_id: { from: { kind: 'param', name: 'id' } },
-    data_base64: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: 'data_base64 обязателен.' },
+    data_base64: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: "data_base64 is required." },
     mime_type: { from: { kind: 'body' }, t: z.string().optional() },
   },
 );
@@ -3101,8 +3101,8 @@ export const RestNetworkCreate = defineContract(
   {
     display_name: {
       from: { kind: 'body' },
-      msg: 'display_name обязательно и не может быть пустым.',
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'display_name обязательно и не может быть пустым.' : null),
+      msg: "display_name is required and must not be empty.",
+      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "display_name is required and must not be empty." : null),
     },
     description: {
       from: { kind: 'body' },
@@ -3125,7 +3125,7 @@ export const RestNetworkMemberAdd = defineContract(
   z.object({ network_id: NetworkId, user_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    user_id: { from: { kind: 'body' }, msg: 'user_id обязательно.' },
+    user_id: { from: { kind: 'body' }, msg: "user_id is required." },
   },
 );
 
@@ -3146,7 +3146,7 @@ export const RestNetworkMemberPatch = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     uid: { from: { kind: 'param' } },
-    role: { from: { kind: 'body' }, msg: 'Поддерживается только передача владения (role: "owner").' },
+    role: { from: { kind: 'body' }, msg: "Only ownership transfer is supported (role: \"owner\")." },
   },
 );
 
@@ -3212,13 +3212,13 @@ export const RestLinkPatch = defineContract(
     link_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: 'Заголовок If-Match должен содержать целую версию.',
+      msg: "If-Match header must contain an integer version.",
     },
-    source_id: { from: { kind: 'body' }, t: z.string().optional(), msg: 'source_id и target_id меняются вместе.' },
-    target_id: { from: { kind: 'body' }, t: z.string().optional(), msg: 'source_id и target_id меняются вместе.' },
+    source_id: { from: { kind: 'body' }, t: z.string().optional(), msg: "source_id and target_id change together." },
+    target_id: { from: { kind: 'body' }, t: z.string().optional(), msg: "source_id and target_id change together." },
     type_id: { from: { kind: 'body' }, t: z.string().nullable().optional() },
     color: { from: { kind: 'body' }, t: z.string().nullable().optional() },
-    style: { from: { kind: 'body' }, t: z.enum(LINK_STYLES).nullable().optional(), msg: 'Недопустимый style связи.' },
+    style: { from: { kind: 'body' }, t: z.enum(LINK_STYLES).nullable().optional(), msg: "Invalid link style." },
     width: { from: { kind: 'body' }, t: z.number().int().nullable().optional() },
     active: { from: { kind: 'body' }, t: z.boolean().optional() },
     marked_for_deletion: { from: { kind: 'body' }, t: z.boolean().optional() },
@@ -3243,7 +3243,7 @@ export const RestLinkDeletionCheckBatch = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).min(1),
       req: true,
-      msg: 'ids обязателен (непустой массив строк).',
+      msg: "ids is required (a non-empty array of strings).",
     },
   },
 );
@@ -3257,7 +3257,7 @@ export const RestLinksByThought = defineContract(
     group: {
       from: { kind: 'query' },
       t: z.string().optional(),
-      check: (v: unknown) => (typeof v === 'string' && v !== 'type' ? 'Поддерживается только group=type.' : null),
+      check: (v: unknown) => (typeof v === 'string' && v !== 'type' ? "Only group=type is supported." : null),
     },
     show_inactive: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
     show_trash: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
@@ -3274,7 +3274,7 @@ export const RestImportPreview = defineContract(
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: 'Поле archive_b64 обязательно и должно быть непустой строкой.',
+      msg: "The archive_b64 field is required and must be a non-empty string.",
     },
   },
 );
@@ -3289,27 +3289,27 @@ export const RestImportCommit = defineContract(
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: 'Поле archive_b64 обязательно и должно быть непустой строкой.',
+      msg: "The archive_b64 field is required and must be a non-empty string.",
     },
     parent_thought_id: {
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: 'Поле parent_thought_id обязательно и должно быть UUID.',
+      msg: "The parent_thought_id field is required and must be a UUID.",
     },
     etnx: {
       from: { kind: 'body' },
       parse: (raw: unknown) => {
         if (raw === undefined) return undefined;
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', 'Поле etnx должно быть объектом.', { field: 'etnx' });
+          throw new EtnError('VALIDATION_ERROR', "The etnx field must be an object.", { field: 'etnx' });
         }
         const obj = raw as Record<string, unknown>;
         const slices: Record<string, boolean> = {};
         for (const key of ['include_types', 'include_attachments', 'include_chronology'] as const) {
           if (obj[key] !== undefined) {
             if (typeof obj[key] !== 'boolean') {
-              throw new EtnError('VALIDATION_ERROR', `etnx.${key} должен быть boolean.`, { field: `etnx.${key}` });
+              throw new EtnError('VALIDATION_ERROR', `etnx.${key} must be a boolean.`, { field: `etnx.${key}` });
             }
             slices[key] = obj[key] as boolean;
           }
@@ -3370,9 +3370,9 @@ export const RestSearchQuery = defineContract(
           v.from_thought_id === undefined),
       {
         message:
-          `Поле ast несовместимо с плоскими мыслевыми параметрами (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+          `The ast field is incompatible with flat thought parameters (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
             ', ',
-          )}): передайте либо ast, либо плоские параметры.`,
+          )}): provide either ast or flat parameters.`,
       },
     ),
   {
@@ -3391,26 +3391,26 @@ export const RestSearchQuery = defineContract(
         const first = Array.isArray(raw) ? raw[0] : raw;
         return typeof first === 'string' && first.trim() !== '' ? first : undefined;
       },
-      msg: 'Параметр q обязателен и не может быть пустым.',
+      msg: "The q parameter is required and must not be empty.",
     },
     scope: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown) =>
         typeof v === 'string' && !['names', 'texts', 'links', 'chronology', 'all', 'thoughts'].includes(v)
-          ? 'Недопустимый scope.'
+          ? "Invalid scope."
           : null,
     },
     in: {
       from: { kind: 'query' },
       t: z.string().optional(),
-      check: (v: unknown) => (typeof v === 'string' && v !== 'subtree' ? 'in должен быть равен "subtree".' : null),
+      check: (v: unknown) => (typeof v === 'string' && v !== 'subtree' ? "in must equal \"subtree\"." : null),
     },
     from_thought_id: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown, all: Record<string, unknown>) =>
-        v === undefined && all['in'] === 'subtree' ? 'При in=subtree нужен from_thought_id.' : null,
+        v === undefined && all['in'] === 'subtree' ? "from_thought_id is required when in=subtree." : null,
     },
     type_id: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
     link_type_id: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
@@ -3435,12 +3435,12 @@ export const RestMentionsScan = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string()).min(1),
       req: true,
-      msg: 'texts обязателен (массив строк).',
+      msg: "texts is required (an array of strings).",
       check: (v: unknown) => {
         const arr = v as string[];
-        if (arr.length > 50) return 'texts не может содержать больше 50 элементов.';
+        if (arr.length > 50) return "texts must not contain more than 50 items.";
         const total = arr.reduce((sum, t) => sum + t.length, 0);
-        if (total > 20000) return 'Суммарная длина texts не может превышать 20000 символов.';
+        if (total > 20000) return "Total length of texts must not exceed 20000 characters.";
         return null;
       },
     },
@@ -3478,7 +3478,7 @@ export const RestThoughtDuplicates = defineContract(
     // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
     // проверяет роут (`input.network_ids.length > 0`).
     network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
-    title: { from: { kind: 'query' }, req: true, msg: 'title обязателен.' },
+    title: { from: { kind: 'query' }, req: true, msg: "title is required." },
     synonyms: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
     type_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
     mode: { from: { kind: 'query' }, t: z.enum(['dedupe', 'search']).optional() },
@@ -3494,40 +3494,40 @@ export const RestExport = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).min(1),
       req: true,
-      msg: 'thought_ids обязателен (непустой массив строк).',
+      msg: "thought_ids is required (a non-empty array of strings).",
     },
     format: {
       from: { kind: 'body' },
       t: z.enum(EXPORT_FORMATS),
       req: true,
-      msg: 'Недопустимый format.',
+      msg: "Invalid format.",
     },
     etnx: {
       from: { kind: 'body' },
       parse: (raw: unknown, requestId: string) => {
         if (raw === undefined) return undefined;
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', 'Поле etnx должно быть объектом.', { field: 'etnx' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "The etnx field must be an object.", { field: 'etnx' }, requestId);
         }
         const obj = raw as Record<string, unknown>;
         const opts: Record<string, unknown> = {};
         for (const key of ['include_types', 'include_attachments', 'include_chronology', 'include_subtree'] as const) {
           if (obj[key] !== undefined) {
             if (typeof obj[key] !== 'boolean') {
-              throw new EtnError('VALIDATION_ERROR', `etnx.${key} должен быть boolean.`, { field: `etnx.${key}` }, requestId);
+              throw new EtnError('VALIDATION_ERROR', `etnx.${key} must be a boolean.`, { field: `etnx.${key}` }, requestId);
             }
             opts[key] = obj[key] as boolean;
           }
         }
         if (obj['subtree_depth'] !== undefined) {
           if (typeof obj['subtree_depth'] !== 'number' || !Number.isInteger(obj['subtree_depth'])) {
-            throw new EtnError('VALIDATION_ERROR', 'etnx.subtree_depth должен быть целым числом.', { field: 'etnx.subtree_depth' }, requestId);
+            throw new EtnError('VALIDATION_ERROR', "etnx.subtree_depth must be an integer.", { field: 'etnx.subtree_depth' }, requestId);
           }
           const depth = obj['subtree_depth'] as number;
           if (depth < 1 || depth > ETNX_SUBTREE_DEPTH_MAX) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              `etnx.subtree_depth должен быть в диапазоне 1..${ETNX_SUBTREE_DEPTH_MAX}.`,
+              `etnx.subtree_depth must be in the range 1..${ETNX_SUBTREE_DEPTH_MAX}.`,
               { field: 'etnx.subtree_depth', min: 1, max: ETNX_SUBTREE_DEPTH_MAX },
               requestId,
             );
@@ -3577,7 +3577,7 @@ export function assertImageIcon(icon: string | null | undefined, requestId?: str
   if (/^https?:\/\//i.test(icon)) return;
   const match = /^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/i.exec(icon);
   if (match === null) {
-    throw new EtnError('VALIDATION_ERROR', 'icon должен быть data:image URL или http(s) URL.', { field: 'icon' }, requestId);
+    throw new EtnError('VALIDATION_ERROR', "icon must be a data:image URL or an http(s) URL.", { field: 'icon' }, requestId);
   }
   const b64 = match[1] ?? '';
   const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
@@ -3585,7 +3585,7 @@ export function assertImageIcon(icon: string | null | undefined, requestId?: str
   if (bytes > ICON_MAX_BYTES) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Файл иконки слишком большой (${bytes} байт; лимит ${ICON_MAX_BYTES}).`,
+      `Icon file is too large (${bytes} bytes; limit ${ICON_MAX_BYTES}).`,
       { field: 'icon', limit: ICON_MAX_BYTES },
       requestId,
     );
@@ -3614,7 +3614,7 @@ export const RestThoughtCreateBody = defineContract(
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
     .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
-    title: { from: { kind: 'body' }, msg: 'title обязателен и не может быть пустым.' },
+    title: { from: { kind: 'body' }, msg: "title is required and must not be empty." },
     synonyms: { from: { kind: 'body' } },
     type_id: { from: { kind: 'body' } },
     icon: { from: { kind: 'body' } },
@@ -3632,14 +3632,14 @@ export const RestThoughtCreateBody = defineContract(
       parse: (raw: unknown, requestId: string) => {
         if (raw === undefined) return undefined;
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', 'create_link должен быть объектом.', { field: 'create_link' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "create_link must be an object.", { field: 'create_link' }, requestId);
         }
         const cl = raw as Record<string, unknown>;
         const direction = cl['direction'];
         if (direction !== 'parent' && direction !== 'child') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'create_link.direction должен быть "parent" или "child".',
+            "create_link.direction must be \"parent\" or \"child\".",
             { field: 'create_link.direction' },
             requestId,
           );
@@ -3648,7 +3648,7 @@ export const RestThoughtCreateBody = defineContract(
         if (typeof targetThoughtId !== 'string' || targetThoughtId === '') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'create_link.target_thought_id обязателен.',
+            "create_link.target_thought_id is required.",
             { field: 'create_link.target_thought_id' },
             requestId,
           );
@@ -3668,7 +3668,7 @@ export const RestThoughtCreateBody = defineContract(
       parse: (raw: unknown, requestId: string) => {
         if (raw === undefined) return undefined;
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', 'comment должен быть объектом.', { field: 'comment' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "comment must be an object.", { field: 'comment' }, requestId);
         }
         const c = raw as Record<string, unknown>;
         const bodyMd = c['body_md'];
@@ -3677,7 +3677,7 @@ export const RestThoughtCreateBody = defineContract(
         if (typeof bodyMd !== 'string') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'comment.body_md обязателен и должен быть строкой.',
+            "comment.body_md is required and must be a string.",
             { field: 'comment.body_md' },
             requestId,
           );
@@ -3740,22 +3740,22 @@ export const RestThoughtCopyBody = defineContract(
   {
     source_network_id: {
       from: { kind: 'body' },
-      msg: 'source_network_id обязателен и не может быть пустым.',
+      msg: "source_network_id is required and must not be empty.",
     },
     parent_thought_id: {
       from: { kind: 'body' },
-      msg: 'parent_thought_id обязателен и не может быть пустым.',
+      msg: "parent_thought_id is required and must not be empty.",
     },
     thoughts: {
       from: { kind: 'body' },
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw) || raw.length === 0) {
-          throw new EtnError('VALIDATION_ERROR', 'thoughts должен быть непустым массивом снимков мыслей.', { field: 'thoughts' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "thoughts must be a non-empty array of thought snapshots.", { field: 'thoughts' }, requestId);
         }
         const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         return raw.map((it, idx) => {
           if (typeof it !== 'object' || it === null || Array.isArray(it)) {
-            throw new EtnError('VALIDATION_ERROR', `thoughts[${idx}] должен быть объектом.`, { field: `thoughts[${idx}]` }, requestId);
+            throw new EtnError('VALIDATION_ERROR', `thoughts[${idx}] must be an object.`, { field: `thoughts[${idx}]` }, requestId);
           }
           const item = it as Record<string, unknown>;
           if (
@@ -3764,7 +3764,7 @@ export const RestThoughtCopyBody = defineContract(
             item['source_id'] !== '' &&
             (typeof item['source_id'] !== 'string' || !UUID_RE.test(item['source_id'] as string))
           ) {
-            throw new EtnError('VALIDATION_ERROR', `thoughts[${idx}].source_id должен быть UUID-строкой.`, { field: `thoughts[${idx}].source_id` }, requestId);
+            throw new EtnError('VALIDATION_ERROR', `thoughts[${idx}].source_id must be a UUID string.`, { field: `thoughts[${idx}].source_id` }, requestId);
           }
           return item;
         });
@@ -3776,12 +3776,12 @@ export const RestThoughtCopyBody = defineContract(
       parse: (raw: unknown, requestId: string) => {
         if (raw === undefined) return undefined;
         if (!Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', 'links должен быть массивом.', { field: 'links' }, requestId);
+          throw new EtnError('VALIDATION_ERROR', "links must be an array.", { field: 'links' }, requestId);
         }
         return raw.map((it, idx) => {
           if (typeof it !== 'object' || it === null || Array.isArray(it)) {
           
-            throw new EtnError('VALIDATION_ERROR', `links[${idx}] должен быть объектом.`, { field: `links[${idx}]` }, requestId);
+            throw new EtnError('VALIDATION_ERROR', `links[${idx}] must be an object.`, { field: `links[${idx}]` }, requestId);
           }
           return it;
         });
@@ -3797,7 +3797,7 @@ export const RestIfMatch = defineContract(
   {
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: 'Заголовок If-Match должен содержать целую версию.',
+      msg: "If-Match header must contain an integer version.",
     },
   },
 );
@@ -3821,7 +3821,7 @@ export const RestIdsBody = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).min(1),
       req: true,
-      msg: 'ids обязателен (непустой массив строк).',
+      msg: "ids is required (a non-empty array of strings).",
     },
   },
 );
@@ -3844,19 +3844,19 @@ export const RestNeighborsQuery = defineContract(
     network_id: { from: { kind: 'param', name: 'networkId' } },
     dir: {
       from: { kind: 'query' },
-      msg: 'dir обязателен (parents|children|siblings).',
+      msg: "dir is required (parents|children|siblings).",
     },
     sort: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown) =>
-        typeof v === 'string' && !(SORT_KINDS as readonly string[]).includes(v) ? 'Недопустимый sort.' : null,
+        typeof v === 'string' && !(SORT_KINDS as readonly string[]).includes(v) ? "Invalid sort." : null,
     },
     order: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown) =>
-        typeof v === 'string' && !(SORT_ORDERS as readonly string[]).includes(v) ? 'Недопустимый order.' : null,
+        typeof v === 'string' && !(SORT_ORDERS as readonly string[]).includes(v) ? "Invalid order." : null,
     },
     type_id: { from: { kind: 'query' }, t: z.string().optional() },
     show_inactive: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
@@ -3875,7 +3875,7 @@ export const RestResolveIdsBody = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string()).max(THOUGHT_RESOLVE_MAX_IDS),
       req: true,
-      msg: `ids должен быть массивом строк (до ${THOUGHT_RESOLVE_MAX_IDS} элементов).`,
+      msg: `ids must be an array of strings (up to ${THOUGHT_RESOLVE_MAX_IDS} items).`,
     },
   },
 );
@@ -3884,9 +3884,9 @@ export const RestFocusPrefsBody = defineContract(
   'rest:thoughts.focus-prefs-body',
   z.object({ dir: z.string().min(1), sort: z.string().min(1), order: z.string().min(1) }),
   {
-    dir: { from: { kind: 'body' }, msg: 'dir, sort и order обязательны.' },
-    sort: { from: { kind: 'body' }, msg: 'dir, sort и order обязательны.' },
-    order: { from: { kind: 'body' }, msg: 'dir, sort и order обязательны.' },
+    dir: { from: { kind: 'body' }, msg: "dir, sort and order are required." },
+    sort: { from: { kind: 'body' }, msg: "dir, sort and order are required." },
+    order: { from: { kind: 'body' }, msg: "dir, sort and order are required." },
   },
 );
 
@@ -3894,12 +3894,12 @@ export const RestFocusOrderBody = defineContract(
   'rest:thoughts.focus-order-body',
   z.object({ dir: z.string().min(1) }),
   {
-    dir: { from: { kind: 'body' }, msg: 'dir и ordered_ids обязательны.' },
+    dir: { from: { kind: 'body' }, msg: "dir and ordered_ids are required." },
     ordered_ids: {
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).min(1),
       req: true,
-      msg: 'dir и ordered_ids обязательны.',
+      msg: "dir and ordered_ids are required.",
     },
   },
 );
@@ -3928,7 +3928,7 @@ export const RestAdminMemberRole = defineContract(
   {
     id: { from: { kind: 'param' } },
     uid: { from: { kind: 'param' } },
-    role: { from: { kind: 'body' }, msg: 'role должен быть owner или member.' },
+    role: { from: { kind: 'body' }, msg: "role must be owner or member." },
   },
 );
 
@@ -3948,7 +3948,7 @@ export const RestOrderedIdsBody = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string()),
       req: true,
-      msg: 'ordered_ids обязателен (массив строк).',
+      msg: "ordered_ids is required (an array of strings).",
     },
   },
 );
@@ -3960,7 +3960,7 @@ export const RestDescriptionOverrideBody = defineContract(
   {
     description: {
       from: { kind: 'body' },
-      msg: 'description обязателен (текст или null).',
+      msg: "description is required (text or null).",
     },
   },
 );
@@ -3987,7 +3987,7 @@ export const RestThoughtTypeCreateBody = defineContract(
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
     .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
-    name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
+    name: { from: { kind: 'body' }, msg: "name is required and must not be empty." },
     parent_id: {
       from: { kind: 'body' },
       parse: (raw: unknown) => (raw === '' ? null : raw),
@@ -4069,13 +4069,13 @@ export const RestLinkTypeUpdateBody = defineContract(
       from: { kind: 'body' },
       t: z.string().optional(),
       check: () =>
-        'PATCH /link-types/{id} не меняет имена — редактируйте свойство-связь (PATCH /networks/{nid}/properties/{id}).',
+        "PATCH /link-types/{id} does not change names — edit the link property (PATCH /networks/{nid}/properties/{id}).",
     },
     name_reverse: {
       from: { kind: 'body' },
       t: z.string().optional(),
       check: () =>
-        'PATCH /link-types/{id} не меняет имена — редактируйте свойство-связь (PATCH /networks/{nid}/properties/{id}).',
+        "PATCH /link-types/{id} does not change names — edit the link property (PATCH /networks/{nid}/properties/{id}).",
     },
   },
 );
@@ -4094,14 +4094,14 @@ export const RestAttachBody = defineContract(
     side: {
       from: { kind: 'body' },
       t: z.enum(['source', 'target']).nullable().optional(),
-      msg: 'side должен быть одним из: source, target или null.',
+      msg: "side must be one of: source, target or null.",
     },
     property_id: {
       from: { kind: 'body' },
       t: z.string().optional(),
       check: (v: unknown) =>
         v !== undefined && (typeof v !== 'string' || v.trim() === '')
-          ? 'property_id должен быть непустой строкой.'
+          ? "property_id must be a non-empty string."
           : null,
     },
     key: { from: { kind: 'body' }, t: z.string().optional() },
@@ -4125,17 +4125,17 @@ export const RestTypePropertyUpdateBody = defineContract(
     side: {
       from: { kind: 'body' },
       t: z.enum(['source', 'target']).nullable().optional(),
-      msg: 'side должен быть одним из: source, target или null.',
+      msg: "side must be one of: source, target or null.",
     },
     allowed_target_type_ids: {
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).nullable().optional(),
-      msg: 'allowed_target_type_ids должен быть массивом id или null.',
+      msg: "allowed_target_type_ids must be an array of ids or null.",
     },
     allowed_source_type_ids: {
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).nullable().optional(),
-      msg: 'allowed_source_type_ids должен быть массивом id или null.',
+      msg: "allowed_source_type_ids must be an array of ids or null.",
     },
   },
 );
@@ -4153,9 +4153,9 @@ export const RestViewCreateBody = defineContract(
     })
     .strict(),
   {
-    name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
+    name: { from: { kind: 'body' }, msg: "name is required and must not be empty." },
     description: { from: { kind: 'body' } },
-    definition: { from: { kind: 'body' }, msg: 'definition обязателен.' },
+    definition: { from: { kind: 'body' }, msg: "definition is required." },
     position: { from: { kind: 'body' } },
     is_default: { from: { kind: 'body' } },
   },
@@ -4174,9 +4174,9 @@ export const RestViewUpdateBody = defineContract(
     })
     .strict(),
   {
-    name: { from: { kind: 'body' }, msg: 'name не может быть пустым.' },
+    name: { from: { kind: 'body' }, msg: "name must not be empty." },
     description: { from: { kind: 'body' } },
-    definition: { from: { kind: 'body' }, msg: 'definition не может быть пустым.' },
+    definition: { from: { kind: 'body' }, msg: "definition must not be empty." },
     position: { from: { kind: 'body' } },
     is_default: { from: { kind: 'body' } },
   },
@@ -4197,7 +4197,7 @@ export const RestViewMoveToThoughtBody = defineContract(
   {
     target_thought_id: {
       from: { kind: 'body' },
-      msg: 'target_thought_id обязателен — id мысли-получателя.',
+      msg: "target_thought_id is required — the recipient thought id.",
     },
   },
 );
@@ -4219,8 +4219,8 @@ export const RestViewRunBody = defineContract(
     })
     .strict(),
   {
-    sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
-    order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    sort: { from: { kind: 'body' }, msg: "Invalid sort." },
+    order: { from: { kind: 'body' }, msg: "Invalid order." },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
   },
@@ -4246,9 +4246,9 @@ export const RestViewRunAstBody = defineContract(
     })
     .strict(),
   {
-    ast: { from: { kind: 'body' }, msg: 'ast обязателен — ad-hoc тело отбора.' },
-    sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
-    order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    ast: { from: { kind: 'body' }, msg: "ast is required — an ad-hoc filter body." },
+    sort: { from: { kind: 'body' }, msg: "Invalid sort." },
+    order: { from: { kind: 'body' }, msg: "Invalid order." },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
   },
@@ -4270,7 +4270,7 @@ function parseRestLinkFilter(raw: unknown, requestId: string): LinkTypeFilterInp
   } catch {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'link_filter должен быть JSON-объектом { type_ids?: string[], include_structural?: boolean }.',
+      "link_filter must be a JSON object { type_ids?: string[], include_structural?: boolean }.",
       { field: 'link_filter' },
       requestId,
     );
@@ -4293,7 +4293,7 @@ function parseRestAstQueryParam(raw: unknown, requestId: string): unknown {
   } catch {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'ast должен быть JSON-объектом тела отбора (version + filter).',
+      "ast must be a JSON filter body object (version + filter).",
       { field: 'ast' },
       requestId,
     );
@@ -4315,7 +4315,7 @@ export const RestHierarchyQuery = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     thought_id: { from: { kind: 'param', name: 'id' } },
-    dir: { from: { kind: 'query' }, msg: 'dir должен быть parents или children.' },
+    dir: { from: { kind: 'query' }, msg: "dir must be parents or children." },
     show_inactive: { from: { kind: 'query', coerce: 'bool' } },
     show_trash: { from: { kind: 'query', coerce: 'bool' } },
     offset: {
@@ -4331,7 +4331,7 @@ export const RestHierarchyQuery = defineContract(
     link_filter: {
       from: { kind: 'query' },
       parse: parseRestLinkFilter,
-      msg: 'link_filter должен быть JSON-объектом { type_ids?: string[], include_structural?: boolean }.',
+      msg: "link_filter must be a JSON object { type_ids?: string[], include_structural?: boolean }.",
     },
   },
 );
@@ -4348,7 +4348,7 @@ export const RestEdgesBody = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    ids: { from: { kind: 'body' }, msg: 'ids должен быть массивом строк.' },
+    ids: { from: { kind: 'body' }, msg: "ids must be an array of strings." },
     show_inactive: { from: { kind: 'body' } },
     show_trash: { from: { kind: 'body' } },
     link_filter: { from: { kind: 'body' } },
@@ -4366,13 +4366,13 @@ export const RestSavedFilterCreateBody = defineContract(
     name: z.string().min(1),
   }),
   {
-    view: { from: { kind: 'body' }, msg: 'Недопустимый view.' },
-    name: { from: { kind: 'body' }, msg: 'name обязателен.' },
+    view: { from: { kind: 'body' }, msg: "Invalid view." },
+    name: { from: { kind: 'body' }, msg: "name is required." },
     definition: {
       from: { kind: 'body' },
       t: z.object({}).catchall(z.unknown()),
       req: true,
-      msg: 'definition обязателен.',
+      msg: "definition is required.",
     },
   },
 );
@@ -4385,9 +4385,9 @@ export const RestSavedFilterPatchBody = defineContract(
     name: z.string().min(1).optional(),
   }),
   {
-    view: { from: { kind: 'body' }, msg: 'Недопустимый view.' },
-    name: { from: { kind: 'body' }, msg: 'name обязателен.' },
-    definition: { from: { kind: 'body' }, t: z.object({}).catchall(z.unknown()), msg: 'definition должен быть объектом.' },
+    view: { from: { kind: 'body' }, msg: "Invalid view." },
+    name: { from: { kind: 'body' }, msg: "name is required." },
+    definition: { from: { kind: 'body' }, t: z.object({}).catchall(z.unknown()), msg: "definition must be an object." },
   },
 );
 
@@ -4398,7 +4398,7 @@ export const RestSavedFilterViewQuery = defineContract(
   {
     view: {
       from: { kind: 'query' },
-      msg: 'Недопустимый view.',
+      msg: "Invalid view.",
       parse: (raw: unknown) => (raw === undefined || raw === null || raw === '' ? undefined : raw),
     },
   },
@@ -4453,12 +4453,12 @@ export const RestStructureQueryBody = defineContract(
     })
     .strict(),
   {
-    sort: { from: { kind: 'body' }, msg: 'Недопустимый sort.' },
-    order: { from: { kind: 'body' }, msg: 'Недопустимый order.' },
+    sort: { from: { kind: 'body' }, msg: "Invalid sort." },
+    order: { from: { kind: 'body' }, msg: "Invalid order." },
     // REST-only поле (в общей схеме отсутствует): переопределение видимости
     // помеченных на удаление для `meta.directions` (ошибка 331ffb94) — тем же
     // путём, что `show_trash` у фокуса/иерархии/рёбер (задача 77923b49).
-    show_trash: { from: { kind: 'body' }, t: z.boolean().optional(), msg: 'show_trash должен быть boolean.' },
+    show_trash: { from: { kind: 'body' }, t: z.boolean().optional(), msg: "show_trash must be a boolean." },
     ids_only: { from: { kind: 'body' } },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
@@ -4484,10 +4484,10 @@ export const RestPropertyCreateBody = defineContract(
     link_width: z.number().nullable().optional(),
   }),
   {
-    name: { from: { kind: 'body' }, msg: 'name обязателен и не может быть пустым.' },
+    name: { from: { kind: 'body' }, msg: "name is required and must not be empty." },
     value_type: {
       from: { kind: 'body' },
-      msg: 'value_type обязателен и должен быть одним из поддерживаемых.',
+      msg: "value_type is required and must be one of the supported values.",
       check: (v: unknown, all: Record<string, unknown>) => {
         const linkFields = [
           'name_forward',
@@ -4498,7 +4498,7 @@ export const RestPropertyCreateBody = defineContract(
           'link_width',
         ].some((k) => all[k] !== undefined);
         return linkFields && v !== 'link'
-          ? 'name_forward/name_reverse/parent_link_type_id/link_color/link_style/link_width применимы только к value_type="link".'
+          ? "name_forward/name_reverse/parent_link_type_id/link_color/link_style/link_width apply only to value_type=\"link\"."
           : null;
       },
     },
@@ -4506,18 +4506,18 @@ export const RestPropertyCreateBody = defineContract(
     description: { from: { kind: 'body' } },
     name_forward: {
       from: { kind: 'body' },
-      msg: 'name_forward должен быть непустой строкой.',
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'name_forward должен быть непустой строкой.' : null),
+      msg: "name_forward must be a non-empty string.",
+      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "name_forward must be a non-empty string." : null),
     },
     name_reverse: {
       from: { kind: 'body' },
-      msg: 'name_reverse должен быть непустой строкой.',
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? 'name_reverse должен быть непустой строкой.' : null),
+      msg: "name_reverse must be a non-empty string.",
+      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "name_reverse must be a non-empty string." : null),
     },
     parent_link_type_id: { from: { kind: 'body' } },
     link_color: { from: { kind: 'body' } },
-    link_style: { from: { kind: 'body' }, msg: 'Недопустимый link_style.' },
-    link_width: { from: { kind: 'body' }, msg: 'link_width должен быть числом или null.' },
+    link_style: { from: { kind: 'body' }, msg: "Invalid link_style." },
+    link_width: { from: { kind: 'body' }, msg: "link_width must be a number or null." },
   },
 );
 
@@ -4536,18 +4536,18 @@ export const RestPropertyUpdateBody = defineContract(
     link_width: z.number().nullable().optional(),
   }),
   {
-    name: { from: { kind: 'body' }, msg: 'name должен быть непустой строкой.' },
+    name: { from: { kind: 'body' }, msg: "name must be a non-empty string." },
     value_type: {
       from: { kind: 'body' },
-      msg: 'value_type должен быть одним из поддерживаемых.',
+      msg: "value_type must be one of the supported values.",
     },
     config: { from: { kind: 'body' } },
     description: { from: { kind: 'body' } },
-    name_forward: { from: { kind: 'body' }, msg: 'name_forward должен быть непустой строкой.' },
-    name_reverse: { from: { kind: 'body' }, msg: 'name_reverse должен быть непустой строкой.' },
-    link_color: { from: { kind: 'body' }, msg: 'link_color должен быть строкой или null.' },
-    link_style: { from: { kind: 'body' }, msg: 'Недопустимый link_style.' },
-    link_width: { from: { kind: 'body' }, msg: 'link_width должен быть числом или null.' },
+    name_forward: { from: { kind: 'body' }, msg: "name_forward must be a non-empty string." },
+    name_reverse: { from: { kind: 'body' }, msg: "name_reverse must be a non-empty string." },
+    link_color: { from: { kind: 'body' }, msg: "link_color must be a string or null." },
+    link_style: { from: { kind: 'body' }, msg: "Invalid link_style." },
+    link_width: { from: { kind: 'body' }, msg: "link_width must be a number or null." },
   },
 );
 
@@ -5033,7 +5033,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['summary_md'],
-      message: 'резюме не может содержать заголовки (markdown без заголовков)',
+      message: "the summary must not contain headings (markdown without headings)",
       params: { code: 'summary_headings_forbidden' },
     });
   }
@@ -5041,7 +5041,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['cover_attachment_id'],
-      message: 'только один источник обложки: вложение или URL',
+      message: "only one cover source: an attachment or a URL",
       params: { code: 'cover_conflict' },
     });
   }
@@ -5050,7 +5050,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['text_sources'],
-      message: 'свойства текстов и «дополнительных материалов» пересекаются',
+      message: "text and \"additional materials\" properties overlap",
       params: { code: 'recipe_overlap' },
     });
   }
@@ -5058,7 +5058,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['numbering_from'],
-      message: 'numbering_from не может быть больше numbering_to',
+      message: "numbering_from must not be greater than numbering_to",
       params: { code: 'numbering_range' },
     });
   }
@@ -5294,7 +5294,7 @@ export const RestPublicationExclusionAdd = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    thought_id: { from: { kind: 'body' }, msg: 'thought_id обязателен.' },
+    thought_id: { from: { kind: 'body' }, msg: "thought_id is required." },
   },
 );
 
@@ -5309,7 +5309,7 @@ export const RestPublicationExclusionRemove = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    thought_id: { from: { kind: 'query' }, parse: singleQueryValue, msg: 'thought_id обязателен.' },
+    thought_id: { from: { kind: 'query' }, parse: singleQueryValue, msg: "thought_id is required." },
   },
 );
 
@@ -5352,7 +5352,7 @@ export const RestPublicationExport = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    format: { from: { kind: 'body' }, msg: 'Недопустимый format (ожидается md|html).' },
+    format: { from: { kind: 'body' }, msg: "Invalid format (expected md|html)." },
     with_assets: { from: { kind: 'body' } },
   },
 );
@@ -5371,7 +5371,7 @@ export const RestPublicationExportBatch = defineContract(
     network_id: { from: { kind: 'param', name: 'networkId' } },
     ids: { from: { kind: 'body' } },
     active_only: { from: { kind: 'body' } },
-    format: { from: { kind: 'body' }, msg: 'Недопустимый format (ожидается md|html).' },
+    format: { from: { kind: 'body' }, msg: "Invalid format (expected md|html)." },
     with_assets: { from: { kind: 'body' } },
   },
 );
@@ -5410,7 +5410,7 @@ export const RestPublicationCandidateAccept = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    thought_id: { from: { kind: 'body' }, msg: 'thought_id обязателен.' },
+    thought_id: { from: { kind: 'body' }, msg: "thought_id is required." },
   },
 );
 
@@ -5441,7 +5441,7 @@ export const RestShelfCreate = defineContract(
   z.object({ network_id: NetworkId, title: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    title: { from: { kind: 'body' }, msg: 'title полки обязателен.' },
+    title: { from: { kind: 'body' }, msg: "Shelf title is required." },
   },
 );
 
@@ -5525,7 +5525,7 @@ export const RestShelfItemAdd = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     shelf_id: { from: { kind: 'param', name: 'id' } },
-    publication_id: { from: { kind: 'body' }, msg: 'publication_id обязателен.' },
+    publication_id: { from: { kind: 'body' }, msg: "publication_id is required." },
     position: { from: { kind: 'body' } },
   },
 );
@@ -5544,7 +5544,7 @@ export const RestShelfItemRemove = defineContract(
     publication_id: {
       from: { kind: 'query' },
       parse: singleQueryValue,
-      msg: 'publication_id обязателен.',
+      msg: "publication_id is required.",
     },
   },
 );

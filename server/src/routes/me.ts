@@ -82,7 +82,7 @@ export function parseMaxWritesPerMinute(
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'max_writes_per_minute должен быть положительным целым числом или null.',
+      "max_writes_per_minute must be a positive integer or null.",
       { field: 'max_writes_per_minute' },
       requestId,
     );
@@ -189,7 +189,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         if (trimmed.length > DISPLAY_NAME_MAX_LENGTH) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `Имя не должно превышать ${DISPLAY_NAME_MAX_LENGTH} символов.`,
+            `The name must not exceed ${DISPLAY_NAME_MAX_LENGTH} characters.`,
             { field: 'display_name' },
             req.id,
           );
@@ -200,7 +200,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } else {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Поле display_name должно быть строкой или null.',
+          "The display_name field must be a string or null.",
           { field: 'display_name' },
           req.id,
         );
@@ -232,7 +232,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const updated = app.systemDb.getUserById(me.id);
       if (updated === null) {
         // Should not happen — we just updated an existing user.
-        throw new EtnError('INTERNAL', 'Не удалось прочитать обновлённого пользователя.', undefined, req.id);
+        throw new EtnError('INTERNAL', "Failed to read the updated user.", undefined, req.id);
       }
       sendSuccess(reply, currentUserDto(updated));
     },
@@ -287,13 +287,13 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null || key.user_id !== req.auth!.user.id) {
         // Do not leak ownership: treat a foreign key as not-found.
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       const body = (req.body ?? {}) as UpdateKeyBody;
       if (!('max_writes_per_minute' in body)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Требуется поле max_writes_per_minute (число или null).',
+          "The max_writes_per_minute field is required (a number or null).",
           { field: 'max_writes_per_minute' },
           req.id,
         );
@@ -320,11 +320,11 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id: keyId } = req.params as KeyIdParams;
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null) {
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       if (key.user_id !== req.auth!.user.id) {
         // Do not leak ownership: treat a foreign key as not-found.
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       app.systemDb.disableApiKey(keyId);
       app.systemDb.insertAuditLog({

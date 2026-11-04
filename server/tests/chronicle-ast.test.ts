@@ -309,7 +309,7 @@ describe('хроника: отбор на общий AST (задача 4752b065)
         { ast: { version: FILTER_AST_VERSION, filter: { op: 'and', children: [] } }, keywords: 'x' },
         'r',
       ),
-      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR' && /несовместимо/.test(e.message),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR' && /incompatible/.test(e.message),
     );
     // Пагинация и order допустимы с AST.
     assert.doesNotThrow(() =>
@@ -581,8 +581,8 @@ describe('хроника: авторство записи раскрывает �
         (err: unknown) =>
           err instanceof EtnError &&
           err.code === 'VALIDATION_ERROR' &&
-          /«\$user»/.test(err.message) &&
-          /пользовател/i.test(err.message),
+          /"\$user"/.test(err.message) &&
+          /request user is not set/i.test(err.message),
         'без пользователя запроса токен $user — явная ошибка, а не пустое условие',
       );
       // С пользователем запроса (как в REST/MCP) набор исполняется — только свои.

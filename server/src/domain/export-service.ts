@@ -357,8 +357,8 @@ export async function exportToEtnx(
   if (size > ETNX_MAX_BYTES) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Размер .etnx превысил лимит ${ETNX_MAX_BYTES} байт (получено ${size}). ` +
-        'Отключите вложения или уменьшите subtree_depth.',
+      `The .etnx size exceeded the limit of ${ETNX_MAX_BYTES} bytes (got ${size}). ` +
+        "Disable attachments or reduce subtree_depth.",
       { limit: ETNX_MAX_BYTES, actual: size },
     );
   }
@@ -409,7 +409,7 @@ export async function exportToEtnxFile(
     const code = (err as NodeJS.ErrnoException).code;
     throw new EtnError(
       'INTERNAL',
-      `Не удалось записать .etnx по пути ${target}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to write .etnx to ${target}: ${err instanceof Error ? err.message : String(err)}`,
       { path: target, ...(code === undefined ? {} : { code }) },
     );
   }
@@ -423,7 +423,7 @@ export async function exportToEtnxFile(
 function resolveEtnxTargetPath(destination: EtnxFileDestination): string {
   const target = destination.path;
   if (!path.isAbsolute(target)) {
-    throw new EtnError('VALIDATION_ERROR', `destination.path должен быть абсолютным: ${target}`, {
+    throw new EtnError('VALIDATION_ERROR', `destination.path must be absolute: ${target}`, {
       field: 'destination.path',
     });
   }
@@ -433,13 +433,13 @@ function resolveEtnxTargetPath(destination: EtnxFileDestination): string {
     dirStat = statSync(dir);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    throw new EtnError('VALIDATION_ERROR', `Каталог назначения не найден: ${dir}`, {
+    throw new EtnError('VALIDATION_ERROR', `Destination directory not found: ${dir}`, {
       field: 'destination.path',
       ...(code === undefined ? {} : { code }),
     });
   }
   if (!dirStat.isDirectory()) {
-    throw new EtnError('VALIDATION_ERROR', `Каталог назначения — не каталог: ${dir}`, {
+    throw new EtnError('VALIDATION_ERROR', `Destination is not a directory: ${dir}`, {
       field: 'destination.path',
     });
   }
@@ -447,12 +447,12 @@ function resolveEtnxTargetPath(destination: EtnxFileDestination): string {
     if (destination.overwrite !== true) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Файл уже существует: ${target}. Передайте overwrite: true, чтобы перезаписать.`,
+        `File already exists: ${target}. Pass overwrite: true to overwrite.`,
         { field: 'destination.path' },
       );
     }
     if (statSync(target).isDirectory()) {
-      throw new EtnError('VALIDATION_ERROR', `Путь назначения — каталог: ${target}`, {
+      throw new EtnError('VALIDATION_ERROR', `Destination path is a directory: ${target}`, {
         field: 'destination.path',
       });
     }

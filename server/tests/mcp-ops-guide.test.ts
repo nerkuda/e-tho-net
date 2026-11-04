@@ -173,7 +173,7 @@ describe('etn.guide + etn.ops (86ef2ff4)', { skip: !nativeAvailable() }, () => {
         assert.equal(res.isError, true);
         const text = toolText(res);
         assert.match(text, /VALIDATION_ERROR/);
-        assert.match(text, /Неизвестное действие/);
+        assert.match(text, /Unknown action/);
         assert.match(text, /locks\.acquire/);
       } finally {
         await handle.close();

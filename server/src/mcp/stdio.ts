@@ -50,7 +50,7 @@ export async function runStdioMcp(opts: StdioMcpOptions): Promise<void> {
     );
   if (opts.apiKey === null || opts.apiKey === '') {
     throw new Error(
-      'Для stdio-режима MCP нужен API-key: задайте ETN_API_KEY или передайте --api-key.',
+      "The MCP stdio mode requires an API key: set ETN_API_KEY or pass --api-key.",
     );
   }
 
@@ -59,7 +59,7 @@ export async function runStdioMcp(opts: StdioMcpOptions): Promise<void> {
     const authProvider = createApiKeyAuthProvider(systemDb);
     const auth = authProvider(opts.apiKey);
     if (auth === null) {
-      throw new Error('Невалидный или отключённый API-key (проверьте ETN_API_KEY / --api-key).');
+      throw new Error("Invalid or disabled API key (check ETN_API_KEY / --api-key).");
     }
 
     const deps: McpDeps = {

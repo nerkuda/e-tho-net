@@ -684,6 +684,34 @@ export const en = {
    * короче и не повторяет имя строки.
    */
   'errors.propertyTargetType': 'value type is not allowed by the property',
+  /**
+   * Server errors — user-facing text by code (ADR daab6ac4, §4):
+   * `error.message` is English and never shown. Refining reasons
+   * (`details.reason`/`details.issue`) use `errors.code.<code>.<token>` keys;
+   * an unknown code or reason falls back to the generic text.
+   */
+  'errors.code.VALIDATION_ERROR': 'check the entered data',
+  'errors.code.BAD_REQUEST': 'the request cannot be completed',
+  'errors.code.UNAUTHORIZED': 'sign-in is required',
+  'errors.code.FORBIDDEN': 'not enough permissions for this action',
+  'errors.code.NOT_FOUND': 'the object was not found — it may have been deleted',
+  'errors.code.VERSION_CONFLICT': 'the data has changed — refresh and try again',
+  'errors.code.DUPLICATE': 'such a record already exists',
+  'errors.code.LOCKED': 'another member is editing the object',
+  'errors.code.LOCK_NOT_FOUND': 'the object lock was not found',
+  'errors.code.RATE_LIMITED': 'too many requests — try again later',
+  'errors.code.PROTECTED_ENTITY': 'the object is protected from changes',
+  'errors.code.CLIENT_VERSION_UNSUPPORTED':
+    'the client version is not supported — update the client',
+  /** Refinements of `426 CLIENT_VERSION_UNSUPPORTED` by `details.reason`. */
+  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-missing':
+    'the server did not receive the client version — update the client',
+  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-invalid':
+    'the server could not parse the client version — update the client',
+  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-out-of-range':
+    'the client version is not supported by the server — update the client',
+  'errors.code.UPDATE_INSTALLER_FAILED': 'failed to start the update installer',
+  'errors.unknownCode': 'the action could not be completed',
 
   // -- Подключение к серверу (ошибка 390e9746) -----------------------------
   /** Отказ подключения к сохранённому серверу: «метка» + адрес + причина. */
@@ -2551,6 +2579,22 @@ export const en = {
   'filterDiagnostics.editZamenitSohranennoeOpredelenie': '%1. Editing will replace the saved definition.',
   'filterDiagnostics.value': 'value “%1”',
   'filterDiagnostics.deleted': '%1 deleted',
+  /**
+   * Core diagnostics and unresolved tokens — text by machine-readable
+   * `code`/`reason` (ADR daab6ac4, §4): the server `message` is English and
+   * never shown; `filterIssueReason` appends the name/value/date.
+   */
+  'filterDiagnostics.server.entityDeleted':
+    'a condition entity was deleted from the network — the view cannot be applied',
+  'filterDiagnostics.server.propertyDetached':
+    'the property is no longer part of this type’s property set',
+  'filterDiagnostics.server.unknown': 'the condition is no longer applicable',
+  'filterDiagnostics.server.tokenUnknown': 'token “%1” could not be resolved',
+  'filterDiagnostics.server.tokenTimeContext': 'token “%1” requires a thought context',
+  'filterDiagnostics.server.tokenIncompatible': 'the operation is incompatible with the condition value type',
+  'filterDiagnostics.server.tokenUnknownProperty': 'the property was not found in the network registry',
+  'filterDiagnostics.server.tokenEmptyValue': 'the value cannot be parsed as a date',
+  'filterDiagnostics.server.tokenUnresolved': 'condition “%1” could not be resolved',
 
   // -- filterEditor ------------------------------------------------------
 

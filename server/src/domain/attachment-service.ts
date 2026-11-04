@@ -483,7 +483,7 @@ export function removeOwner(
     const current = getAttachmentOrThrow(ndb, attachmentId);
     const ownership = liveOwnership(ndb, attachmentId, ot, ownerId);
     if (ownership === undefined) {
-      throw new EtnError('NOT_FOUND', `владение ${ownerType} ${ownerId} не найдено`, {
+      throw new EtnError('NOT_FOUND', `ownership of ${ownerType} ${ownerId} not found`, {
         entity: 'attachment_owner',
         attachment_id: attachmentId,
         owner_type: ownerType,
@@ -498,7 +498,7 @@ export function removeOwner(
       if (icon !== undefined) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'объект использует вложение как свою иконку — снятие владения запрещено',
+          "the object uses the attachment as its icon — detaching ownership is forbidden",
           { code: 'ATTACHMENT_OWNER_IS_ICON', status: 409, field: 'owner_id' },
         );
       }
@@ -509,7 +509,7 @@ export function removeOwner(
       if (cover !== undefined) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'объект использует вложение как свою обложку — снятие владения запрещено',
+          "the object uses the attachment as its cover — detaching ownership is forbidden",
           { code: 'ATTACHMENT_OWNER_IS_ICON', status: 409, field: 'owner_id' },
         );
       }
@@ -1109,11 +1109,11 @@ export function createAttachmentFromInputResult(
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `file_path не указывает на файл на сервере: ${input.file_path}`,
+        `file_path does not point to a file on the server: ${input.file_path}`,
         {
           field: 'file_path',
           file_path: input.file_path,
-          hint: 'файл с машины клиента передавайте содержимым в data_base64',
+          hint: "pass a file from the client machine as content in data_base64",
         },
       );
     }
@@ -1172,7 +1172,7 @@ export function copyAttachmentFiles(
       mkdirSync(path.dirname(dest), { recursive: true });
       copyFileSync(source, dest);
     } catch (err) {
-      warn?.('вложение: не удалось скопировать файл в целевую сеть', {
+      warn?.("attachment: failed to copy the file to the target network", {
         source,
         dest,
         error: String(err),
@@ -1251,7 +1251,7 @@ export class AttachmentFileCopier {
       // Кэшируем и «не найден», чтобы один и тот же файл не сыпал warn'ами
       // при нескольких строках вложений.
       this.copied.set(resolvedSource, filePath);
-      this.warn?.('вложение: исходный файл не найден, копия не создана', {
+      this.warn?.("attachment: source file not found, the copy was not created", {
         file_path: filePath,
       });
       return filePath;
@@ -1378,7 +1378,7 @@ function attachmentStringList(
   if (Array.isArray(value) && value.every((v) => typeof v === 'string')) return value as string[];
   throw new EtnError(
     'VALIDATION_ERROR',
-    `Операнд «${field}»: оператор «${operator}» требует строку или список строк.`,
+    `Operand "${field}": operator "${operator}" requires a string or a list of strings.`,
     { field },
     requestId,
   );
@@ -1449,7 +1449,7 @@ function attachmentNameLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions):
   const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
   if (raw === undefined) {
     return attachmentAstUnsupported(
-      `Операнд «Имя/заголовок»: оператор «${op}» требует строку.`,
+      `Operand "Name/title": operator "${op}" requires a string.`,
       opts.requestId,
     );
   }
@@ -1467,7 +1467,7 @@ function attachmentNameLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions):
       };
     default:
       return attachmentAstUnsupported(
-        `Оператор «${op}» недопустим для «Имени/заголовка».`,
+        `Operator "${op}" is not allowed for "Name/title".`,
         opts.requestId,
       );
   }
@@ -1482,11 +1482,11 @@ function attachmentKindLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions):
   }
   const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
   if (raw === undefined) {
-    return attachmentAstUnsupported(`Операнд «Тип»: оператор «${op}» требует строку.`, opts.requestId);
+    return attachmentAstUnsupported(`Operand "Type": operator "${op}" requires a string.`, opts.requestId);
   }
   if (op === 'eq') return { sql: 'a.kind = ?', args: [raw] };
   if (op === 'ne') return { sql: 'a.kind <> ?', args: [raw] }; // kind NOT NULL
-  return attachmentAstUnsupported(`Оператор «${op}» недопустим для «Типа».`, opts.requestId);
+  return attachmentAstUnsupported(`Operator "${op}" is not allowed for "Type".`, opts.requestId);
 }
 
 /** «MIME-подтип» (`mime_type`): равно/содержит/в списке. */
@@ -1499,7 +1499,7 @@ function attachmentMimeLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions):
   const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
   if (raw === undefined) {
     return attachmentAstUnsupported(
-      `Операнд «MIME-подтип»: оператор «${op}» требует строку.`,
+      `Operand "MIME subtype": operator "${op}" requires a string.`,
       opts.requestId,
     );
   }
@@ -1514,7 +1514,7 @@ function attachmentMimeLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions):
       return { sql: `NOT (${ATTACHMENT_MIME_COND})`, args: [buildLikePattern(raw.toLowerCase())] };
     default:
       return attachmentAstUnsupported(
-        `Оператор «${op}» недопустим для «MIME-подтипа».`,
+        `Operator "${op}" is not allowed for "MIME subtype".`,
         opts.requestId,
       );
   }
@@ -1529,14 +1529,14 @@ function attachmentSizeLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions):
     if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Операнд «Размер»: ожидается число (байты).',
+      "Operand \"Size\": a number (bytes) is expected.",
       { field: 'size' },
       opts.requestId,
     );
   };
   const between = (value: unknown): AttachmentClause => {
     if (!Array.isArray(value) || value.length !== 2) {
-      attachmentAstUnsupported('«Размер»: оператор «между» требует две границы.', opts.requestId);
+      attachmentAstUnsupported("\"Size\": the \"between\" operator requires two bounds.", opts.requestId);
     }
     const bounds = value as FilterAstListItem[];
     return { sql: '(a.file_size >= ? AND a.file_size <= ?)', args: [num(bounds[0]), num(bounds[1])] };
@@ -1561,7 +1561,7 @@ function attachmentSizeLeaf(leaf: FilterAstLeaf, opts: AttachmentSearchOptions):
       return { sql: `NOT ${inner.sql}`, args: inner.args };
     }
     default:
-      return attachmentAstUnsupported(`Оператор «${op}» недопустим для «Размера».`, opts.requestId);
+      return attachmentAstUnsupported(`Operator "${op}" is not allowed for "Size".`, opts.requestId);
   }
 }
 
@@ -1618,7 +1618,7 @@ function attachmentOwnerSubtree(
   if (res.truncated) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Обход «Владельцев в иерархии» прерван: превышен ресурсный бюджет; сузьте набор корней или глубину отбора.',
+      "The \"Owners in hierarchy\" traversal was aborted: the resource budget was exceeded; narrow the root set or the filter depth.",
       { field: 'owner', reason: 'hierarchy_budget' },
       opts.requestId,
     );
@@ -1648,7 +1648,7 @@ function attachmentOwnerLeaf(
   if (op === 'eq' || op === 'ne' || op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
       return attachmentAstUnsupported(
-        '«Владельцы»: оператор сравнения требует число (количество владельцев).',
+        "\"Owners\": a comparison operator requires a number (the owner count).",
         opts.requestId,
       );
     }
@@ -1687,7 +1687,7 @@ function attachmentOwnerLeaf(
   if (op === 'all_of') {
     if (!isSubquery) {
       return attachmentAstUnsupported(
-        '«Владельцы»: оператор all_of требует под-выборку мыслей-владельцев.',
+        "\"Owners\": the all_of operator requires a subquery of owner thoughts.",
         opts.requestId,
       );
     }
@@ -1703,7 +1703,7 @@ function attachmentOwnerLeaf(
       args: outside.args,
     };
   }
-  return attachmentAstUnsupported(`Оператор «${op}» недопустим для «Владельцев».`, opts.requestId);
+  return attachmentAstUnsupported(`Operator "${op}" is not allowed for "Owners".`, opts.requestId);
 }
 
 /** Условие узла AST вложений над alias `a`. */
@@ -1740,7 +1740,7 @@ function attachmentAstNodeClause(
       return attachmentSizeLeaf(node, opts);
     default:
       return attachmentAstUnsupported(
-        `Операнд «${node.entity.kind}» не виден в профиле «вложения».`,
+        `Operand "${node.entity.kind}" is not visible in the "attachments" profile.`,
         opts.requestId,
       );
   }
@@ -1766,7 +1766,7 @@ export function parseAttachmentSearchQuery(
     if (conflicts.length > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'AST-тело (`ast`) несовместимо с плоскими фильтрами вложений.',
+        "An AST body (`ast`) is incompatible with flat attachment filters.",
         { field: 'ast', conflicts },
         requestId,
       );
@@ -2247,7 +2247,7 @@ export function getAttachmentContent(ndb: NetworkDb, id: string): AttachmentCont
   try {
     raw = readUtf8Prefix(a.file_path!, CONTENT_TEXT_MAX_BYTES);
   } catch {
-    throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
+    throw new EtnError('VALIDATION_ERROR', "the attachment file is not readable", {
       field: 'file_path',
     });
   }
@@ -2291,20 +2291,20 @@ export function getAttachmentRawByPath(ndb: NetworkDb, filePath: string): Attach
   const resolved = path.resolve(filePath);
   const storedDir = path.resolve(path.dirname(ndb.dbPath), 'attachments');
   if (!resolved.startsWith(storedDir + path.sep)) {
-    throw new EtnError('NOT_FOUND', 'файл вложения не найден', { field: 'path' });
+    throw new EtnError('NOT_FOUND', "the attachment file was not found", { field: 'path' });
   }
   const rows = ndb
     .prepare("SELECT mime_type, file_path FROM attachments_v WHERE kind = 'file' AND file_path IS NOT NULL")
     .all() as { mime_type: string | null; file_path: string }[];
   const row = rows.find((r) => path.resolve(r.file_path) === resolved);
   if (row === undefined) {
-    throw new EtnError('NOT_FOUND', 'файл вложения не найден', { field: 'path' });
+    throw new EtnError('NOT_FOUND', "the attachment file was not found", { field: 'path' });
   }
   let size: number;
   try {
     size = statSync(resolved).size;
   } catch {
-    throw new EtnError('VALIDATION_ERROR', 'файл вложения недоступен для чтения', {
+    throw new EtnError('VALIDATION_ERROR', "the attachment file is not readable", {
       field: 'path',
     });
   }
@@ -2335,7 +2335,7 @@ export function updateAttachmentContent(
     if (!isTextLikeFile(current)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'контент доступен только для текстовых вложений',
+        "content is available only for text attachments",
         { field: 'id' },
       );
     }
@@ -2376,7 +2376,7 @@ export function updateAttachmentContent(
     if (markdown && text.length > DEFAULT_MAX_LENGTH) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `содержимое вложения превышает лимит рендера (${text.length} > ${DEFAULT_MAX_LENGTH} символов).`,
+        `the attachment content exceeds the render limit (${text.length} > ${DEFAULT_MAX_LENGTH} characters).`,
         { field: 'data_base64', limit: DEFAULT_MAX_LENGTH },
       );
     }
@@ -2387,7 +2387,7 @@ export function updateAttachmentContent(
     try {
       writeFileSync(current.file_path!, buffer);
     } catch {
-      throw new EtnError('VALIDATION_ERROR', 'не удалось записать файл вложения', {
+      throw new EtnError('VALIDATION_ERROR', "failed to write the attachment file", {
         field: 'file_path',
       });
     }

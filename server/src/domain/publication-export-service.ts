@@ -1015,7 +1015,7 @@ export function buildPublicationBatchArtifact(
     if (opts.ids.length > PUBLICATION_EXPORT_BATCH_MAX) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Пакетный экспорт принимает не более ${PUBLICATION_EXPORT_BATCH_MAX} публикаций.`,
+        `Batch export accepts at most ${PUBLICATION_EXPORT_BATCH_MAX} publications.`,
         { field: 'ids', limit: PUBLICATION_EXPORT_BATCH_MAX },
       );
     }
@@ -1031,7 +1031,7 @@ export function buildPublicationBatchArtifact(
   } else {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Укажите ids (непустой список) или active_only: true.',
+      "Provide ids (a non-empty list) or active_only: true.",
       { field: 'ids' },
     );
   }

@@ -103,10 +103,10 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
           typeof network.type_roles.instructions === 'string'
             ? {
                 instructions_ref:
-                  'Эта сеть публикует инструкции для агентов. Прочитайте их через ' +
+                  "This network publishes instructions for agents. Read them via " +
                   '`etn.instructions { network_id: ' +
                   args.network_id +
-                  ' }` перед первым изменением.',
+                  " }` before the first change.",
               }
             : {};
         if (sectionTypeId === null) {

@@ -66,7 +66,7 @@ export function readImportSource(
     try {
       buf = readFileSync(source.path);
     } catch (err) {
-      throw new EtnError('NOT_FOUND', `Файл не найден: ${source.path}`, {
+      throw new EtnError('NOT_FOUND', `File not found: ${source.path}`, {
         path: source.path,
         cause: err instanceof Error ? err.message : String(err),
       });
@@ -74,7 +74,7 @@ export function readImportSource(
     if (buf.length > ETNX_MAX_BYTES) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Размер .etnx (${buf.length} байт) превышает лимит ${ETNX_MAX_BYTES}.`,
+        `The .etnx size (${buf.length} bytes) exceeds the limit ${ETNX_MAX_BYTES}.`,
         { size: buf.length, limit: ETNX_MAX_BYTES },
       );
     }
@@ -87,14 +87,14 @@ export function readImportSource(
   } catch (err) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Не удалось декодировать base64-архив.',
+      "Failed to decode the base64 archive.",
       { cause: err instanceof Error ? err.message : String(err) },
     );
   }
   if (buf.length > ETNX_MAX_BYTES) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Размер .etnx (${buf.length} байт) превышает лимит ${ETNX_MAX_BYTES}.`,
+      `The .etnx size (${buf.length} bytes) exceeds the limit ${ETNX_MAX_BYTES}.`,
       { size: buf.length, limit: ETNX_MAX_BYTES },
     );
   }
@@ -141,8 +141,8 @@ export async function planImportFromBuffer(
       title: c.title,
       reason:
         c.kind === 'id'
-          ? 'мысль с таким id уже есть в целевой сети'
-          : `совпадает title с мыслью ${c.existing_id ?? ''}`.trim(),
+          ? "a thought with this id already exists in the target network"
+          : `title matches thought ${c.existing_id ?? ''}`.trim(),
     })),
   };
 }

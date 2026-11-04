@@ -115,7 +115,7 @@ export function deleteOntologyEntity(
     if (role !== undefined) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Тип используется сетью в роли «${role}»; сначала снимите роль через PATCH /networks/{id}.`,
+        `The type is used by the network in the "${role}" role; remove the role via PATCH /networks/{id} first.`,
         { entity: params.kind, id: params.id, role },
       );
     }
@@ -136,7 +136,7 @@ export function deleteOntologyEntity(
     if (hasUsage) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `${params.kind} ${params.id} используется; передайте force=true для каскада.`,
+        `${params.kind} ${params.id} is in use; pass force=true for a cascade.`,
         buildUsageDetails(params.kind, params.id, usage),
       );
     }

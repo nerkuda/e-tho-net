@@ -219,22 +219,22 @@ export function buildManifest(
  */
 export function parseManifest(json: unknown): EtnxManifest {
   if (typeof json !== 'object' || json === null || Array.isArray(json)) {
-    throw new EtnError('VALIDATION_ERROR', 'Корень манифеста должен быть объектом.');
+    throw new EtnError('VALIDATION_ERROR', "The manifest root must be an object.");
   }
   const obj = json as Record<string, unknown>;
   if (obj.format !== 'etnx') {
-    throw new EtnError('VALIDATION_ERROR', `Неизвестный format: ${String(obj.format)}.`, {
+    throw new EtnError('VALIDATION_ERROR', `Unknown format: ${String(obj.format)}.`, {
       expected: 'etnx',
     });
   }
   if (typeof obj.version !== 'string' || obj.version === '') {
-    throw new EtnError('VALIDATION_ERROR', 'Поле version обязательно и должно быть строкой.');
+    throw new EtnError('VALIDATION_ERROR', "The version field is required and must be a string.");
   }
   // 1.0 (pre-registry): reject — see `oldVersionRejection` above.
   if (obj.version === '1.0') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Манифест формата 1.0 не поддерживается — справочник свойств появился в 1.1. Пересохраните экспорт из сети 0.6.5+.',
+      "Format 1.0 manifests are not supported — the property registry appeared in 1.1. Re-export from network 0.6.5+.",
       { field: 'version', manifest_version: obj.version, supported_version: ETNX_VERSION },
     );
   }
@@ -254,18 +254,18 @@ export function parseManifest(json: unknown): EtnxManifest {
     'attachments',
   ]) {
     if (!(key in obj)) {
-      throw new EtnError('VALIDATION_ERROR', `Отсутствует обязательное поле манифеста: ${key}.`, {
+      throw new EtnError('VALIDATION_ERROR', `Missing required manifest field: ${key}.`, {
         field: key,
       });
     }
   }
   if (typeof obj.exported_at !== 'string') {
-    throw new EtnError('VALIDATION_ERROR', 'exported_at должен быть строкой ISO-8601.', {
+    throw new EtnError('VALIDATION_ERROR', "exported_at must be an ISO-8601 string.", {
       field: 'exported_at',
     });
   }
   if (typeof obj.source !== 'object' || obj.source === null) {
-    throw new EtnError('VALIDATION_ERROR', 'source должен быть объектом.', { field: 'source' });
+    throw new EtnError('VALIDATION_ERROR', "source must be an object.", { field: 'source' });
   }
   for (const key of [
     'thought_types',
@@ -281,7 +281,7 @@ export function parseManifest(json: unknown): EtnxManifest {
     'attachments',
   ]) {
     if (!Array.isArray(obj[key])) {
-      throw new EtnError('VALIDATION_ERROR', `${key} должен быть массивом.`, { field: key });
+      throw new EtnError('VALIDATION_ERROR', `${key} must be an array.`, { field: key });
     }
   }
   // Секции «Публикации» (формат 1.2, задача 950e0a59) ОПЦИОНАЛЬНЫ: манифест
@@ -299,7 +299,7 @@ export function parseManifest(json: unknown): EtnxManifest {
       continue;
     }
     if (!Array.isArray(obj[key])) {
-      throw new EtnError('VALIDATION_ERROR', `${key} должен быть массивом.`, { field: key });
+      throw new EtnError('VALIDATION_ERROR', `${key} must be an array.`, { field: key });
     }
   }
   return obj as unknown as EtnxManifest;
@@ -326,7 +326,7 @@ function collectThoughtIds(
 ): string[] {
   for (const id of rootIds) {
     if (getThought(ndb, id) === null) {
-      throw new EtnError('NOT_FOUND', `Мысль ${id} не найдена.`);
+      throw new EtnError('NOT_FOUND', `Thought ${id} not found.`);
     }
   }
   if (!options.include_subtree) {
@@ -339,7 +339,7 @@ function collectThoughtIds(
   if (result.truncated) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Подграф превысил лимит ${ETNX_EXPORT_MAX_NODES} узлов. Уменьшите subtree_depth или разбейте экспорт.`,
+      `The subgraph exceeded the limit of ${ETNX_EXPORT_MAX_NODES} nodes. Reduce subtree_depth or split the export.`,
       { limit: ETNX_EXPORT_MAX_NODES },
     );
   }

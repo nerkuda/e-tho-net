@@ -102,7 +102,7 @@ export function updateNetwork(
     if (!Number.isInteger(value) || value < 1 || value > 7) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'first_day_of_week должен быть целым числом от 1 (понедельник) до 7 (воскресенье).',
+        "first_day_of_week must be an integer from 1 (Monday) to 7 (Sunday).",
         { field: 'first_day_of_week', value },
       );
     }
@@ -179,7 +179,7 @@ export function updateNetwork(
 
   const network = systemDb.getNetworkById(existing.id);
   if (network === null) {
-    throw new EtnError('INTERNAL', 'Сеть исчезла сразу после обновления.', {
+    throw new EtnError('INTERNAL', "The network disappeared right after the update.", {
       network_id: existing.id,
     });
   }

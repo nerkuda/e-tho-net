@@ -196,8 +196,8 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
     // отбросил неизвестный ключ.
     .refine((v) => v.thought === undefined || v.ref !== undefined, {
       message:
-        'элемент с блоком `thought` (новая мысль) обязан объявить локальный `ref` ' +
-        'на уровне элемента `thoughts[]`, рядом с `thought`, а не внутри него: ' +
+        'an item with a `thought` block (a new thought) must declare a local `ref` ' +
+        'at the `thoughts[]` item level, next to `thought`, not inside it: ' +
         '`{ "ref": "a", "thought": { "title": "…" } }`',
     })
     // Item-level `type_id`/`type` (bug 870c0c0d): тип задаётся по id ИЛИ по

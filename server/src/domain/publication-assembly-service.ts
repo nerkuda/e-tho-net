@@ -727,11 +727,11 @@ function buildDocument(
     pub.text_sources.forEach((propId, sourceIndex) => {
       const prop = propertyRow(propId);
       if (prop === null) {
-        warnings.push(`свойство текстов ${propId} не найдено`);
+        warnings.push(`text property ${propId} not found`);
         return;
       }
       if (prop.value_type !== 'link') {
-        warnings.push(`свойство текстов «${prop.name}» не является свойством-связью`);
+        warnings.push(`text property "${prop.name}" is not a link property`);
         return;
       }
       for (const edge of readPropertyEdges(ndb, section.thoughtId, prop)) {
@@ -1311,7 +1311,7 @@ export function acceptPublicationCandidate(
     const pub = getPublicationOrThrow(ndb, publicationId);
     const visible = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ? LIMIT 1').get(thoughtId);
     if (visible === undefined) {
-      throw new EtnError('NOT_FOUND', `Мысль ${thoughtId} не найдена.`, {
+      throw new EtnError('NOT_FOUND', `Thought ${thoughtId} not found.`, {
         entity: 'thought',
         id: thoughtId,
       });
@@ -1340,7 +1340,7 @@ export function acceptPublicationCandidate(
       listPublicationExclusions(ndb, publicationId).map((e) => e.thought_id),
     );
     if (!selectedIds.includes(thoughtId) || excluded.has(thoughtId)) {
-      throw new EtnError('VALIDATION_ERROR', `Мысль ${thoughtId} не является кандидатом публикации.`, {
+      throw new EtnError('VALIDATION_ERROR', `Thought ${thoughtId} is not a publication candidate.`, {
         entity: 'thought',
         id: thoughtId,
         code: 'not_a_candidate',

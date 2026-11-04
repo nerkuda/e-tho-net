@@ -327,7 +327,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestJobById, req);
         const job = getExportJob(input.job_id);
         if (job === null) {
-          throw new EtnError('NOT_FOUND', 'Задача экспорта не найдена.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Export job not found.", undefined, req.id);
         }
         sendSuccess(reply, job);
       },
@@ -358,7 +358,7 @@ export function createSearchRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (content === null) {
           throw new EtnError(
             'NOT_FOUND',
-            'Результат задачи экспорта недоступен.',
+            "The export job result is not available.",
             undefined,
             req.id,
           );

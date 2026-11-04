@@ -62,7 +62,7 @@ function endOfUtcDay(year: number, month: number, day: number): string {
 function invalidDate(field: string, value: string): EtnError {
   return new EtnError(
     'VALIDATION_ERROR',
-    `${field}: ожидается полный UTC-инстанс ISO-8601 либо «голая дата» YYYY-MM-DD`,
+    `${field}: a full ISO-8601 UTC instant or a bare YYYY-MM-DD date is expected`,
     { field, value },
   );
 }

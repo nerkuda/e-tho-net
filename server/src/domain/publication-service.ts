@@ -301,7 +301,7 @@ function assertPublicationOrderKeysKnown(
     ) {
       continue;
     }
-    throw new EtnError('VALIDATION_ERROR', `Узел ${key} не принадлежит публикации.`, {
+    throw new EtnError('VALIDATION_ERROR', `Node ${key} does not belong to the publication.`, {
       field: 'node_key',
       code: 'unknown_node_key',
       node_key: key,
@@ -371,7 +371,7 @@ function assertSummaryHasNoHeadings(summaryMd: string | null): void {
   if (summaryHasMarkdownHeadings(summaryMd)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'резюме публикации не может содержать заголовки (markdown без заголовков)',
+      "the publication summary must not contain headings (markdown without headings)",
       { field: 'summary_md', code: 'summary_headings_forbidden' },
     );
   }
@@ -380,7 +380,7 @@ function assertSummaryHasNoHeadings(summaryMd: string | null): void {
 /** Диапазон нумерации: `numbering_from ≤ numbering_to`, когда обе заданы. */
 function assertNumberingRange(from: number | null, to: number | null): void {
   if (numberingRangeInvalid(from, to)) {
-    throw new EtnError('VALIDATION_ERROR', 'numbering_from не может быть больше numbering_to', {
+    throw new EtnError('VALIDATION_ERROR', "numbering_from must not be greater than numbering_to", {
       field: 'numbering_from',
       code: 'numbering_range',
     });
@@ -395,7 +395,7 @@ function assertSingleCover(
   if (coverAttachmentId !== null && coverUrl !== null) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'у публикации может быть только один источник обложки: вложение или URL',
+      "a publication can have only one cover source: an attachment or a URL",
       { field: 'cover_attachment_id', code: 'cover_conflict' },
     );
   }
@@ -412,7 +412,7 @@ function assertCoverAttachmentOwned(
   if (!hasOwnership(ndb, attachmentId, 'publication', publicationId)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'обложка должна ссылаться на строку-вложение этой публикации',
+      "the cover must reference an attachment row of this publication",
       { field: 'cover_attachment_id', code: 'cover_attachment_invalid' },
     );
   }
@@ -424,7 +424,7 @@ function assertRecipeNoOverlap(textSources: string[], extraProperties: string[])
   if (overlap.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'свойства текстов и «дополнительных материалов» не должны пересекаться',
+      "text and \"additional materials\" properties must not overlap",
       { field: 'text_sources', code: 'recipe_overlap', overlap },
     );
   }
@@ -445,7 +445,7 @@ function normalizePropertyIds(ndb: NetworkDb, ids: string[] | undefined, field: 
   );
   const missing = unique.filter((id) => !found.has(id));
   if (missing.length > 0) {
-    throw new EtnError('VALIDATION_ERROR', 'указаны несуществующие свойства рецепта', {
+    throw new EtnError('VALIDATION_ERROR', "the recipe references non-existent properties", {
       field,
       missing,
     });
@@ -456,11 +456,11 @@ function normalizePropertyIds(ndb: NetworkDb, ids: string[] | undefined, field: 
 /** Проверить название публикации. */
 function validatePublicationTitle(title: unknown): string {
   if (typeof title !== 'string' || title.trim() === '') {
-    throw new EtnError('VALIDATION_ERROR', 'title обязателен', { field: 'title' });
+    throw new EtnError('VALIDATION_ERROR', "title is required", { field: 'title' });
   }
   const value = title.trim();
   if (value.length > TITLE_MAX) {
-    throw new EtnError('VALIDATION_ERROR', `title длиннее ${TITLE_MAX} символов`, {
+    throw new EtnError('VALIDATION_ERROR', `title is longer than ${TITLE_MAX} characters`, {
       field: 'title',
     });
   }
@@ -811,7 +811,7 @@ export function purgePublication(ndb: NetworkDb, id: string): void {
     if (!isBaseContext(ndb)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'физическое удаление публикации доступно только в основе',
+        "hard deletion of a publication is available only in the base layer",
         { entity: 'publication', id, code: 'purge_base_only' },
       );
     }
@@ -820,7 +820,7 @@ export function purgePublication(ndb: NetworkDb, id: string): void {
     if (check.blocked) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'публикация используется в свойствах или удерживается слоем и не может быть удалена',
+        "the publication is used in properties or held by a layer and cannot be deleted",
         { entity: 'publication', id, blocking: check.blocking, code: 'deletion_blocked' },
       );
     }
@@ -1119,7 +1119,7 @@ function publicationMemberThoughtIds(
 function assertThoughtVisible(ndb: NetworkDb, thoughtId: string): void {
   const row = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ? LIMIT 1').get(thoughtId);
   if (row === undefined) {
-    throw new EtnError('NOT_FOUND', `Мысль ${thoughtId} не найдена.`, {
+    throw new EtnError('NOT_FOUND', `Thought ${thoughtId} not found.`, {
       entity: 'thought',
       id: thoughtId,
     });
@@ -1138,7 +1138,7 @@ function assertThoughtInPublication(
   assertThoughtVisible(ndb, thoughtId);
   const members = publicationMemberThoughtIds(ndb, publicationId, pub, actorUserId, tokenContext);
   if (!members.has(thoughtId)) {
-    throw new EtnError('VALIDATION_ERROR', `Мысль ${thoughtId} не входит в публикацию.`, {
+    throw new EtnError('VALIDATION_ERROR', `Thought ${thoughtId} is not part of the publication.`, {
       entity: 'thought',
       id: thoughtId,
       code: 'thought_not_in_publication',
@@ -1323,7 +1323,7 @@ function getShelfOrThrow(ndb: NetworkDb, id: string): Shelf {
 /** Проверить название полки (непустое, в пределах слоя уникальное среди ЖИВЫХ). */
 function validateShelfTitle(ndb: NetworkDb, title: unknown, excludeId?: string): string {
   if (typeof title !== 'string' || title.trim() === '') {
-    throw new EtnError('VALIDATION_ERROR', 'title полки обязателен', { field: 'title' });
+    throw new EtnError('VALIDATION_ERROR', "shelf title is required", { field: 'title' });
   }
   const value = title.trim();
   const key = normalizeTitle(value);
@@ -1341,7 +1341,7 @@ function validateShelfTitle(ndb: NetworkDb, title: unknown, excludeId?: string):
     .prepare('SELECT id FROM shelves_v WHERE title_key = ? AND id <> ? LIMIT 1')
     .get(key, excludeId ?? '') as { id: string } | undefined;
   if (clash !== undefined) {
-    throw new EtnError('VALIDATION_ERROR', 'полка с таким именем уже существует', {
+    throw new EtnError('VALIDATION_ERROR', "a shelf with this name already exists", {
       field: 'title',
       code: 'shelf_title_taken',
     });
@@ -1361,7 +1361,7 @@ function asShelfTitleConflict<T>(fn: () => T): T {
   } catch (err) {
     const code = (err as { code?: unknown }).code;
     if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
-      throw new EtnError('VALIDATION_ERROR', 'полка с таким именем уже существует', {
+      throw new EtnError('VALIDATION_ERROR', "a shelf with this name already exists", {
         field: 'title',
         code: 'shelf_title_taken',
       });
@@ -1553,7 +1553,7 @@ export function deleteShelf(ndb: NetworkDb, id: string): void {
     if (!isBaseContext(ndb)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'физическое удаление полки доступно только в основе',
+        "hard deletion of a shelf is available only in the base layer",
         { entity: 'shelf', id, code: 'purge_base_only' },
       );
     }

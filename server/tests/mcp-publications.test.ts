@@ -551,7 +551,7 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
         });
         assert.equal(badOrder.isError, true);
         assert.match(toolText(badOrder), /VALIDATION_ERROR/);
-        assert.match(toolText(badOrder), /не принадлежит публикации/);
+        assert.match(toolText(badOrder), /does not belong to the publication/);
 
         // 2. Не-кандидат → 422 (в отборе публикации нет).
         const notCandidate = await callOp(handle.client, 'publications.accept', {
@@ -561,7 +561,7 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
         });
         assert.equal(notCandidate.isError, true);
         assert.match(toolText(notCandidate), /VALIDATION_ERROR/);
-        assert.match(toolText(notCandidate), /не является кандидатом/);
+        assert.match(toolText(notCandidate), /is not a publication candidate/);
 
         // 3. Постороннее исключение → 422 (мысль не входит в публикацию).
         const badExclusion = await callOp(handle.client, 'publications.exclusions', {
@@ -571,7 +571,7 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
         });
         assert.equal(badExclusion.isError, true);
         assert.match(toolText(badExclusion), /VALIDATION_ERROR/);
-        assert.match(toolText(badExclusion), /не входит в публикацию/);
+        assert.match(toolText(badExclusion), /is not part of the publication/);
 
         // 4. Деструктив без confirm → VALIDATION_ERROR, домен не вызван.
         const noConfirm = await callOp(handle.client, 'publications.delete', {
@@ -580,7 +580,7 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
         });
         assert.equal(noConfirm.isError, true);
         assert.match(toolText(noConfirm), /VALIDATION_ERROR/);
-        assert.match(toolText(noConfirm), /требуется confirm: true/);
+        assert.match(toolText(noConfirm), /confirm: true is required/);
         // Публикация не тронута.
         const still = (await call(handle.client, 'publications.get', {
           network_id: ctx.networkId,
@@ -621,13 +621,13 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
         //    строкой.» на отсутствующее поле).
         const restMissing = await restApi('POST', '/publications', {});
         assert.equal(restMissing.statusCode, 422);
-        const restMissingMessage = /title обязателен\./.exec(restMissing.body)?.[0];
+        const restMissingMessage = /title is required\./.exec(restMissing.body)?.[0];
         assert.ok(restMissingMessage, `REST: ожидался канонический текст, факт: ${restMissing.body}`);
         const mcpMissing = await callOp(handle.client, 'publications.create', {
           network_id: mcp.networkId,
         });
         assert.equal(mcpMissing.isError, true);
-        assert.match(toolText(mcpMissing), /ETN error \[VALIDATION_ERROR\].*title обязателен\./s);
+        assert.match(toolText(mcpMissing), /ETN error \[VALIDATION_ERROR\].*title is required\./s);
         assert.ok(
           toolText(mcpMissing).includes(restMissingMessage),
           `MCP и REST дают одинаковый текст «${restMissingMessage}», факт: ${toolText(mcpMissing)}`,
@@ -646,8 +646,8 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
           ...bothCovers,
         });
         assert.equal(mcpCover.isError, true);
-        const restCoverMessage = /только один источник обложки[^"]*/.exec(restCover.body)?.[0];
-        const mcpCoverMessage = /только один источник обложки[^\n]*/.exec(toolText(mcpCover))?.[0];
+        const restCoverMessage = /only one cover source[^"]*/.exec(restCover.body)?.[0];
+        const mcpCoverMessage = /only one cover source[^\n]*/.exec(toolText(mcpCover))?.[0];
         assert.ok(restCoverMessage, 'REST вернул сообщение о конфликте обложки');
         assert.equal(mcpCoverMessage, restCoverMessage, 'сообщения обложки совпадают');
 
@@ -661,9 +661,9 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
         });
         assert.equal(mcpSummary.isError, true);
         const restSummaryMessage =
-          /резюме публикации не может содержать заголовки[^"]*/.exec(restSummary.body)?.[0];
+          /summary must not contain headings[^"]*/.exec(restSummary.body)?.[0];
         const mcpSummaryMessage =
-          /резюме публикации не может содержать заголовки[^\n]*/.exec(toolText(mcpSummary))?.[0];
+          /summary must not contain headings[^\n]*/.exec(toolText(mcpSummary))?.[0];
         assert.ok(restSummaryMessage);
         assert.equal(mcpSummaryMessage, restSummaryMessage);
       } finally {

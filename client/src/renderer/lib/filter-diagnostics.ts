@@ -342,11 +342,45 @@ function issueFromDiagnostic(diagnostic: FilterDiagnostic): FilterIssue {
     source: 'server',
     code: diagnostic.code,
     path: typeof diagnostic.path === 'string' ? diagnostic.path : '',
-    message: diagnostic.message,
+    message: diagnosticMessage(diagnostic),
     label: diagnostic.label ?? null,
     valueLabel: diagnostic.value_label ?? null,
     deletedAt: diagnostic.deleted_at ?? null,
   };
+}
+
+/**
+ * Пользовательский текст диагностики ядра по machine-readable `code`
+ * (ADR daab6ac4, п. 4): серверный `message` английский и не показывается.
+ * Снапшоты имён и дату добавляет {@link filterIssueReason}.
+ */
+function diagnosticMessage(diagnostic: FilterDiagnostic): string {
+  switch (diagnostic.code) {
+    case 'entity_deleted':
+      return t('filterDiagnostics.server.entityDeleted');
+    case 'property_detached':
+      return t('filterDiagnostics.server.propertyDetached');
+    default:
+      return t('filterDiagnostics.server.unknown');
+  }
+}
+
+/** Пользовательский текст неразрешённого токена по machine-readable `reason`. */
+function tokenIssueMessage(token: string, reason: string): string {
+  switch (reason) {
+    case 'unknown_token':
+      return t('filterDiagnostics.server.tokenUnknown', token);
+    case 'time_context_required':
+      return t('filterDiagnostics.server.tokenTimeContext', token);
+    case 'incompatible_operation':
+      return t('filterDiagnostics.server.tokenIncompatible');
+    case 'unknown_property':
+      return t('filterDiagnostics.server.tokenUnknownProperty');
+    case 'empty_value':
+      return t('filterDiagnostics.server.tokenEmptyValue');
+    default:
+      return t('filterDiagnostics.server.tokenUnresolved', token);
+  }
 }
 
 /** Свести серверные данные выборки/ошибки в список записей редактора. */
@@ -360,7 +394,7 @@ export function filterIssuesFromPayload(payload: FilterDiagnosticsPayload): Filt
       source: 'server',
       code: 'token_unresolved',
       path: typeof token.path === 'string' ? token.path : '',
-      message: token.message,
+      message: tokenIssueMessage(token.token, token.reason),
     });
   }
   for (const message of payload.messages ?? []) {

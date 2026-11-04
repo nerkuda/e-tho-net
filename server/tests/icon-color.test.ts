@@ -19,7 +19,7 @@ import {
   type RestTestContext,
 } from './rest-helpers.js';
 
-const ICON_COLOR_MESSAGE = 'icon_color должен быть HEX-цветом вида #rrggbb.';
+const ICON_COLOR_MESSAGE = 'icon_color must be a HEX color of the form #rrggbb.';
 const COLOR = '#ff8800';
 
 interface RestError {

@@ -112,7 +112,7 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
           arguments: { network_id: ctx.networkId, thought_ids: ids },
         });
         assert.equal(result.isError, true);
-        assert.match(toolText(result), /ETN error \[VALIDATION_ERROR\]: thought_ids должен содержать не более/);
+        assert.match(toolText(result), /ETN error \[VALIDATION_ERROR\]: thought_ids must contain at most/);
       } finally {
         await handle.close();
       }

@@ -70,7 +70,7 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const network = rt.deps.systemDb.getNetworkById(args.network_id);
         if (network === null) {
-          throw new EtnError('NOT_FOUND', `Сеть ${args.network_id} не найдена.`, {
+          throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`, {
             network_id: args.network_id,
           });
         }

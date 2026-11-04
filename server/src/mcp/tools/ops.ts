@@ -592,7 +592,7 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWritable(rt);
       requireWriteBudget(rt);
       if (a.title === undefined && a.comment === undefined) {
-        throw new EtnError('VALIDATION_ERROR', 'нечего менять: передайте title и/или comment.', {
+        throw new EtnError('VALIDATION_ERROR', "nothing to change: provide title and/or comment.", {
           fields: ['title', 'comment'],
         });
       }
@@ -763,7 +763,7 @@ const HANDLERS: Record<string, OpHandler> = {
         selection = {};
         for (const [table, ids] of Object.entries(a.tables)) {
           if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
-            throw new EtnError('VALIDATION_ERROR', `неизвестная ветвимая таблица «${table}».`, {
+            throw new EtnError('VALIDATION_ERROR', `unknown branchable table "${table}".`, {
               field: 'tables',
               table,
               allowed: BRANCHABLE_TABLES,
@@ -839,7 +839,7 @@ const HANDLERS: Record<string, OpHandler> = {
       const selection: MergeSelection = {};
       for (const [table, ids] of Object.entries(a.tables)) {
         if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
-          throw new EtnError('VALIDATION_ERROR', `неизвестная ветвимая таблица «${table}».`, {
+          throw new EtnError('VALIDATION_ERROR', `unknown branchable table "${table}".`, {
             field: 'tables',
             table,
             allowed: BRANCHABLE_TABLES,
@@ -1282,7 +1282,7 @@ const HANDLERS: Record<string, OpHandler> = {
       const result = await subgraphAsync(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
       // `destination` — только для файлового `.etnx` (задача 99c16033).
       if (a.destination !== undefined && format !== 'etnx') {
-        throw new EtnError('VALIDATION_ERROR', 'destination применим только к format: "etnx".', {
+        throw new EtnError('VALIDATION_ERROR', "destination applies only to format: \"etnx\".", {
           field: 'destination',
         });
       }
@@ -1494,7 +1494,7 @@ const HANDLERS: Record<string, OpHandler> = {
       if (a.network_id === undefined) {
         const displayName = (a.display_name ?? '').trim();
         if (displayName.length === 0) {
-          throw new EtnError('VALIDATION_ERROR', 'display_name обязательно при создании сети.', {
+          throw new EtnError('VALIDATION_ERROR', "display_name is required when creating a network.", {
             field: 'display_name',
           });
         }
@@ -1504,7 +1504,7 @@ const HANDLERS: Record<string, OpHandler> = {
           if (value !== null) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              `На создании сети нельзя указывать непустую роль type_roles.${role}: в новой сети ещё нет типов.`,
+              `A non-empty type_roles.${role} role cannot be provided when creating a network: the new network has no types yet.`,
               { field: `type_roles.${role}`, value },
             );
           }
@@ -1528,11 +1528,11 @@ const HANDLERS: Record<string, OpHandler> = {
         const networkId = a.network_id;
         const existing = rt.deps.systemDb.getNetworkById(networkId);
         if (existing === null) {
-          throw new EtnError('NOT_FOUND', `Сеть ${networkId} не найдена.`, { network_id: networkId });
+          throw new EtnError('NOT_FOUND', `Network ${networkId} not found.`, { network_id: networkId });
         }
         const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId);
         if (!rt.deps.auth.isAdmin && role !== 'owner') {
-          throw new EtnError('FORBIDDEN', 'Требуются права владельца сети или администратора.', {
+          throw new EtnError('FORBIDDEN', "Network owner or administrator rights are required.", {
             network_id: networkId,
           });
         }
@@ -1593,13 +1593,13 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWritable(rt);
       requireWriteBudget(rt);
       if (!rt.deps.auth.isAdmin) {
-        throw new EtnError('FORBIDDEN', 'Удаление сети доступно только администратору сервера.', {
+        throw new EtnError('FORBIDDEN', "Only a server administrator can delete a network.", {
           network_id: a.network_id,
         });
       }
       const existing = rt.deps.systemDb.getNetworkById(a.network_id);
       if (existing === null) {
-        throw new EtnError('NOT_FOUND', `Сеть ${a.network_id} не найдена.`, { network_id: a.network_id });
+        throw new EtnError('NOT_FOUND', `Network ${a.network_id} not found.`, { network_id: a.network_id });
       }
       // Удаление → событие (ошибка abcd3f0b): при сбое удаления фантомного
       // network.deleted быть не должно.
@@ -2033,7 +2033,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (topic !== undefined) {
           return { content: [{ type: 'text', text: topic.body_md }] };
         }
-        throw new EtnError('VALIDATION_ERROR', `Неизвестное действие «${args.topic}».`, {
+        throw new EtnError('VALIDATION_ERROR', `Unknown action "${args.topic}".`, {
           field: 'topic',
           allowed: [...OPS_ACTION_NAMES, ...GUIDE_TOPIC_NAMES],
         });
@@ -2060,7 +2060,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
       try {
         const entry = OPS_ACTIONS_BY_NAME.get(args.action);
         if (entry === undefined) {
-          throw new EtnError('VALIDATION_ERROR', `Неизвестное действие «${args.action}». Список — в etn.guide.`, {
+          throw new EtnError('VALIDATION_ERROR', `Unknown action "${args.action}". See the list in etn.guide.`, {
             field: 'action',
             allowed: OPS_ACTION_NAMES,
           });
@@ -2082,7 +2082,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (entry.destructive && args.confirm !== true) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `Действие «${entry.action}» деструктивно: требуется confirm: true.`,
+            `Action "${entry.action}" is destructive: confirm: true is required.`,
             { field: 'confirm' },
           );
         }
@@ -2091,7 +2091,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (verr !== null) throw verr;
         const handler = HANDLERS[entry.action];
         if (handler === undefined) {
-          throw new EtnError('INTERNAL', `Нет обработчика для действия «${entry.action}».`);
+          throw new EtnError('INTERNAL', `No handler for action "${entry.action}".`);
         }
         return await handler(rt, params, extra as { requestId?: string | number });
       } catch (err) {

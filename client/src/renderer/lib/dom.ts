@@ -9,7 +9,8 @@
 
 import { PROPERTY_SIDE_ERROR_REASON, isNotConnectedErrorMessage } from '@etn/shared';
 
-import { t, formatDate, formatDateTime } from './i18n.js';
+import { getLang, hasMessage, t, formatDate, formatDateTime } from './i18n.js';
+import type { MessageKey } from './i18n.js';
 import { splitHighlightRuns } from './pure.js';
 
 /** Creates an element with an optional class and text. */
@@ -186,8 +187,12 @@ const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
  *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) →
  *   формулировка пользователя по `details.reason`: серверный текст адресован
  *   API/агентам и называет `side`/`source`/`target` (ошибка d9bc6012);
- * - business errors (`VALIDATION_ERROR`, `DUPLICATE`, `LOCKED`,
- *   `VERSION_CONFLICT`, …) keep their server-authored message verbatim.
+ * - серверные ошибки (`code` есть) — словарный текст по цепочке
+ *   `code` → `details.reason`/`details.issue` → общий текст (ADR daab6ac4):
+ *   `error.message` английский и пользователю не показывается, причина по
+ *   тексту не определяется;
+ * - локальные ошибки без `code` (проверки клиента, сообщения main) — свой
+ *   текст как есть.
  */
 export function errText(err: unknown): string {
   if (isConnectionLostError(err)) return t('errors.connectionLost');
@@ -200,7 +205,56 @@ export function errText(err: unknown): string {
   if (RAW_NETWORK_ERROR_RE.test(message)) return t('errors.serverUnavailable');
   const sideText = propertySideErrorText(like);
   if (sideText !== null) return sideText;
+  const serverText = serverErrorText(like);
+  if (serverText !== null) return serverText;
   return message;
+}
+
+/**
+ * Текст серверной ошибки по машиночитаемым полям (ADR daab6ac4, п. 4):
+ * `code` → уточняющий `details.reason`/`details.issue` → общий текст.
+ *
+ * `error.message` здесь не используется вовсе: он английский и адресован
+ * разработчикам, агентам и журналам. Неизвестный код или причина дают общий
+ * локализованный текст, а не серверную строку; параметров из сообщения не
+ * берём — только из `details`.
+ */
+const CODE_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
+  VALIDATION_ERROR: 'errors.code.VALIDATION_ERROR',
+  BAD_REQUEST: 'errors.code.BAD_REQUEST',
+  UNAUTHORIZED: 'errors.code.UNAUTHORIZED',
+  FORBIDDEN: 'errors.code.FORBIDDEN',
+  NOT_FOUND: 'errors.code.NOT_FOUND',
+  VERSION_CONFLICT: 'errors.code.VERSION_CONFLICT',
+  DUPLICATE: 'errors.code.DUPLICATE',
+  LOCKED: 'errors.code.LOCKED',
+  LOCK_NOT_FOUND: 'errors.code.LOCK_NOT_FOUND',
+  RATE_LIMITED: 'errors.code.RATE_LIMITED',
+  PROTECTED_ENTITY: 'errors.code.PROTECTED_ENTITY',
+  CLIENT_VERSION_UNSUPPORTED: 'errors.code.CLIENT_VERSION_UNSUPPORTED',
+  UPDATE_INSTALLER_FAILED: 'errors.code.UPDATE_INSTALLER_FAILED',
+};
+
+function serverErrorText(like: ErrorLike | null): string | null {
+  const code = typeof like?.code === 'string' ? like.code : null;
+  if (code === null) return null;
+  const details = like?.details;
+  if (typeof details === 'object' && details !== null) {
+    const record = details as { reason?: unknown; issue?: unknown };
+    const token =
+      typeof record.reason === 'string'
+        ? record.reason
+        : typeof record.issue === 'string'
+          ? record.issue
+          : null;
+    if (token !== null) {
+      const reasonKey = `errors.code.${code}.${token}` as MessageKey;
+      if (hasMessage(getLang(), reasonKey)) return t(reasonKey);
+    }
+  }
+  const key = CODE_ERROR_KEYS[code];
+  if (key !== undefined) return t(key);
+  return t('errors.unknownCode');
 }
 
 /**

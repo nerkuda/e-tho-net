@@ -336,7 +336,7 @@ export interface PublicationAssembly {
  * и клиента (по нему показывает пустое состояние документа): строка не должна
  * разъезжаться между сторонами.
  */
-export const PUBLICATION_EMPTY_RECIPE_WARNING = 'отбор заголовков не задан';
+export const PUBLICATION_EMPTY_RECIPE_WARNING = "the heading view is not set";
 
 /** Параметры сборки. */
 export interface PublicationAssemblyQuery {

@@ -227,7 +227,7 @@ describe(
         // Два источника порядка — конфликт.
         assert.throws(
           () => mcpRequestToQuery({ ast, sort: 'created_at' }, { maxNodes: 100 }),
-          /VALIDATION_ERROR|дважды/,
+          /VALIDATION_ERROR|twice/,
         );
       } finally {
         ndb.close();
@@ -277,7 +277,7 @@ describe(
         );
         assert.throws(
           () => runTitles(ndb, [{ key: 'НетТакого', order: 'asc' }]),
-          /удалено из реестра|не найден/,
+          /deleted from the network registry|was not found/,
           'неизвестный ключ по-прежнему отвергается (диагностика с именем ключа)',
         );
       } finally {
@@ -472,7 +472,7 @@ describe(
         // Курсор от asc под desc-сортировкой → ошибка (чужой порядок).
         assert.throws(
           () => q([{ key: 'created_at', order: 'desc' }] as FilterAstSortKey[], page1.next_cursor!),
-          /курсор/i,
+          /cursor/i,
         );
 
         // Тот же порядок → страница 2 продолжает без дублей/пропусков.
@@ -490,7 +490,7 @@ describe(
         assert.ok(bySrok.next_cursor, 'курсор по свойству-ключу есть');
         assert.throws(
           () => q([{ key: 'Дедлайн', order: 'asc' }] as FilterAstSortKey[], bySrok.next_cursor!),
-          /курсор/i,
+          /cursor/i,
         );
       } finally {
         ndb.close();

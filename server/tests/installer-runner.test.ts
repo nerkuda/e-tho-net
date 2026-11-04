@@ -327,7 +327,7 @@ describe('недопустимая цель обновления', () => {
       runner.run(makeTarget({ downloadUrl: null })),
       (err: unknown) => {
         assert.ok(err instanceof InstallerTargetError);
-        assert.match(err.message, /ссылки на установщик/);
+        assert.match(err.message, /installer link/);
         return true;
       },
     );
@@ -427,7 +427,7 @@ describe('ошибки скачивания', () => {
         runner.run(makeTarget()),
         (err: unknown) => {
           assert.ok(err instanceof InstallerDownloadError);
-          assert.match(err.message, /время ожидания/);
+          assert.match(err.message, /timed out/);
           return true;
         },
       );
@@ -566,7 +566,7 @@ describe('тайм-аут ожидания установщика', () => {
         assert.equal(err.timeoutMs, 60);
         assert.equal(err.installerPath, installerPath);
         assert.equal(err.logPath, logPath);
-        assert.match(err.message, /оставлен работать/);
+        assert.match(err.message, /left running/);
         assert.match(err.message, /install-20261029-120000\.log/);
         return true;
       },
@@ -591,7 +591,7 @@ describe('тайм-аут ожидания установщика', () => {
       (err: unknown) => {
         assert.ok(err instanceof InstallerTimeoutError);
         assert.equal(err.logPath, null);
-        assert.match(err.message, /журнал установщика не найден/);
+        assert.match(err.message, /installer log not found/);
         return true;
       },
     );

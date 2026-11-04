@@ -141,7 +141,7 @@ function assertExactKeys(
   const unknown = Object.keys(obj).filter((k) => !allowed.includes(k));
   if (unknown.length > 0) {
     fail(
-      `${path}: неизвестные поля: ${unknown.join(', ')}. Допустимы: ${allowed.join(', ')}.`,
+      `${path}: unknown fields: ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}.`,
       { field: path, fields: unknown },
       requestId,
     );
@@ -163,19 +163,19 @@ function isScalar(value: unknown): value is FilterAstScalar {
  */
 export function parseFilterAst(input: unknown, requestId?: string): FilterAst {
   if (!isPlainObject(input)) {
-    fail('Отбор должен быть объектом.', { field: 'filter' }, requestId);
+    fail("The view must be an object.", { field: 'filter' }, requestId);
   }
-  assertExactKeys(input, ROOT_KEYS, 'Отбор', requestId);
+  assertExactKeys(input, ROOT_KEYS, "View", requestId);
 
   if (typeof input['version'] !== 'number' || input['version'] !== FILTER_AST_VERSION) {
     fail(
-      `Неподдерживаемая версия формы отбора: ожидается ${FILTER_AST_VERSION}.`,
+      `Unsupported filter form version: ${FILTER_AST_VERSION} is expected.`,
       { field: 'version', expected: FILTER_AST_VERSION },
       requestId,
     );
   }
   if (!('filter' in input)) {
-    fail('Отбор обязан нести дерево условий в поле filter.', { field: 'filter' }, requestId);
+    fail("The view must carry a condition tree in the filter field.", { field: 'filter' }, requestId);
   }
   const node = parseFilterAstNode(input['filter'], 'filter', requestId);
 
@@ -193,12 +193,12 @@ export function parseFilterAstNode(
   requestId?: string,
 ): FilterAstNode {
   if (!isPlainObject(input)) {
-    fail(`${path}: узел отбора должен быть объектом.`, { field: path }, requestId);
+    fail(`${path}: a view node must be an object.`, { field: path }, requestId);
   }
   if ('op' in input) return parseGroup(input, path, requestId);
   if ('entity' in input) return parseLeaf(input, path, requestId);
   fail(
-    `${path}: узел отбора должен быть группой (поле op) либо условием (поле entity).`,
+    `${path}: a view node must be a group (op field) or a condition (entity field).`,
     { field: path },
     requestId,
   );
@@ -208,19 +208,19 @@ function parseGroup(input: Record<string, unknown>, path: string, requestId?: st
   assertExactKeys(input, GROUP_KEYS, path, requestId);
   const op = input['op'];
   if (typeof op !== 'string' || !(FILTER_AST_GROUP_OPS as readonly string[]).includes(op)) {
-    fail(`${path}.op: недопустимый оператор группы.`, {
+    fail(`${path}.op: invalid group operator.`, {
       field: `${path}.op`,
       allowed: FILTER_AST_GROUP_OPS,
     }, requestId);
   }
   const rawChildren = input['children'];
   if (!Array.isArray(rawChildren)) {
-    fail(`${path}.children: ожидается массив узлов.`, { field: `${path}.children` }, requestId);
+    fail(`${path}.children: an array of nodes is expected.`, { field: `${path}.children` }, requestId);
   }
   // `not` — ровно один ребёнок; `and`/`or` — ноль и более (пустая группа
   // нейтральна, сценарий 82187004; группа из одного условия эквивалентна ему).
   if (op === 'not' && rawChildren.length !== 1) {
-    fail(`${path}: группа «не» обязана содержать ровно один дочерний узел.`, {
+    fail(`${path}: the "not" group must contain exactly one child node.`, {
       field: `${path}.children`,
       count: rawChildren.length,
     }, requestId);
@@ -236,7 +236,7 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
   const entity = parseEntity(input['entity'], `${path}.entity`, requestId);
   const operator = input['operator'];
   if (typeof operator !== 'string' || !(FILTER_AST_OPERATORS as readonly string[]).includes(operator)) {
-    fail(`${path}.operator: недопустимый оператор условия.`, {
+    fail(`${path}.operator: invalid condition operator.`, {
       field: `${path}.operator`,
       allowed: FILTER_AST_OPERATORS,
     }, requestId);
@@ -245,7 +245,7 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
   // Предикаты наличия связей значения не несут: `value` при них — явная ошибка,
   // иначе форма молча принимала бы бессмысленное поле (требование 60db9614).
   if (NO_VALUE_OPERAND_KINDS.has(entity.kind) && input['value'] !== undefined) {
-    fail(`${path}: операнд «${entity.kind}» не принимает значение.`, {
+    fail(`${path}: operand "${entity.kind}" does not accept a value.`, {
       field: `${path}.value`,
     }, requestId);
   }
@@ -259,7 +259,7 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
       const allowed = SUBQUERY_LEAF_OPERATOR[value.operator];
       if (!allowed.includes(leaf.operator)) {
         fail(
-          `${path}: оператор условия «${leaf.operator}» не согласован с оператором под-выборки «${value.operator}»; допустимо: ${allowed.join(', ')}.`,
+          `${path}: condition operator "${leaf.operator}" is not compatible with subquery operator "${value.operator}"; allowed: ${allowed.join(', ')}.`,
           { field: `${path}.operator`, operator: leaf.operator, subquery_operator: value.operator },
           requestId,
         );
@@ -273,7 +273,7 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
       Array.isArray(value) &&
       value.length !== 2
     ) {
-      fail(`${path}.value: оператор «между» требует ровно две границы.`, {
+      fail(`${path}.value: the "between" operator requires exactly two bounds.`, {
         field: `${path}.value`,
         count: value.length,
       }, requestId);
@@ -285,7 +285,7 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
   if (input['mode'] !== undefined) {
     const mode = input['mode'];
     if (typeof mode !== 'string' || !(FILTER_AST_HIERARCHY_MODES as readonly string[]).includes(mode)) {
-      fail(`${path}.mode: недопустимый режим обхода «в иерархии».`, {
+      fail(`${path}.mode: invalid "in hierarchy" traversal mode.`, {
         field: `${path}.mode`,
         allowed: FILTER_AST_HIERARCHY_MODES,
       }, requestId);
@@ -299,7 +299,7 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
   // отбора учитывает помеченный лист как обычное условие.
   if (input['service'] !== undefined) {
     if (input['service'] !== true) {
-      fail(`${path}.service: служебная метка листа допускает только true.`, {
+      fail(`${path}.service: the leaf service flag allows only true.`, {
         field: `${path}.service`,
         value: input['service'],
       }, requestId);
@@ -311,7 +311,7 @@ function parseLeaf(input: Record<string, unknown>, path: string, requestId?: str
 
 function parseEntity(input: unknown, path: string, requestId?: string): FilterAstEntity {
   if (!isPlainObject(input)) {
-    fail(`${path}: операнд должен быть объектом.`, { field: path }, requestId);
+    fail(`${path}: the operand must be an object.`, { field: path }, requestId);
   }
   const kind = input['kind'];
   // Только СОБСТВЕННЫЕ ключи справочника: `in` пропускал унаследованные от
@@ -319,7 +319,7 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
   // чего `ENTITY_KEYS[kind]` давал функцию вместо массива и валидация падала
   // TypeError вместо VALIDATION_ERROR.
   if (typeof kind !== 'string' || !Object.hasOwn(ENTITY_KEYS, kind)) {
-    fail(`${path}.kind: неизвестный операнд.`, {
+    fail(`${path}.kind: unknown operand.`, {
       field: `${path}.kind`,
       allowed: Object.keys(ENTITY_KEYS),
     }, requestId);
@@ -332,19 +332,19 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
       const propertyId = input['property_id'];
       const property = input['property'];
       if (propertyId === undefined && property === undefined) {
-        fail(`${path}: операнд «свойство» обязан задать property_id или property.`, {
+        fail(`${path}: the "property" operand must provide property_id or property.`, {
           field: path,
         }, requestId);
       }
       if (propertyId !== undefined && (typeof propertyId !== 'string' || propertyId === '')) {
-        fail(`${path}.property_id: ожидается непустая строка.`, { field: `${path}.property_id` }, requestId);
+        fail(`${path}.property_id: a non-empty string is expected.`, { field: `${path}.property_id` }, requestId);
       }
       if (property !== undefined && (typeof property !== 'string' || property === '')) {
-        fail(`${path}.property: ожидается непустая строка.`, { field: `${path}.property` }, requestId);
+        fail(`${path}.property: a non-empty string is expected.`, { field: `${path}.property` }, requestId);
       }
       const direction = input['direction'];
       if (direction !== undefined && direction !== 'out' && direction !== 'in') {
-        fail(`${path}.direction: ожидается "out" или "in".`, { field: `${path}.direction` }, requestId);
+        fail(`${path}.direction: "out" or "in" is expected.`, { field: `${path}.direction` }, requestId);
       }
       return {
         kind: 'property',
@@ -362,7 +362,7 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
             (v) => typeof v !== 'string' || !(STRUCTURE_KEYWORD_SCOPES as readonly string[]).includes(v),
           )
         ) {
-          fail(`${path}.scope: ожидается массив областей поиска.`, {
+          fail(`${path}.scope: an array of search scopes is expected.`, {
             field: `${path}.scope`,
             allowed: STRUCTURE_KEYWORD_SCOPES,
           }, requestId);
@@ -383,7 +383,7 @@ function parseEntity(input: unknown, path: string, requestId?: string): FilterAs
           (v) => typeof v !== 'string' || !(FILTER_LINK_EDGE_STATES as readonly string[]).includes(v),
         )
       ) {
-        fail(`${path}.states: ожидается массив состояний ребра.`, {
+        fail(`${path}.states: an array of edge states is expected.`, {
           field: `${path}.states`,
           allowed: FILTER_LINK_EDGE_STATES,
         }, requestId);
@@ -403,7 +403,7 @@ function parseTokenValue(input: Record<string, unknown>, path: string, requestId
   assertExactKeys(input, TOKEN_KEYS, path, requestId);
   const token = input['token'];
   if (typeof token !== 'string' || token.trim() === '') {
-    fail(`${path}.token: ожидается непустая строка токена.`, { field: `${path}.token` }, requestId);
+    fail(`${path}.token: a non-empty token string is expected.`, { field: `${path}.token` }, requestId);
   }
   return { token };
 }
@@ -424,7 +424,7 @@ function parseValue(input: unknown, path: string, requestId?: string): FilterAst
         out.push(parseTokenValue(el, `${path}[${i}]`, requestId));
         continue;
       }
-      fail(`${path}[${i}]: элемент списка должен быть скаляром или токеном.`, {
+      fail(`${path}[${i}]: a list item must be a scalar or a token.`, {
         field: `${path}[${i}]`,
       }, requestId);
     }
@@ -439,7 +439,7 @@ function parseValue(input: unknown, path: string, requestId?: string): FilterAst
       assertExactKeys(input, SUBQUERY_KEYS, path, requestId);
       const op = input['operator'];
       if (typeof op !== 'string' || !(SUBQUERY_OPERATORS as readonly string[]).includes(op)) {
-        fail(`${path}.operator: недопустимый оператор под-выборки.`, {
+        fail(`${path}.operator: invalid subquery operator.`, {
           field: `${path}.operator`,
           allowed: SUBQUERY_OPERATORS,
         }, requestId);
@@ -450,14 +450,14 @@ function parseValue(input: unknown, path: string, requestId?: string): FilterAst
       };
     }
   }
-  fail(`${path}: значение должно быть скаляром, списком, токеном или под-выборкой.`, {
+  fail(`${path}: the value must be a scalar, a list, a token or a subquery.`, {
     field: path,
   }, requestId);
 }
 
 function parseLabels(input: unknown, path: string, requestId?: string): FilterAstLabels {
   if (!isPlainObject(input)) {
-    fail(`${path}: снапшоты подписей должны быть объектом.`, { field: path }, requestId);
+    fail(`${path}: label snapshots must be an object.`, { field: path }, requestId);
   }
   assertExactKeys(input, LABELS_KEYS, path, requestId);
   const out: FilterAstLabels = {};
@@ -465,7 +465,7 @@ function parseLabels(input: unknown, path: string, requestId?: string): FilterAs
     const value = input[key];
     if (value === undefined) continue;
     if (typeof value !== 'string') {
-      fail(`${path}.${key}: подпись должна быть строкой.`, { field: `${path}.${key}` }, requestId);
+      fail(`${path}.${key}: a label must be a string.`, { field: `${path}.${key}` }, requestId);
     }
     out[key] = value;
   }
@@ -479,12 +479,12 @@ function parseLabels(input: unknown, path: string, requestId?: string): FilterAs
 /** Карта подписей значений по id (`labels.values`): объект непустых строк. */
 function parseLabelMap(input: unknown, path: string, requestId?: string): Record<string, string> {
   if (!isPlainObject(input)) {
-    fail(`${path}: карта подписей значений должна быть объектом.`, { field: path }, requestId);
+    fail(`${path}: the value-label map must be an object.`, { field: path }, requestId);
   }
   const out: Record<string, string> = {};
   for (const [id, name] of Object.entries(input)) {
     if (typeof name !== 'string') {
-      fail(`${path}.${id}: подпись значения должна быть строкой.`, {
+      fail(`${path}.${id}: a value label must be a string.`, {
         field: `${path}.${id}`,
       }, requestId);
     }
@@ -495,21 +495,21 @@ function parseLabelMap(input: unknown, path: string, requestId?: string): Record
 
 function parseFilterAstSort(input: unknown, requestId?: string): FilterAstSortKey[] {
   if (!Array.isArray(input)) {
-    fail('sort: ожидается массив ключей сортировки.', { field: 'sort' }, requestId);
+    fail("sort: an array of sort keys is expected.", { field: 'sort' }, requestId);
   }
   return input.map((raw, i) => {
     const path = `sort[${i}]`;
     if (!isPlainObject(raw)) {
-      fail(`${path}: ключ сортировки должен быть объектом.`, { field: path }, requestId);
+      fail(`${path}: a sort key must be an object.`, { field: path }, requestId);
     }
     assertExactKeys(raw, SORT_KEY_KEYS, path, requestId);
     const key = raw['key'];
     if (typeof key !== 'string' || key === '') {
-      fail(`${path}.key: ожидается непустая строка.`, { field: `${path}.key` }, requestId);
+      fail(`${path}.key: a non-empty string is expected.`, { field: `${path}.key` }, requestId);
     }
     const order = raw['order'];
     if (order !== 'asc' && order !== 'desc') {
-      fail(`${path}.order: ожидается "asc" или "desc".`, { field: `${path}.order` }, requestId);
+      fail(`${path}.order: "asc" or "desc" is expected.`, { field: `${path}.order` }, requestId);
     }
     return { key, order };
   });

@@ -223,7 +223,7 @@ export function selectRecipeIds(
     filter = parseStructureFilter(raw);
   } catch (err) {
     if (err instanceof EtnError) {
-      warnings.push(`рецепт заголовков не исполнен: ${err.message}`);
+      warnings.push(`heading recipe was not executed: ${err.message}`);
       return [];
     }
     throw err;
@@ -260,7 +260,7 @@ export function selectRecipeIds(
     if (!page.has_more || page.next_cursor === null) break;
     cursor = page.next_cursor;
     if (ids.length >= PUBLICATION_RECIPE_MAX_NODES) {
-      warnings.push('отбор заголовков усечён по потолку узлов сборки');
+      warnings.push("the heading view was truncated by the assembly node ceiling");
       break;
     }
   }
@@ -293,7 +293,7 @@ function selectAstRecipeIds(
     ast = compileRecipeToAst(ndb, recipe);
   } catch (err) {
     if (err instanceof EtnError) {
-      warnings.push(`рецепт заголовков не исполнен: ${err.message}`);
+      warnings.push(`heading recipe was not executed: ${err.message}`);
       return [];
     }
     throw err;
@@ -325,7 +325,7 @@ function selectAstRecipeIds(
       );
       if (page.unresolved !== undefined && page.unresolved.length > 0) {
         warnings.push(
-          `рецепт заголовков не исполнен: ${page.unresolved.map((i) => i.message).join('; ')}`,
+          `heading recipe was not executed: ${page.unresolved.map((i) => i.message).join('; ')}`,
         );
         return [];
       }
@@ -333,13 +333,13 @@ function selectAstRecipeIds(
       if (!page.has_more || page.next_cursor === null) break;
       cursor = page.next_cursor;
       if (ids.length >= PUBLICATION_RECIPE_MAX_NODES) {
-        warnings.push('отбор заголовков усечён по потолку узлов сборки');
+        warnings.push("the heading view was truncated by the assembly node ceiling");
         break;
       }
     }
   } catch (err) {
     if (err instanceof EtnError) {
-      warnings.push(`рецепт заголовков не исполнен: ${err.message}`);
+      warnings.push(`heading recipe was not executed: ${err.message}`);
       return [];
     }
     throw err;

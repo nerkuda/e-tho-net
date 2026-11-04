@@ -552,7 +552,7 @@ describe(
         assert.ok(res.unresolved !== undefined && res.unresolved.length > 0, 'есть диагностика');
         assert.equal(res.unresolved[0]!.token, '$thought');
         assert.equal(res.unresolved[0]!.reason, 'unknown_token');
-        assert.match(res.unresolved[0]!.message, /фокус/i);
+        assert.match(res.unresolved[0]!.message, /focus/i);
       } finally {
         ndb.close();
       }

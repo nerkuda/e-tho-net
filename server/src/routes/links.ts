@@ -63,7 +63,7 @@ export function createLinksRoutes(deps: RouteDeps): FastifyPluginAsync {
             : openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const link = getLink(ndb, input.link_id);
         if (link === null) {
-          throw new EtnError('NOT_FOUND', 'Связь не найдена.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Link not found.", undefined, req.id);
         }
         sendSuccess(reply, link);
       },

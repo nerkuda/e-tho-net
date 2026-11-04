@@ -94,7 +94,7 @@ export function parseLinkTypeFilterValue(
   if (typeof raw !== 'object' || Array.isArray(raw)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'link_filter должен быть объектом { type_ids?: string[], include_structural?: boolean }.',
+      "link_filter must be an object { type_ids?: string[], include_structural?: boolean }.",
       { field: 'link_filter' },
       requestId,
     );
@@ -109,7 +109,7 @@ export function parseLinkTypeFilterValue(
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'link_filter.type_ids должен быть массивом непустых строк.',
+        "link_filter.type_ids must be an array of non-empty strings.",
         { field: 'type_ids' },
         requestId,
       );
@@ -122,7 +122,7 @@ export function parseLinkTypeFilterValue(
     if (typeof structuralRaw !== 'boolean') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'link_filter.include_structural должен быть логическим значением.',
+        "link_filter.include_structural must be a boolean.",
         { field: 'include_structural' },
         requestId,
       );
@@ -132,7 +132,7 @@ export function parseLinkTypeFilterValue(
   if ((typeIds?.length ?? 0) === 0 && includeStructural !== true) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'link_filter пуст: укажите непустой type_ids и/или include_structural=true.',
+      "link_filter is empty: provide a non-empty type_ids and/or include_structural=true.",
       { field: 'link_filter' },
       requestId,
     );

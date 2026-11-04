@@ -709,6 +709,33 @@ export const ru = {
    * короче и не повторяет имя строки.
    */
   'errors.propertyTargetType': 'значение не того типа, который допускает свойство',
+  /**
+   * Серверные ошибки — пользовательский текст по коду (ADR daab6ac4, п. 4):
+   * `error.message` английский и не показывается. Уточняющие причины
+   * (`details.reason`/`details.issue`) адресуются ключами
+   * `errors.code.<код>.<токен>`; неизвестный код или причина — общий текст.
+   */
+  'errors.code.VALIDATION_ERROR': 'проверьте введённые данные',
+  'errors.code.BAD_REQUEST': 'запрос не может быть выполнен',
+  'errors.code.UNAUTHORIZED': 'требуется вход в систему',
+  'errors.code.FORBIDDEN': 'недостаточно прав для этого действия',
+  'errors.code.NOT_FOUND': 'объект не найден — возможно, его удалили',
+  'errors.code.VERSION_CONFLICT': 'данные уже изменились — обновите и повторите',
+  'errors.code.DUPLICATE': 'такая запись уже существует',
+  'errors.code.LOCKED': 'объект редактирует другой участник',
+  'errors.code.LOCK_NOT_FOUND': 'захват объекта не найден',
+  'errors.code.RATE_LIMITED': 'слишком много запросов — попробуйте позже',
+  'errors.code.PROTECTED_ENTITY': 'объект защищён от изменения',
+  'errors.code.CLIENT_VERSION_UNSUPPORTED': 'версия клиента не поддерживается — обновите клиент',
+  /** Уточнения `426 CLIENT_VERSION_UNSUPPORTED` по `details.reason`. */
+  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-missing':
+    'сервер не получил версию клиента — обновите клиент',
+  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-invalid':
+    'сервер не распознал версию клиента — обновите клиент',
+  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-out-of-range':
+    'версия клиента не подходит серверу — обновите клиент',
+  'errors.code.UPDATE_INSTALLER_FAILED': 'не удалось запустить установщик обновления',
+  'errors.unknownCode': 'не удалось выполнить действие',
 
   // -- Подключение к серверу (ошибка 390e9746) -----------------------------
   /** Отказ подключения к сохранённому серверу: «метка» + адрес + причина. */
@@ -2623,6 +2650,22 @@ export const ru = {
   'filterDiagnostics.editZamenitSohranennoeOpredelenie': '%1. Правка заменит сохранённое определение.',
   'filterDiagnostics.value': 'значение «%1»',
   'filterDiagnostics.deleted': 'удалено %1',
+  /**
+   * Диагностика ядра и неразрешённые токены — текст по machine-readable
+   * `code`/`reason` (ADR daab6ac4, п. 4): серверный `message` английский и не
+   * показывается; имя/значение/дату добавляет `filterIssueReason`.
+   */
+  'filterDiagnostics.server.entityDeleted':
+    'сущность условия удалена из сети — отбор нельзя применить',
+  'filterDiagnostics.server.propertyDetached':
+    'свойство больше не входит в набор свойств этого типа',
+  'filterDiagnostics.server.unknown': 'условие больше не применимо',
+  'filterDiagnostics.server.tokenUnknown': 'токен «%1» не разрешён',
+  'filterDiagnostics.server.tokenTimeContext': 'токен «%1» требует контекста мысли',
+  'filterDiagnostics.server.tokenIncompatible': 'операция несовместима с типом значения условия',
+  'filterDiagnostics.server.tokenUnknownProperty': 'свойство не найдено в реестре сети',
+  'filterDiagnostics.server.tokenEmptyValue': 'значение не разбирается как дата',
+  'filterDiagnostics.server.tokenUnresolved': 'условие «%1» не удалось разрешить',
 
   // -- filterEditor ------------------------------------------------------
 

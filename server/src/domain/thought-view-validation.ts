@@ -88,7 +88,7 @@ export function validateViewName(name: unknown, requestId?: string): string {
   if (typeof name !== 'string' || name.trim() === '') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Имя отбора должно быть непустой строкой.',
+      "The view name must be a non-empty string.",
       { field: 'name' },
       requestId,
     );
@@ -97,7 +97,7 @@ export function validateViewName(name: unknown, requestId?: string): string {
   if ([...trimmed].length > THOUGHT_TYPE_VIEW_NAME_MAX) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Имя отбора должно быть не длиннее ${THOUGHT_TYPE_VIEW_NAME_MAX} символов.`,
+      `The view name must be at most ${THOUGHT_TYPE_VIEW_NAME_MAX} characters long.`,
       { field: 'name', limit: THOUGHT_TYPE_VIEW_NAME_MAX },
       requestId,
     );
@@ -118,7 +118,7 @@ export function validateViewDescription(
   if (typeof description !== 'string') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Описание отбора должно быть строкой или null.',
+      "The view description must be a string or null.",
       { field: 'description' },
       requestId,
     );
@@ -126,7 +126,7 @@ export function validateViewDescription(
   if (description.length > THOUGHT_TYPE_VIEW_DESCRIPTION_MAX) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Описание отбора должно быть не длиннее ${THOUGHT_TYPE_VIEW_DESCRIPTION_MAX} символов.`,
+      `The view description must be at most ${THOUGHT_TYPE_VIEW_DESCRIPTION_MAX} characters long.`,
       { field: 'description', limit: THOUGHT_TYPE_VIEW_DESCRIPTION_MAX },
       requestId,
     );
@@ -143,7 +143,7 @@ export function validateViewDefinition(definition: unknown, requestId?: string):
   if (typeof definition !== 'string' || definition.trim() === '') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'definition должен быть непустой JSON-строкой.',
+      "definition must be a non-empty JSON string.",
       { field: 'definition' },
       requestId,
     );
@@ -154,7 +154,7 @@ export function validateViewDefinition(definition: unknown, requestId?: string):
   } catch (err) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `definition не является валидным JSON: ${(err as Error).message}`,
+      `definition is not valid JSON: ${(err as Error).message}`,
       { field: 'definition' },
       requestId,
     );
@@ -162,7 +162,7 @@ export function validateViewDefinition(definition: unknown, requestId?: string):
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'definition должен быть JSON-объектом (не массивом и не null).',
+      "definition must be a JSON object (not an array and not null).",
       { field: 'definition' },
       requestId,
     );
@@ -176,7 +176,7 @@ export function validateViewPosition(position: unknown, requestId?: string): num
   if (typeof position !== 'number' || !Number.isInteger(position) || position < 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'position должен быть неотрицательным целым числом.',
+      "position must be a non-negative integer.",
       { field: 'position' },
       requestId,
     );

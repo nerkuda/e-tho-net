@@ -631,7 +631,7 @@ describe(
           });
           assert.throws(
             () => createThoughtTypeView(ndb, typeId, { name: 'X', definition }, USER),
-            /не найдено в реестре сети/,
+            /was not found in the network registry/,
           );
         } finally {
           ndb.close();

@@ -56,7 +56,7 @@ export function createTrashRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (rawIds.length === 0) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'ids должен быть непустым массивом строк (или отсутствовать — очистка всей корзины).',
+              "ids must be a non-empty array of strings (or absent — emptying the whole trash).",
               { field: 'ids' },
               req.id,
             );

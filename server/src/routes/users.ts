@@ -136,7 +136,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (username.length === 0) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Поле username обязательно и не может быть пустым.',
+          "The username field is required and must not be empty.",
           { field: 'username' },
           req.id,
         );
@@ -148,7 +148,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (app.systemDb.getUserByUsername(username) !== null) {
         throw new EtnError(
           'DUPLICATE',
-          `Пользователь "${username}" уже существует.`,
+          `User "${username}" already exists.`,
           { field: 'username' },
           req.id,
         );
@@ -207,7 +207,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id } = req.params as UserIdParams;
       const user = app.systemDb.getUserById(id);
       if (user === null) {
-        throw new EtnError('NOT_FOUND', 'Пользователь не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "User not found.", undefined, req.id);
       }
       sendSuccess(reply, userDto(user));
     },
@@ -220,7 +220,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id } = req.params as UserIdParams;
       const user = app.systemDb.getUserById(id);
       if (user === null) {
-        throw new EtnError('NOT_FOUND', 'Пользователь не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "User not found.", undefined, req.id);
       }
       const body = (req.body ?? {}) as UpdateUserInput;
 
@@ -237,7 +237,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (user.is_first_user && (!isAdmin || disabled)) {
         throw new EtnError(
           'PROTECTED_ENTITY',
-          'Первого пользователя нельзя понизить или отключить.',
+          "The first user cannot be demoted or disabled.",
           { field: 'is_first_user' },
           req.id,
         );
@@ -264,12 +264,12 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id } = req.params as UserIdParams;
       const user = app.systemDb.getUserById(id);
       if (user === null) {
-        throw new EtnError('NOT_FOUND', 'Пользователь не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "User not found.", undefined, req.id);
       }
       if (user.is_first_user) {
         throw new EtnError(
           'PROTECTED_ENTITY',
-          'Первого пользователя нельзя удалить.',
+          "The first user cannot be deleted.",
           undefined,
           req.id,
         );
@@ -284,7 +284,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (authorship !== null) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Нельзя удалить пользователя, который является автором или последним редактором сущностей: сначала снимите/переназначьте авторство.',
+          "A user who is the author or last editor of entities cannot be deleted: reassign or clear the authorship first.",
           {
             network_id: authorship.network_id,
             table: authorship.table,
@@ -296,7 +296,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (owned > 0) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Нельзя удалить пользователя, владеющего сетями: передайте владение.',
+          "A user who owns networks cannot be deleted: transfer ownership first.",
           { owned_networks: owned },
           req.id,
         );
@@ -322,7 +322,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id } = req.params as UserIdParams;
       const user = app.systemDb.getUserById(id);
       if (user === null) {
-        throw new EtnError('NOT_FOUND', 'Пользователь не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "User not found.", undefined, req.id);
       }
       const body = (req.body ?? {}) as CreateKeyForUserBody;
       const label = typeof body.label === 'string' ? body.label.trim() || null : null;
@@ -362,13 +362,13 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id, keyId } = req.params as UserKeyIdParams;
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null || key.user_id !== id) {
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       const body = (req.body ?? {}) as UpdateKeyForUserBody;
       if (!('max_writes_per_minute' in body)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Требуется поле max_writes_per_minute (число или null).',
+          "The max_writes_per_minute field is required (a number or null).",
           { field: 'max_writes_per_minute' },
           req.id,
         );
@@ -395,7 +395,7 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id, keyId } = req.params as UserKeyIdParams;
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null || key.user_id !== id) {
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       app.systemDb.disableApiKey(keyId);
       app.systemDb.insertAuditLog({

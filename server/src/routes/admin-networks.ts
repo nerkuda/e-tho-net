@@ -45,7 +45,7 @@ export function createAdminNetworksRoutes(networkService: NetworkService): Fasti
         const { id } = req.params as NetworkIdParams;
         const existing = app.systemDb.getNetworkById(id);
         if (!existing) {
-          throw new EtnError('NOT_FOUND', 'Сеть не найдена.', { id }, req.id);
+          throw new EtnError('NOT_FOUND', "Network not found.", { id }, req.id);
         }
 
         // Сначала реальное удаление (файлы + запись реестра), потом событие:
@@ -81,7 +81,7 @@ export function createAdminNetworksRoutes(networkService: NetworkService): Fasti
         if (current === null) {
           throw new EtnError(
             'NOT_FOUND',
-            'Пользователь не является участником сети.',
+            "The user is not a network member.",
             { id, uid },
             req.id,
           );
@@ -95,7 +95,7 @@ export function createAdminNetworksRoutes(networkService: NetworkService): Fasti
           }
           const network = app.systemDb.getNetworkById(id);
           if (!network) {
-            throw new EtnError('NOT_FOUND', 'Сеть не найдена.', { id }, req.id);
+            throw new EtnError('NOT_FOUND', "Network not found.", { id }, req.id);
           }
           // Old owner drops to member, new owner promoted — one transaction.
           app.systemDb.transferNetworkOwnership(id, network.owner_id, uid);
@@ -104,7 +104,7 @@ export function createAdminNetworksRoutes(networkService: NetworkService): Fasti
           if (current === 'owner') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'Нельзя понизить владельца; сначала передайте владение.',
+              "The owner cannot be demoted; transfer ownership first.",
               { id, uid },
               req.id,
             );

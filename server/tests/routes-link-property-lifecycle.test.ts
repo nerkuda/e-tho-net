@@ -619,7 +619,7 @@ describe(
           error: { code: string; details: { reason?: string } };
         };
         assert.equal(body.error.code, 'VALIDATION_ERROR');
-        assert.match(body.error.details.reason ?? '', /связ|конверта/i);
+        assert.match(body.error.details.reason ?? '', /edges|conversion/i);
       } finally {
         await closeRestContext(ctx);
       }

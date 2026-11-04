@@ -550,7 +550,7 @@ export function validateTypeRoles(input: unknown): TypeRoles {
   if (typeof input !== 'object' || Array.isArray(input)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'type_roles должен быть объектом { [роль]: type_id | null }.',
+      "type_roles must be an object { [role]: type_id | null }.",
       { field: 'type_roles' },
     );
   }
@@ -559,14 +559,14 @@ export function validateTypeRoles(input: unknown): TypeRoles {
     if (!(KNOWN_TYPE_ROLES as readonly string[]).includes(key)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Неизвестная роль type_roles "${key}" (допустимы: ${KNOWN_TYPE_ROLES.join(', ')}).`,
+        `Unknown type_roles role "${key}" (allowed: ${KNOWN_TYPE_ROLES.join(', ')}).`,
         { field: `type_roles.${key}`, allowed: KNOWN_TYPE_ROLES },
       );
     }
     if (raw !== null && typeof raw !== 'string') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `type_roles["${key}"] должен быть строкой или null.`,
+        `type_roles["${key}"] must be a string or null.`,
         { field: `type_roles.${key}` },
       );
     }

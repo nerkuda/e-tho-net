@@ -1231,7 +1231,7 @@ describe(
         assert.throws(
           () =>
             setTypePropertyDescriptionOverride(ndb, 'thought_type', parent.id, own.id, 'nope', USER),
-          /собственные свойства правятся в справочнике/,
+          /own properties are edited in the registry/,
         );
 
         // A sibling type's property is not in the child's ancestor chain.
@@ -1244,7 +1244,7 @@ describe(
         assert.throws(
           () =>
             setTypePropertyDescriptionOverride(ndb, 'thought_type', child.id, sibProp.id, 'nope', USER),
-          /переопределять можно только свойства, подключённые предками/,
+          /only properties bound by ancestors of this type can be overridden/,
         );
       } finally {
         ndb.close();

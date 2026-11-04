@@ -111,11 +111,11 @@ export function assertFilterAstInProfile(
   const first = violations[0]!;
   const reason =
     first.kind === 'operand'
-      ? `операнд «${first.value}» не виден в точке применения`
-      : `оператор «${first.value}» недопустим в точке применения`;
+      ? `operand "${first.value}" is not visible at the point of use`
+      : `operator "${first.value}" is not allowed at the point of use`;
   throw new EtnError(
     'VALIDATION_ERROR',
-    `Отбор не соответствует профилю «${profile.title}»: ${reason}.`,
+    `The view does not match the "${profile.title}" profile: ${reason}.`,
     {
       field: first.path,
       profile: profileId,

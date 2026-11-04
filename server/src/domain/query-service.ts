@@ -419,7 +419,7 @@ export function assertPropertyConditionsResolvable(
     if (getNetworkProperty(ndb, cond.property_id) === null) {
       throw new EtnError(
         'NOT_FOUND',
-        `Свойство «${cond.property_id}» не найдено в реестре сети.`,
+        `Property "${cond.property_id}" was not found in the network registry.`,
         { field: 'property_id', property_id: cond.property_id },
         requestId,
       );
@@ -459,7 +459,7 @@ export function mcpRequestToQuery(
       if (typeof c.property_id !== 'string' || c.property_id === '') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Условие свойства не адресует свойство: укажите property_id или property.',
+          "The property condition does not address a property: provide property_id or property.",
           { field: 'property_id' },
         );
       }
@@ -520,7 +520,7 @@ function assertAstSortNotConflicting(
   if (req.sort !== undefined || req.order !== undefined) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Сортировка задана дважды: в теле ast (sort) и в полях sort/order инструмента — оставьте один источник.',
+      "Sorting is specified twice: in the ast body (sort) and in the tool's sort/order fields — keep a single source.",
       { field: 'sort' },
     );
   }
@@ -945,7 +945,7 @@ function astSortClause(
     if (ref === null || def === null) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Ключ сортировки «${key.key}» не найден: это не фиксированный ключ (title/created_at/updated_at) и не свойство сети.`,
+        `Sort key "${key.key}" was not found: it is neither a fixed key (title/created_at/updated_at) nor a network property.`,
         { field: 'ast.sort', key: key.key },
         requestId,
       );
@@ -955,7 +955,7 @@ function astSortClause(
       if (edges === null) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `Сортировка по свойству-связи «${key.key}» не поддержана: у свойства нет типа связи.`,
+          `Sorting by link property "${key.key}" is not supported: the property has no link type.`,
           { field: 'ast.sort', key: key.key },
           requestId,
         );
@@ -1092,21 +1092,21 @@ function sqlScalar(
   switch (def.value_type) {
     case 'number':
       if (typeof value !== 'number') {
-        throw new EtnError('VALIDATION_ERROR', 'Значение свойства должно быть числом.', {
+        throw new EtnError('VALIDATION_ERROR', "Property value must be a number.", {
           field: 'value',
         }, requestId);
       }
       return value;
     case 'bool':
       if (typeof value !== 'boolean') {
-        throw new EtnError('VALIDATION_ERROR', 'Значение свойства должно быть boolean.', {
+        throw new EtnError('VALIDATION_ERROR', "Property value must be a boolean.", {
           field: 'value',
         }, requestId);
       }
       return value ? 1 : 0;
     default:
       if (typeof value !== 'string') {
-        throw new EtnError('VALIDATION_ERROR', 'Значение свойства должно быть строкой.', {
+        throw new EtnError('VALIDATION_ERROR', "Property value must be a string.", {
           field: 'value',
         }, requestId);
       }
@@ -1123,7 +1123,7 @@ function coerceValueList(
   if (!Array.isArray(value) || value.length === 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Для операции ${operator} нужен непустой массив значений.`,
+      `Operation ${operator} requires a non-empty array of values.`,
       { field: 'value', operator },
       requestId,
     );
@@ -1131,7 +1131,7 @@ function coerceValueList(
   if (value.some((v) => typeof v !== 'string' || v === '')) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Массив значений операции ${operator} должен состоять из непустых строк.`,
+      `The value array of operation ${operator} must consist of non-empty strings.`,
       { field: 'value', operator },
       requestId,
     );
@@ -1360,7 +1360,7 @@ export const AST_SUBQUERY_MAX_DEPTH = 100;
 function astUnsupported(what: string, field: string, requestId?: string): never {
   throw new EtnError(
     'VALIDATION_ERROR',
-    `${what} пока не поддержано доменным исполнителем отбора.`,
+    `${what} is not yet supported by the domain filter executor.`,
     { field, unsupported: true },
     requestId,
   );
@@ -1426,7 +1426,7 @@ function astSubqueryIdSet(
   if (depth >= AST_SUBQUERY_MAX_DEPTH) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Глубина вложенности под-выборок превысила предохранитель ресурса (${AST_SUBQUERY_MAX_DEPTH}); упростите отбор.`,
+      `Subquery nesting depth exceeded the resource guard (${AST_SUBQUERY_MAX_DEPTH}); simplify the filter.`,
       { field: `${path}.query`, reason: 'subquery_depth', limit: AST_SUBQUERY_MAX_DEPTH },
       requestId,
     );
@@ -1444,7 +1444,7 @@ function astSubqueryIdSet(
   if (rows.length > AST_SUBQUERY_MAX_NODES) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Под-выборка вернула больше ${AST_SUBQUERY_MAX_NODES} элементов — превышен ресурсный бюджет; сузьте под-выборку.`,
+      `The subquery returned more than ${AST_SUBQUERY_MAX_NODES} items — resource budget exceeded; narrow the subquery.`,
       { field: `${path}.query`, reason: 'subquery_budget', limit: AST_SUBQUERY_MAX_NODES },
       requestId,
     );
@@ -1455,7 +1455,7 @@ function astSubqueryIdSet(
     if (budget.ids > AST_SUBQUERY_MAX_NODES) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Суммарный размер под-выборок отбора превысил ресурсный бюджет (${AST_SUBQUERY_MAX_NODES}); упростите отбор.`,
+        `The total size of filter subqueries exceeded the resource budget (${AST_SUBQUERY_MAX_NODES}); simplify the filter.`,
         { field: `${path}.query`, reason: 'subquery_budget', limit: AST_SUBQUERY_MAX_NODES },
         requestId,
       );
@@ -1563,19 +1563,19 @@ function astSubqueryLeafClause(
   const entity = leaf.entity;
   // 1. Релевантность левого операнда (требование c088f9e1).
   if (AST_SUBQUERY_DEFERRED.has(entity.kind)) {
-    astUnsupported(`Исполнение под-выборки на операнде «${entity.kind}»`, `${path}.value`, requestId);
+    astUnsupported(`Subquery execution on operand "${entity.kind}"`, `${path}.value`, requestId);
   }
   if (!AST_SUBQUERY_SUPPORTED.has(entity.kind)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Значение-под-выборка недоступно на операнде «${entity.kind}».`,
+      `Subquery value is not available on operand "${entity.kind}".`,
       { field: `${path}.value`, operand: entity.kind, relevant: false },
       requestId,
     );
   }
   // 2. Совместимость оператора-листа (наборные/ссылочные, не предикаты).
   if (!AST_SUBQUERY_LEAF_OPS.has(leaf.operator)) {
-    astUnsupported(`Оператор «${leaf.operator}» со значением-под-выборкой`, `${path}.operator`, requestId);
+    astUnsupported(`Operator "${leaf.operator}" with a subquery value`, `${path}.operator`, requestId);
   }
   const subquery = leaf.value as FilterAstSubqueryValue;
   const quant = subquery.operator;
@@ -1596,7 +1596,7 @@ function astSubqueryLeafClause(
       if (def.value_type !== 'link') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `Значение-под-выборка доступно только на ссылочных операндах; свойство типа ${def.value_type} — не ссылка.`,
+          `A subquery value is available only on reference operands; a property of type ${def.value_type} is not a reference.`,
           { field: `${path}.value`, operand: 'property', value_type: def.value_type },
           requestId,
         );
@@ -1639,7 +1639,7 @@ function astSubqueryLeafClause(
       if (quant === 'all_in') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Оператор «все в (выборке)» применим только к множественным операндам; «Мысль» — одиночный.',
+          "The \"all in (subquery)\" operator applies only to multi-valued operands; \"Thought\" is single-valued.",
           { field: `${path}.value.operator`, operand: 'id' },
           requestId,
         );
@@ -1651,7 +1651,7 @@ function astSubqueryLeafClause(
       if (quant === 'all_in') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Оператор «все в (выборке)» применим только к множественным операндам; «Тип» — одиночный.',
+          "The \"all in (subquery)\" operator applies only to multi-valued operands; \"Type\" is single-valued.",
           { field: `${path}.value.operator`, operand: 'type' },
           requestId,
         );
@@ -1667,7 +1667,7 @@ function astSubqueryLeafClause(
     default:
       throw new EtnError(
         'VALIDATION_ERROR',
-        'Неизвестный операнд значения-под-выборки.',
+        "Unknown subquery-value operand.",
         { field: `${path}.entity` },
         requestId,
       );
@@ -1711,9 +1711,9 @@ function astHierarchySubtree(
   if (res.truncated) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Обход «в иерархии» прерван: превышен ресурсный бюджет ' +
-        (res.reason === 'timeout' ? '(время)' : '(число узлов)') +
-        '; сузьте набор корней или глубину отбора.',
+      "The \"in hierarchy\" traversal was aborted: the resource budget was exceeded " +
+        (res.reason === 'timeout' ? "(time)" : "(node count)") +
+        "; narrow the root set or the filter depth.",
       {
         field: path,
         reason: 'hierarchy_budget',
@@ -1992,7 +1992,7 @@ function astCountNumber(value: FilterAstValue | undefined, path: string, request
   if (!Number.isFinite(n)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Оператор «количество» требует числового значения.',
+      "The \"count\" operator requires a numeric value.",
       { field: path },
       requestId,
     );
@@ -2005,7 +2005,7 @@ function astCountRange(value: FilterAstValue | undefined, path: string, requestI
   if (!Array.isArray(value) || value.length !== 2) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Оператор «между» требует ровно две границы.',
+      "The \"between\" operator requires exactly two bounds.",
       { field: path },
       requestId,
     );
@@ -2049,7 +2049,7 @@ function countLeafClause(
     op === 'lt' ? '<' :
     op === 'lte' ? '<=' :
     null;
-  if (cmp === null) astUnsupported(`Оператор «${op}» для количества`, path, requestId);
+  if (cmp === null) astUnsupported(`Operator "${op}" for count`, path, requestId);
   const n = astCountNumber(leaf.value, `${path}.value`, requestId);
   return { sql: `${expr} ${cmp} ?`, params: [...countParams, n] };
 }
@@ -2131,7 +2131,7 @@ function scalarCompareClause(
     if (!Array.isArray(leaf.value) || leaf.value.length !== 2) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'Оператор «между» требует ровно две границы.',
+        "The \"between\" operator requires exactly two bounds.",
         { field: `${path}.value` },
         requestId,
       );
@@ -2367,7 +2367,7 @@ function filterAstLeafClause(
       // Тождественность мысли: явный список id (операторы eq/ne/in/not_in).
       const ids = astStringList(leaf.value, operator, `${path}.value`, requestId);
       if (operator !== 'in' && operator !== 'not_in' && operator !== 'eq' && operator !== 'ne') {
-        astUnsupported(`Оператор «${operator}» для операнда «Тождественность»`, opPath, requestId);
+        astUnsupported(`Operator "${operator}" for the "Identity" operand`, opPath, requestId);
       }
       const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
       if (list.length === 0) return operator === 'in' || operator === 'eq' ? AST_FALSE : AST_TRUE;
@@ -2422,7 +2422,7 @@ function filterAstLeafClause(
         operator !== 'any_of' &&
         operator !== 'none_of'
       ) {
-        astUnsupported(`Оператор «${operator}» для операнда «Тип»`, opPath, requestId);
+        astUnsupported(`Operator "${operator}" for the "Type" operand`, opPath, requestId);
       }
       const list = operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
       // Ссылочные операторы (`eq`/`ne`/`in`/`not_in`/`any_of`/`none_of`)
@@ -2472,7 +2472,7 @@ function filterAstLeafClause(
         operator !== 'in_hierarchy' &&
         operator !== 'not_in_hierarchy'
       ) {
-        astUnsupported(`Оператор «${operator}» для операнда «Тип связи»`, opPath, requestId);
+        astUnsupported(`Operator "${operator}" for the "Link type" operand`, opPath, requestId);
       }
       const list =
         operator === 'eq' || operator === 'ne' ? (ids.length > 0 ? [ids[0]!] : []) : ids;
@@ -2558,10 +2558,10 @@ function filterAstLeafClause(
       return hasPropertiesLeafClause(ndb, leaf, path, requestId);
 
     case 'targets':
-      astUnsupported('Операнд «Цели» (отбор хроники)', `${path}.entity`, requestId);
+      astUnsupported("Operand \"Targets\" (chronicle filter)", `${path}.entity`, requestId);
   }
   // Недостижимо: все виды операндов обработаны выше.
-  throw new EtnError('VALIDATION_ERROR', 'Неизвестный операнд условия отбора.', { field: `${path}.entity` }, requestId);
+  throw new EtnError('VALIDATION_ERROR', "Unknown filter-condition operand.", { field: `${path}.entity` }, requestId);
 }
 
 /** Значение-лист как непустой список строк (ид/имена) для наборных операторов. */
@@ -2573,7 +2573,7 @@ function astStringList(
 ): string[] {
   const raw = Array.isArray(value) ? value : value === undefined ? [] : [value];
   if (raw.some((v) => typeof v !== 'string')) {
-    throw new EtnError('VALIDATION_ERROR', `Значение оператора «${operator}» должно быть строкой или списком строк.`, {
+    throw new EtnError('VALIDATION_ERROR', `The value of operator "${operator}" must be a string or a list of strings.`, {
       field: path,
     }, requestId);
   }
@@ -2627,10 +2627,10 @@ function propertyLeafClause(
   astOpts?: AstExecOptions,
 ): Clause {
   const { entity, operator } = leaf;
-  if (entity.kind !== 'property') throw new Error('propertyLeafClause вызван не для свойства');
+  if (entity.kind !== 'property') throw new Error("propertyLeafClause called for a non-property");
   const propertyRef = entity.property_id ?? entity.property;
   if (propertyRef === undefined) {
-    throw new EtnError('VALIDATION_ERROR', 'Операнд «свойство» не адресует свойство.', { field: entityPath }, requestId);
+    throw new EtnError('VALIDATION_ERROR', "The \"property\" operand does not address a property.", { field: entityPath }, requestId);
   }
   const ref = resolveConditionPropertyRef(ndb, propertyRef, requestId);
   if (ref === null) return NO_MATCH_CLAUSE;
@@ -2651,7 +2651,7 @@ function propertyLeafClause(
   // входит в поддерево корней (требование aa7a2aea, задача e62aa4db).
   if (operator === 'in_hierarchy' || operator === 'not_in_hierarchy') {
     if (def.value_type !== 'link') {
-      astUnsupported(`Оператор «${operator}» для свойства типа ${def.value_type}`, entityPath, requestId);
+      astUnsupported(`Operator "${operator}" for a property of type ${def.value_type}`, entityPath, requestId);
     }
     return hierarchyLinkPropertyClause(ndb, def, directionRef, leaf, astOpts, entityPath, requestId);
   }
@@ -2691,7 +2691,7 @@ function propertyLeafClause(
     ) {
       return scalarCompareClause(def, leaf, entityPath, requestId);
     }
-    astUnsupported(`Оператор «${operator}» для свойства типа ${def.value_type}`, entityPath, requestId);
+    astUnsupported(`Operator "${operator}" for a property of type ${def.value_type}`, entityPath, requestId);
   }
 
   if (operator === 'not_contains') {
@@ -2728,13 +2728,13 @@ function linkPresenceLeafClause(
   if (leaf.value !== undefined) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Операнд «${entity.kind}» не принимает значение.`,
+      `Operand "${entity.kind}" does not accept a value.`,
       { field: `${path}.value` },
       requestId,
     );
   }
   if (leaf.operator !== 'is_empty' && leaf.operator !== 'not_empty') {
-    astUnsupported(`Оператор «${leaf.operator}» для операнда «${entity.kind}»`, `${path}.operator`, requestId);
+    astUnsupported(`Operator "${leaf.operator}" for operand "${entity.kind}"`, `${path}.operator`, requestId);
   }
   const ownColumn = entity.kind === 'incoming_links' ? 'target_id' : 'source_id';
   const conditions = [`l.${ownColumn} = t.id`, ...linkEdgeStateClauses(entity.states, path, requestId)];
@@ -2770,7 +2770,7 @@ function linkEdgeStateClauses(
   if (unknown.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Неизвестное состояние ребра: ${unknown.join(', ')}.`,
+      `Unknown edge state: ${unknown.join(', ')}.`,
       { field: `${path}.states`, allowed: FILTER_LINK_EDGE_STATES },
       requestId,
     );
@@ -2866,16 +2866,16 @@ function structuralLeafClause(
       ? match
       : { sql: `NOT (${match.sql})`, params: match.params };
   }
-  astUnsupported(`Оператор «${operator}» для структурного операнда`, path, requestId);
+  astUnsupported(`Operator "${operator}" for a structural operand`, path, requestId);
 }
 
 /** Булев предикат по колонке-флагу (`active`/`marked_for_deletion`). */
 function boolColumnClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
   if (leaf.operator !== 'eq' && leaf.operator !== 'ne') {
-    astUnsupported(`Оператор «${leaf.operator}» для булева предиката`, path, requestId);
+    astUnsupported(`Operator "${leaf.operator}" for a boolean predicate`, path, requestId);
   }
   if (typeof leaf.value !== 'boolean') {
-    throw new EtnError('VALIDATION_ERROR', 'Булев предикат требует значения boolean.', { field: path }, requestId);
+    throw new EtnError('VALIDATION_ERROR', "A boolean predicate requires a boolean value.", { field: path }, requestId);
   }
   const want = leaf.operator === 'eq' ? leaf.value : !leaf.value;
   return { sql: `${column} = ${want ? 1 : 0}`, params: [] };
@@ -2889,7 +2889,7 @@ function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string
   else if ((leaf.operator === 'eq' || leaf.operator === 'ne') && typeof leaf.value === 'boolean') {
     want = leaf.operator === 'eq' ? leaf.value : !leaf.value;
   } else {
-    astUnsupported(`Оператор «${leaf.operator}» для предиката наличия`, path, requestId);
+    astUnsupported(`Operator "${leaf.operator}" for a presence predicate`, path, requestId);
   }
   return want ? { sql: existsSql, params: [] } : { sql: `NOT (${existsSql})`, params: [] };
 }
@@ -2909,7 +2909,7 @@ function keywordsLeafClause(
   astOpts?: AstExecOptions,
 ): Clause {
   if (leaf.operator !== 'matches') {
-    astUnsupported(`Оператор «${leaf.operator}» для операнда «Найти слова»`, path, requestId);
+    astUnsupported(`Operator "${leaf.operator}" for the "Find words" operand`, path, requestId);
   }
   // Ни одной отмеченной области (в т.ч. `scope` не задан) — условие отключено;
   // режима «искать везде» нет (требование 0882f8d5). Дефолт title+synonyms —
@@ -2949,7 +2949,7 @@ function authorLeafClause(column: string, leaf: FilterAstLeaf, path: string, req
     not_empty: 'not_empty',
   };
   const op = map[leaf.operator];
-  if (op === undefined) astUnsupported(`Оператор «${leaf.operator}» для авторского операнда`, path, requestId);
+  if (op === undefined) astUnsupported(`Operator "${leaf.operator}" for an authorship operand`, path, requestId);
   const value: string | string[] | undefined =
     leaf.value === undefined ? undefined : Array.isArray(leaf.value) ? (leaf.value as string[]) : (leaf.value as string);
   const where: string[] = [];
@@ -2981,7 +2981,7 @@ function expandInclusiveDateUpper(value: string): string {
 function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
   const one = (op: string, value: unknown): Clause => {
     if (typeof value !== 'string' || value.trim() === '') {
-      throw new EtnError('VALIDATION_ERROR', 'Граница даты должна быть непустой строкой ISO-8601.', { field: path }, requestId);
+      throw new EtnError('VALIDATION_ERROR', "Date bound must be a non-empty ISO-8601 string.", { field: path }, requestId);
     }
     const raw = value.trim();
     // Включительная верхняя граница-«голая дата» — конец суток UTC (469d8d69).
@@ -3003,14 +3003,14 @@ function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, reque
   }
   if (leaf.operator === 'between' || leaf.operator === 'not_between') {
     if (!Array.isArray(leaf.value) || leaf.value.length !== 2) {
-      throw new EtnError('VALIDATION_ERROR', 'Оператор «между» требует ровно две границы.', { field: path }, requestId);
+      throw new EtnError('VALIDATION_ERROR', "The \"between\" operator requires exactly two bounds.", { field: path }, requestId);
     }
     const low = one('gte', leaf.value[0]);
     const high = one('lte', leaf.value[1]);
     const between: Clause = { sql: `(${low.sql} AND ${high.sql})`, params: [...low.params, ...high.params] };
     return leaf.operator === 'between' ? between : { sql: `NOT (${between.sql})`, params: between.params };
   }
-  astUnsupported(`Оператор «${leaf.operator}» для даты`, path, requestId);
+  astUnsupported(`Operator "${leaf.operator}" for a date`, path, requestId);
 }
 
 /**
@@ -3031,7 +3031,7 @@ function hasPropertiesLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, path: stri
     return leaf.operator === 'not_empty' ? { sql: exists, params: [] } : { sql: `NOT (${exists})`, params: [] };
   }
   if (leaf.operator !== 'has' && leaf.operator !== 'not_has') {
-    astUnsupported(`Оператор «${leaf.operator}» для операнда «свойства»`, path, requestId);
+    astUnsupported(`Operator "${leaf.operator}" for the "property" operand`, path, requestId);
   }
   const ids = astStringList(leaf.value, leaf.operator, path, requestId);
   if (ids.length === 0) return leaf.operator === 'has' ? AST_FALSE : AST_TRUE;
@@ -3185,7 +3185,7 @@ function linkPropertyClause(
       if (typeof value !== 'string' || value === '') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Значение условия по свойству-связи для eq/ne должно быть id мысли (строка) или boolean.',
+          "The link-property condition value for eq/ne must be a thought id (string) or a boolean.",
           { field: 'value' },
           requestId,
         );
@@ -3198,7 +3198,7 @@ function linkPropertyClause(
       if (!Array.isArray(cond.value) || cond.value.length === 0) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
+          "For the \"in list\"/\"not in list\" operation, value must be a non-empty array.",
           { field: 'value' },
           requestId,
         );
@@ -3235,7 +3235,7 @@ function linkPropertyClause(
       // Недостижимо — OPS_BY_VALUE_TYPE['link'] ограничивает набор выше.
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Операция ${cond.operator} недопустима для свойства-связи.`,
+        `Operation ${cond.operator} is not allowed for a link property.`,
         { field: 'operator' },
         requestId,
       );
@@ -3305,7 +3305,7 @@ function propertyClauses(
     if (!allowed.includes(cond.operator)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Операция ${cond.operator} недопустима для свойства типа ${def.value_type}.`,
+        `Operation ${cond.operator} is not allowed for a property of type ${def.value_type}.`,
         { field: 'operator', allowed: [...allowed] },
         requestId,
       );
@@ -3387,7 +3387,7 @@ function propertyClauses(
         if (!Array.isArray(cond.value) || cond.value.length === 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
+            "For the \"in list\"/\"not in list\" operation, value must be a non-empty array.",
             { field: 'value' },
             requestId,
           );
@@ -3426,7 +3426,7 @@ function propertyClauses(
       if (!Array.isArray(cond.value) || cond.value.length === 0) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Для операции "в списке"/"не в списке" value должен быть непустым массивом.',
+          "For the \"in list\"/\"not in list\" operation, value must be a non-empty array.",
           { field: 'value' },
           requestId,
         );
@@ -3598,7 +3598,7 @@ function decodeCursor(
   const invalid = (details: Record<string, unknown> = {}): never => {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Некорректный keyset-курсор: продолжение страницы невозможно.',
+      "Invalid keyset cursor: the page cannot be continued.",
       { field: 'cursor', ...details },
       requestId,
     );

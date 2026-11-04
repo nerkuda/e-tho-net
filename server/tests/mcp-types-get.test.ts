@@ -338,7 +338,7 @@ describe('etn.types.get + list { keywords, compact, meta } (17ff4619)', {
         });
         assert.equal(neither.isError, true);
         assert.match(toolText(neither), /\[VALIDATION_ERROR\]/);
-        assert.match(toolText(neither), /Укажите ровно одно/);
+        assert.match(toolText(neither), /Provide exactly one/);
 
         const both = await handle.client.callTool({
           name: 'etn.types.get',

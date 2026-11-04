@@ -19,7 +19,7 @@ import { EtnError, isIconLibraryName, type IconKind } from '@etn/shared';
 
 /** Канонический текст ошибки вида `icon` (REST и MCP — один). */
 export const LIBRARY_ICON_MESSAGE =
-  'icon должен быть именем иконки из каталога Lucide (kebab-case).';
+  "icon must be a Lucide catalog icon name (kebab-case).";
 
 /**
  * Тело запроса: при `icon_kind='icon'` поле `icon` обязано быть именем
@@ -55,7 +55,7 @@ export function assertLibraryIcon(
 // ---------------------------------------------------------------------------
 
 /** Канонический текст ошибки цвета символа иконки (REST и MCP — один). */
-export const ICON_COLOR_MESSAGE = 'icon_color должен быть HEX-цветом вида #rrggbb.';
+export const ICON_COLOR_MESSAGE = "icon_color must be a HEX color of the form #rrggbb.";
 
 /** Допустимый HEX-цвет `#rrggbb` (регистр любой) — как у цвета слоя. */
 const ICON_COLOR_RE = /^#[0-9a-fA-F]{6}$/;

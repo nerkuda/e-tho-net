@@ -183,7 +183,7 @@ export class NetworkServiceImpl implements NetworkService {
       if (row === undefined) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `Тип для роли «${role}» не найден в сети.`,
+          `Type for role "${role}" not found in the network.`,
           { field: `type_roles.${role}`, value },
         );
       }

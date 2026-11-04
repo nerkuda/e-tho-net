@@ -109,14 +109,14 @@ function resolveLinkSide(
     if (isTyped(requested)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `сторона «${requested}» свойства «${prop.name}» входит в эффективный набор типа мысли — её порядок задаёт привязка типа`,
+        `side "${requested}" of property "${prop.name}" is part of the thought type's effective set — its order is set by the type binding`,
         { field: 'side', property_id: prop.id, side: requested },
       );
     }
     if (!live[requested]) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `у свойства «${prop.name}» нет живых рёбер стороны «${requested}» — пустой внетиповой строки не существует`,
+        `property "${prop.name}" has no live edges on side "${requested}" — an empty non-type row does not exist`,
         { field: 'side', property_id: prop.id, side: requested },
       );
     }
@@ -126,14 +126,14 @@ function resolveLinkSide(
   if (live.source && live.target) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `у мысли живы обе стороны свойства «${prop.name}» — укажите side`,
+      `the thought has live edges on both sides of property "${prop.name}" — specify side`,
       { field: 'side', property_id: prop.id, allowed: ['source', 'target'] },
     );
   }
   if (!live.source && !live.target) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `у свойства «${prop.name}» нет живых рёбер — пустой внетиповой строки не существует`,
+      `property "${prop.name}" has no live edges — an empty non-type row does not exist`,
       { property_id: prop.id },
     );
   }
@@ -141,7 +141,7 @@ function resolveLinkSide(
   if (isTyped(only)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `сторона «${only}» свойства «${prop.name}» входит в эффективный набор типа мысли — её порядок задаёт привязка типа`,
+      `side "${only}" of property "${prop.name}" is part of the thought type's effective set — its order is set by the type binding`,
       { field: 'side', property_id: prop.id, side: only },
     );
   }
@@ -173,7 +173,7 @@ export function setThoughtPropertyOrder(
 
     items.forEach((item, index) => {
       if (!Number.isFinite(item.position) || item.position < 0) {
-        throw new EtnError('VALIDATION_ERROR', 'position должен быть неотрицательным числом', {
+        throw new EtnError('VALIDATION_ERROR', "position must be a non-negative number", {
           field: `items[${index}].position`,
           position: item.position,
         });
@@ -182,7 +182,7 @@ export function setThoughtPropertyOrder(
       if (prop === null) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `свойства ${item.property_id} нет в справочнике сети`,
+          `property ${item.property_id} is not in the network registry`,
           { field: `items[${index}].property_id`, property_id: item.property_id },
         );
       }
@@ -195,13 +195,13 @@ export function setThoughtPropertyOrder(
           // порядок им задаёт привязка, пер-мысленных строк у них нет.
           throw new EtnError(
             'VALIDATION_ERROR',
-            `свойство «${prop.name}» — структурное и не упорядочивается пер-мысленно`,
+            `property "${prop.name}" is structural and is not ordered per thought`,
             { field: `items[${index}].property_id`, property_id: prop.id },
           );
         }
         side = resolveLinkSide(ndb, thoughtId, prop, linkTypeId, typed, item.side);
       } else if (item.side !== undefined) {
-        throw new EtnError('VALIDATION_ERROR', 'side задаётся только для свойств-связей', {
+        throw new EtnError('VALIDATION_ERROR', "side is set only for link properties", {
           field: `items[${index}].side`,
           property_id: prop.id,
         });
@@ -209,7 +209,7 @@ export function setThoughtPropertyOrder(
         if (attached.has(prop.id)) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `свойство «${prop.name}» привязано к типу мысли — его порядок задаёт привязка типа`,
+            `property "${prop.name}" is bound to a thought type — its order is set by the type binding`,
             { field: `items[${index}].property_id`, property_id: prop.id },
           );
         }
@@ -222,7 +222,7 @@ export function setThoughtPropertyOrder(
         if (value === undefined) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `у мысли нет значения свойства «${prop.name}» — упорядочивать нечего`,
+            `the thought has no value for property "${prop.name}" — nothing to order`,
             { field: `items[${index}].property_id`, property_id: prop.id },
           );
         }
@@ -233,7 +233,7 @@ export function setThoughtPropertyOrder(
       if (duplicate !== undefined) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `дубль строки порядка: свойство «${prop.name}»${side === null ? '' : `, сторона «${side}»`}`,
+          `duplicate order row: property "${prop.name}"${side === null ? '' : `, side "${side}"`}`,
           {
             field: `items[${index}].property_id`,
             property_id: prop.id,

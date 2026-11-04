@@ -211,7 +211,7 @@ export type FlatPropertyOp = (typeof FLAT_PROPERTY_OPS)[number];
  * по-прежнему игнорируют `value` любой формы.
  */
 export const FLAT_PROPERTY_CONTAINS_VALUE_MESSAGE =
-  'Для операции contains value должен быть строкой.';
+  "For the contains operation, value must be a string.";
 /** Детали ошибки формы `value` у `contains` — одни для MCP и REST. */
 export const FLAT_PROPERTY_CONTAINS_VALUE_DETAILS = {
   field: 'value',

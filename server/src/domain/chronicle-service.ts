@@ -97,14 +97,14 @@ function parseDateField(
   const raw = body[field];
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== 'string' || raw.trim() === '') {
-    throw new EtnError('VALIDATION_ERROR', `${field} должен быть непустой строкой даты.`, {
+    throw new EtnError('VALIDATION_ERROR', `${field} must be a non-empty date string.`, {
       field,
     }, requestId);
   }
   const trimmed = raw.trim();
   const { known, unknown } = scanStringForTokens(trimmed);
   if (unknown.length > 0) {
-    throw new EtnError('VALIDATION_ERROR', `${field}: неизвестный токен «${unknown[0]!.raw}».`, {
+    throw new EtnError('VALIDATION_ERROR', `${field}: unknown token "${unknown[0]!.raw}".`, {
       field,
       token: unknown[0]!.raw,
     }, requestId);
@@ -114,7 +114,7 @@ function parseDateField(
     if (bad !== undefined) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `${field}: токен «${bad.raw}» требует контекста мысли и в периоде недопустим.`,
+        `${field}: token "${bad.raw}" requires a thought context and is not allowed in a period.`,
         { field, token: bad.raw },
         requestId,
       );
@@ -173,7 +173,7 @@ export function parseChronicleFilter(
     if (flatPresent.length > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'AST-тело (`ast`) несовместимо с плоскими критериями отбора.',
+        "An AST body (`ast`) is incompatible with flat filter criteria.",
         { field: 'ast', conflicts: flatPresent },
         requestId,
       );
@@ -184,7 +184,7 @@ export function parseChronicleFilter(
   const keywords = body['keywords'];
   if (keywords !== undefined) {
     if (typeof keywords !== 'string') {
-      throw new EtnError('VALIDATION_ERROR', 'keywords должен быть строкой.', {
+      throw new EtnError('VALIDATION_ERROR', "keywords must be a string.", {
         field: 'keywords',
       }, requestId);
     }
@@ -205,7 +205,7 @@ export function parseChronicleFilter(
         (v) => typeof v !== 'string' || !(STRUCTURE_KEYWORD_SCOPES as readonly string[]).includes(v),
       )
     ) {
-      throw new EtnError('VALIDATION_ERROR', 'Недопустимый keyword_scope.', {
+      throw new EtnError('VALIDATION_ERROR', "Invalid keyword_scope.", {
         field: 'keyword_scope',
         allowed: STRUCTURE_KEYWORD_SCOPES,
       }, requestId);
@@ -218,14 +218,14 @@ export function parseChronicleFilter(
   const thoughtIds = body['thought_ids'];
   if (thoughtIds !== undefined) {
     if (!Array.isArray(thoughtIds) || thoughtIds.some((v) => typeof v !== 'string')) {
-      throw new EtnError('VALIDATION_ERROR', 'thought_ids должен быть массивом строк.', {
+      throw new EtnError('VALIDATION_ERROR', "thought_ids must be an array of strings.", {
         field: 'thought_ids',
       }, requestId);
     }
     if (thoughtIds.length > CHRONICLE_THOUGHT_IDS_MAX) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `thought_ids — не более ${CHRONICLE_THOUGHT_IDS_MAX} мыслей.`,
+        `thought_ids must contain at most ${CHRONICLE_THOUGHT_IDS_MAX} thoughts.`,
         { field: 'thought_ids' },
         requestId,
       );
@@ -236,7 +236,7 @@ export function parseChronicleFilter(
   const includeSubtree = body['include_subtree'];
   if (includeSubtree !== undefined) {
     if (typeof includeSubtree !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'include_subtree должен быть boolean.', {
+      throw new EtnError('VALIDATION_ERROR', "include_subtree must be a boolean.", {
         field: 'include_subtree',
       }, requestId);
     }
@@ -246,7 +246,7 @@ export function parseChronicleFilter(
   const typeIds = body['type_ids'];
   if (typeIds !== undefined) {
     if (!Array.isArray(typeIds) || typeIds.some((v) => typeof v !== 'string')) {
-      throw new EtnError('VALIDATION_ERROR', 'type_ids должен быть массивом строк.', {
+      throw new EtnError('VALIDATION_ERROR', "type_ids must be an array of strings.", {
         field: 'type_ids',
       }, requestId);
     }
@@ -261,7 +261,7 @@ export function parseChronicleFilter(
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'link_type_ids должен быть массивом строк.',
+        "link_type_ids must be an array of strings.",
         { field: 'link_type_ids' },
         requestId,
       );
@@ -275,7 +275,7 @@ export function parseChronicleFilter(
       typeof linkScope !== 'string' ||
       !(CHRONICLE_LINK_SCOPES as readonly string[]).includes(linkScope)
     ) {
-      throw new EtnError('VALIDATION_ERROR', 'Недопустимый link_scope.', {
+      throw new EtnError('VALIDATION_ERROR', "Invalid link_scope.", {
         field: 'link_scope',
         allowed: CHRONICLE_LINK_SCOPES,
       }, requestId);
@@ -290,7 +290,7 @@ export function parseChronicleFilter(
   const targets = body['targets'];
   if (targets !== undefined) {
     if (typeof targets !== 'object' || targets === null || Array.isArray(targets)) {
-      throw new EtnError('VALIDATION_ERROR', 'targets должен быть объектом критериев.', {
+      throw new EtnError('VALIDATION_ERROR', "targets must be a criteria object.", {
         field: 'targets',
       }, requestId);
     }
@@ -309,7 +309,7 @@ export function parseChronicleFilter(
   const dateMode = body['date_mode'];
   if (dateMode !== undefined) {
     if (dateMode !== 'presets' && dateMode !== 'dates') {
-      throw new EtnError('VALIDATION_ERROR', 'Недопустимый date_mode.', {
+      throw new EtnError('VALIDATION_ERROR', "Invalid date_mode.", {
         field: 'date_mode',
         allowed: ['presets', 'dates'],
       }, requestId);
@@ -338,7 +338,7 @@ export function parseChronicleFilter(
 function parseChronicleAuthorOp(raw: unknown, requestId?: string): StructureAuthorOp {
   if (raw === undefined) return 'eq';
   if (typeof raw !== 'string' || !(STRUCTURE_AUTHOR_OPS as readonly string[]).includes(raw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимая операция фильтра авторства.', {
+    throw new EtnError('VALIDATION_ERROR', "Invalid authorship filter operation.", {
       field: 'op',
       allowed: STRUCTURE_AUTHOR_OPS,
     }, requestId);
@@ -358,14 +358,14 @@ function parseChronicleAuthorValue(
   if (op === 'empty' || op === 'not_empty') return undefined;
   if (op === 'in' || op === 'not_in') {
     if (!Array.isArray(raw) || raw.length === 0) {
-      throw new EtnError('VALIDATION_ERROR', 'Для операции in/not_in нужен непустой массив id.', {
+      throw new EtnError('VALIDATION_ERROR', "The in/not_in operation requires a non-empty array of ids.", {
         field: 'value',
       }, requestId);
     }
     const ids: string[] = [];
     for (const v of raw) {
       if (typeof v !== 'string' || v.trim() === '') {
-        throw new EtnError('VALIDATION_ERROR', 'Каждый id должен быть непустой строкой.', {
+        throw new EtnError('VALIDATION_ERROR', "Each id must be a non-empty string.", {
           field: 'value',
         }, requestId);
       }
@@ -374,7 +374,7 @@ function parseChronicleAuthorValue(
     return ids;
   }
   if (typeof raw !== 'string') {
-    throw new EtnError('VALIDATION_ERROR', 'Значение должно быть строкой (id пользователя).', {
+    throw new EtnError('VALIDATION_ERROR', "The value must be a string (a user id).", {
       field: 'value',
     }, requestId);
   }
@@ -428,7 +428,7 @@ export function parseChronicleFilterDefinition(
   const filter = parseChronicleFilter(body, requestId);
   const orderRaw = body['order'];
   if (typeof orderRaw !== 'string' || !(SORT_ORDERS as readonly string[]).includes(orderRaw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимый order.', {
+    throw new EtnError('VALIDATION_ERROR', "Invalid order.", {
       field: 'order',
       allowed: SORT_ORDERS,
     }, requestId);
@@ -488,7 +488,7 @@ function parseChronicleBodyFormat(
   }
   throw new EtnError(
     'VALIDATION_ERROR',
-    'Недопустимый body — ожидается одно из значений: md, html, both.',
+    "Invalid body — expected one of: md, html, both.",
     { field: 'body', allowed: CHRONICLE_BODY_FORMATS },
     requestId,
   );
@@ -504,7 +504,7 @@ function parseChronicleLimit(body: Record<string, unknown>, requestId: string): 
   if (limit < 1 || limit > CHRONICLE_QUERY_MAX_LIMIT) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `limit должен быть целым числом 1..${CHRONICLE_QUERY_MAX_LIMIT}.`,
+      `limit must be an integer in 1..${CHRONICLE_QUERY_MAX_LIMIT}.`,
       { field: 'limit' },
       requestId,
     );
@@ -518,7 +518,7 @@ function parseChronicleOffset(body: Record<string, unknown>, requestId: string):
   const offset =
     typeof offsetRaw === 'number' && Number.isInteger(offsetRaw) ? offsetRaw : 0;
   if (offset < 0) {
-    throw new EtnError('VALIDATION_ERROR', 'offset должен быть целым числом ≥ 0.', {
+    throw new EtnError('VALIDATION_ERROR', "offset must be an integer ≥ 0.", {
       field: 'offset',
     }, requestId);
   }
@@ -801,7 +801,7 @@ function astTokenOrString(raw: unknown, field: string, requestId?: string): stri
     const t = (raw as { token?: unknown }).token;
     if (typeof t === 'string') return t;
   }
-  throw new EtnError('VALIDATION_ERROR', `${field}: ожидается дата или токен.`, { field }, requestId);
+  throw new EtnError('VALIDATION_ERROR', `${field}: expected a date or a token.`, { field }, requestId);
 }
 
 /** Раскрыть дату/токен границы периода записи в полный UTC-инстанс. */
@@ -810,11 +810,11 @@ function resolveRecordBound(raw: unknown, bound: 'lower' | 'upper', opts: Chroni
   const rawStr = astTokenOrString(raw, field, opts.requestId).trim();
   const { known, unknown } = scanStringForTokens(rawStr);
   if (unknown.length > 0) {
-    throw new EtnError('VALIDATION_ERROR', `${field}: неизвестный токен «${unknown[0]!.raw}».`, { field, token: unknown[0]!.raw }, opts.requestId);
+    throw new EtnError('VALIDATION_ERROR', `${field}: unknown token "${unknown[0]!.raw}".`, { field, token: unknown[0]!.raw }, opts.requestId);
   }
   const bad = known.find((t) => t.kind !== 'global');
   if (bad !== undefined) {
-    throw new EtnError('VALIDATION_ERROR', `${field}: токен «${bad.raw}» требует контекста мысли и в периоде недопустим.`, { field, token: bad.raw }, opts.requestId);
+    throw new EtnError('VALIDATION_ERROR', `${field}: token "${bad.raw}" requires a thought context and is not allowed in a period.`, { field, token: bad.raw }, opts.requestId);
   }
   if (known.length === 0) {
     const normalised = normaliseInstant(rawStr, field, bound === 'lower' ? 'start' : 'end');
@@ -825,7 +825,7 @@ function resolveRecordBound(raw: unknown, bound: 'lower' | 'upper', opts: Chroni
     ...(opts.withTime !== undefined ? { withTime: opts.withTime } : {}),
   });
   if (resolved === undefined) {
-    throw new EtnError('VALIDATION_ERROR', `${field}: не удалось раскрыть значение периода.`, { field }, opts.requestId);
+    throw new EtnError('VALIDATION_ERROR', `${field}: failed to resolve the period value.`, { field }, opts.requestId);
   }
   return resolved;
 }
@@ -842,7 +842,7 @@ function recordTimeLeafClause(leaf: FilterAstLeaf, opts: ChronicleAstOpts): Chro
   };
   const between = (value: unknown): ChronicleClause => {
     if (!Array.isArray(value) || value.length !== 2) {
-      astUnsupported('«Время записи»: оператор «между» требует две границы.', opts.requestId);
+      astUnsupported("\"Record time\": the \"between\" operator requires two bounds.", opts.requestId);
     }
     const bounds = value as FilterAstListItem[];
     const a = lower(bounds[0], false);
@@ -882,7 +882,7 @@ function recordTimeLeafClause(leaf: FilterAstLeaf, opts: ChronicleAstOpts): Chro
       return { sql: `NOT ${inner.sql}`, args: inner.args };
     }
     default:
-      return astUnsupported(`Оператор «${leaf.operator}» недопустим для «Времени записи».`, opts.requestId);
+      return astUnsupported(`Operator "${leaf.operator}" is not allowed for "Record time".`, opts.requestId);
   }
 }
 
@@ -914,7 +914,7 @@ function recordTextLeafClause(
   if (op === 'matches') return recordMatchesClause(matchesCond, leaf.value);
   const raw = typeof leaf.value === 'string' ? leaf.value : undefined;
   if (raw === undefined) {
-    return astUnsupported(`Оператор «${op}» требует строковое значение.`, opts.requestId);
+    return astUnsupported(`Operator "${op}" requires a string value.`, opts.requestId);
   }
   switch (op) {
     case 'eq':
@@ -928,7 +928,7 @@ function recordTextLeafClause(
       return { sql: `NOT (${inner.sql})`, args: inner.args };
     }
     default:
-      return astUnsupported(`Оператор «${op}» недопустим для строкового операнда записи.`, opts.requestId);
+      return astUnsupported(`Operator "${op}" is not allowed for a string record operand.`, opts.requestId);
   }
 }
 
@@ -937,7 +937,7 @@ function recordTextLeafClause(
  * «Редактор записи») — одна точка на все сообщения этой пары колонок.
  */
 function recordAuthorColumnLabel(column: 'c.created_by' | 'c.updated_by'): string {
-  return column === 'c.created_by' ? 'Автор записи' : 'Редактор записи';
+  return column === 'c.created_by' ? "Record author" : "Record editor";
 }
 
 /**
@@ -986,7 +986,7 @@ function resolveRecordAuthorValue(
     if (unknown.length > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `${column}: неизвестный токен «${unknown[0]!.raw}».`,
+        `${column}: unknown token "${unknown[0]!.raw}".`,
         { field: 'value', token: unknown[0]!.raw },
         opts.requestId,
       );
@@ -995,7 +995,7 @@ function resolveRecordAuthorValue(
     if (bad !== undefined) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `${column}: токен «${bad.raw}» требует контекста мысли и в условии авторства недопустим.`,
+        `${column}: token "${bad.raw}" requires a thought context and is not allowed in an authorship condition.`,
         { field: 'value', token: bad.raw },
         opts.requestId,
       );
@@ -1008,7 +1008,7 @@ function resolveRecordAuthorValue(
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `${recordAuthorColumnLabel(column)}: токен «$user» не разрешён — не задан пользователь запроса.`,
+        `${recordAuthorColumnLabel(column)}: the "$user" token is not allowed — the request user is not set.`,
         { field: 'value', token: '$user' },
         opts.requestId,
       );
@@ -1020,7 +1020,7 @@ function resolveRecordAuthorValue(
     if (resolved.unresolved.length > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `${column}: не удалось раскрыть токен «${text}».`,
+        `${column}: failed to resolve token "${text}".`,
         { field: 'value', token: text },
         opts.requestId,
       );
@@ -1052,7 +1052,7 @@ function recordAuthorLeafClause(
   }
   const value = resolveRecordAuthorValue(leaf.value, column, opts);
   if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) {
-    return astUnsupported(`«${recordAuthorColumnLabel(column)}»: не задано значение условия.`, opts.requestId);
+    return astUnsupported(`"${recordAuthorColumnLabel(column)}": the condition value is not set.`, opts.requestId);
   }
   appendChronicleAuthorCondition(conds, args, column, value, op);
   if (conds.length === 0) return { sql: '1=1', args: [] };
@@ -1116,7 +1116,7 @@ function targetsLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, opts: ChronicleA
       if (res.truncated) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Обход «Целей в иерархии» прерван: превышен ресурсный бюджет; сузьте набор целей.',
+          "The \"Targets in hierarchy\" traversal was aborted: the resource budget was exceeded; narrow the target set.",
           { field: 'targets', reason: 'hierarchy_budget' },
           opts.requestId,
         );
@@ -1131,7 +1131,7 @@ function targetsLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, opts: ChronicleA
   }
 
   if (!isSubquery && !Array.isArray(value)) {
-    return astUnsupported('«Цели»: оператор требует значения — списка мыслей либо под-выборки.', opts.requestId);
+    return astUnsupported("\"Targets\": the operator requires a value — a list of thoughts or a subquery.", opts.requestId);
   }
   const set = ids();
   const attachArgs = idsArgs(set);
@@ -1148,7 +1148,7 @@ function targetsLeafClause(ndb: NetworkDb, leaf: FilterAstLeaf, opts: ChronicleA
       return { sql: `(EXISTS (${ATTACH_ANY_SQL}) AND NOT EXISTS (${attachToIdsSql(set, true)}))`, args: attachArgs };
     }
     default:
-      return astUnsupported(`Оператор «${op}» недопустим для «Целей».`, opts.requestId);
+      return astUnsupported(`Operator "${op}" is not allowed for "Targets".`, opts.requestId);
   }
 }
 
@@ -1204,7 +1204,7 @@ function chronicleAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: Chron
     case 'targets':
       return targetsLeafClause(ndb, node, opts);
     default:
-      return astUnsupported(`Операнд «${node.entity.kind}» не виден в профиле хроники.`, opts.requestId);
+      return astUnsupported(`Operand "${node.entity.kind}" is not visible in the chronicle profile.`, opts.requestId);
   }
 }
 
@@ -1268,7 +1268,7 @@ export function compileChronicleToAst(
   if (linkScope !== 'both') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `AST 0.13.1 выражает только link_scope = 'both'; значение «${linkScope}» не поддержано — отказ вместо подмены.`,
+      `AST 0.13.1 expresses only link_scope = 'both'; the value "${linkScope}" is not supported — refusing instead of substituting.`,
       { field: 'link_scope' },
       opts.requestId,
     );
@@ -1276,7 +1276,7 @@ export function compileChronicleToAst(
   if ((request.link_type_ids ?? []).length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'AST 0.13.1 не выражает фильтр типов связей (link_type_ids) — отказ вместо подмены.',
+      "AST 0.13.1 cannot express the link-type filter (link_type_ids) — refusing instead of substituting.",
       { field: 'link_type_ids' },
       opts.requestId,
     );
