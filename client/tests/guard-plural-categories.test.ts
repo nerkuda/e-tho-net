@@ -33,7 +33,13 @@ import { ruPlurals } from '../src/renderer/lib/locales/ru.js';
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOCALES_DIR = path.join(CLIENT_ROOT, 'src', 'renderer', 'lib', 'locales');
 
-/** Тестовая фикстура GUI-стенда: не пользовательский язык, форм плюралов не описывает. */
+/**
+ * Тестовая фикстура GUI-стенда: не пользовательский язык, поэтому из проверки
+ * исключена. Свои формы она объявляет (`testPlurals` с `plurals.child`), но
+ * регистрируется только в `MODE=test` и не имеет ICU-кода: `Intl.PluralRules`
+ * по имени файла `test` бросил бы RangeError, а паритет форм с `ru` держит
+ * `guard-i18n-parity.test.ts`.
+ */
 const TEST_LOCALE_FILE = 'test.ts';
 
 /** Коды языков из файлов `lib/locales/*.ts`, кроме тестовой фикстуры. */

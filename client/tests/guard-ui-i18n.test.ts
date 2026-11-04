@@ -15,7 +15,10 @@
  * 2. **Целостность словаря.** Каждый ключ из `t('…')`/`tp('…')` в исходниках
  *    рендерера есть в каталоге `ru` — опечатка не доедет до пользователя.
  *    Сбор ключей — по AST, а не построчным regex: многострочный вызов
- *    (`tp(\n  'ключ', n)`) — обычная форма и тоже обязан проверяться.
+ *    (`tp(\n  'ключ', n)`) — обычная форма и тоже обязан проверяться. Вызов
+ *    словаря определяется происхождением импорта: алиасы (`t as tr`),
+ *    namespace (`import * as i18n`) и реэкспорт через модуль-посредник
+ *    (`export { t } from './i18n.js'`, `export *`) разрешаются транзитивно.
  * 3. **Полнота каталога.** У каждого ключа `ru` непустой русский текст —
  *    «перевод» не может остаться заглушкой.
  * 4. **Ленивое вычисление текста (ошибка ebed42d3).** `t()`/`tp()` не
@@ -128,18 +131,166 @@ function parseSource(fileName: string, source: string): ts.SourceFile {
   return ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
+/** Синтетические модули теста: rel-путь от renderer → исходник (без файла на диске). */
+type SyntheticModules = Readonly<Record<string, string>>;
+
+/** Относительный путь модуля renderer в posix-виде (`lib/i18n.ts`). */
+function toModulePath(rel: string): string {
+  return rel.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/** Исходник модуля renderer: синтетический поверх диска. */
+function moduleSource(rel: string, synthetic?: SyntheticModules): string | null {
+  const virtual = synthetic?.[rel];
+  if (virtual !== undefined) return virtual;
+  try {
+    return fs.readFileSync(path.join(RENDERER_ROOT, rel), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** Разобранные модули дерева: AST одного файла переиспользуется на прогон. */
+const moduleAstCache = new Map<string, ts.SourceFile>();
+
+/** AST модуля renderer; `null` — файла нет (или путь не относится к renderer). */
+function moduleAst(rel: string, synthetic?: SyntheticModules): ts.SourceFile | null {
+  const virtual = synthetic?.[rel];
+  if (virtual !== undefined) return parseSource(rel, virtual);
+  let sf = moduleAstCache.get(rel);
+  if (sf === undefined) {
+    const source = moduleSource(rel);
+    if (source === null) return null;
+    sf = parseSource(rel, source);
+    moduleAstCache.set(rel, sf);
+  }
+  return sf;
+}
+
+/** Модуль словаря — сам `lib/i18n.ts`. */
+function isI18nModule(rel: string): boolean {
+  return /(^|\/)i18n(\.js|\.ts)?$/.test(rel);
+}
+
+/** Разрешение относительного импорта от модуля `fromRel` в файл renderer. */
+function resolveSpecifier(
+  fromRel: string,
+  specifier: string,
+  synthetic?: SyntheticModules,
+): string | null {
+  if (!specifier.startsWith('.')) return null; // пакет, не файл проекта
+  const base = path.posix.dirname(toModulePath(fromRel));
+  const resolved = path.posix.normalize(path.posix.join(base, specifier));
+  const candidates = [
+    resolved,
+    resolved.replace(/\.js$/, '.ts'),
+    `${resolved}.ts`,
+    `${resolved}/index.ts`,
+  ];
+  for (const candidate of candidates) {
+    if (synthetic?.[candidate] !== undefined) return candidate;
+    if (fs.existsSync(path.join(RENDERER_ROOT, candidate))) return candidate;
+  }
+  return null;
+}
+
+/** Происхождение символа: функция словаря, namespace-объект или не словарь. */
+type SymbolOrigin = { kind: 'function'; name: 't' | 'tp' } | { kind: 'namespace' } | null;
+
+/**
+ * Происхождение экспорта `name` модуля `rel`. Реэкспорт разрешается
+ * транзитивно (`export { t } from './i18n.js'`, `export * from './barrel.js'`),
+ * поэтому вызов `t()` после импорта через модуль-посредник не выпадает из
+ * сбора. Цикл реэкспортов не зацикливает обход.
+ */
+function exportOrigin(
+  rel: string,
+  name: string,
+  synthetic: SyntheticModules | undefined,
+  seen: Set<string>,
+): SymbolOrigin {
+  if (isI18nModule(rel)) {
+    return name === 't' || name === 'tp' ? { kind: 'function', name } : null;
+  }
+  const key = `${rel}#${name}`;
+  if (seen.has(key)) return null; // цикл реэкспортов
+  seen.add(key);
+  const sf = moduleAst(rel, synthetic);
+  if (sf === null) return null;
+  for (const statement of sf.statements) {
+    if (!ts.isExportDeclaration(statement)) continue;
+    const spec = statement.moduleSpecifier;
+    const target =
+      spec !== undefined && ts.isStringLiteral(spec)
+        ? resolveSpecifier(rel, spec.text, synthetic)
+        : null;
+    const clause = statement.exportClause;
+    if (clause === undefined) {
+      // `export * from './x'` — наружу уходит всё, включая t/tp.
+      if (target !== null) {
+        const origin = exportOrigin(target, name, synthetic, seen);
+        if (origin !== null) return origin;
+      }
+      continue;
+    }
+    if (!ts.isNamedExports(clause)) continue; // `export * as ns` — namespace, не t/tp напрямую
+    for (const element of clause.elements) {
+      if (element.name.text !== name) continue;
+      const local = (element.propertyName ?? element.name).text;
+      if (target !== null) return exportOrigin(target, local, synthetic, seen);
+      // `export { t }` без источника — локальная привязка файла.
+      return localOrigin(rel, sf, local, synthetic, seen);
+    }
+  }
+  return null;
+}
+
+/** Происхождение локальной привязки файла: импорт `t`/`tp` из словаря. */
+function localOrigin(
+  rel: string,
+  sf: ts.SourceFile,
+  localName: string,
+  synthetic: SyntheticModules | undefined,
+  seen: Set<string>,
+): SymbolOrigin {
+  for (const statement of sf.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const spec = statement.moduleSpecifier;
+    if (!ts.isStringLiteral(spec)) continue;
+    const target = resolveSpecifier(rel, spec.text, synthetic);
+    if (target === null) continue;
+    const named = statement.importClause?.namedBindings;
+    if (named === undefined) continue;
+    if (ts.isNamespaceImport(named)) {
+      if (named.name.text === localName) return { kind: 'namespace' };
+      continue;
+    }
+    if (!ts.isNamedImports(named)) continue;
+    for (const element of named.elements) {
+      if (element.name.text !== localName) continue;
+      const imported = (element.propertyName ?? element.name).text;
+      return exportOrigin(target, imported, synthetic, seen);
+    }
+  }
+  return null;
+}
+
 /**
  * Статические ключи `t()`/`tp()` одного исходника. Сбор — по AST: вызов
  * может быть многострочным (`tp(\n  'plurals.orphanedChildren', n)`), и
  * построчная регулярка такой ключ теряла. Комментарии и примеры в них
  * вызовами не считаются; динамический ключ (не литерал) здесь не проверяется —
- * его держит тип `MessageKey`. Локальная функция с именем `t`/`tp`,
- * вызываемая со строкой, от словарной не отличается; таких вызовов в
- * renderer нет (проверено при вводе AST-сбора).
+ * его держит тип `MessageKey`. Вызов словаря определяется происхождением
+ * импорта (алиасы, namespace, реэкспорт), а не именем функции: локальная
+ * функция `t` без импорта словаря не считается.
  */
-function sourceUsedKeys(fileName: string, source: string): UsedKey[] {
+function sourceUsedKeys(
+  fileName: string,
+  source: string,
+  synthetic?: SyntheticModules,
+): UsedKey[] {
   const sf = parseSource(fileName, source);
-  const bindings = i18nBindings(sf);
+  const bindings = i18nBindings(fileName, sf, synthetic);
   if (bindings.direct.size === 0 && bindings.namespaces.size === 0) return [];
   const keys: UsedKey[] = [];
   const visit = (node: ts.Node): void => {
@@ -198,36 +349,48 @@ interface ModuleLevelCall {
   text: string;
 }
 
-/** Имена `t`/`tp` из импорта `i18n` в файле. */
+/** Имена `t`/`tp` из импорта словаря в файле. */
 interface I18nBindings {
   /** Именованные импорты: локальное имя → `t` или `tp` (алиасы учтены). */
   direct: Map<string, 't' | 'tp'>;
-  /** Namespace-импорты (`import * as i18n`) — вызовы `i18n.t(...)`. */
-  namespaces: Set<string>;
+  /** Namespace-импорты (`import * as i18n`) → доступные в них `t`/`tp`. */
+  namespaces: Map<string, Set<'t' | 'tp'>>;
 }
 
 /**
- * Имена `t`/`tp` из импорта `i18n` в файле — включая алиасы
- * (`import { t as tr }`) и namespace (`import * as i18n`): вызов ищется по
- * имени, а не по тексту модуля.
+ * Имена `t`/`tp` из импорта словаря в файле — включая алиасы
+ * (`import { t as tr }`), namespace (`import * as i18n`) и реэкспорт через
+ * модуль-посредник (`export { t } from './i18n.js'`): импорт разрешается
+ * транзитивно до самого `lib/i18n.ts`, а не по тексту пути.
  */
-function i18nBindings(sf: ts.SourceFile): I18nBindings {
-  const bindings: I18nBindings = { direct: new Map(), namespaces: new Set() };
+function i18nBindings(
+  fileName: string,
+  sf: ts.SourceFile,
+  synthetic?: SyntheticModules,
+): I18nBindings {
+  const bindings: I18nBindings = { direct: new Map(), namespaces: new Map() };
   for (const statement of sf.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
-    // `./i18n.js`, `../lib/i18n.js`, `i18n` — путь заканчивается именем модуля.
     const spec = statement.moduleSpecifier;
-    if (!ts.isStringLiteral(spec) || !/(^|\/)i18n(\.js|\.ts)?$/.test(spec.text)) continue;
+    if (!ts.isStringLiteral(spec)) continue;
+    const target = resolveSpecifier(toModulePath(fileName), spec.text, synthetic);
+    if (target === null) continue;
     const named = statement.importClause?.namedBindings;
     if (named === undefined) continue;
     if (ts.isNamespaceImport(named)) {
-      bindings.namespaces.add(named.name.text);
+      const available = new Set<'t' | 'tp'>();
+      for (const fn of ['t', 'tp'] as const) {
+        if (exportOrigin(target, fn, synthetic, new Set()) !== null) available.add(fn);
+      }
+      if (available.size > 0) bindings.namespaces.set(named.name.text, available);
       continue;
     }
     if (!ts.isNamedImports(named)) continue;
     for (const element of named.elements) {
       const imported = (element.propertyName ?? element.name).text;
-      if (imported === 't' || imported === 'tp') bindings.direct.set(element.name.text, imported);
+      if (imported !== 't' && imported !== 'tp') continue;
+      if (exportOrigin(target, imported, synthetic, new Set()) === null) continue;
+      bindings.direct.set(element.name.text, imported);
     }
   }
   return bindings;
@@ -240,10 +403,10 @@ function i18nBindings(sf: ts.SourceFile): I18nBindings {
 function i18nCallName(expression: ts.Expression, bindings: I18nBindings): 't' | 'tp' | null {
   if (ts.isIdentifier(expression)) return bindings.direct.get(expression.text) ?? null;
   if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
-    if (!bindings.namespaces.has(expression.expression.text)) return null;
-    return expression.name.text === 't' || expression.name.text === 'tp'
-      ? expression.name.text
-      : null;
+    const available = bindings.namespaces.get(expression.expression.text);
+    if (available === undefined) return null;
+    if (expression.name.text !== 't' && expression.name.text !== 'tp') return null;
+    return available.has(expression.name.text) ? expression.name.text : null;
   }
   return null;
 }
@@ -366,9 +529,13 @@ function hasModuleLevelMarker(node: ts.Node, sf: ts.SourceFile, lines: string[])
  * `const X = t('…')` от `const X = () => t('…')`, путает `map` с ленивым
  * колбэком и ломается на многострочных литералах.
  */
-function moduleLevelI18nCalls(fileName: string, source: string): ModuleLevelCall[] {
+function moduleLevelI18nCalls(
+  fileName: string,
+  source: string,
+  synthetic?: SyntheticModules,
+): ModuleLevelCall[] {
   const sf = parseSource(fileName, source);
-  const bindings = i18nBindings(sf);
+  const bindings = i18nBindings(fileName, sf, synthetic);
   if (bindings.direct.size === 0 && bindings.namespaces.size === 0) return [];
   const lines = source.split('\n');
   const calls: ModuleLevelCall[] = [];
@@ -460,9 +627,13 @@ function i18nProducingFunctions(functions: Map<string, SameFileFunction>): Set<s
  * он всё равно вычисляется при импорте. Прямые `t()`/`tp()` — отдельная
  * проверка, здесь они не дублируются.
  */
-function derivedModuleLevelI18nCalls(fileName: string, source: string): ModuleLevelCall[] {
+function derivedModuleLevelI18nCalls(
+  fileName: string,
+  source: string,
+  synthetic?: SyntheticModules,
+): ModuleLevelCall[] {
   const sf = parseSource(fileName, source);
-  const bindings = i18nBindings(sf);
+  const bindings = i18nBindings(fileName, sf, synthetic);
   if (bindings.direct.size === 0 && bindings.namespaces.size === 0) return [];
   const producers = i18nProducingFunctions(sameFileFunctions(sf, bindings));
   if (producers.size === 0) return [];
@@ -677,6 +848,46 @@ describe('guard: локализация renderer', () => {
       ],
       'ключ на следующей строке после t(/tp( — такой же вызов словаря; ' +
         'пример в комментарии и чужой localT — нет',
+    );
+  });
+
+  it('сбор ключей видит алиасы, namespace и реэкспорт словаря', () => {
+    const probe = [
+      "import { t as tr, tp as trp } from './lib/i18n.js';",
+      "import * as i18nNs from './lib/i18n.js';",
+      "import { t } from './lib/probe-barrel-2014af4f.js';",
+      "import { t as viaStar } from './lib/probe-star-2014af4f.js';",
+      "import { t as notReexported } from './lib/probe-not-barrel-2014af4f.js';",
+      "const A = tr('actions.save');",
+      "const B = trp('plurals.link', 2);",
+      "const C = i18nNs.t('actions.cancel');",
+      "const D = i18nNs.tp('plurals.child', 3);",
+      "const E = t('actions.close');",
+      "const F = viaStar('actions.apply');",
+      "const G = notReexported('probe.notAReexport');",
+    ].join('\n');
+    // Модуль-посредник: прямo реэкспортирует словарь, `export *` — транзитивно.
+    const synthetic = {
+      'lib/probe-barrel-2014af4f.ts': "export { t, tp } from './i18n.js';",
+      'lib/probe-inner-2014af4f.ts': "export { t } from './i18n.js';",
+      'lib/probe-star-2014af4f.ts': "export * from './probe-inner-2014af4f.js';",
+      // Импортирует t, но наружу его не отдаёт — вызов не словарный.
+      'lib/probe-not-barrel-2014af4f.ts':
+        "import { t } from './i18n.js';\nexport const helper = t('actions.save');",
+    };
+    assert.deepEqual(
+      sourceUsedKeys('probe.ts', probe, synthetic),
+      [
+        { fn: 't', key: 'actions.save' },
+        { fn: 'tp', key: 'plurals.link' },
+        { fn: 't', key: 'actions.cancel' },
+        { fn: 'tp', key: 'plurals.child' },
+        { fn: 't', key: 'actions.close' },
+        { fn: 't', key: 'actions.apply' },
+      ],
+      'алиасы (tr/trp), namespace (i18nNs.t/tp), реэкспорт из посредника (t) ' +
+        'и `export *` (viaStar) — вызовы словаря; импорт из модуля, который t ' +
+        'не реэкспортирует (notReexported), — нет',
     );
   });
 
