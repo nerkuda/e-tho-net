@@ -97,13 +97,24 @@ export function updateDeploymentLabel(deployment: ServerDeployment): MessageKey 
 }
 
 /**
- * Путь к журналу установщика из серверного текста ошибки. Сервер дописывает
- * `журнал: <путь>` в конец причины (`describeFailureExit` и др.); путь может
- * содержать пробелы, поэтому берётся хвост после маркера.
+ * Маркер журнала установщика в серверном тексте ошибки. Сервер дописывает
+ * `log: <путь>` в конец причины (`describeFailureExit`, `InstallerTimeoutError`
+ * и др., ADR daab6ac4 — английский); путь может содержать пробелы, поэтому
+ * берётся хвост после маркера.
  */
+const ENGLISH_JOURNAL_MARKER = /\blog:\s*([^;]+?)(?:\s*;|\s*$)/i;
+
+/**
+ * Русская форма маркера — совместимость с заданиями, сохранёнными до перевода
+ * серверных текстов. Приоритет у английской формы.
+ */
+const RUSSIAN_JOURNAL_MARKER = /журнал(?:\s+установщика)?:\s*([^;]+?)(?:\s*;|\s*$)/i;
+
+/** Путь к журналу установщика из серверного текста ошибки. */
 export function extractJournalPath(error: string | null): string | null {
   if (error === null || error.trim() === '') return null;
-  const match = /журнал(?:\s+установщика)?:\s*(.+?)\s*;?\s*$/i.exec(error);
+  const match =
+    ENGLISH_JOURNAL_MARKER.exec(error) ?? RUSSIAN_JOURNAL_MARKER.exec(error);
   const path = match?.[1]?.trim() ?? '';
   return path === '' ? null : path;
 }
@@ -155,7 +166,12 @@ export interface ServerUpdateViewModel {
   done: boolean;
   /** Итог: задание провалилось. */
   failed: boolean;
-  /** Серверная причина сбоя (итог `failed`). */
+  /**
+   * Сырой серверный текст сбоя (итог `failed`). Фолбэк: при отказе `apply`
+   * диалог предпочитает локализованный текст по коду (ADR daab6ac4 §4);
+   * серверный текст остаётся только для восстановленного из `/progress`
+   * задания, у которого кода уже нет.
+   */
   failureText: string | null;
   /** Путь к журналу установщика из причины сбоя; `null` — сервер не сообщил. */
   journalPath: string | null;
@@ -251,11 +267,12 @@ export type ApplyFailureKind = 'in-progress' | 'installer-failed' | 'rejected';
 export interface ApplyFailure {
   kind: ApplyFailureKind;
   /**
-   * Пользовательский текст для `installer-failed`/`rejected` (по коду
+   * Готовый пользовательский текст для `installer-failed`/`rejected` (по коду
    * `details.reason`, ADR daab6ac4 §4; серверный `message` не показывается)
-   * или `null`.
+   * или `null`. Поле не называется `message`: в контракте ADR это имя
+   * закреплено за английским диагностическим текстом сервера.
    */
-  message: string | null;
+  text: string | null;
   /** Задание из `details.job`, если сервер его прислал. */
   job: UpdateJob | null;
   /** Сервер разрешает повтор (`details.retryable`); сейчас всегда `false`. */
@@ -304,29 +321,29 @@ export function classifyApplyFailure(err: unknown): ApplyFailure {
 
   // Обрыв/тайм-аут: apply отвечает только после скачивания и проверки хеша.
   if (transportKind === 'connect-failed') {
-    return { kind: 'in-progress', message: null, job, retryable: false };
+    return { kind: 'in-progress', text: null, job, retryable: false };
   }
   if (error?.code === 'SERVER_UPDATING') {
-    return { kind: 'in-progress', message: null, job, retryable: false };
+    return { kind: 'in-progress', text: null, job, retryable: false };
   }
   if (error?.code === 'VERSION_CONFLICT') {
     if (reason === 'docker' || reason === 'downgrade' || reason === 'version-mismatch') {
-      return { kind: 'rejected', message: errText(err), job, retryable: false };
+      return { kind: 'rejected', text: errText(err), job, retryable: false };
     }
     // job-active / installer-alive / 409 без причины — идущее обновление.
-    return { kind: 'in-progress', message: null, job, retryable: false };
+    return { kind: 'in-progress', text: null, job, retryable: false };
   }
   if (error?.code === 'UPDATE_INSTALLER_FAILED') {
     return {
       kind: 'installer-failed',
-      message: errText(err),
+      text: errText(err),
       job,
       retryable: details.retryable === true,
     };
   }
   return {
     kind: 'rejected',
-    message: errText(err),
+    text: errText(err),
     job,
     retryable: false,
   };

@@ -172,7 +172,9 @@ describe('server-update: снимок кеша и доступность обн�
 describe('server-update: итог задания и пути', () => {
   it('failed: причина из задания, путь журнала извлекается, backup_path null — не подставляется', () => {
     const failed = job('failed', {
-      error: 'Установщик завершился с кодом 10; откат выполнен установщиком, журнал: C:\\ProgramData\\ETN\\logs\\install-20261029.log',
+      error:
+        'The installer exited with code 10; the rollback was performed by the installer, ' +
+        'log: C:\\ProgramData\\ETN\\logs\\install-20261029.log',
     });
     const view = serverUpdateViewModel(state({ job: failed, phase: 'failed' }));
     assert.equal(view.failed, true);
@@ -189,11 +191,26 @@ describe('server-update: итог задания и пути', () => {
     assert.equal(view.backupPath, backupPath);
   });
 
-  it('путь в журнале может содержать пробелы', () => {
+  it('путь в журнале — английский маркер `log:`, русский остаётся совместимостью', () => {
+    assert.equal(
+      extractJournalPath(
+        'The installer precondition failed — manual mode is required, ' +
+          'log: C:\\Program Files\\ETN\\logs\\install-1.log',
+      ),
+      'C:\\Program Files\\ETN\\logs\\install-1.log',
+      'путь с пробелами после английского маркера',
+    );
     assert.equal(
       extractJournalPath('сбой, журнал: C:\\Program Files\\ETN\\logs\\install-1.log'),
       'C:\\Program Files\\ETN\\logs\\install-1.log',
+      'русская форма — совместимость с заданиями до перевода',
     );
+    assert.equal(
+      extractJournalPath('log: C:\\logs\\new.log; журнал: C:\\logs\\legacy.log'),
+      'C:\\logs\\new.log',
+      'приоритет английской формы',
+    );
+    assert.equal(extractJournalPath('installer log not found'), null);
     assert.equal(extractJournalPath('журнал установщика не найден'), null);
     assert.equal(extractJournalPath(null), null);
   });
@@ -216,7 +233,7 @@ describe('server-update: разбор отказа apply', () => {
       }),
     );
     assert.equal(failure.kind, 'in-progress');
-    assert.equal(failure.message, null);
+    assert.equal(failure.text, null);
     assert.equal(failure.job?.id, 'job-1');
   });
 
@@ -232,9 +249,9 @@ describe('server-update: разбор отказа apply', () => {
         new EtnError('VERSION_CONFLICT', `server rejected the update: ${reason}`, { reason }),
       );
       assert.equal(failure.kind, 'rejected', `reason ${reason} — отказ`);
-      assert.equal(failure.message, expected[reason]);
+      assert.equal(failure.text, expected[reason]);
       // ADR daab6ac4 §4: английский серверный message пользователю не уходит.
-      assert.ok(!failure.message?.includes('server rejected'), 'серверный текст не показан');
+      assert.ok(!failure.text?.includes('server rejected'), 'серверный текст не показан');
     }
   });
 
@@ -263,7 +280,7 @@ describe('server-update: разбор отказа apply', () => {
     );
     assert.equal(failure.kind, 'installer-failed');
     // Текст — по `details.reason`, а не английский серверный message (ADR §4).
-    assert.equal(failure.message, 'скачанный установщик не прошёл проверку контрольной суммы');
+    assert.equal(failure.text, 'скачанный установщик не прошёл проверку контрольной суммы');
     assert.equal(failure.retryable, false);
     assert.equal(failure.job?.stage, 'failed');
   });

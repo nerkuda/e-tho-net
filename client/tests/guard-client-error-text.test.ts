@@ -9,9 +9,16 @@
  *
  * Сторож проверяет места, где раньше показывался сырой `err.message`:
  * мастер публикации, футер диалога обновления, модель отказа `apply`,
- * обработчик deep-link. `lib/pure.ts::isNotFoundError` обязан читать только
- * machine-readable `code` — `reviveIpcError` восстанавливает его на границе
- * IPC (`lib/etn.ts`).
+ * обработчик deep-link, диалог фильтра типов связей, полоса отборов и
+ * команды структурного фильтра. `lib/pure.ts::isNotFoundError` обязан читать
+ * только machine-readable `code` — `reviveIpcError` восстанавливает его на
+ * границе IPC (`lib/etn.ts`).
+ *
+ * Ловятся три формы: прямой `err.message`, приведение
+ * `(err as { message }).message` и поле `message` серверного DTO
+ * (`failure.message`, `failures[i].message`). Сканируются только модули,
+ * где `message` означал показ пользователю; легитимные `Error.message` для
+ * журналов и отладки в других модулях не затрагиваются.
  *
  * Самодоказательство: синтетический исходник с показом `err.message`
  * детектируется, а комментарий о запрете — нет.
@@ -34,6 +41,9 @@ const ERR_TEXT_MODULES = [
   path.join(RENDERER_ROOT, 'lib', 'server-update-dialog.ts'),
   path.join(RENDERER_ROOT, 'lib', 'server-update.ts'),
   path.join(RENDERER_ROOT, 'editor', 'deep-link-handler.ts'),
+  path.join(RENDERER_ROOT, 'canvas', 'link-filter-dialog.ts'),
+  path.join(RENDERER_ROOT, 'canvas', 'focus-filter-strip.ts'),
+  path.join(RENDERER_ROOT, 'screens', 'structures', 'commands.ts'),
 ] as const;
 
 const PURE_MODULE = path.join(RENDERER_ROOT, 'lib', 'pure.ts');
@@ -48,6 +58,19 @@ function stripComments(source: string): string {
 /** Показ сырого серверного сообщения: `err.message`, `error?.message`. */
 const RAW_MESSAGE = /\b(?:err|error)\s*\??\s*\.\s*message\b/;
 
+/**
+ * Приведение к структурному виду и чтение `message`:
+ * `(err as { message?: unknown }).message`.
+ */
+const CAST_MESSAGE = /\bas\s*\{[^{}]*\bmessage\b[^{}]*\}\s*\)\s*\.\s*message\b/;
+
+/**
+ * Поле `message` серверного DTO (`failure.message`, `failures[0]?.message`,
+ * `issue.message`, `warning.message`) — английский текст ADR не для UI.
+ */
+const DTO_MESSAGE =
+  /\b(?:failure|failures\s*\[[^\]]*\]|issue|diagnostic|warning)\s*\??\s*\.\s*message\b/;
+
 /** Разбор серверного текста вместо кода. */
 const MESSAGE_PARSING = /\.\s*message\s*\.\s*includes\s*\(/;
 
@@ -55,6 +78,8 @@ function findViolations(source: string): string[] {
   const clean = stripComments(source);
   const violations: string[] = [];
   if (RAW_MESSAGE.test(clean)) violations.push('raw-message');
+  if (CAST_MESSAGE.test(clean)) violations.push('cast-message');
+  if (DTO_MESSAGE.test(clean)) violations.push('dto-message');
   if (MESSAGE_PARSING.test(clean)) violations.push('message-parsing');
   return violations;
 }
@@ -63,6 +88,16 @@ describe('сторож: серверный error.message не показывае
   it('самодоказательство: синтетический показ message ловится, комментарий — нет', () => {
     assert.deepEqual(findViolations("error.textContent = err.message;"), ['raw-message']);
     assert.deepEqual(findViolations('const x = err?.message ?? null;'), ['raw-message']);
+    assert.deepEqual(findViolations('const msg = (err as { message?: unknown }).message;'), [
+      'cast-message',
+    ]);
+    assert.deepEqual(findViolations('const msg = (failure as { message: string }).message;'), [
+      'cast-message',
+    ]);
+    assert.deepEqual(findViolations('notice(result.failures[0]?.message ?? "");'), [
+      'dto-message',
+    ]);
+    assert.deepEqual(findViolations('notice(failure.message);'), ['dto-message']);
     assert.deepEqual(findViolations("if (err.message.includes('not found')) return true;"), [
       'raw-message',
       'message-parsing',

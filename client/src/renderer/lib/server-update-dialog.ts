@@ -379,7 +379,11 @@ export function openServerUpdateDialog(
     progressNote.textContent = note;
     progressNote.hidden = note === '';
 
-    const failure = view.failureText ?? state.failureOverride;
+    // Причина: локализованный текст по коду (`details.reason`, ADR daab6ac4
+    // §4) приоритетнее сырого серверного `job.error` — английский `message`
+    // пользователю не показывается. Сырой текст остаётся фолбэком, когда
+    // кода нет (задание восстановлено из `/progress` после перезапуска).
+    const failure = state.failureOverride ?? view.failureText;
     failureLine.hidden = !view.failed || failure === null;
     failureLine.textContent =
       view.failed && failure !== null ? t('serverUpdate.failure.reason', failure) : '';
@@ -546,14 +550,14 @@ export function openServerUpdateDialog(
         state.installerFailed = true;
         if (failure.job !== null) applyJob(failure.job);
         else state.phase = 'failed';
-        state.failureOverride = failure.message === null ? null : failure.message;
+        state.failureOverride = failure.text === null ? null : failure.text;
         render();
         return;
       }
       // Настоящий отказ — строка ошибки в футере, диалог остаётся в ожидании.
       state.phase = state.job !== null && state.job.stage === 'done' ? 'done' : 'idle';
       errorLine.show(
-        t('serverUpdate.applyFailed', failure.message ?? t('serverUpdate.reasonUnknown')),
+        t('serverUpdate.applyFailed', failure.text ?? t('serverUpdate.reasonUnknown')),
       );
       render();
     }

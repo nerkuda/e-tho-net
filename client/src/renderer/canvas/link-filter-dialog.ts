@@ -34,6 +34,7 @@ import {
   type EntityPickerDialogCtx,
 } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
+import { errText } from '../lib/dom.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 
@@ -157,9 +158,8 @@ async function applyFilter(networkId: string, checked: ReadonlySet<string>): Pro
 }
 
 function formatError(err: unknown, fallback: string): string {
-  if (err !== null && typeof err === 'object' && 'message' in err) {
-    const msg = (err as { message?: unknown }).message;
-    if (typeof msg === 'string' && msg.length > 0) return `${fallback} ${msg}`;
-  }
-  return fallback;
+  // Причина — локализованный текст по коду (ADR daab6ac4 §4); серверный
+  // `message` английский и пользователю не показывается.
+  const text = errText(err);
+  return text === '' ? fallback : `${fallback} ${text}`;
 }

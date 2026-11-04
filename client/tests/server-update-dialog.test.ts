@@ -500,11 +500,12 @@ describe('запуск обновления и прогресс', () => {
 
   it('502: причина и журнал, кнопки «Повторить» нет, apply не повторяется', async () => {
     const failed = job('failed', {
-      error: 'SHA-256 установщика не совпал; журнал: C:\\ProgramData\\ETN\\logs\\install-1.log',
+      error:
+        'SHA-256 mismatch detected; log: C:\\ProgramData\\ETN\\logs\\install-1.log',
     });
     const harness = mount(
       applyingScenario([failed], async () => {
-        throw new EtnError('UPDATE_INSTALLER_FAILED', 'SHA-256 установщика не совпал', {
+        throw new EtnError('UPDATE_INSTALLER_FAILED', 'SHA-256 mismatch detected', {
           status: 502,
           stage: 'preparing',
           reason: 'installer-hash',
@@ -520,7 +521,16 @@ describe('запуск обновления и прогресс', () => {
       const node = dialog();
       const text = node.flatText();
       assert.ok(text.includes(t('serverUpdate.stage.failed')));
-      assert.ok(text.includes('SHA-256 установщика не совпал'), 'осмысленная причина сервера');
+      // ADR daab6ac4 §4: причина — локализованный текст по коду и
+      // `details.reason`, а не английский `job.error`.
+      assert.ok(
+        text.includes(t('errors.code.UPDATE_INSTALLER_FAILED.installer-hash')),
+        'локализованная причина по коду и details.reason',
+      );
+      assert.ok(
+        !text.includes('SHA-256 mismatch detected'),
+        'сырой английский job.error пользователю не показан',
+      );
       assert.ok(
         text.includes('C:\\ProgramData\\ETN\\logs\\install-1.log'),
         'путь к журналу установщика показан',
