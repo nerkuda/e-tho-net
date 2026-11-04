@@ -884,6 +884,8 @@ export const en = {
   'lang.ru': 'Russian',
   /** Отображаемое имя английского языка (каталог `en.ts`, задача d08c422d). */
   'lang.en': 'English',
+  /** Отображаемое имя китайского языка (каталог `zh.ts`, задача f7dba88c). */
+  'lang.zh': 'Chinese',
   /** Заголовок объединённого диалога настроек (все разделы). */
   'settings.title': 'All settings',
   'settings.language': 'Language',

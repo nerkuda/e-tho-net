@@ -51,6 +51,7 @@ import {
 } from './plural.js';
 import { en, enPlurals } from './locales/en.js';
 import { ru, ruPlurals } from './locales/ru.js';
+import { zh, zhPlurals } from './locales/zh.js';
 
 /** Ключ строки словаря — только ключи исходного языка (`ru`). */
 export type MessageKey = keyof typeof ru;
@@ -299,3 +300,6 @@ registerLocale(DEFAULT_LANG, ru, ruPlurals);
 // Английский каталог (задача d08c422d): полный перевод ключей `ru.ts`,
 // регистрация делает язык доступным для выбора (`availableLocales`).
 registerLocale('en', en, enPlurals);
+// Китайский каталог, упрощённый zh-CN (задача f7dba88c): полный перевод
+// `ru.ts`, плюралы — единственная категория `other` по правилам `zh`.
+registerLocale('zh', zh, zhPlurals);

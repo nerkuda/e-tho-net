@@ -2,7 +2,7 @@
  * Деградация языка и автодетект на старте (задача e6374cd1).
  *
  * Проверяется поведение `lib/lang.ts` поверх шима `document`/`window.etn`:
- * - каталог недоступен (zh ещё не собран; en собран задачей d08c422d) —
+ * - каталог недоступен (собранные языки — ru, en, zh) —
  *   эффективный язык `ru`, `document.lang` НЕ выставляется в недоступный код,
  *   в журнал уходит `ui.i18n.locale_unavailable`, состояние видно настройкам;
  * - сохранённый доступный язык (тестовая локаль) применяется;
@@ -52,11 +52,11 @@ describe('lang: деградация и автодетект', () => {
     shimNodeGlobals();
     documentElement.lang = '';
     const { applyLang, unavailableLang } = await import('../src/renderer/lib/lang.js');
-    assert.equal(applyLang('zh'), false);
-    assert.equal(unavailableLang(), 'zh');
+    assert.equal(applyLang('ja'), false);
+    assert.equal(unavailableLang(), 'ja');
     assert.equal(documentElement.lang, DEFAULT_LANG, 'недоступный код не выставляется');
     assert.ok(
-      events.some((e) => e.name === 'ui.i18n.locale_unavailable' && e.data?.['lang'] === 'zh'),
+      events.some((e) => e.name === 'ui.i18n.locale_unavailable' && e.data?.['lang'] === 'ja'),
       'деградация записана в журнал',
     );
   });
@@ -88,6 +88,18 @@ describe('lang: деградация и автодетект', () => {
     const { initLang, unavailableLang } = await import('../src/renderer/lib/lang.js');
     await initLang();
     assert.equal(documentElement.lang, 'en', 'английский каталог доступен — язык ОС применяется');
+    assert.equal(unavailableLang(), null, 'деградации нет');
+    assert.deepEqual(writes, [], 'детект ОС не записывается в client_meta');
+  });
+
+  it('язык ОС zh: каталог собран — применяется без деградации (задача f7dba88c)', async () => {
+    writes.length = 0;
+    storedLang = null;
+    preferred = 'zh';
+    documentElement.lang = '';
+    const { initLang, unavailableLang } = await import('../src/renderer/lib/lang.js');
+    await initLang();
+    assert.equal(documentElement.lang, 'zh', 'китайский каталог доступен — язык ОС применяется');
     assert.equal(unavailableLang(), null, 'деградации нет');
     assert.deepEqual(writes, [], 'детект ОС не записывается в client_meta');
   });
