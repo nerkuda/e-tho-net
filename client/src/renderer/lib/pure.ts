@@ -725,14 +725,13 @@ export function parseThoughtIdLookupQuery(q: string): string | null {
 }
 
 /**
- * Whether `err` means "no entity with this id". IPC (`ipcRenderer.invoke`)
- * drops custom error fields of `EtnError`, so the server's `… not found`
- * message is checked as a fallback for the lost `code`.
+ * Whether `err` means "no entity with this id". The cause is read from the
+ * machine-readable `code` only (ADR daab6ac4 §4): the server `message` is
+ * English and is never parsed. `reviveIpcError` restores `code` in the
+ * renderer (`lib/etn.ts`), so the IPC boundary no longer loses it.
  */
 export function isNotFoundError(err: unknown): boolean {
-  const shape = err as { code?: unknown; message?: unknown } | null;
-  if (shape?.code === 'NOT_FOUND') return true;
-  return typeof shape?.message === 'string' && shape.message.includes('not found');
+  return (err as { code?: unknown } | null)?.code === 'NOT_FOUND';
 }
 
 // ---------------------------------------------------------------------------

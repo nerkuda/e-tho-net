@@ -457,6 +457,40 @@ export interface PublicationExportBatchRequest {
 export const PUBLICATION_EXPORT_STATUSES = ['ok', 'skipped', 'error'] as const;
 export type PublicationExportStatus = (typeof PUBLICATION_EXPORT_STATUSES)[number];
 
+/**
+ * Стабильные коды машиночитаемых замечаний сборки экспорта публикации
+ * (ADR daab6ac4 §4). Новые коды — аддитивно.
+ *
+ *   * `attachment_unavailable` — картинка-вложение недоступна (причина в
+ *     `details.reason`);
+ *   * `cover_attachment_unavailable` — недоступна обложка-вложение;
+ *   * `batch_truncated` — `active_only` усечён до потолка пакета;
+ *   * `assembly_warning` — замечание сборки документа (довод сборки);
+ *   * `publication_not_found` — публикация из списка не найдена;
+ *   * `build_failed` — сборка публикации завершилась ошибкой.
+ */
+export const PUBLICATION_EXPORT_ISSUE_CODES = [
+  'attachment_unavailable',
+  'cover_attachment_unavailable',
+  'batch_truncated',
+  'assembly_warning',
+  'publication_not_found',
+  'build_failed',
+] as const;
+export type PublicationExportIssueCode = (typeof PUBLICATION_EXPORT_ISSUE_CODES)[number];
+
+/**
+ * Машиночитаемое замечание сборки (предупреждение либо ошибка записи отчёта):
+ * `code` — стабильный токен, по которому клиент строит пользовательский текст,
+ * `message` — канонический английский диагностический текст для разработчиков,
+ * агентов и журналов, `details` — параметры локализации (ADR daab6ac4 §4).
+ */
+export interface PublicationExportIssue {
+  code: PublicationExportIssueCode;
+  message: string;
+  details?: Record<string, string | number>;
+}
+
 /** Одна запись отчёта джобы: публикация, её slug, статус и предупреждения. */
 export interface PublicationExportEntry {
   publication_id: string;
@@ -464,9 +498,9 @@ export interface PublicationExportEntry {
   slug: string;
   status: PublicationExportStatus;
   /** Недоступные вложения и прочие нефатальные замечания сборки. */
-  warnings: string[];
-  /** Сообщение об ошибке при `status = 'error'`. */
-  error?: string;
+  warnings: PublicationExportIssue[];
+  /** Машиночитаемая ошибка при `status = 'error'`. */
+  error?: PublicationExportIssue;
   /** Относительные пути файлов публикации внутри архива. */
   files?: string[];
 }
@@ -475,5 +509,5 @@ export interface PublicationExportEntry {
 export interface PublicationExportReport {
   publications: PublicationExportEntry[];
   /** Сводные предупреждения, не привязанные к одной публикации. */
-  warnings: string[];
+  warnings: PublicationExportIssue[];
 }

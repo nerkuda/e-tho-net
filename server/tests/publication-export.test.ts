@@ -17,6 +17,7 @@ import { afterEach, describe, it } from 'node:test';
 import yauzl from 'yauzl';
 
 import { publicationAnchor, shortId } from '@etn/markdown';
+import type { PublicationExportIssue } from '@etn/shared';
 
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createLinkType } from '../src/domain/link-type-service.js';
@@ -186,7 +187,10 @@ async function getJob(
 ): Promise<{
   status: string;
   filename?: string;
-  report?: { publications: Array<{ status: string; slug: string; warnings: string[] }>; warnings: string[] };
+  report?: {
+    publications: Array<{ status: string; slug: string; warnings: PublicationExportIssue[] }>;
+    warnings: PublicationExportIssue[];
+  };
 }> {
   const res = await ctx.app.inject({
     method: 'GET',
@@ -300,8 +304,10 @@ describe('publication-export: одиночный экспорт', { skip }, () =
     assert.equal(job.report?.publications[0]?.status, 'ok');
     assert.equal(job.report?.publications[0]?.slug, 'moya-publikaciya');
     assert.ok(
-      job.report?.publications[0]?.warnings.some((w) => w.includes('вложение недоступно')),
-      `ожидалось предупреждение о вложении: ${JSON.stringify(job.report)}`,
+      job.report?.publications[0]?.warnings.some(
+        (w) => w.code === 'attachment_unavailable' && !/[\u0400-\u04FF]/.test(w.message),
+      ),
+      `ожидалось машиночитаемое английское предупреждение о вложении: ${JSON.stringify(job.report)}`,
     );
 
     const zip = await downloadJob(ctx, jobId);
@@ -468,7 +474,12 @@ describe('publication-export: одиночный экспорт', { skip }, () =
     const job = await getJob(ctx, jobId);
     assert.equal(job.status, 'done');
     assert.ok(
-      job.report?.publications[0]?.warnings.some((w) => w.includes('вложение не найдено')),
+      job.report?.publications[0]?.warnings.some(
+        (w) =>
+          w.code === 'attachment_unavailable' &&
+          w.details?.reason === 'attachment_not_found' &&
+          !/[\u0400-\u04FF]/.test(w.message),
+      ),
       `ожидалось предупреждение о недоступном id: ${JSON.stringify(job.report)}`,
     );
 

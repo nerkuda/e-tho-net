@@ -721,6 +721,13 @@ export const ru = {
   'errors.code.FORBIDDEN': 'недостаточно прав для этого действия',
   'errors.code.NOT_FOUND': 'объект не найден — возможно, его удалили',
   'errors.code.VERSION_CONFLICT': 'данные уже изменились — обновите и повторите',
+  /** Уточнения `409 VERSION_CONFLICT` при запуске обновления (`details.reason`). */
+  'errors.code.VERSION_CONFLICT.docker':
+    'автообновление в контейнере Docker невозможно — обновите образ по инструкции сервера',
+  'errors.code.VERSION_CONFLICT.downgrade':
+    'целевая версия не новее текущей — откат версии запрещён',
+  'errors.code.VERSION_CONFLICT.version-mismatch':
+    'доступная версия изменилась — проверьте обновления ещё раз',
   'errors.code.DUPLICATE': 'такая запись уже существует',
   'errors.code.LOCKED': 'объект редактирует другой участник',
   'errors.code.LOCK_NOT_FOUND': 'захват объекта не найден',
@@ -735,6 +742,15 @@ export const ru = {
   'errors.code.CLIENT_VERSION_UNSUPPORTED.version-out-of-range':
     'версия клиента не подходит серверу — обновите клиент',
   'errors.code.UPDATE_INSTALLER_FAILED': 'не удалось запустить установщик обновления',
+  /** Уточнения `502 UPDATE_INSTALLER_FAILED` по `details.reason`. */
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-target':
+    'сервер не принял целевую версию обновления',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-download':
+    'не удалось скачать установщик обновления',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-hash':
+    'скачанный установщик не прошёл проверку контрольной суммы',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-launch':
+    'установщик обновления не запустился',
   'errors.unknownCode': 'не удалось выполнить действие',
 
   // -- Подключение к серверу (ошибка 390e9746) -----------------------------

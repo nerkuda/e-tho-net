@@ -556,7 +556,10 @@ describe('запуск обновления и прогресс', () => {
       await tick();
       buttonByLabel(dialog(), t('serverUpdate.apply')).click();
       await tick(10);
-      assert.ok(footerErrorText(dialog()).includes('Сервер развёрнут в Docker'));
+      const footer = footerErrorText(dialog());
+      // Текст — из словаря по `details.reason`, серверный message не показан.
+      assert.ok(footer.includes('автообновление в контейнере Docker невозможно'), footer);
+      assert.ok(!footer.includes('Сервер развёрнут в Docker'), 'серверный текст не ушёл в UI');
       assert.deepEqual(harness.calls.applies, ['0.15.2']);
     } finally {
       harness.stop();

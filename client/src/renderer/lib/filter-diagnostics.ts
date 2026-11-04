@@ -48,6 +48,8 @@ import type {
 // Текст строки-диагностики — из словаря (`lib/i18n.ts`), а не литералом
 // (требование 0e5ff1c6): формулировка меняется в одном месте — каталоге.
 import { t } from './i18n.js';
+// Текст неразрешённого токена — общий помощник со строкой поиска.
+import { tokenIssueMessage } from './token-issue-message.js';
 
 // ---------------------------------------------------------------------------
 // Вид записи диагностики
@@ -362,24 +364,6 @@ function diagnosticMessage(diagnostic: FilterDiagnostic): string {
       return t('filterDiagnostics.server.propertyDetached');
     default:
       return t('filterDiagnostics.server.unknown');
-  }
-}
-
-/** Пользовательский текст неразрешённого токена по machine-readable `reason`. */
-function tokenIssueMessage(token: string, reason: string): string {
-  switch (reason) {
-    case 'unknown_token':
-      return t('filterDiagnostics.server.tokenUnknown', token);
-    case 'time_context_required':
-      return t('filterDiagnostics.server.tokenTimeContext', token);
-    case 'incompatible_operation':
-      return t('filterDiagnostics.server.tokenIncompatible');
-    case 'unknown_property':
-      return t('filterDiagnostics.server.tokenUnknownProperty');
-    case 'empty_value':
-      return t('filterDiagnostics.server.tokenEmptyValue');
-    default:
-      return t('filterDiagnostics.server.tokenUnresolved', token);
   }
 }
 

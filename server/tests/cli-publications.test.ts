@@ -198,9 +198,18 @@ describe('etn publications rebuild (integration)', { skip }, () => {
   }
 
   /** Seed a publication into the network and release the DB handle. */
-  function seedPublication(fx: CliFixture, title: string, layerId = BASE_LAYER_ID): string {
+  function seedPublication(
+    fx: CliFixture,
+    title: string,
+    layerId = BASE_LAYER_ID,
+    summaryMd: string | null = null,
+  ): string {
     const ndb = openNetworkDb(fx.dataDir, fx.networkId, createLogger('silent'), layerId);
-    const pub = createPublication(ndb, { title }, fx.adminId);
+    const pub = createPublication(
+      ndb,
+      { title, ...(summaryMd === null ? {} : { summary_md: summaryMd }) },
+      fx.adminId,
+    );
     closeNetworkDb(fx.networkId);
     return pub.id;
   }
@@ -254,6 +263,43 @@ describe('etn publications rebuild (integration)', { skip }, () => {
     assert.ok(second.stdout.join('\n').includes('unchanged 1'), second.stdout.join('\n'));
     assert.equal(fs.readFileSync(mdPath, 'utf8'), content, 'содержимое изменилось при повторном запуске');
     assert.equal(fs.statSync(mdPath).mtimeMs, mtimeFirst, 'файл перезаписан без изменений');
+  });
+
+  it('предупреждения сборки печатаются по-английски и без кириллицы', async () => {
+    const fx = await setup();
+    const missingId = randomUUID();
+    // Недоступное вложение в summary — источник предупреждения домена экспорта.
+    const pubId = seedPublication(
+      fx,
+      'Warned',
+      BASE_LAYER_ID,
+      `![x](etnimg://attachment/${missingId})`,
+    );
+    const outDir = path.join(fx.dataDir, 'out-warned');
+
+    const run = await captureConsole(() =>
+      main({
+        argv: [
+          'node', 'etn', 'publications', 'rebuild',
+          '--out', outDir,
+          '--network', fx.networkId,
+          '--ids', pubId,
+        ],
+        env: env(fx, fx.key),
+      }),
+    );
+    assert.equal(run.result, 0, run.stderr.join('\n'));
+    const output = run.stdout.join('\n');
+    const warningLines = run.stdout.filter((line) => line.startsWith('warning: '));
+    assert.ok(
+      warningLines.some((line) => line.includes('Attachment unavailable')),
+      `ожидалось английское предупреждение о вложении: ${output}`,
+    );
+    assert.ok(
+      warningLines.some((line) => line.includes(missingId)),
+      `предупреждение называет недоступное вложение: ${output}`,
+    );
+    assert.equal(/[\u0400-\u04FF]/.test(output), false, `кириллица в выводе CLI: ${output}`);
   });
 
   it('формат html и zip: пишется архив с тем же документом', async () => {

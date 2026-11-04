@@ -696,6 +696,13 @@ export const en = {
   'errors.code.FORBIDDEN': 'not enough permissions for this action',
   'errors.code.NOT_FOUND': 'the object was not found — it may have been deleted',
   'errors.code.VERSION_CONFLICT': 'the data has changed — refresh and try again',
+  /** Refinements of `409 VERSION_CONFLICT` when applying an update (`details.reason`). */
+  'errors.code.VERSION_CONFLICT.docker':
+    'automatic updates are not available in a Docker container — update the image using the server instruction',
+  'errors.code.VERSION_CONFLICT.downgrade':
+    'the target version is not newer than the current one — downgrade is not allowed',
+  'errors.code.VERSION_CONFLICT.version-mismatch':
+    'the available version has changed — check for updates again',
   'errors.code.DUPLICATE': 'such a record already exists',
   'errors.code.LOCKED': 'another member is editing the object',
   'errors.code.LOCK_NOT_FOUND': 'the object lock was not found',
@@ -711,6 +718,15 @@ export const en = {
   'errors.code.CLIENT_VERSION_UNSUPPORTED.version-out-of-range':
     'the client version is not supported by the server — update the client',
   'errors.code.UPDATE_INSTALLER_FAILED': 'failed to start the update installer',
+  /** Refinements of `502 UPDATE_INSTALLER_FAILED` by `details.reason`. */
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-target':
+    'the server rejected the update target version',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-download':
+    'failed to download the update installer',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-hash':
+    'the downloaded installer failed the checksum verification',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-launch':
+    'the update installer did not start',
   'errors.unknownCode': 'the action could not be completed',
 
   // -- Подключение к серверу (ошибка 390e9746) -----------------------------

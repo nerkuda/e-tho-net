@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { BASE_LAYER_ID } from '@etn/shared';
+import { BASE_LAYER_ID, type PublicationExportIssue } from '@etn/shared';
 
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { openNetworkDb } from '../src/db/network-db.js';
@@ -118,7 +118,9 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
           network_id: ctx.networkId,
           title: 'Документ',
           subtitle: 'Подзаголовок',
-          summary_md: 'Краткое резюме',
+          // Недоступное вложение: предупреждение экспорта должно быть
+          // машиночитаемым и английским (ADR daab6ac4 §4).
+          summary_md: `Краткое резюме\n\n![x](etnimg://attachment/${randomUUID()})`,
           title_recipe: { type_ids: [type.id], sort: 'alpha', order: 'asc' },
           numbering_from: 1,
           numbering_to: 6,
@@ -264,7 +266,7 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
           network_id: ctx.networkId,
           publication_id: pubId,
           format: 'md',
-        })) as { content: string; filename: string; warnings: string[] };
+        })) as { content: string; filename: string; warnings: PublicationExportIssue[] };
         assert.match(md1.filename, /\.md$/);
         assert.ok(md1.content.length > 0);
         const md2 = (await call(handle.client, 'publications.export', {
@@ -273,6 +275,22 @@ describe('MCP-публикации (etn.ops): сквозной сценарий'
           format: 'md',
         })) as { content: string };
         assert.equal(md2.content, md1.content, 'повторный md-экспорт байтово идентичен');
+
+        // Экспорт с ассетами: недоступное вложение даёт машиночитаемое
+        // предупреждение (код + английский message, ADR §4), без кириллицы.
+        const withAssets = (await call(handle.client, 'publications.export', {
+          network_id: ctx.networkId,
+          publication_id: pubId,
+          format: 'md',
+          with_assets: true,
+        })) as { artifact: string; warnings: PublicationExportIssue[] };
+        assertZipArtifact(withAssets.artifact);
+        assert.ok(
+          withAssets.warnings.some(
+            (w) => w.code === 'attachment_unavailable' && !/[\u0400-\u04FF]/.test(w.message),
+          ),
+          `ожидалось английское предупреждение в MCP: ${JSON.stringify(withAssets.warnings)}`,
+        );
 
         // --- экспорт: content (html) --------------------------------------
         const html = (await call(handle.client, 'publications.export', {

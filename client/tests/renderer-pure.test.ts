@@ -756,12 +756,14 @@ describe('search scope resolution (H13)', () => {
     assert.equal(parseThoughtIdLookupQuery('id ec5ba58c'), null);
   });
 
-  it('detects not-found errors via code and via the IPC-surviving message', () => {
+  it('detects not-found errors by the machine-readable code only', () => {
     assert.equal(isNotFoundError({ code: 'NOT_FOUND', message: 'thought x not found' }), true);
-    // ipcRenderer.invoke drops custom fields — only the message survives.
+    // ADR daab6ac4 §4: серверный `message` не разбирается. `reviveIpcError`
+    // восстанавливает `code` на границе IPC (`lib/etn.ts`), fallback не нужен.
     assert.equal(
       isNotFoundError(new Error('Error invoking remote method: Error: thought x not found')),
-      true,
+      false,
+      'текст ошибки — не причина',
     );
     assert.equal(isNotFoundError({ code: 'INTERNAL', message: 'Сетевая ошибка: timeout' }), false);
     assert.equal(isNotFoundError(null), false);

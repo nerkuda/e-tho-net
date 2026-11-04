@@ -220,13 +220,21 @@ describe('server-update: разбор отказа apply', () => {
     assert.equal(failure.job?.id, 'job-1');
   });
 
-  it('VERSION_CONFLICT docker/downgrade/version-mismatch — настоящий отказ с текстом сервера', () => {
+  it('VERSION_CONFLICT docker/downgrade/version-mismatch — настоящий отказ с локализованным текстом', () => {
+    const expected: Record<string, string> = {
+      docker:
+        'автообновление в контейнере Docker невозможно — обновите образ по инструкции сервера',
+      downgrade: 'целевая версия не новее текущей — откат версии запрещён',
+      'version-mismatch': 'доступная версия изменилась — проверьте обновления ещё раз',
+    };
     for (const reason of ['docker', 'downgrade', 'version-mismatch'] as const) {
       const failure = classifyApplyFailure(
-        new EtnError('VERSION_CONFLICT', `отказ ${reason}`, { reason }),
+        new EtnError('VERSION_CONFLICT', `server rejected the update: ${reason}`, { reason }),
       );
       assert.equal(failure.kind, 'rejected', `reason ${reason} — отказ`);
-      assert.equal(failure.message, `отказ ${reason}`);
+      assert.equal(failure.message, expected[reason]);
+      // ADR daab6ac4 §4: английский серверный message пользователю не уходит.
+      assert.ok(!failure.message?.includes('server rejected'), 'серверный текст не показан');
     }
   });
 
@@ -245,16 +253,17 @@ describe('server-update: разбор отказа apply', () => {
 
   it('502 UPDATE_INSTALLER_FAILED — отказ установщика, retryable: false', () => {
     const failure = classifyApplyFailure(
-      new EtnError('UPDATE_INSTALLER_FAILED', 'SHA-256 не совпал', {
+      new EtnError('UPDATE_INSTALLER_FAILED', 'SHA-256 mismatch detected', {
         status: 502,
         stage: 'preparing',
         reason: 'installer-hash',
         retryable: false,
-        job: job('failed', { error: 'SHA-256 не совпал' }),
+        job: job('failed', { error: 'SHA-256 mismatch detected' }),
       }),
     );
     assert.equal(failure.kind, 'installer-failed');
-    assert.equal(failure.message, 'SHA-256 не совпал');
+    // Текст — по `details.reason`, а не английский серверный message (ADR §4).
+    assert.equal(failure.message, 'скачанный установщик не прошёл проверку контрольной суммы');
     assert.equal(failure.retryable, false);
     assert.equal(failure.job?.stage, 'failed');
   });

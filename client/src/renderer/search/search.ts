@@ -103,6 +103,9 @@ import { createDebouncedWriter } from '../lib/debounced-writer.js';
 import { menuAction, isInsideMenu, showMenuAt } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { t } from '../lib/i18n.js';
+// Пользовательский текст неразрешённого токена — по `reason`, а не по
+// серверному `message` (ADR daab6ac4 §4); помощник общий с редактором отбора.
+import { tokenIssueMessage } from '../lib/token-issue-message.js';
 import {
   UI_STATE_KEY,
   type Link,
@@ -1029,7 +1032,7 @@ function renderUnresolvedDiagnostics(
   const block = div('search-diagnostics');
   block.append(el('p', 'search-diagnostic-warning', t('search.unresolvedTokens')));
   for (const issue of issues) {
-    block.append(el('div', 'search-diagnostic-item', issue.message));
+    block.append(el('div', 'search-diagnostic-item', tokenIssueMessage(issue.token, issue.reason)));
   }
   box.append(block);
 }

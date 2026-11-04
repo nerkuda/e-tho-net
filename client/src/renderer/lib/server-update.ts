@@ -36,7 +36,7 @@ import type {
   SystemUpdateStatus,
   UpdateChannel,
 } from '../../main/ipc/contract.js';
-import { fmtDateTime } from './dom.js';
+import { errText, fmtDateTime } from './dom.js';
 import { t, type MessageKey } from './i18n.js';
 
 /** Фаза диалога: ожидание, проверка, идущее задание, итог. */
@@ -250,7 +250,11 @@ export type ApplyFailureKind = 'in-progress' | 'installer-failed' | 'rejected';
 /** Разобранный отказ `apply`. */
 export interface ApplyFailure {
   kind: ApplyFailureKind;
-  /** Сообщение сервера (для `installer-failed`/`rejected`) или `null`. */
+  /**
+   * Пользовательский текст для `installer-failed`/`rejected` (по коду
+   * `details.reason`, ADR daab6ac4 §4; серверный `message` не показывается)
+   * или `null`.
+   */
   message: string | null;
   /** Задание из `details.job`, если сервер его прислал. */
   job: UpdateJob | null;
@@ -307,7 +311,7 @@ export function classifyApplyFailure(err: unknown): ApplyFailure {
   }
   if (error?.code === 'VERSION_CONFLICT') {
     if (reason === 'docker' || reason === 'downgrade' || reason === 'version-mismatch') {
-      return { kind: 'rejected', message: error.message, job, retryable: false };
+      return { kind: 'rejected', message: errText(err), job, retryable: false };
     }
     // job-active / installer-alive / 409 без причины — идущее обновление.
     return { kind: 'in-progress', message: null, job, retryable: false };
@@ -315,14 +319,14 @@ export function classifyApplyFailure(err: unknown): ApplyFailure {
   if (error?.code === 'UPDATE_INSTALLER_FAILED') {
     return {
       kind: 'installer-failed',
-      message: error.message,
+      message: errText(err),
       job,
       retryable: details.retryable === true,
     };
   }
   return {
     kind: 'rejected',
-    message: error?.message ?? null,
+    message: errText(err),
     job,
     retryable: false,
   };

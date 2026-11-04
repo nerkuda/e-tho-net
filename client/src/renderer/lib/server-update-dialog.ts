@@ -49,7 +49,7 @@ import type {
   SystemUpdateStatus,
 } from '../../main/ipc/contract.js';
 import { confirmDialog, showDialog } from './dialog.js';
-import { div, el } from './dom.js';
+import { div, el, errText } from './dom.js';
 import { t } from './i18n.js';
 import {
   classifyApplyFailure,
@@ -111,8 +111,7 @@ function isRateLimited(err: unknown): boolean {
 
 /** Человеческая причина ошибки для строки футера. */
 function errorText(err: unknown): string {
-  if (err instanceof Error && err.message.trim() !== '') return err.message;
-  return t('serverUpdate.reasonUnknown');
+  return errText(err) || t('serverUpdate.reasonUnknown');
 }
 
 /**

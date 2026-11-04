@@ -30,6 +30,7 @@ import {
   type ExportJob,
   type PublicationExportEntry,
   type PublicationExportFormat,
+  type PublicationExportIssue,
   type PublicationExportReport,
   type PublicationPrint,
 } from '@etn/shared';
@@ -348,7 +349,7 @@ interface AssetFile {
 interface AssetCollection {
   replacements: Map<string, string>;
   files: AssetFile[];
-  warnings: string[];
+  warnings: PublicationExportIssue[];
 }
 
 /** `etnimg://…` URL inside markdown/HTML output. */
@@ -365,8 +366,17 @@ const ETNIMG_ATTACHMENT_HOST = 'attachment';
 /** id вложения: uuid-подобный (защита от мусора и path traversal), как в клиенте. */
 const ETNIMG_ATTACHMENT_ID_RE = /^[0-9a-zA-Z-]{1,64}$/;
 
+/** Причина отказа резолва `etnimg://`-адреса (машиночитаемая, ADR §4). */
+type EtnimgErrorReason = 'url_unparsed' | 'attachment_not_found';
+
+/** Отказ резолва: причина и адрес/идентификатор для `details`. */
+interface EtnimgFailure {
+  reason: EtnimgErrorReason;
+  target: string;
+}
+
 /** Резолв `etnimg://`-адреса: абсолютный путь файла сервера либо причина отказа. */
-type EtnimgResolution = { absPath: string } | { error: string };
+type EtnimgResolution = { absPath: string } | { error: EtnimgFailure };
 
 /**
  * Резолвит `etnimg://`-адрес в абсолютный путь файла на сервере (паритет с
@@ -388,32 +398,36 @@ function resolveEtnimgPath(ndb: NetworkDb, href: string): EtnimgResolution {
   try {
     url = new URL(href);
   } catch {
-    return { error: `не разобран URL ${href}` };
+    return { error: { reason: 'url_unparsed', target: href } };
   }
-  if (url.protocol !== 'etnimg:') return { error: `не разобран URL ${href}` };
+  if (url.protocol !== 'etnimg:') {
+    return { error: { reason: 'url_unparsed', target: href } };
+  }
   let host: string;
   let pathname: string;
   try {
     host = decodeURIComponent(url.hostname);
     pathname = decodeURIComponent(url.pathname);
   } catch {
-    return { error: `не разобран URL ${href}` };
+    return { error: { reason: 'url_unparsed', target: href } };
   }
   const segments = pathname.split('/').filter((s) => s !== '' && s !== '.' && s !== '..');
 
   if (host.toLowerCase() === ETNIMG_ATTACHMENT_HOST) {
     const id = segments[0];
     if (segments.length !== 1 || id === undefined || !ETNIMG_ATTACHMENT_ID_RE.test(id)) {
-      return { error: `не разобран URL ${href}` };
+      return { error: { reason: 'url_unparsed', target: href } };
     }
     const attachment = getAttachment(ndb, id);
     if (attachment === null || attachment.kind !== 'file' || attachment.file_path === null) {
-      return { error: `вложение не найдено (${id})` };
+      return { error: { reason: 'attachment_not_found', target: id } };
     }
     return { absPath: attachment.file_path };
   }
 
-  if (host === '' || segments.length === 0) return { error: `не разобран URL ${href}` };
+  if (host === '' || segments.length === 0) {
+    return { error: { reason: 'url_unparsed', target: href } };
+  }
   const abs = /^[a-zA-Z]$/.test(host)
     ? `${host}:\\${segments.join('\\')}`
     : `/${[host, ...segments].join('/')}`;
@@ -449,6 +463,85 @@ function collectEtnimgUrls(sources: readonly string[]): string[] {
   return out;
 }
 
+/** Причина недоступности картинки-вложения (машиночитаемая, ADR §4). */
+type AttachmentUnavailableReason =
+  | EtnimgErrorReason
+  | 'outside_attachments'
+  | 'file_missing'
+  | 'read_failed';
+
+/** Английский диагностический текст причины недоступности вложения. */
+function attachmentUnavailableMessage(
+  reason: AttachmentUnavailableReason,
+  target: string,
+): string {
+  switch (reason) {
+    case 'url_unparsed':
+      return `Attachment unavailable: unrecognized etnimg URL (${target}).`;
+    case 'attachment_not_found':
+      return `Attachment unavailable: attachment not found (${target}).`;
+    case 'outside_attachments':
+      return `Attachment unavailable: the path is outside the server attachments directory (${target}).`;
+    case 'file_missing':
+      return `Attachment unavailable: the file is not found on the server (${target}).`;
+    case 'read_failed':
+      return `Attachment unavailable: the file could not be read (${target}).`;
+  }
+}
+
+/**
+ * Машиночитаемое предупреждение «вложение недоступно» (ADR daab6ac4 §4):
+ * `code` + английский `message` + `details` (`reason`, `url`, `target`).
+ */
+function attachmentIssue(
+  url: string,
+  reason: AttachmentUnavailableReason,
+  target: string,
+): PublicationExportIssue {
+  return {
+    code: 'attachment_unavailable',
+    message: attachmentUnavailableMessage(reason, target),
+    details: { reason, url, target },
+  };
+}
+
+/** Машиночитаемое предупреждение «обложка-вложение недоступна» (ADR §4). */
+function coverAttachmentIssue(
+  reason: AttachmentUnavailableReason,
+  target?: string,
+): PublicationExportIssue {
+  const cause = attachmentUnavailableReasonText(reason);
+  return {
+    code: 'cover_attachment_unavailable',
+    message:
+      target === undefined
+        ? `Cover attachment unavailable: ${cause}.`
+        : `Cover attachment unavailable: ${cause} (${target}).`,
+    details: target === undefined ? { reason } : { reason, target },
+  };
+}
+
+/** Короткая причина недоступности вложения для текста обложки. */
+function attachmentUnavailableReasonText(reason: AttachmentUnavailableReason): string {
+  switch (reason) {
+    case 'outside_attachments':
+      return 'the path is outside the server attachments directory';
+    case 'file_missing':
+      return 'the file is not found on the server';
+    case 'read_failed':
+      return 'the file could not be read';
+    case 'attachment_not_found':
+      return 'attachment not found';
+    case 'url_unparsed':
+      return 'unrecognized etnimg URL';
+  }
+}
+
+/** Замечание сборки документа — машиночитаемое предупреждение (ADR §4). */
+function assemblyIssue(message: string): PublicationExportIssue {
+  return { code: 'assembly_warning', message };
+}
+
 /** Deterministic asset name from file content: `<hash8><ext>`. */
 function assetNameFor(absPath: string): string {
   const hash = createHash('sha1').update(readFileSync(absPath)).digest('hex').slice(0, ASSET_HASH_LENGTH);
@@ -466,7 +559,7 @@ function assetNameFor(absPath: string): string {
 function collectAssets(ndb: NetworkDb, sources: readonly string[], withAssets: boolean): AssetCollection {
   const replacements = new Map<string, string>();
   const files: AssetFile[] = [];
-  const warnings: string[] = [];
+  const warnings: PublicationExportIssue[] = [];
   if (!withAssets) return { replacements, files, warnings };
 
   const dir = attachmentsDir(ndb);
@@ -474,23 +567,23 @@ function collectAssets(ndb: NetworkDb, sources: readonly string[], withAssets: b
   for (const url of collectEtnimgUrls(sources)) {
     const resolved = resolveEtnimgPath(ndb, url);
     if ('error' in resolved) {
-      warnings.push(`вложение недоступно: ${resolved.error}`);
+      warnings.push(attachmentIssue(url, resolved.error.reason, resolved.error.target));
       continue;
     }
     const abs = resolved.absPath;
     if (!isInsideAttachments(dir, abs)) {
-      warnings.push(`вложение недоступно: путь вне каталога сервера (${path.basename(abs)})`);
+      warnings.push(attachmentIssue(url, 'outside_attachments', path.basename(abs)));
       continue;
     }
     if (!existsSync(abs)) {
-      warnings.push(`вложение недоступно: файл не найден на сервере (${path.basename(abs)})`);
+      warnings.push(attachmentIssue(url, 'file_missing', path.basename(abs)));
       continue;
     }
     let name: string;
     try {
       name = assetNameFor(abs);
     } catch {
-      warnings.push(`вложение недоступно: не удалось прочитать файл (${path.basename(abs)})`);
+      warnings.push(attachmentIssue(url, 'read_failed', path.basename(abs)));
       continue;
     }
     if (!byName.has(name)) {
@@ -559,28 +652,28 @@ function assetDataUri(absPath: string): string | null {
 function collectInlineAssets(
   ndb: NetworkDb,
   sources: readonly string[],
-): { replacements: Map<string, string>; warnings: string[] } {
+): { replacements: Map<string, string>; warnings: PublicationExportIssue[] } {
   const replacements = new Map<string, string>();
-  const warnings: string[] = [];
+  const warnings: PublicationExportIssue[] = [];
   const dir = attachmentsDir(ndb);
   for (const url of collectEtnimgUrls(sources)) {
     const resolved = resolveEtnimgPath(ndb, url);
     if ('error' in resolved) {
-      warnings.push(`вложение недоступно: ${resolved.error}`);
+      warnings.push(attachmentIssue(url, resolved.error.reason, resolved.error.target));
       continue;
     }
     const abs = resolved.absPath;
     if (!isInsideAttachments(dir, abs)) {
-      warnings.push(`вложение недоступно: путь вне каталога сервера (${path.basename(abs)})`);
+      warnings.push(attachmentIssue(url, 'outside_attachments', path.basename(abs)));
       continue;
     }
     if (!existsSync(abs)) {
-      warnings.push(`вложение недоступно: файл не найден на сервере (${path.basename(abs)})`);
+      warnings.push(attachmentIssue(url, 'file_missing', path.basename(abs)));
       continue;
     }
     const uri = assetDataUri(abs);
     if (uri === null) {
-      warnings.push(`вложение недоступно: не удалось прочитать файл (${path.basename(abs)})`);
+      warnings.push(attachmentIssue(url, 'read_failed', path.basename(abs)));
       continue;
     }
     replacements.set(url, uri);
@@ -595,7 +688,7 @@ function collectInlineAssets(
 function resolveCoverDataUri(
   ndb: NetworkDb,
   document: PublicationExportDocument,
-  warnings: string[],
+  warnings: PublicationExportIssue[],
 ): string | null {
   const { cover } = document.title;
   if (cover.kind === 'url') return cover.ref;
@@ -603,17 +696,21 @@ function resolveCoverDataUri(
 
   const attachment = getAttachment(ndb, cover.ref);
   if (attachment === null || attachment.kind !== 'file' || attachment.file_path === null) {
-    warnings.push('обложка-вложение недоступна');
+    warnings.push(coverAttachmentIssue('attachment_not_found'));
     return null;
   }
   const abs = attachment.file_path;
-  if (!isInsideAttachments(attachmentsDir(ndb), abs) || !existsSync(abs)) {
-    warnings.push(`обложка-вложение недоступна (${path.basename(abs)})`);
+  if (!isInsideAttachments(attachmentsDir(ndb), abs)) {
+    warnings.push(coverAttachmentIssue('outside_attachments', path.basename(abs)));
+    return null;
+  }
+  if (!existsSync(abs)) {
+    warnings.push(coverAttachmentIssue('file_missing', path.basename(abs)));
     return null;
   }
   const uri = assetDataUri(abs);
   if (uri === null) {
-    warnings.push(`обложка-вложение недоступна (${path.basename(abs)})`);
+    warnings.push(coverAttachmentIssue('read_failed', path.basename(abs)));
     return null;
   }
   return uri;
@@ -636,7 +733,7 @@ export function renderPublicationPrintHtml(
   userId: string,
   resolveUserName: (userId: string) => string | null,
   tokenContext?: AstTokenContext,
-): PublicationPrint & { warnings: string[] } {
+): PublicationPrint & { warnings: PublicationExportIssue[] } {
   const pub = getPublication(ndb, publicationId);
   if (pub === null) {
     throw new EtnError('NOT_FOUND', `publication ${publicationId} not found`, {
@@ -651,7 +748,7 @@ export function renderPublicationPrintHtml(
     resolveUserName,
     tokenContext,
   );
-  const warnings = [...document.warnings];
+  const warnings = document.warnings.map(assemblyIssue);
   // Развёрнутые источники: картинки из трансклюзий вклеиваются как data-URI
   // тем же проходом, что и картинки собственных текстов (ошибка 6ab79f3d).
   const expand = createBodyExpander(ndb);
@@ -797,7 +894,10 @@ export function buildPublicationArtifact(
   const expandBlock = createBodyExpander(ndb);
   const expandPlain = createPlainBodyExpander(ndb);
   const assets = collectAssets(ndb, collectAssetSources(document, expandPlain), withAssets);
-  const warnings = [...document.warnings, ...assets.warnings];
+  const warnings: PublicationExportIssue[] = [
+    ...document.warnings.map(assemblyIssue),
+    ...assets.warnings,
+  ];
   const coverSrc = resolveCoverSource(ndb, document, assets, withAssets, warnings);
 
   const extension = format === 'md' ? 'md' : 'html';
@@ -841,7 +941,7 @@ function resolveCoverSource(
   document: PublicationExportDocument,
   assets: AssetCollection,
   withAssets: boolean,
-  warnings: string[],
+  warnings: PublicationExportIssue[],
 ): string | null {
   const { cover } = document.title;
   if (cover.kind === 'url') return cover.ref;
@@ -850,19 +950,23 @@ function resolveCoverSource(
 
   const attachment = getAttachment(ndb, cover.ref);
   if (attachment === null || attachment.kind !== 'file' || attachment.file_path === null) {
-    warnings.push('обложка-вложение недоступна');
+    warnings.push(coverAttachmentIssue('attachment_not_found'));
     return null;
   }
   const abs = attachment.file_path;
-  if (!isInsideAttachments(attachmentsDir(ndb), abs) || !existsSync(abs)) {
-    warnings.push(`обложка-вложение недоступна (${path.basename(abs)})`);
+  if (!isInsideAttachments(attachmentsDir(ndb), abs)) {
+    warnings.push(coverAttachmentIssue('outside_attachments', path.basename(abs)));
+    return null;
+  }
+  if (!existsSync(abs)) {
+    warnings.push(coverAttachmentIssue('file_missing', path.basename(abs)));
     return null;
   }
   let name: string;
   try {
     name = assetNameFor(abs);
   } catch {
-    warnings.push(`обложка-вложение недоступна (${path.basename(abs)})`);
+    warnings.push(coverAttachmentIssue('read_failed', path.basename(abs)));
     return null;
   }
   if (!assets.files.some((f) => f.name === name)) assets.files.push({ name, absPath: abs });
@@ -1009,7 +1113,7 @@ export function buildPublicationBatchArtifact(
   resolveUserName: (userId: string) => string | null,
   tokenContext?: AstTokenContext,
 ): { entries: PublicationFile[]; report: PublicationExportReport } {
-  const warnings: string[] = [];
+  const warnings: PublicationExportIssue[] = [];
   let ids: string[];
   if (Array.isArray(opts.ids) && opts.ids.length > 0) {
     if (opts.ids.length > PUBLICATION_EXPORT_BATCH_MAX) {
@@ -1024,9 +1128,11 @@ export function buildPublicationBatchArtifact(
     const selected = selectActivePublicationIds(ndb);
     ids = selected.ids;
     if (selected.total > PUBLICATION_EXPORT_BATCH_MAX) {
-      warnings.push(
-        `пакет усечён до ${PUBLICATION_EXPORT_BATCH_MAX} публикаций (в сети ${selected.total} актуальных)`,
-      );
+      warnings.push({
+        code: 'batch_truncated',
+        message: `Batch truncated to ${PUBLICATION_EXPORT_BATCH_MAX} publications (the network has ${selected.total} active ones).`,
+        details: { limit: PUBLICATION_EXPORT_BATCH_MAX, total: selected.total },
+      });
     }
   } else {
     throw new EtnError(
@@ -1051,7 +1157,11 @@ export function buildPublicationBatchArtifact(
         slug: '',
         status: 'error',
         warnings: [],
-        error: 'публикация не найдена',
+        error: {
+          code: 'publication_not_found',
+          message: `Publication ${id} not found.`,
+          details: { publication_id: id },
+        },
       });
       continue;
     }
@@ -1074,7 +1184,11 @@ export function buildPublicationBatchArtifact(
         slug,
         status: 'error',
         warnings: [],
-        error: err instanceof Error ? err.message : String(err),
+        error: {
+          code: 'build_failed',
+          message: err instanceof Error ? err.message : String(err),
+          details: { publication_id: id },
+        },
       });
     }
   }

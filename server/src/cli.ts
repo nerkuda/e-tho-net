@@ -548,7 +548,7 @@ async function runPublicationsRebuild(
         );
         const artifact = buildPublicationArtifact(ndb, document, args.format, true, '', slug);
         entries.push(...artifact.entries);
-        for (const w of artifact.entry.warnings) warnings.push(w);
+        for (const w of artifact.entry.warnings) warnings.push(w.message);
       } catch (err) {
         const title = titleById.get(id) ?? id;
         warnings.push(
