@@ -35,13 +35,13 @@
       "name": "open-client-section",
       "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
     },
-    { "name": "test-locale-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"zz\"]') !== null" },
-    { "name": "lang-checked-before", "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null", "expect": "ru" },
+    { "name": "test-locale-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]') !== null" },
+    { "name": "lang-checked-before", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "ru" },
     {
       "name": "pick-test-locale",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"zz\"]'); if (!r) throw new Error('нет локали zz'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]'); if (!r) throw new Error('нет локали zz'); r.click(); return r.checked; })()"
     },
-    { "name": "test-locale-picked", "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null", "expect": "zz" },
+    { "name": "test-locale-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "zz" },
     { "name": "apply-enabled", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'Применить' && !b.disabled)" },
     {
       "name": "apply-lang",
@@ -50,7 +50,7 @@
 
     { "name": "live-lang-applied", "timeout": 20000, "waitFor": "document.documentElement.lang === 'zz' && document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent === 'TestNet' && document.querySelector('.dialog-title')?.textContent === 'TestSettings'" },
     { "name": "dialog-buttons-after", "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.textContent)", "expect": ["TestApply", "TestCancel", "TestApplyClose"] },
-    { "name": "lang-checked-after", "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null", "expect": "zz" },
+    { "name": "lang-checked-after", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "zz" },
     { "name": "map-tab-after", "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title')).includes('TestMap')", "expect": true },
 
     {
@@ -77,12 +77,12 @@
       "name": "open-client-again",
       "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
     },
-    { "name": "ru-radio-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]') !== null" },
+    { "name": "ru-radio-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]') !== null" },
     {
       "name": "pick-russian",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
     },
-    { "name": "russian-picked", "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null", "expect": "ru" },
+    { "name": "russian-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "ru" },
     { "name": "apply-enabled-again", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'TestApply' && !b.disabled)" },
     {
       "name": "apply-russian",

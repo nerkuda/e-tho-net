@@ -50,6 +50,12 @@ import { div, el, errText } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { availableLocales, getLang, t } from '../lib/i18n.js';
 import { applyLang, unavailableLang } from '../lib/lang.js';
+import {
+  changeAppLanguage,
+  getAppLanguageState,
+  isLanguageApiSupported,
+  refreshEffectiveLanguage,
+} from '../lib/app-language.js';
 import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
@@ -137,7 +143,17 @@ interface Draft {
   showInactive: boolean;
   showTrash: boolean;
   theme: Theme;
-  /** Язык интерфейса (L5 `client_meta.lang`, задача 57f09136). */
+  /**
+   * «Язык приложения» из профиля пользователя (ADR daab6ac4 §2–3, задачи
+   * faba9ff4/222666db): `null` — «использовать язык сетей», иначе тег.
+   */
+  appLanguage: string | null;
+  /**
+   * Язык сети (ADR daab6ac4 §2): `null` — «использовать язык сервера».
+   * Редактируется владельцем сети/администратором.
+   */
+  networkLanguage: string | null;
+  /** Локальный выбор языка для старого сервера (L5 `client_meta.lang`). */
   lang: string;
   cloudWidth: number;
   cloudGap: number;
@@ -171,6 +187,8 @@ function readInitialDraft(): Draft {
     showInactive: store.state.showInactive,
     showTrash: store.state.showTrash,
     theme: store.state.theme,
+    appLanguage: getAppLanguageState().language,
+    networkLanguage: net?.language ?? null,
     lang: getLang(),
     cloudWidth: store.state.cloudWidth,
     cloudGap: store.state.cloudGap,
@@ -192,6 +210,8 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.showInactive !== b.showInactive ||
     a.showTrash !== b.showTrash ||
     a.theme !== b.theme ||
+    a.appLanguage !== b.appLanguage ||
+    a.networkLanguage !== b.networkLanguage ||
     a.lang !== b.lang ||
     a.cloudWidth !== b.cloudWidth ||
     a.cloudGap !== b.cloudGap
@@ -437,6 +457,36 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       },
     });
 
+    // Язык сети (ADR daab6ac4 §2, задача 222666db п. 2): «использовать язык
+    // сервера» (null) или конкретный тег; меняет владелец/админ — тот же
+    // `PATCH /networks/{id}`, что и остальные поля раздела. Старый сервер
+    // контракта не знает — поле не показывается.
+    const languageSupported = isLanguageApiSupported();
+    const localeChoices = availableLocales();
+    const networkLanguageOptions = [
+      { value: '', label: t('settings.networkLanguageInherit') },
+      ...localeChoices.map((locale) => ({ value: locale.code, label: locale.name })),
+    ];
+    if (
+      draft.networkLanguage !== null &&
+      !localeChoices.some((locale) => locale.code === draft.networkLanguage)
+    ) {
+      // Язык, заданный другим клиентом, не теряем и не подменяем: показываем
+      // сам тег, пока пользователь не выберет другой.
+      networkLanguageOptions.push({ value: draft.networkLanguage, label: draft.networkLanguage });
+    }
+    const networkLanguageSelect = languageSupported
+      ? fieldSelect({
+          value: draft.networkLanguage ?? '',
+          options: networkLanguageOptions,
+          disabled: !canEditNetwork,
+          onChange: (value) => {
+            draft.networkLanguage = value === '' ? null : value;
+            markDirty();
+          },
+        })
+      : null;
+
     // Вкладки четырёх markdown-полей самоописания сети (O5) — общий механизм
     // `lib/ui/tabs.ts` (задача a57e7998): панели сохраняются, поле каждой
     // вкладки строится лениво при первом показе.
@@ -541,6 +591,15 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       el('h3', 'settings-section-title', t('settings.settingsNetwork')),
       fieldRow({ label: t('networks.label.titleNetwork'), control: nameInput }),
       fieldRow({ label: t('settings.label.firstDenWeek'), control: firstDaySelect }),
+      ...(networkLanguageSelect === null
+        ? []
+        : [
+            fieldRow({
+              label: t('settings.networkLanguage'),
+              control: networkLanguageSelect,
+            }),
+            el('p', 'muted', t('settings.networkLanguageHint')),
+          ]),
       el(
         'p',
         'muted',
@@ -576,25 +635,94 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   function renderClientSection(): HTMLElement {
     const root = div('settings-section');
 
-    // Язык интерфейса (L5 `client_meta.lang`, задача 57f09136): выбор из
-    // зарегистрированных каталогов (`lib/i18n.ts`) рядом с темой — обе
-    // настройки клиентские и действуют на всех экранах.
+    // «Язык приложения» (ADR daab6ac4 §2–3, задача 222666db п. 1): при
+    // доступном сервере — «использовать язык сетей» или конкретный язык,
+    // значение живёт в профиле пользователя и действует на всех его клиентах.
+    // Старый сервер (0.15.1) не знает контракта: остаётся локальный выбор
+    // `client_meta.lang` с пояснением (решение задачи faba9ff4 п. 5).
+    const languageSupported = isLanguageApiSupported();
+    const localeChoices = availableLocales();
     const langGroup = choiceGroup();
-    for (const locale of availableLocales()) {
+    if (languageSupported) {
       langGroup.append(
         radioRow({
-          label: locale.name,
-          name: 'settings-lang',
-          value: locale.code,
-          checked: draft.lang === locale.code,
+          label: t('settings.languageInherit'),
+          name: 'settings-app-lang',
+          value: '',
+          checked: draft.appLanguage === null,
           onChange: (checked) => {
             if (!checked) return;
-            draft.lang = locale.code;
+            draft.appLanguage = null;
             markDirty();
           },
         }).row,
       );
+      for (const locale of localeChoices) {
+        langGroup.append(
+          radioRow({
+            label: locale.name,
+            name: 'settings-app-lang',
+            value: locale.code,
+            checked: draft.appLanguage === locale.code,
+            onChange: (checked) => {
+              if (!checked) return;
+              draft.appLanguage = locale.code;
+              markDirty();
+            },
+          }).row,
+        );
+      }
+      if (
+        draft.appLanguage !== null &&
+        !localeChoices.some((locale) => locale.code === draft.appLanguage)
+      ) {
+        // Тег без каталога в этой сборке (например, язык задан другим
+        // клиентом) — показываем как есть, не подменяя выбор.
+        langGroup.append(
+          radioRow({
+            label: draft.appLanguage,
+            name: 'settings-app-lang',
+            value: draft.appLanguage,
+            checked: true,
+          }).row,
+        );
+      }
+    } else {
+      for (const locale of localeChoices) {
+        langGroup.append(
+          radioRow({
+            label: locale.name,
+            name: 'settings-lang',
+            value: locale.code,
+            checked: draft.lang === locale.code,
+            onChange: (checked) => {
+              if (!checked) return;
+              draft.lang = locale.code;
+              markDirty();
+            },
+          }).row,
+        );
+      }
     }
+
+    // Текущий эффективный язык (ADR §2): показываем язык и ступень
+    // наследования, чтобы модель «профиль → сеть → сервер» была видна.
+    const effective = getAppLanguageState().effective;
+    const effectiveNote =
+      languageSupported && effective !== null
+        ? el(
+            'p',
+            'muted',
+            t('settings.languageEffective', [
+              effective.language,
+              t(`settings.languageSource.${effective.source}`),
+            ]),
+          )
+        : null;
+    // Сервер не поддерживает хранение языка в профиле (старый сервер).
+    const localOnlyNote = languageSupported
+      ? null
+      : el('p', 'muted', t('settings.languageLocalOnly'));
 
     const themeGroup = choiceGroup();
     const lightOpt = radioRow({
@@ -650,7 +778,13 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     root.append(
       el('h3', 'settings-section-title', t('settings.language')),
       langGroup,
-      el('p', 'muted', t('settings.languageHint')),
+      el(
+        'p',
+        'muted',
+        languageSupported ? t('settings.languageHintAllDevices') : t('settings.languageHint'),
+      ),
+      ...(effectiveNote === null ? [] : [effectiveNote]),
+      ...(localOnlyNote === null ? [] : [localOnlyNote]),
       ...(unavailableNote === null ? [] : [unavailableNote]),
       el('h3', 'settings-section-title settings-section-title-spaced', t('settings.tema')),
       themeGroup,
@@ -720,7 +854,8 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       draft.networkConventions !== original.networkConventions ||
       draft.networkExamples !== original.networkExamples ||
       draft.networkNodeSectionTypeId !== original.networkNodeSectionTypeId ||
-      draft.networkInstructionsTypeId !== original.networkInstructionsTypeId;
+      draft.networkInstructionsTypeId !== original.networkInstructionsTypeId ||
+      (isLanguageApiSupported() && draft.networkLanguage !== original.networkLanguage);
     if (networkFieldsDirty) {
       // Merge the form's `type_roles` selections into the existing dictionary
       // so we never wipe roles the dialog doesn't expose. The server's PATCH
@@ -738,11 +873,20 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
           table_of_contents: draft.networkNodeSectionTypeId,
           instructions: draft.networkInstructionsTypeId,
         },
+        // Язык сети — только на сервере с контрактом языка (ADR §2); старый
+        // сервер неизвестного ключа не получает.
+        ...(isLanguageApiSupported() ? { language: draft.networkLanguage } : {}),
       };
       tasks.push(
         (async () => {
           const updated = await etn.networks.update(networkId, fields);
           store.update({ network: updated });
+          // Смена языка сети применяется на лету у всех, кто наследует язык
+          // сети (задача 222666db п. 2/4): перечитываем эффективный язык своей
+          // пары, не дожидаясь WS-кадра.
+          if (isLanguageApiSupported() && draft.networkLanguage !== original.networkLanguage) {
+            await refreshEffectiveLanguage();
+          }
         })(),
       );
     }
@@ -791,10 +935,22 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
-    // Client: язык интерфейса (L5 `client_meta.lang`, задача 57f09136).
-    // Как тема: применить сразу (каркас i18n + атрибут `lang` документа),
-    // затем сохранить выбор.
-    if (draft.lang !== original.lang) {
+    // Client: «язык приложения». При доступном сервере значение живёт в
+    // профиле пользователя (ADR daab6ac4 §2–3, задача 222666db п. 1):
+    // сохранение `PUT /users/me/settings/app_language` и живое применение
+    // эффективного языка (для «наследовать» его резолвит сервер). Не удалось
+    // сохранить — выбор применён локально как кэш, синхронизация отложена
+    // (сценарий faba9ff4). Старый сервер — локальный выбор, как раньше.
+    if (isLanguageApiSupported()) {
+      if (draft.appLanguage !== original.appLanguage) {
+        tasks.push(
+          (async () => {
+            const synced = await changeAppLanguage(draft.appLanguage);
+            if (!synced) notice(t('settings.languageSyncDeferred'), 'error');
+          })(),
+        );
+      }
+    } else if (draft.lang !== original.lang) {
       tasks.push(
         (async () => {
           await etn.meta.set(CLIENT_META_KEY.LANG, draft.lang);
@@ -844,6 +1000,8 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.showInactive = draft.showInactive;
       original.showTrash = draft.showTrash;
       original.theme = draft.theme;
+      original.appLanguage = draft.appLanguage;
+      original.networkLanguage = draft.networkLanguage;
       original.lang = draft.lang;
       original.cloudWidth = draft.cloudWidth;
       original.cloudGap = draft.cloudGap;

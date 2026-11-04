@@ -10,16 +10,17 @@
  */
 
 import type { AuditLogEntry, Network, User } from '@etn/shared';
-import { t } from '../lib/i18n.js';
+import { availableLocales, t } from '../lib/i18n.js';
+import { isLanguageApiSupported } from '../lib/app-language.js';
 
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
-import { button, div, el, fmtDateTime, span } from '../lib/dom.js';
+import { button, div, el, errText, fmtDateTime, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { menuAction, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
-import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { fieldInput, fieldRow, fieldSelect } from '../lib/ui/field.js';
 import { operationError } from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
 import { bindSearchNav } from '../lib/ui/search-nav.js';
@@ -42,6 +43,16 @@ export function openAdminPanel(): void {
       { id: 'users', label: t('admin.tab.users'), content: pane((h) => void renderUsers(h)) },
       { id: 'networks', label: t('admin.tab.networks'), content: pane((h) => void renderNetworks(h)) },
       { id: 'audit', label: t('admin.tab.audit'), content: pane((h) => void renderAudit(h)) },
+      // Язык сервера (ADR daab6ac4 §1–2, задача 222666db п. 3): единственная
+      // административная настройка сервера, поэтому компактная вкладка в
+      // существующей админ-панели — без нового крупного экрана. Вкладка видна
+      // только администратору: диалог открывается лишь пунктом меню
+      // «Администрирование» (проверка `me.is_admin`).
+      {
+        id: 'server',
+        label: t('admin.tab.server'),
+        content: pane((h) => void renderServerSettings(h)),
+      },
     ],
     // Правило 3 требования 11ddd910: под списком — кнопка решения. Панель
     // информационная, решение одно — «Закрыть».
@@ -70,6 +81,73 @@ function adminToolbar(): HTMLElement {
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
+
+/**
+ * Вкладка «Сервер»: язык сервера по умолчанию — нижняя ступень наследования
+ * языка интерфейса (ADR daab6ac4 §1–2, задача 222666db п. 3). Админский
+ * уровень живёт здесь, в существующей админ-панели: отдельного крупного
+ * экрана настроек сервера в клиенте нет. Старый сервер (0.15.1) контракта не
+ * знает — вкладка объясняет, что настройка недоступна.
+ */
+async function renderServerSettings(host: HTMLElement): Promise<void> {
+  if (!isLanguageApiSupported()) {
+    host.replaceChildren(el('p', 'muted', t('admin.serverLanguageUnsupported')));
+    return;
+  }
+  host.replaceChildren(loadingState());
+  let current: string;
+  try {
+    current = (await etn.admin.getServerLanguage()).language;
+  } catch (err) {
+    host.replaceChildren(operationError(err));
+    return;
+  }
+  const choices = availableLocales().map((locale) => ({
+    value: locale.code,
+    label: locale.name,
+  }));
+  if (!choices.some((choice) => choice.value === current)) {
+    choices.push({ value: current, label: current });
+  }
+  let selected = current;
+  const saveButton = uiButton({
+    label: t('actions.save'),
+    role: 'primary',
+    size: 'm',
+    disabled: true,
+    onClick: () => {
+      void (async () => {
+        saveButton.disabled = true;
+        try {
+          await etn.admin.setServerLanguage(selected);
+          current = selected;
+          notice(t('admin.serverLanguageSaved'));
+        } catch (err) {
+          notice(errText(err), 'error');
+          saveButton.disabled = selected === current;
+        }
+      })();
+    },
+  });
+  const select = fieldSelect({
+    value: current,
+    options: choices,
+    onChange: (value) => {
+      selected = value;
+      saveButton.disabled = value === current;
+    },
+  });
+  const stack = div('form-stack');
+  const actions = div('form-row');
+  actions.append(saveButton);
+  stack.append(
+    el('h3', 'settings-section-title', t('admin.serverLanguage')),
+    fieldRow({ control: select }),
+    el('p', 'muted', t('admin.serverLanguageHint')),
+    actions,
+  );
+  host.replaceChildren(stack);
+}
 
 /** Renders the users tab. */
 async function renderUsers(content: HTMLElement): Promise<void> {

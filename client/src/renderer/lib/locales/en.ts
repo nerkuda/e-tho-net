@@ -962,8 +962,23 @@ export const en = {
   'lang.zh': 'Chinese',
   /** Заголовок объединённого диалога настроек (все разделы). */
   'settings.title': 'All settings',
-  'settings.language': 'Language',
+  'settings.language': 'Application language',
   'settings.languageHint': 'Interface language. Applies to this client only.',
+  'settings.languageHintAllDevices':
+    'Interface language. Applies to all your clients on this server.',
+  'settings.languageInherit': 'Use network languages',
+  'settings.languageEffective': 'Current: %1 (%2)',
+  'settings.languageSource.user': 'chosen in profile',
+  'settings.languageSource.network': 'network language',
+  'settings.languageSource.server': 'server language',
+  'settings.languageLocalOnly':
+    'The server does not store the language in the profile: the choice applies to this client only.',
+  'settings.languageSyncDeferred':
+    'Could not save the language to the profile. The choice was applied on this client; synchronization will retry on connect.',
+  'settings.networkLanguage': 'Network language',
+  'settings.networkLanguageInherit': 'Use server language',
+  'settings.networkLanguageHint':
+    'Interface language for members whose application language is “use network languages”.',
   /**
    * Эффективный язык недоступен в сборке (задача e6374cd1): интерфейс уже
    * показан на исходном `ru`, сообщение объясняет почему. Подстановка — код
@@ -1422,6 +1437,12 @@ export const en = {
   'admin.tab.networks': 'Networks',
   /** Вкладка админ-панели: журнал аудита. */
   'admin.tab.audit': 'Audit',
+  'admin.tab.server': 'Server',
+  'admin.serverLanguage': 'Default server language',
+  'admin.serverLanguageHint':
+    'Lowest level of the interface language inheritance: used by networks and users without their own language. Does not affect API, MCP or CLI response language.',
+  'admin.serverLanguageUnsupported': 'The server does not support language settings.',
+  'admin.serverLanguageSaved': 'Server language saved.',
 
   // -- Диалог «Статистика мыслесети» (screens/network-stats.ts) -------------
   /** Заголовок диалога и пункта меню «Мыслесеть». */

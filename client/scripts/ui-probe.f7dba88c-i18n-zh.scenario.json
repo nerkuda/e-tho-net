@@ -64,11 +64,11 @@
     {
       "name": "baseline-ru-present",
       "timeout": 10000,
-      "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]') !== null"
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]') !== null"
     },
     {
       "name": "baseline-pick-ru",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
     },
     {
       "name": "baseline-apply-enabled",
@@ -92,7 +92,7 @@
     {
       "name": "zh-radio-present",
       "timeout": 10000,
-      "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"zh\"]') !== null"
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"zh\"]') !== null"
     },
     {
       "name": "lang-labels-before",
@@ -105,11 +105,11 @@
     },
     {
       "name": "pick-chinese",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"zh\"]'); if (!r) throw new Error('нет локали zh'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"zh\"]'); if (!r) throw new Error('нет локали zh'); r.click(); return r.checked; })()"
     },
     {
       "name": "chinese-picked",
-      "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null",
+      "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null",
       "expect": "zh"
     },
     {

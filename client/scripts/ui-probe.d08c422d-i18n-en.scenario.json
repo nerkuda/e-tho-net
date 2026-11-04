@@ -68,11 +68,11 @@
     {
       "name": "baseline-ru-present",
       "timeout": 10000,
-      "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]') !== null"
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]') !== null"
     },
     {
       "name": "baseline-pick-ru",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
     },
     {
       "name": "baseline-apply-enabled",
@@ -157,20 +157,20 @@
     {
       "name": "en-radio-present",
       "timeout": 10000,
-      "waitFor": "document.querySelector('input[name=\"settings-lang\"][value=\"en\"]') !== null"
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"en\"]') !== null"
     },
     {
       "name": "lang-checked-before",
-      "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null",
+      "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null",
       "expect": "ru"
     },
     {
       "name": "pick-english",
-      "eval": "(() => { const r = document.querySelector('input[name=\"settings-lang\"][value=\"en\"]'); if (!r) throw new Error('нет локали en'); r.click(); return r.checked; })()"
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"en\"]'); if (!r) throw new Error('нет локали en'); r.click(); return r.checked; })()"
     },
     {
       "name": "english-picked",
-      "probe": "document.querySelector('input[name=\"settings-lang\"]:checked')?.value ?? null",
+      "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null",
       "expect": "en"
     },
     {
