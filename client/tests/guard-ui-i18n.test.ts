@@ -16,9 +16,10 @@
  *    рендерера есть в каталоге `ru` — опечатка не доедет до пользователя.
  *    Сбор ключей — по AST, а не построчным regex: многострочный вызов
  *    (`tp(\n  'ключ', n)`) — обычная форма и тоже обязан проверяться. Вызов
- *    словаря определяется происхождением импорта: алиасы (`t as tr`),
+ *    словаря определяется происхождением импорта: алиасы (`import { t as tr }`),
  *    namespace (`import * as i18n`) и реэкспорт через модуль-посредник
- *    (`export { t } from './i18n.js'`, `export *`) разрешаются транзитивно.
+ *    (`export { t } from './i18n.js'`, `export { t as tr } from './i18n.js'`,
+ *    `export *`) разрешаются транзитивно.
  * 3. **Полнота каталога.** У каждого ключа `ru` непустой русский текст —
  *    «перевод» не может остаться заглушкой.
  * 4. **Ленивое вычисление текста (ошибка ebed42d3).** `t()`/`tp()` не
@@ -54,7 +55,10 @@
  * колбэке, переданном по имени (`arr.map(helper)`), и в функции другого
  * модуля — такие случаи не отличить от ленивых без межмодульного анализа;
  * типовые модульные формы (прямой вызов, синхронный колбэк, обёртка своего
- * файла) покрыты.
+ * файла) покрыты. Namespace-доступ к переименованному реэкспорту
+ * (`import * as barrel` + `barrel.tr('ключ')`) не отслеживается: свойства
+ * namespace проверяются по именам `t`/`tp`, а переименованные экспорты
+ * разрешаются только при именованном импорте.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -360,8 +364,9 @@ interface I18nBindings {
 /**
  * Имена `t`/`tp` из импорта словаря в файле — включая алиасы
  * (`import { t as tr }`), namespace (`import * as i18n`) и реэкспорт через
- * модуль-посредник (`export { t } from './i18n.js'`): импорт разрешается
- * транзитивно до самого `lib/i18n.ts`, а не по тексту пути.
+ * модуль-посредник (`export { t } from './i18n.js'`,
+ * `export { t as tr } from './i18n.js'`): импорт разрешается транзитивно до
+ * самого `lib/i18n.ts`, а не по тексту пути.
  */
 function i18nBindings(
   fileName: string,
@@ -387,10 +392,14 @@ function i18nBindings(
     }
     if (!ts.isNamedImports(named)) continue;
     for (const element of named.elements) {
+      // Имя импорта может быть переименованным реэкспортом посредника
+      // (`export { t as tr } from './i18n.js'`), поэтому происхождение
+      // разрешается по исходному имени, а локальная привязка получает то
+      // имя функции, которую экспорт в итоге отдаёт.
       const imported = (element.propertyName ?? element.name).text;
-      if (imported !== 't' && imported !== 'tp') continue;
-      if (exportOrigin(target, imported, synthetic, new Set()) === null) continue;
-      bindings.direct.set(element.name.text, imported);
+      const origin = exportOrigin(target, imported, synthetic, new Set());
+      if (origin === null || origin.kind !== 'function') continue;
+      bindings.direct.set(element.name.text, origin.name);
     }
   }
   return bindings;
@@ -858,6 +867,7 @@ describe('guard: локализация renderer', () => {
       "import { t } from './lib/probe-barrel-2014af4f.js';",
       "import { t as viaStar } from './lib/probe-star-2014af4f.js';",
       "import { t as notReexported } from './lib/probe-not-barrel-2014af4f.js';",
+      "import { tr as viaRenamed, trp as viaRenamedPlural, util } from './lib/probe-renamed-barrel-2014af4f.js';",
       "const A = tr('actions.save');",
       "const B = trp('plurals.link', 2);",
       "const C = i18nNs.t('actions.cancel');",
@@ -865,8 +875,12 @@ describe('guard: локализация renderer', () => {
       "const E = t('actions.close');",
       "const F = viaStar('actions.apply');",
       "const G = notReexported('probe.notAReexport');",
+      "const H = viaRenamed('actions.renamed');",
+      "const I = viaRenamedPlural('plurals.renamed', 2);",
+      "const J = util('probe.notI18n');",
     ].join('\n');
-    // Модуль-посредник: прямo реэкспортирует словарь, `export *` — транзитивно.
+    // Модуль-посредник: прямo реэкспортирует словарь, `export *` — транзитивно,
+    // третий — переименовывает экспорт и отдаёт ещё и локальную функцию.
     const synthetic = {
       'lib/probe-barrel-2014af4f.ts': "export { t, tp } from './i18n.js';",
       'lib/probe-inner-2014af4f.ts': "export { t } from './i18n.js';",
@@ -874,6 +888,12 @@ describe('guard: локализация renderer', () => {
       // Импортирует t, но наружу его не отдаёт — вызов не словарный.
       'lib/probe-not-barrel-2014af4f.ts':
         "import { t } from './i18n.js';\nexport const helper = t('actions.save');",
+      // Реэкспорт с переименованием: `tr`/`trp` — те же функции словаря;
+      // `util` — локальная функция посредника, не словарь.
+      'lib/probe-renamed-barrel-2014af4f.ts':
+        "export { t as tr, tp as trp } from './i18n.js';\n" +
+        "export function helper(): string { return 'x'; }\n" +
+        'export { helper as util };',
     };
     assert.deepEqual(
       sourceUsedKeys('probe.ts', probe, synthetic),
@@ -884,10 +904,13 @@ describe('guard: локализация renderer', () => {
         { fn: 'tp', key: 'plurals.child' },
         { fn: 't', key: 'actions.close' },
         { fn: 't', key: 'actions.apply' },
+        { fn: 't', key: 'actions.renamed' },
+        { fn: 'tp', key: 'plurals.renamed' },
       ],
-      'алиасы (tr/trp), namespace (i18nNs.t/tp), реэкспорт из посредника (t) ' +
-        'и `export *` (viaStar) — вызовы словаря; импорт из модуля, который t ' +
-        'не реэкспортирует (notReexported), — нет',
+      'алиасы (tr/trp), namespace (i18nNs.t/tp), реэкспорт из посредника (t), ' +
+        '`export *` (viaStar) и реэкспорт с переименованием (viaRenamed/' +
+        'viaRenamedPlural) — вызовы словаря; импорт из модуля, который t не ' +
+        'реэкспортирует (notReexported), и локальная функция посредника (util) — нет',
     );
   });
 
