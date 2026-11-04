@@ -14,6 +14,8 @@
  *    кириллицей на одной из строк шаблона проходила мимо).
  * 2. **Целостность словаря.** Каждый ключ из `t('…')`/`tp('…')` в исходниках
  *    рендерера есть в каталоге `ru` — опечатка не доедет до пользователя.
+ *    Сбор ключей — по AST, а не построчным regex: многострочный вызов
+ *    (`tp(\n  'ключ', n)`) — обычная форма и тоже обязан проверяться.
  * 3. **Полнота каталога.** У каждого ключа `ru` непустой русский текст —
  *    «перевод» не может остаться заглушкой.
  * 4. **Ленивое вычисление текста (ошибка ebed42d3).** `t()`/`tp()` не
@@ -113,30 +115,79 @@ function isCommentLine(line: string): boolean {
   return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
 }
 
-/** Ключи, встречающиеся в коде как `t('ключ'…)`/`tp('ключ'…)` (комментарии не считаются). */
-function collectUsedKeys(fn: 't' | 'tp'): Map<string, string[]> {
-  const used = new Map<string, string[]>();
-  const call = new RegExp(`(?<![\\w$.])${fn}\\(\\s*'([^']+)'`, 'g');
-  for (const abs of listSourceFiles(RENDERER_ROOT)) {
-    const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
-    if (rel.startsWith('lib/locales/')) continue; // сам словарь
-    const source = fs.readFileSync(abs, 'utf8');
-    for (const line of source.split('\n')) {
-      if (isCommentLine(line)) continue; // примеры в JSDoc — не вызовы
-      for (const match of line.matchAll(call)) {
-        const key = match[1]!;
-        const list = used.get(key) ?? [];
-        list.push(rel);
-        used.set(key, list);
-      }
-    }
-  }
-  return used;
+/** Статический ключ вызова словаря в исходнике. */
+interface UsedKey {
+  /** Функция словаря, которой вызван ключ. */
+  fn: 't' | 'tp';
+  /** Ключ — строковый литерал первого аргумента. */
+  key: string;
 }
 
 /** Разбор исходника для AST-проверок. */
 function parseSource(fileName: string, source: string): ts.SourceFile {
   return ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
+
+/**
+ * Статические ключи `t()`/`tp()` одного исходника. Сбор — по AST: вызов
+ * может быть многострочным (`tp(\n  'plurals.orphanedChildren', n)`), и
+ * построчная регулярка такой ключ теряла. Комментарии и примеры в них
+ * вызовами не считаются; динамический ключ (не литерал) здесь не проверяется —
+ * его держит тип `MessageKey`. Локальная функция с именем `t`/`tp`,
+ * вызываемая со строкой, от словарной не отличается; таких вызовов в
+ * renderer нет (проверено при вводе AST-сбора).
+ */
+function sourceUsedKeys(fileName: string, source: string): UsedKey[] {
+  const sf = parseSource(fileName, source);
+  const bindings = i18nBindings(sf);
+  if (bindings.direct.size === 0 && bindings.namespaces.size === 0) return [];
+  const keys: UsedKey[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const fn = i18nCallName(node.expression, bindings);
+      const arg = node.arguments[0];
+      if (
+        fn !== null &&
+        arg !== undefined &&
+        (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))
+      ) {
+        keys.push({ fn, key: arg.text });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return keys;
+}
+
+/** Все статические ключи renderer (по AST) — собираются один раз на прогон. */
+let usedKeysCache: (UsedKey & { file: string })[] | null = null;
+
+/** Ключи `t()`/`tp()` во всём renderer, кроме самого словаря. */
+function usedKeys(): (UsedKey & { file: string })[] {
+  if (usedKeysCache !== null) return usedKeysCache;
+  const occurrences: (UsedKey & { file: string })[] = [];
+  for (const abs of listSourceFiles(RENDERER_ROOT)) {
+    const rel = path.relative(RENDERER_ROOT, abs).replace(/\\/g, '/');
+    if (!SCANNED_FILES(rel)) continue; // сам словарь
+    for (const used of sourceUsedKeys(rel, fs.readFileSync(abs, 'utf8'))) {
+      occurrences.push({ ...used, file: rel });
+    }
+  }
+  usedKeysCache = occurrences;
+  return occurrences;
+}
+
+/** Ключи, встречающиеся в коде как `t('ключ'…)`/`tp('ключ'…)` (комментарии не считаются). */
+function collectUsedKeys(fn: 't' | 'tp'): Map<string, string[]> {
+  const used = new Map<string, string[]>();
+  for (const occurrence of usedKeys()) {
+    if (occurrence.fn !== fn) continue;
+    const list = used.get(occurrence.key) ?? [];
+    list.push(occurrence.file);
+    used.set(occurrence.key, list);
+  }
+  return used;
 }
 
 /** Один вызов `t()`/`tp()`, выполняемый при импорте модуля. */
@@ -149,8 +200,8 @@ interface ModuleLevelCall {
 
 /** Имена `t`/`tp` из импорта `i18n` в файле. */
 interface I18nBindings {
-  /** Именованные импорты `t`/`tp` — локальные имена (алиасы учтены). */
-  direct: Set<string>;
+  /** Именованные импорты: локальное имя → `t` или `tp` (алиасы учтены). */
+  direct: Map<string, 't' | 'tp'>;
   /** Namespace-импорты (`import * as i18n`) — вызовы `i18n.t(...)`. */
   namespaces: Set<string>;
 }
@@ -161,7 +212,7 @@ interface I18nBindings {
  * имени, а не по тексту модуля.
  */
 function i18nBindings(sf: ts.SourceFile): I18nBindings {
-  const bindings: I18nBindings = { direct: new Set(), namespaces: new Set() };
+  const bindings: I18nBindings = { direct: new Map(), namespaces: new Set() };
   for (const statement of sf.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     // `./i18n.js`, `../lib/i18n.js`, `i18n` — путь заканчивается именем модуля.
@@ -176,22 +227,30 @@ function i18nBindings(sf: ts.SourceFile): I18nBindings {
     if (!ts.isNamedImports(named)) continue;
     for (const element of named.elements) {
       const imported = (element.propertyName ?? element.name).text;
-      if (imported === 't' || imported === 'tp') bindings.direct.add(element.name.text);
+      if (imported === 't' || imported === 'tp') bindings.direct.set(element.name.text, imported);
     }
   }
   return bindings;
 }
 
+/**
+ * `t`/`tp`, если выражение — вызов функции словаря (алиасы и namespace
+ * учтены). `null` — не вызов словаря.
+ */
+function i18nCallName(expression: ts.Expression, bindings: I18nBindings): 't' | 'tp' | null {
+  if (ts.isIdentifier(expression)) return bindings.direct.get(expression.text) ?? null;
+  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+    if (!bindings.namespaces.has(expression.expression.text)) return null;
+    return expression.name.text === 't' || expression.name.text === 'tp'
+      ? expression.name.text
+      : null;
+  }
+  return null;
+}
+
 /** Вызов `t()`/`tp()` (включая `i18n.t(...)` для namespace-импорта). */
 function isI18nCall(expression: ts.Expression, bindings: I18nBindings): boolean {
-  if (ts.isIdentifier(expression)) return bindings.direct.has(expression.text);
-  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
-    return (
-      bindings.namespaces.has(expression.expression.text) &&
-      (expression.name.text === 't' || expression.name.text === 'tp')
-    );
-  }
-  return false;
+  return i18nCallName(expression, bindings) !== null;
 }
 
 /** Колбэк вызова исполняется синхронно при самом вызове (методы массива, `Array.from`). */
@@ -592,6 +651,32 @@ describe('guard: локализация renderer', () => {
       missing,
       [],
       `Ключи без форм в ruPlurals: ${missing.join(', ')}`,
+    );
+  });
+
+  it('сбор ключей видит многострочные вызовы t()/tp()', () => {
+    const probe = [
+      "import { t, tp } from './lib/i18n.js';",
+      "const A = t('actions.save');",
+      'const B = tp(',
+      "  'plurals.orphanedChildren',",
+      '  2,',
+      ');',
+      'const C = t(',
+      '  `actions.cancel`,',
+      ');',
+      "// пример в комментарии: t('probe.notACall')",
+      "const D = localT('probe.notI18n');",
+    ].join('\n');
+    assert.deepEqual(
+      sourceUsedKeys('probe.ts', probe),
+      [
+        { fn: 't', key: 'actions.save' },
+        { fn: 'tp', key: 'plurals.orphanedChildren' },
+        { fn: 't', key: 'actions.cancel' },
+      ],
+      'ключ на следующей строке после t(/tp( — такой же вызов словаря; ' +
+        'пример в комментарии и чужой localT — нет',
     );
   });
 

@@ -15,7 +15,9 @@
  *    `t()` вернёт пустоту, и подпись исчезнет.
  * 3. **Не содержать дублей ключей.** Повтор в объектном литерале молча
  *    перекрывает предыдущее значение: правка «верхней» строки ничего не
- *    меняет, а typecheck на некоторых формах дубль не видит.
+ *    меняет, а typecheck на некоторых формах дубль не видит. Проверяются
+ *    и каталог `<код>`, и формы `<код>Plurals` — ключи верхнего уровня и
+ *    категории внутри ключа.
  * 4. **Совпадать по набору подстановок `%1…%n`.** Другой номер или пропущенный
  *    параметр — потерянный текст («Не удалось записать %1» без имени) либо
  *    лишний `%2` в строке, куда его никто не передаёт.
@@ -168,6 +170,25 @@ function unwrapExpression(init: ts.Expression | undefined): ts.Expression | unde
   return node;
 }
 
+/** Имя свойства объектного литерала: идентификатор, строка или шаблон без подстановок. */
+function propertyName(node: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  return undefined;
+}
+
+/** Ключи объектного литерала в порядке исходника (с дублями). */
+function objectLiteralKeys(node: ts.ObjectLiteralExpression): string[] {
+  const keys: string[] = [];
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = propertyName(property.name);
+    if (name !== undefined) keys.push(name);
+  }
+  return keys;
+}
+
 /** Ключи объектного литерала экспорта `<exportName>` в порядке исходника (с дублями). */
 function sourceKeys(sf: ts.SourceFile, exportName: string): string[] {
   const keys: string[] = [];
@@ -175,12 +196,7 @@ function sourceKeys(sf: ts.SourceFile, exportName: string): string[] {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === exportName) {
       const init = unwrapExpression(node.initializer);
       if (init !== undefined && ts.isObjectLiteralExpression(init)) {
-        for (const property of init.properties) {
-          if (!ts.isPropertyAssignment(property)) continue;
-          const name = property.name;
-          if (ts.isStringLiteral(name) || ts.isIdentifier(name)) keys.push(name.text);
-          else if (ts.isNoSubstitutionTemplateLiteral(name)) keys.push(name.text);
-        }
+        keys.push(...objectLiteralKeys(init));
       }
     }
     ts.forEachChild(node, visit);
@@ -197,6 +213,38 @@ function duplicateKeys(keys: readonly string[]): string[] {
     if (seen.has(key)) duplicates.add(key);
     seen.add(key);
   }
+  return [...duplicates].sort();
+}
+
+/**
+ * Дубли в плюральном каталоге `<exportName>`: ключи верхнего уровня и
+ * категории внутри ключа. Рантайм молча оставляет последнее значение —
+ * ровно как в основном каталоге, но AST-проверка основных ключей вложенные
+ * объекты не видела.
+ */
+function pluralDuplicateKeys(sf: ts.SourceFile, exportName: string): string[] {
+  const duplicates = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === exportName) {
+      const init = unwrapExpression(node.initializer);
+      if (init !== undefined && ts.isObjectLiteralExpression(init)) {
+        for (const key of duplicateKeys(objectLiteralKeys(init))) duplicates.add(key);
+        for (const property of init.properties) {
+          if (!ts.isPropertyAssignment(property)) continue;
+          const key = propertyName(property.name);
+          const forms = unwrapExpression(property.initializer);
+          if (key === undefined || forms === undefined || !ts.isObjectLiteralExpression(forms)) {
+            continue;
+          }
+          for (const category of duplicateKeys(objectLiteralKeys(forms))) {
+            duplicates.add(`${key}.${category}`);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
   return [...duplicates].sort();
 }
 
@@ -321,11 +369,16 @@ function scanRegistrations(): RegistrationScan {
 }
 
 describe('guard: паритет локалей', () => {
-  it('в каталогах lib/locales/*.ts нет дублей ключей', () => {
+  it('в каталогах lib/locales/*.ts нет дублей ключей и форм', () => {
     const violations: string[] = [];
     for (const code of localeCodes()) {
       const { sf } = parseSource(`${code}.ts`);
-      const duplicates = duplicateKeys(sourceKeys(sf, code));
+      const duplicates = [
+        ...new Set([
+          ...duplicateKeys(sourceKeys(sf, code)),
+          ...pluralDuplicateKeys(sf, `${code}Plurals`),
+        ]),
+      ];
       if (duplicates.length > 0) {
         violations.push(`  • ${code}.ts — дубли: ${duplicates.join(', ')}`);
       }
@@ -333,8 +386,28 @@ describe('guard: паритет локалей', () => {
     assert.deepEqual(
       violations,
       [],
-      'Дубль ключа в объектном литерале молча перекрывает предыдущее значение:\n' +
+      'Дубль ключа в объектном литерале молча перекрывает предыдущее значение — ' +
+        'в каталоге и в формах плюрализации:\n' +
         violations.join('\n'),
+    );
+  });
+
+  it('детектор дублей видит повтор в плюральном объекте', () => {
+    const probe = [
+      'export const en = {',
+      "  'actions.save': 'Save',",
+      '};',
+      'export const enPlurals = {',
+      "  'plurals.child': { one: 'child', other: 'children' },",
+      "  'plurals.child': { one: 'child', other: 'children' },",
+      "  'plurals.link': { one: 'link', one: 'link', other: 'links' },",
+      '};',
+    ].join('\n');
+    const sf = ts.createSourceFile('probe.ts', probe, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    assert.deepEqual(
+      pluralDuplicateKeys(sf, 'enPlurals'),
+      ['plurals.child', 'plurals.link.one'],
+      'повтор ключа плюрального каталога и повтор категории внутри формы — дубли',
     );
   });
 

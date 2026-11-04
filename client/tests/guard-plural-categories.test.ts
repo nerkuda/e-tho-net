@@ -1,17 +1,24 @@
 /**
- * Сторож категорий плюрализации (задача e6374cd1).
+ * Сторож категорий плюрализации (задача e6374cd1, доработан в 2014af4f).
  *
- * Правило: файл языка экспортирует типизированный `<код>Plurals`, и в нём
- * заполнены ровно те категории, которые выбирает `Intl.PluralRules` этого
- * языка (ru `one/few/many/other`, en `one/other`, zh `other`). Пропущенная
- * форма не падает в рантайме (fallback на `other`), но даёт неверный текст —
- * например «1,5 потомков» вместо «1,5 потомка».
+ * Правило: если файл языка объявляет формы `<код>Plurals`, в нём заполнены
+ * ровно те категории, которые выбирает `Intl.PluralRules` этого языка
+ * (ru `one/few/many/other`, en `one/other`, zh `other`), и форма находится
+ * для любого числа. Пропущенная форма не падает в рантайме (fallback на
+ * `other`), но даёт неверный текст — например «1,5 потомков» вместо
+ * «1,5 потомка».
+ *
+ * Состав языков — динамический: сторож перебирает `lib/locales/*.ts`, кроме
+ * тестовой фикстуры `test.ts` (она регистрируется только в `MODE=test`), и
+ * читает объявленный экспорт `<код>Plurals`; обязательные категории берутся
+ * из `Intl.PluralRules('<код>').resolvedOptions()` — ручной таблицы в
+ * стороже нет. Новый язык с формами (zh — задача f7dba88c) проверяется без
+ * правки сторожа. Язык без объявленных форм здесь не проверяется: `tp()`
+ * добирает формы `ru`, а регистрацию и паритет каталогов держит
+ * `guard-i18n-parity.test.ts`.
  *
  * Паритет ключей и подстановок между языками здесь НЕ проверяется: это
- * отдельный сторож `guard-i18n-parity.test.ts` (задача 6c1b56f3). Сторож сам
- * подхватывает файлы локалей: он ищет `lib/locales/<код>.ts` и читает экспорт
- * `<код>Plurals`, поэтому новые языки (zh — задача f7dba88c) проверяются без
- * правки сторожа.
+ * отдельный сторож `guard-i18n-parity.test.ts` (задача 6c1b56f3).
  */
 
 import assert from 'node:assert/strict';
@@ -26,27 +33,46 @@ import { ruPlurals } from '../src/renderer/lib/locales/ru.js';
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOCALES_DIR = path.join(CLIENT_ROOT, 'src', 'renderer', 'lib', 'locales');
 
-/**
- * Обязательные категории языка — по правилам ICU. Новый язык добавляется
- * сюда вместе со своим каталогом (en/zh — задачи 6c1b56f3/d08c422d).
- */
-const REQUIRED: Record<string, readonly string[]> = {
-  ru: ['one', 'few', 'many', 'other'],
-  en: ['one', 'other'],
-  zh: ['other'],
-};
+/** Тестовая фикстура GUI-стенда: не пользовательский язык, форм плюралов не описывает. */
+const TEST_LOCALE_FILE = 'test.ts';
 
-/** Найти каталоги форм всех языков, у которых есть файл локали. */
+/** Коды языков из файлов `lib/locales/*.ts`, кроме тестовой фикстуры. */
+function localeCodes(): string[] {
+  return fs
+    .readdirSync(LOCALES_DIR)
+    .filter((name) => name.endsWith('.ts') && name !== TEST_LOCALE_FILE)
+    .map((name) => name.slice(0, -'.ts'.length))
+    .sort();
+}
+
+/**
+ * Обязательные категории языка — из ICU: правила языка не дублируются
+ * таблицей в стороже. Неизвестный код — ошибка имени файла, а не молчаливый
+ * пропуск.
+ */
+function requiredCategories(code: string): readonly string[] {
+  try {
+    return [...new Intl.PluralRules(code).resolvedOptions().pluralCategories].sort();
+  } catch {
+    assert.fail(
+      `язык ${code}: Intl.PluralRules не знает код — проверь имя файла lib/locales/${code}.ts`,
+    );
+  }
+}
+
+/**
+ * Формы всех языков, которые их объявили: `ruPlurals` — источник истины,
+ * остальные — объявленный экспорт `<код>Plurals` из файла локали.
+ */
 async function loadPluralCatalogs(): Promise<Map<string, PluralCatalog>> {
   const catalogs = new Map<string, PluralCatalog>();
   catalogs.set('ru', ruPlurals as PluralCatalog);
-  for (const code of Object.keys(REQUIRED)) {
+  for (const code of localeCodes()) {
     if (code === 'ru') continue;
     const file = path.join(LOCALES_DIR, `${code}.ts`);
-    if (!fs.existsSync(file)) continue;
     const module = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
     const exported = module[`${code}Plurals`];
-    assert.ok(exported !== undefined, `lib/locales/${code}.ts не экспортирует ${code}Plurals`);
+    if (exported === undefined) continue; // формы не объявлены — tp() использует ru
     catalogs.set(code, exported as PluralCatalog);
   }
   return catalogs;
@@ -56,8 +82,7 @@ describe('guard: категории плюрализации', () => {
   it('каждый язык заполняет обязательные категории и не заводит лишних', async () => {
     const catalogs = await loadPluralCatalogs();
     for (const [code, catalog] of catalogs) {
-      const required = REQUIRED[code];
-      assert.ok(required !== undefined, `язык ${code}: нет описания категорий в стороже`);
+      const required = requiredCategories(code);
       const keys = Object.keys(catalog);
       assert.ok(keys.length > 0, `язык ${code}: каталог форм пуст`);
       for (const key of keys) {
