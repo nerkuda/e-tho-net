@@ -37,16 +37,19 @@ export interface EffectiveLanguage {
 }
 
 /**
- * Сетевой срез контракта настроек языка (`GET /users/me/language-settings`).
+ * Сетевой срез контракта настроек языка (`GET /users/me/language-settings`,
+ * ADR daab6ac4 §3).
  *
- * `language` — хранимое значение сети: `null` — «использовать язык сервера»,
- * иначе конкретный тег. `effective` — результат резолвинга для пары
- * «текущий пользователь × эта сеть».
+ * `language`/`source` — ЭФФЕКТИВНЫЙ язык пары «текущий пользователь × эта
+ * сеть» и его источник: та же пара `{ language, source }`, что отдают
+ * остальные поверхности. `stored_language` — хранимое значение сети (`null` —
+ * «использовать язык сервера»), нужно редактору настроек; `can_edit` —
+ * может ли текущий пользователь менять язык этой сети (владелец/админ).
  */
-export interface NetworkLanguageSettings {
+export interface NetworkLanguageSettings extends EffectiveLanguage {
   network_id: string;
-  language: string | null;
-  effective: EffectiveLanguage;
+  /** Хранимое значение сети: `null` — «использовать язык сервера». */
+  stored_language: string | null;
   /** Может ли текущий пользователь менять язык этой сети (владелец/админ). */
   can_edit: boolean;
 }

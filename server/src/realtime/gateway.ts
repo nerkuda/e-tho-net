@@ -289,7 +289,9 @@ export class RealtimeGateway {
       if (user !== null) continue;
       const before = resolveEffectiveLanguage({ user, network: previousLanguage, server });
       const after = resolveEffectiveLanguage({ user, network: network.language, server });
-      if (before.language === after.language) continue;
+      // Сравнивается ПАРА `{ language, source }` (ADR §3): смена только
+      // источника (`null → en` при сервере `en`) тоже меняет контракт клиента.
+      if (before.language === after.language && before.source === after.source) continue;
       sendJson(
         conn,
         { type: 'settings.language', language: after.language, source: after.source } satisfies RealtimeLanguageFrame,
@@ -300,9 +302,11 @@ export class RealtimeGateway {
 
   /**
    * Смена языка сервера (ADR daab6ac4 §3, задача f99f0542): `settings.language`
-   * уходит сокетам, чей эффективный язык наследует серверную ступень, —
-   * у пользователя нет своего «языка приложения», у сети нет своего языка.
-   * Сокеты с явным языком пользователя или сети не затрагиваются.
+   * уходит сокетам, у которых фактически изменилась пара `{ language, source }`
+   * эффективного языка. Решает резолвинг, а не хранимое значение сети: сеть с
+   * невалидным тегом (ручная правка БД) фактически наследует сервер — событие
+   * ей тоже уходит. Сокеты с явным языком пользователя или валидным языком
+   * сети не затрагиваются (их пара не меняется).
    *
    * @param previousServerLanguage — значение `server.language` ДО изменения.
    */
@@ -310,12 +314,19 @@ export class RealtimeGateway {
     const server = getServerLanguage(this.systemDb);
     if (server === previousServerLanguage) return;
     for (const conn of this.connections) {
-      if (getUserAppLanguage(this.systemDb, conn.userId) !== null) continue;
+      const user = getUserAppLanguage(this.systemDb, conn.userId);
       const network = this.systemDb.getNetworkById(conn.networkId);
-      if (network === null || network.language !== null) continue;
+      const networkLanguage = network?.language ?? null;
+      const before = resolveEffectiveLanguage({
+        user,
+        network: networkLanguage,
+        server: previousServerLanguage,
+      });
+      const after = resolveEffectiveLanguage({ user, network: networkLanguage, server });
+      if (before.language === after.language && before.source === after.source) continue;
       sendJson(
         conn,
-        { type: 'settings.language', language: server, source: 'server' } satisfies RealtimeLanguageFrame,
+        { type: 'settings.language', language: after.language, source: after.source } satisfies RealtimeLanguageFrame,
         this.logger,
       );
     }

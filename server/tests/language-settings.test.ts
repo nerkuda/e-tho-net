@@ -35,8 +35,11 @@ interface LanguageSettingsBody {
   language: string | null;
   networks: Array<{
     network_id: string;
-    language: string | null;
-    effective: { language: string; source: 'user' | 'network' | 'server' };
+    /** Эффективный язык пары «пользователь × сеть» (ADR §3), не хранимый. */
+    language: string;
+    source: 'user' | 'network' | 'server';
+    /** Хранимое значение сети (`null` — наследовать язык сервера). */
+    stored_language: string | null;
     can_edit: boolean;
   }>;
 }
@@ -141,6 +144,12 @@ function languageOf(body: LanguageSettingsBody, networkId: string) {
   return network;
 }
 
+/** Эффективная пара `{ language, source }` элемента сети (ADR §3). */
+function effectiveOf(body: LanguageSettingsBody, networkId: string) {
+  const network = languageOf(body, networkId);
+  return { language: network.language, source: network.source };
+}
+
 describe(
   'language settings (ADR daab6ac4, f99f0542)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
@@ -229,10 +238,12 @@ describe(
         assert.equal(settings.statusCode, 200);
         let body = settings.json().data as LanguageSettingsBody;
         assert.equal(body.language, null);
-        assert.deepEqual(languageOf(body, ctx.networkId).effective, {
+        assert.deepEqual(effectiveOf(body, ctx.networkId), {
           language: 'en',
           source: 'server',
         });
+        // `language` элемента — ЭФФЕКТИВНЫЙ язык; хранимое значение — отдельно.
+        assert.equal(languageOf(body, ctx.networkId).stored_language, null);
 
         // Владелец ставит конкретный язык сети; тег канонизируется.
         const patched = await ctx.app.inject({
@@ -257,10 +268,11 @@ describe(
           headers: h,
         });
         body = settings.json().data as LanguageSettingsBody;
-        assert.deepEqual(languageOf(body, ctx.networkId).effective, {
+        assert.deepEqual(effectiveOf(body, ctx.networkId), {
           language: 'zh-Hans',
           source: 'network',
         });
+        assert.equal(languageOf(body, ctx.networkId).stored_language, 'zh-Hans');
 
         // Обычный участник менять язык сети не может.
         const member = createPlainUser(ctx);
@@ -308,10 +320,11 @@ describe(
           headers: h,
         });
         body = settings.json().data as LanguageSettingsBody;
-        assert.deepEqual(languageOf(body, ctx.networkId).effective, {
+        assert.deepEqual(effectiveOf(body, ctx.networkId), {
           language: 'ru',
           source: 'server',
         });
+        assert.equal(languageOf(body, ctx.networkId).stored_language, null);
 
         // Некорректный тег сети — 422.
         const invalid = await ctx.app.inject({
@@ -363,10 +376,13 @@ describe(
         });
         let body = settings.json().data as LanguageSettingsBody;
         assert.equal(body.language, 'en');
-        assert.deepEqual(languageOf(body, ctx.networkId).effective, {
+        assert.deepEqual(effectiveOf(body, ctx.networkId), {
           language: 'en',
           source: 'user',
         });
+        // Эффективный язык пользователя не подменяет хранимое значение сети:
+        // редактор настроек видит оба поля раздельно (ADR §3).
+        assert.equal(languageOf(body, ctx.networkId).stored_language, 'zh-Hans');
 
         // `null` — «использовать язык сетей»: возвращаемся к языку сети.
         const cleared = await ctx.app.inject({
@@ -383,7 +399,7 @@ describe(
           headers: h,
         });
         body = settings.json().data as LanguageSettingsBody;
-        assert.deepEqual(languageOf(body, ctx.networkId).effective, {
+        assert.deepEqual(effectiveOf(body, ctx.networkId), {
           language: 'zh-Hans',
           source: 'network',
         });
@@ -526,6 +542,100 @@ describe(
         });
 
         await closeSocket(memberSocket.socket);
+        await closeSocket(adminSocket.socket);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('WebSocket: смена только источника пары тоже рассылает settings.language', async () => {
+      const ctx: RestTestContext = await buildRestContext();
+      try {
+        await ctx.app.listen({ port: 0, host: '127.0.0.1' });
+        const address = ctx.app.server.address();
+        if (address === null || typeof address === 'string') {
+          throw new Error('expected a TCP address');
+        }
+        const port = address.port;
+        const h = authHeaders(ctx);
+
+        // Сеть наследует сервер: пара `en/server`.
+        const adminSocket = connect(port, ctx.networkId, ctx.adminKey);
+        await waitForOpen(adminSocket.socket);
+        const ready = await adminSocket.next((f) => f.type === 'ready', 'ready');
+        assert.deepEqual(ready, { type: 'ready', language: 'en', source: 'server' });
+
+        // Сеть фиксирует ТОТ ЖЕ тег, что у сервера: язык не меняется, но
+        // источник становится `network` — событие обязано уйти (ADR §3).
+        const patched = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}`,
+          headers: h,
+          payload: { language: 'en' },
+        });
+        assert.equal(patched.statusCode, 200);
+        const sourceChanged = await adminSocket.next(
+          (f) => f.type === 'settings.language',
+          'settings.language(source only)',
+        );
+        assert.deepEqual(sourceChanged, {
+          type: 'settings.language',
+          language: 'en',
+          source: 'network',
+        });
+
+        await closeSocket(adminSocket.socket);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('WebSocket: невалидный тег сети фактически наследует сервер и получает событие', async () => {
+      const ctx: RestTestContext = await buildRestContext();
+      try {
+        await ctx.app.listen({ port: 0, host: '127.0.0.1' });
+        const address = ctx.app.server.address();
+        if (address === null || typeof address === 'string') {
+          throw new Error('expected a TCP address');
+        }
+        const port = address.port;
+        const h = authHeaders(ctx);
+
+        const adminSocket = connect(port, ctx.networkId, ctx.adminKey);
+        await waitForOpen(adminSocket.socket);
+        await adminSocket.next((f) => f.type === 'ready', 'ready');
+
+        // Ручная правка БД: невалидный тег сети. Резолвинг трактует его как
+        // наследование сервера, поэтому смена языка сервера её затрагивает.
+        const network = ctx.sys.getNetworkById(ctx.networkId);
+        assert.ok(network !== null, 'сеть существует');
+        ctx.sys.updateNetwork(ctx.networkId, {
+          displayName: network.display_name,
+          description: network.description,
+          when_to_use: network.when_to_use,
+          conventions: network.conventions,
+          examples: network.examples,
+          type_roles: network.type_roles,
+          language: 'not a tag',
+        });
+
+        const changed = await ctx.app.inject({
+          method: 'PUT',
+          url: '/api/v1/admin/settings/language',
+          headers: h,
+          payload: { language: 'ru' },
+        });
+        assert.equal(changed.statusCode, 200);
+        const frame = await adminSocket.next(
+          (f) => f.type === 'settings.language',
+          'settings.language(invalid network tag)',
+        );
+        assert.deepEqual(frame, {
+          type: 'settings.language',
+          language: 'ru',
+          source: 'server',
+        });
+
         await closeSocket(adminSocket.socket);
       } finally {
         await closeRestContext(ctx);

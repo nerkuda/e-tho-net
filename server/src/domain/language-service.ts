@@ -102,7 +102,9 @@ export function resolveLanguageForUserNetwork(
 /**
  * Контракт настроек языка клиента (`GET /users/me/language-settings`, ADR §3):
  * язык приложения пользователя и эффективный язык по каждой доступной ему
- * сети. `can_edit` — владелец сети или администратор сервера.
+ * сети. Элемент сети несёт пару `{ language, source }` — эффективный язык
+ * (ADR §3); хранимое значение сети и право правки — отдельными полями для
+ * редактора настроек. `can_edit` — владелец сети или администратор сервера.
  */
 export function readUserLanguageSettings(
   systemDb: Db,
@@ -113,12 +115,12 @@ export function readUserLanguageSettings(
   const server = getServerLanguage(systemDb);
   const networks = systemDb.listNetworksForUser(userId).map((network) => ({
     network_id: network.id,
-    language: network.language,
-    effective: resolveEffectiveLanguage({
+    ...resolveEffectiveLanguage({
       user: language,
       network: network.language,
       server,
     }),
+    stored_language: network.language,
     can_edit: isAdmin || network.role === 'owner',
   }));
   return { language, networks };
