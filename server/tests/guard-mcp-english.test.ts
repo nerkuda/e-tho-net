@@ -35,14 +35,47 @@ const CYRILLIC = /[\u0400-\u04FF]/;
  * Строковый литерал — строка ПРИМЕРА ДАННЫХ (JSON в фенсе how-to/гайда), а не
  * проза поверхности. Данные сетей не локализуются (ADR daab6ac4 §6): примеры
  * сохраняют русские имена типов, свойств и значений, чтобы оставаться
- * копируемыми в сеть с русскими именами (задача 7e5099ed п. 3). Поэтому
+ * копируемыми в сеть с русскими именами (задача 7e5099ed п. 1). Поэтому
  * кириллица допустима только в строке JSON-формы: она начинается с `{`, `[`
- * или `"ключа` и содержит разделитель `":`. Проза этим условием не проходит.
+ * или `"ключа`, содержит пару `"ключ":` и ЛЕКСИЧЕСКИ является JSON-структурой
+ * (или её фрагментом). Проза с кавычкой и двоеточием
+ * (`"Заметка": это русская проза`) не проходит: текст после `:` стоит вне
+ * строкового значения, а вне строк JSON допускает только пунктуацию, числа и
+ * `true`/`false`/`null`.
  */
 function isDataExampleLine(fragment: string): boolean {
-  const trimmed = fragment.trimStart();
+  const trimmed = fragment.trim();
   if (!/^[{["]/.test(trimmed)) return false;
-  return /"[^"\n]*"\s*:/.test(trimmed);
+  if (!/"[^"\n]*"\s*:/.test(trimmed)) return false;
+  return isJsonFragment(trimmed);
+}
+
+/**
+ * Лексическая проверка JSON-фрагмента: кириллица (и любой текст) — только
+ * внутри двойных кавычек; вне них допустимы лишь JSON-пунктуация, пробелы,
+ * числа и литералы `true`/`false`/`null`. Фрагмент может быть частью
+ * многострочного примера, поэтому баланс скобок не проверяется.
+ */
+function isJsonFragment(text: string): boolean {
+  const outside: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    outside.push(ch);
+  }
+  if (inString) return false; // незакрытая строка — не JSON-фрагмент
+  const structural = outside.join('').replace(/\b(?:true|false|null)\b/g, '');
+  return /^[\s{}[\]:,\-+0-9.eE]*$/.test(structural);
 }
 
 interface Violation {
@@ -160,5 +193,16 @@ describe('guard: поверхность MCP — английская (daab6ac4, 
       "const prose = '\"Русский текст\" без JSON-разделителя';\n",
     );
     assert.equal(violations.length, 1, 'проза с кириллицей обязана ловиться');
+  });
+
+  it('пример данных не открывает лазейку прозе с парой «ключ»:', () => {
+    // Регресс из задачи 7e5099ed п. 3: послабление «строка начинается с кавычки
+    // и содержит `":` разрешало произвольную прозу после двоеточия.
+    const violations = scanSource(
+      'server/src/mcp/synthetic.ts',
+      "const prose = '  \"Заметка\": это русская проза, а не пример данных.';\n",
+    );
+    assert.equal(violations.length, 1, 'текст после `:` вне JSON-строки — проза, а не данные');
+    assert.match(violations[0]!.text, /Заметка/);
   });
 });
