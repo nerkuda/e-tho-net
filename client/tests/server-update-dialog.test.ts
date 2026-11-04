@@ -128,6 +128,10 @@ function job(stage: UpdateJob['stage'], overrides: Partial<UpdateJob> = {}): Upd
     stage,
     started_at: '2026-10-29T12:00:00.000Z',
     error: null,
+    reason: null,
+    failed_stage: null,
+    exit_code: null,
+    log_path: null,
     backup_path: null,
     ...overrides,
   };
@@ -500,6 +504,9 @@ describe('запуск обновления и прогресс', () => {
 
   it('502: причина и журнал, кнопки «Повторить» нет, apply не повторяется', async () => {
     const failed = job('failed', {
+      reason: 'installer-hash',
+      failed_stage: 'preparing',
+      log_path: 'C:\\ProgramData\\ETN\\logs\\install-1.log',
       error:
         'SHA-256 mismatch detected; log: C:\\ProgramData\\ETN\\logs\\install-1.log',
     });
@@ -716,15 +723,54 @@ describe('восстановление прогресса при повторн�
   });
 
   it('после перезапуска задание failed с причиной восстанавливается из /progress', async () => {
+    // Реальный английский текст сервера (`interruptedJobMessage`) пользователю
+    // не показывается: причина локализуется по `reason`, этап — из
+    // `failed_stage` (ADR daab6ac4 §4).
     const failed = job('failed', {
-      error: 'Сервер перезапущен до завершения задания обновления (этап «installing»)',
+      reason: 'interrupted',
+      failed_stage: 'installing',
+      error:
+        'The server restarted before the update job completed (stage "installing"); ' +
+        'the job is not resumed automatically.',
     });
     const harness = mount({ getProgress: async () => ({ job: failed }) });
     try {
       await tick();
       const text = dialog().flatText();
       assert.ok(text.includes(t('serverUpdate.stage.failed')));
-      assert.ok(text.includes('Сервер перезапущен до завершения задания обновления'));
+      assert.ok(
+        text.includes('перезапустился до завершения задания обновления'),
+        'локализованная причина по reason',
+      );
+      assert.ok(text.includes('«installing»'), 'этап из failed_stage');
+      assert.ok(!text.includes('The server restarted'), 'английский job.error не показан');
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('штатный сбой установщика из /progress: причина по reason, журнал из log_path', async () => {
+    // `/progress` — штатный канал сбоя установщика (код выхода/предусловие/
+    // тайм-аут): кода ошибки в конверте нет, причина обязана быть в задании.
+    const failed = job('failed', {
+      reason: 'installer-exit',
+      failed_stage: 'backing-up',
+      exit_code: 10,
+      log_path: 'C:\\ProgramData\\ETN\\logs\\install-from-field.log',
+      error:
+        'The installer exited with code 10; the rollback was performed by the installer, ' +
+        'log: C:\\ProgramData\\ETN\\logs\\install-from-field.log',
+    });
+    const harness = mount({ getProgress: async () => ({ job: failed }) });
+    try {
+      await tick();
+      const text = dialog().flatText();
+      assert.ok(text.includes('установщик завершился с кодом 10'), 'код из exit_code');
+      assert.ok(!text.includes('The installer exited'), 'английский job.error не показан');
+      assert.ok(
+        text.includes('C:\\ProgramData\\ETN\\logs\\install-from-field.log'),
+        'путь из машиночитаемого log_path',
+      );
     } finally {
       harness.stop();
     }

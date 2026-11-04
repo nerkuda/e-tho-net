@@ -257,7 +257,9 @@ export interface ApiKeyWithUser {
  * `stage` хранится строкой: набор допустимых значений и их терминальность —
  * знание домена (`server/src/update/apply.ts`), а не схемы. `updated_at` и
  * `finished_at` — служебные поля хранения: сущность отдаёт клиенту только
- * `id`/`target_version`/`stage`/`started_at`/`error`/`backup_path`.
+ * `id`/`target_version`/`stage`/`started_at`/`error`/`reason`/`failed_stage`/
+ * `exit_code`/`log_path`/`backup_path`. Причина сбоя машиночитаема
+ * (миграция `018_update_jobs_failure_fields.sql`, задача 4f6c972a).
  */
 export interface UpdateJobRow {
   id: string;
@@ -267,6 +269,14 @@ export interface UpdateJobRow {
   updated_at: string;
   finished_at: string | null;
   error: string | null;
+  /** `UpdateJobFailureReason` или `null` (задание до миграции 018 / успех). */
+  reason: string | null;
+  /** Этап, на котором задание остановилось; `null` — неизвестен. */
+  failed_stage: string | null;
+  /** Код возврата установщика; `null` — кода нет. */
+  exit_code: number | null;
+  /** Путь к журналу установщика; `null` — журнал не найден. */
+  log_path: string | null;
   backup_path: string | null;
 }
 
@@ -278,7 +288,25 @@ export interface UpdateJobPatch {
   /** ISO-8601 момента завершения; `null` у активного задания. */
   finishedAt: string | null;
   error: string | null;
+  /** Машиночитаемая причина сбоя (см. {@link UpdateJobRow.reason}). */
+  reason: string | null;
+  failedStage: string | null;
+  exitCode: number | null;
+  logPath: string | null;
   backupPath: string | null;
+}
+
+/**
+ * Итог восстановления незавершённого задания при старте сервера: терминальный
+ * этап, английское пояснение и машиночитаемая причина (`update/apply.ts`).
+ */
+export interface UpdateJobRecoveryOutcome {
+  stage: 'done' | 'failed';
+  error: string | null;
+  /** Причина `failed` (`interrupted`); у `done` — `null`. */
+  reason: string | null;
+  /** Этап, на котором задание остановилось; у `done` — `null`. */
+  failedStage: string | null;
 }
 
 /** A still-fresh cached idempotent response (02-data-model.md §2.7). */
@@ -558,7 +586,9 @@ export class SystemDb {
     );
     this.stUpdateUpdateJob = db.prepare(
       `UPDATE update_jobs
-          SET stage = ?, updated_at = ?, finished_at = ?, error = ?, backup_path = ?
+          SET stage = ?, updated_at = ?, finished_at = ?, error = ?,
+              reason = ?, failed_stage = ?, exit_code = ?, log_path = ?,
+              backup_path = ?
         WHERE id = ?`,
     );
   }
@@ -1516,14 +1546,14 @@ export class SystemDb {
    * одной транзакцией (терминальные не трогаются). Итог решает домен
    * (`update/apply.ts`): хранилище не знает semver и версий, поэтому
    * `outcomeFor` получает строку целиком (включая `target_version`,
-   * `stage`, `backup_path`) и возвращает терминальный этап и пояснение.
-   * `nowIso` пишется и в `updated_at`, и в `finished_at`: завершённое задание
-   * не может остаться с пустым временем завершения.
-   * Возвращает число завершённых заданий.
+   * `stage`, `backup_path`) и возвращает терминальный этап, пояснение и
+   * машиночитаемую причину. `nowIso` пишется и в `updated_at`, и в
+   * `finished_at`: завершённое задание не может остаться с пустым временем
+   * завершения. Возвращает число завершённых заданий.
    */
   recoverInterruptedUpdateJobs(
     nowIso: string,
-    outcomeFor: (row: UpdateJobRow) => { stage: 'done' | 'failed'; error: string | null },
+    outcomeFor: (row: UpdateJobRow) => UpdateJobRecoveryOutcome,
   ): number {
     const rows = this.stListActiveUpdateJobs.all() as UpdateJobRow[];
     if (rows.length === 0) {
@@ -1537,6 +1567,10 @@ export class SystemDb {
           nowIso,
           nowIso,
           outcome.error,
+          outcome.reason,
+          outcome.failedStage,
+          null,
+          null,
           row.backup_path,
           row.id,
         );
@@ -1552,6 +1586,10 @@ export class SystemDb {
       patch.updatedAt,
       patch.finishedAt,
       patch.error,
+      patch.reason,
+      patch.failedStage,
+      patch.exitCode,
+      patch.logPath,
       patch.backupPath,
       id,
     );

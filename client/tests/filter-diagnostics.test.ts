@@ -188,10 +188,9 @@ describe('диагностика строк отбора: данные ядра 
       unresolved: [
         { path: 'filter.children[1].value', token: '$now', reason: 'bad_token', message: 'токен не разобран' },
       ],
-      messages: ['рецепт заголовков не исполнен'],
     });
-    assert.equal(issues.length, 4);
-    const [deleted, detached, token, build] = issues;
+    assert.equal(issues.length, 3);
+    const [deleted, detached, token] = issues;
     assert.deepEqual(
       {
         severity: deleted!.severity,
@@ -215,8 +214,6 @@ describe('диагностика строк отбора: данные ядра 
     assert.equal(token!.severity, 'error', 'неразрешённый токен — применение невозможно');
     assert.equal(token!.code, 'token_unresolved');
     assert.equal(token!.path, 'filter.children[1].value');
-    assert.equal(build!.code, 'build_warning');
-    assert.equal(build!.path, '', 'у строкового предупреждения адреса строки нет');
   });
 
   it('красное из ошибки `EtnError` (details.diagnostics) и дедупликация записей', () => {
@@ -246,7 +243,17 @@ describe('диагностика строк отбора: данные ядра 
     assert.equal(byPath.get('filter.children[0]')!.severity, 'error', 'при конфликте побеждает красное');
     assert.equal(byPath.size, 1);
     const unlocalized = mod.unlocalizedFilterIssues(
-      mod.filterIssuesFromPayload({ messages: ['сборка не удалась'] }),
+      mod.filterIssuesFromPayload({
+        warnings: [
+          {
+            severity: 'warning',
+            code: 'property_detached',
+            path: '',
+            label: null,
+            message: 'жёлтое без адреса',
+          },
+        ],
+      }),
     );
     assert.equal(unlocalized.length, 1);
     assert.equal(mixed.length, 2);

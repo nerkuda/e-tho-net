@@ -196,7 +196,18 @@ export interface ThoughtBatchResult {
 export interface ThoughtBatchFailure {
   id: string;
   code: EtnErrorCode;
+  /**
+   * Английский диагностический текст отказа (ADR daab6ac4 §4). Клиент его не
+   * показывает и не разбирает: пользовательский текст строится по `code` и
+   * машиночитаемым {@link details}.
+   */
   message: string;
+  /**
+   * Машиночитаемые детали отказа — `EtnError.details` доменной операции
+   * (`details.reason`, `details.field`, …). Позволяют клиенту уточнить текст
+   * по коду, не разбирая `message`.
+   */
+  details?: unknown;
 }
 
 /**

@@ -29,7 +29,12 @@
  * модель не подставляет путь; если поле появится, оно показывается как есть.
  */
 
-import { EtnError, type UpdateJob, type UpdateJobStage } from '@etn/shared';
+import {
+  EtnError,
+  isUpdateJobFailureReason,
+  type UpdateJob,
+  type UpdateJobStage,
+} from '@etn/shared';
 
 import type {
   ServerDeployment,
@@ -119,6 +124,55 @@ export function extractJournalPath(error: string | null): string | null {
   return path === '' ? null : path;
 }
 
+/**
+ * Текст причины сбоя задания по машиночитаемому `reason` (задача 4f6c972a,
+ * ADR daab6ac4 §4). Возвращает `null`, когда причины нет: вызывающий берёт
+ * `job.error` фолбэком (задание сохранено до появления поля). Неизвестное
+ * значение (сервер новее клиента) — общий локализованный текст, а не сырой
+ * английский `error`.
+ *
+ * `installer-*`-причины делят ключи с `502 UPDATE_INSTALLER_FAILED`: один и
+ * тот же отказ установщика показывается одинаково и из конверта ошибки, и из
+ * задания в `/progress`. `installer-exit` и `interrupted` подставляют
+ * параметры из задания (`exit_code`, `failed_stage`), а не из текста.
+ */
+export function updateFailureText(
+  job: Pick<UpdateJob, 'reason' | 'exit_code' | 'failed_stage'>,
+): string | null {
+  const reason = job.reason;
+  if (reason === null) return null;
+  switch (reason) {
+    case 'installer-target':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-target');
+    case 'installer-download':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-download');
+    case 'installer-hash':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-hash');
+    case 'installer-launch':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-launch');
+    case 'installer-exit':
+      return job.exit_code === null
+        ? t('serverUpdate.failure.installerExitNoCode')
+        : t('serverUpdate.failure.installerExit', String(job.exit_code));
+    case 'installer-precondition':
+      return t('serverUpdate.failure.installerPrecondition');
+    case 'installer-timeout':
+      return t('serverUpdate.failure.installerTimeout');
+    case 'not-a-service':
+      return t('serverUpdate.failure.notAService');
+    case 'interrupted':
+      return job.failed_stage === null
+        ? t('serverUpdate.failure.interruptedNoStage')
+        : t('serverUpdate.failure.interrupted', job.failed_stage);
+    case 'internal':
+      return t('serverUpdate.failure.internal');
+    default:
+      // Новое значение причины от более свежего сервера: общий текст, без
+      // разбора английского `error`.
+      return t('serverUpdate.failure.unknown');
+  }
+}
+
 /** Снимок состояния диалога. */
 export interface ServerUpdateState {
   /** Кеш проверки; `null` — ещё не загружен (или не удалось прочитать). */
@@ -167,13 +221,15 @@ export interface ServerUpdateViewModel {
   /** Итог: задание провалилось. */
   failed: boolean;
   /**
-   * Сырой серверный текст сбоя (итог `failed`). Фолбэк: при отказе `apply`
-   * диалог предпочитает локализованный текст по коду (ADR daab6ac4 §4);
-   * серверный текст остаётся только для восстановленного из `/progress`
-   * задания, у которого кода уже нет.
+   * Причина сбоя (`failed`) — локализованный текст по машиночитаемому
+   * `reason` (ADR daab6ac4 §4). `job.error` (английский) — только фолбэк,
+   * когда `reason` нет: задание сохранено до появления поля.
    */
   failureText: string | null;
-  /** Путь к журналу установщика из причины сбоя; `null` — сервер не сообщил. */
+  /**
+   * Путь к журналу установщика: машиночитаемое `job.log_path` в первую
+   * очередь, разбор `job.error` — только фолбэк для старых заданий.
+   */
   journalPath: string | null;
   /** Путь к архиву БД; `null` — сервер не сообщил (сейчас всегда). */
   backupPath: string | null;
@@ -249,8 +305,10 @@ export function serverUpdateViewModel(state: ServerUpdateState): ServerUpdateVie
     running: runningPhase || (job !== null && !isTerminalJobStage(job.stage)),
     done,
     failed,
-    failureText: failed ? (job?.error ?? null) : null,
-    journalPath: failed ? extractJournalPath(job?.error ?? null) : null,
+    failureText: failed ? (job === null ? null : (updateFailureText(job) ?? job.error)) : null,
+    journalPath: failed
+      ? (job?.log_path ?? extractJournalPath(job?.error ?? null))
+      : null,
     backupPath: job?.backup_path ?? null,
     disconnected: state.disconnected,
     checking: state.checking,
@@ -299,6 +357,13 @@ function jobFromDetails(details: unknown): UpdateJob | null {
     stage: candidate.stage as UpdateJobStage,
     started_at: candidate.started_at,
     error: typeof candidate.error === 'string' ? candidate.error : null,
+    reason: isUpdateJobFailureReason(candidate.reason) ? candidate.reason : null,
+    failed_stage:
+      typeof candidate.failed_stage === 'string'
+        ? (candidate.failed_stage as UpdateJobStage)
+        : null,
+    exit_code: typeof candidate.exit_code === 'number' ? candidate.exit_code : null,
+    log_path: typeof candidate.log_path === 'string' ? candidate.log_path : null,
     backup_path: typeof candidate.backup_path === 'string' ? candidate.backup_path : null,
   };
 }

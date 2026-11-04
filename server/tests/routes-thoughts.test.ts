@@ -629,9 +629,22 @@ describe(
           },
         });
         assert.equal(dupBatch.statusCode, 200);
-        const db = dupBatch.json().data as { affected: number; failures: Array<{ code: string }> };
+        const db = dupBatch.json().data as {
+          affected: number;
+          failures: Array<{
+            code: string;
+            details?: { source_id?: string; target_id?: string; type_id?: string | null };
+          }>;
+        };
         assert.equal(db.affected, 0);
         assert.equal(db.failures[0]!.code, 'DUPLICATE');
+        // Машиночитаемые детали отказа едут клиенту: текст по коду строится
+        // без разбора английского `message` (ADR daab6ac4 §4, задача 4f6c972a).
+        assert.deepEqual(db.failures[0]!.details, {
+          source_id: ctx.homeId,
+          target_id: a,
+          type_id: null,
+        });
 
         // unlink_from_focus removes the links.
         const unlinkBatch = await ctx.app.inject({

@@ -31,7 +31,7 @@ import {
   updateStageLabel,
   type ServerUpdateState,
 } from '../src/renderer/lib/server-update.js';
-import { t } from '../src/renderer/lib/i18n.js';
+import { setLang, t } from '../src/renderer/lib/i18n.js';
 
 /** Снимок кеша: сервер-служба, есть версия новее. */
 function status(overrides: Partial<SystemUpdateStatus> = {}): SystemUpdateStatus {
@@ -57,6 +57,10 @@ function job(stage: UpdateJob['stage'], overrides: Partial<UpdateJob> = {}): Upd
     stage,
     started_at: '2026-10-29T12:00:00.000Z',
     error: null,
+    reason: null,
+    failed_stage: null,
+    exit_code: null,
+    log_path: null,
     backup_path: null,
     ...overrides,
   };
@@ -170,7 +174,7 @@ describe('server-update: снимок кеша и доступность обн�
 });
 
 describe('server-update: итог задания и пути', () => {
-  it('failed: причина из задания, путь журнала извлекается, backup_path null — не подставляется', () => {
+  it('failed без reason: сырой job.error — только фолбэк (задание до миграции)', () => {
     const failed = job('failed', {
       error:
         'The installer exited with code 10; the rollback was performed by the installer, ' +
@@ -178,9 +182,116 @@ describe('server-update: итог задания и пути', () => {
     });
     const view = serverUpdateViewModel(state({ job: failed, phase: 'failed' }));
     assert.equal(view.failed, true);
-    assert.equal(view.failureText, failed.error);
+    assert.equal(view.failureText, failed.error, 'без reason показывается фолбэк');
     assert.equal(view.journalPath, 'C:\\ProgramData\\ETN\\logs\\install-20261029.log');
     assert.equal(view.backupPath, null, 'выдуманный путь архива не появляется');
+  });
+
+  it('failed с reason: причина локализована, английский error не показывается', () => {
+    const serverText =
+      'The installer exited with code 10; the rollback was performed by the installer, ' +
+      'log: C:\\logs\\install-1.log';
+    const cases: Array<[UpdateJob['reason'], string]> = [
+      ['installer-target', 'сервер не принял целевую версию'],
+      ['installer-download', 'не удалось скачать установщик обновления'],
+      ['installer-hash', 'скачанный установщик не прошёл проверку контрольной суммы'],
+      ['installer-launch', 'установщик обновления не запустился'],
+      ['installer-precondition', 'ручной режим'],
+      ['installer-timeout', 'не завершился за отведённое время'],
+      ['not-a-service', 'не как служба Windows'],
+      ['internal', 'внутренней ошибкой'],
+    ];
+    for (const [reason, fragment] of cases) {
+      const view = serverUpdateViewModel(
+        state({ job: job('failed', { error: serverText, reason }), phase: 'failed' }),
+      );
+      assert.ok(
+        view.failureText?.includes(fragment),
+        `${String(reason)}: ожидалась формулировка «${fragment}», получено «${view.failureText}»`,
+      );
+      assert.ok(
+        !view.failureText?.includes('The installer exited'),
+        `${String(reason)}: английский job.error пользователю не показан`,
+      );
+    }
+  });
+
+  it('installer-exit: код возврата из exit_code, log_path приоритетнее разбора текста', () => {
+    const view = serverUpdateViewModel(
+      state({
+        job: job('failed', {
+          reason: 'installer-exit',
+          exit_code: 10,
+          log_path: 'C:\\logs\\from-field.log',
+          error: 'The installer exited with code 99; log: C:\\logs\\from-error.log',
+        }),
+        phase: 'failed',
+      }),
+    );
+    assert.match(view.failureText ?? '', /кодом 10/, 'код — из машиночитаемого exit_code');
+    assert.ok(!view.failureText?.includes('99'), 'код из текста не разбирается');
+    assert.equal(view.journalPath, 'C:\\logs\\from-field.log', 'log_path приоритетнее разбора');
+  });
+
+  it('installer-exit без кода — аварийное завершение без выдуманного кода', () => {
+    const view = serverUpdateViewModel(
+      state({ job: job('failed', { reason: 'installer-exit', exit_code: null }), phase: 'failed' }),
+    );
+    assert.equal(view.failureText, t('serverUpdate.failure.installerExitNoCode'));
+  });
+
+  it('interrupted: этап из failed_stage, английский текст не показан', () => {
+    const view = serverUpdateViewModel(
+      state({
+        job: job('failed', {
+          reason: 'interrupted',
+          failed_stage: 'installing',
+          error:
+            'The server restarted before the update job completed (stage "installing"); ' +
+            'the job is not resumed automatically.',
+        }),
+        phase: 'failed',
+      }),
+    );
+    assert.ok(view.failureText?.includes('«installing»'), view.failureText ?? '');
+    assert.ok(!view.failureText?.includes('The server restarted'), 'английский текст не показан');
+  });
+
+  it('interrupted без этапа — текст без подстановки', () => {
+    const view = serverUpdateViewModel(
+      state({ job: job('failed', { reason: 'interrupted', failed_stage: null }), phase: 'failed' }),
+    );
+    assert.equal(view.failureText, t('serverUpdate.failure.interruptedNoStage'));
+  });
+
+  it('неизвестная причина от более свежего сервера — общий текст, не английский error', () => {
+    const view = serverUpdateViewModel(
+      state({
+        job: job('failed', {
+          error: 'A new failure the client does not know',
+          reason: 'future-reason' as unknown as UpdateJob['reason'],
+        }),
+        phase: 'failed',
+      }),
+    );
+    assert.equal(view.failureText, t('serverUpdate.failure.unknown'));
+    assert.ok(!view.failureText?.includes('A new failure'));
+  });
+
+  it('английская форма причины — из en-каталога', () => {
+    assert.equal(setLang('en'), true);
+    try {
+      const view = serverUpdateViewModel(
+        state({ job: job('failed', { reason: 'installer-hash' }), phase: 'failed' }),
+      );
+      assert.equal(
+        view.failureText,
+        'the downloaded installer failed the checksum verification',
+        'английская форма закреплена',
+      );
+    } finally {
+      setLang('ru');
+    }
   });
 
   it('backup_path, если сервер его прислал, показывается как есть', () => {

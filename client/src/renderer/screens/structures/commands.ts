@@ -310,10 +310,14 @@ async function cmdBatch(
   try {
     const result = await etn.thoughts.batch(networkId, { ids, op, args });
     if (result.failures.length > 0) {
-      // Причина — по машиночитаемому коду `ThoughtBatchFailure` (ADR
-      // daab6ac4 §4): серверный `message` английский и в UI не показывается.
+      // Причина — по машиночитаемому коду и `details` отказа (ADR
+      // daab6ac4 §4): серверный `message` английский и в UI не показывается,
+      // а `details.reason`/`details.issue` уточняют формулировку.
       const firstFailure = result.failures[0];
-      const reason = firstFailure === undefined ? '' : errText({ code: firstFailure.code });
+      const reason =
+        firstFailure === undefined
+          ? ''
+          : errText({ code: firstFailure.code, details: firstFailure.details });
       notice(
         t('structures.notSucceededApplyThoughts', [
           result.failures.length,

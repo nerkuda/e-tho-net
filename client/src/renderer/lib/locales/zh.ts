@@ -416,6 +416,20 @@ export const zh = {
   'serverUpdate.progress.reconnect': '重启后客户端将自动重新连接，并在新版本上继续工作。',
   'serverUpdate.failure.reason': '原因：%1',
   'serverUpdate.failure.journal': '安装程序日志：%1',
+  'serverUpdate.failure.installerExit': '安装程序以代码 %1 退出；回滚由安装程序完成',
+  'serverUpdate.failure.installerExitNoCode': '安装程序异常退出；回滚由安装程序完成',
+  'serverUpdate.failure.installerPrecondition':
+    '安装程序需要手动模式——请手动执行更新并查看安装程序日志',
+  'serverUpdate.failure.installerTimeout':
+    '安装程序未在规定时间内完成，已保持运行——请等待其结束并查看日志',
+  'serverUpdate.failure.notAService':
+    '服务器不是作为 Windows 服务运行的——无法自动更新：请手动停止服务器并运行安装程序，或将 ETN 安装为 Windows 服务',
+  'serverUpdate.failure.interrupted':
+    '服务器在更新任务完成前重启（阶段「%1」）；任务不会自动继续',
+  'serverUpdate.failure.interruptedNoStage':
+    '服务器在更新任务完成前重启；任务不会自动继续',
+  'serverUpdate.failure.internal': '更新任务因内部错误失败',
+  'serverUpdate.failure.unknown': '更新因未知原因失败',
   'serverUpdate.backupPath': '数据库归档：%1',
   'serverUpdate.copyPath': '复制路径',
   'serverUpdate.pathCopied': '路径已复制',

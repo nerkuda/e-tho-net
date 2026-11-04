@@ -9,7 +9,7 @@
  * `failures` (транспортные ошибки — исключением, как раньше).
  */
 
-import type { ThoughtBatchResult } from '@etn/shared';
+import { EtnError, type ThoughtBatchResult } from '@etn/shared';
 
 import { etn } from './etn.js';
 import { signalPublicationCompositionChanged } from './live/index.js';
@@ -82,10 +82,21 @@ export async function setOnlyParents(
   return result;
 }
 
-/** Бросает первую ошибку из `failures` — для потоков с try/catch. */
+/**
+ * Бросает первую ошибку из `failures` — для потоков с try/catch.
+ *
+ * Бросается `EtnError` с кодом и `details` отказа, а НЕ plain-`Error` с
+ * серверным `message`: английский текст — диагностика для разработчиков
+ * (ADR daab6ac4 §4), пользовательский текст строит `errText` по коду
+ * (`canvas.ts`, `drag-cloud.ts`, `publications/workspace.ts` показывают его
+ * через notice/диалог). Обёртка plain-`Error` вернула бы сырой английский в UI.
+ */
 export function throwOnFailures(result: ThoughtBatchResult): void {
   const first = result.failures[0];
   if (first !== undefined) {
-    throw new Error(first.message);
+    // Поля DTO разбираются здесь один раз: `message` остаётся диагностикой
+    // внутри EtnError и в интерфейс не попадает.
+    const { code, message, details } = first;
+    throw new EtnError(code, message, details);
   }
 }

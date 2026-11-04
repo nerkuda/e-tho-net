@@ -50,11 +50,11 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { compareSemver, parseSemver } from '@etn/shared';
-import type { UpdateJob, UpdateJobStage } from '@etn/shared';
+import { compareSemver, isUpdateJobFailureReason, parseSemver } from '@etn/shared';
+import type { UpdateJob, UpdateJobFailureReason, UpdateJobStage } from '@etn/shared';
 
 import type { Logger } from '../logger.js';
-import type { SystemDb, UpdateJobRow } from '../db/system-db.js';
+import type { SystemDb, UpdateJobRecoveryOutcome, UpdateJobRow } from '../db/system-db.js';
 import type { MaintenanceService } from '../maintenance.js';
 import { SERVER_VERSION } from '../version.js';
 import type { UpdateCache } from './checker.js';
@@ -296,7 +296,7 @@ function classifyInterruptedJob(
   row: UpdateJobRow,
   serverVersion: string,
   nowIso: string,
-): { stage: 'done' | 'failed'; error: string | null } {
+): UpdateJobRecoveryOutcome {
   const order = compareSemver(serverVersion, row.target_version);
   if (order !== null && order >= 0) {
     return {
@@ -304,9 +304,19 @@ function classifyInterruptedJob(
       error:
         `${RECOVERED_DONE_MESSAGE_PREFIX}: the server is running version ${serverVersion}, ` +
         `the job target version is ${row.target_version}; the outcome was recovered at startup at ${nowIso}.`,
+      reason: null,
+      failedStage: null,
     };
   }
-  return { stage: 'failed', error: interruptedJobMessage(row.stage) };
+  return {
+    stage: 'failed',
+    error: interruptedJobMessage(row.stage),
+    // Машиночитаемая причина (ADR daab6ac4 §4): клиент строит текст по ней,
+    // английский `error` пользователю не показывается. `failed_stage` несёт
+    // этап, на котором процесс умер до перезапуска.
+    reason: 'interrupted',
+    failedStage: isUpdateJobStage(row.stage) ? row.stage : null,
+  };
 }
 
 /**
@@ -339,6 +349,13 @@ function toUpdateJob(row: UpdateJobRow): UpdateJob {
     stage: isUpdateJobStage(row.stage) ? row.stage : 'failed',
     started_at: row.started_at,
     error: row.error,
+    reason: isUpdateJobFailureReason(row.reason) ? row.reason : null,
+    failed_stage:
+      row.failed_stage !== null && isUpdateJobStage(row.failed_stage)
+        ? row.failed_stage
+        : null,
+    exit_code: typeof row.exit_code === 'number' ? row.exit_code : null,
+    log_path: row.log_path,
     backup_path: row.backup_path,
   };
 }
@@ -358,6 +375,22 @@ function describePreconditionExit(result: InstallerRunResult): string {
   const journal =
     result.logPath === null ? "installer log not found" : `log: ${result.logPath}`;
   return `The installer precondition failed — manual mode is required, ${journal}`;
+}
+
+/**
+ * Итог сбоя задания: английский диагностический текст плюс машиночитаемая
+ * причина (задача 4f6c972a, ADR daab6ac4 §4). Клиент строит пользовательский
+ * текст по `reason` и параметрам, `error` не разбирает.
+ *
+ * `stage` — этап, на котором задание остановилось (уходит в `failed_stage`);
+ * `exitCode` и `logPath` заполняются, когда их знает установщик.
+ */
+interface UpdateJobFailure {
+  error: string;
+  reason: UpdateJobFailureReason;
+  stage: UpdateJobStage;
+  exitCode?: number | null;
+  logPath?: string | null;
 }
 
 /** Создать сервис задания обновления. Один экземпляр на процесс сервера. */
@@ -425,7 +458,11 @@ export function createUpdateApplyService(
   });
 
   /** Записать этап задания (или итог) в системную БД. */
-  function writeJob(jobId: string, stage: UpdateJobStage, error: string | null): UpdateJob {
+  function writeJob(
+    jobId: string,
+    stage: UpdateJobStage,
+    failure: UpdateJobFailure | null,
+  ): UpdateJob {
     const current = systemDb.getUpdateJob(jobId);
     if (current === null) {
       throw new Error(`update job ${jobId} disappeared from the system database`);
@@ -435,7 +472,13 @@ export function createUpdateApplyService(
       stage,
       updatedAt: timestamp,
       finishedAt: isTerminalUpdateJobStage(stage) ? timestamp : null,
-      error,
+      error: failure?.error ?? null,
+      // Причина и её параметры живут только у сбоя: успех и промежуточный этап
+      // не несут машиночитаемого отказа.
+      reason: failure?.reason ?? null,
+      failedStage: failure?.stage ?? null,
+      exitCode: failure?.exitCode ?? null,
+      logPath: failure?.logPath ?? null,
       backupPath: current.backup_path,
     });
     return toUpdateJob(systemDb.getUpdateJob(jobId) as UpdateJobRow);
@@ -521,6 +564,21 @@ export function createUpdateApplyService(
     };
   }
 
+  /** Сбой до запуска установщика: записать итог задания и причину `502`. */
+  function failBeforeLaunch(
+    jobId: string,
+    reason: UpdateInstallerFailureReason,
+    message: string,
+  ): void {
+    preLaunchFailure = reason;
+    preLaunchStage = currentStage(jobId);
+    writeJob(jobId, 'failed', {
+      error: message,
+      reason,
+      stage: preLaunchStage,
+    });
+  }
+
   /** Исполнить задание в фоне: runner → итог в БД. Никогда не отклоняется. */
   async function runJob(jobId: string, target: InstallerTarget): Promise<void> {
     try {
@@ -530,42 +588,56 @@ export function createUpdateApplyService(
         writeJob(jobId, 'done', null);
         logger?.info({ jobId, targetVersion: target.version }, 'update job: done');
       } else if (outcome === 'precondition') {
-        writeJob(jobId, 'failed', describePreconditionExit(result));
+        writeJob(jobId, 'failed', {
+          error: describePreconditionExit(result),
+          reason: 'installer-precondition',
+          stage: currentStage(jobId),
+          exitCode: result.code,
+          logPath: result.logPath,
+        });
         logger?.warn({ jobId, code: result.code }, "update job: installer precondition");
       } else {
-        writeJob(jobId, 'failed', describeFailureExit(result));
+        writeJob(jobId, 'failed', {
+          error: describeFailureExit(result),
+          reason: 'installer-exit',
+          stage: currentStage(jobId),
+          exitCode: result.code,
+          logPath: result.logPath,
+        });
         logger?.warn({ jobId, code: result.code }, "update job: the installer failed");
       }
     } catch (err) {
       if (err instanceof InstallerTimeoutError) {
-        // Процесс не убит: он может быть посреди замены файлов. Журнал — в тексте.
-        writeJob(jobId, 'failed', `The update did not complete: ${err.message}`);
+        // Процесс не убит: он может быть посреди замены файлов. Журнал — в тексте
+        // и в машиночитаемом `log_path`.
+        writeJob(jobId, 'failed', {
+          error: `The update did not complete: ${err.message}`,
+          reason: 'installer-timeout',
+          stage: currentStage(jobId),
+          logPath: err.logPath,
+        });
         logger?.error({ jobId, logPath: err.logPath }, "update job: installer timeout");
       } else if (err instanceof InstallerTargetError) {
-        preLaunchFailure = 'installer-target';
-        preLaunchStage = currentStage(jobId);
-        writeJob(jobId, 'failed', err.message);
+        failBeforeLaunch(jobId, 'installer-target', err.message);
       } else if (err instanceof InstallerDownloadError) {
-        preLaunchFailure = 'installer-download';
-        preLaunchStage = currentStage(jobId);
-        writeJob(jobId, 'failed', err.message);
+        failBeforeLaunch(jobId, 'installer-download', err.message);
       } else if (err instanceof InstallerHashError) {
-        preLaunchFailure = 'installer-hash';
-        preLaunchStage = currentStage(jobId);
-        writeJob(jobId, 'failed', err.message);
+        failBeforeLaunch(jobId, 'installer-hash', err.message);
       } else if (err instanceof InstallerLaunchError) {
-        preLaunchFailure = 'installer-launch';
-        preLaunchStage = currentStage(jobId);
-        writeJob(jobId, 'failed', err.message);
+        failBeforeLaunch(jobId, 'installer-launch', err.message);
       } else if (err instanceof InstallerRunInProgressError) {
-        preLaunchFailure = 'installer-launch';
-        preLaunchStage = currentStage(jobId);
-        writeJob(jobId, 'failed', err.message);
+        failBeforeLaunch(jobId, 'installer-launch', err.message);
       } else {
+        // Непредвиденная ошибка задания: для `502` остаётся `installer-launch`
+        // (установщик не запущен), сама причина сбоя — `internal`.
         preLaunchFailure = 'installer-launch';
         preLaunchStage = currentStage(jobId);
         const message = err instanceof Error ? err.message : String(err);
-        writeJob(jobId, 'failed', `The update job did not complete: ${message}`);
+        writeJob(jobId, 'failed', {
+          error: `The update job did not complete: ${message}`,
+          reason: 'internal',
+          stage: preLaunchStage,
+        });
         logger?.error({ err, jobId }, "update job: unexpected error");
       }
     } finally {
@@ -577,8 +649,12 @@ export function createUpdateApplyService(
   }
 
   /** Итог задания без запуска установщика (сервер не службой). */
-  function failWithoutInstaller(jobId: string, message: string): UpdateJob {
-    const job = writeJob(jobId, 'failed', message);
+  function failWithoutInstaller(jobId: string): UpdateJob {
+    const job = writeJob(jobId, 'failed', {
+      error: NOT_A_SERVICE_MESSAGE,
+      reason: 'not-a-service',
+      stage: currentStage(jobId),
+    });
     logger?.warn({ jobId }, "update job: the update was rejected without running the installer");
     return job;
   }
@@ -607,7 +683,7 @@ export function createUpdateApplyService(
       // Не служба — задание фиксирует отказ и завершается, установщик не
       // запускается, обслуживание не включается (сценарий 6b7c09a9).
       if (options.deployment !== 'windows-service') {
-        return failWithoutInstaller(prepared.jobId, NOT_A_SERVICE_MESSAGE);
+        return failWithoutInstaller(prepared.jobId);
       }
 
       currentJobId = prepared.jobId;

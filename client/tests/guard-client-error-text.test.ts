@@ -16,9 +16,12 @@
  *
  * Ловятся три формы: прямой `err.message`, приведение
  * `(err as { message }).message` и поле `message` серверного DTO
- * (`failure.message`, `failures[i].message`). Сканируются только модули,
- * где `message` означал показ пользователю; легитимные `Error.message` для
- * журналов и отладки в других модулях не затрагиваются.
+ * (`failure.message`, `failures[i].message`, алиас `first.message`).
+ * Сканируются только модули, где `message` означал показ пользователю;
+ * легитимные `Error.message` для журналов и отладки в других модулях не
+ * затрагиваются. Модули переупаковки отказов DTO (`link-ops.ts`) дополнительно
+ * обязаны бросать `EtnError` с кодом и `details`, а не plain-`Error` с
+ * серверным текстом.
  *
  * Самодоказательство: синтетический исходник с показом `err.message`
  * детектируется, а комментарий о запрете — нет.
@@ -48,6 +51,13 @@ const ERR_TEXT_MODULES = [
 
 const PURE_MODULE = path.join(RENDERER_ROOT, 'lib', 'pure.ts');
 
+/**
+ * Модули, которые пробрасывают отказ пакетной операции (`ThoughtBatchFailure`)
+ * дальше в UI: обязаны бросать `EtnError` с кодом и `details`, а серверный
+ * `message` — только как диагностику, не переупаковывая в plain-`Error`.
+ */
+const DTO_ERROR_MODULES = [path.join(RENDERER_ROOT, 'lib', 'link-ops.ts')] as const;
+
 /** Вырезает комментарии, сохраняя переводы строк (номера строк не съезжают). */
 function stripComments(source: string): string {
   return source
@@ -66,10 +76,15 @@ const CAST_MESSAGE = /\bas\s*\{[^{}]*\bmessage\b[^{}]*\}\s*\)\s*\.\s*message\b/;
 
 /**
  * Поле `message` серверного DTO (`failure.message`, `failures[0]?.message`,
- * `issue.message`, `warning.message`) — английский текст ADR не для UI.
+ * `first.message`, `issue.message`, `warning.message`) — английский текст ADR
+ * не для UI. Алиас `first` ловится так же, как `failure`: переименование
+ * переменной не должно обходить запрет.
  */
 const DTO_MESSAGE =
-  /\b(?:failure|failures\s*\[[^\]]*\]|issue|diagnostic|warning)\s*\??\s*\.\s*message\b/;
+  /\b(?:failure|failures\s*\[[^\]]*\]|first|issue|diagnostic|warning)\s*\??\s*\.\s*message\b/;
+
+/** Переупаковка отказа DTO в plain-`Error` (серверный текст попадёт в UI). */
+const PLAIN_ERROR_WRAP = /\bnew\s+Error\s*\(/;
 
 /** Разбор серверного текста вместо кода. */
 const MESSAGE_PARSING = /\.\s*message\s*\.\s*includes\s*\(/;
@@ -97,6 +112,7 @@ describe('сторож: серверный error.message не показывае
     assert.deepEqual(findViolations('notice(result.failures[0]?.message ?? "");'), [
       'dto-message',
     ]);
+    assert.deepEqual(findViolations('notice(first.message);'), ['dto-message']);
     assert.deepEqual(findViolations('notice(failure.message);'), ['dto-message']);
     assert.deepEqual(findViolations("if (err.message.includes('not found')) return true;"), [
       'raw-message',
@@ -127,5 +143,37 @@ describe('сторож: серверный error.message не показывае
     const body = /export function isNotFoundError\([\s\S]*?\n\}/.exec(clean)?.[0] ?? '';
     assert.match(body, /code === 'NOT_FOUND'/, 'причина — по коду');
     assert.ok(!body.includes('.message'), 'сообщение в определении причины не участвует');
+  });
+
+  it('link-ops пробрасывает отказ DTO через EtnError, а не plain-Error', () => {
+    for (const file of DTO_ERROR_MODULES) {
+      const clean = stripComments(fs.readFileSync(file, 'utf8'));
+      const relative = path.relative(RENDERER_ROOT, file);
+      assert.deepEqual(
+        findViolations(clean),
+        [],
+        `${relative}: серверный message не показывается и не переупаковывается`,
+      );
+      assert.ok(
+        !PLAIN_ERROR_WRAP.test(clean),
+        `${relative}: отказ DTO бросается как EtnError с кодом, plain-Error вернул бы английский текст в UI`,
+      );
+      assert.match(
+        clean,
+        /throw\s+new\s+EtnError\s*\(/,
+        `${relative}: EtnError с кодом и details — единственная форма проброса`,
+      );
+    }
+  });
+
+  it('самодоказательство: new Error(first.message) и new Error(message) краснят', () => {
+    const alias = 'const first = result.failures[0];\nthrow new Error(first.message);';
+    assert.ok(findViolations(alias).includes('dto-message'), 'алиас first ловится как DTO');
+    assert.ok(PLAIN_ERROR_WRAP.test(alias), 'plain-Error вокруг отказа DTO ловится');
+    const destructured = 'const { message } = first;\nthrow new Error(message);';
+    assert.ok(PLAIN_ERROR_WRAP.test(destructured), 'plain-Error с любым текстом ловится');
+    const correct = 'const { code, message, details } = first;\nthrow new EtnError(code, message, details);';
+    assert.ok(!findViolations(correct).includes('dto-message'));
+    assert.ok(!PLAIN_ERROR_WRAP.test(correct));
   });
 });

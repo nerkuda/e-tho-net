@@ -859,10 +859,35 @@ export const en = {
   'serverUpdate.progress.disconnected': 'Connection to the server was interrupted — this is expected during an update. Waiting for the server to restart.',
   /** После перезапуска сервер вернётся на новой версии. */
   'serverUpdate.progress.reconnect': 'After the restart, the client will reconnect automatically and continue working on the new version.',
-  /** Причина сбоя задания: `%1` — серверный текст. */
+  /** Причина сбоя задания: `%1` — локализованный текст по `reason`. */
   'serverUpdate.failure.reason': 'Reason: %1',
   /** Журнал установщика: `%1` — путь. */
   'serverUpdate.failure.journal': 'Installer log: %1',
+  /** The installer exited with a non-zero code: `%1` — exit code. */
+  'serverUpdate.failure.installerExit':
+    'the installer exited with code %1; the rollback was performed by the installer',
+  /** The installer exited without an exit code (signal/abnormal termination). */
+  'serverUpdate.failure.installerExitNoCode':
+    'the installer terminated abnormally; the rollback was performed by the installer',
+  /** Exit code 20: the installer requires manual mode. */
+  'serverUpdate.failure.installerPrecondition':
+    'the installer requires manual mode — run the update manually and check the installer log',
+  /** The installer timed out and was left running. */
+  'serverUpdate.failure.installerTimeout':
+    'the installer did not finish within the time limit and was left running — wait for it and check the log',
+  /** The server is not a Windows service — automatic update is impossible. */
+  'serverUpdate.failure.notAService':
+    'the server is not running as a Windows service — automatic update is impossible: stop the server manually and run the installer, or install ETN as a Windows service',
+  /** Recovered job: the server restarted before completion; `%1` — stage. */
+  'serverUpdate.failure.interrupted':
+    'the server restarted before the update job completed (stage "%1"); the job is not resumed automatically',
+  /** Recovered job without a saved stage. */
+  'serverUpdate.failure.interruptedNoStage':
+    'the server restarted before the update job completed; the job is not resumed automatically',
+  /** Unexpected internal job error. */
+  'serverUpdate.failure.internal': 'the update job failed with an internal error',
+  /** A newer server reported a reason this client does not know. */
+  'serverUpdate.failure.unknown': 'the update failed for an unknown reason',
   /** Архив базы данных: `%1` — путь (сервер пока присылает `null`). */
   'serverUpdate.backupPath': 'Database backup: %1',
   /** Кнопка копирования пути. */

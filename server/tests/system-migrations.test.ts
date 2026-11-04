@@ -32,6 +32,7 @@ const EXPECTED_FILES = [
   '015_networks_first_day_of_week.sql',
   '016_update_jobs.sql',
   '017_networks_language.sql',
+  '018_update_jobs_failure_fields.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */
@@ -102,6 +103,14 @@ describe(
           apiCols.includes('max_writes_per_minute'),
           'api_keys.max_writes_per_minute missing (O8)',
         );
+
+        // Машиночитаемая причина сбоя задания (миграция 018, задача 4f6c972a).
+        const jobCols = (
+          db.prepare('PRAGMA table_info(update_jobs)').all() as { name: string }[]
+        ).map((r) => r.name);
+        for (const column of ['reason', 'failed_stage', 'exit_code', 'log_path']) {
+          assert.ok(jobCols.includes(column), `update_jobs.${column} missing`);
+        }
 
         // Settings seeded with all 7 defaults (5 SETTING_KEY + 2 traversal.*).
         const n = (db.prepare('SELECT COUNT(*) AS c FROM settings').get() as { c: number }).c;

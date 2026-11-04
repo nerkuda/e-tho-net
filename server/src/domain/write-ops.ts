@@ -424,7 +424,7 @@ export function composeThoughtBatch(
       affected += 1;
     } catch (err) {
       if (err instanceof EtnError) {
-        failures.push({ id, code: err.code, message: err.message });
+        failures.push({ id, code: err.code, message: err.message, details: err.details });
       } else {
         failures.push({ id, code: 'INTERNAL', message: 'internal error' });
       }

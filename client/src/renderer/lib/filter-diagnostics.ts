@@ -107,8 +107,6 @@ export interface FilterDiagnosticsPayload {
   warnings?: readonly FilterDiagnostic[];
   /** `unresolved` — нераскрытые токены (`ids` пуст). */
   unresolved?: readonly FilterUnresolvedToken[];
-  /** Строковые предупреждения сборки/рецепта (адреса у них нет). */
-  messages?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -379,15 +377,6 @@ export function filterIssuesFromPayload(payload: FilterDiagnosticsPayload): Filt
       code: 'token_unresolved',
       path: typeof token.path === 'string' ? token.path : '',
       message: tokenIssueMessage(token.token, token.reason),
-    });
-  }
-  for (const message of payload.messages ?? []) {
-    out.push({
-      severity: 'warning',
-      source: 'server',
-      code: 'build_warning',
-      path: '',
-      message,
     });
   }
   return dedupeIssues(out);
