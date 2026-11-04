@@ -489,9 +489,18 @@ interface MarkerViolation {
   text: string;
 }
 
-/** В тексте после маркера есть хотя бы слово — обоснование, а не пустая метка. */
+/**
+ * В тексте после маркера есть хотя бы слово — обоснование, а не пустая метка.
+ * Другой маркер i18n обоснованием не является: иначе два пустых маркера
+ * подряд «оправдывали» бы друг друга.
+ */
 function hasJustification(text: string): boolean {
-  const cleaned = text.replace(/^[\s/*<>\-—–:;,.()]+/u, '');
+  const withoutMarkers = text
+    .split(TECHNICAL_MARKER)
+    .join(' ')
+    .split(MODULE_LEVEL_MARKER)
+    .join(' ');
+  const cleaned = withoutMarkers.replace(/^[\s/*<>\-—–:;,.()]+/u, '');
   return /\p{L}{2}/u.test(cleaned);
 }
 
@@ -650,14 +659,23 @@ describe('guard: локализация renderer', () => {
       '// причина: контракт для разработчика, не пользовательская строка',
       "const D = 4; // i18n: module-level — обосновано",
       "const E = 5; // i18n: module-level",
+      '// i18n: technical',
+      '// i18n: module-level',
+      "const F = 6;",
     ].join('\n');
     const found = markerJustificationViolations('probe.ts', probe).map(
       (item) => `${item.line}:${item.marker}`,
     );
     assert.deepEqual(
       found,
-      ['1:i18n: technical', '6:i18n: module-level'],
-      'маркер без текста причины (на той же или следующей строке комментария) — нарушение',
+      [
+        '1:i18n: technical',
+        '6:i18n: module-level',
+        '7:i18n: technical',
+        '8:i18n: module-level',
+      ],
+      'маркер без текста причины (на той же или следующей строке комментария) — ' +
+        'нарушение; соседний пустой маркер обоснованием не считается',
     );
   });
 
