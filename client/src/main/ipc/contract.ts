@@ -79,6 +79,7 @@ import type {
   FocusResponse,
   HealthResponse,
   HierarchyResponse,
+  LanguageSource,
   Link,
   LinkPropertyValues,
   LinkDeletionCheckResult,
@@ -100,6 +101,7 @@ import type {
   NetworkPropertyUpdateInput,
   UpdateNetworkInput,
   EffectiveTypeProperty,
+  UserLanguageSettings,
   AttachPropertyInput,
   PropertyDefinition,
   PropertyDefinitionUpdateInput,
@@ -124,6 +126,7 @@ import type {
   ShelfInput,
   SearchRequest,
   SearchResponse,
+  ServerLanguageSettings,
   StructureQueryRequest,
   StructureQueryResponse,
   StructureIdsQueryResult,
@@ -1366,6 +1369,13 @@ export interface EtnApi {
     listNetworks(): Promise<Network[]>;
     removeNetwork(id: string): Promise<void>;
     listAudit(filters?: Record<string, unknown>): Promise<unknown>;
+    /**
+     * `GET /admin/settings/language` — язык сервера по умолчанию, нижняя
+     * ступень наследования языка интерфейса (ADR daab6ac4 §1–2).
+     */
+    getServerLanguage(): Promise<ServerLanguageSettings>;
+    /** `PUT /admin/settings/language` — сменить язык сервера (админ). */
+    setServerLanguage(language: string): Promise<ServerLanguageSettings>;
   };
   me: {
     get(): Promise<CurrentUser>;
@@ -1392,6 +1402,14 @@ export interface EtnApi {
      * server validates the value shape (`comment_hotkeys` — a string map).
      */
     setSetting(key: string, value: unknown): Promise<void>;
+    /**
+     * `GET /users/me/language-settings` — «язык приложения» пользователя
+     * (`null` — «использовать язык сетей») и эффективный язык `{ language,
+     * source }` по каждой доступной сети (ADR daab6ac4 §3, задача f99f0542).
+     * Старый сервер (0.15.1) маршрута не знает — вызов отвергается `NOT_FOUND`;
+     * клиент трактует это как отсутствие серверной настройки.
+     */
+    getLanguageSettings(): Promise<UserLanguageSettings>;
   };
   /**
    * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,
@@ -1472,6 +1490,20 @@ export interface EtnApi {
         kind: 'switched' | 'deleted';
         networkId: string;
         layer: { id: string; title: string };
+      }) => void,
+    ): () => void;
+    /**
+     * Кадры языка сокета (ADR daab6ac4 §3, задача f99f0542): `ready` при
+     * подключении и `settings.language` при смене языка сети/сервера.
+     * `language` — конкретный тег, `source` — ступень наследования.
+     * `networkId` — сеть сокета; рендерер применяет язык, только если это
+     * активная сеть (задача faba9ff4).
+     */
+    onLanguage(
+      cb: (payload: {
+        networkId: string;
+        language: string;
+        source: LanguageSource;
       }) => void,
     ): () => void;
     /**

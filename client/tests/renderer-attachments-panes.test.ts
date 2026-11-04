@@ -186,6 +186,7 @@ describe('вложения открытого редактора (ошибка 0
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,
+        onLanguage: () => undefined,
         onEvent: () => undefined,
         notifyOnline: () => undefined,
       },

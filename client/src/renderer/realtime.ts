@@ -20,6 +20,7 @@ import type { AnyRealtimeEvent } from '@etn/shared';
 import type { ServerMaintenanceDto } from '../main/ipc/contract.js';
 
 import { etn } from './lib/etn.js';
+import { applyServerLanguageFrame } from './lib/app-language.js';
 import { routeRealtimeEvent } from './lib/live/event-router.js';
 import { toast } from './lib/notice.js';
 import { describeEvent, isRealtimeEvent } from './lib/pure.js';
@@ -298,6 +299,21 @@ export function initRealtime(): void {
       kind: obj.kind,
       networkId,
       layer: { id: layerObj.id, title: String(layerObj.title ?? '') },
+    });
+  });
+
+  // Язык сокета (ADR daab6ac4 §3, задача faba9ff4 п. 3): `ready` при
+  // подключении и `settings.language` при смене языка сети/сервера. Сокет
+  // принадлежит паре «пользователь × сеть», поэтому кадр текущего пользователя;
+  // применяется только для активной сети, чужую сеть кэшируем до перехода.
+  etn.realtime.onLanguage((payload) => {
+    const obj = payload as { networkId?: unknown; language?: unknown; source?: unknown };
+    if (typeof obj.networkId !== 'string' || typeof obj.language !== 'string') return;
+    if (obj.source !== 'user' && obj.source !== 'network' && obj.source !== 'server') return;
+    applyServerLanguageFrame({
+      networkId: obj.networkId,
+      language: obj.language,
+      source: obj.source,
     });
   });
 

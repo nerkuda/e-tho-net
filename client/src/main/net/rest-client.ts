@@ -1157,6 +1157,16 @@ export class RestClient {
     });
   }
 
+  /**
+   * `GET /users/me/language-settings` — «язык приложения» пользователя
+   * (`null` — наследование) и эффективный язык по каждой доступной сети
+   * (ADR daab6ac4 §3, задача f99f0542). Резолвинг выполняет сервер; клиент
+   * цепочку наследования не собирает.
+   */
+  public async getMyLanguageSettings(): Promise<import('@etn/shared').UserLanguageSettings> {
+    return this.request('GET', '/users/me/language-settings');
+  }
+
   // -------------------------------------------------------------------------
   // §4 Admin: users
   // -------------------------------------------------------------------------
@@ -1164,6 +1174,25 @@ export class RestClient {
   /** `GET /admin/users`. */
   public async adminListUsers(): Promise<import('@etn/shared').User[]> {
     return this.request('GET', '/admin/users');
+  }
+
+  /**
+   * `GET /admin/settings/language` — язык сервера по умолчанию, нижняя ступень
+   * наследования языка интерфейса (ADR daab6ac4 §1–2, задача f99f0542).
+   */
+  public async getServerLanguage(): Promise<import('@etn/shared').ServerLanguageSettings> {
+    return this.request('GET', '/admin/settings/language');
+  }
+
+  /** `PUT /admin/settings/language` — сменить язык сервера (админ). */
+  public async setServerLanguage(
+    language: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ServerLanguageSettings> {
+    return this.request('PUT', '/admin/settings/language', {
+      body: { language },
+      requestOptions: opts,
+    });
   }
 
   /** `POST /admin/users` — create a user (admin); a key is generated for hand-off. */

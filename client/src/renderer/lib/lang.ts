@@ -38,22 +38,26 @@ export function unavailableLang(): string | null {
 }
 
 /**
- * Применяет язык к интерфейсу и документу. Недоступный каталог деградирует на
- * исходный `ru` (возвращает `false`): интерфейс не остаётся на смеси языков,
- * `document.lang` указывает на реально показанный язык.
+ * Применяет язык к интерфейсу и документу. Каталог выбирается по правилу ADR
+ * daab6ac4 §2 («точный тег → основной подтег → исходный `ru`»): для `en-US`
+ * берётся `en`, для `zh-Hans` — `zh`; недоступный целиком язык деградирует на
+ * `ru`. Интерфейс не остаётся на смеси языков, `document.lang` указывает на
+ * реально показанный язык.
+ *
+ * Возвращает `true`, когда каталог найден (точный или по основному подтегу);
+ * `false` — запрошенный язык недоступен и показан исходный `ru`.
  */
 export function applyLang(lang: string): boolean {
-  if (!hasLocale(lang)) {
-    unavailable = lang;
-    logUiEvent('ui.i18n.locale_unavailable', { lang });
-    setLang(DEFAULT_LANG);
-    document.documentElement.lang = DEFAULT_LANG;
-    return false;
-  }
-  unavailable = null;
-  if (!setLang(lang)) return false;
-  document.documentElement.lang = lang;
-  return true;
+  const direct = hasLocale(lang);
+  const primary = lang.split('-')[0] ?? '';
+  const resolved = direct ? lang : hasLocale(primary) ? primary : DEFAULT_LANG;
+  // Деградация — только когда не нашёлся ни точный каталог, ни основной подтег.
+  const degraded = !direct && resolved === DEFAULT_LANG && lang !== DEFAULT_LANG;
+  unavailable = degraded ? lang : null;
+  if (degraded) logUiEvent('ui.i18n.locale_unavailable', { lang });
+  if (!setLang(resolved)) return false;
+  document.documentElement.lang = resolved;
+  return !degraded;
 }
 
 /**

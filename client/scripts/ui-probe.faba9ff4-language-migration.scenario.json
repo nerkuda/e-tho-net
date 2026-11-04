@@ -1,0 +1,187 @@
+{
+  "name": "faba9ff4-language-migration",
+  "description": "Задача faba9ff4 п. 2–4: миграция локального client_meta.lang в профиль и синхронизация через сервер. Стенд поднимается с языком сервера по умолчанию en (язык ОС на стенде — en), сеть язык не задаёт. Перед входом в локальный кэш кладётся ru и снимается маркер миграции — так выглядит клиент 0.15.1, обновлённый до 0.15.2. Проверяется: после входа кэш один раз перенесён в профиль и интерфейс переключился на ru; повторный старт с испорченным кэшем поднимает ru из профиля (профиль побеждает кэш); после осознанного null в профиле значение уже не переносится — эффективный язык резолвит сервер (en), кэш перезаписывается серверным значением, профиль остаётся null. В конце сценария профиль явно переводится в ru — это состояние использует второй прогон ui-probe.faba9ff4-language-second-client.scenario.json на копии данных (другой профиль клиента, язык ОС en). Запуск: npm -w @etn/server run build && npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.faba9ff4-language-migration.scenario.json --keep --out .tmp/faba9ff4/migration",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fresh-cache-and-marker",
+      "probe": "(async () => { const lang = await window.etn.meta.get('lang'); const migrated = await window.etn.meta.get('lang_migrated'); return { lang, migrated, ui: document.documentElement.lang }; })()",
+      "expect": {
+        "lang": null,
+        "migrated": null,
+        "ui": "en"
+      }
+    },
+    {
+      "name": "seed-old-client-cache",
+      "probe": "(async () => { await window.etn.meta.set('lang', 'ru'); await window.etn.meta.set('lang_migrated', 'false'); return { lang: await window.etn.meta.get('lang'), migrated: await window.etn.meta.get('lang_migrated') }; })()",
+      "expect": {
+        "lang": "ru",
+        "migrated": "false"
+      }
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "migration-applied-live",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ru",
+      "timeout": 25000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "migration-profile-state",
+      "probe": "(async () => { const settings = await window.etn.me.getLanguageSettings(); return { user: settings.language, networks: settings.networks.map((n) => ({ language: n.language, source: n.source })), cache: await window.etn.meta.get('lang'), migrated: await window.etn.meta.get('lang_migrated'), tabs: Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title')) }; })()",
+      "expect": {
+        "user": "ru",
+        "networks": [
+          {
+            "language": "ru",
+            "source": "user"
+          }
+        ],
+        "cache": "ru",
+        "migrated": "true",
+        "tabs": [
+          "Карта мыслей",
+          "Структуры мыслей",
+          "Дневник",
+          "Публикации",
+          "События"
+        ]
+      }
+    },
+    {
+      "name": "spoil-cache-after-migration",
+      "probe": "(async () => { await window.etn.meta.set('lang', 'en'); return await window.etn.meta.get('lang'); })()",
+      "expect": "en"
+    },
+    {
+      "name": "reload-with-profile-ru",
+      "probe": "(() => { window.__etnReload = true; setTimeout(() => location.reload(), 120); return 'scheduled'; })()",
+      "expect": "scheduled"
+    },
+    {
+      "name": "profile-wins-cache",
+      "timeout": 30000,
+      "waitFor": "window.__etnReload === undefined && performance.now() > 400 && document.documentElement.lang === 'ru' && document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "cache-restored-from-profile",
+      "probe": "(async () => ({ cache: await window.etn.meta.get('lang'), migrated: await window.etn.meta.get('lang_migrated'), user: (await window.etn.me.getLanguageSettings()).language }))()",
+      "expect": {
+        "cache": "ru",
+        "migrated": "true",
+        "user": "ru"
+      }
+    },
+    {
+      "name": "conscious-inheritance-null",
+      "api": {
+        "name": "conscious-inheritance-null",
+        "method": "PUT",
+        "path": "/users/me/settings/app_language",
+        "body": {
+          "value": null
+        },
+        "expression": "data.value"
+      },
+      "expect": null
+    },
+    {
+      "name": "reload-after-null",
+      "probe": "(() => { window.__etnReload = true; setTimeout(() => location.reload(), 120); return 'scheduled'; })()",
+      "expect": "scheduled"
+    },
+    {
+      "name": "server-value-after-null",
+      "timeout": 30000,
+      "waitFor": "window.__etnReload === undefined && performance.now() > 400 && document.documentElement.lang === 'en' && document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "cache-follows-server",
+      "probe": "(async () => ({ cache: await window.etn.meta.get('lang'), user: (await window.etn.me.getLanguageSettings()).language }))()",
+      "expect": {
+        "cache": "en",
+        "user": null
+      }
+    },
+    {
+      "name": "seed-cache-again-with-null-profile",
+      "probe": "(async () => { await window.etn.meta.set('lang', 'ru'); return await window.etn.meta.get('lang'); })()",
+      "expect": "ru"
+    },
+    {
+      "name": "reload-with-cache-ru-null-profile",
+      "probe": "(() => { window.__etnReload = true; setTimeout(() => location.reload(), 120); return 'scheduled'; })()",
+      "expect": "scheduled"
+    },
+    {
+      "name": "null-not-overwritten",
+      "timeout": 30000,
+      "waitFor": "window.__etnReload === undefined && performance.now() > 400 && document.documentElement.lang === 'en' && document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "null-and-cache-final",
+      "probe": "(async () => ({ cache: await window.etn.meta.get('lang'), user: (await window.etn.me.getLanguageSettings()).language, migrated: await window.etn.meta.get('lang_migrated'), tabs: Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title')) }))()",
+      "expect": {
+        "cache": "en",
+        "user": null,
+        "migrated": "true",
+        "tabs": [
+          "Thought map",
+          "Thought structures",
+          "Diary",
+          "Publications",
+          "Events"
+        ]
+      }
+    },
+    {
+      "name": "first-client-sets-ru",
+      "api": {
+        "name": "first-client-sets-ru",
+        "method": "PUT",
+        "path": "/users/me/settings/app_language",
+        "body": {
+          "value": "ru"
+        },
+        "expression": "data.value"
+      },
+      "expect": "ru"
+    }
+  ]
+}

@@ -376,6 +376,8 @@ function buildApi(): EtnBridgeApi {
       listNetworks: () => invoke('admin.listNetworks'),
       removeNetwork: (id) => invoke('admin.removeNetwork', id),
       listAudit: (filters) => invoke('admin.listAudit', filters),
+      getServerLanguage: () => invoke('admin.getServerLanguage'),
+      setServerLanguage: (language) => invoke('admin.setServerLanguage', language),
     },
     me: {
       get: () => invoke('me.get'),
@@ -385,6 +387,7 @@ function buildApi(): EtnBridgeApi {
       removeKey: (id) => invoke('me.removeKey', id),
       getSettings: () => invoke('me.getSettings'),
       setSetting: (key, value) => invoke('me.setSetting', key, value),
+      getLanguageSettings: () => invoke('me.getLanguageSettings'),
     },
     locks: {
       acquire: (networkId, entityType, entityId) =>
@@ -439,6 +442,20 @@ function buildApi(): EtnBridgeApi {
           );
         ipcRenderer.on('realtime:layer', listener);
         return () => ipcRenderer.removeListener('realtime:layer', listener);
+      },
+      /** Кадры языка сокета (ADR daab6ac4 §3): `ready` при подключении и
+       * `settings.language` при смене языка сети/сервера. */
+      onLanguage(cb) {
+        const listener = (_event: unknown, payload: unknown): void =>
+          cb(
+            payload as {
+              networkId: string;
+              language: string;
+              source: 'user' | 'network' | 'server';
+            },
+          );
+        ipcRenderer.on('realtime:language', listener);
+        return () => ipcRenderer.removeListener('realtime:language', listener);
       },
       /** Own-mutation flag (S11, 08-ui-spec.md §2.2): the write may have
        * created a layer shadow row — the renderer refreshes the override

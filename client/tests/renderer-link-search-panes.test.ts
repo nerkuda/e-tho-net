@@ -278,6 +278,7 @@ describe('живой поиск в поле-связи переживает ух
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,
+        onLanguage: () => undefined,
         onEvent: () => undefined,
         notifyOnline: () => undefined,
       },

@@ -1827,6 +1827,16 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'admin.listAudit',
     bind((filters?: Record<string, unknown>) => requireRest(deps).adminListAudit(filters ?? {})),
   );
+  // Язык сервера (ADR daab6ac4, задача f99f0542): нижняя ступень наследования
+  // интерфейса; меняет администратор.
+  handlers.set(
+    'admin.getServerLanguage',
+    bind(() => requireRest(deps).getServerLanguage()),
+  );
+  handlers.set(
+    'admin.setServerLanguage',
+    bind((language: string) => requireRest(deps).setServerLanguage(language)),
+  );
 
   // --- me ---------------------------------------------------------------------
   handlers.set(
@@ -1862,6 +1872,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'me.setSetting',
     bind((key: string, value: unknown) => requireRest(deps).setMySetting(key, value)),
+  );
+  // «Язык приложения» из профиля пользователя (ADR daab6ac4 §3, задача faba9ff4):
+  // хранимое значение и эффективный язык по каждой сети резолвит сервер.
+  handlers.set(
+    'me.getLanguageSettings',
+    bind(() => requireRest(deps).getMyLanguageSettings()),
   );
 
   // --- object locks (task 4f141756, docs/03-server-api.md §13c) --------------

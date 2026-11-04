@@ -298,6 +298,7 @@ describe('вкладка «Свойства» после скрытия пере
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,
+        onLanguage: () => undefined,
         onEvent: (handler: (raw: unknown) => void) => {
           realtimeHandler = handler;
         },

@@ -54,6 +54,7 @@ import {
   CLIENT_META_KEY,
   REALTIME_CLOSE_CODES,
   type AnyRealtimeEvent,
+  type LanguageSource,
   type RealtimeMaintenanceFrame,
   type RealtimeServerControlMessage,
 } from '@etn/shared';
@@ -176,12 +177,40 @@ export interface RealtimeClientEvents extends EventMap {
    * не по `connected`.
    */
   'maintenance-stable': [];
+  /**
+   * Кадр языка (ADR daab6ac4 §3, задача f99f0542): `ready` после подключения
+   * или `settings.language` при смене языка сети/сервера. Пул добавляет
+   * `networkId` и передаёт рендереру; применяется только для активной сети.
+   */
+  language: [frame: LanguageFrame];
   /** Server closed with `4401` — API-key rejected or membership lost. */
   unauthorized: [];
   /** Server closed with `4404` — network does not exist. */
   'not-found': [];
   /** Low-level socket error (already handled for reconnect; surfaced for logging). */
   error: [err: Error];
+}
+
+/** Разобранная пара языка кадра `ready`/`settings.language` (ADR daab6ac4 §3). */
+export interface LanguageFrame {
+  /** Конкретный тег BCP-47 (как прислал сервер). */
+  language: string;
+  /** Ступень наследования, откуда взят язык. */
+  source: LanguageSource;
+}
+
+/**
+ * Разбирает служебный кадр языка сокета (`ready`, `settings.language`).
+ * `null` — кадр другого типа или неполный: старый сервер таких кадров не шлёт,
+ * а незнакомый/битый кадр не должен ронять событийный поток.
+ */
+export function parseLanguageFrame(payload: unknown): LanguageFrame | null {
+  if (payload === null || typeof payload !== 'object') return null;
+  const obj = payload as { type?: unknown; language?: unknown; source?: unknown };
+  if (obj.type !== 'ready' && obj.type !== 'settings.language') return null;
+  if (typeof obj.language !== 'string' || obj.language.trim() === '') return null;
+  if (obj.source !== 'user' && obj.source !== 'network' && obj.source !== 'server') return null;
+  return { language: obj.language, source: obj.source };
 }
 
 /** Constructor options for {@link RealtimeClient}. */
@@ -685,6 +714,15 @@ export class RealtimeClient extends TypedEmitter<RealtimeClientEvents> {
       // меньше серверного.
       this.emitTyped('maintenance', frame);
       this.setStatus('reconnecting', 'server-maintenance');
+      return;
+    }
+
+    // Кадры языка (ADR daab6ac4 §3): `ready` сразу после подключения и
+    // `settings.language` при смене языка сети/сервера. Это служебные кадры без
+    // `seq`/`network_id` — событийный конверт ниже их отверг бы.
+    const languageFrame = parseLanguageFrame(payload);
+    if (languageFrame !== null) {
+      this.emitTyped('language', languageFrame);
       return;
     }
 

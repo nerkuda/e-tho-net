@@ -76,6 +76,11 @@ import {
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
+import {
+  initAppLanguage,
+  resetAppLanguageState,
+  syncLanguageForNetwork,
+} from './lib/app-language.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
@@ -356,6 +361,10 @@ async function openNetworkBody(
     activeTabId,
     activeView: resolvedView,
   });
+  // Эффективный язык новой активной сети (ADR daab6ac4 §2, задача 222666db
+  // п. 4): у сети может быть свой язык — пересчитываем без перезапуска. Ответ
+  // применяется, только если сеть всё ещё активна (проверка внутри модуля).
+  void syncLanguageForNetwork(networkId);
   // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
   setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
 
@@ -715,6 +724,11 @@ export async function restoreSession(): Promise<void> {
   // restoreSession(). Недоступные настройки не блокируют вход: при сбое
   // остаются умолчания.
   await loadUserSettings().catch(() => undefined);
+  // Язык приложения из профиля пользователя (ADR daab6ac4 §5, задача
+  // faba9ff4): серверное значение побеждает кэш, разовая миграция
+  // `client_meta.lang` → профиль. Недоступный/старый сервер не блокирует вход —
+  // интерфейс остаётся на кэше/ОС.
+  await initAppLanguage().catch(() => undefined);
   // Q5: warm the `networkList` cache early so the first tab-strip render has
   // display_names. The accessibility marking itself re-runs at the end of
   // `openNetwork`, once `store.tabs` is populated — marking here raced an
@@ -750,6 +764,9 @@ export async function disconnect(): Promise<void> {
   // Сочетания клавиш принадлежат пользователю сервера (L3s): при отключении
   // возвращаем умолчания, чтобы их не унаследовал следующий пользователь.
   resetUserSettings();
+  // Серверный слой языка — тоже принадлежность пользователя: снимок профиля
+  // сбрасывается (кэш `client_meta.lang` остаётся установочным).
+  resetAppLanguageState();
   store.resetNetwork();
   store.update({ me: null, profileId: null });
   showScreen('onboarding');

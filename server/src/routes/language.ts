@@ -19,7 +19,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { EtnError, normalizeLanguageTag } from '@etn/shared';
+import { EtnError, normalizeLanguageTag, type ServerLanguageSettings } from '@etn/shared';
 
 import { parseRest, RestAdminLanguageSetting } from '../contracts.js';
 import {
@@ -37,7 +37,8 @@ export const languageRoutes: FastifyPluginAsync = async (app: FastifyInstance) =
     '/admin/settings/language',
     { preHandler: [app.authPreHandler, requireAdmin] },
     async (_req: FastifyRequest, reply) => {
-      sendSuccess(reply, { language: getServerLanguage(app.systemDb) });
+      const payload: ServerLanguageSettings = { language: getServerLanguage(app.systemDb) };
+      sendSuccess(reply, payload);
     },
   );
 
@@ -70,7 +71,7 @@ export const languageRoutes: FastifyPluginAsync = async (app: FastifyInstance) =
         // типизированное событие `settings.language` без перезапуска.
         app.realtimeGateway.notifyServerLanguageChanged(previous);
       }
-      sendSuccess(reply, { language });
+      sendSuccess(reply, { language } satisfies ServerLanguageSettings);
     },
   );
 

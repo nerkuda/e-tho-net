@@ -37,6 +37,14 @@ export interface EffectiveLanguage {
 }
 
 /**
+ * Язык сервера по умолчанию — ответ `GET`/`PUT /admin/settings/language`
+ * (ADR daab6ac4 §1–2). Тег всегда конкретный: сервер не отдаёт наружу `null`.
+ */
+export interface ServerLanguageSettings {
+  language: string;
+}
+
+/**
  * Сетевой срез контракта настроек языка (`GET /users/me/language-settings`,
  * ADR daab6ac4 §3).
  *
