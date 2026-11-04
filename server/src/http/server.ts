@@ -41,6 +41,7 @@ import {
   type UpdateApplyServiceOptions,
 } from '../update/apply.js';
 import { meRoutes } from '../routes/me.js';
+import { languageRoutes } from '../routes/language.js';
 import { systemUpdateRoutes } from '../routes/system-update.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
@@ -390,6 +391,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // --- Route plugins (tasks B12+) ------------------------------------------
   await app.register(meRoutes, { prefix: '/api/v1' });
+  await app.register(languageRoutes, { prefix: '/api/v1' });
   await app.register(usersRoutes, { prefix: '/api/v1' });
   // NetworkService: directory + data.db + HOME seeding (task C10). One
   // instance is shared between the regular routes, the admin routes and the

@@ -440,6 +440,9 @@ describe('обслуживание — WebSocket', { skip: !nativeAvailable() },
       assert.equal(info.code, 1012, 'close 1012 service restart');
       assert.equal(info.reason, 'server updating');
       assert.deepEqual(frames, [
+        // Кадр готовности (ADR daab6ac4, задача f99f0542) приходит сразу после
+        // подключения — до кадра обслуживания.
+        { type: 'ready', language: 'en', source: 'server' },
         {
           type: 'maintenance',
           reason: 'server-updating',

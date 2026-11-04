@@ -31,6 +31,7 @@ const EXPECTED_FILES = [
   '014_user_settings.sql',
   '015_networks_first_day_of_week.sql',
   '016_update_jobs.sql',
+  '017_networks_language.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */

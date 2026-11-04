@@ -32,7 +32,7 @@ import type {
   UserSettingsMap,
 } from '@etn/shared';
 
-import { EtnError, USER_SETTING_KEY } from '@etn/shared';
+import { EtnError, normalizeLanguageTag, USER_SETTING_KEY } from '@etn/shared';
 
 /** Max length of `users.display_name`; mirrors the schema CHECK. */
 const DISPLAY_NAME_MAX_LENGTH = 200;
@@ -96,18 +96,34 @@ export function parseMaxWritesPerMinute(
  * The `value` field is mandatory. Known keys get a shape check; unknown keys are
  * stored as-is so the table can carry future server-level user settings
  * (ADR 3a829d25) without an allowlist edit per key.
+ *
+ * Returns the value to store: known keys may canonicalise it (the language tag
+ * of `app_language` is normalised to BCP-47 canonical form — ADR daab6ac4).
  */
-export function validateUserSettingValue(key: string, value: unknown, requestId: string): void {
+export function validateUserSettingValue(key: string, value: unknown, requestId: string): unknown {
   if (value === undefined) {
-    throw new EtnError('VALIDATION_ERROR', 'Требуется поле value.', { field: 'value' }, requestId);
+    throw new EtnError('VALIDATION_ERROR', 'value is required.', { field: 'value' }, requestId);
+  }
+  if (key === USER_SETTING_KEY.APP_LANGUAGE) {
+    if (value === null) return null;
+    const language = normalizeLanguageTag(value);
+    if (language === null) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'app_language must be null or a valid BCP-47 language tag.',
+        { field: 'value', value },
+        requestId,
+      );
+    }
+    return language;
   }
   if (key !== USER_SETTING_KEY.COMMENT_HOTKEYS) {
-    return;
+    return value;
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'comment_hotkeys должен быть JSON-объектом «команда → сочетание».',
+      'comment_hotkeys must be a JSON object "command → combination".',
       { field: 'value' },
       requestId,
     );
@@ -116,12 +132,13 @@ export function validateUserSettingValue(key: string, value: unknown, requestId:
     if (typeof combination !== 'string') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Сочетание команды «${command}» должно быть строкой.`,
-        { field: 'value' },
+        `Combination of command "${command}" must be a string.`,
+        { field: 'value', command },
         requestId,
       );
     }
   }
+  return value;
 }
 
 /** Build the public DTO of an existing key (no secret). */
@@ -342,9 +359,9 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (req: FastifyRequest, reply) => {
       const { key } = parseRest(RestUserSettingKey, req);
       const body = (req.body ?? {}) as { value?: unknown };
-      validateUserSettingValue(key, body.value, req.id);
-      app.systemDb.setUserSetting(req.auth!.user.id, key, body.value);
-      sendSuccess(reply, { key, value: body.value });
+      const value = validateUserSettingValue(key, body.value, req.id);
+      app.systemDb.setUserSetting(req.auth!.user.id, key, value);
+      sendSuccess(reply, { key, value });
     },
   );
 };

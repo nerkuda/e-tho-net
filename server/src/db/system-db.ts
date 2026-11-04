@@ -153,6 +153,7 @@ interface NetworkRow {
   examples: string | null;
   type_roles: string;
   first_day_of_week: number;
+  language: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -172,6 +173,7 @@ export function rowToNetwork(r: NetworkRow): Network {
       typeof r.first_day_of_week === 'number' && r.first_day_of_week >= 1 && r.first_day_of_week <= 7
         ? r.first_day_of_week
         : 1,
+    language: r.language ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -429,6 +431,7 @@ export class SystemDb {
       `UPDATE networks SET display_name = ?, description = ?, when_to_use = ?,
               conventions = ?, examples = ?, type_roles = ?,
               first_day_of_week = COALESCE(?, first_day_of_week),
+              language = CASE WHEN ? = 1 THEN ? ELSE language END,
               updated_at = ?
        WHERE id = ?`,
     );
@@ -436,6 +439,7 @@ export class SystemDb {
       `SELECT n.id AS id, n.display_name AS display_name, n.owner_id AS owner_id,
               n.description AS description, n.when_to_use AS when_to_use,
               n.type_roles AS type_roles, n.first_day_of_week AS first_day_of_week,
+              n.language AS language,
               n.created_at AS created_at, n.updated_at AS updated_at,
               m.role AS role, ou.display_name AS owner_display_name,
               (SELECT COUNT(*) FROM network_members WHERE network_id = n.id) AS members_count
@@ -964,6 +968,7 @@ export class SystemDb {
       examples: null,
       type_roles: typeRoles,
       first_day_of_week: firstDay,
+      language: null,
       created_at: now,
       updated_at: now,
     };
@@ -985,6 +990,11 @@ export class SystemDb {
    * replaces the legacy `node_section_type_id` and is encoded as JSON.
    * `first_day_of_week` (0.13.1) is optional: когда не задан, значение столбца
    * сохраняется (`COALESCE`) — так частичный вызов не сбрасывает настройку.
+   *
+   * `language` (ADR daab6ac4, задача f99f0542) — настройка сети: `undefined`
+   * сохраняет текущее значение, `null` означает «использовать язык сервера»,
+   * строка — конкретный тег. `null` осмысленен, поэтому `COALESCE` не годится:
+   * наличие/отсутствие поля различает отдельный флаг `setLanguage`.
    */
   updateNetwork(
     id: string,
@@ -996,6 +1006,7 @@ export class SystemDb {
       examples: string | null;
       type_roles: TypeRoles;
       first_day_of_week?: number;
+      language?: string | null;
     },
   ): void {
     this.stUpdateNetwork.run(
@@ -1006,6 +1017,8 @@ export class SystemDb {
       fields.examples,
       encodeTypeRolesColumn(fields.type_roles),
       fields.first_day_of_week ?? null,
+      fields.language === undefined ? 0 : 1,
+      fields.language ?? null,
       new Date().toISOString(),
       id,
     );
@@ -1038,6 +1051,7 @@ export class SystemDb {
       when_to_use: string | null;
       type_roles: string;
       first_day_of_week: number;
+      language: string | null;
       created_at: string;
       updated_at: string;
       role: NetworkRole;
@@ -1059,6 +1073,7 @@ export class SystemDb {
         // Настройка сети (задача 8eaeba9a): то же значение, что у
         // `GET /networks/:id` (`networkDto`) — REST и MCP читают из одного SQL.
         first_day_of_week: r.first_day_of_week,
+        language: r.language ?? null,
       };
     });
   }

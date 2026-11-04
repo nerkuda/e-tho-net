@@ -13,6 +13,7 @@
 
 export * from './enums.js';
 export * from './constants.js';
+export * from './language.js';
 export * from './errors.js';
 export * from './icon-catalog.js';
 export * from './keywords.js';

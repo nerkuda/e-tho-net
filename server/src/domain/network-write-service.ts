@@ -12,7 +12,7 @@
  * авторизованного актора.
  */
 
-import { EtnError, validateTypeRoles, type Network, type UpdateNetworkInput } from '@etn/shared';
+import { EtnError, normalizeLanguageTag, validateTypeRoles, type Network, type UpdateNetworkInput } from '@etn/shared';
 
 import type { SystemDb } from '../db/system-db.js';
 import type { NetworkService } from './network-service.js';
@@ -109,6 +109,26 @@ export function updateNetwork(
     firstDayOfWeek = value;
   }
 
+  // Язык сети (ADR daab6ac4 §2, задача f99f0542): `undefined` — сохранить
+  // текущий; `null` — «использовать язык сервера»; строка — конкретный тег,
+  // канонизируется. Наличие каталога перевода сервер не проверяет.
+  let language = existing.language;
+  if (patch.language !== undefined) {
+    if (patch.language === null) {
+      language = null;
+    } else {
+      const normalized = normalizeLanguageTag(patch.language);
+      if (normalized === null) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'language must be null or a valid BCP-47 language tag.',
+          { field: 'language', value: patch.language },
+        );
+      }
+      language = normalized;
+    }
+  }
+
   systemDb.updateNetwork(existing.id, {
     displayName,
     description,
@@ -117,6 +137,7 @@ export function updateNetwork(
     examples,
     type_roles: validatedRoles,
     first_day_of_week: firstDayOfWeek,
+    language,
   });
   systemDb.insertAuditLog({
     actorUserId: actor.userId,
@@ -133,6 +154,7 @@ export function updateNetwork(
       examples,
       type_roles: validatedRoles,
       first_day_of_week: firstDayOfWeek,
+      language,
       ...(actor.via !== undefined ? { via: actor.via } : {}),
     },
   });
@@ -150,6 +172,9 @@ export function updateNetwork(
   }
   if (firstDayOfWeek !== existing.first_day_of_week) {
     changes['first_day_of_week'] = firstDayOfWeek;
+  }
+  if (language !== existing.language) {
+    changes['language'] = language;
   }
 
   const network = systemDb.getNetworkById(existing.id);

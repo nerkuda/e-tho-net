@@ -80,6 +80,7 @@ function networkDto(n: Network) {
     type_roles: n.type_roles,
     has_structure: typeof n.type_roles.table_of_contents === 'string',
     first_day_of_week: n.first_day_of_week,
+    language: n.language,
     created_at: n.created_at,
     updated_at: n.updated_at,
   };
@@ -208,6 +209,13 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
             { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
             { meta: { request_id: req.id } },
           );
+        }
+        // Смена языка сети (ADR daab6ac4 §3, задача f99f0542): затронутые
+        // сокеты получают `settings.language` с пересчитанной парой
+        // `{ language, source }` — только те, у кого эффективный язык реально
+        // изменился (пользователи без явного «языка приложения»).
+        if (changes['language'] !== undefined) {
+          app.realtimeGateway.notifyNetworkLanguageChanged(networkId, network.language);
         }
         sendSuccess(reply, networkDto(updated));
       },

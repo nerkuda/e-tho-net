@@ -3174,6 +3174,23 @@ export const RestUserSettingKey = defineContract(
 );
 
 // ---------------------------------------------------------------------------
+// Языковые настройки (REST — routes/language.ts; ADR daab6ac4, задача f99f0542)
+// ---------------------------------------------------------------------------
+
+/** PUT /admin/settings/language — язык сервера по умолчанию (админ). */
+export const RestAdminLanguageSetting = defineContract(
+  'rest:admin.settings.language',
+  z.object({ language: z.string().min(1) }),
+  {
+    language: {
+      from: { kind: 'body' },
+      req: true,
+      msg: 'language is required.',
+    },
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Связи (REST — routes/links.ts) и импорт (routes/import.ts)
 // ---------------------------------------------------------------------------
 
