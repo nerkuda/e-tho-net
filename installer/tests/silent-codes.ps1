@@ -76,6 +76,10 @@
          ETN_DEPLOYMENT=windows-service; после установки сгенерированный
          etn-service.xml сохраняет режим службы (сервер, запущенный службой,
          обязан определяться как windows-service)
+     30. a7394117: одна запись деинсталляции при смене области реестра —
+         GUI-админ-установка (HKCU) и тихое /ALLUSERS-обновление (HKLM) не
+         оставляют дубля в «Программах и компонентах»; режим «только для меня»
+         машинную запись не трогает
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -663,7 +667,9 @@ $staticChecks = @(
     @{ Name = 'static:display-name-validation'; Pattern = [regex]::Escape('function ValidDisplayName'); Note = 'display_name из /PARAMS проверяется (дефект 6)' },
     @{ Name = 'static:reason-file'; Pattern = [regex]::Escape('reason_file='); Note = 'причина отказа предусловия — родителю' },
     @{ Name = 'static:backup-entry'; Pattern = [regex]::Escape('function CreateDatabaseBackup(const Needed: Boolean): Boolean'); Note = 'бэкап: решение о необходимости передаёт вызывающий' },
-    @{ Name = 'static:backup-keep-three'; Pattern = [regex]::Escape('BACKUPS_KEEP = 3'); Note = 'бэкап: три последних архива' }
+    @{ Name = 'static:backup-keep-three'; Pattern = [regex]::Escape('BACKUPS_KEEP = 3'); Note = 'бэкап: три последних архива' },
+    @{ Name = 'static:setup-mutex'; Pattern = [regex]::Escape('SetupMutex=ETNSetup'); Note = 'параллельный запуск установщика запрещён' },
+    @{ Name = 'static:uninstall-scope-cleanup'; Pattern = [regex]::Escape('RemoveDuplicateUninstallRecord;'); Note = 'запись деинсталляции прежней области удаляется после установки (a7394117)' }
 )
 foreach ($check in $staticChecks) {
     Add-StaticResult -Name $check.Name -Ok (Test-IssCode -Text $issText -Pattern $check.Pattern) -Note $check.Note
@@ -4259,11 +4265,94 @@ try {
     Add-Result -Name 'client-real-uninstall:files-gone' -Expected 0 `
         -Actual ([int](Test-Path -LiteralPath (Join-Path $appDir 'ETN.exe'))) `
         -Note 'файлы клиента удалены'
+
+    # a7394117: одна запись деинсталляции в машинном режиме. Причина (верификация
+    # aa5af30c): GUI-админ-установка при PrivilegesRequired=lowest пишет запись
+    # в HKCU (Inno остаётся в неадминистративном режиме), тихое /ALLUSERS-
+    # обновление — в HKLM, прежняя запись остаётся: в «Программах и компонентах»
+    # две строки. Прогон без прав администратора: машинная область моделируется
+    # поддеревом HKCU (/TESTUNINSTROOT), /TESTINNOADMINMODE=1 означает
+    # «Inno записал HKLM».
+    Write-Host '=== a7394117: одна запись деинсталляции в машинном режиме ==='
+    $uninstScopeRoot = 'Software\ETN-Test\Uninstall'
+    $machineScopeKey = 'HKCU:\' + $uninstScopeRoot + '\Machine\' +
+        '{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1'
+    $scopeParams = New-ParamsFile -Mode 'service' -Name 'scope-uninstall.ini'
+    function Reset-UninstallScope {
+        foreach ($key in @($machineScopeKey, $testUninstallKey)) {
+            if (Test-Path -LiteralPath $key) {
+                Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    function New-MachineScopeRecord {
+        $null = New-Item -Path $machineScopeKey -Force
+    }
+    Reset-State
+    Reset-UninstallScope
+
+    # 1. Элевированная GUI-установка: Inno пишет HKCU. Машинная запись прежней
+    #    установки (модель) должна быть удалена — иначе она останется дублем.
+    New-MachineScopeRecord
+    $installCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+        "/PARAMS=`"$scopeParams`"", '/TESTELEVATED=1', '/TESTSERVICE=present',
+        '/TESTHEALTH=ok', '/TESTADMINMODE=1', "/TESTUNINSTROOT=$uninstScopeRoot"))
+    Add-Result -Name 'uninst-scope:gui-admin-code' -Expected 0 -Actual $installCode
+    Add-Result -Name 'uninst-scope:gui-admin-hkcu' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $testUninstallKey)) `
+        -Note 'Inno записал HKCU (неадминистративный режим)'
+    Add-Result -Name 'uninst-scope:gui-admin-hklm-removed' -Expected 0 `
+        -Actual ([int](Test-Path -LiteralPath $machineScopeKey)) `
+        -Note 'машинная запись прежней установки удалена'
+
+    # 2. Тихое /ALLUSERS-обновление: Inno пишет HKLM (в модели — заранее
+    #    созданный ключ песочницы), запись HKCU от GUI-админ-установки удаляется.
+    #    Файл параметров удаляется установщиком после чтения (тест 22) —
+    #    готовим новый, иначе привилегированная фаза получит пустой набор.
+    New-MachineScopeRecord
+    $scopeParams = New-ParamsFile -Mode 'service' -Name 'scope-uninstall-update.ini'
+    $updateCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+        "/PARAMS=`"$scopeParams`"", '/TESTELEVATED=1', '/TESTSERVICE=present',
+        '/TESTHEALTH=ok', '/TESTADMINMODE=1', '/TESTINNOADMINMODE=1',
+        "/TESTUNINSTROOT=$uninstScopeRoot"))
+    Add-Result -Name 'uninst-scope:allusers-code' -Expected 0 -Actual $updateCode
+    Add-Result -Name 'uninst-scope:allusers-hkcu-removed' -Expected 0 `
+        -Actual ([int](Test-Path -LiteralPath $testUninstallKey)) `
+        -Note 'запись GUI-админ-установки (HKCU) удалена'
+    Add-Result -Name 'uninst-scope:allusers-hklm' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $machineScopeKey)) `
+        -Note 'машинная запись осталась'
+    Add-Result -Name 'uninst-scope:one-record' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $testUninstallKey) + [int](Test-Path -LiteralPath $machineScopeKey)) `
+        -Note 'в «Программах и компонентах» одна запись (HKCU+HKLM)'
+    $scopeLogText = ''
+    $scopeLog = Get-LatestLog
+    if ($scopeLog) { $scopeLogText = Get-Content -LiteralPath $scopeLog.FullName -Raw }
+    Add-Result -Name 'uninst-scope:log' -Expected 1 `
+        -Actual ([int]($scopeLogText.Contains('Удалена запись деинсталляции прежней области'))) `
+        -Note 'удаление записано в журнал установки'
+
+    # 3. Режим «только для меня»: машинную запись не трогаем (прав на HKLM нет,
+    #    запись пользователя остаётся единственной, как и было до исправления).
+    Reset-State
+    New-MachineScopeRecord
+    $userCode = Invoke-Setup -Path $uninsSetup -Arguments ($silent + @(
+        '/TESTSELECT=client-user', '/TESTUSERINSTALL=1', '/TESTELEVATED=1'))
+    Add-Result -Name 'uninst-scope:user-mode-code' -Expected 0 -Actual $userCode
+    Add-Result -Name 'uninst-scope:user-mode-machine-kept' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $machineScopeKey)) `
+        -Note 'в режиме «только для меня» машинная запись не удаляется'
+    Add-Result -Name 'uninst-scope:user-mode-hkcu' -Expected 1 `
+        -Actual ([int](Test-Path -LiteralPath $testUninstallKey)) `
+        -Note 'запись пользовательской установки на месте'
 } finally {
     # Деинсталлятор при отказе (мутация) оставляет установку и запись в HKCU:
     # убираем за собой, чтобы прогон не оставлял следов.
     if (Test-Path -LiteralPath $testUninstallKey) {
         Remove-Item -LiteralPath $testUninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath 'HKCU:\Software\ETN-Test') {
+        Remove-Item -LiteralPath 'HKCU:\Software\ETN-Test' -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (Test-Path -LiteralPath $appDir) {
         Remove-Item -LiteralPath $appDir -Recurse -Force -ErrorAction SilentlyContinue

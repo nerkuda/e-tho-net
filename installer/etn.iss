@@ -494,6 +494,15 @@ const
   { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
     клиент electron-builder (NSIS) и запись установки Inno. }
   UNINSTALL_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
+  { Имя ключа записи деинсталляции Inno: AppId из [Setup] с суффиксом _is1
+    (в реестре AppId записан с одной ведущей скобкой). У тестовой сборки с
+    деинсталлятором свой AppId — продуктовую запись она не трогает.
+    Ошибка a7394117: по этому ключу удаляется запись прежней области реестра. }
+#ifdef TestUninstallable
+  UNINSTALL_KEY_NAME = '{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}_is1';
+#else
+  UNINSTALL_KEY_NAME = '{6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70}_is1';
+#endif
   { Ожидание исчезновения записи Uninstall после удаления старого клиента:
     деинсталлятор NSIS с _?= завершается синхронно, но старая версия могла
     проигнорировать параметр и удалять в фоне — запись исчезает с задержкой.
@@ -614,6 +623,14 @@ var
     без настоящей элевации (проверка «клиент только для всех»); без него
     тестовая сборка работает как неадминистративный режим «только для меня». }
   GTestAdminMode: String;
+  { Ошибка a7394117: /TESTINNOADMINMODE=1 моделирует административный режим
+    самого Inno (/ALLUSERS): запись деинсталляции он пишет в HKLM; без хука
+    тестовая сборка (PrivilegesRequired=lowest) пишет её в HKCU.
+    /TESTUNINSTROOT=<подключ> уводит машинную область записи в песочницу HKCU:
+    прав на настоящий HKLM в прогоне нет. Пользовательская область остаётся
+    настоящим ключом Inno — так проверяется удаление оставшейся записи. }
+  GTestInnoAdminMode: String;
+  GTestUninstallRoot: String;
   { /TESTUSERONLYMODE=1 — явная проверка неадминистративного режима в тестовой
     сборке: сервер недоступен, ставится только клиент «для меня». }
   GTestUserOnlyMode: String;
@@ -1459,9 +1476,84 @@ begin
   if GTestRecord = '1' then Result := True;
   Exit;
 #endif
-  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
-    '{6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70}_is1';
+  Key := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
   Result := RegKeyExists(HKLM, Key) or RegKeyExists(HKLM64, Key);
+end;
+
+{ Удаляет запись деинсталляции по одному корню реестра. Возвращает 1, если
+  запись была и удалена. Ошибка удаления установку не отменяет: WARN в журнал
+  (ошибка a7394117). }
+function DeleteUninstallRecordAt(const Root: Integer; const RootName,
+  SubKey: String): Integer;
+begin
+  Result := 0;
+  if not RegKeyExists(Root, SubKey) then Exit;
+  if RegDeleteKeyIncludingSubkeys(Root, SubKey) then
+  begin
+    Result := 1;
+    LogLine('INFO', 'Удалена запись деинсталляции прежней области: ' +
+      RootName + '\' + SubKey);
+  end
+  else
+    LogLine('WARN', 'Запись деинсталляции прежней области не удалена: ' +
+      RootName + '\' + SubKey + ' (установка продолжается)');
+end;
+
+{ Удаляет запись деинсталляции в машинной (HKLM) или пользовательской (HKCU)
+  области — в той, куда Inno её НЕ записал (ошибка a7394117). В тестовой
+  сборке машинная область моделируется поддеревом HKCU: прав на HKLM в прогоне
+  silent-codes.ps1 нет, а пользовательская область остаётся настоящим ключом
+  Inno. Возвращает число удалённых ключей. }
+function DeleteForeignUninstallRecord(const MachineScope: Boolean): Integer;
+var
+  SubKey: String;
+begin
+  Result := 0;
+  SubKey := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
+  if MachineScope then
+  begin
+#ifdef TestMode
+    if GTestUninstallRoot <> '' then
+    begin
+      Result := DeleteUninstallRecordAt(HKCU, 'HKCU',
+        GTestUninstallRoot + '\Machine\' + UNINSTALL_KEY_NAME);
+      Exit;
+    end;
+#endif
+    { HKLM в 32- и 64-битном представлении — разные ветки реестра: прежняя
+      установка могла записать запись в любую из них. }
+    Result := DeleteUninstallRecordAt(HKLM64, 'HKLM64', SubKey);
+    Result := Result + DeleteUninstallRecordAt(HKLM32, 'HKLM32', SubKey);
+  end
+  else
+    Result := DeleteUninstallRecordAt(HKCU, 'HKCU', SubKey);
+end;
+
+{ Ошибка a7394117: PrivilegesRequired=lowest пишет запись деинсталляции в
+  HKCU при элевированном GUI-запуске (Inno остаётся в неадминистративном
+  режиме) и в HKLM при тихом /ALLUSERS-обновлении. Прежнюю запись Inno не
+  мигрирует — после обновления в «Программах и компонентах» две строки.
+  После успешной установки удаляем запись в области, куда Inno её не записал.
+  В режиме «только для меня» ничего не удаляем: запись одна, прав на HKLM нет. }
+procedure RemoveDuplicateUninstallRecord;
+var
+  ForeignMachineScope: Boolean;
+begin
+#ifdef TestMode
+  { Тестовая сборка без деинсталлятора (Uninstallable=no) запись не создаёт,
+    а её AppId — продуктовый: удалять по нему запись на машине нельзя. }
+  #ifndef TestUninstallable
+  Exit;
+  #endif
+#endif
+  if not GAdminInstallMode then Exit;
+  { IsAdminInstallMode: Inno в административном режиме (/ALLUSERS) — запись
+    HKLM, значит удаляем HKCU; иначе (элевированный GUI-запуск) — наоборот. }
+  ForeignMachineScope := not IsAdminInstallMode;
+#ifdef TestMode
+  if GTestInnoAdminMode = '1' then ForeignMachineScope := False;
+#endif
+  DeleteForeignUninstallRecord(ForeignMachineScope);
 end;
 
 procedure DetectState;
@@ -6873,6 +6965,8 @@ begin
   GTestConnectParams := '';
   GTestAdminMode := '';
   GTestUserOnlyMode := '';
+  GTestInnoAdminMode := '';
+  GTestUninstallRoot := '';
   GParamsPath := '';
   GReasonFile := '';
   GDeferredLog := '';
@@ -6958,6 +7052,8 @@ begin
   GTestConnectParams := ParamValue('TESTCONNECTPARAMS');
   GTestAdminMode := ParamValue('TESTADMINMODE');
   GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
+  GTestInnoAdminMode := ParamValue('TESTINNOADMINMODE');
+  GTestUninstallRoot := ParamValue('TESTUNINSTROOT');
   { /TESTGUIMODE=1 имитирует GUI-запуск в silent-прогоне: silent-термин снимается
     ДО расчёта режима (GUserOnlyMode) и выбора компонентов — иначе контекст
     всегда привилегированный, а режим «только для меня» не смоделировать. }
@@ -7980,6 +8076,13 @@ begin
         end;
       end;
     end;
+    { Ошибка a7394117: запись деинсталляции прежней области реестра удаляется
+      только после успешной установки — при откате она остаётся точкой
+      возврата. В машинном режиме Inno пишет запись только в одну область
+      (HKCU или HKLM), вторую удаляем, чтобы в «Программах и компонентах» была
+      одна строка. }
+    if (GExitCode = EXIT_OK) and GAdminInstallMode then
+      RemoveDuplicateUninstallRecord;
     { Снимок отката удаляется последним — только после того, как install.json
       зафиксировал новую версию (замечание приёмки: сбой записи при уже
       удалённом снимке оставлял установку без пути отката). }
