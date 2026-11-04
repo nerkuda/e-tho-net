@@ -35,7 +35,7 @@ export function registerCommentsGetTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.comments.get',
     {
-      title: 'Комментарий (полный текст)',
+      title: 'Comment (full text)',
       description:
         'Fetch one comment in full: by `comment_id` — any comment (permanent or chronological) with its ' +
         "complete `body_md`; by `thought_id` — the thought's permanent comment, or `{thought_id, permanent: " +
@@ -84,7 +84,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
   mcp.registerTool(
     'etn.comments.update',
     {
-      title: 'Изменить комментарий',
+      title: 'Update comment',
       description:
         'Patch a comment (permanent or chronological) by `comment_id` — last-write-wins per field. ' +
         '`valid_from`/`valid_to` apply to chronological entries (permanent ignores them). ' +
@@ -152,7 +152,7 @@ export function registerCommentsWriteTools(mcp: McpServer, rt: McpRuntime): void
   mcp.registerTool(
     'etn.comments.edit',
     {
-      title: 'Частичная правка комментария',
+      title: 'Edit comment by parts',
       description:
         'Edit a comment by parts: `append`/`prepend`/`replace_section`/' +
         '`delete_section` ops applied sequentially in one transaction ' +

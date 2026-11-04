@@ -302,7 +302,7 @@ describe('MCP server (F1 smoke)', { skip: !nativeAvailable() }, () => {
         const block = read.contents[0];
         assert.ok(block !== undefined && 'text' in block);
         assert.equal(block.mimeType, 'text/markdown');
-        assert.match(block.text, /# Комментарии: HOME/);
+        assert.match(block.text, /# Comments: HOME/);
       } finally {
         await handle.close();
       }

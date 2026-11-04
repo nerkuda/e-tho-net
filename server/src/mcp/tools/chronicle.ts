@@ -19,17 +19,17 @@ export function registerChronicleQueryTool(mcp: McpServer, rt: McpRuntime): void
   mcp.registerTool(
     'etn.chronicle.query',
     {
-      title: 'Запрос хроники',
+      title: 'Chronicle query',
       // 0.14.1 (ошибка d47e5ba3): keywords/keyword_scope и раскрытие
       // `*`-синонимов в scope title/synonyms — та же формулировка, что у
       // `etn.thoughts.search`/`query` (общий предикат, коммит 4037a997).
       // 0.15.1 (ошибка 50a94510): `body` — формат тела записи в строке; проза
       // сжата, бюджет tools/list (ADR b2eebf8b) остаётся соблюдённым.
       description:
-        'Запрос хроники: хроно-комментарии по фильтру мыслей; `targets` — критерии целей; ' +
-        '`keywords`/`keyword_scope` — мини-синтаксис §6.10 (AND, `*`, `-слово`); в `title`/`synonyms` ' +
-        'слово без `*` равно слову `*`-синонима; `ast` — профиль «хроника» ' +
-        '(etn.guide «thoughts.query»), XOR с плоскими; `body` — `md` (дефолт) | `html`.',
+        'Chronicle query: chronological comments by a thought filter; `targets` — target criteria; ' +
+        '`keywords`/`keyword_scope` — the §6.10 mini-syntax (AND, `*`, `-word`); in `title`/`synonyms` ' +
+        'a word without `*` equals a word of a `*`-synonym; `ast` — the "chronicle" profile ' +
+        '(etn.guide "thoughts.query"), XOR with flat; `body` — `md` (default) | `html`.',
       inputSchema: ChronicleQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.chronicle.query'],
     },

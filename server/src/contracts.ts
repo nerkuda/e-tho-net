@@ -899,7 +899,7 @@ export const LayersResetOverride = defineContract(
  */
 const FilterAstBody = z
   .record(z.string(), z.unknown())
-  .describe('AST-тело отбора; грамматика — etn.guide { topic: "thoughts.query" }.');
+  .describe('AST view body; grammar — etn.guide { topic: "thoughts.query" }.');
 
 /**
  * Плоские МЫСЛЕВЫЕ параметры точки поиска, несовместимые с `ast`
@@ -1024,7 +1024,7 @@ const QUERY_PROPERTY_VALUE_SCHEMA = z
     z.object({}),
     z.null(),
   ])
-  .describe('presence игнорирует');
+  .describe('presence ignores it');
 
 const QueryPropertyFields = z
   .object({

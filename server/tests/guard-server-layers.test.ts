@@ -32,11 +32,17 @@ const PREPARE_CALL = /\.(prepare|pragma)\s*\(/;
 /**
  * Строка содержит строковый SQL-фрагмент: в кавычках/бэктиках ключевое
  * слово запроса (SELECT/INSERT/UPDATE/DELETE) И структурный маркер
- * (FROM/INTO/SET/VALUES/WHERE/JOIN/TABLE). Двухмаркерность отсекает
- * описания инструментов («update … from» в прозе без структуры запроса).
+ * (FROM/INTO/SET/VALUES/WHERE/JOIN/TABLE). После перевода MCP-текстов на
+ * английский двухмаркерности стало мало: обычная проза («deleted from the
+ * registry», «insert-only», «selects … into sections») давала ложные
+ * срабатывания. Поэтому ключевое слово — только целым словом (`\b…\b`) и
+ * с обязательным пробелом после него: словоформы (`deleted`, `deletes`,
+ * `insert-only`, `sub-selection`) больше не считаются SQL, а реальные
+ * фрагменты (`SELECT … FROM`, `DELETE FROM`, `INSERT INTO`, `UPDATE … SET`)
+ * по-прежнему ловятся.
  */
 const SQL_FRAGMENT =
-  /['"`][^'"`]*(?:SELECT|INSERT|UPDATE|DELETE)[^'"`]*(?:FROM\s+|INTO\s+|SET\s+|VALUES\s*\(|WHERE\s+|JOIN\s+|TABLE\s+)[^'"`]*['"`]/i;
+  /['"`][^'"`]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b\s+[^'"`]*\b(?:FROM|INTO|SET|VALUES|WHERE|JOIN|TABLE)\b[^'"`]*['"`]/i;
 
 describe('guard: слои сервера — фасады без SQL и взаимных импортов', () => {
   it('в routes/* и mcp/* нет ndb.prepare и сырого SQL', () => {

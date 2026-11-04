@@ -1925,10 +1925,10 @@ function renderRegistry(): string {
     else bucket.entries.push(entry);
   }
   const lines: string[] = [
-    '# Редкие операции MCP (etn.ops)',
+    '# Rare MCP operations (etn.ops)',
     '',
-    'Вызов: `etn.ops { action, params, confirm: true }` — `confirm` обязателен для деструктивных.',
-    'Полная инструкция по действию: `etn.guide { topic: "<action>" }`.',
+    'Call: `etn.ops { action, params, confirm: true }` — `confirm` is required for destructive ones.',
+    'Full instruction for an action: `etn.guide { topic: "<action>" }`.',
     '',
   ];
   for (const { group, entries } of groups) {
@@ -1940,7 +1940,7 @@ function renderRegistry(): string {
     lines.push('');
   }
   if (GUIDE_TOPICS.length > 0) {
-    lines.push('## Частые операции — детали');
+    lines.push('## Frequent operations — details');
     for (const topic of GUIDE_TOPICS) {
       lines.push(`- **${topic.topic}** — ${topic.when}`);
     }
@@ -1956,31 +1956,31 @@ function renderTopic(entry: OpEntry): string {
     '',
     entry.when,
     '',
-    `Группа: ${entry.group}. Снят из постоянного набора: \`${entry.tool}\`.`,
-    `Вызов — только через \`etn.ops { action: "${entry.action}" }\`.`,
-    `Деструктивна: ${entry.destructive ? 'да — требуется `confirm: true` на верхнем уровне `etn.ops`' : 'нет'}.`,
-    `Read-only: ${entry.readOnly ? 'да' : 'нет'}.`,
+    `Group: ${entry.group}. Removed from the permanent set: \`${entry.tool}\`.`,
+    `Call only via \`etn.ops { action: "${entry.action}" }\`.`,
+    `Destructive: ${entry.destructive ? 'yes — `confirm: true` is required at the top level of `etn.ops`' : 'no'}.`,
+    `Read-only: ${entry.readOnly ? 'yes' : 'no'}.`,
     ...((entry.mutatingParams ?? []).length === 0
       ? []
       : [
-          `Изменяет БД при аргументах: ${entry.mutatingParams!
+          `Writes to the DB with arguments: ${entry.mutatingParams!
             .map((rule) => `\`${rule.param}: ${JSON.stringify(rule.equals)}\``)
-            .join(', ')} — такой вызов блокируется при обслуживании сервера (SERVER_UPDATING).`,
+            .join(', ')} — such a call is blocked during server maintenance (SERVER_UPDATING).`,
         ]),
     '',
     '## params',
   ];
   if (entry.params.length === 0) {
-    lines.push('Параметров нет.');
+    lines.push('No parameters.');
   } else {
     for (const param of entry.params) {
-      lines.push(`- \`${param.name}\`${param.required === true ? ' (обязателен)' : ''} — ${param.desc}`);
+      lines.push(`- \`${param.name}\`${param.required === true ? ' (required)' : ''} — ${param.desc}`);
     }
   }
-  lines.push('', '## Эффекты', entry.effects, '', '## Ошибки', entry.errors, '');
-  lines.push('## Пример');
+  lines.push('', '## Effects', entry.effects, '', '## Errors', entry.errors, '');
+  lines.push('## Example');
   const exampleParams = entry.params.reduce<Record<string, string>>((acc, param) => {
-    if (param.required === true) acc[param.name] = '<значение>';
+    if (param.required === true) acc[param.name] = '<value>';
     return acc;
   }, {});
   lines.push(
@@ -2004,13 +2004,13 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.guide',
     {
-      title: 'Справочник редких операций',
+      title: 'Rare operations reference',
       description:
-        'Справочник MCP (прогрессивное раскрытие). Без параметров — реестр ' +
-        '«действие/тема → когда нужно». С `topic` — полная инструкция: для редких операций — ' +
-        'состав `params`, `confirm`, эффекты, коды ошибок; для частых — детали из их `description`. ' +
-        'Редкие операции включают публикации и полки (`publications.*`/`shelves.*`). ' +
-        'Исполнитель редких операций — `etn.ops`.',
+        'MCP reference (progressive disclosure). Without parameters — the registry of ' +
+        '"action/topic → when it is needed". With `topic` — the full instruction: for rare operations — ' +
+        'the `params` shape, `confirm`, effects, error codes; for frequent ones — details from their `description`. ' +
+        'Rare operations include publications and shelves (`publications.*`/`shelves.*`). ' +
+        'The executor of rare operations is `etn.ops`.',
       inputSchema: Guide.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.guide'],
     },
@@ -2046,13 +2046,13 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.ops',
     {
-      title: 'Исполнитель редких операций',
+      title: 'Rare operations executor',
       description:
-        'Исполнитель редких операций, снятых из постоянного набора (прогрессивное раскрытие). ' +
-        '`action` — имя из справочника `etn.guide`; `params` — плоский объект; `confirm: true` ' +
-        'обязателен для деструктивных (delete/purge/truncate/import/layers.delete/merge), ' +
-        'без него VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — состав params и эффекты. ' +
-        'Среди редких — администрирование, слои, экспорт/импорт, публикации и полки.',
+        'The executor of rare operations removed from the permanent set (progressive disclosure). ' +
+        '`action` — a name from the `etn.guide` reference; `params` — a flat object; `confirm: true` ' +
+        'is required for destructive ones (delete/purge/truncate/import/layers.delete/merge), ' +
+        'without it VALIDATION_ERROR. First read `etn.guide { topic }` — the params shape and effects. ' +
+        'Rare ones include administration, layers, export/import, publications and shelves.',
       inputSchema: Ops.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ops'],
     },

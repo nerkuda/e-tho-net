@@ -141,7 +141,7 @@ describe('MCP layers.diff pagination (ddb67ddc)', { skip: !nativeAvailable() }, 
           arguments: { topic: 'layers.diff_doc' },
         });
         assert.equal(diffDocGuide.isError, undefined, toolText(diffDocGuide));
-        assert.match(toolText(diffDocGuide), /НЕ пагинируется/);
+        assert.match(toolText(diffDocGuide), /NOT sectioned and NOT paginated/);
       } finally {
         await agent.close();
       }

@@ -108,19 +108,19 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.thoughts.search',
     {
-      title: 'Полнотекстовый поиск',
+      title: 'Full-text search',
       description:
         'Full-text search across thought names, comment texts, link texts and chronology. `scope` selects ' +
         'result groups (`names`/`texts`/`links`/`chronology`/`all`); `in_subtree_of`, `type_id` (or its ' +
         'name-form `type`, resolved case-insensitively via `etn.types.list`; `NOT_FOUND` if no such type, ' +
         '`VALIDATION_ERROR` with `details.candidates` on ambiguity), `author_id`/`editor_id` narrow it. ' +
-        '`query` — мини-синтаксис §6.10: слова через AND, `*` — подстановка, `-слово` — исключение; ' +
-        'в группе `by_names` слово запроса без `*` совпадает и со СЛОВОМ хранимого `*`-синонима ' +
-        'по границам слова (`проектиров*` находит «проектирование»), слова запроса независимы. ' +
-        'Принимает и `ast` — мыслевые настройки отбора (профиль `thoughts`: подкорень, типы мыслей, ' +
-        '«показывать неактуальные», «корзина»); валидируется профилем, `VALIDATION_ERROR` вне профиля; ' +
-        '`ast` XOR плоские мыслевые параметры. `focus_thought_id` — мысль-фокус карты: ' +
-        'контекст токенов `$thought*` в `ast` (совместим с `ast`). ' +
+        '`query` — the §6.10 mini-syntax: words ANDed, `*` — wildcard, `-word` — exclusion; ' +
+        'in the `by_names` group a query word without `*` also matches a WORD of a stored `*`-synonym ' +
+        'on word boundaries (`design*` finds "designing"), query words are independent. ' +
+        'Also accepts `ast` — thought view settings (the `thoughts` profile: subtree, thought types, ' +
+        '"show inactive", "basket"); validated by the profile, `VALIDATION_ERROR` outside the profile; ' +
+        '`ast` XOR flat thought parameters. `focus_thought_id` — the map focus thought: ' +
+        'the `$thought*` token context in `ast` (compatible with `ast`). ' +
         '`limit` (1–200, default 50) + `offset` walk the tail; `meta.total_in_group` gives unfiltered totals ' +
         'per group.',
       inputSchema: ThoughtsSearch.schema,
@@ -264,7 +264,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.thoughts.query',
     {
-      title: 'Структурная выборка мыслей',
+      title: 'Structural thought query',
       // 0.14.1 (ошибка 6ff9749f): «пустая страница и unresolved» — семантика
       // СОХРАНЁННЫХ отборов (`etn.views.run`), не этого инструмента. Для плоских
       // полей неизвестное имя типа/свойства — `NOT_FOUND`; значения `ast`-листьев
@@ -278,19 +278,19 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
       // `not_empty` паритет с REST; пара наличия обходится без `value`.
       // Прирост прозы уложен сжатием тех же описаний (бюджет `tools/list`).
       description:
-        'Структурная выборка (без текста), AND: ' +
-        '`in_subtree_of`(+`max_depth`), `type_id[]` (либо `type[]`), `active`/`trashed`, ' +
-        '`keywords` (мини-синтаксис по названию/синонимам; слово без `*` совпадает и с ' +
-        '`*`-синонимом: `проектиров*` → «проектирование»), `properties[]` (канон ' +
+        'Structural query (no text), AND: ' +
+        '`in_subtree_of`(+`max_depth`), `type_id[]` (or `type[]`), `active`/`trashed`, ' +
+        '`keywords` (mini-syntax over title/synonyms; a word without `*` also matches a ' +
+        '`*`-synonym: `design*` → "designing"), `properties[]` (canon ' +
         'eq/ne/contains/gt/gte/lt/lte/in/not_in/is_empty/not_empty/any_of/all_of/none_of; ' +
-        '`is_empty`/`not_empty` — без `value`), `created_*`/`updated_*`, ' +
-        '`author_id`/`editor_id`, `link_filter` (с `ast`: пред-сужение поверх дерева). ' +
-        'Или `ast` — дерево условий ' +
-        '(грамматика — `etn.guide { topic: "thoughts.query" }`), XOR с плоскими критериями. ' +
-        'Ответ: `thought_types`, эхо `resolved_types`/`resolved_properties` для имён; ' +
-        'неизвестное имя в плоских полях — `NOT_FOUND`; значения `ast`-листьев — только id (имена ' +
-        'не резолвятся и молча не совпадают); неразрешимый `ast`-токен → пустая страница и ' +
-        '`unresolved`; удалённая сущность — `VALIDATION_ERROR` ' +
+        '`is_empty`/`not_empty` — without `value`), `created_*`/`updated_*`, ' +
+        '`author_id`/`editor_id`, `link_filter` (with `ast`: pre-narrowing over the tree). ' +
+        'Or `ast` — a condition tree ' +
+        '(grammar — `etn.guide { topic: "thoughts.query" }`), XOR with flat criteria. ' +
+        'Response: `thought_types`, echo of `resolved_types`/`resolved_properties` for names; ' +
+        'an unknown name in flat fields — `NOT_FOUND`; `ast` leaf values — ids only (names ' +
+        'are not resolved and silently do not match); an unresolvable `ast` token → an empty page and ' +
+        '`unresolved`; a deleted entity — `VALIDATION_ERROR` ' +
         '(`details.diagnostics`).',
       inputSchema: ThoughtsQuery.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.query'],
@@ -541,19 +541,19 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.thoughts.get',
     {
-      title: 'Мысль (полная)',
+      title: 'Thought (full)',
       description:
-        'Одна мысль целиком: синонимы, вложенный тип (`name` + AI-описание, без визуальных полей) и ' +
-        'значения свойств: вне-типовые — в эффективном пер-мысленном порядке, типовые — в порядке ' +
-        'выборки (порядок задают привязки типа, см. ' +
-        '`GET …/types/{id}/properties`); `outside_type: true` — свойство не на цепочке типа ' +
-        'владельца, карточка не пустая). Структурные «Родители»/«Потомки» не возвращаются — их числа в `meta`. ' +
-        '`meta.deletion_blocks` — блокировки удаления. ' +
-        '`meta.permanent` — полный текст постоянного комментария (полностью — `etn.comments.get`). ' +
-        '`meta.link_stats` — счётчики активных связей по `(link_type_id, direction)` с именами типа. ' +
-        '`meta.views` — эффективные отборы мысли: типовые (`scope: "type"`), затем внетиповые ' +
-        '(`scope: "thought"`), `defined_on` — владелец; ' +
-        'исполняются через `etn.views.run`. `view: "compact"` (default) — без визуальных полей.',
+        'One thought in full: synonyms, the embedded type (`name` + AI description, without visual fields) and ' +
+        'property values: out-of-type ones in the effective per-thought order, type ones in the order ' +
+        'of the query (the order is set by the type bindings, see ' +
+        '`GET …/types/{id}/properties`); `outside_type: true` — the property is not on the owner type ' +
+        'chain, the card is not empty). Structural "Parents"/"Children" are not returned — their counts are in `meta`. ' +
+        '`meta.deletion_blocks` — deletion blocks. ' +
+        '`meta.permanent` — the full text of the permanent comment (in full — `etn.comments.get`). ' +
+        '`meta.link_stats` — active link counters by `(link_type_id, direction)` with type names. ' +
+        '`meta.views` — the effective views of the thought: type ones (`scope: "type"`), then out-of-type ' +
+        '(`scope: "thought"`), `defined_on` — the owner; ' +
+        'executed via `etn.views.run`. `view: "compact"` (default) — without visual fields.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -615,19 +615,19 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.thoughts.resolve',
     {
-      title: 'Пакетное чтение мыслей',
+      title: 'Batch thought read',
       description:
-        'Батч-чтение по списку id: `items[]` (карточки в порядке первого появления, дубли ' +
-        'схлопываются) + `missing[]`. Неразрешимый id (в т.ч. короткий префикс — ' +
-        'ненайденный или неоднозначный) попадает в `missing[]`, а не отвергает весь батч. ' +
-        'Карточка несёт мысль, вложенный тип (`name` + `description`), ' +
-        'свойства (без структурных «Родители»/«Потомки» — их числа в `meta`), `meta.link_stats` ' +
-        '(счётчики с именами типов связей), ' +
-        'полнотекстовый `comment_preview` и `meta.views` — ' +
-        'эффективный набор отборов для каждой мысли (типовые + внетиповые со `scope`). ' +
-        'Постоянный комментарий — один раз, полным текстом в `comment_preview`; ' +
-        '`meta.permanent` намеренно `null` (не признак отсутствия; полная форма — `etn.thoughts.get`). ' +
-        'Лимит — 100 id за вызов.',
+        'Batch read by id list: `items[]` (cards in first-appearance order, duplicates ' +
+        'collapsed) + `missing[]`. An unresolvable id (including a short prefix — ' +
+        'not found or ambiguous) goes to `missing[]` instead of rejecting the whole batch. ' +
+        'The card carries the thought, the embedded type (`name` + `description`), ' +
+        'properties (without structural "Parents"/"Children" — their counts are in `meta`), `meta.link_stats` ' +
+        '(counters with link type names), ' +
+        'the full-text `comment_preview` and `meta.views` — ' +
+        'the effective view set for each thought (type + out-of-type with `scope`). ' +
+        'The permanent comment — once, in full in `comment_preview`; ' +
+        '`meta.permanent` is intentionally `null` (not a sign of absence; the full form — `etn.thoughts.get`). ' +
+        'Limit — 100 ids per call.',
       inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
     },
@@ -682,19 +682,19 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.thoughts.neighbors',
     {
-      title: 'Соседи мысли',
+      title: 'Thought neighbors',
       description:
         'Direct neighbours of a thought by direction (`parents`/`children`/`siblings`) or `both`; ' +
-        '`depth > 1` does a bounded BFS walk. `dir: "both"` — оба направления одним вызовом, ' +
-        'записи несут `direction: "in"|"out"`. Рёбра несут `has_properties`/`has_comment` — ' +
-        'два агрегирующих запроса на весь набор рёбер, не на ребро; `link_marked_for_deletion` ' +
-        'говорит, что ребро помечено на удаление (корзина) — оно остаётся ' +
-        'видимым, но помеченным. НЕАКТИВНЫЕ соседи (мысль или ребро с `active: false`) ' +
-        'скрываются по умолчанию и не входят в `total`; `show_inactive: true` их показывает ' +
-        '(как в `search`/`query`) — и на `depth: 1`, и в BFS-обходе. На `depth: 1` страница 50 — ' +
-        '`total`/`truncated` показывают остаток; дальше — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
-        '`link_filter` — { type_ids?, include_structural? } ограничивает связи, по которым считается соседство. ' +
-        'Справочники `link_types`/`thought_types`.',
+        '`depth > 1` does a bounded BFS walk. `dir: "both"` — both directions in one call, ' +
+        'entries carry `direction: "in"|"out"`. Edges carry `has_properties`/`has_comment` — ' +
+        'two aggregate queries for the whole edge set, not per edge; `link_marked_for_deletion` ' +
+        'says the edge is marked for deletion (basket) — it stays ' +
+        'visible but marked. INACTIVE neighbors (a thought or an edge with `active: false`) ' +
+        'are hidden by default and are not counted in `total`; `show_inactive: true` shows them ' +
+        '(as in `search`/`query`) — both at `depth: 1` and in the BFS walk. At `depth: 1` the page is 50 — ' +
+        '`total`/`truncated` show the remainder; beyond that — `etn.thoughts.query { in_subtree_of, max_depth: 1 }`. ' +
+        '`link_filter` — { type_ids?, include_structural? } limits the links over which neighbors are counted. ' +
+        'Reference tables `link_types`/`thought_types`.',
       inputSchema: ThoughtsNeighbors.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.neighbors'],
     },
@@ -854,20 +854,20 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.thoughts.subgraph',
     {
-      title: 'Подграф в радиусе N рёбер',
+      title: 'Subgraph within N edges',
       description:
         'The key RAG tool: the radius-bounded subgraph around seeds — nodes, active edges, `thought_types`/' +
         '`link_types` reference tables, and with `include_comments` per-node comment previews (permanent ' +
         'truncated to 600 chars, last 10 chronological; fetch full texts via `etn.comments.get` when ' +
         '`truncated`). `max_nodes` is capped by the server setting max_nodes_per_subgraph; `max_chars` ' +
         'caps the JSON size — the server first shrinks comment previews, then drops the farthest nodes ' +
-        '(BFS level), reporting `truncated: true` + `reason`. Edges несут `has_properties`/`has_comment`; ' +
-        '`link_marked_for_deletion` — ребро помечено на удаление (корзина). ' +
-        '`nodes[].views` — эффективный набор отборов только у seed-узлов (типовые и внетиповые со ' +
-        '`scope`); у прочих `views: []` (в `compact` поле снимается проекцией), исполняется через ' +
+        '(BFS level), reporting `truncated: true` + `reason`. Edges carry `has_properties`/`has_comment`; ' +
+        '`link_marked_for_deletion` — the edge is marked for deletion (basket). ' +
+        '`nodes[].views` — the effective view set only on seed nodes (type and out-of-type with ' +
+        '`scope`); on others `views: []` (in `compact` the field is dropped by projection), executed via ' +
         '`etn.views.run { view_name }`. ' +
         '`link_filter` — { type_ids?, include_structural? } ' +
-        'ограничивает рёбра подграфа. ' +
+        'limits the subgraph edges. ' +
         '`view: "compact"` (default) drops visual fields.',
       inputSchema: ThoughtsSubgraph.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.subgraph'],
@@ -1042,7 +1042,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.thoughts.usage',
     {
-      title: 'Где используется мысль',
+      title: 'Where the thought is used',
       description:
         'Thoughts referencing this thought through link-property edges (formal links), grouped by the ' +
         'registry property: { total, groups: [{property_id, key, thoughts[]}], thought_types } — one group ' +
@@ -1095,7 +1095,7 @@ export function registerFindDuplicatesTool(mcp: McpServer, rt: McpRuntime): void
   mcp.registerTool(
     'etn.thoughts.find_duplicates',
     {
-      title: 'Поиск дубликатов',
+      title: 'Find duplicates',
       // 0.14.1 (ошибка 1eaf36df): четвёртый тир — stored `*`-синоним матчит
       // входной термин ЦЕЛИКОМ (anchored regex, границы слов, порядок слов
       // значим; `wildSynRows` + `anchoredWildcardFor`/`mentionPrefilterPass`,

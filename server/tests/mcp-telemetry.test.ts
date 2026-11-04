@@ -717,7 +717,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         );
         assert.match(
           thoughtsQueryTool!.description ?? '',
-          /`resolved_types`\/`resolved_properties` для имён/,
+          /`resolved_types`\/`resolved_properties` for names/,
           'в описании etn.thoughts.query пропала оговорка «для имён» у эха resolved_*',
         );
         // 0.14.1 (ошибка 40c76144, замечание верификатора круга 3): вторая
@@ -726,7 +726,7 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // сторож: смысловая часть контракта, а не редакционная проза.
         assert.match(
           thoughtsQueryTool!.description ?? '',
-          /`link_filter` \(с `ast`: пред-сужение поверх дерева\)/,
+          /`link_filter` \(with `ast`: pre-narrowing over the tree\)/,
           'в описании etn.thoughts.query пропала оговорка «поверх дерева» у link_filter с ast',
         );
         // 0.11.1 (задача 8f6857f8): прирост целиком от 22 новых инструментов

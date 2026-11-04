@@ -32,7 +32,7 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.views.run',
     {
-      title: 'Исполнить отбор относительно мысли',
+      title: 'Run a view relative to a thought',
       // 0.14.1 (ошибка 8a87586d): отбор относительно мысли показывает
       // СОСЕДЕЙ, а не саму мысль — `thought-type-views-service.ts` отбрасывает
       // якорь (`items.filter(i => i.id !== thoughtId)`) и корректирует `total`.
@@ -42,17 +42,17 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
       // выровнена с REST-спекой c989a4e2; проза сжата под бюджет tools/list.
       description:
         'Run a view for one thought from `meta.views` ' +
-        '(`scope: "type" | "thought"`, `defined_on` — владелец). `view_name` — имя ' +
-        '(нормализовано) или `id` отбора; либо готовое `ast`-тело (грамматика — ' +
-        '`etn.guide { topic: "thoughts.query" }`) — ровно одно из двух. `limit`/`offset` — страница, ' +
-        '`order` — направление сортировки. Якорная мысль `thought_id` исключается из выдачи и `total` ' +
-        '— но `total` уменьшается, только если якорь попал на страницу ' +
-        '(сама мысль — `etn.thoughts.get`). Read-only: без бюджета записи и `audit_log`. ' +
-        'Возвращает страницу; при `view_name` — карточку отбора в top-level `view` ' +
-        '(id, имя, `scope`, `defined_on`, `inherited`), при `ast` поля `view` нет — `meta.ast: true`; ' +
-        '`meta.unresolved` (неразрешённый токен — `data` пустая). Не найден — `NOT_FOUND` ' +
-        'с `details.available_views`. Удалённая сущность условия — ' +
-        '`VALIDATION_ERROR` (`details.diagnostics`), отвязанное свойство — `meta.warnings`.',
+        '(`scope: "type" | "thought"`, `defined_on` — the owner). `view_name` — a name ' +
+        '(normalized) or a view `id`; or a ready `ast` body (grammar — ' +
+        '`etn.guide { topic: "thoughts.query" }`) — exactly one of the two. `limit`/`offset` — the page, ' +
+        '`order` — the sort direction. The anchor thought `thought_id` is excluded from the result and `total` ' +
+        '— but `total` decreases only if the anchor fell on the page ' +
+        '(the thought itself — `etn.thoughts.get`). Read-only: no write budget and no `audit_log`. ' +
+        'Returns a page; with `view_name` — the view card in the top-level `view` ' +
+        '(id, name, `scope`, `defined_on`, `inherited`); with `ast` there is no `view` field — `meta.ast: true`; ' +
+        '`meta.unresolved` (an unresolvable token — `data` is empty). Not found — `NOT_FOUND` ' +
+        'with `details.available_views`. A deleted condition entity — ' +
+        '`VALIDATION_ERROR` (`details.diagnostics`), an unlinked property — `meta.warnings`.',
       inputSchema: ViewsRun.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.views.run'],
     },

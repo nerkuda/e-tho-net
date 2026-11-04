@@ -57,14 +57,14 @@ function invalidArg(message: string): McpError {
  */
 export function parseSeedIds(input: SeedIdsInput): string[] {
   if (typeof input !== 'string' && !Array.isArray(input)) {
-    throw invalidArg(`seed_ids: ожидается строка или массив строк, получено ${jsonType(input)}`);
+    throw invalidArg(`seed_ids: expected a string or an array of strings, got ${jsonType(input)}`);
   }
   const tokens = typeof input === 'string' ? splitSeedIds(input) : [...input];
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const [index, token] of tokens.entries()) {
     if (typeof token !== 'string') {
-      throw invalidArg(`seed_ids[${index}]: ожидается строковый id, получено ${jsonType(token)}`);
+      throw invalidArg(`seed_ids[${index}]: expected a string id, got ${jsonType(token)}`);
     }
     const id = token.trim();
     if (id === '' || seen.has(id)) continue;
@@ -72,10 +72,10 @@ export function parseSeedIds(input: SeedIdsInput): string[] {
     ids.push(id);
   }
   if (ids.length === 0) {
-    throw invalidArg('seed_ids: пустой список — передайте хотя бы один id');
+    throw invalidArg('seed_ids: empty list — pass at least one id');
   }
   if (ids.length > MAX_PROMPT_SEED_IDS) {
-    throw invalidArg(`seed_ids: ${ids.length} id — предел ${MAX_PROMPT_SEED_IDS}`);
+    throw invalidArg(`seed_ids: ${ids.length} ids — the limit is ${MAX_PROMPT_SEED_IDS}`);
   }
   return ids;
 }
@@ -96,10 +96,10 @@ export function parseRadiusArg(input: string | number | undefined): number {
     value = Number.NaN;
   }
   if (!Number.isInteger(value)) {
-    throw invalidArg(`radius: ожидается целое число ${range}, получено ${JSON.stringify(input)}`);
+    throw invalidArg(`radius: expected an integer ${range}, got ${JSON.stringify(input)}`);
   }
   if (value < PROMPT_RADIUS_MIN || value > PROMPT_RADIUS_MAX) {
-    throw invalidArg(`radius: ${value} — вне диапазона ${range}`);
+    throw invalidArg(`radius: ${value} is out of range ${range}`);
   }
   return value;
 }
@@ -117,13 +117,13 @@ function splitSeedIds(raw: string): string[] {
       parsed = JSON.parse(fragment);
     } catch (err) {
       throw invalidArg(
-        `seed_ids: битый JSON-массив «${shorten(fragment)}»: ${(err as Error).message}` +
-          ' — id должны быть строками в двойных кавычках',
+        `seed_ids: malformed JSON array "${shorten(fragment)}": ${(err as Error).message}` +
+          ' — ids must be strings in double quotes',
       );
     }
     for (const [index, element] of (parsed as unknown[]).entries()) {
       if (typeof element !== 'string') {
-        throw invalidArg(`seed_ids[${index}]: ожидается строковый id, получено ${jsonType(element)}`);
+        throw invalidArg(`seed_ids[${index}]: expected a string id, got ${jsonType(element)}`);
       }
       tokens.push(element);
     }
@@ -162,7 +162,7 @@ function splitSeedFragments(raw: string): string[] {
     }
     if (char === ']') {
       depth -= 1;
-      if (depth < 0) throw invalidArg('seed_ids: лишняя закрывающая скобка «]»');
+      if (depth < 0) throw invalidArg('seed_ids: extra closing bracket "]"');
       current += char;
       continue;
     }
@@ -173,19 +173,19 @@ function splitSeedFragments(raw: string): string[] {
     }
     current += char;
   }
-  if (depth !== 0) throw invalidArg('seed_ids: незакрытый JSON-массив — нет закрывающей «]»');
-  if (inString) throw invalidArg('seed_ids: незакрытая двойная кавычка');
+  if (depth !== 0) throw invalidArg('seed_ids: unterminated JSON array — no closing "]"');
+  if (inString) throw invalidArg('seed_ids: unterminated double quote');
   if (current.trim() !== '') fragments.push(current.trim());
   return fragments;
 }
 
-/** Тип значения по-русски — для сообщений о неверном вводе. */
+/** Тип значения — для сообщений о неверном вводе. */
 function jsonType(value: unknown): string {
   if (value === null) return 'null';
-  if (Array.isArray(value)) return 'массив';
-  if (typeof value === 'number') return 'число';
-  if (typeof value === 'boolean') return 'логическое значение';
-  if (typeof value === 'object') return 'объект';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'object') return 'object';
   return typeof value;
 }
 
@@ -205,9 +205,9 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.summarize_thought',
     {
-      title: 'Резюме мысли',
+      title: 'Thought summary',
       description:
-        'Собрать краткое резюме мысли и её контекста: прочитать мысль, её соседей и комментарии.',
+        'Build a short summary of a thought and its context: read the thought, its neighbors and comments.',
       argsSchema: {
         network_id: z.string().min(1),
         thought_id: z.string().min(1),
@@ -217,15 +217,15 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       const { network_id, thought_id } = args;
       return promptResult(
         [
-          `Составь краткое резюме мысли сети ETN и её контекста.`,
+          'Build a short summary of a thought in the ETN network and its context.',
           ``,
-          `Сделай следующее:`,
-          `1. Прочитай мысль: ресурс \`etn://networks/${network_id}/thoughts/${thought_id}\`.`,
-          `2. Прочитай соседей: \`etn://networks/${network_id}/thoughts/${thought_id}/neighbors\`.`,
-          `3. Прочитай комментарии: \`etn://networks/${network_id}/thoughts/${thought_id}/comments\`.`,
-          `4. Опиши суть мысли, её роль в сети, ключевые связи и свежие хронологические записи.`,
+          'Do the following:',
+          `1. Read the thought: resource \`etn://networks/${network_id}/thoughts/${thought_id}\`.`,
+          `2. Read the neighbors: \`etn://networks/${network_id}/thoughts/${thought_id}/neighbors\`.`,
+          `3. Read the comments: \`etn://networks/${network_id}/thoughts/${thought_id}/comments\`.`,
+          '4. Describe the essence of the thought, its role in the network, key links and recent chronological entries.',
           ``,
-          `Вывод — Markdown на русском языке, не более 200 слов. Не изменяй данные.`,
+          'Output — Markdown in English, at most 200 words. Do not change any data.',
         ].join('\n'),
       );
     },
@@ -234,9 +234,9 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.suggest_links',
     {
-      title: 'Предложить связи',
+      title: 'Suggest links',
       description:
-        'Предложить возможные связи для мысли на основе текстов её соседей и содержимого сети.',
+        "Suggest possible links for a thought based on its neighbors' texts and the network content.",
       argsSchema: {
         network_id: z.string().min(1),
         thought_id: z.string().min(1),
@@ -246,16 +246,16 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       const { network_id, thought_id } = args;
       return promptResult(
         [
-          `Предложи возможные связи для мысли сети ETN.`,
+          'Suggest possible links for a thought in the ETN network.',
           ``,
-          `Сделай следующее:`,
-          `1. Прочитай мысль: \`etn://networks/${network_id}/thoughts/${thought_id}\`.`,
-          `2. Изучи её соседей: \`etn://networks/${network_id}/thoughts/${thought_id}/neighbors\`.`,
-          `3. Найди кандидатов поиском: инструмент \`etn.thoughts.search\` (scope=names) по ключевым словам из названия и текстов мысли.`,
-          `4. Для каждого кандидата обоснуй связь и предложи тип (загляни в \`etn://networks/${network_id}/link-types\`).`,
+          'Do the following:',
+          `1. Read the thought: \`etn://networks/${network_id}/thoughts/${thought_id}\`.`,
+          `2. Study its neighbors: \`etn://networks/${network_id}/thoughts/${thought_id}/neighbors\`.`,
+          '3. Find candidates by search: the `etn.thoughts.search` tool (scope=names) over keywords from the thought title and texts.',
+          `4. For each candidate justify the link and suggest a type (look at \`etn://networks/${network_id}/link-types\`).`,
           ``,
-          `Вывод — список из 3–10 предложений в формате: цель → тип связи → обоснование.`,
-          `Не создавай связи самостоятельно — только предложи.`,
+          'Output — a list of 3–10 suggestions in the format: target → link type → rationale.',
+          'Do not create links yourself — only suggest them.',
         ].join('\n'),
       );
     },
@@ -264,31 +264,31 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.detect_duplicates',
     {
-      title: 'Найти дубликаты',
+      title: 'Find duplicates',
       description:
-        'Найти кандидатов на слияние в поддереве: собрать подграф и прогнать названия через find_duplicates.',
+        'Find merge candidates in a subtree: build a subgraph and run the titles through find_duplicates.',
       argsSchema: {
         network_id: z.string().min(1),
         seed_thought_id: z.string().min(1),
         radius: z
           .string()
           .optional()
-          .describe('радиус подграфа: целое число 1..5 строкой (по умолчанию 2)'),
+          .describe('subgraph radius: an integer 1..5 as a string (default 2)'),
       },
     },
     (args) => {
       const radius = parseRadiusArg(args.radius);
       return promptResult(
         [
-          `Найди кандидатов на слияние (дубликаты) в подграфе сети ETN.`,
+          'Find merge candidates (duplicates) in an ETN network subgraph.',
           ``,
-          `Сделай следующее:`,
-          `1. Собери подграф: \`etn.thoughts.subgraph\` с seed_ids=[${JSON.stringify(args.seed_thought_id)}], radius=${radius}.`,
-          `2. Для каждой мысли подграфа вызови \`etn.thoughts.find_duplicates\` с её названием и синонимами.`,
-          `3. Отфильтруй совпадения с оценкой «точное» или «по синониму».`,
+          'Do the following:',
+          `1. Build the subgraph: \`etn.thoughts.subgraph\` with seed_ids=[${JSON.stringify(args.seed_thought_id)}], radius=${radius}.`,
+          '2. For each subgraph thought call `etn.thoughts.find_duplicates` with its title and synonyms.',
+          '3. Keep matches rated "exact" or "by synonym".',
           ``,
-          `Вывод — Markdown-таблица: пара мыслей → тип совпадения → рекомендация (слить/переименовать/оставить).`,
-          `Не изменяй данные — только отчёт.`,
+          'Output — a Markdown table: thought pair → match type → recommendation (merge/rename/keep).',
+          'Do not change data — report only.',
         ].join('\n'),
       );
     },
@@ -297,21 +297,21 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.generate_report',
     {
-      title: 'Отчёт по подграфу',
+      title: 'Subgraph report',
       description:
-        'Собрать Markdown-документ по подграфу на заданную тему: контекст, хронология, выводы.',
+        'Build a Markdown document on a subgraph for a given topic: context, chronology, conclusions.',
       argsSchema: {
         network_id: z.string().min(1),
         topic: z.string().min(1),
         seed_ids: z
           .string()
           .describe(
-            'id ядер подграфа строкой: JSON-массив (["id1","id2"]) или список через запятую/пробелы; 1..20',
+            'subgraph seed ids as a string: a JSON array (["id1","id2"]) or a comma/space separated list; 1..20',
           ),
         radius: z
           .string()
           .optional()
-          .describe('радиус подграфа: целое число 1..5 строкой (по умолчанию 2)'),
+          .describe('subgraph radius: an integer 1..5 as a string (default 2)'),
       },
     },
     (args) => {
@@ -319,16 +319,16 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       const seedIds = parseSeedIds(args.seed_ids);
       return promptResult(
         [
-          `Собери Markdown-отчёт по теме «${args.topic}» на основе данных сети ETN.`,
+          `Build a Markdown report on the topic "${args.topic}" based on the ETN network data.`,
           ``,
-          `Сделай следующее:`,
-          `1. Собери контекст: \`etn.thoughts.subgraph\` с seed_ids=[${seedIds
+          'Do the following:',
+          `1. Build the context: \`etn.thoughts.subgraph\` with seed_ids=[${seedIds
             .map((id) => JSON.stringify(id))
             .join(', ')}], radius=${radius}, include_comments=true.`,
-          `2. При необходимости дополни контекст поиском \`etn.thoughts.search\` и ресурсами типов: \`etn://networks/${args.network_id}/thought-types\`, \`etn://networks/${args.network_id}/link-types\`.`,
-          `3. Составь структурированный документ: цель, ключевые мысли, связи, хронология, выводы и открытые вопросы.`,
+          `2. If needed, extend the context with \`etn.thoughts.search\` and the type resources: \`etn://networks/${args.network_id}/thought-types\`, \`etn://networks/${args.network_id}/link-types\`.`,
+          '3. Compose a structured document: goal, key thoughts, links, chronology, conclusions and open questions.',
           ``,
-          `Вывод — готовый Markdown на русском языке. Если хочешь сохранить отчёт — запиши хронологический комментарий у корневой мысли через \`etn.thoughts.write\` (поле \`chronicle\` в элементе батча).`,
+          'Output — ready Markdown in English. If you want to keep the report, write a chronological comment on the root thought via `etn.thoughts.write` (the `chronicle` field of the batch item).',
         ].join('\n'),
       );
     },
@@ -344,9 +344,9 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.how_to_merge_partial',
     {
-      title: 'Как делать частичное слияние слоя (etn.ops, action layers.merge)',
+      title: 'How to do a partial layer merge (etn.ops, action layers.merge)',
       description:
-        'Пошаговая инструкция: замкнутость выборки tables, конфликты base_version, reserve-слой для отката.',
+        'Step-by-step: `tables` selection closure, base_version conflicts, the reserve layer for rollback.',
       argsSchema: {
         network_id: z.string().min(1),
         layer_id: z.string().min(1).optional(),
@@ -356,20 +356,20 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
       const layerRef = args.layer_id ?? '<layer_id>';
       return promptResult(
         [
-          `Как слить слой в родителя целиком или частично (\`etn.ops { action: "layers.merge" }\`, сеть ${args.network_id}).`,
+          `How to merge a layer into its parent fully or partially (\`etn.ops { action: "layers.merge" }\`, network ${args.network_id}).`,
           ``,
-          `1. Осмотрись: \`etn.layers.list\` — возьми layer_id и убедись, что у слоя есть родитель (основу и служебные слои слить нельзя).`,
-          `2. Посмотри, что в слое: \`etn.ops { action: "layers.diff", params: { network_id: ${JSON.stringify(args.network_id)}, layer_id: ${JSON.stringify(layerRef)} } }\` — структурная разница (links: added/removed/type_changed/reparented/reorder_collapsed; overridden — физические строки слоя). Текстовую разницу даст \`etn.ops { action: "layers.diff_doc", params: { network_id, layer_id } }\` — используй обе.`,
-          `3. Полное слияние: \`etn.ops { action: "layers.merge", params: { network_id, layer_id }, confirm: true }\` — без tables переносятся все изменения слоя.`,
-          `4. Частичное слияние: добавь в params \`tables: { "<таблица>": ["<id строк>"] }\`. Таблицы ветвимы: thoughts, thought_synonyms, links, thought_types, link_types, properties, type_properties, type_property_overrides, property_values, comments, comment_targets, attachments. Ключи — ЛОГИЧЕСКИЕ id строк (те же, что в diff.override и в обычных инструментах).`,
+          '1. Look around: `etn.layers.list` — take the layer_id and make sure the layer has a parent (the base and service layers cannot be merged).',
+          `2. Look at what is in the layer: \`etn.ops { action: "layers.diff", params: { network_id: ${JSON.stringify(args.network_id)}, layer_id: ${JSON.stringify(layerRef)} } }\` — the structural difference (links: added/removed/type_changed/reparented/reorder_collapsed; overridden — physical rows of the layer). The text difference comes from \`etn.ops { action: "layers.diff_doc", params: { network_id, layer_id } }\` — use both.`,
+          '3. Full merge: `etn.ops { action: "layers.merge", params: { network_id, layer_id }, confirm: true }` — without tables all layer changes are transferred.',
+          '4. Partial merge: add `tables: { "<table>": ["<row ids>"] }` to params. Tables are branchable: thoughts, thought_synonyms, links, thought_types, link_types, properties, type_properties, type_property_overrides, property_values, comments, comment_targets, attachments. Keys are LOGICAL row ids (the same as in diff.override and in the regular tools).',
           ``,
-          `Замкнутость (missing_closure): если выбранная строка ссылается на другую строку (связь — на мысль, комментарий — на владельца и т.п.), ссылка должна быть либо тоже выбрана, либо уже существовать в родителе. Ошибка перечисляет недостающие ссылки в details.missing_closure — добавь их в tables и повтори.`,
+          'Closure (missing_closure): if a selected row references another row (a link — a thought, a comment — an owner, etc.), the reference must either be selected too or already exist in the parent. The error lists the missing references in details.missing_closure — add them to tables and retry.',
           ``,
-          `Конфликты (conflicts): если родитель изменил строку после создания слоя (base_version ≠ текущая версия родителя), ВСЯ операция отклоняется — частичного применения не бывает. details.conflicts перечисляет расхождения (таблица, id, expected_base_version, current_version). Разреши конфликт вручную (приведи слой к новой версии родителя) и повтори слияние.`,
+          'Conflicts (conflicts): if the parent changed a row after the layer was created (base_version ≠ the current parent version), the WHOLE operation is rejected — partial application never happens. details.conflicts lists the discrepancies (table, id, expected_base_version, current_version). Resolve the conflict manually (bring the layer to the new parent version) and retry the merge.',
           ``,
-          `Reserve-слой: если слияние что-то перезаписывает или удаляет, сервер автоматически создаёт служебный резервный слой с состоянием до слияния (reserve_layer_id в ответе). Откат ручной: скопируй нужное из резерва, затем удали резерв. Вставки-only слияние резерва не создаёт.`,
-          `Успешный ответ: { applied, skipped, reorder_collapsed, reserve_layer_id, purged }. skipped — связи, чей конец исчез физически (§6.4): слияние всё равно успешно.`,
-          `После слияния проверь остаток: повторный \`etn.ops { action: "layers.diff" }\` покажет, что ещё не слито; пустой слой можно удалить \`etn.ops { action: "layers.delete", params: { network_id, layer_id }, confirm: true }\`.`,
+          'Reserve layer: if the merge overwrites or deletes anything, the server automatically creates a service reserve layer with the state before the merge (reserve_layer_id in the response). Rollback is manual: copy what you need from the reserve, then delete the reserve. An insert-only merge creates no reserve.',
+          'Successful response: { applied, skipped, reorder_collapsed, reserve_layer_id, purged }. skipped — links whose end disappeared physically (§6.4): the merge still succeeds.',
+          'After the merge check the remainder: a repeated `etn.ops { action: "layers.diff" }` shows what is not merged yet; an empty layer can be deleted with `etn.ops { action: "layers.delete", params: { network_id, layer_id }, confirm: true }`.',
         ].join('\n'),
       );
     },
@@ -378,9 +378,9 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.how_to_purge',
     {
-      title: 'Как удалять двухфазно (trash → проверка блокировок → purge)',
+      title: 'How to delete in two phases (trash → block check → purge)',
       description:
-        'Пошаговая инструкция двухфазного удаления: пометка в корзину, проверка блокировок, физическая чистка.',
+        'Step-by-step two-phase deletion: mark to the basket, check blocks, physically purge.',
       argsSchema: {
         network_id: z.string().min(1),
       },
@@ -388,23 +388,23 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
     (args) => {
       return promptResult(
         [
-          `Как физически удалять мысли и связи в сети ${args.network_id} (двухфазное удаление, S13).`,
+          `How to physically delete thoughts and links in network ${args.network_id} (two-phase deletion, S13).`,
           ``,
-          `Фаза 1 — пометка (обратима):`,
-          `1. \`etn.ops { action: "thoughts.trash", params: { network_id, thought_id, trashed: true } }\` — мысль уходит в корзину, исчезая из обычных выборок, но физически остаётся. Вернуть: тот же action с \`trashed: false\`.`,
-          `2. Посмотри корзину целиком: \`etn.ops { action: "trash.list", params: { network_id } }\` — каждая строка уже с готовой проверкой блокировки (blocked/blocking), без отдельной проверки блокировок.`,
+          'Phase 1 — marking (reversible):',
+          '1. `etn.ops { action: "thoughts.trash", params: { network_id, thought_id, trashed: true } }` — the thought goes to the basket, disappearing from regular queries but physically staying. To restore: the same action with `trashed: false`.',
+          '2. Look at the whole basket: `etn.ops { action: "trash.list", params: { network_id } }` — each row already has a computed block check (blocked/blocking), no separate block check needed.',
           ``,
-          `Что блокирует физическое удаление:`,
-          `- использование мысли как цели свойства-связи другой мысли (снять: \`etn.ops { action: "usage_clear", params: { network_id, thought_id } }\` или убрать связь у владельца);`,
-          `- удержание живой теневой строкой рабочего слоя (holding_layers в blocking; сначала разбери/слей слой: \`etn.ops { action: "layers.merge" }\`);`,
-          `- будущие сироты: физическое удаление мысли с детьми не удаляет детей, но о них сообщит проверка (orphaned_children).`,
-          `Точечная проверка без корзины: \`etn.ops { action: "thoughts.deletion_check", params: { network_id, thought_ids: [...] } }\`.`,
+          'What blocks a physical delete:',
+          '- the thought being used as a link-property target of another thought (clear: `etn.ops { action: "usage_clear", params: { network_id, thought_id } }` or remove the link at the owner);',
+          '- holding by a live shadow row of a working layer (holding_layers in blocking; first analyse/merge the layer: `etn.ops { action: "layers.merge" }`);',
+          '- future orphans: a physical delete of a thought with children does not delete the children, but the check reports them (orphaned_children).',
+          'A point check without the basket: `etn.ops { action: "thoughts.deletion_check", params: { network_id, thought_ids: [...] } }`.',
           ``,
-          `Фаза 2 — физическая чистка:`,
-          `3. \`etn.ops { action: "trash.purge", params: { network_id }, confirm: true }\` — «удалить всё, что возможно»: физически стирает каждую помеченную строку без блокировок, заблокированные молча пропускает. Ответ { purged, skipped }.`,
-          `4. Если что-то осталось в skipped — разбери блокировки по списку above и повтори purge.`,
+          'Phase 2 — physical purge:',
+          '3. `etn.ops { action: "trash.purge", params: { network_id }, confirm: true }` — "delete everything possible": physically erases every marked row without blocks and silently skips blocked ones. Response { purged, skipped }.',
+          '4. If anything remains in skipped — resolve the blocks from the list above and repeat the purge.',
           ``,
-          `Прямое \`etn.ops { action: "thoughts.delete", params: { network_id, thought_id }, confirm: true }\` — физическое удаление сразу; оно само прогоняет ту же проверку блокировок и падает с details.blocking (плюс details.how_to с именем этого промпта), если удаление заблокировано. Защищённые мысли (HOME) не удаляются вовсе.`,
+          'A direct `etn.ops { action: "thoughts.delete", params: { network_id, thought_id }, confirm: true }` — physical deletion at once; it runs the same block check itself and fails with details.blocking (plus details.how_to with this prompt name) if the deletion is blocked. Protected thoughts (HOME) are never deleted.',
         ].join('\n'),
       );
     },
@@ -416,9 +416,9 @@ export function registerPrompts(mcp: McpServer, _rt: McpRuntime): void {
   mcp.registerPrompt(
     'etn.how_to_write_batch',
     {
-      title: 'Как делать батч-запись мыслей через etn.thoughts.write',
+      title: 'How to do a thought batch write via etn.thoughts.write',
       description:
-        'Пошаговая инструкция для `etn.thoughts.write`: локальные `ref`, `target_ref`, циклы, лимиты, миграция с поглощённых инструментов.',
+        'Step-by-step for `etn.thoughts.write`: local `ref`, `target_ref`, cycles, limits, migration from the absorbed tools.',
       argsSchema: {
         network_id: z.string().min(1),
       },

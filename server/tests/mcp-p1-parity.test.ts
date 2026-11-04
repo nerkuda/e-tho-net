@@ -187,7 +187,7 @@ describe('etn.thoughts.resolve (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.ok(resolveTool, 'etn.thoughts.resolve должен быть в списке инструментов');
         const description = resolveTool!.description ?? '';
         assert.match(description, /comment_preview/);
-        assert.match(description, /meta\.permanent`\s*намеренно\s*`null/);
+        assert.match(description, /meta\.permanent`\s*is intentionally\s*`null/);
       } finally {
         await handle.close();
       }

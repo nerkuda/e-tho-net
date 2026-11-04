@@ -236,15 +236,15 @@ function assertEffectsMatchRegistry(profileId: FilterProfileId, action: string):
 
 describe('guard: списки операторов темы гайда = реестр профилей (71f547c1, 6a224eba)', () => {
   it('thoughts.query: операнды профиля мыслей документированы ровно по реестру', () => {
-    assertTopicMatchesRegistry('thoughts', 'thoughts.query', 'Операнды (`entity.kind`)');
+    assertTopicMatchesRegistry('thoughts', 'thoughts.query', 'Operands (`entity.kind`)');
   });
 
   it('activity.list: каждый операнд профиля «события» документирован ровно по реестру', () => {
-    assertTopicMatchesRegistry('events', 'activity.list', 'Операнды записи события');
+    assertTopicMatchesRegistry('events', 'activity.list', 'Event record operands');
   });
 
   it('thoughts.query: операнды профиля «хроника» документированы ровно по реестру', () => {
-    assertTopicMatchesRegistry('chronicle', 'thoughts.query', '### Профиль «хроника»');
+    assertTopicMatchesRegistry('chronicle', 'thoughts.query', 'The "chronicle" profile');
   });
 
   it('attachments.search: операнды профиля «вложения» документированы ровно по реестру', () => {
@@ -257,16 +257,26 @@ describe('guard: списки операторов темы гайда = рее�
     assert.ok(topic !== undefined);
     // Буллеты `states` не должны попадать в секцию операндов: иначе сторож
     // паритета прочтёт их как операнды вне профиля.
-    const section = operandSection(topic.body_md, 'Операнды (`entity.kind`)');
+    const section = operandSection(topic.body_md, 'Operands (`entity.kind`)');
     assert.ok(!/^-\s+`states`/m.test(section), '`states` описан вне секции операндов');
+    // Подписи состояний в MCP-справке английские (ADR daab6ac4); словарь
+    // FILTER_LINK_EDGE_STATE_LABELS — клиентский (русский интерфейс), в гайд
+    // не проецируется.
+    const stateLabelEn: Record<string, string> = {
+      active: '("active")',
+      inactive: '("inactive")',
+      trashed: '("in the basket")',
+      not_trashed: '("not in the basket")',
+    };
     for (const state of shared.FILTER_LINK_EDGE_STATES) {
       assert.ok(
         topic.body_md.includes(`\`${state}\``),
         `справка обязана называть состояние ребра ${state}`,
       );
-    }
-    for (const label of Object.values(shared.FILTER_LINK_EDGE_STATE_LABELS)) {
-      assert.ok(topic.body_md.includes(label), `справка обязана называть подпись «${label}»`);
+      assert.ok(
+        topic.body_md.includes(stateLabelEn[state]!),
+        `справка обязана называть английскую подпись состояния ${state} (${stateLabelEn[state]})`,
+      );
     }
     for (const kind of ['incoming_links', 'outgoing_links'] as const) {
       assert.ok(topic.body_md.includes(`\`${kind}\``), `справка обязана описывать ${kind}`);

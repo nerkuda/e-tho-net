@@ -40,19 +40,19 @@ export function registerCustomViewsWriteTool(mcp: McpServer, rt: McpRuntime): vo
   mcp.registerTool(
     'etn.custom_views.write',
     {
-      title: 'Батч-запись внетиповых отборов мысли',
+      title: 'Batch write of out-of-type thought views',
       description:
-        'Батч-запись внетиповых отборов одной мысли: `views[]` 1–50, одна транзакция «всё или ' +
-        'ничего», один write-бюджет и одна строка `audit_log`; события — по одному на изменённый ' +
-        'отбор. Элемент: `action` `create`|`update`|`delete`; create — `ref?` (локальная ссылка ' +
-        'батча), `name`, `definition` (JSON-строка), `description?`, `position?`, `is_default?`, ' +
-        '`on_duplicate?` (`fail`|`reuse`|`update`); update — полный `id` живого отбора этой мысли XOR ' +
-        '`ref`, `expected_version?`, частичный патч (пустой — `VALIDATION_ERROR`); delete — `id` XOR ' +
-        '`ref`, без `expected_version`. `ref` резолвится вторым проходом (вперёд и create+delete в ' +
-        'батче); неразрешённый — `VALIDATION_ERROR` `views[i].ref`. Чужой `id` — 404; дубль имени — ' +
-        '409 `DUPLICATE` (`details.existing_id`). Ответ: `{ items, warnings: [], layer }` — полные ' +
-        'карточки create/update и `{ action: "deleted", id }`; чтение — `meta.views` карточек ' +
-        '(`scope: "thought"`), исполнение — `etn.views.run`.',
+        'Batch write of out-of-type views of one thought: `views[]` 1–50, one all-or-' +
+        'nothing transaction, one write budget and one `audit_log` row; events — one per changed ' +
+        'view. Item: `action` `create`|`update`|`delete`; create — `ref?` (batch-local ' +
+        'reference), `name`, `definition` (JSON string), `description?`, `position?`, `is_default?`, ' +
+        '`on_duplicate?` (`fail`|`reuse`|`update`); update — the full `id` of a live view of this thought XOR ' +
+        '`ref`, `expected_version?`, a partial patch (empty — `VALIDATION_ERROR`); delete — `id` XOR ' +
+        '`ref`, without `expected_version`. `ref` is resolved by a second pass (forward and create+delete in ' +
+        'the batch); unresolved — `VALIDATION_ERROR` `views[i].ref`. A foreign `id` — 404; a duplicate name — ' +
+        '409 `DUPLICATE` (`details.existing_id`). Response: `{ items, warnings: [], layer }` — full ' +
+        'cards for create/update and `{ action: "deleted", id }`; reading — `meta.views` of cards ' +
+        '(`scope: "thought"`), execution — `etn.views.run`.',
       inputSchema: CustomViewsWrite.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.custom_views.write'],
     },
