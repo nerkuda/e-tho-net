@@ -713,6 +713,8 @@ function renderAudit(content: HTMLElement): void {
 
   /** Загруженные записи журнала — источник клиентского фильтра поиска. */
   let loaded: AuditLogEntry[] = [];
+  /** Всего записей в окне фильтра на сервере (`meta.total`) — для итога. */
+  let loadedTotal = 0;
   /** Текущая таблица журнала: пересобирается в `paint`, мост ищет её через замыкание. */
   let auditTable: TableHandle<AuditLogEntry> | null = null;
 
@@ -794,7 +796,7 @@ function renderAudit(content: HTMLElement): void {
     });
     tableWrap.replaceChildren(
       table.element,
-      el('p', 'faint', t('admin.vsegoRecords', loaded.length)),
+      el('p', 'faint', t('admin.vsegoRecords', loadedTotal)),
     );
     auditTable = table;
   }
@@ -813,6 +815,7 @@ function renderAudit(content: HTMLElement): void {
         limit: 100,
       })) as { entries: AuditLogEntry[]; total: number };
       loaded = result.entries;
+      loadedTotal = result.total;
       paint();
     } catch (err) {
       tableWrap.replaceChildren(operationError(err));

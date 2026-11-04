@@ -38,6 +38,7 @@ import {
   type ApiList,
   type ApiSuccess,
   type AuditListResult,
+  type AuditLogEntry,
   type DuplicateHit,
   type DuplicateSearchMode,
   type EtnErrorBody,
@@ -1269,7 +1270,15 @@ export class RestClient {
     });
   }
 
-  /** `GET /admin/audit` — query the audit log (admin). */
+  /**
+   * `GET /admin/audit` — query the audit log (admin).
+   *
+   * REST отдаёт список `{ data, meta: { total, offset, limit } }`; метод
+   * собирает его в `{ entries, total }` — форма IPC/рендерера (ошибка
+   * 0111ca49: раньше `request()` возвращал только `data`-массив, а админ-панель
+   * ждала `{ entries, total }`). `total` — размер окна до пагинации; при
+   * отсутствии `meta.total` берётся размер страницы.
+   */
   public async adminListAudit(
     query?: import('@etn/shared').AuditQuery,
   ): Promise<AuditListResult> {
@@ -1283,7 +1292,14 @@ export class RestClient {
       if (query.limit !== undefined) q['limit'] = query.limit;
       if (query.offset !== undefined) q['offset'] = query.offset;
     }
-    return this.request('GET', '/admin/audit', { query: Object.keys(q).length ? q : undefined });
+    const { data: entries, meta: envelope } = await this.requestEnvelope<AuditLogEntry[]>(
+      'GET',
+      '/admin/audit',
+      { query: Object.keys(q).length ? q : undefined },
+    );
+    const meta = envelope as { total?: number } | undefined;
+    const total = typeof meta?.total === 'number' ? meta.total : entries.length;
+    return { entries, total };
   }
 
   // -------------------------------------------------------------------------

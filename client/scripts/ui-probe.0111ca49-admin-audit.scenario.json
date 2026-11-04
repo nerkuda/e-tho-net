@@ -1,0 +1,72 @@
+{
+  "name": "admin-audit-log",
+  "description": "Ошибка 0111ca49: вкладка «Аудит» админ-панели строит таблицу журнала. REST отдаёт список { data, meta: { total } }, IPC adminListAudit собирает { entries, total }; до фикса панель падала на массиве («Cannot convert undefined or null to object», tables: 0). Стенд свежий: язык сервера ставится ru предусловием, онбординг — админским ключом, seed уже создал записи аудита (category=data). Проверяем: таблица построена, ошибки нет, итог «Всего записей: N» (N>0) и он равен числу записей на странице при N<=100. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.0111ca49-admin-audit.scenario.json",
+  "timeout": 150000,
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "serverLanguage",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": { "language": "ru" }
+      },
+      "expect": { "language": "ru" }
+    },
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 25000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "open-user-menu", "click": "button[title=\"Меню пользователя\"]" },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-admin-panel",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Администрирование'); if (!row) throw new Error('нет пункта «Администрирование»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "admin-panel-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .ui-tab').length === 4 && document.querySelector('.dialog-backdrop .dialog-title')?.textContent === 'Администрирование'"
+    },
+    {
+      "name": "open-audit-tab",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .ui-tab')).find((e) => (e.textContent || '').trim() === 'Аудит'); if (!b) throw new Error('нет вкладки «Аудит»'); b.click(); return true; })()"
+    },
+    {
+      "name": "audit-pane-loaded",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-table-wrap .ui-table') !== null"
+    },
+    {
+      "name": "audit-no-error",
+      "probe": "document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-table-wrap .error-text')?.textContent ?? null",
+      "expect": null
+    },
+    {
+      "name": "audit-grid-built",
+      "probe": "document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active .admin-table-wrap .ui-table .ui-table-grid').length > 0",
+      "expect": true
+    },
+    {
+      "name": "audit-cells-built",
+      "probe": "(() => { const g = document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-table-wrap .ui-table .ui-table-grid'); return g !== null && Array.isArray(g.items) && g.items.length > 0; })()",
+      "expect": true
+    },
+    {
+      "name": "audit-total-present",
+      "probe": "(() => { const text = document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-table-wrap > p.faint')?.textContent ?? ''; const m = /Всего записей: (\\d+)/.exec(text); return m !== null && Number(m[1]) > 0; })()",
+      "expect": true
+    },
+    {
+      "name": "audit-rows-match-total",
+      "probe": "(() => { const text = document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-table-wrap > p.faint')?.textContent ?? ''; const m = /Всего записей: (\\d+)/.exec(text); const g = document.querySelector('.dialog-backdrop .ui-tabpanel.active .admin-table-wrap .ui-table .ui-table-grid'); const rows = g !== null && Array.isArray(g.items) ? g.items.length : -1; return m === null ? false : Number(m[1]) === rows; })()",
+      "expect": true
+    }
+  ]
+}

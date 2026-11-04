@@ -1372,3 +1372,36 @@ describe('RestClient — деградация выборки на сервер �
     assert.equal(retry.cursor, undefined);
   });
 });
+
+describe('RestClient — adminListAudit: форма { entries, total } (ошибка 0111ca49)', () => {
+  const ENTRY = {
+    id: 1,
+    ts: '2026-11-04T00:00:00.000Z',
+    actor_user_id: null,
+    network_id: null,
+    category: 'auth' as const,
+    action: 'login',
+    target_type: null,
+    target_id: null,
+    details: null,
+  };
+
+  it('собирает data и meta.total в { entries, total }', async () => {
+    const { fetch, calls } = makeFetch([
+      { status: 200, body: { data: [ENTRY], meta: { total: 42, offset: 0, limit: 100 } } },
+    ]);
+    const client = makeClient(fetch);
+
+    const result = await client.adminListAudit({ limit: 100 });
+
+    assert.deepEqual(result, { entries: [ENTRY], total: 42 });
+    assert.ok(calls[0]!.url.includes('/admin/audit?limit=100'), calls[0]!.url);
+  });
+
+  it('без meta.total итог равен размеру страницы', async () => {
+    const { fetch } = makeFetch([{ status: 200, body: { data: [ENTRY] } }]);
+    const client = makeClient(fetch);
+
+    assert.deepEqual(await client.adminListAudit(), { entries: [ENTRY], total: 1 });
+  });
+});
