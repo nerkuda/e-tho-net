@@ -808,12 +808,12 @@ function renderAudit(content: HTMLElement): void {
   async function loadAudit(): Promise<void> {
     tableWrap.replaceChildren(loadingState());
     try {
-      const result = (await etn.admin.listAudit({
+      const result = await etn.admin.listAudit({
         category: categorySelect.value === '' ? undefined : categorySelect.value,
         from: fromInput.value === '' ? undefined : fromInput.value,
         to: toInput.value === '' ? undefined : toInput.value,
         limit: 100,
-      })) as { entries: AuditLogEntry[]; total: number };
+      });
       loaded = result.entries;
       loadedTotal = result.total;
       paint();

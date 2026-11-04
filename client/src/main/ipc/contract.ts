@@ -34,6 +34,7 @@ export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState
 
 import type {
   ApiKey,
+  AuditListResult,
   Attachment,
   AttachmentContent,
   AttachmentContentUpdateInput,
@@ -1368,7 +1369,7 @@ export interface EtnApi {
     removeUserKey(id: string, keyId: string): Promise<void>;
     listNetworks(): Promise<Network[]>;
     removeNetwork(id: string): Promise<void>;
-    listAudit(filters?: Record<string, unknown>): Promise<unknown>;
+    listAudit(filters?: Record<string, unknown>): Promise<AuditListResult>;
     /**
      * `GET /admin/settings/language` — язык сервера по умолчанию, нижняя
      * ступень наследования языка интерфейса (ADR daab6ac4 §1–2).
