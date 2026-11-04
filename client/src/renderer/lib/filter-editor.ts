@@ -327,14 +327,14 @@ function assertButtonsContract(opts: FilterEditorOptions): void {
   if (opts.buttons?.standard === false) return;
   if (opts.host.save === undefined) {
     throw new Error(
-      'buildFilterEditor: стандартный набор кнопок требует host.save (запись отбора); ' + // i18n: technical
-        'для мест со своими кнопками передайте buttons: { standard: false }' // i18n: technical
+      'buildFilterEditor: стандартный набор кнопок требует host.save (запись отбора); ' + // i18n: technical — контракт API для разработчика
+        'для мест со своими кнопками передайте buttons: { standard: false }' // i18n: technical — контракт API для разработчика
     );
   }
   if (opts.host.reset === undefined) {
     throw new Error(
-      'buildFilterEditor: стандартный набор кнопок требует host.reset (очистка условий); ' + // i18n: technical
-        'для мест со своими кнопками передайте buttons: { standard: false }' // i18n: technical
+      'buildFilterEditor: стандартный набор кнопок требует host.reset (очистка условий); ' + // i18n: technical — контракт API для разработчика
+        'для мест со своими кнопками передайте buttons: { standard: false }' // i18n: technical — контракт API для разработчика
     );
   }
 }

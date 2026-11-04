@@ -433,7 +433,7 @@ export function undefineKeyContext(id: string): void {
  */
 export function pushKeyContext(id: string): () => void {
   if (!isKnownContext(id)) {
-    throw new Error(`Контекст "${id}" не объявлен через defineKeyContext`); // i18n: technical
+    throw new Error(`Контекст "${id}" не объявлен через defineKeyContext`); // i18n: technical — ошибка программиста, не пользовательская строка
   }
   const token = Symbol(id);
   stack.push({ id, token });

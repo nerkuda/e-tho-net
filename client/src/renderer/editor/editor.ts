@@ -2723,7 +2723,7 @@ function focusOnMapFromMenu(
     return;
   }
   void focusOnMap(thoughtId).catch((error: unknown) => {
-    console.error('[editor] не удалось открыть карту мыслей', error); // i18n: technical
+    console.error('[editor] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
     notice(t('editor.focusOnMapFailed', errText(error)), 'error');
   });
 }

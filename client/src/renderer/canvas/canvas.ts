@@ -785,7 +785,7 @@ function scheduleRender(): void {
       // Отказ render() НЕ должен теряться (ошибка 1656ef58): прежде `void
       // render()` оставлял исключение необработанным отказом, и сбой выглядел
       // как «зависание» без реакции. Логируем и повторяем расклад целиком.
-      console.error('[canvas] рендер прерван — повтор на следующем тике', error); // i18n: technical
+      console.error('[canvas] рендер прерван — повтор на следующем тике', error); // i18n: technical — диагностика для разработчика
       rebuildFailures += 1;
       scheduleRebuildRetry();
     });
@@ -980,7 +980,7 @@ async function render(): Promise<void> {
     // «применённым» этот расклад не считаем (lastFocusId/lastFocusResponse не
     // двигаем), следующий тик повторяет render() целиком. Без этого фокус
     // оставался новым, а зоны — прежними до следующего внешнего триггера.
-    console.error('[canvas] пересборка расклада прервана — повтор целиком', error); // i18n: technical
+    console.error('[canvas] пересборка расклада прервана — повтор целиком', error); // i18n: technical — диагностика для разработчика
     rebuildFailures += 1;
     scheduleRebuildRetry();
     return;

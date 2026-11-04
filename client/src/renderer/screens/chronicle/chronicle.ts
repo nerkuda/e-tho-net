@@ -2063,7 +2063,7 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
             void import('../active-view.js')
               .then(({ focusThoughtOnMap }) => focusThoughtOnMap(target.thought.id))
               .catch((error) => {
-                console.error('[chronicle] не удалось открыть карту мыслей', error); // i18n: technical
+                console.error('[chronicle] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
               });
           },
           extraItems: [

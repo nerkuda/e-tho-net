@@ -1264,7 +1264,7 @@ async function openCommentOrAttachmentOwner(
   if (target.owner_type === 'publication') {
     // Редактор публикации появится вместе с экраном «Публикации» (задача
     // a3cfc018) — до тех пор показываем снимок из журнала.
-    throw new Error('редактор публикации недоступен'); // i18n: technical
+    throw new Error('редактор публикации недоступен'); // i18n: technical — ошибка программиста, не пользовательская строка
   }
   const link = await etn.links.get(networkId, target.owner_id, atLayer);
   store.update({

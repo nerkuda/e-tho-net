@@ -824,7 +824,7 @@ async function focusLinkRef(id: string): Promise<void> {
     const { focusThoughtOnMap } = await import('../screens/active-view.js');
     await focusThoughtOnMap(id);
   } catch (error) {
-    console.error('[mini-graph] не удалось открыть карту мыслей', error); // i18n: technical
+    console.error('[mini-graph] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
   }
 }
 
