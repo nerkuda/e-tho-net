@@ -353,6 +353,11 @@ RestartApplications=no
 ; без UAC и без respawn. /CURRENTUSER не нужен: обычный запуск и так lowest.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
+; Один установщик за раз (наблюдение заказчика 2026-11-04): параллельный запуск
+; второй версии во время первого оставлял залипший сеанс ввода. Inno создаёт
+; мьютекс и второй экземпляр останавливает сообщением «установка уже
+; запущена», ничего не меняя; в silent-режиме сообщение подавляется.
+SetupMutex=ETNSetup
 ; Предупреждение Inno «per-user areas in admin mode» снято осознанно: пути
 ; {localappdata}/{userdesktop}/{userprograms} используются только установкой
 ; клиента «только для меня», а в элевированном (административном) запуске эта
