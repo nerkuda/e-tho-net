@@ -191,6 +191,7 @@
 ;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
 ;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
 ;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID,
+;   /TESTPORTBINDFAIL, /TESTLISTENERTABLEOFF, /TESTNOSERVICE,
 ;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
 ;   /TESTSERVICEWAIT, /TESTSERVICEINSTALL, /TESTSERVICEUNINSTALL,
 ;   /TESTSERVICEREALFILE, /TESTUNINSTALLSERVICE, /TESTHEALTHURL,
@@ -654,6 +655,14 @@ var
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
   GTestOwnServicePid: String;
+  { 1dddac77: имитация неизвестного отказа пробного bind в запасной ветке —
+    проверка перехода в статус 2 (fail-closed, код 20 с причиной). }
+  GTestPortBindFail: String;
+  { 1dddac77: имитация недоступной TCP-таблицы Windows (сборка без перечисления
+    слушателей) и отсутствия службы ETN — проверка ветки «своя служба жива,
+    таблица сломана» без реальной аномалии ОС. }
+  GTestListenerTableOff: String;
+  GTestNoService: String;
   { Тестовые хуки bb063ac3: служба и health-check без реальной службы Windows
     и без настоящего сервера — подмена исполняемого файла службы, её состояния
     и команд, базового URL health-check, бюджетов ожидания и сбоя отката. }
@@ -5341,26 +5350,56 @@ end;
   входят (IPv6-only слушатель серверу не мешает); dual-stack `::` показывается
   в Get-NetTCPConnection и ловится перебором адресов. Если сервер начнёт
   слушать IPv6, перечисление надо расширить.
-  Если командлет недоступен или IPv4-слушателей нет, порт проверяется без
-  пробного bind на все интерфейсы: зарезервированные диапазоны (Hyper-V/WinNAT,
-  TIME_WAIT после перезапуска) читаются из netsh, затем пробный bind на
-  127.0.0.1 (loopback). Пробный bind 0.0.0.0 вызывал диалог Windows Security
-  «Allow для Windows PowerShell» прямо во время установки (ошибка 860def0d,
-  п.4).
+  Пустой или неуспешный ответ перечисления НЕ означает «порт свободен»:
+  на Windows 11 build 28000 (KB5133111/KB5127653) TCP-таблица не показывает
+  только что созданные слушатели — Get-NetTCPConnection падает с ObjectNotFound,
+  netstat по порту пуст, а TcpClient.Connect успешен (ошибка 1dddac77). Поэтому
+  запасная ветка работает fail-closed: зарезервированные диапазоны
+  (Hyper-V/WinNAT) читаются из netsh, затем выполняется эксклюзивный bind на
+  0.0.0.0 (SO_EXCLUSIVEADDRUSE) БЕЗ Listen. Раньше здесь был TcpListener на
+  loopback: у него ExclusiveAddressUse=false, bind проходил при живом
+  слушателе на 0.0.0.0/чужом конкретном адресе (SO_REUSEADDR), и порт
+  считался свободным — fail-open. Эксклюзивный bind на 0.0.0.0 ловит все
+  такие случаи и не срабатывает на свободном порту. Listen() не вызывается
+  сознательно: он создаёт слушающий endpoint, и Windows Security показывает
+  диалог «Allow для Windows PowerShell» прямо во время установки (ошибка
+  860def0d, п.4); bind без Listen диалога не вызывает (проверено на build
+  28000: положительный контроль с listen() даёт диалог, bind — нет).
+  Ошибка bind AddressAlreadyInUse/AccessDenied — порт занят (1); любая другая
+  ошибка (проверить не удалось) — статус 2.
+  На сборках Windows с неработающей TCP-таблицей (build 28000,
+  KB5133111/KB5127653) владельца слушателя не узнать: own-PID сопоставление
+  невозможно, а эксклюзивный bind падает на порту живой своей службы — тогда
+  установка и автообновление поверх работающей установки всегда получали бы
+  20. Поэтому доступность таблицы проверяется пробой: временный TcpListener на
+  loopback с портом 0 обязан появиться в Get-NetTCPConnection со своим PID
+  (listen только на loopback диалога брандмауэра не даёт). Если таблица не
+  работает, но служба ETN зарегистрирована и запущена (svcFound=1), порт
+  считается своим (0): службу остановит ssInstall, а её работоспособность
+  проверит health-check. Без запущенной службы — прежний fail-closed (netsh +
+  эксклюзивный bind). Если таблица работает, логика не меняется: строки есть —
+  foreign/own, строк нет — netsh + эксклюзивный bind.
   Возвращает 0 — свободен (или держит служба ETN), 1 — занят, 2 — проверить
   не удалось. Тестовые хуки (только TestMode): TESTSERVICENAME подменяет имя
   службы, и скрипт возвращает 0/2 по факту её нахождения (поведенческая проба
   CIM-запроса); TESTOWNSERVICEPID задаёт PID «своей» службы вместо CIM-запроса
-  (поведенческая проба сравнения владельцев и цепочки потомков). }
+  (поведенческая проба сравнения владельцев и цепочки потомков);
+  TESTPORTBINDFAIL=1 имитирует неизвестный отказ пробного bind (статус 2);
+  TESTLISTENERTABLEOFF=1 — недоступную TCP-таблицу, TESTNOSERVICE=1 —
+  отсутствие службы (проверка новых веток без аномальной ОС). }
 function ServerPortStatus(const Port: String): Integer;
 var
-  Script, Args, SvcName, SvcNameLiteral, SvcProbe, OwnSeed: String;
+  Script, Args, SvcName, SvcNameLiteral, SvcProbe, OwnSeed, BindFail,
+  TableOff, NoSvc: String;
   Code: Integer;
 begin
   Result := 2;
   SvcName := SERVICE_NAME;
   SvcProbe := '0';
   OwnSeed := '0';
+  BindFail := '0';
+  TableOff := '0';
+  NoSvc := '0';
 #ifdef TestMode
   if GTestServiceName <> '' then
   begin
@@ -5370,6 +5409,12 @@ begin
   { Валидация PID: строка из параметра идёт в скрипт только если это число. }
   if StrToIntDef(GTestOwnServicePid, 0) > 0 then
     OwnSeed := IntToStr(StrToIntDef(GTestOwnServicePid, 0));
+  if GTestPortBindFail = '1' then
+    BindFail := '1';
+  if GTestListenerTableOff = '1' then
+    TableOff := '1';
+  if GTestNoService = '1' then
+    NoSvc := '1';
 #endif
   { Имя службы — в одинарные кавычки PowerShell; кавычки внутри имени
     удваиваются (правило PS-литерала). Двойных кавычек в скрипте нет. }
@@ -5378,10 +5423,11 @@ begin
   Script :=
     '$ErrorActionPreference=''SilentlyContinue'';$port=' + Port + ';' +
     '$svcName=''' + SvcNameLiteral + ''';' +
-    '$svcProbe=' + SvcProbe + ';$ownSeed=' + OwnSeed + ';' +
+    '$svcProbe=' + SvcProbe + ';$ownSeed=' + OwnSeed + ';$bindFail=' + BindFail +
+    ';$tableOff=' + TableOff + ';$noSvc=' + NoSvc + ';' +
     '$svcFound=0;$own=@();' +
-    'if($ownSeed -gt 0){$own+=$ownSeed}' +
-    'else{try{$svc=Get-CimInstance Win32_Service|' +
+    'if($ownSeed -gt 0){$own+=$ownSeed;$svcFound=1}' +
+    'elseif($noSvc -eq 0){try{$svc=Get-CimInstance Win32_Service|' +
     'Where-Object{$_.Name -eq $svcName}|Select-Object -First 1;' +
     'if($svc -and ([int]$svc.ProcessId -gt 0)){$svcFound=1;' +
     '$own+=[int]$svc.ProcessId}}catch{}};' +
@@ -5393,26 +5439,58 @@ begin
     'if($front -contains [int]$p.ParentProcessId){' +
     '$own+=[int]$p.ProcessId;$next+=[int]$p.ProcessId}};' +
     '$front=$next}};' +
-    '$v4=$null;' +
-    'try{$v4=@(Get-NetTCPConnection -LocalPort $port -State Listen ' +
-    '-ErrorAction Stop|Where-Object{$_.LocalAddress -notmatch '':''})}catch{};' +
+    { Доступность TCP-таблицы: временный слушатель на loopback с портом 0
+      обязан появиться в перечислении со своим PID. На аномальной сборке
+      Windows (1dddac77) таблица его не показывает — тогда перечисление
+      непригодно, и порт проверяется запасной веткой. Проба не даёт диалога
+      брандмауэра: listen только на loopback. }
+    '$tableOk=0;$v4=$null;' +
+    'if($tableOff -eq 0){' +
+    '$pl=$null;try{$pl=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,0);' +
+    '$pl.Start();$pp=([Net.IPEndPoint]$pl.LocalEndpoint).Port;$tableOk=0;' +
+    'for($i=0;$i -lt 10;$i++){' +
+    '$c=@(Get-NetTCPConnection -LocalPort $pp -State Listen -ErrorAction Stop|' +
+    'Where-Object{[int]$_.OwningProcess -eq $PID});' +
+    'if($c.Count -gt 0){$tableOk=1;break};Start-Sleep -Milliseconds 100}}' +
+    'catch{$tableOk=0}' +
+    'finally{if($pl){$pl.Stop()}};' +
+    'if($tableOk -eq 1){try{' +
+    '$v4=@(Get-NetTCPConnection -LocalPort $port -State Listen ' +
+    '-ErrorAction Stop|Where-Object{$_.LocalAddress -notmatch '':''})' +
+    '}catch{$v4=$null}}};' +
     'if($null -ne $v4 -and $v4.Count -gt 0){' +
     '$foreign=@($v4|Where-Object{$own -notcontains [int]$_.OwningProcess});' +
     'if($foreign.Count -eq 0){exit 0};exit 1};' +
-    { Порт в зарезервированном диапазоне (Hyper-V/WinNAT, TIME_WAIT после
-      перезапуска) слушателя не имеет, но bind на 0.0.0.0 для него закрыт.
-      Раньше это ловилось пробным bind на все интерфейсы — он и вызывал диалог
-      Windows Security «Allow для Windows PowerShell» во время установки.
-      Диапазоны читаем через netsh, пробный bind остаётся только на loopback
-      (loopback диалога не вызывает). Ошибка 860def0d, п.4. }
+    { Таблица недоступна, но служба ETN зарегистрирована и запущена: порт
+      считаем своим — службу остановит ssInstall, работоспособность проверит
+      health-check. Иначе повторная установка/автообновление на аномальной ОС
+      всегда падали бы с «порт занят» на собственной службе. }
+    'if(($tableOk -eq 0) -and ($svcFound -eq 1)){exit 0};' +
+    { Пустое перечисление — не признак свободного порта: на аномальной
+      сборке Windows TCP-таблица не показывает новые слушатели (1dddac77).
+      Порт в зарезервированном диапазоне (Hyper-V/WinNAT) слушателя не имеет,
+      но bind/Listen для него закрыт; диапазоны читаем через netsh (bind без
+      Listen исключения не проверяет). Ошибка 860def0d, п.4. }
     'try{$ex=@(netsh int ipv4 show excludedportrange protocol=tcp)}catch{$ex=@()};' +
     'foreach($ln in $ex){$t=@(($ln.Trim()) -split ''\s+'');' +
     'if($t.Count -ge 2){$a=0;$b=0;' +
     'if([int]::TryParse($t[0],[ref]$a)){if([int]::TryParse($t[1],[ref]$b)){' +
     'if(($port -ge $a) -and ($port -le $b)){exit 1}}}}}' +
-    'try{$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,$port);' +
-    '$l.Start();$l.Stop()}catch{exit 1};' +
-    'exit 0';
+    { Fail-closed проба: эксклюзивный bind на 0.0.0.0 без Listen. }
+    'if($bindFail -eq 1){exit 2};' +
+    '$sock=$null;' +
+    'try{$sock=New-Object Net.Sockets.Socket([Net.Sockets.AddressFamily]::InterNetwork,' +
+    '[Net.Sockets.SocketType]::Stream,[Net.Sockets.ProtocolType]::Tcp);' +
+    '$sock.SetSocketOption([Net.Sockets.SocketOptionLevel]::Socket,' +
+    '[Net.Sockets.SocketOptionName]::ExclusiveAddressUse,$true);' +
+    '$ep=New-Object Net.IPEndPoint([Net.IPAddress]::Any,$port);' +
+    '$sock.Bind($ep);$sock.Close();exit 0}' +
+    'catch{' +
+    'if($sock){$sock.Close()};' +
+    '$se=$_.Exception;while($se.InnerException){$se=$se.InnerException};' +
+    '$ec=-1;if($se -is [Net.Sockets.SocketException]){$ec=[int]$se.SocketErrorCode};' +
+    { 10048 = AddressAlreadyInUse, 10013 = AccessDenied. }
+    'if(($ec -eq 10048) -or ($ec -eq 10013)){exit 1};exit 2}';
   Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '',
     SW_HIDE, ewWaitUntilTerminated, Code) then
@@ -7092,6 +7170,9 @@ begin
   GTestResult := '';
   GTestServiceName := '';
   GTestOwnServicePid := '';
+  GTestPortBindFail := '';
+  GTestListenerTableOff := '';
+  GTestNoService := '';
   GTestServiceCmd := '';
   GTestServiceState := '';
   GTestServiceStop := '';
@@ -7197,6 +7278,9 @@ begin
   GTestResult := ParamValue('TESTRESULT');
   GTestServiceName := ParamValue('TESTSERVICENAME');
   GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
+  GTestPortBindFail := ParamValue('TESTPORTBINDFAIL');
+  GTestListenerTableOff := ParamValue('TESTLISTENERTABLEOFF');
+  GTestNoService := ParamValue('TESTNOSERVICE');
   GTestServiceCmd := ParamValue('TESTSERVICECMD');
   GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
   GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));

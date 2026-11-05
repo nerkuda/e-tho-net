@@ -85,6 +85,16 @@
          запись машинной установки (InstallLocation/UninstallString указывают
          в {app}), per-user клиент «только для меня» и запись без этих
          значений сохраняются
+     31. 1dddac77: пустое перечисление слушателей не считается свободным портом —
+         запасная ветка проверяет порт эксклюзивным bind на 0.0.0.0 без
+         listen() (SO_EXCLUSIVEADDRUSE): занятый на 0.0.0.0, loopback,
+         конкретном адресе или LAN-адресе порт даёт 20, свободный — 0,
+         невозможность проверки (хук /TESTPORTBINDFAIL) — 20 с причиной.
+         Доступность TCP-таблицы проверяется пробой на loopback (иначе на
+         build 28000 живая своя служба даёт «занят»): таблица сломана + служба
+         запущена → 0; таблица сломана + службы нет → прежний fail-closed
+         (хуки /TESTLISTENERTABLEOFF и /TESTNOSERVICE); обновление поверх
+         живой службы проходит, чужой занятый порт по-прежнему даёт 20
 
     Коды Inno 1–8 контрактом не являются; тест падает на любом отклонении.
 
@@ -167,6 +177,28 @@ function Get-FreeTcpPort {
     $listener.Start()
     try { return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port }
     finally { $listener.Stop() }
+}
+
+# Работает ли перечисление слушателей на этой машине: собственный пробный
+# слушатель на loopback обязан появиться в Get-NetTCPConnection со своим PID.
+# На аномальной сборке Windows (1dddac77) TCP-таблица не показывает новые
+# слушатели, причём пустой ответ и ошибка CIM неразличимы, — поэтому
+# «таблица недоступна» доказывается пробой, а не текстом исключения.
+function Test-ListenerTableWorks {
+    $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $probe.Start()
+    try {
+        $port = ([System.Net.IPEndPoint]$probe.LocalEndpoint).Port
+        for ($i = 0; $i -lt 10; $i++) {
+            try {
+                $found = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop |
+                    Select-Object -First 1)
+                if (($found.Count -gt 0) -and ([int]$found[0].OwningProcess -eq $PID)) { return $true }
+            } catch { }
+            Start-Sleep -Milliseconds 100
+        }
+        return $false
+    } finally { $probe.Stop() }
 }
 
 function New-InstallJson {
@@ -653,7 +685,7 @@ $staticChecks = @(
     @{ Name = 'static:port-page'; Pattern = [regex]::Escape('CreateServerParamsPage'); Note = 'экран «Параметры сервера»' },
     @{ Name = 'static:port-focus'; Pattern = [regex]::Escape('WizardForm.ActiveControl := GPortEdit'); Note = 'фокус на поле порта при ошибке' },
     @{ Name = 'static:precheck-function'; Pattern = [regex]::Escape('function CheckServerEnvironment'); Note = 'единая предпроверка окружения' },
-    @{ Name = 'static:port-loopback-bind'; Pattern = [regex]::Escape('TcpListener([Net.IPAddress]::Loopback,$port)'); Note = 'пробный bind на loopback' },
+    @{ Name = 'static:port-fail-closed-bind'; Pattern = [regex]::Escape('SocketOptionName]::ExclusiveAddressUse'); Note = 'fail-closed: эксклюзивный bind на 0.0.0.0 без listen()' },
     @{ Name = 'static:port-own-service-children'; Pattern = [regex]::Escape('$p.ParentProcessId'); Note = 'служба ETN: потомки WinSW, не только ProcessId' },
     @{ Name = 'static:firewall-warning-gui'; Pattern = [regex]::Escape('Внимание: правило брандмауэра Windows не создано'); Note = 'предупреждение netsh — в итоговой сводке' },
     @{ Name = 'static:firewall-warning-fact'; Pattern = [regex]::Escape('Установка продолжается: сервер слушает'); Note = 'в журнале — факт 0.0.0.0, а не «локально»' },
@@ -743,6 +775,18 @@ $hookUnderIfdef = ($testModeBody -ne '') -and
     (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('if GTestHealth')))
 Add-StaticResult -Name 'static:health-hook-ifdef' -Ok $hookUnderIfdef `
     -Note 'хук /TESTHEALTH под #ifdef TestMode (построчно)'
+# 1dddac77: хуки имитации сломанной TCP-таблицы и отсутствия службы —
+# переменные скрипта и разбор параметров только в тестовой сборке.
+$portTableHooks = (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$tableOff'))) -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$noSvc')))
+Add-StaticResult -Name 'static:port-table-hooks' -Ok $portTableHooks `
+    -Note 'хуки /TESTLISTENERTABLEOFF и /TESTNOSERVICE доходят до скрипта'
+$portTableHooksIfdef = (Test-IssCode -Text $testModeBody `
+        -Pattern ([regex]::Escape("ParamValue('TESTLISTENERTABLEOFF')"))) -and
+    (Test-IssCode -Text $testModeBody `
+        -Pattern ([regex]::Escape("ParamValue('TESTNOSERVICE')")))
+Add-StaticResult -Name 'static:port-table-hooks-ifdef' -Ok $portTableHooksIfdef `
+    -Note 'портовые хуки разбираются только под #ifdef TestMode'
 
 # ce3ab836: бэкап БД — проверка по телам функций, а не подстрокой по файлу:
 # integrity_check обязан быть в проверке копии, wal_checkpoint — в чекпойнте,
@@ -1366,10 +1410,38 @@ Add-StaticResult -Name 'static:mode-guidance' -Ok $uacOk `
     -Note 'мастер объясняет режим «только для меня» и что сервер ставится запуском от имени администратора'
 
 $portBody = Get-IssFunctionBody -Text $issText -Name 'ServerPortStatus'
-$portOk = (-not (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('IPAddress]::Any')))) -and
-    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('show excludedportrange protocol=tcp')))
-Add-StaticResult -Name 'static:port-no-firewall-prompt' -Ok $portOk `
-    -Note 'проверка порта — bind на loopback и таблица исключений netsh, без запроса брандмауэра'
+# 1dddac77: доступность TCP-таблицы проверяется пробой на loopback (порт 0) —
+# listen только на loopback диалога брандмауэра не даёт; слушать 0.0.0.0
+# нельзя (860def0d, п.4), а запасная ветка обязана работать fail-closed —
+# эксклюзивный bind на 0.0.0.0 (SO_EXCLUSIVEADDRUSE) без listen(): bind без
+# флага проходил при живом слушателе (SO_REUSEADDR, ложное «свободен»).
+$portProbeLoopback = Test-IssCode -Text $portBody `
+    -Pattern ([regex]::Escape('TcpListener([Net.IPAddress]::Loopback,0)'))
+$portNoAnyListener = -not (Test-IssCode -Text $portBody `
+    -Pattern ([regex]::Escape('TcpListener([Net.IPAddress]::Any')))
+$portNoListenCall = -not (Test-IssCode -Text $portBody -Pattern '\.Listen\s*\(')
+$portNetsh = Test-IssCode -Text $portBody `
+    -Pattern ([regex]::Escape('show excludedportrange protocol=tcp'))
+Add-StaticResult -Name 'static:port-no-firewall-prompt' `
+    -Ok ($portProbeLoopback -and $portNoAnyListener -and $portNoListenCall -and $portNetsh) `
+    -Note 'проба таблицы — loopback, bind на 0.0.0.0 без listen(), таблица исключений netsh'
+$portExclusive = (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('ExclusiveAddressUse'))) -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('SetSocketOption')))
+Add-StaticResult -Name 'static:port-exclusive-bind' -Ok $portExclusive `
+    -Note 'fail-closed: bind с SO_EXCLUSIVEADDRUSE, иначе SO_REUSEADDR даёт ложное «свободен»'
+# 1dddac77: проба таблицы (слушатель на loopback с портом 0 виден со своим PID)
+# и ветка «таблица недоступна + служба запущена → порт свой», без которой на
+# build 28000 установка/автообновление поверх живой службы падают с кодом 20.
+$portTableProbe = ($portBody -ne '') -and $portProbeLoopback -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('OwningProcess -eq $PID'))) -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$tableOk')))
+Add-StaticResult -Name 'static:port-listener-table-probe' -Ok $portTableProbe `
+    -Note 'проба TCP-таблицы: свежий loopback-слушатель обязан быть виден со своим PID'
+$portTableServiceOwn = (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$tableOk -eq 0'))) -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('$svcFound -eq 1'))) -and
+    (Test-IssCode -Text $portBody -Pattern ([regex]::Escape('exit 0')))
+Add-StaticResult -Name 'static:port-tableoff-service-own' -Ok $portTableServiceOwn `
+    -Note 'таблица недоступна + своя служба запущена → порт свой (0), иначе fail-closed'
 
 $finishedBody = Get-IssFunctionBody -Text $issText -Name 'CreateFinishedControls'
 $finishedOk = (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('WizardForm.FinishedLabel.Left'))) -and
@@ -2319,7 +2391,7 @@ $busyPort = ([System.Net.IPEndPoint]$busyListener.LocalEndpoint).Port
 try {
     Reset-PrecheckResult
     $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
-        "/TESTPORT=$busyPort", "/TESTRESULT=`"$precheckResult`""))
+        "/TESTPORT=$busyPort", '/TESTNOSERVICE=1', "/TESTRESULT=`"$precheckResult`""))
 } finally {
     $busyListener.Stop()
 }
@@ -2329,6 +2401,47 @@ $busyReasonOk = $busyReason -match ('порт ' + $busyPort + ' занят др�
 Add-Result -Name 'precheck:port-busy-reason' -Expected 1 -Actual ([int]$busyReasonOk) -Note $busyReason
 $busyLog = Get-LogLine -Pattern 'TESTPRECHECK result=([^\r\n]+)'
 Add-Result -Name 'precheck:port-busy-log' -Expected 1 -Actual ([int]([bool]$busyLog)) -Note $busyLog
+
+# Свободный порт после занятого: fail-closed проба (эксклюзивный bind без
+# listen()) не должна давать ложного «занят» — код 0, причина пуста (1dddac77).
+Reset-State
+Reset-PrecheckResult
+$freeAfterBusyPort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+    "/TESTPORT=$freeAfterBusyPort", '/TESTNOSERVICE=1', "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'precheck:port-free-code' -Expected 0 -Actual $code
+Add-Result -Name 'precheck:port-free-reason' -Expected 1 `
+    -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'причина пуста'
+
+# 1dddac77: TCP-таблица сломана (хук /TESTLISTENERTABLEOFF), службы ETN нет
+# (/TESTNOSERVICE) — fail-closed не ослабляется: занятый порт остаётся занятым,
+# свободный — свободным.
+Reset-State
+$tableOffListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 0)
+$tableOffListener.Start()
+$tableOffPort = ([System.Net.IPEndPoint]$tableOffListener.LocalEndpoint).Port
+try {
+    Reset-PrecheckResult
+    $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+        "/TESTPORT=$tableOffPort", '/TESTLISTENERTABLEOFF=1', '/TESTNOSERVICE=1',
+        "/TESTRESULT=`"$precheckResult`""))
+} finally {
+    $tableOffListener.Stop()
+}
+Add-Result -Name 'precheck:port-tableoff-busy-code' -Expected 20 -Actual $code
+$tableOffReason = Get-PrecheckResult
+$tableOffReasonOk = $tableOffReason -match ('порт ' + $tableOffPort + ' занят другим приложением')
+Add-Result -Name 'precheck:port-tableoff-busy-reason' -Expected 1 `
+    -Actual ([int]$tableOffReasonOk) -Note $tableOffReason
+Reset-State
+Reset-PrecheckResult
+$tableOffFreePort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+    "/TESTPORT=$tableOffFreePort", '/TESTLISTENERTABLEOFF=1', '/TESTNOSERVICE=1',
+    "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'precheck:port-tableoff-free-code' -Expected 0 -Actual $code
+Add-Result -Name 'precheck:port-tableoff-free-reason' -Expected 1 `
+    -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'причина пуста'
 
 # Порт занят ТОЛЬКО на loopback: сервер слушает 0.0.0.0, поэтому пробный bind
 # на 0.0.0.0 такой слушатель не видит — дефект B1 приёмки 9b310991 (установщик
@@ -2341,7 +2454,7 @@ $loopPort = ([System.Net.IPEndPoint]$loopListener.LocalEndpoint).Port
 try {
     Reset-PrecheckResult
     $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
-        "/TESTPORT=$loopPort", "/TESTRESULT=`"$precheckResult`""))
+        "/TESTPORT=$loopPort", '/TESTNOSERVICE=1', "/TESTRESULT=`"$precheckResult`""))
 } finally {
     $loopListener.Stop()
 }
@@ -2364,7 +2477,7 @@ try {
     $addrPort = ([System.Net.IPEndPoint]$addrListener.LocalEndpoint).Port
     Reset-PrecheckResult
     $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
-        "/TESTPORT=$addrPort", "/TESTRESULT=`"$precheckResult`""))
+        "/TESTPORT=$addrPort", '/TESTNOSERVICE=1', "/TESTRESULT=`"$precheckResult`""))
     Add-Result -Name 'precheck:port-address-busy-code' -Expected 20 -Actual $code
     $addrReason = Get-PrecheckResult
     $addrReasonOk = $addrReason -match ('порт ' + $addrPort + ' занят другим приложением')
@@ -2453,6 +2566,12 @@ $wrapper = Start-Process -FilePath $psExe `
     -PassThru -WindowStyle Hidden
 $childPid = 0
 $ownerPid = 0
+# Доступность перечисления слушателей доказывается собственной пробой
+# (Test-ListenerTableWorks): на нормальной Windows таблица показывает свежий
+# loopback-слушатель с нашим PID, на аномальной (1dddac77) — нет, и тогда
+# владельца сокета установщик доказать не может.
+$tableWorks = Test-ListenerTableWorks
+$listenerAlive = $false
 try {
     $deadline = (Get-Date).AddSeconds(25)
     while ((Get-Date) -lt $deadline) {
@@ -2465,12 +2584,23 @@ try {
                 Select-Object -First 1)
             if ($conn.Count -gt 0) { $ownerPid = [int]$conn[0].OwningProcess }
         } catch { }
-        if (($ownerPid -gt 0) -and ($childPid -gt 0)) { break }
+        if ($childPid -gt 0) {
+            $listenerAlive = Test-TcpReady -Port $listenerPort -TimeoutMs 300
+        }
+        $ownerOk = $tableWorks -and ($ownerPid -eq $childPid)
+        $aliveOk = (-not $tableWorks) -and $listenerAlive
+        if (($childPid -gt 0) -and ($ownerOk -or $aliveOk)) { break }
         Start-Sleep -Milliseconds 200
     }
-    $ready = ($ownerPid -gt 0) -and ($childPid -gt 0) -and ($ownerPid -eq $childPid)
-    Add-Result -Name 'ownsvc:listener-ready' -Expected 1 -Actual ([int]$ready) `
-        -Note ("слушатель pid=$ownerPid, обёртка pid=" + $wrapper.Id)
+    # На аномальной сборке Windows перечисление слушателей не работает
+    # (1dddac77): владельца сокета не узнать. Готовность подтверждается
+    # подключением к слушателю; порт своей запущенной службы установщик
+    # считает своим и без таблицы (см. ownsvc:* ниже).
+    $ready = ($childPid -gt 0) -and
+        (($tableWorks -and ($ownerPid -eq $childPid)) -or ((-not $tableWorks) -and $listenerAlive))
+    $readyNote = "слушатель pid=$ownerPid, обёртка pid=" + $wrapper.Id
+    if (-not $tableWorks) { $readyNote += ' (перечисление слушателей недоступно: готовность по connect)' }
+    Add-Result -Name 'ownsvc:listener-ready' -Expected 1 -Actual ([int]$ready) -Note $readyNote
 
     if ($ready) {
         # Чужой слушатель без хука — занят (контроль: проба не пустая).
@@ -2483,15 +2613,34 @@ try {
             -Actual ([int]((Get-PrecheckResult) -match ('порт ' + $listenerPort + ' занят другим приложением'))) `
             -Note 'слушатель неизвестного PID — занят'
 
-        # PID самой службы = PID процесса-слушателя — своим.
+        # PID самой службы = PID процесса-слушателя — своим, в том числе на ОС
+        # со сломанной TCP-таблицей (build 28000): служба зарегистрирована и
+        # запущена, порт считается своим — её остановит ssInstall, а
+        # работоспособность проверит health-check. До фикса здесь был
+        # fail-closed 20, и обновление поверх живой службы не проходило.
         Reset-State
         Reset-PrecheckResult
         $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
             "/TESTPORT=$listenerPort", "/TESTOWNSERVICEPID=$childPid",
             "/TESTRESULT=`"$precheckResult`""))
-        Add-Result -Name 'ownsvc:self-pid-code' -Expected 0 -Actual $code
+        Add-Result -Name 'ownsvc:self-pid-code' -Expected 0 -Actual $code `
+            -Note 'слушатель своего PID — свободен для ETN'
         Add-Result -Name 'ownsvc:self-pid-reason-empty' -Expected 1 `
-            -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'слушатель своего PID — свободен для ETN'
+            -Actual ([int]((Get-PrecheckResult) -eq '')) `
+            -Note 'слушатель своего PID — порт свой, причина пуста'
+
+        # Таблица сломана (хук /TESTLISTENERTABLEOFF): та же ветка на любой ОС.
+        # Порт занят слушателем, bind упал бы (10048) — установщик обязан
+        # вернуть 0 по признаку запущенной службы, иначе обновление не пройдёт.
+        Reset-State
+        Reset-PrecheckResult
+        $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
+            "/TESTPORT=$listenerPort", "/TESTOWNSERVICEPID=$childPid",
+            '/TESTLISTENERTABLEOFF=1', "/TESTRESULT=`"$precheckResult`""))
+        Add-Result -Name 'ownsvc:tableoff-own-service-code' -Expected 0 -Actual $code `
+            -Note 'таблица сломана + своя служба запущена — порт свой (0)'
+        Add-Result -Name 'ownsvc:tableoff-own-service-reason-empty' -Expected 1 `
+            -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'причина пуста'
 
         # PID службы = PID обёртки (родителя): потомок WinSW — своим.
         Reset-State
@@ -2499,12 +2648,15 @@ try {
         $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
             "/TESTPORT=$listenerPort", "/TESTOWNSERVICEPID=$($wrapper.Id)",
             "/TESTRESULT=`"$precheckResult`""))
-        Add-Result -Name 'ownsvc:descendant-pid-code' -Expected 0 -Actual $code
+        Add-Result -Name 'ownsvc:descendant-pid-code' -Expected 0 -Actual $code `
+            -Note 'слушатель-потомок WinSW — свободен для ETN'
         Add-Result -Name 'ownsvc:descendant-pid-reason-empty' -Expected 1 `
-            -Actual ([int]((Get-PrecheckResult) -eq '')) -Note 'слушатель-потомок WinSW — свободен для ETN'
+            -Actual ([int]((Get-PrecheckResult) -eq '')) `
+            -Note 'слушатель-потомок WinSW — порт свой, причина пуста'
     } else {
         Add-Result -Name 'ownsvc:foreign-listener-busy' -Expected 1 -Actual 0 -Note 'дерево процессов не поднялось'
         Add-Result -Name 'ownsvc:self-pid-code' -Expected 1 -Actual 0 -Note 'дерево процессов не поднялось'
+        Add-Result -Name 'ownsvc:tableoff-own-service-code' -Expected 1 -Actual 0 -Note 'дерево процессов не поднялось'
         Add-Result -Name 'ownsvc:descendant-pid-code' -Expected 1 -Actual 0 -Note 'дерево процессов не поднялось'
     }
 } finally {
@@ -2530,7 +2682,7 @@ if ($lanAddress) {
         Reset-State
         Reset-PrecheckResult
         $code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1',
-            "/TESTPORT=$lanPort", "/TESTRESULT=`"$precheckResult`""))
+            "/TESTPORT=$lanPort", '/TESTNOSERVICE=1', "/TESTRESULT=`"$precheckResult`""))
         Add-Result -Name 'precheck:port-lan-busy-code' -Expected 20 -Actual $code -Note ("LAN $lanAddress")
         $lanReason = Get-PrecheckResult
         Add-Result -Name 'precheck:port-lan-busy-reason' -Expected 1 `
@@ -2553,6 +2705,20 @@ Add-Result -Name 'precheck:port-invalid-code' -Expected 20 -Actual $code
 $invalidReason = Get-PrecheckResult
 $invalidReasonOk = $invalidReason -match 'некорректный порт "70000"'
 Add-Result -Name 'precheck:port-invalid-reason' -Expected 1 -Actual ([int]$invalidReasonOk) -Note $invalidReason
+
+# Проверка невозможна: неизвестный отказ пробного bind (хук /TESTPORTBINDFAIL)
+# даёт статус 2 — код 20 с понятной причиной, а не «порт свободен» (1dddac77,
+# fail-closed). Хук имитирует ошибку, которую нельзя воспроизвести по заказу.
+Reset-State
+Reset-PrecheckResult
+$bindFailPort = Get-FreeTcpPort
+$code = Invoke-Setup -Arguments ($silent + @('/TESTPRECHECK=1', "/TESTPORT=$bindFailPort",
+    '/TESTPORTBINDFAIL=1', "/TESTRESULT=`"$precheckResult`""))
+Add-Result -Name 'precheck:port-bindfail-code' -Expected 20 -Actual $code
+$bindFailReason = Get-PrecheckResult
+Add-Result -Name 'precheck:port-bindfail-reason' -Expected 1 `
+    -Actual ([int]($bindFailReason -match ('не удалось проверить занятость порта ' + $bindFailPort))) `
+    -Note $bindFailReason
 
 # Свободный порт и достаточно места: предпроверка проходит (причина пуста).
 Reset-State
@@ -3665,6 +3831,73 @@ $noInit = (-not (Test-LatestLogContains -Pattern 'etn init: запуск')) -and
     (Test-LatestLogContains -Pattern 'etn init не вызывается')
 Add-Result -Name 'update-ok:no-init' -Expected 1 -Actual ([int]$noInit) `
     -Note 'etn init при обновлении не вызывался'
+
+# --- A2. 1dddac77: своя служба жива, TCP-таблица недоступна -----------------
+# На build 28000 таблица слушателей не работает: без спецветки эксклюзивный
+# bind падал на порту собственной службы, и обновление поверх работающей
+# установки всегда получало 20. Служба запущена (PID процесса передан хуком),
+# таблица недоступна (хук) — обновление обязано пройти.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$fixturePort = 0
+try {
+    $fixtureJson = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw | ConvertFrom-Json
+    $fixturePort = [int]$fixtureJson.port
+} catch { }
+$ownServiceListener = $null
+$srv = $null
+try {
+    if ($fixturePort -gt 0) {
+        $ownServiceListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $fixturePort)
+        $ownServiceListener.Start()
+    }
+    $srv = Start-FakeHealthServer -Mode 'ok' -DbPath (Join-Path $dataDir '_system.db') `
+        -Marker 'new-version-write'
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)", '/TESTLISTENERTABLEOFF=1',
+            "/TESTOWNSERVICEPID=$PID"))
+} finally {
+    if ($null -ne $ownServiceListener) { $ownServiceListener.Stop() }
+    if ($null -ne $srv) { Stop-FakeHealthServer $srv }
+}
+Add-Result -Name 'update-tableoff-own:code' -Expected 0 -Actual $code `
+    -Note 'таблица сломана + своя служба запущена — обновление проходит'
+$jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
+Add-Result -Name 'update-tableoff-own:install-json' -Expected 1 `
+    -Actual ([int]($jsonText -match ('"product_version":"' + [regex]::Escape($version) + '"'))) `
+    -Note ('версия ' + $version)
+Add-Result -Name 'update-tableoff-own:health' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Health-check http://127\.0\.0\.1')) `
+    -Note 'health-check выполнен'
+
+# Контроль: та же сломанная таблица, но службы нет — чужой занятый порт даёт 20.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$fixturePort = 0
+try {
+    $fixtureJson = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw | ConvertFrom-Json
+    $fixturePort = [int]$fixtureJson.port
+} catch { }
+$foreignListener = $null
+try {
+    if ($fixturePort -gt 0) {
+        $foreignListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $fixturePort)
+        $foreignListener.Start()
+    }
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs +
+        @('/TESTLISTENERTABLEOFF=1', '/TESTNOSERVICE=1'))
+} finally {
+    if ($null -ne $foreignListener) { $foreignListener.Stop() }
+}
+Add-Result -Name 'update-tableoff-foreign:code' -Expected 20 -Actual $code `
+    -Note 'таблица сломана, службы нет, порт занят — обновление отклонено'
+$keptIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js')) -eq $oldIndex
+Add-Result -Name 'update-tableoff-foreign:no-changes' -Expected 1 -Actual ([int]$keptIndex) `
+    -Note 'файлы не заменены'
+Add-Result -Name 'update-tableoff-foreign:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern ('порт ' + $fixturePort + ' занят другим приложением'))) `
+    -Note 'журнал называет причину'
 
 # --- B. health вернул чужую версию: код 10 и полный откат -------------------
 $null = New-UpdateFixture
