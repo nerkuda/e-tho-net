@@ -367,7 +367,7 @@ where I am now, having traveled such a path. As of **November 2026**:
   ETN is my passion, my hobby, which also brings benefits in my
   projects: it is successfully used as a knowledge base for several of them.
   After all, some people spend their evenings watching TV series, others —
-  riding a bicycle. "Everyone has their own quirks" (c).
+  riding a bicycle. "Everyone has their own quirks" (as the saying goes).
 - *is it worth it?* — Yes!
 
 ## Try it

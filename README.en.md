@@ -80,30 +80,40 @@ information — your own server, your own data, no subscriptions and no clouds.
 From zero to a working thought network in a few minutes. Platform details are in
 [Installation](#installation) below and in [`docs/userdocs/install.md`](docs/userdocs/install.md).
 
-1. **Start the server.** With Docker:
+1. **Get the project.** For the Docker route, clone the repository — `docker-compose.yml`
+   lives in it:
+   ```bash
+   git clone https://github.com/nerkuda/e-tho-net.git && cd e-tho-net
+   ```
+   For the Node.js route, download `etn-server-<version>.tar.gz` from the
+   [releases page](https://github.com/nerkuda/e-tho-net/releases) and unpack it:
+   ```bash
+   tar -xzf etn-server-<version>.tar.gz && cd etn-server-<version>
+   ```
+2. **Start the server.** With Docker:
    ```bash
    docker compose build
    docker compose run --rm --entrypoint node etn /app/server/dist/cli.js init \
      --username admin --display-name "Administrator"
    docker compose up -d
    ```
-   Or with Node.js 22 LTS: unpack the server distribution and run
+   Or with Node.js 22 LTS: in the unpacked directory, run
    ```bash
    export ETN_DATA_DIR="$HOME/.local/share/etn"
    export ETN_PORT=4321
    node dist/cli.js init --username admin --display-name "Administrator"
    node dist/index.js
    ```
-2. **Save the initial API key.** `init` prints it once; the server does not start
+3. **Save the initial API key.** `init` prints it once; the server does not start
    without an administrator.
-3. **Check the server.** `curl http://localhost:4321/api/v1/health` returns
+4. **Check the server.** `curl http://localhost:4321/api/v1/health` returns
    `{"status":"ok","db":"ok",...}`.
-4. **Install the client.** On Windows, run `ETN-Setup-<version>.exe`; on Linux,
+5. **Install the client.** On Windows, run `ETN-Setup-<version>.exe`; on Linux,
    use the one-line installer:
    ```bash
    curl -fsSL https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash
    ```
-5. **Connect.** On first launch, enter the server address `http(s)://host:port`
+6. **Connect.** On first launch, enter the server address `http(s)://host:port`
    (for example `http://127.0.0.1:4321`) and the administrator's API key. The
    client checks the key and version compatibility and opens the workspace.
 
