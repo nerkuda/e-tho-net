@@ -1,3 +1,5 @@
+**Русский** | [English](README.en.md)
+
 # ETN — The Endless Thought Network
 
 Бесплатный self-hosted «цифровой мозг»: заметки, идеи, задачи и файлы живут не
