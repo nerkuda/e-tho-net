@@ -417,7 +417,8 @@ in [`docs/development-in-etn.en.md`](docs/development-in-etn.en.md).
 - [ ] User-defined appearance styles
 - [ ] List/table/kanban view switcher
 - [ ] To-do lists and thought reminders
-- [ ] Localization into different languages
+- [ ] Localization into other languages
+- [X] Localization into English
 - [X] Server and client installer; updating the server service from the client
 - [X] Out-of-type thought views
 - [X] Out-of-type thought properties
