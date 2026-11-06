@@ -23,8 +23,9 @@
 ;     server и service (данные не копируются); после успешного обновления
 ;     удаляется, при отказе остаётся точкой ручного восстановления;
 ;   * после копирования: настройка службы, запуск, расширенный health-check
-;     (GET /api/v1/health → 200, status=ok, db=ok, версия = целевая;
-;     GET /api/v1/version → version и api; бюджет 120 с, повтор каждые 2 с);
+;     (один GET /api/v1/health → 200, status=ok, db=ok, version = целевая из
+;     тела ответа; бюджет 60 с фактического времени, повтор каждые 2 с;
+;     задача a1ea1d40 — второй GET /api/v1/version установщик не вызывает);
 ;   * неудача health-check: остановка службы, возврат файлов из снимка,
 ;     восстановление БД из архива (с удалением WAL/SHM), запуск прежней
 ;     версии, повторная проверка, код 10; в журнале отдельно «Откат выполнен»
@@ -553,10 +554,13 @@ const
   SERVICE_STATE_MISSING = 2;
   SERVICE_STATE_UNKNOWN = 3;
   { Health-check после запуска новой версии (требование 0a79d9de): бюджет
-    120 с, повтор каждые 2 с; прежние 60 с ожидания RUNNING не нужны —
-    готовность подтверждает только health-check. Тело ответа разбирается,
-    а не только код. }
-  HEALTH_WAIT_MS = 120000;
+    60 с ФАКТИЧЕСКОГО времени, повтор каждые 2 с; прежние 60 с ожидания
+    RUNNING не нужны — готовность подтверждает только health-check. Тело
+    ответа разбирается, а не только код. 34f8e315 временно держал 120 с,
+    чтобы сохранить прежний суммарный бюджет; a1ea1d40 вернул 60 с по
+    требованию: health идёт после listen, миграция — только _system.db,
+    markdown-переиндексация может быть дольше — отдельный риск. }
+  HEALTH_WAIT_MS = 60000;
   HEALTH_STEP_MS = 2000;
   { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
     клиент electron-builder (NSIS) и запись установки Inno. }
@@ -4621,9 +4625,12 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
-  Health-check (требование 0a79d9de): GET /api/v1/health → 200, status=ok,
-  db=ok, version = целевая; GET /api/v1/version → version = целевая, api=v1.
-  Тело разбирается, а не только HTTP-код; бюджет 60 с, повтор каждые 2 с.
+  Health-check (требование 0a79d9de): один GET /api/v1/health → 200, status=ok,
+  db=ok, version = целевая из тела того же ответа. Тело разбирается, а не
+  только HTTP-код; второй GET /api/v1/version установщик не вызывает —
+  эндпоинт остаётся для клиентов и диагностики (задача a1ea1d40).
+  Бюджет — 60 с фактического времени, повтор каждые 2 с; один запрос с
+  --max-time 5 может перебрать бюджет до ~5 с — это допустимо.
   --------------------------------------------------------------------------- }
 function HealthBaseUrl: String;
 begin
@@ -4686,12 +4693,13 @@ begin
   Result := True;
 end;
 
-{ Одна попытка расширенного health-check. RequireTargetVersion=False нужен
-  после отката: прежняя версия обязана отвечать, но её версия — не целевая. }
+{ Одна попытка расширенного health-check: единственный GET /api/v1/health,
+  version берётся из того же тела. RequireTargetVersion=False нужен после
+  отката: прежняя версия обязана отвечать, но её версия — не целевая. }
 function CheckHealthOnce(const RequireTargetVersion: Boolean;
   var Detail: String): Boolean;
 var
-  Base, Body, Status, Db, Api, Ver: String;
+  Base, Body, Status, Db, Ver: String;
 begin
   Result := False;
   Detail := '';
@@ -4724,22 +4732,6 @@ begin
       ' вместо ' + GProductVersion;
     Exit;
   end;
-  if not HttpGetBody(Base + '/api/v1/version',
-    ExpandConstant('{tmp}') + '\etn-version.json', 'GET /api/v1/version', Detail) then Exit;
-  Body := ReadTextFile(ExpandConstant('{tmp}') + '\etn-version.json');
-  Ver := JsonGetRaw(Body, 'version');
-  if Ver <> GProductVersion then
-  begin
-    Detail := 'version: версия ' + IfStr(Ver = '', '<нет>', Ver) +
-      ' вместо ' + GProductVersion;
-    Exit;
-  end;
-  Api := JsonGetRaw(Body, 'api');
-  if Api <> 'v1' then
-  begin
-    Detail := 'version: api=' + IfStr(Api = '', '<нет>', Api) + ' вместо v1';
-    Exit;
-  end;
   Result := True;
 end;
 
@@ -4749,7 +4741,7 @@ end;
   HTTP-сервер, чтобы разбор тела проверялся по-настоящему. }
 function ProbeHealth(const RequireTargetVersion: Boolean): Boolean;
 var
-  Elapsed: Integer;
+  StartAt, ElapsedMs, RemainingMs: Int64;
 begin
   Result := False;
   GHealthReason := '';
@@ -4768,7 +4760,10 @@ begin
     LogLine('ERROR', 'Health-check не выполнен: ' + GHealthReason);
     Exit;
   end;
-  Elapsed := 0;
+  { Бюджет — фактическое время по системным часам, а не сумма Sleep: один
+    запрос с --max-time 5 может занять до 5 с, и сумма пауз исказила бы
+    бюджет в разы. Перебор одного запроса до ~5 с допустим. }
+  StartAt := ServiceNowSeconds;
   while True do
   begin
     if CheckHealthOnce(RequireTargetVersion, GHealthReason) then
@@ -4777,9 +4772,15 @@ begin
       Result := True;
       Exit;
     end;
-    if Elapsed >= HealthWaitMs then Break;
-    Sleep(HealthStepMs);
-    Elapsed := Elapsed + HealthStepMs;
+    ElapsedMs := (ServiceNowSeconds - StartAt) * 1000;
+    { Часы могли скорректироваться назад: отрицательный остаток не должен
+      растягивать бюджет. }
+    if ElapsedMs < 0 then ElapsedMs := 0;
+    if ElapsedMs >= HealthWaitMs then Break;
+    { Sleep не уходит за бюджет: остаток меньше шага — спим остаток. }
+    RemainingMs := HealthWaitMs - ElapsedMs;
+    if RemainingMs > HealthStepMs then RemainingMs := HealthStepMs;
+    Sleep(RemainingMs);
   end;
   LogLine('ERROR', 'Health-check ' + HealthBaseUrl + ': сбой — ' + GHealthReason);
 end;
@@ -5532,7 +5533,15 @@ begin
   else if ProbeHealth(False) then
     LogLine('INFO', 'Откат: прежняя версия отвечает на health-check')
   else
+  begin
     LogLine('WARN', 'Откат: прежняя версия не отвечает (' + GHealthReason + ')');
+    { Причина отказа не должна маскировать неработающую прежнюю версию: файлы
+      могли вернуться, но сервер не поднялся — администратор обязан увидеть
+      это в причине, а не только WARN в журнале (a1ea1d40). }
+    GFailureReason := GFailureReason + '. Прежняя версия не отвечает на ' +
+      'health-check: ' + GHealthReason + '; ' + FmtMessage(
+      CustomMessage('ServiceStartManually'), [GLogPath]);
+  end;
 end;
 
 { Вызывается ли бэкап: только при смене версии (карточка bb063ac3). Ремонт
@@ -8771,8 +8780,9 @@ begin
         else
         begin
           SetInstallStage('Проверка работоспособности…');
-          { Расширенный health-check (0a79d9de): 200, status=ok, db=ok,
-            версия = целевая; затем GET /api/v1/version. }
+          { Расширенный health-check (0a79d9de, a1ea1d40): один GET
+            /api/v1/health — 200, status=ok, db=ok, version = целевая из тела
+            ответа; повтор до 60 с фактического времени. }
           if not ProbeHealth(True) then
             FailInstall('health-check не пройден: ' + GHealthReason);
         end;

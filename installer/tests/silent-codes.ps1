@@ -54,14 +54,16 @@
          без бэкапа, без баз данных архив не создаётся. ZIP, integrity_check,
          WAL и ротация — в CLI (server/tests/db-backup.test.ts); в .iss
          SQLite-логики быть не должно (статический сторож)
-     26. bb063ac3: обновление сервера — порядок фаз до копирования (остановка
-         службы → бэкап БД → снимок отката), ожидание реальной остановки
-         службы (не остановилась — код 20), неудачный бэкап — код 10 без
-         замены файлов с поднятой службой (bc7cc846), расширенный health-check
-         с разбором тела /health и /version (status/db/версия/api; HTTP 500 и
-         чужая версия — код 10 и откат), возврат файлов из снимка и БД из
-         архива, install.json только после успеха, снимок удаляется только при
-         успехе, неудачный откат — код 10 с путём к архиву в журнале
+     26. bb063ac3 / a1ea1d40: обновление сервера — порядок фаз до копирования
+         (остановка службы → бэкап БД → снимок отката), ожидание реальной
+         остановки службы (не остановилась — код 20), неудачный бэкап — код 10
+         без замены файлов с поднятой службой (bc7cc846), расширенный
+         health-check одним GET /api/v1/health (status/db/версия из тела;
+         HTTP 500 и чужая версия — код 10 и откат), бюджет 60 с фактического
+         времени (не сумма Sleep), возврат файлов из снимка и БД из архива,
+         install.json только после успеха, снимок удаляется только при
+         успехе, неудачный откат — код 10 с путём к архиву и диагностикой
+         health прежней версии в причине
      27. 8b1f5980: регистрация службы WinSW после записи etn-service.xml и до
          запуска (install с конфигом рядом с exe; повторная установка не
          перегистрирует службу, WinSW 1073 — успех, сбой install — код 10),
@@ -487,8 +489,9 @@ function Test-LatestLogCount {
 # --- bb063ac3: подставной health-сервер, снимок отката и порядок журнала -----
 # Разбор тела health-check проверяется по-настоящему: установщик опрашивает
 # локальный HTTP-сервер (Node 22), который отдаёт заданный ответ — версию,
-# db, HTTP 500 или неверный /api/v1/version. Заодно сервер имитирует запись
-# «неудачного запуска» в БД, чтобы откат БД можно было проверить по данным.
+# db или HTTP 500. Заодно сервер имитирует запись «неудачного запуска» в БД,
+# чтобы откат БД можно было проверить по данным. DelayMs — задержка ответа:
+# ею проверяется бюджет фактического времени (a1ea1d40).
 function Initialize-FakeHealthScript {
     $scriptPath = Join-Path $workRoot 'fake-health.cjs'
     if (Test-Path -LiteralPath $scriptPath) { return $scriptPath }
@@ -503,6 +506,7 @@ const requestLog = argv[5];
 const dbPath = argv[6] || '';
 const dbModule = argv[7] || '';
 const marker = argv[8] || '';
+const delayMs = Number(argv[9] || 0);
 let mutated = false;
 function mutate() {
   if (mutated) return;
@@ -520,24 +524,25 @@ function mutate() {
 function health(status, db, version) {
   return JSON.stringify({ status: status, db: db, version: version, uptime: 1 });
 }
+function reply(res, statusCode, body) {
+  const send = function () {
+    res.statusCode = statusCode;
+    res.end(body);
+  };
+  if (delayMs > 0) setTimeout(send, delayMs); else send();
+}
 const server = http.createServer(function (req, res) {
   fs.appendFileSync(requestLog, req.url + '\n');
   res.setHeader('Content-Type', 'application/json');
   if (req.url === '/api/v1/health') {
     mutate();
     if (mode === 'http500') {
-      res.statusCode = 500;
-      res.end(health('error', 'error', target));
+      reply(res, 500, health('error', 'error', target));
       return;
     }
-    if (mode === 'db-error') { res.end(health('ok', 'error', target)); return; }
-    if (mode === 'wrong-version') { res.end(health('ok', 'ok', '9.9.9')); return; }
-    res.end(health('ok', 'ok', target));
-    return;
-  }
-  if (req.url === '/api/v1/version') {
-    const v = (mode === 'api-version') ? '9.9.9' : target;
-    res.end(JSON.stringify({ version: v, api: 'v1' }));
+    if (mode === 'db-error') { reply(res, 200, health('ok', 'error', target)); return; }
+    if (mode === 'wrong-version') { reply(res, 200, health('ok', 'ok', '9.9.9')); return; }
+    reply(res, 200, health('ok', 'ok', target));
     return;
   }
   res.statusCode = 404;
@@ -570,7 +575,8 @@ function Start-FakeHealthServer {
     param(
         [string]$Mode = 'ok',
         [string]$DbPath = '',
-        [string]$Marker = ''
+        [string]$Marker = '',
+        [int]$DelayMs = 0
     )
     $scriptPath = Initialize-FakeHealthScript
     $port = Get-FreeTcpPort
@@ -578,7 +584,7 @@ function Start-FakeHealthServer {
     [System.IO.File]::WriteAllText($requestLog, '')
     $betterSqlite = Join-Path $repoRoot 'server\node_modules\better-sqlite3'
     $nodeArgs = @($scriptPath, [string]$port, $Mode, $version, $requestLog,
-        (IfStrEmpty $DbPath), $betterSqlite, $Marker)
+        (IfStrEmpty $DbPath), $betterSqlite, $Marker, [string]$DelayMs)
     $proc = Start-Process -FilePath $script:BackupNode -ArgumentList $nodeArgs `
         -WorkingDirectory (Join-Path $repoRoot 'server') -PassThru
     if (-not (Test-TcpReady -Port $port)) {
@@ -3574,12 +3580,27 @@ Add-StaticResult -Name 'static:wait-service-stopped' `
     -Note 'stop → WaitServiceStopped по etn-service.exe status; sc query/_PENDING удалены; бюджет по часам'
 $healthBody = Get-IssFunctionBody -Text $issText -Name 'CheckHealthOnce'
 $healthParts = (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('/api/v1/health'))) -and
-    (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('/api/v1/version'))) -and
+    (-not (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('/api/v1/version')))) -and
+    (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape("if Status <> 'ok'"))) -and
+    (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape("if Db <> 'ok'"))) -and
     (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape("JsonGetRaw(Body, 'db')"))) -and
+    (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape("JsonGetRaw(Body, 'version')"))) -and
     (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('GProductVersion')))
 Add-StaticResult -Name 'static:health-parses-body' -Ok $healthParts `
-    -Note 'health и version: разбор тела (status/db/version/api), а не только код'
+    -Note 'один GET /health: status/db/version разбираются и сравниваются; /api/v1/version не вызывается'
+$probeHealthBody = Get-IssFunctionBody -Text $issText -Name 'ProbeHealth'
+$probeBudget = (Test-IssCode -Text $probeHealthBody -Pattern ([regex]::Escape('ServiceNowSeconds'))) -and
+    (-not (Test-IssCode -Text $probeHealthBody -Pattern ([regex]::Escape('Elapsed := Elapsed +')))) -and
+    (Test-IssCode -Text $probeHealthBody -Pattern ([regex]::Escape('RemainingMs'))) -and
+    (-not (Test-IssCode -Text $probeHealthBody -Pattern ([regex]::Escape('Sleep(HealthStepMs)'))))
+Add-StaticResult -Name 'static:health-actual-budget' -Ok $probeBudget `
+    -Note 'бюджет ProbeHealth по ServiceNowSeconds; Sleep не уходит за остаток'
 $rollbackBody = Get-IssFunctionBody -Text $issText -Name 'RollbackAfterFailure'
+$rollbackHealthReason = (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Прежняя версия не отвечает'))) -and
+    (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('GHealthReason'))) -and
+    (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('ServiceStartManually')))
+Add-StaticResult -Name 'static:rollback-health-reason' -Ok $rollbackHealthReason `
+    -Note 'неудача health прежней версии дописывается в GFailureReason, а не только WARN'
 Add-StaticResult -Name 'static:rollback-messages' `
     -Ok ((Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Откат выполнен'))) -and
         (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Откат не выполнен'))) -and
@@ -3855,9 +3876,10 @@ $archives = @(Get-BackupArchives)
 Add-Result -Name 'update-ok:archive' -Expected 1 -Actual ([int]($archives.Count -ge 1))
 Add-Result -Name 'update-ok:snapshot-removed' -Expected 0 -Actual ([int](@(Get-RollbackDirs).Count))
 $requests = Get-FakeHealthRequests -Server $srv
-$bothEndpoints = ($requests -match '/api/v1/health') -and ($requests -match '/api/v1/version')
-Add-Result -Name 'update-ok:endpoints' -Expected 1 -Actual ([int][bool]$bothEndpoints) `
-    -Note 'health-check проверил и /health, и /version'
+$singleEndpoint = ($requests -match '/api/v1/health') -and
+    (-not ($requests -match '/api/v1/version'))
+Add-Result -Name 'update-ok:single-endpoint' -Expected 1 -Actual ([int][bool]$singleEndpoint) `
+    -Note 'health-check вызвал только /api/v1/health; второй GET /version не выполняется'
 $order = Get-LogPatternIndices -Patterns @(
     'Этап: Остановка службы ETN',
     'Бэкап БД: архив создан',
@@ -3884,6 +3906,35 @@ $noInit = (-not (Test-LatestLogContains -Pattern 'etn init: запуск')) -and
     (Test-LatestLogContains -Pattern 'etn init не вызывается')
 Add-Result -Name 'update-ok:no-init' -Expected 1 -Actual ([int]$noInit) `
     -Note 'etn init при обновлении не вызывался'
+
+# --- A1. a1ea1d40: бюджет health-check — фактическое время, не сумма Sleep ---
+# Ответ подставного сервера задержан на 2 с, бюджет 3000 мс, шаг 500 мс.
+# Старая арифметика (Elapsed прирастал только на Sleep) делала 6 попыток:
+# 6 × (2 + 0,5) ≈ 15 с только на первый опрос. Фактический бюджет — 2 попытки
+# (второй запрос заканчивается уже за бюджетом) ≈ 4,5 с + health прежней
+# версии после отката ≈ 2 с. Порог 12 с отсекает старую сумму пауз с запасом.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$srv = Start-FakeHealthServer -Mode 'wrong-version' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write' -DelayMs 2000
+$budgetWatch = [System.Diagnostics.Stopwatch]::StartNew()
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs +
+        @('/TESTHEALTHWAIT=3000', '/TESTHEALTHSTEP=500', $nodeArg, "/TESTHEALTHURL=$($srv.Url)"))
+} finally {
+    $budgetWatch.Stop()
+    Stop-FakeHealthServer $srv
+}
+$budgetSeconds = [math]::Round($budgetWatch.Elapsed.TotalSeconds, 1)
+Add-Result -Name 'update-health-budget:code' -Expected 10 -Actual $code
+Add-Result -Name 'update-health-budget:actual-time' -Expected 1 `
+    -Actual ([int]($budgetSeconds -lt 12)) `
+    -Note ('установка ' + $budgetSeconds + ' с; сумма Sleep дала бы ~15 с только на первый опрос')
+$budgetRequests = @((Get-FakeHealthRequests -Server $srv) -split "`n" |
+    Where-Object { $_.Trim() -ne '' }).Count
+Add-Result -Name 'update-health-budget:requests' -Expected 1 `
+    -Actual ([int]($budgetRequests -lt 6)) `
+    -Note ('запросов к health: ' + $budgetRequests + '; старая сумма пауз сделала бы 7')
 
 # --- A2. 1dddac77: своя служба жива, TCP-таблица недоступна -----------------
 # На build 28000 таблица слушателей не работает: без спецветки эксклюзивный
@@ -4004,6 +4055,9 @@ Add-Result -Name 'update-foreign:rollback-log' -Expected 1 `
 Add-Result -Name 'update-foreign:health-reason' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'версия 9\.9\.9 вместо 0\.15\.1')) `
     -Note 'журнал называет причину: чужая версия'
+Add-Result -Name 'update-foreign:rollback-health' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Откат: прежняя версия отвечает на health-check')) `
+    -Note 'после отката health прежней версии пройден без требования целевой версии'
 $dbValues = Get-BackupTestValues -Path (Join-Path $dataDir '_system.db')
 Add-Result -Name 'update-foreign:db-restored' -Expected 1 -Actual ([int]($dbValues -eq 'alpha')) `
     -Note ('данные после отката: ' + $dbValues)
@@ -4024,21 +4078,9 @@ Add-Result -Name 'update-http500:rollback' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'Откат выполнен')) `
     -Note 'HTTP-ошибка health — повод для отката'
 
-# --- D. /api/v1/version вернул чужую версию: код 10 и откат -----------------
-$null = New-UpdateFixture
-$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
-$srv = Start-FakeHealthServer -Mode 'api-version' -DbPath (Join-Path $dataDir '_system.db') `
-    -Marker 'new-version-write'
-try {
-    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
-        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)"))
-} finally {
-    Stop-FakeHealthServer $srv
-}
-Add-Result -Name 'update-version:code' -Expected 10 -Actual $code
-Add-Result -Name 'update-version:reason' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'version: версия 9\.9\.9 вместо 0\.15\.1')) `
-    -Note 'проверяется и GET /api/v1/version'
+# --- D. (удалён a1ea1d40) Второй GET /api/v1/version больше не вызывается ----
+# Бывший тест «/version вернул чужую версию» удалён вместе с самим запросом:
+# версия проверяется из тела /health (тест update-foreign и сторожа выше).
 
 # --- E. health с db=error: код 10 и откат -----------------------------------
 $null = New-UpdateFixture
@@ -4056,14 +4098,21 @@ Add-Result -Name 'update-db-error:reason' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'health: db=error вместо ok')) `
     -Note 'db=ok обязателен'
 
-# --- F. Неудачный откат: код 10 и путь к архиву в журнале -------------------
+# --- F. Неудачный откат: код 10, путь к архиву и health в причине ------------
+# a1ea1d40: неудача health прежней версии после отката не маскируется —
+# дописывается в GFailureReason вместе с подсказкой ServiceStartManually.
+# Причина доступна только через reason-файл, поэтому запуск привилегированной
+# фазы с /PARAMS (как в тесте ремонта).
 $null = New-UpdateFixture
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$reasonRollbackFail = Join-Path $workRoot 'rollback-fail-reason.txt'
+$paramsRollbackFail = New-ParamsFile -ReasonFile $reasonRollbackFail -Name 'rollback-fail.ini'
 $srv = Start-FakeHealthServer -Mode 'http500' -DbPath (Join-Path $dataDir '_system.db') `
     -Marker 'new-version-write'
 try {
-    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
-        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)", '/TESTROLLBACK=fail'))
+    $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+        "/PARAMS=`"$paramsRollbackFail`"", '/TESTELEVATED=1', '/TESTSERVICE=present',
+        $nodeArg) + $fastHealth + @("/TESTHEALTHURL=$($srv.Url)", '/TESTROLLBACK=fail'))
 } finally {
     Stop-FakeHealthServer $srv
 }
@@ -4074,6 +4123,16 @@ Add-Result -Name 'update-rollback-fail:log' -Expected 1 `
 Add-Result -Name 'update-rollback-fail:archive-path' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'Откат не выполнен: [^\r\n]*архив: [^\r\n]*backups')) `
     -Note 'в сообщении путь к архиву БД'
+$reasonRollbackText = ''
+if (Test-Path -LiteralPath $reasonRollbackFail) {
+    $reasonRollbackText = Get-Content -LiteralPath $reasonRollbackFail -Raw
+}
+Add-Result -Name 'update-rollback-fail:health-reason' -Expected 1 `
+    -Actual ([int](
+        ($reasonRollbackText -match 'Прежняя версия не отвечает') -and
+        ($reasonRollbackText -match 'health: HTTP-ошибка') -and
+        ($reasonRollbackText -match 'etn-service\.exe start'))) `
+    -Note 'неудача health прежней версии (диагностика + ServiceStartManually) — в причине'
 
 # --- G. Бэкап не удался: код 10, файлы не заменены, служба поднята ----------
 $null = New-UpdateFixture
