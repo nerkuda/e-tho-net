@@ -511,3 +511,220 @@ describe('guard: Docker-образ сервера — обязательная �
     );
   });
 });
+
+/**
+ * Сторож состава ассетов релиза (ошибка 054b0a66, 0.15.2).
+ *
+ * `docker/build-push-action` кладёт в артефакты прогона служебный
+ * `.dockerbuild` — запись сборочного контекста. `actions/download-artifact`
+ * без `pattern` скачивает ВСЕ артефакты прогона, и `softprops/action-gh-release`
+ * публикует служебный файл как ассет релиза: в prerelease `v0.15.2` уехал
+ * `nerkuda.e-tho-net.Z5ZMXK.dockerbuild` (28 736 байт). Тот же класс дефекта
+ * уже закрывали в 6995459b (`pattern: etn-*`), но переписывание workflow в
+ * 35c32a7b (0.15.1) потеряло настройку — сторожа на этот контракт не было.
+ *
+ * Контракт:
+ *   * в джобе `publish` ровно один шаг `actions/download-artifact`, и у него
+ *     `pattern: release-*` — только артефакты трёх сборочных джоб;
+ *   * `path: artifacts` и `merge-multiple: true` на месте — три файла лежат
+ *     в одном каталоге, по которому считается `SHA256SUMS`;
+ *   * имена всех `actions/upload-artifact` в workflow начинаются с `release-`
+ *     (иначе `pattern` молча перестанет их находить);
+ *   * md-контракт в шапке файла: перечислены пять ожидаемых ассетов релиза
+ *     и зафиксировано, что `.dockerbuild` ассетом не является.
+ *
+ * Сторож статический, как и остальные проверки этого файла: YAML читается
+ * текстом, комментарии в теле отбрасываются (упоминание в шапке не маскирует
+ * удаление настройки), а md-контракт проверяется отдельно по самой шапке.
+ */
+
+/** Все шаги джобы, использующие action по префиксу `uses: <prefix>`. */
+function stepsUsingPrefix(job: readonly string[], prefix: string): string[][] {
+  const steps = findBlock(job, 'steps', 4);
+  if (!steps) return [];
+  const pattern = new RegExp(`^\\s*(?:-\\s+)?uses:\\s*${escapeRe(prefix)}`);
+  return listItems(steps).filter((item) => item.some((line) => pattern.test(line)));
+}
+
+/** Строки шага после `key:` — содержимое блочного скаляра (`files: |`). */
+function blockValueLines(step: readonly string[], key: string): string[] {
+  const start = step.findIndex((line) =>
+    new RegExp(`^\\s*(?:-\\s+)?${escapeRe(key)}:\\s*\\|\\s*$`).test(line),
+  );
+  if (start < 0) return [];
+
+  const headIndent = indentOf(step[start] ?? '');
+  const body: string[] = [];
+  for (let i = start + 1; i < step.length; i += 1) {
+    const line = step[i];
+    if (line === undefined) break;
+    if (line.trim() !== '' && indentOf(line) <= headIndent) break;
+    body.push(line.trim());
+  }
+  return body.filter(Boolean);
+}
+
+/** Шапка workflow: ведущие строки-комментарии до первого объявления. */
+function headerComments(workflow: string): string {
+  const lines: string[] = [];
+  for (const line of workflow.split('\n')) {
+    if (line.trim() === '') continue;
+    if (!/^\s*#/.test(line)) break;
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
+describe('guard: публикация релиза — только релизные артефакты', () => {
+  it(`${RELEASE_WORKFLOW}: publish скачивает только артефакты release-*`, () => {
+    const text = stripComments(readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер'));
+    const publish = findBlock(text.split('\n'), 'publish', 2);
+    assert.ok(publish !== null, `${RELEASE_WORKFLOW}: нет джобы publish.`);
+
+    const downloads = stepsUsingPrefix(publish, 'actions/download-artifact@');
+    assert.equal(
+      downloads.length,
+      1,
+      `${RELEASE_WORKFLOW}: в publish ожидается ровно один шаг ` +
+        `actions/download-artifact, найдено ${downloads.length}. Несколько загрузок ` +
+        'в один каталог смешивают состав релиза.',
+    );
+
+    const download = downloads[0] ?? [];
+    const pattern = stepValue(download, 'pattern');
+    assert.ok(
+      pattern !== null,
+      `${RELEASE_WORKFLOW}: в publish downloads-artifact без pattern — шаг скачивает ` +
+        'ВСЕ артефакты прогона, включая служебный .dockerbuild от ' +
+        'docker/build-push-action, и тот уезжает в ассеты релиза (ошибка 054b0a66). ' +
+        'Укажи pattern: release-*.',
+    );
+    const normalized = pattern.replace(/^['"]|['"]$/g, '').trim();
+    assert.equal(
+      normalized,
+      'release-*',
+      `${RELEASE_WORKFLOW}: pattern скачивания артефактов в publish — «${normalized}», ` +
+        'ожидается «release-*». Широкий шаблон (в том числе «*») снова втянет ' +
+        '.dockerbuild в релиз.',
+    );
+
+    assert.equal(
+      stepValue(download, 'path'),
+      'artifacts',
+      `${RELEASE_WORKFLOW}: шаг скачивания в publish должен класть артефакты в path: artifacts — ` +
+        'по этому каталогу считает SHA256SUMS и публикует gh-release (files: artifacts/*).',
+    );
+    assert.equal(
+      stepValue(download, 'merge-multiple'),
+      'true',
+      `${RELEASE_WORKFLOW}: у шага скачивания в publish должен остаться merge-multiple: true — ` +
+        'без него файлы трёх артефактов лягут в подкаталоги, и SHA256SUMS их не найдёт.',
+    );
+  });
+
+  it(`${RELEASE_WORKFLOW}: все upload-artifact названы release-*`, () => {
+    const text = stripComments(readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер'));
+    const lines = text.split('\n');
+    const jobs = findBlock(lines, 'jobs', 0);
+    assert.ok(jobs !== null, `${RELEASE_WORKFLOW}: нет блока jobs.`);
+
+    const jobNames = jobs
+      .map((line) => /^ {2}([A-Za-z0-9_.-]+):\s*$/.exec(line))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map((match) => match[1] ?? '');
+
+    const uploaded: { job: string; name: string | null }[] = [];
+    for (const jobName of jobNames) {
+      const job = findBlock(jobs, jobName, 2);
+      if (!job) continue;
+      for (const step of stepsUsingPrefix(job, 'actions/upload-artifact@')) {
+        uploaded.push({ job: jobName, name: stepValue(step, 'name') });
+      }
+    }
+
+    assert.ok(
+      uploaded.length > 0,
+      `${RELEASE_WORKFLOW}: не найдено ни одного шага actions/upload-artifact — ` +
+        'publish скачивать нечего.',
+    );
+    for (const entry of uploaded) {
+      assert.ok(
+        entry.name !== null,
+        `${RELEASE_WORKFLOW}: у upload-artifact в джобе ${entry.job} нет name — ` +
+          'безымянный артефакт не попадёт под pattern: release-* и выпадет из релиза.',
+      );
+      assert.match(
+        entry.name,
+        /^release-[a-z0-9-]+$/,
+        `${RELEASE_WORKFLOW}: артефакт «${entry.name}» (джоба ${entry.job}) не начинается ` +
+          'с release-. publish качает только release-*, поэтому переименование ' +
+          'артефакта молча исключит его из релиза.',
+      );
+    }
+
+    // Три сборочные джобы — три артефакта, которые обязан скачать publish.
+    for (const expected of ['release-windows', 'release-linux-client', 'release-linux-server']) {
+      assert.ok(
+        uploaded.some((entry) => entry.name === expected),
+        `${RELEASE_WORKFLOW}: нет артефакта ${expected} — в релизе не будет одного ` +
+          'из трёх бинарных ассетов.',
+      );
+    }
+  });
+
+  it(`${RELEASE_WORKFLOW}: md-контракт — пять ассетов релиза, .dockerbuild не ассет`, () => {
+    const text = readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер');
+    const header = headerComments(text);
+    assert.ok(header.length > 0, `${RELEASE_WORKFLOW}: нет шапки-комментария с контрактом ассетов.`);
+
+    const assets: { label: string; pattern: RegExp }[] = [
+      { label: 'ETN-Setup-<version>.exe', pattern: /ETN-Setup-[^\s]+\.exe/ },
+      { label: 'ETN-Client-<version>-linux-x64.tar.gz', pattern: /ETN-Client-[^\s]+-linux-x64\.tar\.gz/ },
+      { label: 'etn-server-<version>.tar.gz', pattern: /etn-server-[^\s]+\.tar\.gz/ },
+      { label: 'SHA256SUMS', pattern: /\bSHA256SUMS\b/ },
+      { label: 'install.sh', pattern: /\binstall\.sh\b/ },
+    ];
+    for (const asset of assets) {
+      assert.match(
+        header,
+        asset.pattern,
+        `${RELEASE_WORKFLOW}: в шапке-контракте нет ассета ${asset.label}. В релизе ` +
+          'ровно пять ожидаемых ассетов; шапка — md-контракт, по которому сверяются ' +
+          'workflow, install.sh, тело релиза и update-checker.',
+      );
+    }
+    assert.match(
+      header,
+      /\.dockerbuild/,
+      `${RELEASE_WORKFLOW}: шапка-контракт не фиксирует, что .dockerbuild — служебный ` +
+        'артефакт docker-джобы и в релиз не входит. Без этой строки следующий ' +
+        'рефакторинг снова потеряет pattern (ошибка 054b0a66).',
+    );
+  });
+
+  it(`${RELEASE_WORKFLOW}: gh-release публикует artifacts/* и install.sh`, () => {
+    const text = stripComments(readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер'));
+    const publish = findBlock(text.split('\n'), 'publish', 2);
+    assert.ok(publish !== null, `${RELEASE_WORKFLOW}: нет джобы publish.`);
+
+    const releases = stepsUsingPrefix(publish, 'softprops/action-gh-release@');
+    assert.equal(
+      releases.length,
+      1,
+      `${RELEASE_WORKFLOW}: в publish ожидается ровно один шаг softprops/action-gh-release, ` +
+        `найдено ${releases.length}.`,
+    );
+
+    const files = blockValueLines(releases[0] ?? [], 'files');
+    assert.ok(
+      files.includes('artifacts/*'),
+      `${RELEASE_WORKFLOW}: gh-release не публикует artifacts/* — релиз выйдет без ` +
+        'бинарных ассетов и SHA256SUMS.',
+    );
+    assert.ok(
+      files.includes('scripts/install.sh'),
+      `${RELEASE_WORKFLOW}: gh-release не публикует scripts/install.sh — установщик ` +
+        'Linux-клиента выпадет из релиза.',
+    );
+  });
+});

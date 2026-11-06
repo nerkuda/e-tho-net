@@ -9,6 +9,11 @@
 #   SHA256SUMS                            — SHA-256 всех трёх бинарных ассетов;
 #   install.sh                            — установщик Linux-клиента (не хешируется: это скрипт).
 #
+# Состав публикации фиксирован: `publish` скачивает только артефакты `release-*`
+# (release-windows, release-linux-client, release-linux-server). Служебный
+# `.dockerbuild` от docker/build-push-action — не ассет релиза и в релиз не
+# попадает (ошибка 054b0a66).
+#
 # Имена и состав ассетов — контракт (карточка 6d93fe6f, требование d9e2dcf8):
 # по ним строятся install.sh, client_sha256 в GET /version и серверное
 # обновление (server/src/update/checker.ts ищет `ETN-Setup-<version>.exe`
@@ -283,6 +288,9 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+          # Только артефакты сборочных джоб: служебный `.dockerbuild` от
+          # docker/build-push-action в релиз не входит (ошибка 054b0a66).
+          pattern: release-*
           merge-multiple: true
       - name: Generate and verify SHA256SUMS
         env:
