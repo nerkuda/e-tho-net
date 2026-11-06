@@ -6,7 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,6 +121,43 @@ async function writeZip(zipPath: string, files: Array<{ filePath: string; name: 
     for (const file of files) archive.file(file.filePath, { name: file.name });
     void archive.finalize();
   });
+}
+
+type LiveDatabase = InstanceType<typeof DatabaseConstructor>;
+
+/**
+ * База-источник с живым WAL-хвостом. Соединение возвращается открытым: на
+ * последнем закрытии SQLite чекпойнтит и удаляет `-wal`, а тесту нужен
+ * реальный WAL на диске.
+ */
+function openWalSource(file: string, values: string[]): LiveDatabase {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new DatabaseConstructor(file);
+  db.pragma('journal_mode = WAL');
+  db.exec('CREATE TABLE t(v TEXT)');
+  db.prepare('INSERT INTO t(v) VALUES (?)').run(values[0] ?? 'base');
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  db.pragma('wal_autocheckpoint = 0');
+  for (const value of values.slice(1)) db.prepare('INSERT INTO t(v) VALUES (?)').run(value);
+  return db;
+}
+
+/** Скопировать живую WAL-базу вместе с `-wal`/`-shm` в целевой каталог. */
+function copyLiveDatabase(source: string, destination: string): void {
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(source, destination);
+  fs.copyFileSync(`${source}-wal`, `${destination}-wal`);
+  if (fs.existsSync(`${source}-shm`)) fs.copyFileSync(`${source}-shm`, `${destination}-shm`);
+}
+
+/** Подменить функцию `node:fs` на время теста; возвращает восстановление. */
+function patchFs(name: 'rmSync' | 'copyFileSync', replacement: unknown): () => void {
+  const target = fs as unknown as Record<string, unknown>;
+  const original = target[name];
+  target[name] = replacement;
+  return () => {
+    target[name] = original;
+  };
 }
 
 describe('db-backup: создание архива', () => {
@@ -244,6 +281,70 @@ describe('db-backup: создание архива', () => {
       (error: unknown) => error instanceof DbToolError && error.code === 1,
     );
     assert.equal(fs.readFileSync(toDir, 'utf8'), 'occupied');
+  });
+
+  it('несуществующий каталог данных — код 2, а не «бэкапить нечего»', async () => {
+    const root = makeRoot('missing-data');
+    const dataDir = path.join(root, 'нет такого каталога');
+    await assert.rejects(
+      () => createBackup({ dataDir, toDir: path.join(root, 'backups'), version: '0.15.3' }),
+      (error: unknown) =>
+        error instanceof DbToolError &&
+        error.code === 2 &&
+        /data directory cannot be read/.test(error.message),
+    );
+    assert.equal(fs.existsSync(path.join(root, 'backups')), false);
+  });
+
+  it('каталог данных — файл — код 2', async () => {
+    const root = makeRoot('data-is-file');
+    const dataDir = path.join(root, 'data');
+    fs.writeFileSync(dataDir, 'not a directory');
+    await assert.rejects(
+      () => createBackup({ dataDir, toDir: path.join(root, 'backups'), version: '0.15.3' }),
+      (error: unknown) =>
+        error instanceof DbToolError &&
+        error.code === 2 &&
+        /not a directory/.test(error.message),
+    );
+  });
+
+  it('ошибка удаления старого архива — предупреждение и код 0', async () => {
+    const root = makeRoot('rotate-fail');
+    const dataDir = makeDataDir(root, { system: ['alpha'] });
+    const toDir = path.join(root, 'backups');
+    fs.mkdirSync(toDir, { recursive: true });
+    const oldest = 'etn-backup-0.15.3-20000101-000001.zip';
+    for (const stamp of ['20000101-000001', '20000102-000002', '20000103-000003']) {
+      fs.writeFileSync(path.join(toDir, `etn-backup-0.15.3-${stamp}.zip`), 'old');
+    }
+    const originalRm = (fs as unknown as { rmSync: typeof fs.rmSync }).rmSync;
+    const restoreRm = patchFs('rmSync', ((file: fs.PathLike, options?: fs.RmOptions) => {
+      if (String(file).endsWith(oldest)) {
+        const error = new Error(`EBUSY: resource busy or locked, unlink '${String(file)}'`);
+        (error as NodeJS.ErrnoException).code = 'EBUSY';
+        throw error;
+      }
+      return originalRm(file, options);
+    }) as typeof fs.rmSync);
+    let report: Awaited<ReturnType<typeof createBackup>>;
+    try {
+      report = await createBackup({
+        dataDir,
+        toDir,
+        version: '0.15.3',
+        now: new Date(2026, 10, 6, 12, 0, 0),
+      });
+    } finally {
+      restoreRm();
+    }
+    assert.equal(report.code, 0, report.error ?? '');
+    assert.ok(fs.existsSync(path.join(toDir, oldest)), 'неудалённый архив остался');
+    assert.equal(
+      report.warnings.some((warning) => warning.includes('failed to delete old archive')),
+      true,
+      report.warnings.join(' | '),
+    );
   });
 
   it('ротация: три новейших своих архива, чужие файлы не трогаются', async () => {
@@ -423,6 +524,133 @@ describe('db-backup: восстановление', () => {
       holder.close();
     }
   });
+
+  it('restore удаляет прежние -wal/-shm цели: WAL-хвост не «воскресает»', async () => {
+    const root = makeRoot('restore-live-wal');
+    const archiveData = makeDataDir(root, { system: ['archived'] });
+    const archive = await createBackup({
+      dataDir: archiveData,
+      toDir: path.join(root, 'backups'),
+      version: '0.15.3',
+    });
+    assert.equal(archive.code, 0, archive.error ?? '');
+
+    // Цель — база в WAL-режиме с незачекпойнченным хвостом: реальные -wal и
+    // -shm. Если restore не удалит их, SQLite применит старые кадры к
+    // подменённому файлу, и «архивные» данные смешаются с прежними.
+    const dataDir = path.join(root, 'target');
+    const target = path.join(dataDir, '_system.db');
+    const live = path.join(root, 'live.db');
+    const writer = openWalSource(live, ['base', 'stale-1', 'stale-2']);
+    try {
+      assert.ok(fs.existsSync(`${live}-wal`), 'у источника реальный WAL');
+      copyLiveDatabase(live, target);
+    } finally {
+      writer.close();
+    }
+    assert.ok(fs.existsSync(`${target}-wal`), 'у цели реальный WAL');
+    assert.ok(fs.existsSync(`${target}-shm`), 'у цели реальный SHM');
+
+    const report = await restoreBackup({
+      dataDir,
+      from: archive.archive!,
+      force: true,
+      currentVersion: '0.15.3',
+    });
+    assert.equal(report.code, 0, report.error ?? '');
+    assert.deepEqual(readValues(target), ['archived'], 'строки из прежнего WAL не воскресли');
+    assert.equal(fs.existsSync(`${target}-wal`), false, 'WAL прежней цели удалён');
+    assert.equal(fs.existsSync(`${target}-shm`), false, 'SHM прежней цели удалён');
+    assert.equal(fs.existsSync(`${target}.restore-tmp`), false);
+    assert.equal(fs.existsSync(`${target}.restore-old`), false);
+  });
+
+  it('сбой staged-копии не удаляет WAL цели (порядок restore)', async () => {
+    const root = makeRoot('restore-order');
+    const archiveData = makeDataDir(root, { system: ['archived'] });
+    const archive = await createBackup({
+      dataDir: archiveData,
+      toDir: path.join(root, 'backups'),
+      version: '0.15.3',
+    });
+    assert.equal(archive.code, 0, archive.error ?? '');
+
+    const dataDir = path.join(root, 'target');
+    const target = path.join(dataDir, '_system.db');
+    const live = path.join(root, 'live.db');
+    const writer = openWalSource(live, ['base', 'stale-1']);
+    try {
+      copyLiveDatabase(live, target);
+    } finally {
+      writer.close();
+    }
+    assert.ok(fs.existsSync(`${target}-wal`));
+
+    const originalCopy = (fs as unknown as { copyFileSync: typeof fs.copyFileSync }).copyFileSync;
+    const restoreCopy = patchFs('copyFileSync', ((source: fs.PathLike, destination: fs.PathLike, mode?: number) => {
+      if (String(destination).endsWith('.restore-tmp')) {
+        const error = new Error('ENOSPC: no space left on device, copyfile');
+        (error as NodeJS.ErrnoException).code = 'ENOSPC';
+        throw error;
+      }
+      return originalCopy(source, destination, mode);
+    }) as typeof fs.copyFileSync);
+    try {
+      await assert.rejects(
+        () => restoreBackup({ dataDir, from: archive.archive!, force: true, currentVersion: '0.15.3' }),
+        (error: unknown) => error instanceof DbToolError && error.code === 1,
+      );
+    } finally {
+      restoreCopy();
+    }
+
+    // Прежняя база не тронута: main-файл и WAL на месте, staged-копии нет.
+    assert.ok(fs.existsSync(target), 'прежняя БД на месте');
+    assert.ok(fs.existsSync(`${target}-wal`), 'WAL прежней БД не удалён до копии');
+    assert.equal(fs.existsSync(`${target}.restore-tmp`), false, 'недоделанная копия удалена');
+    assert.deepEqual(readValues(target), ['base', 'stale-1'], 'прежние данные целы');
+  });
+
+  it('посторонняя запись в архиве (_system.db-wal) — отказ (код 1)', async () => {
+    const root = makeRoot('extra-entry');
+    const dataDir = makeDataDir(root, { system: ['alpha'] });
+    const systemDb = path.join(dataDir, '_system.db');
+    const before = fs.readFileSync(systemDb);
+    const zipPath = path.join(root, 'etn-backup-0.15.3-20261106-120000.zip');
+    await writeZip(zipPath, [
+      { filePath: systemDb, name: '_system.db' },
+      { filePath: systemDb, name: '_system.db-wal' },
+    ]);
+    await assert.rejects(
+      () => restoreBackup({ dataDir, from: zipPath, force: true, currentVersion: '0.15.3' }),
+      (error: unknown) =>
+        error instanceof DbToolError &&
+        error.code === 1 &&
+        /unexpected entry in the archive/.test(error.message),
+    );
+    assert.deepEqual(fs.readFileSync(systemDb), before);
+  });
+
+  it('truncated ZIP — отказ до изменения цели (код 1)', async () => {
+    const root = makeRoot('truncated');
+    const dataDir = makeDataDir(root, { system: ['alpha'] });
+    const systemDb = path.join(dataDir, '_system.db');
+    const before = fs.readFileSync(systemDb);
+    const archive = await createBackup({
+      dataDir,
+      toDir: path.join(root, 'backups'),
+      version: '0.15.3',
+    });
+    assert.equal(archive.code, 0, archive.error ?? '');
+    const full = fs.readFileSync(archive.archive!);
+    const truncated = path.join(root, 'etn-backup-0.15.3-20261106-120000.zip');
+    fs.writeFileSync(truncated, full.subarray(0, Math.max(16, Math.floor(full.length / 2))));
+    await assert.rejects(
+      () => restoreBackup({ dataDir, from: truncated, force: true, currentVersion: '0.15.3' }),
+      (error: unknown) => error instanceof DbToolError && error.code === 1,
+    );
+    assert.deepEqual(fs.readFileSync(systemDb), before);
+  });
 });
 
 describe('db-backup: CLI и отчёт', () => {
@@ -514,23 +742,43 @@ describe('db-backup: CLI и отчёт', () => {
     assert.equal(compareVersions('unknown', '0.15.3'), null);
   });
 
-  it('модуль самодостаточен: нет импортов других файлов проекта', () => {
-    const source = fs.readFileSync(SOURCE_FILE, 'utf8');
-    assert.equal(
-      /from\s+['"]\.\.?\//.test(source),
-      false,
-      'db-backup.ts не должен импортировать файлы проекта',
+  it('runBackupCli с несуществующим каталогом данных — код 2 и отчёт', async () => {
+    const root = makeRoot('cli-missing-dir');
+    const reportPath = path.join(root, 'report.txt');
+    const { result } = await captureConsole(() =>
+      runBackupCli(
+        [
+          '--to',
+          path.join(root, 'backups'),
+          '--data-dir',
+          path.join(root, 'нет такого каталога'),
+          '--report-out',
+          reportPath,
+        ],
+        {},
+      ),
     );
-    assert.equal(
-      /from\s+['"]@etn\//.test(source),
-      false,
-      'db-backup.ts не должен импортировать workspace-пакеты',
+    assert.equal(result, 2);
+    assert.match(fs.readFileSync(reportPath, 'utf8'), /^code=2$/m);
+  });
+
+  it('инструмент без node_modules поставки — код 2', () => {
+    // Самодостаточность проверяется сторожем guard-db-layer; здесь — реальный
+    // запуск из каталога без node_modules: внешние библиотеки не разрешаются,
+    // и это внутренняя ошибка (2), а не отказ бэкапа (1).
+    const root = makeRoot('no-modules');
+    const dataDir = makeDataDir(root, { system: ['alpha'] });
+    const toolDir = path.join(root, 'tool');
+    fs.mkdirSync(toolDir, { recursive: true });
+    const tool = path.join(toolDir, 'db-backup.ts');
+    fs.copyFileSync(SOURCE_FILE, tool);
+    const result = spawnSync(
+      process.execPath,
+      [tool, 'backup', '--to', path.join(root, 'backups'), '--data-dir', dataDir],
+      { cwd: toolDir, encoding: 'utf8' },
     );
-    assert.equal(
-      /from\s+['"](?:better-sqlite3|archiver|yauzl)['"]/.test(source),
-      false,
-      'внешние библиотеки загружаются через createRequire',
-    );
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /Required module "better-sqlite3" was not found/);
   });
 
   it('собранный модуль запускается напрямую как инструмент (dist или tsx)', () => {

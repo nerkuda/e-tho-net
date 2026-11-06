@@ -566,6 +566,22 @@ export async function createBackup(options: BackupOptions): Promise<DbToolReport
   const now = options.now ?? new Date();
   const warnings: string[] = [];
 
+  // Отсутствующий или нечитаемый каталог данных — не «бэкапить нечего»:
+  // это опечатка в пути или сломанное окружение установщика (код 2), а не
+  // штатный пустой каталог (код 0).
+  let dataDirStat: fs.Stats;
+  try {
+    dataDirStat = fs.statSync(dataDir);
+  } catch (error) {
+    throw new DbToolError(
+      `The data directory cannot be read: ${dataDir}: ${errorText(error)}`,
+      2,
+    );
+  }
+  if (!dataDirStat.isDirectory()) {
+    throw new DbToolError(`The data directory is not a directory: ${dataDir}`, 2);
+  }
+
   let sources: DatabaseSource[];
   try {
     sources = listDatabaseSources(dataDir);
@@ -860,6 +876,8 @@ export async function restoreBackup(options: RestoreOptions): Promise<DbToolRepo
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-restore-'));
   const staged: Array<{ relative: string; filePath: string }> = [];
+  /** Временные файлы подмены: недоделанная копия не остаётся рядом с базой. */
+  const temporaries: string[] = [];
   let bytes = 0;
   let zip: ZipFile | null = null;
   try {
@@ -905,12 +923,16 @@ export async function restoreBackup(options: RestoreOptions): Promise<DbToolRepo
       const previousStat = fs.existsSync(target.destination)
         ? fs.statSync(target.destination)
         : null;
-      removeSidecars(target.destination);
       const temporary = `${target.destination}.restore-tmp`;
       const previous = `${target.destination}.restore-old`;
       fs.rmSync(temporary, { force: true });
       fs.rmSync(previous, { recursive: true, force: true });
+      temporaries.push(temporary);
+      // Порядок важен: сначала staged-копия, только потом удаление сайдкаров.
+      // Иначе неудачное копирование (ENOSPC, отказ прав) оставит прежнюю БД
+      // без WAL-хвоста, и откат сам станет потерей данных.
       fs.copyFileSync(target.filePath, temporary);
+      removeSidecars(target.destination);
       if (previousStat !== null) {
         fs.renameSync(target.destination, previous);
         try {
@@ -944,6 +966,13 @@ export async function restoreBackup(options: RestoreOptions): Promise<DbToolRepo
       zip?.close();
     } catch {
       // Файл архива уже закрыт.
+    }
+    for (const temporary of temporaries) {
+      try {
+        fs.rmSync(temporary, { force: true });
+      } catch (error) {
+        warnings.push(`failed to remove ${temporary}: ${errorText(error)}`);
+      }
     }
     try {
       fs.rmSync(stagingDir, { recursive: true, force: true });
@@ -995,6 +1024,10 @@ Creates a ZIP archive of the ETN databases in <dir>:
   _system.db and networks/<uuid>/data.db. Attachments are not included.
 Archive name: etn-backup-<version>-<YYYYMMDD-HHMMSS>.zip. The three newest
 archives are kept; foreign files are not touched.
+
+The report field "bytes" is the total size of the database files before
+compression. The databases are staged in the temporary directory, so the
+operation needs free space there roughly equal to twice their size.
 
 Options:
   --to <dir>            Parent directory for the archive (required).

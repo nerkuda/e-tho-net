@@ -11,6 +11,8 @@
  * в этом же каталоге и по этому же образцу.
  */
 
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -37,5 +39,31 @@ describe('guard: better-sqlite3 только в слое db', () => {
           rel === 'db' || rel.startsWith('db/') || line.includes('import type'),
       },
     ]);
+  });
+});
+
+/**
+ * `db-backup.ts` кладётся в payload установщика как `etn-db-tool.mjs` и
+ * запускается из `{tmp}`: любой статический импорт, кроме встроенных
+ * `node:`-модулей, сделает инструмент неработоспособным. Внешние библиотеки
+ * (`better-sqlite3`, `archiver`, `yauzl`) обязаны грузиться через
+ * `createRequire` из `server/node_modules` поставки.
+ */
+describe('guard: db-backup самодостаточен для payload', () => {
+  it('статические импорты — только node:, пакеты — через createRequire', () => {
+    const source = fs.readFileSync(path.join(SERVER_SRC_ROOT, 'db', 'db-backup.ts'), 'utf8');
+    const specifiers = [...source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((match) => match[1]!);
+    assert.ok(specifiers.length > 0, 'в db-backup.ts есть статические импорты node:');
+    for (const specifier of specifiers) {
+      assert.ok(
+        specifier.startsWith('node:'),
+        `db-backup.ts не должен импортировать «${specifier}»: только node:-модули`,
+      );
+    }
+    assert.equal(
+      /\brequire\s*\(\s*['"](?!node:)/.test(source),
+      false,
+      'внешние пакеты нельзя требовать статически: только createRequire',
+    );
   });
 });
