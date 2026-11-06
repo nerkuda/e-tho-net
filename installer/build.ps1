@@ -269,6 +269,7 @@ function Test-PayloadFreshness {
         'server\package.json',
         'server\dist\index.js',
         'server\dist\cli.js',
+        'server\dist\db\db-backup.js',
         'server\migrations\system',
         'server\migrations\network',
         'server\node_modules\better-sqlite3\package.json',
@@ -380,6 +381,15 @@ function Test-PayloadFreshness {
     foreach ($capability in @('--key-out', '--check')) {
         if (-not $cliText.Contains($capability)) {
             $problems.Add("в payload server\dist\cli.js нет поддержки $capability — это старая сборка")
+        }
+    }
+    # Инструмент бэкапа/восстановления (3acd9c3c): без него обновление не
+    # начнётся (установщик извлекает self-contained etn-db-tool.mjs). Строки
+    # взяты из справки CLI — они есть только в сборке с этими командами.
+    $dbToolText = Get-Content -LiteralPath (Join-Path $Root 'server\dist\db\db-backup.js') -Raw
+    foreach ($capability in @('backup --to', 'restore --from', '--report-out')) {
+        if (-not $dbToolText.Contains($capability)) {
+            $problems.Add("в payload server\dist\db\db-backup.js нет поддержки $capability — это старая сборка")
         }
     }
     # Плейсхолдеры шаблона службы: без них InstallServiceConfig не подставит

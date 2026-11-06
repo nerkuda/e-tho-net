@@ -39,6 +39,7 @@ import { ConfigError, loadConfig, type ServerConfig } from './config.js';
 import { logger } from './logger.js';
 import { SystemDb } from './db/system-db.js';
 import { closeNetworkDb, openNetworkDb } from './db/network-db.js';
+import { runBackupCli, runRestoreCli } from './db/db-backup.js';
 import { generateApiKey } from './auth/api-key.js';
 import { createApiKeyAuthProvider } from './mcp/auth.js';
 import { runStdioMcp } from './mcp/stdio.js';
@@ -153,6 +154,8 @@ Commands:
   init          Initial server setup: creates _system.db, the first
                 administrator and the primary API key. "etn init --check" only
                 reports the initialization state (for the installer).
+  backup        Create a ZIP archive of the databases (before an update).
+  restore       Restore the databases from a backup archive.
   mcp           MCP server in stdio mode (for local AI agents). The API key —
                 via ETN_API_KEY or --api-key.
   publications  Rebuild publications into a directory (CI and git hooks).
@@ -795,6 +798,14 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       return 1;
     }
     return parsed.check ? runInitCheck(config) : runInit(parsed, config);
+  }
+
+  if (command === 'backup') {
+    return runBackupCli(tokens.slice(1), env);
+  }
+
+  if (command === 'restore') {
+    return runRestoreCli(tokens.slice(1), env);
   }
 
   if (command === 'mcp') {

@@ -37,16 +37,25 @@
 ;
 ; Задача ce3ab836 (0.15.1) — бэкап баз данных перед заменой файлов:
 ;   * CreateDatabaseBackup(Needed) — вызывающий (bb063ac3) передаёт решение:
-;     при смене версии Needed = True, при ремонте той же версии False;
-;   * архив — каталог backups\<YYYYMMDD-HHmmss> каталога данных с копиями
-;     _system.db и networks\<uuid>\data.db; без вложений и без zip;
-;   * перед копированием WAL-база чекпойнтится через node.exe и
-;     better-sqlite3 поставки; если чекпойнт не удался, копируется и файл -wal;
-;   * каждая копия проходит PRAGMA integrity_check (не ok — архив неудачный и
-;     удаляется, обновление отменяется);
-;   * хранятся три последних архива; четвёртый удаляет самый старый, ошибка
-;     удаления обновление не отменяет (только WARN); чужие файлы и каталоги
-;     в backups не трогаются.
+;     при смене версии Needed = True, при ремонте той же версии False.
+;
+; Задача 3acd9c3c (0.15.3) — бэкап и восстановление БД вынесены в CLI сервера:
+;   * SQLite/чекпойнт/копирования в Pascal больше нет: установщик извлекает
+;     самодостаточный etn-db-tool.mjs (server/dist/db/db-backup.js) во
+;     временный каталог ДО остановки службы и запускает его через
+;     {app}\node.exe с рабочим каталогом {app}\server:
+;       backup  --to <данные>\backups --report-out <tmp>\report.txt --data-dir <данные>
+;       restore --from <архив этого запуска> --force --report-out ... --data-dir ...
+;   * архив — ZIP по спецификации (сущность 2975c553):
+;     etn-backup-<версия>-<YYYYMMDD-HHMMSS>.zip внутри _system.db и
+;     networks\<uuid>\data.db; вложения не входят; ротация трёх архивов и
+;     integrity_check — в CLI (server/src/db/db-backup.ts), покрыты TS-тестами;
+;   * путь архива и причина отказа читаются из отчёта key=value (archive,
+;     error, warnings) в GLastBackupDir/GBackupReason, попадают в журнал,
+;     экран ошибки и сводку; любой ненулевой код инструмента — код 10;
+;   * откат — только из архива ЭТОГО запуска (не LatestBackupDir);
+;     восстановление staged, WAL/SHM удаляются с проверкой, занятая БД без
+;     --force — отказ до перезаписи.
 ;
 ; Задача 686c5d76 (0.15.1) — первичная инициализация и экран ключа:
 ;   * «уже инициализирован» — критерий hasFirstUser(), а не наличие
@@ -403,6 +412,12 @@ UsePreviousTasks=no
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
+[CustomMessages]
+; Новые пользовательские строки задачи 3acd9c3c попадают сразу сюда.
+; Массовый перенос старых литералов в [CustomMessages] — задача 4dc117f5.
+BackupToolMissing=Инструмент резервного копирования баз данных не найден в поставке установщика.
+BackupToolNotStarted=Инструмент резервного копирования баз данных не запустился — проверьте node.exe поставки и журнал установки.
+
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
 ; --- компонентов; в установку не копируется (dontcopy).
@@ -415,6 +430,14 @@ Source: "{#ServerPayload}\package.json"; DestDir: "{app}\server"; Flags: ignorev
 Source: "{#ServerPayload}\dist\*"; DestDir: "{app}\server\dist"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallServerPayload
 Source: "{#ServerPayload}\migrations\*"; DestDir: "{app}\server\migrations"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Check: InstallServerPayload
 Source: "{#ServerPayload}\node_modules\*"; DestDir: "{app}\server\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Check: InstallServerPayload
+; --- Инструмент бэкапа/восстановления БД (задача 3acd9c3c): dontcopy — только
+; --- для ExtractTemporaryFile, в {app} отдельным файлом не копируется (код уже
+; --- едет в dist\db); извлекается во {tmp} ПОД ИМЕНЕМ .mjs до остановки
+; --- службы, чтобы обновить БД старой версии инструментом из payload.
+; --- DestName обязателен: вне пакета @etn/server Node считал бы .js CommonJS.
+; --- Без Check: извлечение не зависит от выбранных компонентов (бэкап бывает
+; --- только при обновлении сервера, но файл нужен и тестовому прогону).
+Source: "{#ServerPayload}\dist\db\db-backup.js"; DestName: "etn-db-tool.mjs"; Flags: dontcopy noencryption
 #endif
 
 #ifdef HaveNodePayload
@@ -480,10 +503,14 @@ const
   MIN_FREE_SPACE_BYTES = 314572800;
   MIN_PORT = 1;
   MAX_PORT = 65535;
-  { Бэкап БД перед обновлением (ce3ab836): хранятся три последних архива. }
-  BACKUPS_KEEP = 3;
-  { Длина имени каталога архива: YYYYMMDD-HHmmss (15 символов). }
+  { Снимок отката (bb063ac3): имя каталога — YYYYMMDD-HHmmss (15 символов).
+    Ротация архивов БД (три последних) выполняется CLI сервера (3acd9c3c),
+    в Pascal её больше нет. }
   BACKUP_DIR_NAME_LEN = 15;
+  { Инструмент бэкапа/восстановления БД из payload: имя после
+    ExtractTemporaryFile (DestName в [Files]) и имя файла отчёта key=value. }
+  DB_TOOL_FILENAME = 'etn-db-tool.mjs';
+  DB_TOOL_REPORT_NAME = 'etn-backup-report.txt';
   { Win32-коды отказа элевации (ошибка 2dd215f7): в журнал пишется код
     ShellExec, чтобы отличить отмену UAC от отказа окружения. }
   ERROR_ACCESS_DENIED = 5;
@@ -760,14 +787,18 @@ var
 
   { Результат }
   GExitCode: Integer;
-  { Архив БД, созданный последним вызовом CreateDatabaseBackup ('' — архива
-    нет). Вызывающему нужен путь для сообщения об отказе/откате. Откат БД
-    восстанавливает только из него: LatestBackupDir — архив прошлых
+  { Архив БД (ZIP), созданный последним вызовом CreateDatabaseBackup ('' —
+    архива нет). Вызывающему нужен путь для сообщения об отказе/откате. Откат
+    БД восстанавливает только из него: LatestBackupDir — архив прошлых
     обновлений, для автоматического отката он не годится (bb063ac3). }
   GLastBackupDir: String;
   { Причина неудачного бэкапа — для сообщения (сценарий bc7cc846: причина,
-    требуемый объём, путь к журналу). }
+    требуемый объём, путь к журналу). Текст причины берётся из отчёта
+    инструмента (key=value, ключ error). }
   GBackupReason: String;
+  { Путь к извлечённому во временный каталог etn-db-tool.mjs ('' — ещё не
+    извлекался): один инструмент на backup и restore этого запуска. }
+  GDatabaseToolPath: String;
   { Снимок отката текущего обновления (.install\rollback\<timestamp>) и
     последняя причина сбоя health-check для журнала и экрана ошибки. }
   GLastRollbackDir: String;
@@ -4314,9 +4345,9 @@ begin
     end;
 end;
 
-{ Имя каталога архива: YYYYMMDD-HHmmss; суффикс -N — если два архива попали
-  в одну секунду (быстрый повтор в тестах). Такой каталог тоже считается
-  своим архивом и участвует в ротации. }
+{ Имя каталога снимка отката: YYYYMMDD-HHmmss; суффикс -N — если два снимка
+  попали в одну секунду (быстрый повтор в тестах). Формат общий с прежними
+  каталогами архивов; им пользуется очистка снимков отката. }
 function IsBackupDirName(const Name: String): Boolean;
 var
   Tail: String;
@@ -4340,46 +4371,6 @@ function IsRealSubdir(const FindRec: TFindRec): Boolean;
 begin
   Result := ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
     (FindRec.Name <> '.') and (FindRec.Name <> '..');
-end;
-
-{ Есть ли хотя бы одна база сети: networks\<uuid>\data.db. }
-function HasNetworkDatabases(const DataDir: String): Boolean;
-var
-  Root: String;
-  FindRec: TFindRec;
-begin
-  Result := False;
-  Root := DataDir + '\networks';
-  if not DirExists(Root) then Exit;
-  if not FindFirst(Root + '\*', FindRec) then Exit;
-  try
-    repeat
-      if IsRealSubdir(FindRec) and
-         FileExists(Root + '\' + FindRec.Name + '\data.db') then
-      begin
-        Result := True;
-        Exit;
-      end;
-    until not FindNext(FindRec);
-  finally
-    FindClose(FindRec);
-  end;
-end;
-
-function CountBackupDirs(const BackupsDir: String): Integer;
-var
-  FindRec: TFindRec;
-begin
-  Result := 0;
-  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
-  try
-    repeat
-      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) then
-        Result := Result + 1;
-    until not FindNext(FindRec);
-  finally
-    FindClose(FindRec);
-  end;
 end;
 
 { Объём баз данных, которые копирует архив: _system.db и
@@ -4422,41 +4413,54 @@ begin
     Result := IntToStr((Bytes + 1023) div 1024) + ' КБ';
 end;
 
-{ Самый старый архив по имени (имена — нумерованные метки времени, поэтому
-  сравнение строк совпадает с хронологией). Текущий архив исключается: его
-  удалять нельзя даже при переводе часов назад. }
-function OldestBackupDirName(const BackupsDir, Exclude: String): String;
+{ Метка времени из имени ZIP-архива
+  etn-backup-<версия>-<YYYYMMDD-HHMMSS>[-N].zip ('' — имя не по шаблону).
+  Сортировать по полному имени нельзя: версия стоит раньше метки, и архив
+  новой версии оказался бы «старше» архива старой. }
+function BackupZipStamp(const Name: String): String;
 var
-  FindRec: TFindRec;
+  I, L, TailLen: Integer;
+  Tail: String;
 begin
   Result := '';
-  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
-  try
-    repeat
-      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) and
-         (CompareText(FindRec.Name, Exclude) <> 0) then
-        if (Result = '') or (CompareText(FindRec.Name, Result) < 0) then
-          Result := FindRec.Name;
-    until not FindNext(FindRec);
-  finally
-    FindClose(FindRec);
-  end;
+  L := Length(Name);
+  if (L < 20) or (CompareText(Copy(Name, L - 3, 4), '.zip') <> 0) then Exit;
+  for I := 1 to L - 15 do
+    if (Name[I] = '-') and IsAllDigits(Copy(Name, I + 1, 8)) and
+       (Name[I + 9] = '-') and IsAllDigits(Copy(Name, I + 10, 6)) then
+    begin
+      Tail := Copy(Name, I + 16, L - (I + 15));
+      TailLen := Length(Tail);
+      if (CompareText(Tail, '.zip') = 0) or
+         ((TailLen > 5) and (Tail[1] = '-') and
+          (CompareText(Copy(Tail, TailLen - 3, 4), '.zip') = 0) and
+          IsAllDigits(Copy(Tail, 2, TailLen - 5))) then
+        Result := Copy(Name, I + 1, 15);
+    end;
 end;
 
-{ Самый свежий архив по имени: нужен итоговой сводке и экрану ошибки, чтобы
-  показать реальный путь резервной копии (архив создаёт сам установщик в
-  административном режиме; каталог архивов — единственный источник пути). }
+{ Самый свежий архив по времени из имени: нужен итоговой сводке и экрану
+  ошибки, чтобы показать реальный путь резервной копии (архив создаёт CLI
+  сервера; каталог архивов — единственный источник пути). }
 function LatestBackupDirName(const BackupsDir: String): String;
 var
   FindRec: TFindRec;
+  Stamp, Best: String;
 begin
   Result := '';
-  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
+  Best := '';
+  if not FindFirst(BackupsDir + '\etn-backup-*.zip', FindRec) then Exit;
   try
     repeat
-      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) then
-        if (Result = '') or (CompareText(FindRec.Name, Result) > 0) then
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+      begin
+        Stamp := BackupZipStamp(FindRec.Name);
+        if (Stamp <> '') and ((Best = '') or (Stamp > Best)) then
+        begin
+          Best := Stamp;
           Result := FindRec.Name;
+        end;
+      end;
     until not FindNext(FindRec);
   finally
     FindClose(FindRec);
@@ -4473,216 +4477,163 @@ begin
     Result := GDataDir + '\backups\' + Name;
 end;
 
-{ Ротация: пока архивов больше трёх, удаляется самый старый. Чужие файлы и
-  каталоги (имена не по формату архива) не считаются и не трогаются. Ошибка
-  удаления обновление не отменяет — только предупреждение в журнал. }
-procedure RotateBackupArchives(const BackupsDir, CurrentName: String);
-var
-  Oldest: String;
+{ Новое имя архива и ротация трёх последних — в CLI сервера (3acd9c3c,
+  server/src/db/db-backup.ts). В Pascal остаются только функции чтения
+  каталога архивов для сообщений. }
+
+{ SQLite-операции (чекпойнт WAL, integrity_check, копирование баз и ротация)
+  вынесены в CLI сервера — задача 3acd9c3c. Pascal только запускает
+  самодостаточный etn-db-tool.mjs через node.exe поставки и разбирает отчёт
+  key=value; сюда SQL-логику не возвращать. }
+
+{ Извлечь инструмент во временный каталог. Повторный вызов использует уже
+  извлечённый файл; ошибка — False с причиной в Reason. }
+function EnsureDatabaseTool(var Reason: String): Boolean;
 begin
-  while CountBackupDirs(BackupsDir) > BACKUPS_KEEP do
+  Result := False;
+  Reason := '';
+  if GDatabaseToolPath <> '' then
   begin
-    Oldest := OldestBackupDirName(BackupsDir, CurrentName);
-    if Oldest = '' then Break;
-    if DelTree(BackupsDir + '\' + Oldest, True, True, True) then
-      LogLine('INFO', 'Бэкап БД: старый архив удалён: ' + Oldest)
-    else
+    Result := True;
+    Exit;
+  end;
+  try
+    ExtractTemporaryFile(DB_TOOL_FILENAME);
+  except
+    Reason := CustomMessage('BackupToolMissing');
+    LogLine('ERROR', 'Бэкап БД: не удалось извлечь ' + DB_TOOL_FILENAME +
+      ' из установщика: ' + GetExceptionMessage);
+    Exit;
+  end;
+  GDatabaseToolPath := ExpandConstant('{tmp}') + '\' + DB_TOOL_FILENAME;
+  Result := FileExists(GDatabaseToolPath);
+  if not Result then
+    Reason := CustomMessage('BackupToolMissing');
+end;
+
+{ Значение из отчёта инструмента: строки key=value, разделитель — первый '='.
+  Пустое значение и отсутствие ключа дают ''. }
+function DatabaseReportValue(const ReportPath, Key: String): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+  Line, Prefix: String;
+begin
+  Result := '';
+  if not LoadStringsFromFile(ReportPath, Lines) then Exit;
+  Prefix := Key + '=';
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Lines[I];
+    { UTF-8 BOM в первой строке — отчёт пишет Node; ключи английские. }
+    if (I = 0) and (Length(Line) > 0) and (Line[1] = #$FEFF) then
+      Delete(Line, 1, 1);
+    if (Length(Line) >= Length(Prefix)) and
+       (CompareText(Copy(Line, 1, Length(Prefix)), Prefix) = 0) then
     begin
-      LogLine('WARN', 'Бэкап БД: не удалось удалить старый архив ' + Oldest +
-        ' — обновление продолжается, архив оставлен');
-      Break;
-    end;
-  end;
-end;
-
-{ Новое имя архива; суффикс -2, -3 при совпадении секунды. }
-function NewBackupArchiveName(const BackupsDir: String): String;
-var
-  Base: String;
-  N: Integer;
-begin
-  Base := GetDateTimeString('yyyymmdd-hhnnss', '-', '-');
-  Result := Base;
-  N := 2;
-  while DirExists(BackupsDir + '\' + Result) do
-  begin
-    Result := Base + '-' + IntToStr(N);
-    N := N + 1;
-  end;
-end;
-
-{ Чекпойнт WAL перед копированием: после остановки службы в -wal могут лежать
-  закоммиченные страницы. PRAGMA wal_checkpoint(TRUNCATE) переносит их в
-  основной файл, и архив остаётся самодостаточным файлом базы — без
-  дополнительных файлов журнала. busy_timeout=0: служба остановлена, ждать
-  нечего; busy=1 означает, что журнал удерживает кто-то ещё. }
-function CheckpointDatabase(const NodeExe, ServerDir, DbPath: String): Boolean;
-var
-  Script, Args: String;
-  Code: Integer;
-begin
-  Result := False;
-  if not FileExists(NodeExe) then Exit;
-  Script :=
-    'try{' +
-    'const Database=require(''better-sqlite3'');' +
-    'const db=new Database(process.argv[1]);' +
-    'db.pragma(''busy_timeout=0'');' +
-    'const j=String(db.pragma(''journal_mode'')[0].journal_mode||'''');' +
-    'if(j.toLowerCase()!==''wal''){db.close();process.exit(0)}' +
-    'const r=db.pragma(''wal_checkpoint(TRUNCATE)'');' +
-    'db.close();' +
-    'process.exit((r.length>0&&Number(r[0].busy)!==0)?1:0)' +
-    '}catch(e){console.error(String(e&&e.stack||e));process.exit(2)}';
-  Args := '-e "' + Script + '" "' + DbPath + '"';
-  if not Exec(NodeExe, Args, ServerDir, SW_HIDE, ewWaitUntilTerminated, Code) then Exit;
-  Result := Code = 0;
-  if Result then
-    LogLine('INFO', 'Бэкап БД: checkpoint WAL выполнен: ' + DbPath)
-  else
-    LogLine('WARN', 'Бэкап БД: checkpoint WAL не выполнен (код ' + IntToStr(Code) +
-      '): копируется файл журнала: ' + DbPath);
-end;
-
-{ Проверка целостности копии через PRAGMA integrity_check. node.exe и
-  node_modules берутся из установленной поставки: рабочей директорией служит
-  каталог server, поэтому require находит better-sqlite3 поставки. }
-function VerifyDatabaseIntegrity(const NodeExe, ServerDir, DbPath: String): Boolean;
-var
-  Script, Args: String;
-  Code: Integer;
-begin
-  Result := False;
-  if not FileExists(NodeExe) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: нет node.exe поставки: ' + NodeExe +
-      ' — целостность архива не проверить');
-    Exit;
-  end;
-  Script :=
-    'try{' +
-    'const Database=require(''better-sqlite3'');' +
-    'const db=new Database(process.argv[1]);' +
-    'const rows=db.pragma(''integrity_check'');' +
-    'db.close();' +
-    'const ok=rows.length===1&&String(rows[0].integrity_check)===''ok'';' +
-    'if(!ok){console.error(''integrity_check: ''+JSON.stringify(rows));process.exit(1)}' +
-    '}catch(e){console.error(String(e&&e.stack||e));process.exit(2)}';
-  Args := '-e "' + Script + '" "' + DbPath + '"';
-  if not Exec(NodeExe, Args, ServerDir, SW_HIDE, ewWaitUntilTerminated, Code) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: не удалось запустить проверку целостности: ' + NodeExe);
-    Exit;
-  end;
-  if Code <> 0 then
-  begin
-    LogLine('ERROR', 'Бэкап БД: integrity_check не пройден: ' + DbPath +
-      ' (код ' + IntToStr(Code) + ')');
-    Exit;
-  end;
-  LogLine('INFO', 'Бэкап БД: integrity_check ok: ' + DbPath);
-  Result := True;
-end;
-
-{ Копия базы в каталог архива. Если чекпойнт не удался, рядом с базой
-  копируется -wal: SQLite применит журнал при открытии, и снимок останется
-  согласованным. Файл -shm не копируется — он транзитный и создаётся SQLite
-  заново. }
-function CopyDatabaseFile(const Src, DestDir: String; const WithWal: Boolean): Boolean;
-var
-  Dest: String;
-begin
-  Result := False;
-  if not ForceDirectories(DestDir) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архива ' + DestDir);
-    Exit;
-  end;
-  Dest := DestDir + '\' + ExtractFileName(Src);
-  if not CopyFile(Src, Dest, False) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: не удалось скопировать ' + Src + ' в ' + Dest);
-    Exit;
-  end;
-  if WithWal and FileExists(Src + '-wal') then
-  begin
-    if not CopyFile(Src + '-wal', Dest + '-wal', False) then
-    begin
-      LogLine('ERROR', 'Бэкап БД: не удалось скопировать журнал ' + Src + '-wal');
+      Result := Copy(Line, Length(Prefix) + 1, Length(Line) - Length(Prefix));
       Exit;
     end;
-    LogLine('INFO', 'Бэкап БД: вместе с базой скопирован WAL: ' + Src + '-wal');
   end;
-  Result := True;
 end;
 
-{ Одна база: чекпойнт (по возможности), копия, integrity_check копии. }
-function BackupDatabase(const Src, DestDir, NodeExe, ServerDir: String): Boolean;
+{ Запустить инструмент и вернуть его код; False — процесс не стартовал.
+  node.exe берётся из каталога программы (node\node.exe), рабочий каталог —
+  server: оттуда резолвятся внешние библиотеки (archiver/yauzl) и
+  package.json версии. }
+function RunDatabaseTool(const Arguments, WorkingDir: String; var Code: Integer): Boolean;
 var
-  WithWal: Boolean;
+  NodeExe: String;
 begin
-  WithWal := not CheckpointDatabase(NodeExe, ServerDir, Src);
-  if not CopyDatabaseFile(Src, DestDir, WithWal) then
+  Code := -1;
+  if GDatabaseToolPath = '' then Exit;
+  NodeExe := ServerNodeExe(GServerDir);
+  if not FileExists(NodeExe) then
   begin
-    Result := False;
+    LogLine('ERROR', 'Инструмент БД: нет node.exe поставки: ' + NodeExe);
     Exit;
   end;
-  Result := VerifyDatabaseIntegrity(NodeExe, ServerDir,
-    DestDir + '\' + ExtractFileName(Src));
+  Result := Exec(NodeExe, '"' + GDatabaseToolPath + '" ' + Arguments, WorkingDir,
+    SW_HIDE, ewWaitUntilTerminated, Code);
+  if not Result then
+    LogLine('ERROR', 'Инструмент БД: не удалось запустить ' + NodeExe);
 end;
 
-{ Копирование всех баз в архив: _system.db и networks\<uuid>\data.db.
-  Возвращает False на первой ошибке; Count — число скопированных баз. }
-function CopyDatabasesInto(const ArchiveDir: String; var Count: Integer): Boolean;
+{ Отчёт инструмента: причины и предупреждения — в журнал, пути/причины — в
+  GLastBackupDir/GBackupReason. Code — код возврата инструмента. }
+procedure ApplyDatabaseToolReport(const ReportPath: String; const Code: Integer;
+  const Operation: String);
 var
-  NodeExe, ServerDir, NetworksDir, Src, DestDir: String;
+  Reason, WarningsText, Archive: String;
+begin
+  Reason := DatabaseReportValue(ReportPath, 'error');
+  WarningsText := DatabaseReportValue(ReportPath, 'warnings');
+  Archive := DatabaseReportValue(ReportPath, 'archive');
+  if WarningsText <> '' then
+    LogLine('WARN', Operation + ': предупреждения: ' + WarningsText);
+  if Code = 0 then
+  begin
+    if Archive <> '' then
+      GLastBackupDir := Archive
+    else
+      GLastBackupDir := '';
+    if Archive = '' then
+      LogLine('WARN', Operation + ': архив не создан — баз данных нет');
+  end
+  else
+  begin
+    if Reason = '' then
+      Reason := 'код ' + IntToStr(Code);
+    GBackupReason := Reason;
+    LogLine('ERROR', Operation + ': ' + Reason + ' (код ' + IntToStr(Code) + ')');
+  end;
+end;
+
+{ Отчёт во временном каталоге Inno; старый файл удаляется, чтобы причина от
+  прошлого шага не смешалась с текущей. }
+function DatabaseReportPath: String;
+begin
+  Result := ExpandConstant('{tmp}') + '\' + DB_TOOL_REPORT_NAME;
+  DeleteFile(Result);
+end;
+
+{ Есть ли что архивировать: _system.db или networks\<uuid>\data.db.
+  Проверка до вызова инструмента: на первой установке и в тестовых прогонах
+  без баз node.exe ещё не скопирован — CLI не должен запускаться зря. }
+function HasDatabaseFiles: Boolean;
+var
+  NetworksDir: String;
   FindRec: TFindRec;
 begin
   Result := False;
-  Count := 0;
-  NodeExe := ServerNodeExe(GServerDir);
-  ServerDir := GServerDir + '\server';
-  Src := GDataDir + '\_system.db';
-  if FileExists(Src) then
+  if FileExists(GDataDir + '\_system.db') then
   begin
-    if not BackupDatabase(Src, ArchiveDir, NodeExe, ServerDir) then Exit;
-    Count := Count + 1;
+    Result := True;
+    Exit;
   end;
   NetworksDir := GDataDir + '\networks';
-  if DirExists(NetworksDir) then
-  begin
-    if FindFirst(NetworksDir + '\*', FindRec) then
-    begin
-      try
-        repeat
-          if IsRealSubdir(FindRec) then
-          begin
-            Src := NetworksDir + '\' + FindRec.Name + '\data.db';
-            if FileExists(Src) then
-            begin
-              DestDir := ArchiveDir + '\networks\' + FindRec.Name;
-              if not BackupDatabase(Src, DestDir, NodeExe, ServerDir) then Exit;
-              Count := Count + 1;
-            end;
-          end;
-        until not FindNext(FindRec);
-      finally
-        FindClose(FindRec);
+  if not DirExists(NetworksDir) then Exit;
+  if not FindFirst(NetworksDir + '\*', FindRec) then Exit;
+  try
+    repeat
+      if IsRealSubdir(FindRec) and
+         FileExists(NetworksDir + '\' + FindRec.Name + '\data.db') then
+      begin
+        Result := True;
+        Exit;
       end;
-    end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
   end;
-  Result := Count > 0;
-  if not Result then
-    LogLine('ERROR', 'Бэкап БД: не найдено ни одной базы для архивации');
 end;
 
 { Точка входа бэкапа. Needed — решение вызывающего (смена версии или ремонт).
-  Возвращает True, когда архив создан и проверен либо бэкап не требуется;
-  False — архива нет, обновление обязано остановиться до замены файлов. }
+  Возвращает True, когда архив создан и проверен либо бэкап не требуется. }
 function CreateDatabaseBackup(const Needed: Boolean): Boolean;
 var
-  BackupsDir, ArchiveName, ArchiveDir: String;
-  Copied: Integer;
+  Reason, BackupsDir, ReportPath, Arguments: String;
+  Code: Integer;
 begin
   Result := False;
   GLastBackupDir := '';
@@ -4693,18 +4644,20 @@ begin
     Result := True;
     Exit;
   end;
-  if (not FileExists(GDataDir + '\_system.db')) and
-     (not HasNetworkDatabases(GDataDir)) then
+  if not HasDatabaseFiles then
   begin
     LogLine('WARN', 'Бэкап БД: в ' + GDataDir +
       ' нет баз данных — архив не создаётся, обновление продолжается');
     Result := True;
     Exit;
   end;
-  BackupsDir := GDataDir + '\backups';
-  { Этап прогресса: подпись на странице установки (112642a4). В silent
-    записывается только в журнал. }
   SetInstallStage('Резервная копия баз данных…');
+  if not EnsureDatabaseTool(Reason) then
+  begin
+    GBackupReason := Reason;
+    Exit;
+  end;
+  BackupsDir := GDataDir + '\backups';
   if not ForceDirectories(BackupsDir) then
   begin
     GBackupReason := 'каталог архивов не создан: ' + BackupsDir +
@@ -4713,31 +4666,27 @@ begin
       ' (нет прав или места) — обновление отменяется');
     Exit;
   end;
-  ArchiveName := NewBackupArchiveName(BackupsDir);
-  ArchiveDir := BackupsDir + '\' + ArchiveName;
-  if not ForceDirectories(ArchiveDir) then
+  ReportPath := DatabaseReportPath;
+  { --to — родительский каталог: имя ZIP формирует инструмент (спека 2975c553). }
+  Arguments := 'backup --to "' + BackupsDir + '" --report-out "' + ReportPath +
+    '" --data-dir "' + GDataDir + '"';
+  if not RunDatabaseTool(Arguments, GServerDir + '\server', Code) then
   begin
-    GBackupReason := 'каталог архива не создан: ' + ArchiveDir +
-      ' (нет прав или свободного места)';
-    LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архива ' + ArchiveDir +
-      ' (нет прав или места) — обновление отменяется');
+    GBackupReason := CustomMessage('BackupToolNotStarted');
     Exit;
   end;
-  LogLine('INFO', 'Бэкап БД: создаётся архив ' + ArchiveDir);
-  if not CopyDatabasesInto(ArchiveDir, Copied) then
+  ApplyDatabaseToolReport(ReportPath, Code, 'Бэкап БД');
+  if Code <> 0 then Exit;
+  if GLastBackupDir = '' then
   begin
-    GBackupReason := 'копирование или проверка целостности баз не удалось: ' +
-      ArchiveDir;
-    if DelTree(ArchiveDir, True, True, True) then
-      LogLine('ERROR', 'Бэкап БД: неудачный архив удалён: ' + ArchiveDir)
-    else
-      LogLine('WARN', 'Бэкап БД: неудачный архив не удалось удалить: ' + ArchiveDir);
+    LogLine('WARN', 'Бэкап БД: в ' + GDataDir +
+      ' нет баз данных — архив не создаётся, обновление продолжается');
+    Result := True;
     Exit;
   end;
-  GLastBackupDir := ArchiveDir;
   LogLine('INFO', 'Бэкап БД: архив создан: ' + GLastBackupDir +
-    ' (баз: ' + IntToStr(Copied) + ')');
-  RotateBackupArchives(BackupsDir, ArchiveName);
+    ' (баз: ' + DatabaseReportValue(ReportPath, 'databases') +
+    ', байт: ' + DatabaseReportValue(ReportPath, 'bytes') + ')');
   Result := True;
 end;
 
@@ -4984,17 +4933,17 @@ begin
   Result := True;
 end;
 
-{ Восстановление БД из архива ce3ab836: _system.db и networks\<uuid>\data.db.
+{ Восстановление БД из ZIP-архива ce3ab836 через etn-db-tool restore.
   Только из архива ЭТОГО запуска (GLastBackupDir). LatestBackupDir — самый
   свежий архив прошлых обновлений: он не отражает состояние базы на момент
   остановки службы, и подставлять его в автоматический откат нельзя (потеря
-  данных, блокер приёмки bb063ac3). Журналы WAL/SHM текущих файлов удаляются
-  до копирования — иначе SQLite применил бы записи неудачного запуска поверх
-  восстановленной копии. }
-function RestoreDatabaseFromBackup: Boolean;
+  данных, блокер приёмки bb063ac3). --force допустим: служба уже остановлена
+  вызывающим (RollbackAfterFailure); инструмент всё равно проверяет ZIP и
+  integrity_check каждой базы ДО перезаписи, а WAL/SHM удаляет с проверкой. }
+function RestoreDatabaseFromArchive: Boolean;
 var
-  Archive, Src, Dest, NetworksDir: String;
-  FindRec: TFindRec;
+  Archive, ReportPath, Arguments, ReasonText: String;
+  Code: Integer;
 begin
   Result := False;
   Archive := GLastBackupDir;
@@ -5006,51 +4955,19 @@ begin
     Result := True;
     Exit;
   end;
-  Src := Archive + '\_system.db';
-  Dest := GDataDir + '\_system.db';
-  DeleteFile(Dest + '-wal');
-  DeleteFile(Dest + '-shm');
-  if FileExists(Src) then
+  if not EnsureDatabaseTool(ReasonText) then
   begin
-    if not CopyFile(Src, Dest, False) then
-    begin
-      LogLine('ERROR', 'Откат БД: не удалось вернуть ' + Src + ' в ' + Dest);
-      Exit;
-    end;
+    LogLine('ERROR', 'Откат БД: ' + ReasonText);
+    Exit;
   end;
-  NetworksDir := Archive + '\networks';
-  if DirExists(NetworksDir) and FindFirst(NetworksDir + '\*', FindRec) then
-  begin
-    try
-      repeat
-        if (FindRec.Name <> '.') and (FindRec.Name <> '..') and
-           ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) then
-        begin
-          Src := NetworksDir + '\' + FindRec.Name + '\data.db';
-          Dest := GDataDir + '\networks\' + FindRec.Name + '\data.db';
-          DeleteFile(Dest + '-wal');
-          DeleteFile(Dest + '-shm');
-          if FileExists(Src) then
-          begin
-            if not ForceDirectories(ExtractFileDir(Dest)) then
-            begin
-              LogLine('ERROR', 'Откат БД: не удалось создать ' +
-                ExtractFileDir(Dest));
-              Exit;
-            end;
-            if not CopyFile(Src, Dest, False) then
-            begin
-              LogLine('ERROR', 'Откат БД: не удалось вернуть ' + Src + ' в ' + Dest);
-              Exit;
-            end;
-          end;
-        end;
-      until not FindNext(FindRec);
-    finally
-      FindClose(FindRec);
-    end;
-  end;
-  LogLine('INFO', 'Откат БД: база восстановлена из ' + Archive);
+  ReportPath := DatabaseReportPath;
+  Arguments := 'restore --from "' + Archive + '" --force --report-out "' +
+    ReportPath + '" --data-dir "' + GDataDir + '"';
+  if not RunDatabaseTool(Arguments, GServerDir + '\server', Code) then Exit;
+  ApplyDatabaseToolReport(ReportPath, Code, 'Откат БД');
+  if Code <> 0 then Exit;
+  LogLine('INFO', 'Откат БД: база восстановлена из ' + Archive +
+    ' (баз: ' + DatabaseReportValue(ReportPath, 'databases') + ')');
   Result := True;
 end;
 
@@ -5079,7 +4996,7 @@ begin
     перед возвратом файлов её нужно остановить снова. }
   StopServiceForUpdate(Reason);
   FilesOk := RestoreInstallFiles;
-  DbOk := RestoreDatabaseFromBackup;
+  DbOk := RestoreDatabaseFromArchive;
   Archive := GLastBackupDir;
   Detail := '';
   if not FilesOk then Detail := 'файлы не восстановлены';
@@ -5164,6 +5081,9 @@ end;
   10 — сбой выполнения (файлы не тронуты).
   --------------------------------------------------------------------------- }
 function PrepareServerUpdate(var Reason: String): Integer;
+var
+  NeedBackup: Boolean;
+  ToolReason: String;
 begin
   Result := EXIT_OK;
   Reason := '';
@@ -5174,13 +5094,24 @@ begin
       'служба не останавливается, бэкап не создаётся');
     Exit;
   end;
+  NeedBackup := BackupNeeded;
+  { Инструмент бэкапа распаковывается ДО остановки службы: если его нет в
+    поставке, сервер продолжает работать, а обновление не начинается. }
+  if NeedBackup and (not EnsureDatabaseTool(ToolReason)) then
+  begin
+    Reason := 'инструмент резервного копирования баз данных недоступен: ' +
+      ToolReason + ' — обновление отменено, служба не останавливалась';
+    LogLine('ERROR', Reason);
+    Result := EXIT_FAILED;
+    Exit;
+  end;
   SetInstallStage('Остановка службы ETN…');
   if not StopServiceForUpdate(Reason) then
   begin
     Result := EXIT_PRECONDITION;
     Exit;
   end;
-  if BackupNeeded then
+  if NeedBackup then
   begin
     { Подпись этапа «Резервная копия баз данных…» ставит CreateDatabaseBackup. }
     if not CreateDatabaseBackup(True) then
@@ -7192,6 +7123,7 @@ begin
   GTestBackup := '';
   GTestLegacy := '';
   GLastBackupDir := '';
+  GDatabaseToolPath := '';
   GLastRollbackDir := '';
   GHealthReason := '';
   GAdminLogin := '';

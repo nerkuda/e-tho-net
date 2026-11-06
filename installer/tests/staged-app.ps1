@@ -222,42 +222,58 @@ if ($latestLog) { $logText = Get-Content -LiteralPath $latestLog.FullName -Raw }
 Add-Check -Name 'service:firewall-log' -Ok ($logText -match ('Правило брандмауэра создано: TCP ' + $port)) `
     -Note 'правило создано (тестовый netsh)'
 
-# --- Бэкап БД: node.exe и better-sqlite3 из установленной поставки -----------
-# ce3ab836: хук /TESTBACKUP запускает ту же функцию, что вызовет ветка
-# обновления, но без /TESTNODEEXE — integrity_check обязан пройти на реальных
-# node.exe и server\node_modules установленной раскладки. Прогон идёт после
-# чтения журнала установки: свой журнал он не должен подменять проверку выше.
-Write-Host '=== Бэкап БД: node.exe и better-sqlite3 из поставки ==='
+# --- Бэкап БД: инструмент CLI и настоящий ZIP из установленной поставки -----
+# ce3ab836 / 3acd9c3c: хук /TESTBACKUP запускает ту же функцию, что вызовет
+# ветка обновления, но без /TESTNODEEXE — инструмент обязан отработать на
+# реальных node.exe и server\node_modules установленной раскладки, а архив —
+# быть ZIP по спецификации (сущность 2975c553): _system.db и networks\...\
+# data.db, без WAL/SHM. Прогон идёт после чтения журнала установки: свой журнал
+# он не должен подменять проверку выше.
+Write-Host '=== Бэкап БД: инструмент CLI и ZIP из поставки ==='
 $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1'))
 Add-Check -Name 'backup:code' -Ok ($code -eq 0) -Note 'node.exe поставки, без тестового хука'
 $backupsDir = Join-Path $dataDir 'backups'
-$archives = @(Get-ChildItem -LiteralPath $backupsDir -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match '^\d{8}-\d{6}(-\d+)?$' })
+$archives = @(Get-ChildItem -LiteralPath $backupsDir -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^etn-backup-(.+)-(\d{8}-\d{6})(?:-(\d+))?\.zip$' })
 Add-Check -Name 'backup:archive' -Ok ($archives.Count -eq 1) `
     -Note (($archives | ForEach-Object { $_.Name }) -join ', ')
 if ($archives.Count -ge 1) {
-    $archiveDb = Join-Path $archives[0].FullName '_system.db'
-    Add-Check -Name 'backup:system-db' -Ok (Test-Path -LiteralPath $archiveDb)
-    $integrityScript = @'
+    $archive = $archives[0]
+    $unpacked = Join-Path $workRoot ('backup-unpack-' + [guid]::NewGuid().ToString('N'))
+    $zipOk = $false
+    try {
+        Expand-Archive -LiteralPath $archive.FullName -DestinationPath $unpacked -Force
+        $zipOk = Test-Path -LiteralPath (Join-Path $unpacked '_system.db')
+    } catch {
+        Write-Host ("      архив не распакован: {0}" -f $_.Exception.Message)
+    }
+    Add-Check -Name 'backup:zip' -Ok $zipOk -Note 'ZIP с _system.db'
+    if ($zipOk) {
+        $archiveDb = Join-Path $unpacked '_system.db'
+        $integrityScript = @'
 const Database=require('better-sqlite3');
 const db=new Database(process.argv[1]);
 const rows=db.pragma('integrity_check');
 db.close();
 console.log(rows.length===1&&String(rows[0].integrity_check)==='ok'?'ok':'bad');
 '@
-    $installedNode = Join-Path $appDir 'node\node.exe'
-    Push-Location (Join-Path $appDir 'server')
-    try {
-        $integrityOut = @(& $installedNode -e $integrityScript $archiveDb 2>&1)
-        $integrityCode = $LASTEXITCODE
-    } finally {
-        Pop-Location
+        $installedNode = Join-Path $appDir 'node\node.exe'
+        Push-Location (Join-Path $appDir 'server')
+        try {
+            $integrityOut = @(& $installedNode -e $integrityScript $archiveDb 2>&1)
+            $integrityCode = $LASTEXITCODE
+        } finally {
+            Pop-Location
+        }
+        $integrityOk = ($integrityCode -eq 0) -and
+            ([string]($integrityOut | Select-Object -Last 1) -eq 'ok')
+        Add-Check -Name 'backup:integrity' -Ok $integrityOk `
+            -Note ('node.exe поставки; ' + [string]($integrityOut | Select-Object -Last 1))
+    } else {
+        Add-Check -Name 'backup:integrity' -Ok $false -Note 'архив не распакован'
     }
-    $integrityOk = ($integrityCode -eq 0) -and
-        ([string]($integrityOut | Select-Object -Last 1) -eq 'ok')
-    Add-Check -Name 'backup:integrity' -Ok $integrityOk `
-        -Note ('node.exe поставки; ' + [string]($integrityOut | Select-Object -Last 1))
 } else {
+    Add-Check -Name 'backup:zip' -Ok $false -Note 'архив не создан'
     Add-Check -Name 'backup:integrity' -Ok $false -Note 'архив не создан'
 }
 

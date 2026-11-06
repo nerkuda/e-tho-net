@@ -43,13 +43,17 @@
          службу (хук /TESTSERVICENAME); слушатель своего PID и PID-потомка
          (хук /TESTOWNSERVICEPID) — свободен, чужой — 20; реальный LAN-адрес
          машины (если есть) — 20
-     25. ce3ab836: бэкап БД перед обновлением (/TESTBACKUP) — архив с копиями
-         _system.db и networks\<uuid>\data.db проходит integrity_check,
-         WAL-хвост сохраняется в том числе при неудачном чекпойнте (копируется
-         -wal); ошибка создания и битая база — код 10 без архива; четвёртый
-         архив удаляет самый старый, чужие файлы и каталоги не тронуты; ошибка
-         удаления старого архива обновление не отменяет; ремонт — код 0 без
-         бэкапа; без баз данных архив не создаётся
+     25. ce3ab836 / 3acd9c3c: бэкап БД перед обновлением (/TESTBACKUP) —
+         установщик извлекает самодостаточный etn-db-tool.mjs и вызывает его
+         через node.exe поставки (рабочий каталог {app}\server) с аргументами
+         backup --to/--report-out/--data-dir; путь архива и причина отказа
+         читаются из отчёта key=value. Проверяется контракт: успех (архив,
+         записи базы в манифесте, строка журнала с числом баз и байт), отказ
+         инструмента и отчёт без причины (код 10 без архива), предупреждения
+         инструмента в журнале, нет node.exe поставки (код 10), ремонт — код 0
+         без бэкапа, без баз данных архив не создаётся. ZIP, integrity_check,
+         WAL и ротация — в CLI (server/tests/db-backup.test.ts); в .iss
+         SQLite-логики быть не должно (статический сторож)
      26. bb063ac3: обновление сервера — порядок фаз до копирования (остановка
          службы → бэкап БД → снимок отката), ожидание реальной остановки
          службы (не остановилась — код 20), неудачный бэкап — код 10 без
@@ -349,11 +353,13 @@ function Wait-PathGone {
     return -not (Test-Path -LiteralPath $Path)
 }
 
-# --- ce3ab836: бэкап БД — настоящий Node и better-sqlite3 -------------------
-# Проверки бэкапа опираются на ту же раскладку поставки, что и продуктовый
-# установщик: node.exe (хук /TESTNODEEXE) и better-sqlite3 в
-# app\server\node_modules. В фикстуре payload только заглушки, поэтому модули
-# копируются из репозитория (server/node_modules — сборка под Node 22).
+# --- ce3ab836 / 3acd9c3c: бэкап БД — настоящий Node и инструмент ------------
+# SQLite-операции вынесены в CLI сервера: установщик запускает извлечённый
+# etn-db-tool.mjs через node.exe поставки (хук /TESTNODEEXE) с рабочим
+# каталогом {app}\server. Фикстура инструмента (fixtures/payload/server/dist/
+# db/db-backup.js) реализует только контракт установщика; ZIP, integrity_check,
+# WAL и ротация проверяются TS-тестами сервера. better-sqlite3 нужен лишь
+# хелперам теста — ими создаются базы для сценариев обновления.
 function Invoke-NodeEval {
     param([string]$Script, [string[]]$Arguments = @())
     Push-Location (Join-Path $repoRoot 'server')
@@ -366,21 +372,18 @@ function Invoke-NodeEval {
     return [pscustomobject]@{ Code = $exitCode; Output = $output }
 }
 
-function Initialize-BackupServerPayload {
-    $modules = Join-Path $appDir 'server\node_modules'
-    $sources = [ordered]@{
-        'better-sqlite3'   = 'server\node_modules\better-sqlite3'
-        'bindings'         = 'node_modules\bindings'
-        'file-uri-to-path' = 'node_modules\file-uri-to-path'
-    }
-    foreach ($name in $sources.Keys) {
-        $target = Join-Path $modules $name
-        if (Test-Path -LiteralPath $target) { continue }
-        $source = Join-Path $repoRoot $sources[$name]
-        if (-not (Test-Path -LiteralPath $source)) { return $false }
-        New-Item -ItemType Directory -Path $modules -Force | Out-Null
-        Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
-    }
+# Раскладка установленного сервера для прямого прогона /TESTBACKUP: рабочий
+# каталог инструмента {app}\server с package.json версии (имя ZIP и проверка
+# версии архива при восстановлении). В продуктовом обновлении этот каталог уже
+# есть от прежней установки; хук /TESTBACKUP запускается до копирования файлов.
+function Initialize-BackupServerFiles {
+    param([string]$Version = '0.15.1')
+    $serverDir = Join-Path $appDir 'server'
+    New-Item -ItemType Directory -Path $serverDir -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $serverDir 'package.json'),
+        '{"name":"@etn/server","version":"' + $Version + '"}')
+    New-Item -ItemType Directory -Path (Join-Path $serverDir 'dist') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $serverDir 'dist\index.js'), '// stub')
     return $true
 }
 
@@ -425,26 +428,36 @@ db.close();
     return [string]($result.Output | Select-Object -Last 1)
 }
 
-function Test-BackupDatabaseIntegrity {
-    param([string]$Path)
-    $script = @'
-const Database=require('better-sqlite3');
-try{
-  const db=new Database(process.argv[1]);
-  const rows=db.pragma('integrity_check');
-  db.close();
-  console.log(rows.length===1&&String(rows[0].integrity_check)==='ok'?'ok':'bad');
-}catch(e){console.log('bad')}
-'@
-    $result = Invoke-NodeEval -Script $script -Arguments @($Path)
-    return ($result.Code -eq 0 -and [string]($result.Output | Select-Object -Last 1) -eq 'ok')
-}
-
+# Архивы бэкапа — ZIP-файлы в <данные>\backups; имя формирует инструмент
+# (etn-backup-<версия>-<YYYYMMDD-HHMMSS>[-N].zip, сущность 2975c553). Чужие
+# файлы и каталоги архивами не считаются.
 function Get-BackupArchives {
     $backups = Join-Path $dataDir 'backups'
     if (-not (Test-Path -LiteralPath $backups)) { return @() }
-    return @(Get-ChildItem -LiteralPath $backups -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^\d{8}-\d{6}(-\d+)?$' } | Sort-Object Name)
+    return @(Get-ChildItem -LiteralPath $backups -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^etn-backup-(.+)-(\d{8}-\d{6})(?:-(\d+))?\.zip$' } |
+        Sort-Object Name)
+}
+
+# Режим фикстуры etn-db-tool: отказ бэкапа/восстановления, отчёт без причины,
+# предупреждение, успех без архива. Файл читается из <данные>\.install.
+function Set-DatabaseToolMode {
+    param([string]$Mode)
+    $installDir = Join-Path $dataDir '.install'
+    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $installDir 'db-tool-mode.txt'), $Mode)
+}
+
+# «Архив» фикстуры — JSON-манифест (не ZIP): установщику формат не важен, он
+# передаёт путь обратно в restore. Манифест доказывает, что инструмент получил
+# --to и --data-dir и увидел обе базы.
+function Get-FixtureArchiveManifest {
+    param([string]$Archive)
+    try {
+        return (Get-Content -LiteralPath $Archive -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
 }
 
 function Test-LatestLogContains {
@@ -604,8 +617,9 @@ function Get-RollbackDirs {
         Sort-Object Name)
 }
 
-# Заготовка обновления: install.json старой версии, файлы сервера и службы,
-# архив бэкапа требует настоящий node и better-sqlite3 поставки.
+# Заготовка обновления: install.json старой версии, файлы сервера и службы.
+# Каталог {app}\server с package.json уже есть — из него инструмент бэкапа
+# берёт версию и резолвит библиотеки при запуске.
 function New-UpdateFixture {
     param([string]$OldVersion = '0.15.0')
     Reset-State
@@ -613,7 +627,6 @@ function New-UpdateFixture {
     New-ServerFiles -Version $OldVersion
     New-Item -ItemType Directory -Path (Join-Path $appDir 'service') -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $appDir 'service\etn-service.exe'), 'stub')
-    return (Initialize-BackupServerPayload)
 }
 
 # --- Подготовка рабочего каталога -------------------------------------------
@@ -704,7 +717,6 @@ $staticChecks = @(
     @{ Name = 'static:display-name-validation'; Pattern = [regex]::Escape('function ValidDisplayName'); Note = 'display_name из /PARAMS проверяется (дефект 6)' },
     @{ Name = 'static:reason-file'; Pattern = [regex]::Escape('reason_file='); Note = 'причина отказа предусловия — родителю' },
     @{ Name = 'static:backup-entry'; Pattern = [regex]::Escape('function CreateDatabaseBackup(const Needed: Boolean): Boolean'); Note = 'бэкап: решение о необходимости передаёт вызывающий' },
-    @{ Name = 'static:backup-keep-three'; Pattern = [regex]::Escape('BACKUPS_KEEP = 3'); Note = 'бэкап: три последних архива' },
     @{ Name = 'static:setup-mutex'; Pattern = [regex]::Escape('SetupMutex=ETNSetup'); Note = 'параллельный запуск установщика запрещён' },
     @{ Name = 'static:uninstall-scope-cleanup'; Pattern = [regex]::Escape('RemoveDuplicateUninstallRecord;'); Note = 'запись деинсталляции прежней области удаляется после установки (a7394117)' },
     @{ Name = 'static:uninstall-user-hives'; Pattern = [regex]::Escape("RegGetSubkeyNames(HKU, '', Names)"); Note = 'при /ALLUSERS запись ищется в загруженных профилях HKEY_USERS (a7394117)' },
@@ -788,35 +800,76 @@ $portTableHooksIfdef = (Test-IssCode -Text $testModeBody `
 Add-StaticResult -Name 'static:port-table-hooks-ifdef' -Ok $portTableHooksIfdef `
     -Note 'портовые хуки разбираются только под #ifdef TestMode'
 
-# ce3ab836: бэкап БД — проверка по телам функций, а не подстрокой по файлу:
-# integrity_check обязан быть в проверке копии, wal_checkpoint — в чекпойнте,
-# перебор своих архивов (IsBackupDirName) — в выборе самого старого; хук
-# /TESTBACKUP — под #ifdef.
+# 3acd9c3c: SQLite-операции вынесены в CLI сервера (etn backup / etn restore).
+# Pascal только извлекает самодостаточный etn-db-tool.mjs, запускает его через
+# node.exe поставки с рабочим каталогом {app}\server и разбирает отчёт
+# key=value. Сторожа — по телам функций: возврат SQL-логики в .iss запрещён.
 $backupBody = Get-IssFunctionBody -Text $issText -Name 'CreateDatabaseBackup'
 Add-StaticResult -Name 'static:backup-caller-decides' `
     -Ok (Test-IssCode -Text $backupBody -Pattern ([regex]::Escape('if not Needed'))) `
     -Note 'бэкап: ремонт той же версии — без архива (решает вызывающий)'
-$integrityBody = Get-IssFunctionBody -Text $issText -Name 'VerifyDatabaseIntegrity'
-Add-StaticResult -Name 'static:backup-integrity' `
-    -Ok (Test-IssCode -Text $integrityBody -Pattern ([regex]::Escape("pragma(''integrity_check'')"))) `
-    -Note 'PRAGMA integrity_check по каждой копии'
-$checkpointBody = Get-IssFunctionBody -Text $issText -Name 'CheckpointDatabase'
-Add-StaticResult -Name 'static:backup-checkpoint' `
-    -Ok (Test-IssCode -Text $checkpointBody -Pattern ([regex]::Escape('wal_checkpoint(TRUNCATE)'))) `
-    -Note 'чекпойнт WAL перед копированием'
-$copyBody = Get-IssFunctionBody -Text $issText -Name 'CopyDatabasesInto'
-$copyNodeFromSupply = (Test-IssCode -Text $copyBody -Pattern ([regex]::Escape('ServerNodeExe(GServerDir)'))) -and
-    (Test-IssCode -Text $copyBody -Pattern ([regex]::Escape("GServerDir + '\server'")))
-Add-StaticResult -Name 'static:backup-node-supply' -Ok $copyNodeFromSupply `
-    -Note 'node.exe и node_modules — из установленной поставки'
-$rotateBody = Get-IssFunctionBody -Text $issText -Name 'RotateBackupArchives'
-$oldestBody = Get-IssFunctionBody -Text $issText -Name 'OldestBackupDirName'
-$rotateOk = (Test-IssCode -Text $rotateBody -Pattern ([regex]::Escape('CountBackupDirs'))) -and
-    (Test-IssCode -Text $rotateBody -Pattern ([regex]::Escape('OldestBackupDirName'))) -and
-    (Test-IssCode -Text $rotateBody -Pattern ([regex]::Escape('DelTree'))) -and
-    (Test-IssCode -Text $oldestBody -Pattern ([regex]::Escape('IsBackupDirName')))
-Add-StaticResult -Name 'static:backup-rotation' -Ok $rotateOk `
-    -Note 'ротация только своих архивов (IsBackupDirName), чужие не трогаются'
+$skipEmptyBody = Get-IssFunctionBody -Text $issText -Name 'HasDatabaseFiles'
+Add-StaticResult -Name 'static:backup-skip-empty' `
+    -Ok ((Test-IssCode -Text $backupBody -Pattern ([regex]::Escape('if not HasDatabaseFiles'))) -and
+        (Test-IssCode -Text $skipEmptyBody -Pattern ([regex]::Escape("'\_system.db'"))) -and
+        (Test-IssCode -Text $skipEmptyBody -Pattern ([regex]::Escape("'\data.db'")))) `
+    -Note 'нет баз — инструмент не запускается (node.exe ещё не скопирован)'
+$toolFileOk = (Test-IssCode -Text $issText -Pattern ([regex]::Escape('Source: "{#ServerPayload}\dist\db\db-backup.js"'))) -and
+    (Test-IssCode -Text $issText -Pattern ([regex]::Escape('DestName: "etn-db-tool.mjs"'))) -and
+    (Test-IssCode -Text $issText -Pattern ([regex]::Escape('Flags: dontcopy')))
+Add-StaticResult -Name 'static:backup-tool-file' -Ok $toolFileOk `
+    -Note 'инструмент в поставке установщика (dontcopy, .mjs — ESM вне пакета)'
+$extractBody = Get-IssFunctionBody -Text $issText -Name 'EnsureDatabaseTool'
+$extractOk = (Test-IssCode -Text $extractBody -Pattern ([regex]::Escape('ExtractTemporaryFile(DB_TOOL_FILENAME)'))) -and
+    (Test-IssCode -Text $extractBody -Pattern ([regex]::Escape("ExpandConstant('{tmp}')"))) -and
+    (Test-IssCode -Text $extractBody -Pattern ([regex]::Escape('GetExceptionMessage')))
+Add-StaticResult -Name 'static:backup-tool-extract' -Ok $extractOk `
+    -Note 'извлечение во {tmp} до запуска, ошибка — причина в журнал'
+$runToolBody = Get-IssFunctionBody -Text $issText -Name 'RunDatabaseTool'
+$toolNodeOk = (Test-IssCode -Text $runToolBody -Pattern ([regex]::Escape('ServerNodeExe(GServerDir)'))) -and
+    (Test-IssCode -Text $runToolBody -Pattern ([regex]::Escape('Exec(NodeExe'))) -and
+    (Test-IssCode -Text $backupBody -Pattern ([regex]::Escape("GServerDir + '\server'")))
+Add-StaticResult -Name 'static:backup-tool-node' -Ok $toolNodeOk `
+    -Note 'node.exe из {app}\node, рабочий каталог {app}\server (резолв библиотек)'
+$backupArgsOk = (Test-IssCode -Text $backupBody -Pattern ([regex]::Escape('backup --to'))) -and
+    (Test-IssCode -Text $backupBody -Pattern ([regex]::Escape('--report-out'))) -and
+    (Test-IssCode -Text $backupBody -Pattern ([regex]::Escape('--data-dir')))
+Add-StaticResult -Name 'static:backup-tool-args' -Ok $backupArgsOk `
+    -Note 'backup --to/--report-out/--data-dir — контракт CLI'
+$reportBody = Get-IssFunctionBody -Text $issText -Name 'DatabaseReportValue'
+$reportOk = (Test-IssCode -Text $reportBody -Pattern ([regex]::Escape("Prefix := Key + '='"))) -and
+    (Test-IssCode -Text $reportBody -Pattern ([regex]::Escape('Copy(Line, Length(Prefix) + 1')))
+Add-StaticResult -Name 'static:backup-report-parse' -Ok $reportOk `
+    -Note 'отчёт key=value: разделитель — первый ='
+$applyBody = Get-IssFunctionBody -Text $issText -Name 'ApplyDatabaseToolReport'
+$applyOk = (Test-IssCode -Text $applyBody -Pattern ([regex]::Escape('GBackupReason'))) -and
+    (Test-IssCode -Text $applyBody -Pattern ([regex]::Escape("DatabaseReportValue(ReportPath, 'archive')"))) -and
+    (Test-IssCode -Text $applyBody -Pattern ([regex]::Escape("DatabaseReportValue(ReportPath, 'warnings')")))
+Add-StaticResult -Name 'static:backup-report-apply' -Ok $applyOk `
+    -Note 'архив/причина/предупреждения из отчёта в GLastBackupDir/GBackupReason/журнал'
+$restoreBody = Get-IssFunctionBody -Text $issText -Name 'RestoreDatabaseFromArchive'
+$restoreArgsOk = (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape('restore --from'))) -and
+    (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape('--force'))) -and
+    (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape('--report-out'))) -and
+    (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape('--data-dir')))
+Add-StaticResult -Name 'static:restore-tool-args' -Ok $restoreArgsOk `
+    -Note 'restore --from/--force/--report-out/--data-dir — контракт CLI'
+$sqliteGone = ((Get-IssFunctionBody -Text $issText -Name 'VerifyDatabaseIntegrity') -eq '') -and
+    ((Get-IssFunctionBody -Text $issText -Name 'CheckpointDatabase') -eq '') -and
+    ((Get-IssFunctionBody -Text $issText -Name 'CopyDatabasesInto') -eq '') -and
+    ((Get-IssFunctionBody -Text $issText -Name 'RotateBackupArchives') -eq '') -and
+    ((Get-IssFunctionBody -Text $issText -Name 'OldestBackupDirName') -eq '') -and
+    (-not (Test-IssCode -Text $backupBody -Pattern ([regex]::Escape('wal_checkpoint')))) -and
+    (-not (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape("'-wal'"))))
+Add-StaticResult -Name 'static:backup-no-sqlite' -Ok $sqliteGone `
+    -Note 'SQLite/чекпойнт/копирования/ротации в Pascal нет — только вызов CLI'
+$latestBody = Get-IssFunctionBody -Text $issText -Name 'LatestBackupDirName'
+$stampBody = Get-IssFunctionBody -Text $issText -Name 'BackupZipStamp'
+$latestOk = (Test-IssCode -Text $latestBody -Pattern ([regex]::Escape("'\etn-backup-*.zip'"))) -and
+    (Test-IssCode -Text $latestBody -Pattern ([regex]::Escape('BackupZipStamp'))) -and
+    (Test-IssCode -Text $stampBody -Pattern ([regex]::Escape("Copy(Name, I + 1, 8)")))
+Add-StaticResult -Name 'static:backup-latest-zip' -Ok $latestOk `
+    -Note 'самый свежий архив для сообщений — по метке времени в имени ZIP'
 $backupHookIfdef = ($testModeBody -ne '') -and
     (Test-IssCode -Text $testModeBody -Pattern ([regex]::Escape('if GTestBackup')))
 Add-StaticResult -Name 'static:backup-hook-ifdef' -Ok $backupHookIfdef `
@@ -1501,6 +1554,9 @@ function New-FreshnessPayload {
         New-Item -ItemType Directory -Path (Join-Path $Path 'server\dist') -Force | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\index.js'), '// stub')
         [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\cli.js'), '// --key-out --check')
+        New-Item -ItemType Directory -Path (Join-Path $Path 'server\dist\db') -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\db\db-backup.js'),
+            '// backup --to restore --from --report-out')
     }
     if (-not $WithoutClient) {
         [System.IO.File]::WriteAllText((Join-Path $Path 'client\ETN.exe'), 'stub')
@@ -3310,35 +3366,31 @@ Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Windows.Forms,System.D
 }
 
 # ============================================================================
-# ce3ab836: бэкап БД перед обновлением — формат, целостность, ротация.
+# ce3ab836 / 3acd9c3c: бэкап БД — контракт установщика с CLI сервера.
 # ============================================================================
-Write-Host '=== ce3ab836: бэкап БД, три архива и integrity_check ==='
+Write-Host '=== ce3ab836 / 3acd9c3c: бэкап БД — инструмент и отчёт ==='
 
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
 if ($nodeCommand) { $script:BackupNode = $nodeCommand.Source }
 $backupNodeVersion = ''
 if ($script:BackupNode) { $backupNodeVersion = (& $script:BackupNode -v).Trim() }
 Add-StaticResult -Name 'backup:node22' -Ok ($backupNodeVersion -match '^v22\.') `
-    -Note ('Node для integrity_check: ' + $backupNodeVersion)
+    -Note ('Node для инструмента: ' + $backupNodeVersion)
 if (-not $backupNodeVersion.StartsWith('v22.')) {
     throw "Проверки бэкапа требуют Node 22 в PATH (найдено: '$backupNodeVersion')."
 }
 $backupNodeArg = "/TESTNODEEXE=`"$script:BackupNode`""
 
-# --- A. Архив создаётся: копии баз, WAL-хвост, integrity_check --------------
+# --- A. Успех: инструмент получил --to/--data-dir, архив и отчёт разобраны ---
 Reset-State
-$payloadModulesOk = Initialize-BackupServerPayload
-Add-StaticResult -Name 'backup:server-modules' -Ok $payloadModulesOk `
-    -Note 'better-sqlite3 в app\server\node_modules (как в поставке)'
+$null = Initialize-BackupServerFiles
 $networkId = '11111111-2222-3333-4444-555555555555'
 $systemDb = Join-Path $dataDir '_system.db'
 $networkDb = Join-Path $dataDir ('networks\' + $networkId + '\data.db')
-$dbFixturesOk = (New-BackupTestDatabase -Path $systemDb -Values @('alpha', 'beta') -LeaveWalTail) -and
+$dbFixturesOk = (New-BackupTestDatabase -Path $systemDb -Values @('alpha', 'beta')) -and
     (New-BackupTestDatabase -Path $networkDb -Values @('gamma'))
 Add-StaticResult -Name 'backup:fixtures' -Ok $dbFixturesOk `
-    -Note 'WAL-база с незачекпойнченным хвостом и база сети'
-Add-StaticResult -Name 'backup:wal-left' -Ok (Test-Path -LiteralPath ($systemDb + '-wal')) `
-    -Note 'после «падения службы» -wal остался на диске'
+    -Note 'базы _system.db и networks\<uuid>\data.db'
 $foreignFile = Join-Path $dataDir 'backups\notes.txt'
 $foreignDirFile = Join-Path $dataDir 'backups\my-copy\keep.txt'
 New-Item -ItemType Directory -Path (Split-Path -Parent $foreignDirFile) -Force | Out-Null
@@ -3349,182 +3401,102 @@ Add-Result -Name 'backup:create-code' -Expected 0 -Actual $code
 $archives = @(Get-BackupArchives)
 Add-Result -Name 'backup:one-archive' -Expected 1 -Actual ([int]$archives.Count)
 if ($archives.Count -ge 1) {
-    $archive = $archives[-1].FullName
-    $systemCopy = Join-Path $archive '_system.db'
-    $networkCopy = Join-Path $archive ('networks\' + $networkId + '\data.db')
-    Add-Result -Name 'backup:system-copy' -Expected 1 -Actual ([int](Test-Path -LiteralPath $systemCopy))
-    Add-Result -Name 'backup:network-copy' -Expected 1 -Actual ([int](Test-Path -LiteralPath $networkCopy))
-    Add-Result -Name 'backup:system-integrity' -Expected 1 `
-        -Actual ([int](Test-BackupDatabaseIntegrity -Path $systemCopy))
-    Add-Result -Name 'backup:network-integrity' -Expected 1 `
-        -Actual ([int](Test-BackupDatabaseIntegrity -Path $networkCopy))
-    $systemValues = Get-BackupTestValues -Path $systemCopy
-    Add-Result -Name 'backup:wal-tail-kept' -Expected 1 `
-        -Actual ([int]($systemValues -eq 'alpha|beta|wal-tail')) -Note $systemValues
-    Add-Result -Name 'backup:checkpoint-no-wal' -Expected 0 `
-        -Actual ([int](Test-Path -LiteralPath ($systemCopy + '-wal'))) `
-        -Note 'чекпойнт перед копированием: архив — самодостаточный файл базы'
+    $archive = $archives[-1]
+    $archiveNameOk = $archive.Name -match '^etn-backup-0\.15\.1-\d{8}-\d{6}(-\d+)?\.zip$'
+    Add-Result -Name 'backup:archive-name' -Expected 1 -Actual ([int]$archiveNameOk) `
+        -Note $archive.Name
+    $manifest = Get-FixtureArchiveManifest -Archive $archive.FullName
+    $entries = @()
+    if ($null -ne $manifest) { $entries = @($manifest.files | ForEach-Object { [string]$_.entry }) }
+    Add-Result -Name 'backup:manifest-system' -Expected 1 `
+        -Actual ([int]($entries -contains '_system.db'))
+    Add-Result -Name 'backup:manifest-network' -Expected 1 `
+        -Actual ([int]($entries -contains ('networks/' + $networkId + '/data.db')))
+    Add-Result -Name 'backup:manifest-count' -Expected 2 -Actual ([int]$entries.Count) `
+        -Note '--data-dir: обе базы найдены инструментом'
 } else {
-    Add-Result -Name 'backup:system-copy' -Expected 1 -Actual 0 -Note 'архив не создан'
-    Add-Result -Name 'backup:system-integrity' -Expected 1 -Actual 0 -Note 'архив не создан'
+    Add-Result -Name 'backup:archive-name' -Expected 1 -Actual 0 -Note 'архив не создан'
+    Add-Result -Name 'backup:manifest-count' -Expected 2 -Actual 0 -Note 'архив не создан'
 }
+Add-Result -Name 'backup:log-created' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Бэкап БД: архив создан: [^\r\n]*etn-backup-[^\r\n]* \(баз: 2, байт: \d+\)')) `
+    -Note 'журнал: путь архива, число баз и байт из отчёта'
+Add-Result -Name 'backup:report-archive' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'TESTBACKUP result=ok needed=1 archive=[^\r\n]*etn-backup-[^\r\n]*\.zip')) `
+    -Note 'GLastBackupDir заполнен путём из отчёта'
 Add-Result -Name 'backup:foreign-file' -Expected 1 -Actual ([int](Test-Path -LiteralPath $foreignFile))
 Add-Result -Name 'backup:foreign-dir' -Expected 1 -Actual ([int](Test-Path -LiteralPath $foreignDirFile))
 
-# --- B. Ошибка создания архива: код 10, файлы не тронуты --------------------
+# --- B. Отказ инструмента: код 10, архива нет, причина в журнале ------------
 Reset-State
-$null = Initialize-BackupServerPayload
+$null = Initialize-BackupServerFiles
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
-$blockedBackups = Join-Path $dataDir 'backups'
-[System.IO.File]::WriteAllText($blockedBackups, 'occupied')
+Set-DatabaseToolMode -Mode 'fail-backup'
 $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1', $backupNodeArg))
-Add-Result -Name 'backup:fail-code' -Expected 10 -Actual $code
-$failArchives = @(Get-BackupArchives)
-Add-Result -Name 'backup:fail-no-archive' -Expected 0 -Actual ([int]$failArchives.Count)
-$blockedKept = ((Get-Content -LiteralPath $blockedBackups -Raw).Trim() -eq 'occupied')
-Add-Result -Name 'backup:fail-path-kept' -Expected 1 -Actual ([int]$blockedKept) `
-    -Note 'путь backups остался прежним файлом'
+Add-Result -Name 'backup:fail-code' -Expected 10 -Actual $code `
+    -Note 'ненулевой код инструмента — код 10'
+Add-Result -Name 'backup:fail-no-archive' -Expected 0 -Actual ([int](@(Get-BackupArchives).Count))
 Add-Result -Name 'backup:fail-log' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'не удалось создать каталог архивов'))
+    -Actual ([int](Test-LatestLogContains -Pattern 'Бэкап БД: fixture backup failure \(код 1\)')) `
+    -Note 'причина из отчёта — в журнал'
 
-# --- C. Битая база: integrity_check не пройден, архив удалён, код 10 ---------
+# --- C. Инструмент упал без отчёта: причина всё равно известна --------------
 Reset-State
-$null = Initialize-BackupServerPayload
-New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
-[System.IO.File]::WriteAllText((Join-Path $dataDir '_system.db'), 'not a sqlite database at all')
+$null = Initialize-BackupServerFiles
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+Set-DatabaseToolMode -Mode 'no-report'
 $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1', $backupNodeArg))
-Add-Result -Name 'backup:corrupt-code' -Expected 10 -Actual $code
-$corruptArchives = @(Get-BackupArchives)
-Add-Result -Name 'backup:corrupt-no-archive' -Expected 0 -Actual ([int]$corruptArchives.Count)
-Add-Result -Name 'backup:corrupt-log' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'integrity_check не пройден'))
+Add-Result -Name 'backup:no-report-code' -Expected 10 -Actual $code
+Add-Result -Name 'backup:no-report-no-archive' -Expected 0 -Actual ([int](@(Get-BackupArchives).Count))
+Add-Result -Name 'backup:no-report-log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Бэкап БД: код 1 \(код 1\)')) `
+    -Note 'без отчёта причина — код возврата'
 
-# --- D. Нет node.exe поставки: архив не проходит проверку -------------------
+# --- D. Нет node.exe поставки: инструмент не запускается --------------------
 Reset-State
+$null = Initialize-BackupServerFiles
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
 $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1'))
 Add-Result -Name 'backup:no-node-code' -Expected 10 -Actual $code
-$noNodeArchives = @(Get-BackupArchives)
-Add-Result -Name 'backup:no-node-no-archive' -Expected 0 -Actual ([int]$noNodeArchives.Count)
+Add-Result -Name 'backup:no-node-no-archive' -Expected 0 -Actual ([int](@(Get-BackupArchives).Count))
 Add-Result -Name 'backup:no-node-log' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'нет node.exe поставки'))
+    -Actual ([int](Test-LatestLogContains -Pattern 'нет node.exe поставки')) `
+    -Note 'путь node.exe — {app}\node\node.exe'
 
 # --- E. Ремонт той же версии: Needed=False, бэкапа нет ----------------------
 Reset-State
-$null = Initialize-BackupServerPayload
+$null = Initialize-BackupServerFiles
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
 $repairForeign = Join-Path $dataDir 'backups\manual\keep.txt'
 New-Item -ItemType Directory -Path (Split-Path -Parent $repairForeign) -Force | Out-Null
 [System.IO.File]::WriteAllText($repairForeign, 'foreign')
 $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=skip', $backupNodeArg))
 Add-Result -Name 'backup:repair-code' -Expected 0 -Actual $code
-$repairArchives = @(Get-BackupArchives)
-Add-Result -Name 'backup:repair-no-archive' -Expected 0 -Actual ([int]$repairArchives.Count)
+Add-Result -Name 'backup:repair-no-archive' -Expected 0 -Actual ([int](@(Get-BackupArchives).Count))
 Add-Result -Name 'backup:repair-foreign-kept' -Expected 1 -Actual ([int](Test-Path -LiteralPath $repairForeign))
 Add-Result -Name 'backup:repair-log' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'ремонт'))
 
-# --- F. Четвёртый архив: самый старый удалён, остаётся три ------------------
+# --- F. Предупреждения инструмента: успех, но предупреждение в журнале ------
 Reset-State
-$null = Initialize-BackupServerPayload
+$null = Initialize-BackupServerFiles
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
-$backupsDir = Join-Path $dataDir 'backups'
-$oldNames = @('20000101-000001', '20000102-000002', '20000103-000003')
-foreach ($oldName in $oldNames) {
-    New-Item -ItemType Directory -Path (Join-Path $backupsDir $oldName) -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $dataDir '_system.db') -Destination (Join-Path $backupsDir "$oldName\_system.db")
-}
-$rotateForeignFile = Join-Path $backupsDir 'notes.txt'
-$rotateForeignDir = Join-Path $backupsDir 'manual-copy\keep.txt'
-New-Item -ItemType Directory -Path (Split-Path -Parent $rotateForeignDir) -Force | Out-Null
-[System.IO.File]::WriteAllText($rotateForeignFile, 'foreign')
-[System.IO.File]::WriteAllText($rotateForeignDir, 'foreign')
+Set-DatabaseToolMode -Mode 'warn'
 $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1', $backupNodeArg))
-Add-Result -Name 'backup:rotate-code' -Expected 0 -Actual $code
-$rotateArchives = @(Get-BackupArchives)
-$rotateNames = @($rotateArchives | ForEach-Object { $_.Name })
-Add-Result -Name 'backup:rotate-three-left' -Expected 3 -Actual ([int]$rotateArchives.Count) `
-    -Note ($rotateNames -join ', ')
-Add-Result -Name 'backup:rotate-oldest-deleted' -Expected 0 `
-    -Actual ([int]($rotateNames -contains '20000101-000001'))
-$olderKept = ($rotateNames -contains '20000102-000002') -and ($rotateNames -contains '20000103-000003')
-Add-Result -Name 'backup:rotate-newer-kept' -Expected 1 -Actual ([int]$olderKept)
-$newNames = @($rotateNames | Where-Object { $oldNames -notcontains $_ })
-Add-Result -Name 'backup:rotate-new-present' -Expected 1 -Actual ([int]($newNames.Count -eq 1)) `
-    -Note ($newNames -join ', ')
-Add-Result -Name 'backup:rotate-foreign-kept' -Expected 1 `
-    -Actual ([int]((Test-Path -LiteralPath $rotateForeignFile) -and (Test-Path -LiteralPath $rotateForeignDir)))
+Add-Result -Name 'backup:warn-code' -Expected 0 -Actual $code
+Add-Result -Name 'backup:warn-archive' -Expected 1 -Actual ([int](@(Get-BackupArchives).Count))
+Add-Result -Name 'backup:warn-log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Бэкап БД: предупреждения: fixture warning')) `
+    -Note 'warnings из отчёта — в журнал, обновление продолжается'
 
-# --- G. Удаление старого архива не удалось: обновление не отменяется --------
+# --- G. Баз данных нет: архив не создаётся, обновление продолжается ---------
 Reset-State
-$null = Initialize-BackupServerPayload
-$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
-$backupsDir = Join-Path $dataDir 'backups'
-foreach ($oldName in $oldNames) {
-    New-Item -ItemType Directory -Path (Join-Path $backupsDir $oldName) -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $dataDir '_system.db') -Destination (Join-Path $backupsDir "$oldName\_system.db")
-}
-$lockPath = Join-Path $backupsDir '20000101-000001\locked.bin'
-[System.IO.File]::WriteAllText($lockPath, 'locked')
-$lockHandle = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::Open,
-    [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
-try {
-    $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1', $backupNodeArg))
-} finally {
-    $lockHandle.Dispose()
-}
-Add-Result -Name 'backup:locked-rotate-code' -Expected 0 -Actual $code `
-    -Note 'ошибка удаления не отменяет обновление'
-$lockedArchives = @(Get-BackupArchives)
-Add-Result -Name 'backup:locked-rotate-count' -Expected 4 -Actual ([int]$lockedArchives.Count)
-Add-Result -Name 'backup:locked-rotate-log' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'не удалось удалить старый архив'))
-
-# --- H. Баз данных нет: архив не нужен, обновление продолжается -------------
-Reset-State
-$null = Initialize-BackupServerPayload
-New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+$null = Initialize-BackupServerFiles
 $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1', $backupNodeArg))
 Add-Result -Name 'backup:no-databases-code' -Expected 0 -Actual $code
-Add-Result -Name 'backup:no-databases-no-dir' -Expected 0 `
-    -Actual ([int](Test-Path -LiteralPath (Join-Path $dataDir 'backups')))
+Add-Result -Name 'backup:no-databases-no-archive' -Expected 0 -Actual ([int](@(Get-BackupArchives).Count))
 Add-Result -Name 'backup:no-databases-log' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'нет баз данных'))
-
-# --- I. Чекпойнт невозможен (база занята читателем): копируется WAL ---------
-# Служба остановлена, но файл базы удерживает другой процесс: checkpoint
-# получает ошибку, установщик обязан скопировать -wal и всё равно получить
-# согласованный архив, проходящий integrity_check.
-Reset-State
-$null = Initialize-BackupServerPayload
-$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha') -LeaveWalTail
-$busyDbPath = Join-Path $dataDir '_system.db'
-$readerHandle = [System.IO.File]::Open($busyDbPath, [System.IO.FileMode]::Open,
-    [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-try {
-    $code = Invoke-Setup -Arguments ($silent + @('/TESTBACKUP=1', $backupNodeArg))
-} finally {
-    $readerHandle.Dispose()
-}
-Add-Result -Name 'backup:wal-fallback-code' -Expected 0 -Actual $code `
-    -Note 'checkpoint не удался — WAL скопирован'
-$fallbackArchives = @(Get-BackupArchives)
-Add-Result -Name 'backup:wal-fallback-archive' -Expected 1 -Actual ([int]$fallbackArchives.Count)
-if ($fallbackArchives.Count -ge 1) {
-    $fallbackCopy = Join-Path $fallbackArchives[-1].FullName '_system.db'
-    Add-Result -Name 'backup:wal-fallback-integrity' -Expected 1 `
-        -Actual ([int](Test-BackupDatabaseIntegrity -Path $fallbackCopy))
-    $fallbackValues = Get-BackupTestValues -Path $fallbackCopy
-    Add-Result -Name 'backup:wal-fallback-values' -Expected 1 `
-        -Actual ([int]($fallbackValues -eq 'alpha|wal-tail')) -Note $fallbackValues
-    Add-Result -Name 'backup:wal-fallback-selfcontained' -Expected 0 `
-        -Actual ([int](Test-Path -LiteralPath ($fallbackCopy + '-wal'))) `
-        -Note 'после проверки архив — самодостаточный файл базы'
-} else {
-    Add-Result -Name 'backup:wal-fallback-integrity' -Expected 1 -Actual 0 -Note 'архив не создан'
-}
-Add-Result -Name 'backup:wal-fallback-log' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'копируется файл журнала'))
 
 # ============================================================================
 # bb063ac3: обновление — остановка службы, бэкап, снимок отката, health-check.
@@ -3594,10 +3566,12 @@ $rollbackRootBody = Get-IssFunctionBody -Text $issText -Name 'RollbackRoot'
 Add-StaticResult -Name 'static:rollback-dir' `
     -Ok (Test-IssCode -Text $rollbackRootBody -Pattern ([regex]::Escape('\.install\rollback'))) `
     -Note 'снимок отката в %ProgramData%\ETN\.install\rollback'
-$restoreBody = Get-IssFunctionBody -Text $issText -Name 'RestoreDatabaseFromBackup'
-Add-StaticResult -Name 'static:rollback-db-wal' `
-    -Ok (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape("DeleteFile(Dest + '-wal')"))) `
-    -Note 'при восстановлении БД WAL неудачного запуска удаляется'
+$restoreBody = Get-IssFunctionBody -Text $issText -Name 'RestoreDatabaseFromArchive'
+Add-StaticResult -Name 'static:rollback-db-tool' `
+    -Ok ((Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape('RunDatabaseTool'))) -and
+        (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape('restore --from'))) -and
+        (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape('ApplyDatabaseToolReport')))) `
+    -Note 'восстановление БД — restore инструмента, не Pascal (WAL/SHM — в CLI)'
 # Блокер 1 приёмки: откат восстанавливает БД только из архива ЭТОГО запуска.
 # LatestBackupDir (самый свежий архив прошлых обновлений) в откате недопустим:
 # он не отражает состояние базы на момент остановки службы.
@@ -4048,6 +4022,24 @@ Add-Result -Name 'update-backup-fail:service-back' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена')) `
     -Note 'служба поднята обратно на прежней версии'
 
+# --- G2. Инструмент бэкапа отказал: причина из отчёта в сообщении -----------
+# Тот же сценарий bc7cc846, но отказ приходит из CLI (битая база, нет места):
+# причина обязана попасть в сообщение об отмене, файлы — не заменены.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+Set-DatabaseToolMode -Mode 'fail-backup'
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg))
+Add-Result -Name 'update-tool-fail:code' -Expected 10 -Actual $code
+$stillOld = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js')) -eq $oldIndex
+Add-Result -Name 'update-tool-fail:files-untouched' -Expected 1 -Actual ([int]$stillOld)
+Add-Result -Name 'update-tool-fail:no-archive' -Expected 0 -Actual ([int](@(Get-BackupArchives).Count))
+Add-Result -Name 'update-tool-fail:message' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'резервная копия баз данных не создана: fixture backup failure[^\r\n]*журнал: ')) `
+    -Note 'причина из отчёта инструмента — в сообщении об отмене'
+Add-Result -Name 'update-tool-fail:service-back' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена'))
+
 # --- H. Служба не остановилась: код 20, изменений нет -----------------------
 $null = New-UpdateFixture
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
@@ -4074,9 +4066,11 @@ $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @
 $oldSnapshot = Join-Path $dataDir '.install\rollback\20260101-000000\server\dist'
 New-Item -ItemType Directory -Path $oldSnapshot -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $oldSnapshot 'index.js'), '// stale-snapshot')
-# Устаревший архив прошлых обновлений.
-$staleArchive = Join-Path $dataDir 'backups\20260101-000000'
-$null = New-BackupTestDatabase -Path (Join-Path $staleArchive '_system.db') -Values @('stale-archive')
+# Устаревший архив прошлых обновлений: LatestBackupDirName выбирает ZIP по
+# метке времени в имени — файл с валидным именем, содержимое не важно.
+$staleArchive = Join-Path $dataDir 'backups\etn-backup-0.15.0-20260101-000000.zip'
+New-Item -ItemType Directory -Path (Split-Path -Parent $staleArchive) -Force | Out-Null
+[System.IO.File]::WriteAllText($staleArchive, 'stale-archive')
 $oldIndexPath = Join-Path $appDir 'server\dist\index.js'
 [System.IO.File]::WriteAllText($oldIndexPath, '// old-repair-marker')
 $reasonRepair = Join-Path $workRoot 'repair-reason.txt'
@@ -4092,9 +4086,12 @@ Add-Result -Name 'update-repair:code' -Expected 10 -Actual $code `
 $liveDb = Get-BackupTestValues -Path (Join-Path $dataDir '_system.db')
 Add-Result -Name 'update-repair:db-untouched' -Expected 1 -Actual ([int]($liveDb -eq 'alpha')) `
     -Note ('БД после отката: ' + $liveDb)
-$staleDb = Get-BackupTestValues -Path (Join-Path $staleArchive '_system.db')
+$staleText = ''
+if (Test-Path -LiteralPath $staleArchive) {
+    $staleText = (Get-Content -LiteralPath $staleArchive -Raw).Trim()
+}
 Add-Result -Name 'update-repair:stale-archive-kept' -Expected 1 `
-    -Actual ([int]($staleDb -eq 'stale-archive')) `
+    -Actual ([int]($staleText -eq 'stale-archive')) `
     -Note 'старый архив не подставлен и не изменён'
 Add-Result -Name 'update-repair:no-stale-restore' -Expected 1 -Actual ([int](
     (Test-LatestLogContains -Pattern 'Откат БД: архив в этом запуске не создавался') -and
