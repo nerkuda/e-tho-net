@@ -24,16 +24,17 @@
 ;     удаляется, при отказе остаётся точкой ручного восстановления;
 ;   * после копирования: настройка службы, запуск, расширенный health-check
 ;     (GET /api/v1/health → 200, status=ok, db=ok, версия = целевая;
-;     GET /api/v1/version → version и api; бюджет 60 с, повтор каждые 2 с);
+;     GET /api/v1/version → version и api; бюджет 120 с, повтор каждые 2 с);
 ;   * неудача health-check: остановка службы, возврат файлов из снимка,
 ;     восстановление БД из архива (с удалением WAL/SHM), запуск прежней
 ;     версии, повторная проверка, код 10; в журнале отдельно «Откат выполнен»
 ;     либо «Откат не выполнен, архив: <путь>»;
 ;   * install.json пишется только после успешного health-check — иначе после
 ;     отката файл врал бы о новой версии;
-;   * коды: 20 — предусловие (занятый порт, режим app, служба не остановилась,
-;     служба не перешла в RUNNING); 10 — сбой выполнения, включая неудачный
-;     бэкап и неудачный откат.
+;   * коды: 20 — предусловие до замены файлов (занятый порт, режим app,
+;     служба не остановилась, чужая/отключённая/помеченная на удаление
+;     служба); 10 — сбой выполнения (бэкап, снимок, регистрация, запуск,
+;     health, откат; файлы могли быть заменены).
 ;
 ; Задача ce3ab836 (0.15.1) — бэкап баз данных перед заменой файлов:
 ;   * CreateDatabaseBackup(Needed) — вызывающий (bb063ac3) передаёт решение:
@@ -120,14 +121,17 @@
 ;     (WinSW сам его не создаёт); до подстановки службу не регистрировать;
 ;   * служба ETN регистрируется WinSW (etn-service.exe install) после записи
 ;     конфигурации и до запуска; уже зарегистрированная служба не
-;     перегистрируется (WinSW 2.12.0 вернул бы 1073), сбой регистрации —
-;     код 20 с причиной; запуск ждёт подтверждённого RUNNING, затем health;
-;     служба не перешла в RUNNING за бюджет — тоже код 20 с причиной;
+;     перегистрируется (WinSW 2.12.0 вернул бы 1073), но её личность
+;     проверяется (ImagePath, Start, DeleteFlag): чужая/отключённая/помеченная
+;     на удаление — код 20 до копирования файлов; сбой регистрации после
+;     копирования — код 10 с причиной; запуск не ждёт RUNNING — готовность
+;     подтверждает health-check;
 ;   * при удалении программы служба останавливается и снимается
 ;     (etn-service.exe uninstall) до удаления файлов; отказ отменяет удаление
 ;     с причиной; деинсталлятор не вызывает InitializeSetup — путь к службе и
 ;     журнал удаления берутся из {app}/{commonappdata} и install.json;
-;     режим app службу не регистрирует и удаление не трогает;
+;     режим app службу не регистрирует и удаление не трогает; чужую службу
+;     (другой ImagePath) не снимаем — файлы программы удалить можно;
 ;   * при обновлении порт, хост, режим и каталог данных фиксированы — берутся
 ;     из install.json, поля на экране только показывают значения;
 ;   * установка только клиента серверных каталогов и правила не создаёт.
@@ -203,10 +207,11 @@
 ;   /TESTPORTBINDFAIL, /TESTLISTENERTABLEOFF, /TESTNOSERVICE,
 ;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
 ;   /TESTSERVICEWAIT, /TESTSERVICEINSTALL, /TESTSERVICEUNINSTALL,
-;   /TESTSERVICEREALFILE, /TESTUNINSTALLSERVICE, /TESTHEALTHURL,
-;   /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK, /TESTADMINMODE,
-;   /TESTUSERONLYMODE, /TESTGUIMODE — только в тестовой сборке
-;   (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
+;   /TESTSERVICEREALFILE, /TESTSERVICESTATUS, /TESTSERVICEIMAGE,
+;   /TESTSERVICESTARTTYPE, /TESTSERVICEDELETEFLAG, /TESTUNINSTALLSERVICE,
+;   /TESTHEALTHURL, /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK,
+;   /TESTADMINMODE, /TESTUSERONLYMODE, /TESTGUIMODE — только в тестовой
+;   сборке (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
 ; ============================================================================
 
 #ifndef MyAppVersion
@@ -417,6 +422,10 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 ; Массовый перенос старых литералов в [CustomMessages] — задача 4dc117f5.
 BackupToolMissing=Инструмент резервного копирования баз данных не найден в поставке установщика.
 BackupToolNotStarted=Инструмент резервного копирования баз данных не запустился — проверьте node.exe поставки и журнал установки.
+; 34f8e315: служба возвращена после отмены обновления, но не отвечает.
+ServiceStartManually=служба не запущена; запустите вручную (etn-service.exe start), журнал: %1
+; 34f8e315: ручное снятие службы при отмене удаления — команды WinSW, без sc.
+UninstallServiceManual=Остановите и удалите службу ETN вручную: etn-service.exe stop, дождитесь status=Stopped, затем etn-service.exe uninstall — и повторите удаление. Файлы не удалены.
 
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
@@ -516,21 +525,38 @@ const
   ERROR_ACCESS_DENIED = 5;
   ERROR_ELEVATION_REQUIRED = 740;
   ERROR_CANCELLED = 1223;
-  { Остановка службы WinSW (bb063ac3): после etn-service.exe stop состояние
-    опрашивается раз в 250 мс, бюджет — 60 с (stoptimeout в шаблоне службы
-    30 с, остальное — запас на медленную остановку node.exe). }
+  { Остановка службы WinSW (34f8e315): после etn-service.exe stop состояние
+    опрашивается через etn-service.exe status раз в 500 мс; бюджет — 60 с по
+    системным часам (не суммой шагов: один вызов status — отдельный процесс
+    ~350 мс, и суммирование растянуло бы бюджет в 2–3 раза). <stoptimeout>30sec
+    в шаблоне службы — 30 с, остальное — запас на медленную остановку node.exe. }
   SERVICE_STOP_WAIT_MS = 60000;
-  { Запуск службы WinSW (8b1f5980): после etn-service.exe start ждём перехода
-    в RUNNING тем же опросом sc query. Бюджет — 60 с: Node стартует и открывает
-    порт до health-check, который идёт следующим шагом. }
-  SERVICE_START_WAIT_MS = 60000;
-  SERVICE_STOP_STEP_MS = 250;
-  { WinSW 2.12.0 при install существующей службы возвращает код
-    ERROR_SERVICE_EXISTS (1073): повторная установка не должна падать. }
+  SERVICE_STOP_STEP_MS = 500;
+  { stop на службе в переходном состоянии (StartPending/StopPending) WinSW
+    2.12.0 возвращает 1061: StartPending может перейти в Running, поэтому stop
+    повторяется с этим интервалом в пределах общего бюджета. }
+  SERVICE_STOP_RETRY_MS = 1000;
+  { Коды Win32, которые WinSW отдаёт кодом возврата. Разбор — в
+    ServiceCommandResult: 1073/1056 — успех, 1060/1072 от stop — отказ. }
   ERROR_SERVICE_EXISTS = 1073;
+  ERROR_SERVICE_ALREADY_RUNNING = 1056;
+  ERROR_SERVICE_CANNOT_ACCEPT_CTRL = 1061;
+  ERROR_SERVICE_NOT_ACTIVE = 1062;
+  ERROR_SERVICE_DISABLED = 1058;
+  ERROR_SERVICE_DOES_NOT_EXIST = 1060;
+  ERROR_SERVICE_MARKED_FOR_DELETE = 1072;
+  { Состояние службы по выводу etn-service.exe status (WinSW 2.12.0):
+    Started — любое не-Stopped состояние (Running/StartPending/StopPending),
+    Stopped — только полностью остановлена, NonExistent — службы нет. }
+  SERVICE_STATE_STOPPED = 0;
+  SERVICE_STATE_STARTED = 1;
+  SERVICE_STATE_MISSING = 2;
+  SERVICE_STATE_UNKNOWN = 3;
   { Health-check после запуска новой версии (требование 0a79d9de): бюджет
-    60 с, повтор каждые 2 с. Тело ответа разбирается, а не только код. }
-  HEALTH_WAIT_MS = 60000;
+    120 с, повтор каждые 2 с; прежние 60 с ожидания RUNNING не нужны —
+    готовность подтверждает только health-check. Тело ответа разбирается,
+    а не только код. }
+  HEALTH_WAIT_MS = 120000;
   HEALTH_STEP_MS = 2000;
   { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
     клиент electron-builder (NSIS) и запись установки Inno. }
@@ -710,10 +736,25 @@ var
   { /TESTSERVICEREALFILE=1 — модель службы дополнительно проверяет наличие
     etn-service.exe, как продуктовая ветка RunServiceCommand: проба настоящего
     деинсталлятора ловит путь, вычисленный из пустого GServerDir (приёмка
-    4151edf6). /TESTSERVICESTART=pending|<pending-stuck> — смоделированный
-    START_PENDING в первых опросах состояния (2) или до таймаута. }
+    4151edf6). /TESTSERVICESTATUS=fail|garbage|nonexistent — подмена вывода
+    etn-service.exe status (ошибка, неизвестный вывод, NonExistent при живом
+    ключе). /TESTSERVICEIMAGE, /TESTSERVICESTARTTYPE, /TESTSERVICEDELETEFLAG —
+    подмена реестровой личности службы. /TESTSERVICESTOP=1061|1062 — код
+    перехода/«уже остановлена»; 1061 повторяется, затем stop успешен.
+    /TESTSERVICESTOP=fail-after-start — отказ останова после start (проверка
+    отката при неудачной остановке). }
   GTestServiceRealFile: String;
-  GTestServicePendingPolls: Integer;
+  GTestServiceStatus: String;
+  GTestServiceImage: String;
+  GTestServiceStartType: String;
+  GTestServiceDeleteFlag: String;
+  { Состояние модели службы: команда start уже выполнялась (для
+    TESTSERVICESTOP=fail-after-start) и служба снята из SCM (status после
+    uninstall — NonExistent, ключ может остаться при 1072). }
+  GTestServiceStartedFlag: Boolean;
+  GTestServiceUninstalled: Boolean;
+  { Сколько раз stop вернуть 1061 до успеха (TESTSERVICESTOP=1061). }
+  GTestServiceStopRetries: Integer;
   GTestHealthUrl: String;
   GTestHealthWait: String;
   GTestHealthStep: String;
@@ -803,6 +844,11 @@ var
     последняя причина сбоя health-check для журнала и экрана ошибки. }
   GLastRollbackDir: String;
   GHealthReason: String;
+  { Код возврата и текст последней команды службы: 1061/1062 (переход) нужны
+    вызывающему для повтора stop, 1072 после uninstall — для подтверждения
+    через status; текст причины — в сообщение и журнал (34f8e315). }
+  GLastServiceCode: Integer;
+  GLastServiceError: String;
 
   { Экран компонентов }
   GComponentsPage: TWizardPage;
@@ -3700,14 +3746,15 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
-  Служба ETN (WinSW) — остановка и запуск, задача bb063ac3.
+  Служба ETN (WinSW) — остановка и запуск, задачи bb063ac3 и 34f8e315.
 
   Служба останавливается до копирования файлов: иначе занятые node.exe,
-  better-sqlite3 и файлы сервера не заменить. После команды stop состояние
-  опрашивается через sc query, пока служба не окажется STOPPED: WinSW мог
-  вернуть управление раньше фактической остановки дочернего node.exe.
-  В тестовой сборке управление службой подменяется хуками — настоящая служба
-  Windows не нужна.
+  better-sqlite3 и файлы сервера не заменить. Состояние читается командой
+  `etn-service.exe status` (WinSW 2.12.0: Started/Stopped/NonExistent, exit 0);
+  после stop опрос повторяется, пока служба не окажется Stopped: WinSW вернул
+  управление раньше фактической остановки дочернего node.exe. В тестовой
+  сборке управление службой подменяется хуками — настоящая служба Windows не
+  нужна.
   --------------------------------------------------------------------------- }
 (* Каталог программы для операций со службой. В деинсталляторе Inno не вызывает
   InitializeSetup, и GServerDir остаётся пустым, поэтому путь берётся из {app}
@@ -3731,77 +3778,148 @@ begin
 #endif
 end;
 
-{ Вывод sc query по службе. В тестовом режиме — подмена состояния:
-  /TESTSERVICESTATE=running|stopped (статическое состояние: команды его не
-  меняют — проверка «служба не остановилась»); без этой подмены состояние ведёт
-  флаг смоделированных команд start/stop (у /TESTSERVICE=present — RUNNING, как
-  у работающей службы; stop переводит в STOPPED). Без /TESTSERVICE тестовая
-  сборка службу не видит (ServiceRegistered = False), поэтому команды и это
-  состояние не запрашиваются. }
-function ServiceStateOutput: String;
+{ Последняя непустая строка вывода команды: WinSW печатает одно слово
+  (Started/Stopped/NonExistent), но CLR или логгер могут дописать строки.
+  Сравнение — Trim/UpperCase по последней непустой. }
+function LastNonEmptyLine(const Text: String): String;
 var
-  Args, OutFile: String;
-  Code: Integer;
+  I, StartPos: Integer;
+  Line: String;
 begin
   Result := '';
+  StartPos := 1;
+  for I := 1 to Length(Text) do
+    if Text[I] = #10 then
+    begin
+      Line := Trim(Copy(Text, StartPos, I - StartPos));
+      if Line <> '' then Result := Line;
+      StartPos := I + 1;
+    end;
+  Line := Trim(Copy(Text, StartPos, Length(Text) - StartPos + 1));
+  if Line <> '' then Result := Line;
+end;
+
+{ Причина отказа status: конкретика (1072, 5, 1058, 1060) вместо «не удалось».
+  Неизвестный код дополняется последней строкой вывода. }
+function ServiceStatusFailureText(const Code: Integer; const Output: String): String;
+var
+  Line: String;
+begin
+  Line := LastNonEmptyLine(Output);
+  if Code = ERROR_ACCESS_DENIED then
+    Result := 'отказано в доступе (5)'
+  else if Code = ERROR_SERVICE_DISABLED then
+    Result := 'служба отключена (1058)'
+  else if Code = ERROR_SERVICE_DOES_NOT_EXIST then
+    Result := 'служба не найдена (1060)'
+  else if (Code = ERROR_SERVICE_MARKED_FOR_DELETE) or (Pos('1072', Line) > 0) then
+    Result := 'служба помечена на удаление (1072)'
+  else
+  begin
+    Result := 'etn-service.exe status вернул код ' + IntToStr(Code);
+    if Line <> '' then Result := Result + ': ' + Line;
+  end;
+end;
+
+{ Состояние службы по выводу etn-service.exe status (WinSW 2.12.0):
+  Started — любое не-Stopped состояние (Running/StartPending/StopPending),
+  Stopped — служба полностью остановлена, NonExistent — службы нет.
+  Detail — причина, если состояние определить не удалось (SERVICE_STATE_UNKNOWN).
+  Ошибка или неизвестный вывод — быстрый отказ вызывающего: бюджет ожидания не
+  тратится. В тестовом режиме вывод подменяется хуками; без /TESTSERVICE
+  тестовая сборка службу не видит и состояние не запрашивает. }
+function ServiceStatusOutput(var Detail: String): Integer;
+var
+  Args, OutFile, Line, Output: String;
+  Code: Integer;
+begin
+  Detail := '';
 #ifdef TestMode
+  if GTestServiceStatus = 'fail' then
+  begin
+    Detail := 'etn-service.exe status не выполнен (тестовый режим)';
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
+  if GTestServiceStatus = 'garbage' then
+  begin
+    Detail := 'неизвестный вывод etn-service.exe status: TestMode';
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
+  if GTestServiceStatus = 'nonexistent' then
+  begin
+    Result := SERVICE_STATE_MISSING;
+    Exit;
+  end;
+  if (GTestService <> '') and (GTestServiceRealFile = '1') and
+     (not FileExists(ServiceExePath)) then
+  begin
+    Detail := 'нет ' + ServiceExePath + ' — состояние службы не определить';
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
   if GTestServiceState = 'running' then
   begin
-    Result := 'STATE : 4  RUNNING';
+    Result := SERVICE_STATE_STARTED;
     Exit;
   end;
   if GTestServiceState = 'stopped' then
   begin
-    Result := 'STATE : 1  STOPPED';
+    Result := SERVICE_STATE_STOPPED;
     Exit;
   end;
-  if GTestService <> '' then
+  if GTestServiceUninstalled then
   begin
-    if GTestServiceRunning then
-    begin
-      { Смоделированный START_PENDING: реальный SCM держит его, пока служба
-        стартует; RUNNING приходит только следующим опросом. }
-      if GTestServicePendingPolls <> 0 then
-      begin
-        if GTestServicePendingPolls > 0 then
-          GTestServicePendingPolls := GTestServicePendingPolls - 1;
-        Result := 'STATE : 2  START_PENDING';
-        Exit;
-      end;
-      Result := 'STATE : 4  RUNNING';
-    end
-    else
-      Result := 'STATE : 1  STOPPED';
+    Result := SERVICE_STATE_MISSING;
     Exit;
   end;
+  if (GTestService <> '') and GTestServiceRunning then
+    Result := SERVICE_STATE_STARTED
+  else
+    Result := SERVICE_STATE_STOPPED;
+  Exit;
 #endif
-  OutFile := ExpandConstant('{tmp}') + '\etn-service-state.txt';
+  if not FileExists(ServiceExePath) then
+  begin
+    Detail := 'нет ' + ServiceExePath + ' — состояние службы не определить';
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
+  OutFile := ExpandConstant('{tmp}') + '\etn-service-status.txt';
   DeleteFile(OutFile);
-  Args := '/c sc query ' + SERVICE_NAME + ' > "' + OutFile + '" 2>&1';
-  if not Exec(ExpandConstant('{cmd}'), Args, '', SW_HIDE,
-    ewWaitUntilTerminated, Code) then Exit;
-  if FileExists(OutFile) then
-    Result := UpperCase(ReadTextFile(OutFile));
-end;
-
-function ServiceStoppedNow: Boolean;
-var
-  S: String;
-begin
-  S := ServiceStateOutput;
-  Result := (Pos('STOPPED', S) > 0) and (Pos('RUNNING', S) = 0) and
-    (Pos('STOP_PENDING', S) = 0) and (Pos('START_PENDING', S) = 0);
-end;
-
-{ Служба в состоянии RUNNING: START_PENDING/STOP_PENDING не считаются —
-  запуск ещё не подтверждён, health-check идти не должен. }
-function ServiceRunningNow: Boolean;
-var
-  S: String;
-begin
-  S := ServiceStateOutput;
-  Result := (Pos('RUNNING', S) > 0) and (Pos('STOPPED', S) = 0) and
-    (Pos('START_PENDING', S) = 0) and (Pos('STOP_PENDING', S) = 0);
+  { Кавычки вокруг exe обязательны: путь в Program Files содержит пробелы. }
+  Args := '/c ""' + ServiceExePath + '" status > "' + OutFile + '" 2>&1"';
+  if not Exec(ExpandConstant('{cmd}'), Args, ExtractFileDir(ServiceExePath), SW_HIDE,
+    ewWaitUntilTerminated, Code) then
+  begin
+    Detail := 'не удалось запустить etn-service.exe status';
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
+  Output := '';
+  if FileExists(OutFile) then Output := ReadTextFile(OutFile);
+  if Code <> 0 then
+  begin
+    Detail := ServiceStatusFailureText(Code, Output);
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
+  Line := UpperCase(Trim(LastNonEmptyLine(Output)));
+  if Line = 'STARTED' then
+    Result := SERVICE_STATE_STARTED
+  else if Line = 'STOPPED' then
+    Result := SERVICE_STATE_STOPPED
+  else if Line = 'NONEXISTENT' then
+    Result := SERVICE_STATE_MISSING
+  else
+  begin
+    if Line = '' then
+      Detail := 'etn-service.exe status вернул пустой вывод'
+    else
+      Detail := 'неизвестный вывод etn-service.exe status: ' + Line;
+    Result := SERVICE_STATE_UNKNOWN;
+  end;
 end;
 
 function ServiceStopWaitMs: Integer;
@@ -3813,108 +3931,135 @@ begin
 #endif
 end;
 
-function ServiceStartWaitMs: Integer;
+{ Текущее время в секундах (сутки*86400 + часы*3600 + минуты*60 + секунды).
+  GetTickCount в Pascal Script Inno 6 недоступен, поэтому бюджет ожидания
+  считается по системным часам, а не суммой шагов опроса: один вызов status —
+  отдельный процесс ~350 мс, и суммирование растянуло бы 60 с в разы.
+  Точность — 1 с; для бюджета остановки этого достаточно. }
+function ServiceNowSeconds: Int64;
+var
+  Stamp, DayStamp, TimeStamp: Int64;
 begin
-  Result := SERVICE_START_WAIT_MS;
-#ifdef TestMode
-  if GTestServiceWait <> '' then
-    Result := StrToIntDef(GTestServiceWait, Result);
-#endif
+  { Разделители — #0 (по умолчанию), а не пустая строка: GetDateTimeString
+    принимает Char и на пустой строке падает во время выполнения. }
+  Stamp := StrToInt64Def(GetDateTimeString('yyyymmddhhnnss', #0, #0), 0);
+  DayStamp := Stamp div 1000000;
+  TimeStamp := Stamp mod 1000000;
+  Result := DayStamp * 86400 + (TimeStamp div 10000) * 3600 +
+    ((TimeStamp div 100) mod 100) * 60 + (TimeStamp mod 100);
 end;
 
-{ Ждём реальной остановки: опрос раз в SERVICE_STOP_STEP_MS до бюджета. }
-function WaitServiceStopped: Boolean;
-var
-  Waited: Integer;
-begin
-  Result := ServiceStoppedNow;
-  if Result then Exit;
-  Waited := 0;
-  while Waited < ServiceStopWaitMs do
-  begin
-    Sleep(SERVICE_STOP_STEP_MS);
-    Waited := Waited + SERVICE_STOP_STEP_MS;
-    if ServiceStoppedNow then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-  Result := ServiceStoppedNow;
-end;
+{ Ждём подтверждённой остановки — объявлена после RunServiceCommand: Pascal
+  Script Inno требует, чтобы вызываемая функция была объявлена выше. }
 
-{ Ждём подтверждённого RUNNING после start (8b1f5980): WinSW возвращает
-  управление раньше, чем SCM переводит службу в RUNNING, а health-check по
-  ещё не слушающему серверу дал бы ложный сбой и откат. }
-function WaitServiceRunning: Boolean;
-var
-  Waited: Integer;
+{ Причина отказа команды службы с отдельным сообщением для каждого кода
+  (1058/1060/1061/1072): администратору важно отличие «служба отключена» от
+  «помечена на удаление» и «нет прав». }
+function ServiceCodeText(const Verb: String; const Code: Integer): String;
 begin
-  Result := ServiceRunningNow;
-  if Result then Exit;
-  Waited := 0;
-  while Waited < ServiceStartWaitMs do
-  begin
-    Sleep(SERVICE_STOP_STEP_MS);
-    Waited := Waited + SERVICE_STOP_STEP_MS;
-    if ServiceRunningNow then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-  Result := ServiceRunningNow;
+  if Code = 0 then
+    Result := ''
+  else if Code = ERROR_ACCESS_DENIED then
+    Result := 'отказано в доступе (5) — нужны права администратора'
+  else if Code = ERROR_SERVICE_DISABLED then
+    Result := 'служба отключена (1058): включите её или удалите'
+  else if Code = ERROR_SERVICE_DOES_NOT_EXIST then
+    Result := 'служба не найдена (1060)'
+  else if Code = ERROR_SERVICE_MARKED_FOR_DELETE then
+    Result := 'служба помечена на удаление (1072)'
+  else if Code = ERROR_SERVICE_CANNOT_ACCEPT_CTRL then
+    Result := 'служба в переходном состоянии (1061)'
+  else if Code = ERROR_SERVICE_NOT_ACTIVE then
+    Result := 'служба уже остановлена (1062)'
+  else if Code = ERROR_SERVICE_ALREADY_RUNNING then
+    Result := 'служба уже запущена (1056)'
+  else if Code = ERROR_SERVICE_EXISTS then
+    Result := 'служба уже существует (1073)'
+  else
+    Result := 'код ' + IntToStr(Code);
+  if (Result <> '') and (Pos('(', Result) = 0) then
+    Result := 'команда ' + Verb + ' вернула ' + Result;
 end;
 
 { Разбор кода возврата команды WinSW — общий для продуктовой ветки и модели
   службы (поведенческий тест 1073 обязан проверять тот же код, что выполняется
-  на машине). WinSW 2.12.0: install существующей службы возвращает
-  ERROR_SERVICE_EXISTS (1073). Служба уже зарегистрирована — цель достигнута,
-  повторная установка не падает. }
+  на машине). WinSW 2.12.0: install существующей службы — 1073; start уже
+  работающей — 1056; stop на остановленной/в переходе — 1062/1061; uninstall
+  отсутствующей/помеченной — 1060/1072. 1060/1072 от stop — отказ: в обновлении
+  служба не остановлена. GLastServiceCode запоминается для повтора stop (1061)
+  и подтверждения uninstall (1072), GLastServiceError — для причины. }
 function ServiceCommandResult(const Verb: String; const Code: Integer): Boolean;
 begin
   Result := False;
-  if Code <> 0 then
+  GLastServiceCode := Code;
+  GLastServiceError := '';
+  if Code = 0 then
   begin
-    if (Verb = 'install') and (Code = ERROR_SERVICE_EXISTS) then
-    begin
-      LogLine('INFO', 'Служба: install — служба уже существует (код ' +
-        IntToStr(Code) + '), регистрация не требуется');
-      Result := True;
-      Exit;
-    end;
-    LogLine('WARN', 'Служба: команда ' + Verb + ' вернула код ' +
-      IntToStr(Code));
+    LogLine('INFO', 'Служба: команда ' + Verb + ' выполнена');
+    Result := True;
     Exit;
   end;
-  LogLine('INFO', 'Служба: команда ' + Verb + ' выполнена');
-  Result := True;
+  if (Verb = 'install') and (Code = ERROR_SERVICE_EXISTS) then
+  begin
+    LogLine('INFO', 'Служба: install — служба уже существует (код ' +
+      IntToStr(Code) + '), регистрация не требуется');
+    Result := True;
+    Exit;
+  end;
+  if (Verb = 'start') and (Code = ERROR_SERVICE_ALREADY_RUNNING) then
+  begin
+    LogLine('INFO', 'Служба: start — служба уже запущена (код ' +
+      IntToStr(Code) + ')');
+    Result := True;
+    Exit;
+  end;
+  if (Verb = 'stop') and
+     ((Code = ERROR_SERVICE_NOT_ACTIVE) or (Code = ERROR_SERVICE_CANNOT_ACCEPT_CTRL)) then
+  begin
+    LogLine('INFO', 'Служба: stop — ' + ServiceCodeText(Verb, Code) +
+      ', ждём подтверждённой остановки');
+    Result := True;
+    Exit;
+  end;
+  if (Verb = 'uninstall') and
+     ((Code = ERROR_SERVICE_DOES_NOT_EXIST) or (Code = ERROR_SERVICE_MARKED_FOR_DELETE)) then
+  begin
+    LogLine('INFO', 'Служба: uninstall — ' + ServiceCodeText(Verb, Code) +
+      ', подтверждаем удаление через status');
+    Result := True;
+    Exit;
+  end;
+  GLastServiceError := Verb + ': ' + ServiceCodeText(Verb, Code);
+  LogLine('WARN', 'Служба: команда ' + Verb + ' вернула код ' +
+    IntToStr(Code) + ': ' + ServiceCodeText(Verb, Code));
 end;
 
 { Команда WinSW: install, uninstall, stop, start. Код возврата команды —
-  успех/неудача; install существующей службы (1073) — не ошибка: повторная
-  установка обязана проходить (8b1f5980, разбор — ServiceCommandResult).
+  успех/неудача (разбор — ServiceCommandResult).
 
   В тестовой сборке настоящая служба рабочей машины не трогается никогда.
   Хук /TESTSERVICE=present|absent включает модель: команды не выполняются, их
   результат и состояние службы ведут флаги GTestServiceRegistered/Running
   (install/uninstall меняют регистрацию, start/stop — состояние), а сбои
-  задаются хуками /TESTSERVICEINSTALL=fail|exists, /TESTSERVICEUNINSTALL=fail,
-  /TESTSERVICESTOP=fail, /TESTSERVICESTART=fail|pending|pending-stuck. Без
-  /TESTSERVICE команда тоже не выполняется (изоляция тестов от машины), но
-  состояние службы остаётся «не зарегистрирована». /TESTSERVICEREALFILE=1
-  добавляет проверку наличия etn-service.exe, как в продуктовой ветке: проба
-  настоящего деинсталлятора (приёмка 4151edf6) должна падать, если путь к
-  службе вычислен неверно. }
+  задаются хуками /TESTSERVICEINSTALL=fail|exists,
+  /TESTSERVICEUNINSTALL=fail|1072, /TESTSERVICESTOP=fail|fail-after-start|1061|1062,
+  /TESTSERVICESTART=fail|1056|1061. Без /TESTSERVICE команда тоже не выполняется
+  (изоляция тестов от машины), но состояние службы остаётся «не
+  зарегистрирована». /TESTSERVICEREALFILE=1 добавляет проверку наличия
+  etn-service.exe, как в продуктовой ветке: проба настоящего деинсталлятора
+  (приёмка 4151edf6) должна падать, если путь к службе вычислен неверно. }
 function RunServiceCommand(const Verb: String): Boolean;
 var
   Code: Integer;
 begin
   Result := False;
+  GLastServiceCode := 0;
+  GLastServiceError := '';
 #ifdef TestMode
   if (GTestService <> '') and (GTestServiceRealFile = '1') and
      (not FileExists(ServiceExePath)) then
   begin
+    GLastServiceError := 'нет ' + ServiceExePath;
     LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
       ' не выполнена');
     Exit;
@@ -3923,57 +4068,104 @@ begin
   begin
     if (Verb = 'stop') and (GTestServiceStop = 'fail') then
     begin
+      GLastServiceError := 'stop не выполнен (хук)';
       LogLine('WARN', 'Служба (тестовый режим): stop не выполнен (хук)');
+      Exit;
+    end;
+    if (Verb = 'stop') and (GTestServiceStop = 'fail-after-start') and
+       GTestServiceStartedFlag then
+    begin
+      GLastServiceError := 'stop не выполнен после start (хук)';
+      LogLine('WARN', 'Служба (тестовый режим): stop после start не выполнен (хук)');
       Exit;
     end;
     if (Verb = 'start') and (GTestServiceStart = 'fail') then
     begin
+      GLastServiceError := 'start не выполнен (хук)';
       LogLine('WARN', 'Служба (тестовый режим): start не выполнен (хук)');
       Exit;
     end;
     if (Verb = 'install') and (GTestServiceInstall = 'fail') then
     begin
+      GLastServiceError := 'install не выполнен (хук)';
       LogLine('WARN', 'Служба (тестовый режим): install не выполнен (хук)');
       Exit;
     end;
     if (Verb = 'uninstall') and (GTestServiceUninstall = 'fail') then
     begin
+      GLastServiceError := 'uninstall не выполнен (хук)';
       LogLine('WARN', 'Служба (тестовый режим): uninstall не выполнен (хук)');
       Exit;
     end;
+
     if (Verb = 'install') and (GTestServiceInstall = 'exists') then
     begin
       GTestServiceRegistered := True;
-      Result := ServiceCommandResult(Verb, ERROR_SERVICE_EXISTS);
-      Exit;
-    end;
-    if Verb = 'install' then
-      GTestServiceRegistered := True
+      Code := ERROR_SERVICE_EXISTS;
+    end
+    else if (Verb = 'install') then
+    begin
+      GTestServiceRegistered := True;
+      GTestServiceUninstalled := False;
+      Code := 0;
+    end
     else if Verb = 'uninstall' then
     begin
-      GTestServiceRegistered := False;
       GTestServiceRunning := False;
-      GTestServicePendingPolls := 0;
+      GTestServiceStartedFlag := False;
+      GTestServiceUninstalled := True;
+      if GTestServiceUninstall = '1072' then
+      begin
+        { 1072: SCM-запись снята, ключ реестра может остаться — ServiceRegistered
+          остаётся True, status обязан вернуть NonExistent. }
+        GTestServiceRegistered := True;
+        Code := ERROR_SERVICE_MARKED_FOR_DELETE;
+      end
+      else
+      begin
+        GTestServiceRegistered := False;
+        Code := 0;
+      end;
     end
     else if Verb = 'start' then
     begin
       GTestServiceRunning := True;
-      if GTestServiceStart = 'pending' then
-        GTestServicePendingPolls := 2
-      else if GTestServiceStart = 'pending-stuck' then
-        GTestServicePendingPolls := -1
-      else
-        GTestServicePendingPolls := 0;
+      GTestServiceStartedFlag := True;
+      GTestServiceUninstalled := False;
+      if GTestServiceStart = '1056' then Code := ERROR_SERVICE_ALREADY_RUNNING
+      else if GTestServiceStart = '1061' then Code := ERROR_SERVICE_CANNOT_ACCEPT_CTRL
+      else Code := 0;
     end
     else if Verb = 'stop' then
     begin
-      GTestServiceRunning := False;
-      GTestServicePendingPolls := 0;
-    end;
-    LogLine('INFO', 'Служба (тестовый режим): команда ' + Verb +
-      ' — успех (exe=' + ServiceExePath + ', config=' + ServiceDir +
-      '\service\etn-service.xml, exists=' + Pick(FileExists(ServiceExePath), '1', '0') + ')');
-    Result := True;
+      if (GTestServiceStop = '1061') and (GTestServiceStopRetries > 0) then
+      begin
+        { StartPending: первый stop возвращает 1061, служба ещё Started; повтор —
+          успех (проверка повтора в WaitServiceStopped). }
+        GTestServiceStopRetries := GTestServiceStopRetries - 1;
+        Code := ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
+      end
+      else if GTestServiceStop = '1062' then
+      begin
+        GTestServiceRunning := False;
+        GTestServiceStartedFlag := False;
+        Code := ERROR_SERVICE_NOT_ACTIVE;
+      end
+      else
+      begin
+        GTestServiceRunning := False;
+        GTestServiceStartedFlag := False;
+        Code := 0;
+      end;
+    end
+    else
+      Code := 0;
+
+    Result := ServiceCommandResult(Verb, Code);
+    if Result then
+      LogLine('INFO', 'Служба (тестовый режим): команда ' + Verb +
+        ' — успех (exe=' + ServiceExePath + ', config=' + ServiceDir +
+        '\service\etn-service.xml, exists=' + Pick(FileExists(ServiceExePath), '1', '0') + ')');
     Exit;
   end;
   LogLine('WARN', 'Служба (тестовый режим, /TESTSERVICE не задан): команда ' +
@@ -3983,6 +4175,7 @@ begin
 #endif
   if not FileExists(ServiceExePath) then
   begin
+    GLastServiceError := 'нет ' + ServiceExePath;
     LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
       ' не выполнена');
     Exit;
@@ -3992,6 +4185,7 @@ begin
   if not Exec(ServiceExePath, Verb, ExtractFileDir(ServiceExePath), SW_HIDE,
     ewWaitUntilTerminated, Code) then
   begin
+    GLastServiceError := 'не удалось запустить etn-service.exe';
     LogLine('WARN', 'Служба: не удалось запустить ' + ServiceExePath +
       ' ' + Verb);
     Exit;
@@ -3999,10 +4193,195 @@ begin
   Result := ServiceCommandResult(Verb, Code);
 end;
 
-{ Остановка перед заменой файлов. False — служба осталась работать (или её
-  состояние не удалось подтвердить): обновление не начинается, код 20.
-  Причина возвращается вызывающему для журнала и сообщения. }
-function StopServiceForUpdate(var Reason: String): Boolean;
+{ Ждём подтверждённой остановки: опрос status раз в SERVICE_STOP_STEP_MS,
+  бюджет — по часам (не суммой шагов). Stop 1061 повторяется раз в
+  SERVICE_STOP_RETRY_MS: StartPending мог перейти в Running. Бюджет
+  ServiceStopWaitMs действует с момента начала остановки (StartAt). }
+function WaitServiceStopped(StartAt: Int64; AllowMissing: Boolean;
+  var Reason: String): Boolean;
+var
+  Status: Integer;
+  Detail: String;
+  NextStopAt: Int64;
+  RetryStop: Boolean;
+begin
+  Result := False;
+  Reason := '';
+  RetryStop := GLastServiceCode = ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
+  NextStopAt := ServiceNowSeconds + 1;
+  while (ServiceNowSeconds - StartAt) * 1000 < ServiceStopWaitMs do
+  begin
+    if RetryStop and (ServiceNowSeconds >= NextStopAt) then
+    begin
+      if not RunServiceCommand('stop') then
+      begin
+        Reason := 'не удалось остановить службу ' + SERVICE_NAME + ': ' +
+          IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError);
+        Exit;
+      end;
+      RetryStop := GLastServiceCode = ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
+      NextStopAt := ServiceNowSeconds + 1;
+    end;
+    Status := ServiceStatusOutput(Detail);
+    if Status = SERVICE_STATE_STOPPED then
+    begin
+      Result := True;
+      Exit;
+    end;
+    if Status = SERVICE_STATE_MISSING then
+    begin
+      if AllowMissing then
+      begin
+        Result := True;
+        Exit;
+      end;
+      Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована в реестре, но SCM ' +
+        'её не видит (status=NonExistent) — несогласованное состояние';
+      Exit;
+    end;
+    if Status = SERVICE_STATE_UNKNOWN then
+    begin
+      Reason := 'не удалось определить состояние службы ' + SERVICE_NAME + ': ' +
+        IfStr(Detail = '', 'причина в журнале', Detail);
+      Exit;
+    end;
+    Sleep(SERVICE_STOP_STEP_MS);
+  end;
+  Reason := 'служба ' + SERVICE_NAME + ' не остановилась за ' +
+    IntToStr(ServiceStopWaitMs) + ' мс';
+end;
+
+{ ImagePath службы из реестра (в тестовом режиме — хук /TESTSERVICEIMAGE;
+  без хука считается путём этой установки). Кавычки WinSW при install
+  добавляет, если путь содержит пробелы, — сравнение без них и без регистра. }
+function ServiceImagePath: String;
+begin
+  Result := '';
+#ifdef TestMode
+  if GTestService <> '' then
+  begin
+    if GTestServiceImage <> '' then
+      Result := GTestServiceImage
+    else
+      Result := ServiceExePath;
+    Exit;
+  end;
+#endif
+  RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME,
+    'ImagePath', Result);
+end;
+
+function NormalizeServicePath(const Path: String): String;
+begin
+  Result := Trim(Path);
+  if (Length(Result) >= 2) and (Result[1] = '"') and
+     (Result[Length(Result)] = '"') then
+    Result := Copy(Result, 2, Length(Result) - 2);
+  Result := LowerCase(Trim(Result));
+end;
+
+function ServiceImagePathMatches: Boolean;
+begin
+  Result := NormalizeServicePath(ServiceImagePath) =
+    NormalizeServicePath(ServiceExePath);
+end;
+
+function ServiceStartDisabled: Boolean;
+var
+  Value: DWORD;
+begin
+#ifdef TestMode
+  if GTestService <> '' then
+  begin
+    Result := GTestServiceStartType = '4';
+    Exit;
+  end;
+#endif
+  Result := RegQueryDWordValue(HKLM,
+    'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME, 'Start', Value) and
+    (Value = 4);
+end;
+
+function ServiceDeleteFlagSet: Boolean;
+var
+  Value: DWORD;
+begin
+#ifdef TestMode
+  if GTestService <> '' then
+  begin
+    Result := GTestServiceDeleteFlag = '1';
+    Exit;
+  end;
+#endif
+  Result := RegQueryDWordValue(HKLM,
+    'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME, 'DeleteFlag', Value) and
+    (Value = 1);
+end;
+
+{ Личность службы до изменений (34f8e315): ключ HKLM есть — служба обязана
+  быть нашей (ImagePath = <каталог программы>\service\etn-service.exe) и
+  работоспособной. Чужая/устаревшая служба, Start=4 (disabled), DeleteFlag=1 и
+  status NonExistent при живом ключе отсекаются ДО копирования файлов кодом 20:
+  иначе install пропускается (1073), а start падает уже после замены файлов.
+  Ошибка/неизвестный вывод status — тоже быстрый отказ с конкретной причиной. }
+function CheckServiceIdentity(var Reason: String): Boolean;
+var
+  Detail: String;
+  Status: Integer;
+begin
+  Result := True;
+  Reason := '';
+  if GServerMode = 'app' then Exit;
+  if not ServiceRegistered then Exit;
+  if not ServiceImagePathMatches then
+  begin
+    Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована с другим путём: ' +
+      IfStr(ServiceImagePath = '', '<нет ImagePath>', ServiceImagePath) +
+      ' (ожидается ' + ServiceExePath + ') — чужая или устаревшая служба; ' +
+      'удалите её вручную и повторите установку';
+    Result := False;
+    Exit;
+  end;
+  if ServiceStartDisabled then
+  begin
+    Reason := 'служба ' + SERVICE_NAME + ' отключена (Start=4): включите её ' +
+      '(Start=2) или удалите и повторите установку';
+    Result := False;
+    Exit;
+  end;
+  if ServiceDeleteFlagSet then
+  begin
+    Reason := 'служба ' + SERVICE_NAME + ' помечена на удаление (DeleteFlag=1): ' +
+      'перезагрузите машину или удалите ключ службы и повторите установку';
+    Result := False;
+    Exit;
+  end;
+  Status := ServiceStatusOutput(Detail);
+  if Status = SERVICE_STATE_MISSING then
+  begin
+    Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована в реестре, но SCM ' +
+      'её не видит (status=NonExistent) — несогласованное состояние; ' +
+      'перезагрузите машину или удалите ключ службы';
+    Result := False;
+    Exit;
+  end;
+  if Status = SERVICE_STATE_UNKNOWN then
+  begin
+    Reason := 'не удалось определить состояние службы ' + SERVICE_NAME + ': ' +
+      IfStr(Detail = '', 'причина в журнале', Detail);
+    Result := False;
+  end;
+end;
+
+{ Остановка службы перед заменой файлов (AllowMissing=False) и при удалении
+  программы (AllowMissing=True: status=NonExistent допустим). False — служба
+  осталась работать (или состояние не подтвердилось): вызывающий отказывает
+  кодом 20 до замены файлов. Причина возвращается для журнала и сообщения. }
+function StopServiceForUpdate(var Reason: String; AllowMissing: Boolean): Boolean;
+var
+  Detail: String;
+  Status: Integer;
+  StartTick: Int64;
 begin
   Result := True;
   Reason := '';
@@ -4012,33 +4391,87 @@ begin
       'останавливать нечего');
     Exit;
   end;
-  LogLine('INFO', 'Остановка службы ' + SERVICE_NAME);
-  if ServiceStoppedNow then
+  Status := ServiceStatusOutput(Detail);
+  if Status = SERVICE_STATE_STOPPED then
   begin
-    LogLine('INFO', 'Служба ' + SERVICE_NAME + ' уже остановлена');
+    LogLine('INFO', 'Служба ' + SERVICE_NAME + ' уже остановлена (status=Stopped)');
     Exit;
   end;
-  if not RunServiceCommand('stop') then
+  if Status = SERVICE_STATE_MISSING then
   begin
-    Reason := 'не удалось остановить службу ' + SERVICE_NAME +
-      ' (etn-service.exe stop вернул ошибку)';
+    if AllowMissing then
+    begin
+      LogLine('INFO', 'Служба ' + SERVICE_NAME + ' отсутствует в SCM ' +
+        '(status=NonExistent) — останавливать нечего');
+      Exit;
+    end;
+    Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована в реестре, но SCM ' +
+      'её не видит (status=NonExistent) — несогласованное состояние';
     Result := False;
     Exit;
   end;
-  if not WaitServiceStopped then
+  if Status = SERVICE_STATE_UNKNOWN then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' не остановилась за ' +
-      IntToStr(ServiceStopWaitMs) + ' мс';
+    Reason := 'не удалось определить состояние службы ' + SERVICE_NAME + ': ' +
+      IfStr(Detail = '', 'причина в журнале', Detail);
+    Result := False;
+    Exit;
+  end;
+  LogLine('INFO', 'Остановка службы ' + SERVICE_NAME + ' (status=Started)');
+  StartTick := ServiceNowSeconds;
+  if not RunServiceCommand('stop') then
+  begin
+    Reason := 'не удалось остановить службу ' + SERVICE_NAME + ': ' +
+      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError);
+    Result := False;
+    Exit;
+  end;
+  if not WaitServiceStopped(StartTick, AllowMissing, Reason) then
+  begin
     Result := False;
     Exit;
   end;
   LogLine('INFO', 'Служба ' + SERVICE_NAME + ' остановлена');
 end;
 
-{ Запуск службы после замены файлов (и повторно — при откате) с ожиданием
-  подтверждённого RUNNING (8b1f5980). Уже запущенная служба не запускается
-  второй раз. Неудача не выдумывается: вызывающий решает, провал это или
-  повод перейти к health. }
+{ Подтверждение снятия после uninstall: exit 0 (в том числе 1072) не доказывает
+  удаление — WinSW возвращает 0, а ключ службы может остаться. Опрашиваем
+  status до NonExistent; Started/Stopped по истечении бюджета — удаление не
+  завершено. }
+function WaitServiceRemoved(StartTick: Int64; var Reason: String): Boolean;
+var
+  Detail: String;
+  Status: Integer;
+begin
+  Result := False;
+  Reason := '';
+  while (ServiceNowSeconds - StartTick) * 1000 < ServiceStopWaitMs do
+  begin
+    Status := ServiceStatusOutput(Detail);
+    if Status = SERVICE_STATE_MISSING then
+    begin
+      Result := True;
+      Exit;
+    end;
+    if Status = SERVICE_STATE_UNKNOWN then
+    begin
+      Reason := 'не удалось подтвердить снятие службы ' + SERVICE_NAME + ': ' +
+        IfStr(Detail = '', 'причина в журнале', Detail);
+      Exit;
+    end;
+    Sleep(SERVICE_STOP_STEP_MS);
+  end;
+  if Status = SERVICE_STATE_STARTED then
+    Reason := 'служба ' + SERVICE_NAME + ' всё ещё работает после uninstall'
+  else
+    Reason := 'служба ' + SERVICE_NAME + ' осталась в SCM после uninstall ' +
+      '(status=' + Pick(Status = SERVICE_STATE_STOPPED, 'Stopped', 'не NonExistent') + ')';
+end;
+
+{ Запуск службы после замены файлов: start вызывается всегда для
+  зарегистрированной службы (она остановлена перед копированием), ожидания
+  RUNNING больше нет — готовность подтверждает health-check (34f8e315).
+  start уже работающей службы WinSW завершает кодом 1056 — это успех. }
 function StartServiceIfNeeded: Boolean;
 begin
   Result := True;
@@ -4048,25 +4481,15 @@ begin
       'запускать нечего');
     Exit;
   end;
-  if ServiceRunningNow then
-  begin
-    LogLine('INFO', 'Служба ' + SERVICE_NAME + ': уже запущена (RUNNING)');
-    Exit;
-  end;
+  LogLine('INFO', 'Служба ' + SERVICE_NAME + ': команда start');
   if not RunServiceCommand('start') then
   begin
-    LogLine('ERROR', 'Служба ' + SERVICE_NAME + ': команда start не выполнена');
+    LogLine('ERROR', 'Служба ' + SERVICE_NAME + ': команда start не выполнена: ' +
+      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError));
     Result := False;
     Exit;
   end;
-  if not WaitServiceRunning then
-  begin
-    LogLine('ERROR', 'Служба ' + SERVICE_NAME + ': не перешла в RUNNING за ' +
-      IntToStr(ServiceStartWaitMs) + ' мс');
-    Result := False;
-    Exit;
-  end;
-  LogLine('INFO', 'Служба ' + SERVICE_NAME + ': запущена (RUNNING)');
+  LogLine('INFO', 'Служба ' + SERVICE_NAME + ': команда start принята');
 end;
 
 { Регистрация службы WinSW (8b1f5980): выполняется после подстановки
@@ -4077,10 +4500,12 @@ end;
 
   Повторная установка: уже зарегистрированную службу не перегистрируем — WinSW
   2.12.0 вернул бы ERROR_SERVICE_EXISTS (1073), а конфигурацию WinSW читает при
-  каждом старте, поэтому изменённые DATA_DIR/PORT/HOST применяются без install.
+  каждом старте. Перед этим личность службы проверяется ещё раз: 1073 — успех
+  только для СВОЕЙ службы, чужую не запускаем.
 
-  False — служба не зарегистрирована; вызывающий отказывает установке кодом 20
-  с этой причиной (карточка 8b1f5980). }
+  False — служба не зарегистрирована. Регистрация идёт после копирования
+  файлов, поэтому вызывающий отдаёт код 10 (сбой выполнения), а не 20
+  (34f8e315). }
 function RegisterServiceIfNeeded(var Reason: String): Boolean;
 var
   Config: String;
@@ -4102,6 +4527,13 @@ begin
   end;
   if ServiceRegistered then
   begin
+    if not CheckServiceIdentity(Reason) then
+    begin
+      LogLine('ERROR', 'Служба ' + SERVICE_NAME + ' уже зарегистрирована, но ' +
+        'не может быть использована: ' + Reason);
+      Result := False;
+      Exit;
+    end;
     LogLine('INFO', 'Служба ' + SERVICE_NAME + ' уже зарегистрирована — ' +
       'install не требуется');
     Exit;
@@ -4111,7 +4543,20 @@ begin
   if not RunServiceCommand('install') then
   begin
     Reason := 'служба ' + SERVICE_NAME + ' не зарегистрирована: ' +
-      'etn-service.exe install вернул ошибку (конфигурация: ' + Config + ')';
+      'etn-service.exe install вернул ошибку: ' +
+      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError) +
+      ' (конфигурация: ' + Config + ')';
+    Result := False;
+    Exit;
+  end;
+  { 1073 — служба появилась между проверкой реестра и install (гонка). Успех
+    только для СВОЕЙ службы: чужую/устаревшую не запускаем (34f8e315). }
+  if (GLastServiceCode = ERROR_SERVICE_EXISTS) and
+     (not CheckServiceIdentity(Reason)) then
+  begin
+    Reason := 'служба ' + SERVICE_NAME + ' уже зарегистрирована, но ' +
+      'не может быть использована: ' + Reason;
+    LogLine('ERROR', Reason);
     Result := False;
     Exit;
   end;
@@ -4121,8 +4566,16 @@ end;
 { Снятие службы при удалении программы (8b1f5980): stop + uninstall строго до
   удаления файлов (usUninstall). Служба, оставшаяся в SCM с путём в удалённый
   каталог, ломает повторную установку и висит в списке служб. False — служба
-  осталась: удаление программы отменяется, причина возвращается вызывающему. }
+  осталась: удаление программы отменяется, причина возвращается вызывающему.
+
+  Чужую/устаревшую службу (ImagePath не наш) не трогаем: предупреждение, файлы
+  программы удалить можно. status=NonExistent допустим. После uninstall
+  подтверждаем удаление через status (1072 возвращает 0, ключ может остаться);
+  оставшийся ключ при status=NonExistent — SCM завершит удаление после
+  перезагрузки. }
 function RemoveServiceOnUninstall(var Reason: String): Boolean;
+var
+  StartTick: Int64;
 begin
   Result := True;
   Reason := '';
@@ -4132,20 +4585,39 @@ begin
       'снимать нечего');
     Exit;
   end;
-  if not StopServiceForUpdate(Reason) then
+  if not ServiceImagePathMatches then
+  begin
+    LogLine('WARN', 'Служба ' + SERVICE_NAME + ' зарегистрирована с другим путём: ' +
+      IfStr(ServiceImagePath = '', '<нет ImagePath>', ServiceImagePath) +
+      ' — чужая или устаревшая, не снимаю; файлы программы будут удалены');
+    Exit;
+  end;
+  if not StopServiceForUpdate(Reason, True) then
   begin
     Reason := 'служба ' + SERVICE_NAME + ' не остановлена: ' + Reason;
     Result := False;
     Exit;
   end;
+  StartTick := ServiceNowSeconds;
   if not RunServiceCommand('uninstall') then
   begin
     Reason := 'не удалось снять службу ' + SERVICE_NAME +
-      ' (etn-service.exe uninstall вернул ошибку)';
+      ' (etn-service.exe uninstall вернул ошибку): ' +
+      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError);
+    Result := False;
+    Exit;
+  end;
+  if not WaitServiceRemoved(StartTick, Reason) then
+  begin
+    Reason := 'удаление службы ' + SERVICE_NAME + ' не завершено: ' + Reason;
     Result := False;
     Exit;
   end;
   LogLine('INFO', 'Служба ' + SERVICE_NAME + ' снята (uninstall)');
+  if ServiceRegistered then
+    LogLine('WARN', 'Ключ службы ' + SERVICE_NAME + ' ещё существует при ' +
+      'status=NonExistent — SCM завершит удаление после перезагрузки; ' +
+      'файлы программы удалять можно');
 end;
 
 { ---------------------------------------------------------------------------
@@ -4993,8 +5465,24 @@ begin
   SetInstallStage('Откат обновления…');
   LogLine('WARN', 'Откат: начинается (' + GFailureReason + ')');
   { Служба могла успеть запуститься на новой версии (health-check не прошёл):
-    перед возвратом файлов её нужно остановить снова. }
-  StopServiceForUpdate(Reason);
+    перед возвратом файлов её нужно остановить снова. Если остановить не
+    удалось, откат файлов и restore --force по живой БД недопустимы: оставляем
+    снимок и архив точкой ручного восстановления (34f8e315). }
+  if not StopServiceForUpdate(Reason, False) then
+  begin
+    LogLine('ERROR', 'Откат не выполнен: служба ' + SERVICE_NAME +
+      ' не остановилась — ' + Reason + '; файлы новой версии и БД не ' +
+      'восстановлены; снимок: ' + GLastRollbackDir + '; архив: ' +
+      IfStr(GLastBackupDir = '', 'не создавался', GLastBackupDir) +
+      '; журнал: ' + GLogPath);
+    GFailureReason := GFailureReason + '. Откат не выполнен: служба ' +
+      SERVICE_NAME + ' не остановилась (' + Reason + '), файлы новой версии и ' +
+      'БД не восстановлены; снимок: ' + GLastRollbackDir + '; архив: ' +
+      IfStr(GLastBackupDir = '', 'не создавался', GLastBackupDir) +
+      '; журнал: ' + GLogPath + '.';
+    Result := False;
+    Exit;
+  end;
   FilesOk := RestoreInstallFiles;
   DbOk := RestoreDatabaseFromArchive;
   Archive := GLastBackupDir;
@@ -5073,12 +5561,25 @@ begin
   Result := True;
 end;
 
+{ После возврата службы на прежнюю версию (неудачный бэкап/снимок): start не
+  ждёт готовности сервера, поэтому ограниченный health-check прежней версии —
+  единственное доказательство, что сервер снова работает. False — служба не
+  отвечает; вызывающий дописывает в причину подсказку о ручном запуске. }
+function PreviousVersionResponsive: Boolean;
+begin
+  Result := True;
+  if not HealthCheckApplicable then Exit;
+  Result := ProbeHealth(False);
+  if not Result then
+    LogLine('WARN', 'Служба после отмены обновления не отвечает: ' + GHealthReason);
+end;
+
 { ---------------------------------------------------------------------------
   Фазы обновления до копирования файлов — задача bb063ac3.
-  Порядок обязателен: остановка службы → бэкап БД → снимок отката. Копирование
-  файлов выполняет Inno уже после возврата из этого вызова (ssInstall).
-  Возвращает код контракта: 0 — можно копировать, 20 — предусловие,
-  10 — сбой выполнения (файлы не тронуты).
+  Порядок обязателен: личность службы → остановка службы → бэкап БД → снимок
+  отката. Копирование файлов выполняет Inno уже после возврата из этого вызова
+  (ssInstall). Возвращает код контракта: 0 — можно копировать, 20 —
+  предусловие, 10 — сбой выполнения (файлы не тронуты).
   --------------------------------------------------------------------------- }
 function PrepareServerUpdate(var Reason: String): Integer;
 var
@@ -5095,6 +5596,15 @@ begin
     Exit;
   end;
   NeedBackup := BackupNeeded;
+  { Личность службы до любых изменений (34f8e315): чужой ImagePath, Start=4,
+    DeleteFlag=1 или status=NonExistent при живом ключе — код 20, иначе install
+    пропускается (1073), а start падает уже после замены файлов. }
+  if not CheckServiceIdentity(Reason) then
+  begin
+    LogLine('ERROR', 'Обновление отменено: ' + Reason);
+    Result := EXIT_PRECONDITION;
+    Exit;
+  end;
   { Инструмент бэкапа распаковывается ДО остановки службы: если его нет в
     поставке, сервер продолжает работать, а обновление не начинается. }
   if NeedBackup and (not EnsureDatabaseTool(ToolReason)) then
@@ -5106,7 +5616,7 @@ begin
     Exit;
   end;
   SetInstallStage('Остановка службы ETN…');
-  if not StopServiceForUpdate(Reason) then
+  if not StopServiceForUpdate(Reason, False) then
   begin
     Result := EXIT_PRECONDITION;
     Exit;
@@ -5123,9 +5633,13 @@ begin
         ' (' + GDataDir + '\backups); журнал: ' + GLogPath +
         ' — обновление отменено, файлы не заменялись';
       { Служба уже остановлена — возвращаем её: сервер обязан работать на
-        прежней версии (сценарий bc7cc846). }
+        прежней версии (сценарий bc7cc846). start не ждёт готовности, поэтому
+        подтверждаем ответ прежней версии health-check-ом. }
       if not StartServiceIfNeeded then
-        LogLine('WARN', 'Не удалось вернуть службу после неудачного бэкапа');
+        LogLine('WARN', 'Не удалось вернуть службу после неудачного бэкапа')
+      else if not PreviousVersionResponsive then
+        Reason := Reason + '; ' + FmtMessage(
+          CustomMessage('ServiceStartManually'), [GLogPath]);
       Result := EXIT_FAILED;
       Exit;
     end;
@@ -5135,7 +5649,10 @@ begin
     Reason := 'снимок отката не создан: ' + RollbackRoot +
       ' — обновление отменено, файлы не заменялись (причина в журнале)';
     if not StartServiceIfNeeded then
-      LogLine('WARN', 'Не удалось вернуть службу после неудачного снимка');
+      LogLine('WARN', 'Не удалось вернуть службу после неудачного снимка')
+    else if not PreviousVersionResponsive then
+      Reason := Reason + '; ' + FmtMessage(
+        CustomMessage('ServiceStartManually'), [GLogPath]);
     Result := EXIT_FAILED;
     Exit;
   end;
@@ -7115,7 +7632,13 @@ begin
   GTestServiceRegistered := False;
   GTestServiceRunning := False;
   GTestServiceRealFile := '';
-  GTestServicePendingPolls := 0;
+  GTestServiceStatus := '';
+  GTestServiceImage := '';
+  GTestServiceStartType := '';
+  GTestServiceDeleteFlag := '';
+  GTestServiceStartedFlag := False;
+  GTestServiceUninstalled := False;
+  GTestServiceStopRetries := 0;
   GTestHealthUrl := '';
   GTestHealthWait := '';
   GTestHealthStep := '';
@@ -7221,7 +7744,18 @@ begin
   GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
   GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
   GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
-  GTestServicePendingPolls := 0;
+  GTestServiceStatus := LowerCase(ParamValue('TESTSERVICESTATUS'));
+  GTestServiceImage := ParamValue('TESTSERVICEIMAGE');
+  GTestServiceStartType := ParamValue('TESTSERVICESTARTTYPE');
+  GTestServiceDeleteFlag := ParamValue('TESTSERVICEDELETEFLAG');
+  GTestServiceStartedFlag := False;
+  GTestServiceUninstalled := False;
+  { /TESTSERVICESTOP=1061 — первый stop возвращает 1061 (StartPending),
+    повтор — успех: ровно один смоделированный переход. }
+  if GTestServiceStop = '1061' then
+    GTestServiceStopRetries := 1
+  else
+    GTestServiceStopRetries := 0;
   GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
   { Исходное состояние модели службы: present — зарегистрирована и работает
     (обычное состояние машины; обновление сначала её остановит), absent — не
@@ -8185,13 +8719,13 @@ begin
         end;
         { Регистрация службы — после записи etn-service.xml (WinSW читает
           конфигурацию из файла рядом с exe) и до запуска. Режим app службу
-          не регистрирует. Сбой регистрации — код 20 с причиной: без службы
-          сервер не поднимется, а install.json о новой версии врал бы. }
+          не регистрирует. Сбой регистрации — код 10: файлы уже заменены, это
+          сбой выполнения, а не предусловие (34f8e315). }
         if GExitCode = EXIT_OK then
         begin
           SetInstallStage('Регистрация службы ETN…');
           if not RegisterServiceIfNeeded(Reason) then
-            FailInstallWithCode(EXIT_PRECONDITION, Reason);
+            FailInstallWithCode(EXIT_FAILED, Reason);
         end;
         { Правило брандмауэра — по чекбоксу; ошибка netsh не отменяет
           установку (сервер слушает 0.0.0.0, предупреждение в журнал и в
@@ -8222,13 +8756,13 @@ begin
       if GExitCode = EXIT_OK then
       begin
         SetInstallStage('Запуск службы ETN…');
-        { Служба не перешла в RUNNING — предусловие: сервер не работает, и
-          объявлять установку успешной нельзя (код 20 с причиной, как у сбоя
-          регистрации). После отката прежняя версия поднимается. }
+        { start не ждёт RUNNING: готовность подтверждает health-check.
+          Сбой команды start после замены файлов — код 10 (сбой выполнения).
+          После отката прежняя версия поднимается. }
         if not StartServiceIfNeeded then
-          FailInstallWithCode(EXIT_PRECONDITION, 'служба ' + SERVICE_NAME +
-            ' не перешла в RUNNING после замены файлов ' +
-            '(etn-service.exe start вернул ошибку или истёк бюджет ожидания)')
+          FailInstallWithCode(EXIT_FAILED, 'служба ' + SERVICE_NAME +
+            ' не запущена после замены файлов: ' +
+            IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError))
         else if not HealthCheckApplicable then
           { Режим app: сервер не служба, его запускает пользователь. Опрос
             health гарантированно истёк бы и увёл обновление в откат. }
@@ -8401,10 +8935,19 @@ begin
   GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
   GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
   GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
+  GTestServiceStatus := LowerCase(ParamValue('TESTSERVICESTATUS'));
+  GTestServiceImage := ParamValue('TESTSERVICEIMAGE');
+  GTestServiceStartType := ParamValue('TESTSERVICESTARTTYPE');
+  GTestServiceDeleteFlag := ParamValue('TESTSERVICEDELETEFLAG');
+  GTestServiceStartedFlag := False;
+  GTestServiceUninstalled := False;
+  if GTestServiceStop = '1061' then
+    GTestServiceStopRetries := 1
+  else
+    GTestServiceStopRetries := 0;
   GTestFirewall := ParamValue('TESTFIREWALL');
   GTestServiceRegistered := LowerCase(GTestService) = 'present';
   GTestServiceRunning := GTestServiceRegistered;
-  GTestServicePendingPolls := 0;
   LogLine('INFO', 'Деинсталлятор (тестовый режим): TESTSERVICE=' +
     IfStr(GTestService = '', '—', GTestService) + ', TESTSERVICEREALFILE=' +
     IfStr(GTestServiceRealFile = '', '—', GTestServiceRealFile));
@@ -8429,10 +8972,8 @@ begin
     if not RemoveServiceOnUninstall(Reason) then
     begin
       Log('ОШИБКА: удаление отменено — ' + Reason);
-      SuppressibleMsgBox('Удаление программы отменено: ' + Reason +
-        '. Остановите и удалите службу ' + SERVICE_NAME +
-        ' вручную (sc stop ' + SERVICE_NAME + ', sc delete ' + SERVICE_NAME +
-        ') и повторите удаление. Файлы не удалены.', mbError, MB_OK, IDOK);
+      SuppressibleMsgBox('Удаление программы отменено: ' + Reason + '. ' +
+        CustomMessage('UninstallServiceManual'), mbError, MB_OK, IDOK);
       Abort;
     end
     else

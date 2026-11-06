@@ -64,23 +64,29 @@
          успехе, неудачный откат — код 10 с путём к архиву в журнале
      27. 8b1f5980: регистрация службы WinSW после записи etn-service.xml и до
          запуска (install с конфигом рядом с exe; повторная установка не
-         перегистрирует службу, WinSW 1073 — успех, в том числе когда служба
-         уже RUNNING; сбой install — код 20), запуск с ожиданием
-         подтверждённого RUNNING (START_PENDING → RUNNING успешно, навсегда
-         START_PENDING — код 20), снятие при удалении — stop → uninstall до
-         удаления файлов (проба /TESTUNINSTALLSERVICE: отказ uninstall/stop —
+         перегистрирует службу, WinSW 1073 — успех, сбой install — код 10),
+         запуск без ожидания RUNNING (готовность подтверждает health-check;
+         1056 — успех, 1061 — код 10), снятие при удалении — stop → uninstall
+         до удаления файлов (проба /TESTUNINSTALLSERVICE: отказ uninstall/stop —
          код 10 с причиной), режим app службу не регистрирует и режим при
          обновлении сохраняется;
-     28. 8b1f5980 (приёмка): настоящий деинсталлятор (отдельная тестовая
+     28. 34f8e315: управление службой через etn-service.exe stop|status (без
+         sc query): status=Started для любого не-Stopped, ожидание остановки
+         по опросу status с бюджетом 60 с, повтор stop на 1061, личность
+         службы (ImagePath/Start/DeleteFlag/NonExistent) — код 20 до
+         копирования, откат без восстановления файлов/БД при неудачной
+         остановке, uninstall 1072 с подтверждением status; sc query и
+         *_PENDING в .iss отсутствуют;
+     29. 8b1f5980 (приёмка): настоящий деинсталлятор (отдельная тестовая
          сборка с Uninstallable и своим AppId) с моделью службы и проверкой
          наличия etn-service.exe, как в продуктовой ветке: путь службы —
          {app}\service\etn-service.exe, stop и uninstall вызваны, пока файл
          ещё на месте, удаление завершается и файлы удаляются
-     29. e375123f: шаблон службы и фикстура задают
+     30. e375123f: шаблон службы и фикстура задают
          ETN_DEPLOYMENT=windows-service; после установки сгенерированный
          etn-service.xml сохраняет режим службы (сервер, запущенный службой,
          обязан определяться как windows-service)
-     30. a7394117: одна запись деинсталляции при смене области реестра —
+     31. a7394117: одна запись деинсталляции при смене области реестра —
          GUI-админ-установка (HKCU) и тихое /ALLUSERS-обновление (HKLM) не
          оставляют дубля в «Программах и компонентах»; при обновлении из
          службы (LocalSystem) запись ищется в загруженных профилях HKEY_USERS
@@ -89,7 +95,7 @@
          запись машинной установки (InstallLocation/UninstallString указывают
          в {app}), per-user клиент «только для меня» и запись без этих
          значений сохраняются
-     31. 1dddac77: пустое перечисление слушателей не считается свободным портом —
+     32. 1dddac77: пустое перечисление слушателей не считается свободным портом —
          запасная ветка проверяет порт эксклюзивным bind на 0.0.0.0 без
          listen() (SO_EXCLUSIVEADDRUSE): занятый на 0.0.0.0, loopback,
          конкретном адресе или LAN-адресе порт даёт 20, свободный — 0,
@@ -466,6 +472,16 @@ function Test-LatestLogContains {
     if (-not $log) { return $false }
     $text = Get-Content -LiteralPath $log.FullName -Raw
     return ($text -match $Pattern)
+}
+
+# Число вхождений шаблона в последний журнал: повтор stop 1061 проверяется
+# числом команд, а не только фактом строки.
+function Test-LatestLogCount {
+    param([string]$Pattern)
+    $log = Get-LatestLog
+    if (-not $log) { return 0 }
+    $text = Get-Content -LiteralPath $log.FullName -Raw
+    return ([regex]::Matches($text, $Pattern)).Count
 }
 
 # --- bb063ac3: подставной health-сервер, снимок отката и порядок журнала -----
@@ -3546,9 +3562,16 @@ Add-StaticResult -Name 'static:cleanup-after-install-json' `
 $stopBody = Get-IssFunctionBody -Text $issText -Name 'StopServiceForUpdate'
 $waitBody = Get-IssFunctionBody -Text $issText -Name 'WaitServiceStopped'
 Add-StaticResult -Name 'static:wait-service-stopped' `
-    -Ok ((Test-IssCode -Text $stopBody -Pattern ([regex]::Escape('WaitServiceStopped'))) -and
-        (Test-IssCode -Text $waitBody -Pattern ([regex]::Escape('ServiceStoppedNow')))) `
-    -Note 'ожидание реальной остановки службы (sc query, опрос)'
+    -Ok ((Test-IssCode -Text $stopBody -Pattern ([regex]::Escape("RunServiceCommand('stop')"))) -and
+        (Test-IssCode -Text $waitBody -Pattern ([regex]::Escape('ServiceStatusOutput'))) -and
+        (Test-IssCode -Text $waitBody -Pattern ([regex]::Escape('ServiceNowSeconds'))) -and
+        (-not (Test-IssCode -Text $waitBody -Pattern ([regex]::Escape('Waited := Waited +')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('sc query')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('ServiceStateOutput')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('ServiceStoppedNow')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('START_PENDING')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('STOP_PENDING'))))) `
+    -Note 'stop → WaitServiceStopped по etn-service.exe status; sc query/_PENDING удалены; бюджет по часам'
 $healthBody = Get-IssFunctionBody -Text $issText -Name 'CheckHealthOnce'
 $healthParts = (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('/api/v1/health'))) -and
     (Test-IssCode -Text $healthBody -Pattern ([regex]::Escape('/api/v1/version'))) -and
@@ -3635,9 +3658,10 @@ Add-StaticResult -Name 'static:app-no-health' `
 $hookNames = @(
     'TESTSERVICE', 'TESTSERVICECMD', 'TESTSERVICESTATE', 'TESTSERVICESTOP',
     'TESTSERVICESTART', 'TESTSERVICEWAIT', 'TESTSERVICEINSTALL',
-    'TESTSERVICEUNINSTALL', 'TESTSERVICEREALFILE', 'TESTUNINSTALLSERVICE',
-    'TESTHEALTHURL', 'TESTHEALTHWAIT', 'TESTHEALTHSTEP', 'TESTHEALTH',
-    'TESTROLLBACK', 'TESTNODEEXE')
+    'TESTSERVICEUNINSTALL', 'TESTSERVICEREALFILE', 'TESTSERVICESTATUS',
+    'TESTSERVICEIMAGE', 'TESTSERVICESTARTTYPE', 'TESTSERVICEDELETEFLAG',
+    'TESTUNINSTALLSERVICE', 'TESTHEALTHURL', 'TESTHEALTHWAIT', 'TESTHEALTHSTEP',
+    'TESTHEALTH', 'TESTROLLBACK', 'TESTNODEEXE')
 $hooksOutside = @()
 foreach ($hook in $hookNames) {
     $hookPattern = [regex]::Escape("ParamValue('$hook')")
@@ -3647,7 +3671,7 @@ foreach ($hook in $hookNames) {
     }
 }
 Add-StaticResult -Name 'static:update-hooks-ifdef' `
-    -Ok (($hookNames.Count -eq 16) -and ($hooksOutside.Count -eq 0)) `
+    -Ok (($hookNames.Count -eq 20) -and ($hooksOutside.Count -eq 0)) `
     -Note ('все ' + $hookNames.Count + ' хуков обновления под #ifdef TestMode; вне: ' +
         $(if ($hooksOutside.Count -eq 0) { 'нет' } else { $hooksOutside -join ',' }))
 # Бэкап только при смене версии (карточка bb063ac3). Прежняя версия неизвестна
@@ -3682,11 +3706,17 @@ Add-StaticResult -Name 'static:service-install-command' `
 # продуктовая ветка, и модель TestMode: иначе удаление продуктовой ветки
 # оставалось зелёным (замечание приёмки 0978b96a).
 $commandResultBody = Get-IssFunctionBody -Text $issText -Name 'ServiceCommandResult'
+$installCallPos = $registerBody.IndexOf("RunServiceCommand('install')")
+$identityAfterInstall = -1
+if ($installCallPos -ge 0) {
+    $identityAfterInstall = $registerBody.IndexOf('CheckServiceIdentity', $installCallPos)
+}
 Add-StaticResult -Name 'static:service-install-exists' `
     -Ok ((Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('ERROR_SERVICE_EXISTS'))) -and
         (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape("(Verb = 'install')"))) -and
-        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('Result := True')))) `
-    -Note '1073 (служба уже существует) — успех, разбор общий для продукта и модели'
+        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('Result := True'))) -and
+        ($identityAfterInstall -gt $installCallPos)) `
+    -Note '1073 — успех только для своей службы: разбор общий, личность перепроверяется после install'
 # Продуктовая ветка RunServiceCommand — без #ifdef TestMode: проверка файла и
 # вызов общего разбора кода возврата обязаны быть именно в ней.
 $runServiceProd = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'RunServiceCommand' -Ifdef 'TestMode'
@@ -3696,14 +3726,63 @@ Add-StaticResult -Name 'static:service-production-branch' `
         (Test-IssCode -Text $runServiceProd -Pattern ([regex]::Escape('ServiceCommandResult(Verb, Code)'))) -and
         (-not (Test-IssCode -Text $runServiceProd -Pattern ([regex]::Escape('GTestService'))))) `
     -Note 'продуктовая ветка: проверка exe и общий разбор 1073 без тестовых хуков'
+$startBody = Get-IssFunctionBody -Text $issText -Name 'StartServiceIfNeeded'
 Add-StaticResult -Name 'static:service-start-wait' `
-    -Ok ((Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'StartServiceIfNeeded') `
-            -Pattern ([regex]::Escape('WaitServiceRunning'))) -and
-        (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'WaitServiceRunning') `
-            -Pattern ([regex]::Escape('ServiceRunningNow'))) -and
-        (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ServiceRunningNow') `
-            -Pattern ([regex]::Escape('START_PENDING')))) `
-    -Note 'start → ожидание подтверждённого RUNNING (START_PENDING не RUNNING)'
+    -Ok ((Test-IssCode -Text $startBody -Pattern ([regex]::Escape("RunServiceCommand('start')"))) -and
+        (-not (Test-IssCode -Text $startBody -Pattern ([regex]::Escape('WaitServiceRunning')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('WaitServiceRunning')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('ServiceRunningNow')))) -and
+        (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('SERVICE_START_WAIT_MS'))))) `
+    -Note 'start вызывается всегда; RUNNING не ждём — готовность подтверждает health-check'
+# Личность службы проверяется до копирования: PrepareServerUpdate вызывает
+# CheckServiceIdentity раньше EnsureDatabaseTool и StopServiceForUpdate, а сама
+# проверка смотрит ImagePath/Start/DeleteFlag/status.
+$prepareBody = Get-IssFunctionBody -Text $issText -Name 'PrepareServerUpdate'
+$identityBody = Get-IssFunctionBody -Text $issText -Name 'CheckServiceIdentity'
+$pIdentity = $prepareBody.IndexOf('CheckServiceIdentity')
+$pStop = $prepareBody.IndexOf('StopServiceForUpdate')
+Add-StaticResult -Name 'static:service-identity-before-copy' `
+    -Ok (($pIdentity -ge 0) -and ($pStop -gt $pIdentity) -and
+        (Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('EXIT_PRECONDITION'))) -and
+        (Test-IssCode -Text $identityBody -Pattern ([regex]::Escape('ServiceImagePathMatches'))) -and
+        (Test-IssCode -Text $identityBody -Pattern ([regex]::Escape('ServiceStartDisabled'))) -and
+        (Test-IssCode -Text $identityBody -Pattern ([regex]::Escape('ServiceDeleteFlagSet'))) -and
+        (Test-IssCode -Text $identityBody -Pattern ([regex]::Escape('SERVICE_STATE_MISSING')))) `
+    -Note ('личность службы до остановки/копирования (' + $pIdentity + ' < ' + $pStop +
+        '): ImagePath, Start=4, DeleteFlag, NonExistent')
+# Откат не трогает файлы/БД, если служба не остановилась: проверка стоит до
+# RestoreInstallFiles, при отказе — Exit без restore.
+$pRollbackStop = $rollbackBody.IndexOf('StopServiceForUpdate')
+$pRestoreFiles = $rollbackBody.IndexOf('RestoreInstallFiles')
+$pRestoreDb = $rollbackBody.IndexOf('RestoreDatabaseFromArchive')
+Add-StaticResult -Name 'static:service-rollback-stop-guard' `
+    -Ok (($pRollbackStop -ge 0) -and ($pRestoreFiles -gt $pRollbackStop) -and
+        ($pRestoreDb -gt $pRollbackStop) -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('файлы новой версии и '))) -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('БД не восстановлены')))) `
+    -Note ('откат: StopServiceForUpdate → RestoreInstallFiles (' + $pRollbackStop +
+        ' < ' + $pRestoreFiles + '); при отказе файлы/БД не трогаются')
+# Снятие службы подтверждается через status: uninstall 1072 возвращает 0, но
+# ключ может остаться.
+$removeBody = Get-IssFunctionBody -Text $issText -Name 'RemoveServiceOnUninstall'
+$removedBody = Get-IssFunctionBody -Text $issText -Name 'WaitServiceRemoved'
+Add-StaticResult -Name 'static:service-uninstall-confirm' `
+    -Ok ((Test-IssCode -Text $removeBody -Pattern ([regex]::Escape("RunServiceCommand('uninstall')"))) -and
+        (Test-IssCode -Text $removeBody -Pattern ([regex]::Escape('WaitServiceRemoved'))) -and
+        (Test-IssCode -Text $removedBody -Pattern ([regex]::Escape('ServiceStatusOutput'))) -and
+        (Test-IssCode -Text $removedBody -Pattern ([regex]::Escape('ServiceNowSeconds'))) -and
+        (Test-IssCode -Text $removedBody -Pattern ([regex]::Escape('SERVICE_STATE_MISSING')))) `
+    -Note 'uninstall → polling status до NonExistent (exit 0 не доказывает удаление)'
+# Разбор кодов WinSW: 1056 — успех старта, 1061/1062 — переход останова,
+# 1060/1072 — успех только у uninstall, 1058 — отдельное сообщение.
+Add-StaticResult -Name 'static:service-codes' `
+    -Ok ((Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('ERROR_SERVICE_ALREADY_RUNNING'))) -and
+        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('ERROR_SERVICE_CANNOT_ACCEPT_CTRL'))) -and
+        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('ERROR_SERVICE_NOT_ACTIVE'))) -and
+        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('ERROR_SERVICE_DOES_NOT_EXIST'))) -and
+        (Test-IssCode -Text $commandResultBody -Pattern ([regex]::Escape('ERROR_SERVICE_MARKED_FOR_DELETE'))) -and
+        (Test-IssCode -Text $issText -Pattern ([regex]::Escape('ERROR_SERVICE_DISABLED')))) `
+    -Note '1056/1061/1062/1060/1072/1058 разобраны отдельно'
 # Путь к etn-service.exe не зависит от глобалов, заполняемых только установкой:
 # деинсталлятор не вызывает InitializeSetup, и GServerDir в нём пуст (блокер
 # приёмки 0978b96a). В установке {app} ещё не раскрыт внутри InitializeSetup
@@ -3741,9 +3820,9 @@ Add-StaticResult -Name 'static:service-uninstall-before-files' `
     -Note 'служба снимается в usUninstall (до удаления файлов), отказ отменяет удаление'
 $removeBody = Get-IssFunctionBody -Text $issText -Name 'RemoveServiceOnUninstall'
 Add-StaticResult -Name 'static:service-uninstall-commands' `
-    -Ok ((Test-IssCode -Text $removeBody -Pattern ([regex]::Escape('StopServiceForUpdate(Reason)'))) -and
+    -Ok ((Test-IssCode -Text $removeBody -Pattern ([regex]::Escape('StopServiceForUpdate(Reason, True)'))) -and
         (Test-IssCode -Text $removeBody -Pattern ([regex]::Escape("RunServiceCommand('uninstall')")))) `
-    -Note 'снятие: stop (с ожиданием) → etn-service.exe uninstall'
+    -Note 'снятие: stop (с ожиданием, NonExistent допустим) → etn-service.exe uninstall'
 # Uninstaller Inno не поддерживает свой код события: договорный код 10
 # проверяется пробой /TESTUNINSTALLSERVICE, которая вызывает тот же код.
 $uninstallProbeBody = Get-IssFunctionBody -Text $issText -Name 'RunUninstallServiceProbe'
@@ -4002,7 +4081,7 @@ $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @
 $oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
 $blockedBackups = Join-Path $dataDir 'backups'
 [System.IO.File]::WriteAllText($blockedBackups, 'occupied')
-$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg))
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg, '/TESTHEALTH=ok'))
 Add-Result -Name 'update-backup-fail:code' -Expected 10 -Actual $code `
     -Note 'сценарий bc7cc846: неудачный бэкап отменяет обновление'
 $stillOld = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js')) -eq $oldIndex
@@ -4018,9 +4097,10 @@ Add-Result -Name 'update-backup-fail:log' -Expected 1 `
 Add-Result -Name 'update-backup-fail:message-details' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'резервная копия баз данных не создана: каталог архивов не создан[^\r\n]*требуется свободного места: \d+[^\r\n]*журнал: ')) `
     -Note 'причина + объём + журнал в сообщении'
-Add-Result -Name 'update-backup-fail:service-back' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена')) `
-    -Note 'служба поднята обратно на прежней версии'
+$serviceBack = (Test-LatestLogContains -Pattern 'Служба ETN: команда start принята') -and
+    (-not (Test-LatestLogContains -Pattern 'служба не запущена'))
+Add-Result -Name 'update-backup-fail:service-back' -Expected 1 -Actual ([int]$serviceBack) `
+    -Note 'служба возвращена и подтверждена health-check-ом (start не ждёт RUNNING)'
 
 # --- G2. Инструмент бэкапа отказал: причина из отчёта в сообщении -----------
 # Тот же сценарий bc7cc846, но отказ приходит из CLI (битая база, нет места):
@@ -4029,7 +4109,7 @@ $null = New-UpdateFixture
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
 $oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
 Set-DatabaseToolMode -Mode 'fail-backup'
-$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg))
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg, '/TESTHEALTH=ok'))
 Add-Result -Name 'update-tool-fail:code' -Expected 10 -Actual $code
 $stillOld = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js')) -eq $oldIndex
 Add-Result -Name 'update-tool-fail:files-untouched' -Expected 1 -Actual ([int]$stillOld)
@@ -4037,8 +4117,28 @@ Add-Result -Name 'update-tool-fail:no-archive' -Expected 0 -Actual ([int](@(Get-
 Add-Result -Name 'update-tool-fail:message' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'резервная копия баз данных не создана: fixture backup failure[^\r\n]*журнал: ')) `
     -Note 'причина из отчёта инструмента — в сообщении об отмене'
-Add-Result -Name 'update-tool-fail:service-back' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена'))
+$toolBack = (Test-LatestLogContains -Pattern 'Служба ETN: команда start принята') -and
+    (-not (Test-LatestLogContains -Pattern 'служба не запущена'))
+Add-Result -Name 'update-tool-fail:service-back' -Expected 1 -Actual ([int]$toolBack) `
+    -Note 'служба возвращена и подтверждена health-check-ом'
+
+# --- G3. Бэкап не удался и служба не ответила: причина дополнена ------------
+# После неудачного бэкапа start не ждёт RUNNING, поэтому возврат службы
+# подтверждается health-check-ом прежней версии; если она не отвечает, в
+# причину добавляется подсказка о ручном запуске (34f8e315).
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$blockedBackups = Join-Path $dataDir 'backups'
+[System.IO.File]::WriteAllText($blockedBackups, 'occupied')
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg, '/TESTHEALTH=fail'))
+Add-Result -Name 'update-backup-unhealthy:code' -Expected 10 -Actual $code
+Add-Result -Name 'update-backup-unhealthy:hint' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба не запущена; запустите вручную \(etn-service\.exe start\), журнал: ')) `
+    -Note 'в причине — подсказка о ручном запуске и путь к журналу'
+Add-Result -Name 'update-backup-unhealthy:files-untouched' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -eq $oldIndex)) `
+    -Note 'файлы не заменены'
 
 # --- H. Служба не остановилась: код 20, изменений нет -----------------------
 $null = New-UpdateFixture
@@ -4054,6 +4154,153 @@ Add-Result -Name 'update-stop-fail:no-archive' -Expected 0 -Actual ([int](@(Get-
 Add-Result -Name 'update-stop-fail:no-snapshot' -Expected 0 -Actual ([int](@(Get-RollbackDirs).Count))
 Add-Result -Name 'update-stop-fail:log' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'не остановилась за 1000 мс'))
+
+# --- H2. Остановка 1061/1062: переход и повтор -------------------------------
+# WinSW: stop на StartPending/StopPending — 1061 (управление не принято), на
+# остановленной — 1062. 1061 повторяется раз в ~1 с в пределах бюджета, после
+# любого кода состояние подтверждается через status=Stopped.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$code = Invoke-Setup -Arguments ($silent + $updateArgs +
+    @($nodeArg, '/TESTSERVICESTOP=1061', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-stop-1061:code' -Expected 0 -Actual $code `
+    -Note 'stop 1061: повтор stop и подтверждение остановки'
+$stopCount = Test-LatestLogCount -Pattern 'команда stop'
+Add-Result -Name 'service-stop-1061:retry' -Expected 1 -Actual ([int]($stopCount -ge 2)) `
+    -Note ('команд stop: ' + $stopCount)
+Add-Result -Name 'service-stop-1061:transition' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба в переходном состоянии \(1061\)')) `
+    -Note 'журнал называет переход 1061'
+Add-Result -Name 'service-stop-1061:stopped' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN остановлена')) `
+    -Note 'остановка подтверждена status'
+
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$code = Invoke-Setup -Arguments ($silent + $updateArgs +
+    @($nodeArg, '/TESTSERVICESTOP=1062', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-stop-1062:code' -Expected 0 -Actual $code `
+    -Note 'stop 1062 — служба уже остановлена, ждём status=Stopped'
+Add-Result -Name 'service-stop-1062:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба уже остановлена \(1062\)')) `
+    -Note 'журнал называет 1062'
+
+# --- H3. Ошибка status: быстрый отказ до копирования, код 20 -----------------
+# Причина конкретная (status не выполнен), ожидание остановки не начинается,
+# файлы и БД не трогаются.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @('/TESTSERVICESTATUS=fail'))
+Add-Result -Name 'service-status-fail:code' -Expected 20 -Actual $code `
+    -Note 'ошибка status — предусловие не выполнено'
+Add-Result -Name 'service-status-fail:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'не удалось определить состояние службы ETN: etn-service.exe status не выполнен')) `
+    -Note 'причина названа конкретно'
+Add-Result -Name 'service-status-fail:fast' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Остановка службы ETN \(status=Started\)')) `
+    -Note 'ожидание остановки не начиналось'
+Add-Result -Name 'service-status-fail:no-copy' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -eq $oldIndex)) `
+    -Note 'файлы не заменены'
+Add-Result -Name 'service-status-fail:no-archive' -Expected 0 `
+    -Actual ([int](@(Get-BackupArchives).Count))
+
+# --- H4. Личность службы: чужой/устаревший ImagePath — код 20 ----------------
+# install для существующей службы не выполняется (1073), поэтому чужая служба
+# отсекается до копирования: иначе start упал бы уже после замены файлов.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$foreignImage = Join-Path $workRoot 'foreign\etn-service.exe'
+$code = Invoke-Setup -Arguments ($silent + $updateArgs +
+    @("/TESTSERVICEIMAGE=$foreignImage"))
+Add-Result -Name 'service-identity-image:code' -Expected 20 -Actual $code `
+    -Note 'чужой ImagePath — предусловие не выполнено'
+Add-Result -Name 'service-identity-image:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'зарегистрирована с другим путём: .*etn-service\.exe')) `
+    -Note 'журнал называет путь службы и ожидаемый'
+Add-Result -Name 'service-identity-image:no-copy' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -eq $oldIndex))
+Add-Result -Name 'service-identity-image:no-install' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда install'))
+Add-Result -Name 'service-identity-image:no-start' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'команда start'))
+
+# --- H5. Личность службы: Start=4 (disabled) — код 20 -----------------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @('/TESTSERVICESTARTTYPE=4'))
+Add-Result -Name 'service-identity-starttype:code' -Expected 20 -Actual $code `
+    -Note 'отключённая служба — предусловие не выполнено'
+Add-Result -Name 'service-identity-starttype:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'отключена \(Start=4\)')) `
+    -Note 'журнал называет Start=4'
+Add-Result -Name 'service-identity-starttype:no-copy' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -eq $oldIndex))
+
+# --- H6. Личность службы: DeleteFlag=1 (pending delete) — код 20 ------------
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @('/TESTSERVICEDELETEFLAG=1'))
+Add-Result -Name 'service-identity-deleteflag:code' -Expected 20 -Actual $code `
+    -Note 'служба помечена на удаление — предусловие не выполнено'
+Add-Result -Name 'service-identity-deleteflag:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'помечена на удаление \(DeleteFlag=1\)')) `
+    -Note 'журнал называет DeleteFlag=1'
+Add-Result -Name 'service-identity-deleteflag:no-copy' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -eq $oldIndex))
+
+# --- H7. Личность службы: ключ есть, SCM не видит (NonExistent) — код 20 ----
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$code = Invoke-Setup -Arguments ($silent + $updateArgs + @('/TESTSERVICESTATUS=nonexistent'))
+Add-Result -Name 'service-identity-nonexistent:code' -Expected 20 -Actual $code `
+    -Note 'несогласованное состояние реестр/SCM — предусловие не выполнено'
+Add-Result -Name 'service-identity-nonexistent:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'зарегистрирована в реестре, но SCM её не видит')) `
+    -Note 'журнал называет несогласованное состояние'
+Add-Result -Name 'service-identity-nonexistent:no-copy' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -eq $oldIndex))
+
+# --- H8. Откат при неудачной остановке: файлы и БД не восстановлены ---------
+# health-check новой версии не прошёл, а службу новой версии остановить не
+# удалось: restore по живой БД недопустим — снимок и архив остаются точкой
+# ручного восстановления, файлы новой версии не откатываются.
+$null = New-UpdateFixture
+$null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
+$oldIndex = [System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))
+$srv = Start-FakeHealthServer -Mode 'http500' -DbPath (Join-Path $dataDir '_system.db') `
+    -Marker 'new-version-write'
+try {
+    $code = Invoke-Setup -Arguments ($silent + $updateArgs + $fastHealth +
+        @($nodeArg, "/TESTHEALTHURL=$($srv.Url)", '/TESTSERVICESTOP=fail-after-start'))
+} finally {
+    Stop-FakeHealthServer $srv
+}
+Add-Result -Name 'service-rollback-stop-fail:code' -Expected 10 -Actual $code
+Add-Result -Name 'service-rollback-stop-fail:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Откат не выполнен: служба ETN не остановилась')) `
+    -Note 'причина — служба не остановилась'
+Add-Result -Name 'service-rollback-stop-fail:message' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'файлы новой версии и БД не восстановлены; снимок: ')) `
+    -Note 'сообщение прямо говорит: файлы новой версии и БД не восстановлены'
+Add-Result -Name 'service-rollback-stop-fail:files-new' -Expected 1 `
+    -Actual ([int](([System.IO.File]::ReadAllText((Join-Path $appDir 'server\dist\index.js'))) -ne $oldIndex)) `
+    -Note 'файлы новой версии остались (откат файлов не выполнялся)'
+$dbAfter = Get-BackupTestValues -Path (Join-Path $dataDir '_system.db')
+Add-Result -Name 'service-rollback-stop-fail:db-new' -Expected 1 `
+    -Actual ([int](($dbAfter -split '\|') -contains 'new-version-write')) `
+    -Note ('БД не восстановлена (записи неудачного запуска на месте): ' + $dbAfter)
+Add-Result -Name 'service-rollback-stop-fail:snapshot-kept' -Expected 1 `
+    -Actual ([int](@(Get-RollbackDirs).Count)) `
+    -Note 'снимок отката оставлен точкой ручного восстановления'
+Add-Result -Name 'service-rollback-stop-fail:archive-kept' -Expected 1 `
+    -Actual ([int](@(Get-BackupArchives).Count)) `
+    -Note 'архив БД оставлен'
 
 # --- I. Ремонт той же версии: старый архив не подставляется в откат --------
 # Блокер 1 приёмки: при ремонте архив не создаётся (версия та же), но файлы
@@ -4177,8 +4424,8 @@ function Test-LogOrder {
     return $true
 }
 
-# A. Чистая машина: службы нет — установщик вызывает install с конфигом и
-#    запускает службу до подтверждённого RUNNING, затем health.
+# A. Чистая машина: службы нет — установщик вызывает install с конфигом,
+#    start (без ожидания RUNNING) и подтверждает готовность health-check-ом.
 Reset-State
 $paramsRegister = New-ParamsFile -Mode 'service' -Name 'service-register.ini'
 $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
@@ -4201,7 +4448,7 @@ $order = Get-LogPatternIndices -Patterns @(
     'Регистрация службы ETN:',
     'команда install',
     'команда start',
-    'Служба ETN: запущена (RUNNING)',
+    'Health-check (тестовый режим): ok',
     'install.json записан')
 Add-Result -Name 'service-register:log-order' -Expected 1 `
     -Actual ([int](Test-LogOrder $order)) -Note ($order -join ' < ')
@@ -4209,14 +4456,15 @@ $jsonText = Get-Content -LiteralPath (Join-Path $dataDir 'install.json') -Raw
 Add-Result -Name 'service-register:install-json' -Expected 1 `
     -Actual ([int]($jsonText -match '"mode":"service"')) -Note 'mode=service'
 
-# B. Сбой install: код 20 с причиной, install.json не пишется, запуска нет.
+# B. Сбой install: код 10 (файлы уже заменены — сбой выполнения), install.json
+#    не пишется, запуска нет.
 Reset-State
 $paramsFail = New-ParamsFile -Mode 'service' -Name 'service-install-fail.ini'
 $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
     "/PARAMS=`"$paramsFail`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
     '/TESTSERVICEINSTALL=fail', '/TESTHEALTH=ok'))
-Add-Result -Name 'service-install-fail:code' -Expected 20 -Actual $code `
-    -Note 'сбой регистрации — код 20'
+Add-Result -Name 'service-install-fail:code' -Expected 10 -Actual $code `
+    -Note 'сбой регистрации после копирования — код 10'
 Add-Result -Name 'service-install-fail:reason' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'служба ETN не зарегистрирована: etn-service.exe install вернул ошибку')) `
     -Note 'причина в журнале'
@@ -4238,12 +4486,11 @@ Add-Result -Name 'service-install-exists:log' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'служба уже существует \(код 1073\)')) `
     -Note '1073 трактуется как успех'
 Add-Result -Name 'service-install-exists:start' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена \(RUNNING\)'))
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: команда start принята'))
 
 # C2. Служба уже есть И работает, а установщик всё же вызвал install (гонка
-#     проверки реестра): 1073 — успех, второй start не нужен. Разбор 1073
-#     общий с продуктовой веткой (ServiceCommandResult), поэтому кейс
-#     поведенчески покрывает ту же логику, что работает на машине.
+#     проверки реестра): 1073 — успех, start вызывается всегда, но на
+#     работающей службе WinSW вернёт 1056 — тоже успех.
 Reset-State
 $paramsExistsRunning = New-ParamsFile -Mode 'service' -Name 'service-exists-running.ini'
 $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
@@ -4253,43 +4500,61 @@ Add-Result -Name 'service-exists-running:code' -Expected 0 -Actual $code
 Add-Result -Name 'service-exists-running:1073' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'служба уже существует \(код 1073\)')) `
     -Note '1073 разобран общей функцией — успех'
-Add-Result -Name 'service-exists-running:no-start' -Expected 0 `
+Add-Result -Name 'service-exists-running:start' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: команда start принята')) `
+    -Note 'start вызывается всегда, а не пропускается по «уже RUNNING»'
+Add-Result -Name 'service-exists-running:no-running-wait' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'уже запущена \(RUNNING\)')) `
+    -Note 'ожидания RUNNING больше нет'
+
+# C2b. Гонка: реестр при проверке пуст, install вернул 1073 — служба появилась
+#      между проверками. 1073 — успех только для СВОЕЙ службы: чужой ImagePath
+#      останавливает установку кодом 10 (файлы уже заменены), start не зовётся.
+Reset-State
+$paramsRace = New-ParamsFile -Mode 'service' -Name 'service-install-race.ini'
+$foreignRaceImage = Join-Path $workRoot 'foreign-race\etn-service.exe'
+$code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
+    "/PARAMS=`"$paramsRace`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICEINSTALL=exists', "/TESTSERVICEIMAGE=$foreignRaceImage",
+    '/TESTHEALTH=ok'))
+Add-Result -Name 'service-install-race:code' -Expected 10 -Actual $code `
+    -Note '1073 для чужой службы — сбой после копирования'
+Add-Result -Name 'service-install-race:reason' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'уже зарегистрирована, но не может быть использована: .*другим путём')) `
+    -Note 'причина называет чужую службу'
+Add-Result -Name 'service-install-race:no-start' -Expected 0 `
     -Actual ([int](Test-LatestLogContains -Pattern 'команда start')) `
-    -Note 'служба уже RUNNING — повторного start нет'
-Add-Result -Name 'service-exists-running:already-running' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: уже запущена \(RUNNING\)'))
+    -Note 'чужую службу не запускаем'
+Add-Result -Name 'service-install-race:no-json' -Expected 0 `
+    -Actual ([int](Test-Path (Join-Path $dataDir 'install.json'))) `
+    -Note 'install.json не записан'
 
-# C3. START_PENDING не считается RUNNING: модель отдаёт START_PENDING два
-#     опроса, затем RUNNING — установка успешна.
+# C3. start 1056 (служба уже запущена) — успех: готовность подтверждает health.
 Reset-State
-$paramsPending = New-ParamsFile -Mode 'service' -Name 'service-start-pending.ini'
+$paramsStartRunning = New-ParamsFile -Mode 'service' -Name 'service-start-1056.ini'
 $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
-    "/PARAMS=`"$paramsPending`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
-    '/TESTSERVICESTART=pending', '/TESTSERVICEWAIT=5000', '/TESTHEALTH=ok'))
-Add-Result -Name 'service-start-pending:code' -Expected 0 -Actual $code `
-    -Note 'START_PENDING → RUNNING за бюджет — успех'
-Add-Result -Name 'service-start-pending:started' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена \(RUNNING\)')) `
-    -Note 'подтверждённый RUNNING после START_PENDING'
+    "/PARAMS=`"$paramsStartRunning`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICEINSTALL=exists', '/TESTSERVICESTART=1056', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-start-1056:code' -Expected 0 -Actual $code `
+    -Note 'start уже работающей службы (1056) — успех'
+Add-Result -Name 'service-start-1056:log' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'служба уже запущена \(код 1056\)'))
 
-# C4. Служба навсегда в START_PENDING: бюджет истекает — код 20 с причиной,
-#     install.json не пишется.
+# C4. start 1061 после подтверждённой остановки — ошибка 10, install.json не
+#     пишется: служба не приняла управление.
 Reset-State
-$paramsPendingStuck = New-ParamsFile -Mode 'service' -Name 'service-start-pending-stuck.ini'
+$paramsStartRefused = New-ParamsFile -Mode 'service' -Name 'service-start-1061.ini'
 $code = Invoke-Setup -Arguments ($silent + @('/PRIVILEGEDPHASE',
-    "/PARAMS=`"$paramsPendingStuck`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
-    '/TESTSERVICESTART=pending-stuck', '/TESTSERVICEWAIT=600', '/TESTHEALTH=ok'))
-Add-Result -Name 'service-start-pending-stuck:code' -Expected 20 -Actual $code `
-    -Note 'START_PENDING не RUNNING — предусловие не выполнено'
-Add-Result -Name 'service-start-pending-stuck:reason' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'не перешла в RUNNING за 600 мс')) `
-    -Note 'причина таймаута в журнале'
-Add-Result -Name 'service-start-pending-stuck:no-json' -Expected 0 `
+    "/PARAMS=`"$paramsStartRefused`"", '/TESTELEVATED=1', '/TESTSERVICE=absent',
+    '/TESTSERVICEINSTALL=exists', '/TESTSERVICESTART=1061', '/TESTHEALTH=ok'))
+Add-Result -Name 'service-start-1061:code' -Expected 10 -Actual $code `
+    -Note 'start 1061 — сбой выполнения после копирования'
+Add-Result -Name 'service-start-1061:no-json' -Expected 0 `
     -Actual ([int](Test-Path (Join-Path $dataDir 'install.json'))) `
     -Note 'install.json не записан'
 
 # D. Обновление с уже зарегистрированной службой: install не вызывается,
-#    конфигурацию WinSW читает при старте; служба поднята и подтверждена.
+#    конфигурацию WinSW читает при старте; start вызван, готовность — health.
 $null = New-UpdateFixture
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
 $code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg, '/TESTHEALTH=ok'))
@@ -4301,20 +4566,22 @@ Add-Result -Name 'service-repeat:log' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'уже зарегистрирована')) `
     -Note 'install не требуется'
 Add-Result -Name 'service-repeat:running' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: запущена \(RUNNING\)')) `
-    -Note 'после замены файлов служба запущена и подтверждена RUNNING'
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: команда start принята')) `
+    -Note 'после замены файлов start вызван, готовность подтверждает health'
 
-# E. Ремонт той же версии: служба уже работает — второй start не нужен.
+# E. Ремонт той же версии: start вызывается всегда (служба была остановлена
+#    перед проверкой? нет — ремонт без замены файлов службу не останавливает,
+#    start на работающей службе даёт 1056/0 — успех).
 $null = New-UpdateFixture -OldVersion $version
 New-ServiceFixture
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
 $code = Invoke-Setup -Arguments ($silent + $updateArgs + @($nodeArg, '/TESTHEALTH=ok'))
 Add-Result -Name 'service-repair:code' -Expected 0 -Actual $code
-Add-Result -Name 'service-repair:no-start' -Expected 0 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'команда start')) `
-    -Note 'работающая служба не запускается второй раз'
-Add-Result -Name 'service-repair:already-running' -Expected 1 `
-    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: уже запущена \(RUNNING\)'))
+Add-Result -Name 'service-repair:start' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN: команда start принята')) `
+    -Note 'start вызывается всегда, даже если служба уже работала'
+Add-Result -Name 'service-repair:no-running-wait' -Expected 0 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'уже запущена \(RUNNING\)'))
 
 # F. Удаление: stop и uninstall вызываются в этом порядке (та же функция, что
 #    в uninstaller — проба /TESTUNINSTALLSERVICE).
@@ -4349,6 +4616,24 @@ Add-Result -Name 'service-uninstall-stop-fail:code' -Expected 10 -Actual $code
 Add-Result -Name 'service-uninstall-stop-fail:reason' -Expected 1 `
     -Actual ([int](Test-LatestLogContains -Pattern 'служба ETN не остановлена: не удалось остановить службу ETN')) `
     -Note 'служба не остановилась — снятие не выполняется'
+
+# H2. uninstall вернул 1072 (помечена на удаление): exit 0 не доказывает
+#     снятие — подтверждаем status=NonExistent; оставшийся ключ реестра —
+#     предупреждение о перезагрузке, удаление программы не отменяется.
+Reset-State
+$code = Invoke-Setup -Arguments ($silent + @('/TESTELEVATED=1', '/TESTSERVICE=present',
+    '/TESTSERVICEUNINSTALL=1072', '/TESTUNINSTALLSERVICE=1'))
+Add-Result -Name 'service-uninstall-1072:code' -Expected 0 -Actual $code `
+    -Note '1072 — успех после подтверждения status=NonExistent'
+Add-Result -Name 'service-uninstall-1072:confirm' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'подтверждаем удаление через status')) `
+    -Note '1072 подтверждается polling-ом status'
+Add-Result -Name 'service-uninstall-1072:removed' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'Служба ETN снята \(uninstall\)')) `
+    -Note 'status дошёл до NonExistent'
+Add-Result -Name 'service-uninstall-1072:reboot-hint' -Expected 1 `
+    -Actual ([int](Test-LatestLogContains -Pattern 'SCM завершит удаление после перезагрузки')) `
+    -Note 'оставшийся ключ — предупреждение, а не отказ'
 
 # I. Режим app: служба не регистрируется, сервер поднимает пользователь,
 #    health не блокирует установку.
