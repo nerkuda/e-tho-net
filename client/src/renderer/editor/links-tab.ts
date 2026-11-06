@@ -69,7 +69,7 @@ function buildLinksTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEle
   const backlinks = groupSection(
     {
       id: 'links.backlinks',
-      title: 'Ссылки на мысль',
+      title: t('linksTab.title.linkRefThought'),
       lazyCount: true,
       defaultCollapsed: true,
       buildBody: () => buildBacklinksBody(ctx, lifecycle),
@@ -78,7 +78,7 @@ function buildLinksTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEle
   const textMentions = groupSection(
     {
       id: 'links.text-mentions',
-      title: 'Упоминания в текстах',
+      title: t('linksTab.title.mentionsTekstah'),
       lazyCount: true,
       defaultCollapsed: true,
       buildBody: () => buildMentionsBody(ctx, lifecycle),
@@ -144,7 +144,7 @@ function buildLinkThoughtsTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): 
   void reload();
 
   async function reload(): Promise<void> {
-    root.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    root.replaceChildren(el('span', 'muted', t('common.loading')));
     let refs: ThoughtRef[];
     try {
       refs = await etn.thoughts.resolve(networkId, [link.source_id, link.target_id]);
@@ -165,13 +165,13 @@ function buildLinkThoughtsTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): 
     const target = byId.get(link.target_id);
     if (source === undefined && target === undefined) {
       root.replaceChildren(
-        el('p', 'muted', 'Концы связи не найдены — возможно, мысли удалены.'),
+        el('p', 'muted', t('linksTab.koncyLinkNotFoundPossibleThought')),
       );
       return;
     }
     root.replaceChildren();
-    if (source !== undefined) root.append(endpointBlock('Источник', source));
-    if (target !== undefined) root.append(endpointBlock('Назначение', target));
+    if (source !== undefined) root.append(endpointBlock(t('linksTab.istochnik'), source));
+    if (target !== undefined) root.append(endpointBlock(t('linksTab.naznachenie'), target));
   }
 
   return root;
@@ -249,7 +249,7 @@ function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   void reload();
 
   async function reload(): Promise<void> {
-    box.replaceChildren(el('span', 'muted', 'Поиск ссылок на мысль…'));
+    box.replaceChildren(el('span', 'muted', t('linksTab.searchSsylokThought')));
     let hits: MentionHit[];
     try {
       hits = await etn.thoughts.backlinks(networkId, ctx.ownerId);
@@ -268,7 +268,7 @@ function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     const visible = hits.filter((hit) => hit.active || store.state.showInactive);
     box.replaceChildren();
     if (visible.length === 0) {
-      box.append(el('p', 'muted', 'Никто не ссылается на эту мысль через [[#<id>]]. '));
+      box.append(el('p', 'muted', t('linksTab.niktoNotSsylaetsyaEtuThoughtVia')));
       return;
     }
     // Тот же chip-паттерн, что и в buildMentionsBody — иконка/styling
@@ -355,7 +355,7 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
   void reload();
 
   async function reload(): Promise<void> {
-    box.replaceChildren(el('span', 'muted', 'Поиск упоминаний…'));
+    box.replaceChildren(el('span', 'muted', t('linksTab.searchUpominaniy')));
     let hits: MentionHit[];
     try {
       hits = await etn.thoughts.mentions(networkId, ctx.ownerId);
@@ -380,7 +380,7 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
     box.closest('.group')?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${visible.length})` }));
     box.replaceChildren();
     if (visible.length === 0) {
-      box.append(el('p', 'muted', 'Название нигде не упоминается.'));
+      box.append(el('p', 'muted', t('linksTab.titleNigdeNotUpominaetsya')));
       return;
     }
     // The mentions DTO (§13) carries only the owner/title/snippet/active; the

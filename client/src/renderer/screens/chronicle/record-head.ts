@@ -37,6 +37,7 @@ import {
   type RecordTitleHandle,
   type RecordTitleOptions,
 } from './record-title.js';
+import { t } from '../../lib/i18n.js';
 
 /** Данные, подставляемые потребителем в шапку карточки записи. */
 export interface RecordHeadHooks {
@@ -142,11 +143,11 @@ export function buildRecordHead(hooks: RecordHeadHooks): RecordHead {
     date,
     hooks.chips,
     uiButton({
-      label: '+ мысль',
+      label: t('chrono.label.thought'),
       role: 'ghost',
       size: 's',
       class: 'diary-chip-add',
-      title: 'Добавить мысль',
+      title: t('contextMenu.addThought'),
       onClick: () => hooks.onAddThought(),
     }),
     hooks.trailing,

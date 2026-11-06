@@ -284,7 +284,7 @@ export function createPropertiesRegistryRoutes(deps: RouteDeps): FastifyPluginAs
         if (hasLinkTypeFields(changes) && current.value_type !== 'link') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'name_forward/name_reverse/link_color/link_style/link_width применимы только к value_type="link".',
+            "name_forward/name_reverse/link_color/link_style/link_width apply only to value_type=\"link\".",
             { field: 'value_type', actual: current.value_type },
             req.id,
           );

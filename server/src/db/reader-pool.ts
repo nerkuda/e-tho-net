@@ -205,7 +205,7 @@ export class ReaderPool {
   async closeNetwork(networkId: string): Promise<void> {
     const error = new EtnError(
       'INTERNAL',
-      `Сеть ${networkId} удаляется: чтение отклонено.`,
+      `Network ${networkId} is being removed: read rejected.`,
     );
     for (let i = this.queue.length - 1; i >= 0; i -= 1) {
       const job = this.queue[i];

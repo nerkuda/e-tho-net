@@ -156,7 +156,7 @@ async function membersDialog(): Promise<void> {
 
   const memberLabel = (member: NetworkMember): string => {
     const name = member.display_name ?? member.username;
-    if (name === undefined || name === '') return 'неизвестный участник';
+    if (name === undefined || name === '') return t('userSelect.neizvestnyyMember');
     return member.username === undefined || member.username === ''
       ? name
       : `${name} (${member.username})`;
@@ -175,7 +175,7 @@ async function membersDialog(): Promise<void> {
     const table = el('table', 'table-list');
     const head = el('thead');
     const headRow = el('tr');
-    headRow.append(el('th', undefined, 'Пользователь'), el('th', undefined, 'Роль'), el('th'));
+    headRow.append(el('th', undefined, t('settings.user.user')), el('th', undefined, t('workspaceMenus.rol')), el('th'));
     head.append(headRow);
     table.append(head);
     const tbody = el('tbody');
@@ -186,7 +186,7 @@ async function membersDialog(): Promise<void> {
       memberNames.set(member.user_id, name);
       row.append(
         el('td', undefined, name),
-        el('td', undefined, member.role === 'owner' ? 'владелец' : 'участник'),
+        el('td', undefined, member.role === 'owner' ? t('networks.owner') : t('networks.member')),
       );
       const actions = el('td');
       actions.style.whiteSpace = 'nowrap';
@@ -199,7 +199,7 @@ async function membersDialog(): Promise<void> {
       // the currently known lock count of the participant.
       const lockCount = lockCounts.get(member.user_id) ?? 0;
       const clearBtn = button(
-        lockCount > 0 ? `Снять блокировки (${lockCount})` : 'Снять блокировки',
+        lockCount > 0 ? t('workspaceMenus.unsetBlokirovki', lockCount) : t('workspaceMenus.unsetBlokirovki2'),
         () =>
           void clearMemberLocks(networkId, member.user_id, name, {
             confirm: (title, message) => confirmDialog(title, message),
@@ -218,8 +218,8 @@ async function membersDialog(): Promise<void> {
       actions.append(clearBtn);
       if (member.role !== 'owner') {
         actions.append(
-          button('Сделать владельцем', () => void transfer(member.user_id), 'link-btn'),
-          button('Исключить', () => void removeMemberRow(member.user_id), 'link-btn'),
+          button(t('workspaceMenus.doVladelcem'), () => void transfer(member.user_id), 'link-btn'),
+          button(t('workspaceMenus.isklyuchit'), () => void removeMemberRow(member.user_id), 'link-btn'),
         );
       }
       row.append(actions);
@@ -249,9 +249,9 @@ async function membersDialog(): Promise<void> {
   }
 
   async function transfer(userId: string): Promise<void> {
-    const name = memberNames.get(userId) ?? 'неизвестный участник';
+    const name = memberNames.get(userId) ?? t('userSelect.neizvestnyyMember');
     if (
-      !(await confirmDialog('Передача владения', `Передать владение сетью пользователю «${name}»?`))
+      !(await confirmDialog(t('workspaceMenus.peredachaVladeniya'), t('workspaceMenus.peredatVladenieNetworkUser', name)))
     ) {
       return;
     }
@@ -264,8 +264,8 @@ async function membersDialog(): Promise<void> {
   }
 
   async function removeMemberRow(userId: string): Promise<void> {
-    const name = memberNames.get(userId) ?? 'неизвестный участник';
-    if (!(await confirmDialog('Исключить участника', `Исключить «${name}» из сети?`))) return;
+    const name = memberNames.get(userId) ?? t('userSelect.neizvestnyyMember');
+    if (!(await confirmDialog(t('workspaceMenus.isklyuchitMember'), t('workspaceMenus.isklyuchitNetwork', name)))) return;
     try {
       await etn.networks.removeMember(networkId, userId);
       await refresh();
@@ -280,7 +280,7 @@ async function membersDialog(): Promise<void> {
   let addInput: HTMLInputElement | HTMLSelectElement;
   if (users.length > 0) {
     const select = el('select', 'select-input');
-    const placeholder = el('option', undefined, '— выберите пользователя —');
+    const placeholder = el('option', undefined, t('workspaceMenus.selectUser'));
     placeholder.value = '';
     select.append(placeholder);
     for (const user of users) {
@@ -296,13 +296,13 @@ async function membersDialog(): Promise<void> {
   } else {
     const input = fieldInput();
     input.type = 'text';
-    input.placeholder = 'ID пользователя';
+    input.placeholder = t('workspaceMenus.idUser');
     addInput = input;
   }
   addRow.append(
     addInput,
     uiButton({
-      label: 'Добавить',
+      label: t('addDialog.applyLabel.add'),
       role: 'secondary',
       size: 's',
       onClick: () => {
@@ -321,7 +321,7 @@ async function membersDialog(): Promise<void> {
   body.append(addRow);
 
   showDialog({
-    title: 'Участники сети',
+    title: t('workspaceMenus.title.membersNetwork'),
     body,
     size: 'm',
     // Ошибки записи — в панели кнопок (требование 397c5a56).
@@ -362,21 +362,21 @@ export async function clearMemberLocks(
 ): Promise<void> {
   if (
     !(await deps.confirm(
-      'Снять все блокировки',
-      `Снять все блокировки участника «${displayName}»? Действие необратимо.`,
+      t('workspaceMenus.unsetAllBlokirovki'),
+      t('workspaceMenus.unsetAllBlokirovkiMemberActionIrreversible', displayName),
     ))
   ) {
     return;
   }
   try {
     const result = await deps.clear(networkId, userId);
-    deps.onCleared(`Снято блокировок: ${result.cleared}.`);
+    deps.onCleared(t('workspaceMenus.unsetBlokirovok', result.cleared));
     // The realtime bus will fan-out `edit.cleared` for every row, but the
     // local badge needs an immediate refresh — pull the fresh count once
     // and let the realtime subscriber pick up the rest.
     await deps.refresh();
   } catch (err) {
-    deps.onError(`Не удалось снять блокировки: ${errText(err)}`);
+    deps.onError(t('workspaceMenus.notSucceededUnsetBlokirovki', errText(err)));
   }
 }
 
@@ -385,14 +385,14 @@ async function leaveNetwork(): Promise<void> {
   const networkId = requireNetworkId();
   const meId = store.state.me?.id;
   if (meId === undefined) return;
-  if (!(await confirmDialog('Выйти из сети', 'Вы покинете сеть и потеряете к ней доступ.'))) {
+  if (!(await confirmDialog(t('workspaceMenus.vyytiNetwork'), t('workspaceMenus.youPokineteNetworkPoteryaeteNeyAccess')))) {
     return;
   }
   try {
     await etn.networks.removeMember(networkId, meId);
     // The server emits member.removed; the realtime handler returns to the list.
   } catch (err) {
-    errorDialog('Выйти из сети', err);
+    errorDialog(t('workspaceMenus.vyytiNetwork'), err);
   }
 }
 

@@ -246,8 +246,11 @@ describe('guard: обслуживание сервера (479e37ed)', () => {
   });
 
   it('фраза обслуживания — одна: только server-maintenance-text.ts и словарь', () => {
-    // Единственные легальные источники: сборщик текста и словарь.
-    const allowed = new Set(['lib/server-maintenance-text.ts', 'lib/locales/ru.ts']);
+    // Единственные легальные источники: сборщик текста и каталоги языков
+    // (`lib/locales/*`, с задачи d08c422d каталогов больше одного).
+    const allowed = new Set(['lib/server-maintenance-text.ts']);
+    const isAllowed = (rel: string): boolean =>
+      allowed.has(rel) || rel.startsWith('lib/locales/');
     // Фраза в строковом литерале: кавычка стоит ДО фразы в той же строке
     // (упоминание в комментарии вида «сервер обновляется» нарушением не является).
     const phraseLiteral =
@@ -257,7 +260,7 @@ describe('guard: обслуживание сервера (479e37ed)', () => {
     const violations: string[] = [];
     for (const abs of listSourceFiles(RENDERER_ROOT, { extensions: ['.ts'] })) {
       const rel = path.relative(RENDERER_ROOT, abs).split(path.sep).join('/');
-      if (allowed.has(rel)) continue;
+      if (isAllowed(rel)) continue;
       stripComments(read(abs))
         .split('\n')
         .forEach((line, i) => {

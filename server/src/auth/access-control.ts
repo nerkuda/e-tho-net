@@ -65,7 +65,7 @@ export interface AccessControl {
 export function createAccessControl(members: NetworkMembersService): AccessControl {
   const requireAuth: Guard = async (req, reply): Promise<void> => {
     if (req.auth === null) {
-      sendEtnError(reply, 'UNAUTHORIZED', 'Требуется аутентификация.', undefined, req.id);
+      sendEtnError(reply, 'UNAUTHORIZED', "Authentication required.", undefined, req.id);
       return;
     }
   };
@@ -78,7 +78,7 @@ export function createAccessControl(members: NetworkMembersService): AccessContr
     // `auth` is non-null after requireAuth passed.
     const auth = req.auth!;
     if (!auth.user.is_admin) {
-      sendEtnError(reply, 'FORBIDDEN', 'Требуются права администратора.', undefined, req.id);
+      sendEtnError(reply, 'FORBIDDEN', "Administrator rights required.", undefined, req.id);
     }
   };
 
@@ -95,7 +95,7 @@ export function createAccessControl(members: NetworkMembersService): AccessContr
         sendEtnError(
           reply,
           'BAD_REQUEST',
-          'Не удалось определить сеть из пути запроса.',
+          "Failed to determine the network from the request path.",
           undefined,
           req.id,
         );
@@ -109,7 +109,7 @@ export function createAccessControl(members: NetworkMembersService): AccessContr
         sendEtnError(
           reply,
           'NOT_FOUND',
-          'Сеть не найдена.',
+          "Network not found.",
           { entity: 'network', id: networkId },
           req.id,
         );
@@ -125,14 +125,14 @@ export function createAccessControl(members: NetworkMembersService): AccessContr
         sendEtnError(
           reply,
           'FORBIDDEN',
-          'Вы не являетесь участником этой сети.',
+          "You are not a member of this network.",
           undefined,
           req.id,
         );
         return;
       }
       if (requiredRole === 'owner' && role !== 'owner') {
-        sendEtnError(reply, 'FORBIDDEN', 'Требуются права владельца сети.', undefined, req.id);
+        sendEtnError(reply, 'FORBIDDEN', "Network owner rights required.", undefined, req.id);
       }
     };
 

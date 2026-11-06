@@ -364,7 +364,7 @@ export class WritePool {
   async closeNetwork(networkId: string): Promise<void> {
     const error = new EtnError(
       'INTERNAL',
-      `Сеть ${networkId} удаляется: запись отклонена.`,
+      `Network ${networkId} is being removed: write rejected.`,
     );
     // Задачи сети могли ждать допуска (привязки ещё нет) — снимаем их тоже,
     // иначе `admit` поднял бы воркер к удаляемой базе.
@@ -469,16 +469,16 @@ export class WritePool {
     this.evictedCount += 1;
     this.logger?.info(
       { networkId: pin.networkId, idleMs: Date.now() - pin.lastUsedMs },
-      'write pool: привязка сети вытеснена по простою',
+      "write pool: network pin evicted after idle",
     );
-    this.closePin(pin, 'вытеснение по простою');
+    this.closePin(pin, "idle eviction");
   }
 
   /** Открыть воркер под сеть и повесить обработчики жизненного цикла. */
   private createPin(networkId: string): Pin {
     const worker = spawnWorker();
     this.spawns += 1;
-    this.logger?.debug({ networkId, spawns: this.spawns }, 'write pool: воркер сети поднят');
+    this.logger?.debug({ networkId, spawns: this.spawns }, "write pool: network worker started");
     const pin: Pin = { networkId, worker, job: null, queue: [], lastUsedMs: Date.now(), dead: false };
     worker.on('message', (message: WriteTaskResponse) => this.onMessage(pin, message));
     worker.on('error', (err: Error) => this.onWorkerFailure(pin, err));
@@ -506,7 +506,7 @@ export class WritePool {
           queued: this.queuedCount(),
           waitingAdmission: this.admission.length,
         },
-        'write pool: задача долго ждала в очереди',
+        "write pool: job waited in the queue for a long time",
       );
     }
     // Тайм-аут считается от НАЧАЛА исполнения: ожидание в очереди ограничено
@@ -616,7 +616,7 @@ export class WritePool {
           pinnedNetworks: this.pins.map((p) => p.networkId),
           closingNetworks: [...this.closing.keys()],
         },
-        'write pool: задача долго ждёт допуска',
+        "write pool: job is waiting for admission for a long time",
       );
       // Допуск всё ещё не пуст — предупреждать и дальше (порог — период WARN).
       this.armAdmissionWarn(period);
@@ -676,7 +676,7 @@ export class WritePool {
           execMs,
           queued: this.queuedCount(),
         },
-        'write pool: задача исполнена',
+        "write pool: job completed",
       );
       job.resolve(message.result);
     } else {
@@ -708,11 +708,11 @@ export class WritePool {
     this.timedOut += 1;
     this.logger?.warn(
       { networkId: pin.networkId, op: job.task.op, timeoutMs: this.taskTimeoutMs },
-      'write pool: задача записи не уложилась в тайм-аут — воркер заменяется',
+      "write pool: the write job timed out — the worker is being replaced",
     );
     pin.job = null;
     this.clearTimer(job);
-    this.closePin(pin, 'тайм-аут задачи', {
+    this.closePin(pin, "job timeout", {
       job,
       error: new EtnError('INTERNAL', `write task timed out after ${this.taskTimeoutMs} ms`, {
         timedOutMs: this.taskTimeoutMs,
@@ -724,7 +724,7 @@ export class WritePool {
   /** Падение/выход воркера: отклонить его задачу и заменить слот. */
   private onWorkerFailure(pin: Pin, err: Error): void {
     if (pin.dead) return;
-    this.logger?.warn({ err, networkId: pin.networkId }, 'write pool: воркер записи упал');
+    this.logger?.warn({ err, networkId: pin.networkId }, "write pool: the write worker crashed");
     const job = pin.job;
     pin.job = null;
     if (job !== null) {
@@ -738,7 +738,7 @@ export class WritePool {
           : new EtnError('INTERNAL', `write worker failed: ${err.message}`, { resultUnknown: true }),
       );
     }
-    this.closePin(pin, 'падение воркера');
+    this.closePin(pin, "worker crash");
   }
 
   /**
@@ -773,14 +773,14 @@ export class WritePool {
     }
     this.logger?.debug(
       { networkId: pin.networkId, reason, requeued: pendingQueue.length },
-      'write pool: привязка снята, невыполненные задачи сети возвращены в очередь допуска',
+      "write pool: pin released, unfinished network jobs returned to the admission queue",
     );
     const networkId = pin.networkId;
     const exiting = this.terminate(pin.worker).then(() => {
       this.closing.delete(networkId);
       this.logger?.debug(
         { networkId, reason },
-        'write pool: воркер сети остановлен, база освобождена',
+        "write pool: network worker stopped, database released",
       );
       if (pending !== undefined) pending.job.reject(pending.error);
       this.admit();
@@ -820,7 +820,7 @@ export class WritePool {
           busyWorkers: this.busyCount(),
           pinnedNetworks: this.pins.map((p) => p.networkId),
         },
-        'write pool: очередь записи растёт',
+        "write pool: the write queue is growing",
       );
     }
   }

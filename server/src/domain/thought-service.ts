@@ -1044,7 +1044,7 @@ export function updateThought(
         ) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'icon_attachment_id должен указывать на картинку-вложение этой мысли.',
+            "icon_attachment_id must reference an image attachment of this thought.",
             { field: 'icon_attachment_id', attachment_id: attachmentId },
           );
         }

@@ -76,6 +76,11 @@ import {
 import { applyDerivedRealtime } from './realtime-effects.js';
 import { initTheme } from './lib/theme.js';
 import { initLang } from './lib/lang.js';
+import {
+  initAppLanguage,
+  resetAppLanguageState,
+  syncLanguageForNetwork,
+} from './lib/app-language.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
@@ -106,6 +111,7 @@ import {
 } from './screens/tabs/tab-state.js';
 import { serverLabelOf, store, type WorkspaceView } from './state.js';
 import { syncLayersForTab } from './screens/layers.js';
+import { t } from './lib/i18n.js';
 
 /** Debounce for coalescing realtime-triggered refreshes, ms. */
 const REFRESH_DEBOUNCE_MS = 200;
@@ -355,6 +361,10 @@ async function openNetworkBody(
     activeTabId,
     activeView: resolvedView,
   });
+  // Эффективный язык новой активной сети (ADR daab6ac4 §2, задача 222666db
+  // п. 4): у сети может быть свой язык — пересчитываем без перезапуска. Ответ
+  // применяется, только если сеть всё ещё активна (проверка внутри модуля).
+  void syncLanguageForNetwork(networkId);
   // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
   setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
 
@@ -714,6 +724,11 @@ export async function restoreSession(): Promise<void> {
   // restoreSession(). Недоступные настройки не блокируют вход: при сбое
   // остаются умолчания.
   await loadUserSettings().catch(() => undefined);
+  // Язык приложения из профиля пользователя (ADR daab6ac4 §5, задача
+  // faba9ff4): серверное значение побеждает кэш, разовая миграция
+  // `client_meta.lang` → профиль. Недоступный/старый сервер не блокирует вход —
+  // интерфейс остаётся на кэше/ОС.
+  await initAppLanguage().catch(() => undefined);
   // Q5: warm the `networkList` cache early so the first tab-strip render has
   // display_names. The accessibility marking itself re-runs at the end of
   // `openNetwork`, once `store.tabs` is populated — marking here raced an
@@ -749,6 +764,9 @@ export async function disconnect(): Promise<void> {
   // Сочетания клавиш принадлежат пользователю сервера (L3s): при отключении
   // возвращаем умолчания, чтобы их не унаследовал следующий пользователь.
   resetUserSettings();
+  // Серверный слой языка — тоже принадлежность пользователя: снимок профиля
+  // сбрасывается (кэш `client_meta.lang` остаётся установочным).
+  resetAppLanguageState();
   store.resetNetwork();
   store.update({ me: null, profileId: null });
   showScreen('onboarding');
@@ -757,7 +775,7 @@ export async function disconnect(): Promise<void> {
 /** The current network id, or throws (callers require an open network). */
 export function requireNetworkId(): string {
   const id = store.state.networkId;
-  if (id === null) throw new Error('Сеть не открыта.');
+  if (id === null) throw new Error(t('app.networkNotOpen'));
   return id;
 }
 
@@ -899,6 +917,14 @@ export async function boot(): Promise<void> {
   await initTheme();
   // Язык интерфейса (L5 `client_meta.lang`, задача 57f09136): словарь должен
   // быть выбран до монтажа первого экрана, иначе тексты придут на исходном ru.
+  // В тестовой сборке (--mode test) до первого экрана регистрируется локаль
+  // GUI-стенда (задача e6374cd1): живая смена языка проверяется пользовательским
+  // путём «настройки → язык», пока каталогов en/zh нет. В production-сборке
+  // ветка статически ложна и фикстура в бандл не попадает.
+  if (import.meta.env.MODE === 'test') {
+    const { registerTestLocale } = await import('./lib/locales/test.js');
+    registerTestLocale();
+  }
   await initLang();
   // Layer colour indication (0.6.4 §2.2a): one store subscription writing
   // the --layer-* overrides (or clearing them) whenever the current layer,
@@ -1206,7 +1232,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
   if (targetId === null) {
-    notice('Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.');
+    notice(t('app.notSelectedThoughtKopirovaniyaSelectThought'));
     return;
   }
   const { buildSingleThoughtSnapshot } = await import('./canvas/clipboard.js');
@@ -1214,9 +1240,9 @@ async function globalCopy(targetId: string | null): Promise<void> {
     const thought = await etn.thoughts.get(networkId, targetId);
     const { makeSelectionSnapshotDeps } = await import('./selection/selection.js');
     await buildSingleThoughtSnapshot(thought, makeSelectionSnapshotDeps(networkId));
-    notice(`Скопировано: «${thought.title}»`);
+    notice(t('app.skopirovano', thought.title));
   } catch (err) {
-    errorDialog('Копировать', err);
+    errorDialog(t('listActions.copy'), err);
   }
 }
 
@@ -1228,7 +1254,7 @@ async function globalCopy(targetId: string | null): Promise<void> {
  *  With multiple thoughts selected we fall back to the canvas focus. */
 async function globalPaste(targetId: string | null): Promise<void> {
   if (targetId === null) {
-    notice('Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.');
+    notice(t('app.notSelectedThoughtPasteKlikniteThought'));
     return;
   }
   const networkId = store.state.networkId;
@@ -1255,7 +1281,7 @@ async function globalPaste(targetId: string | null): Promise<void> {
   } catch (err) {
     // Clipboard read denied or unavailable — surface the error so the user
     // isn't left wondering why nothing happened.
-    notice(`Не удалось прочитать системный буфер: ${errText(err)}`, 'error');
+    notice(t('app.notSucceededReadSistemnyyBufer', errText(err)), 'error');
   }
 }
 

@@ -25,6 +25,7 @@ import {
   todayLocal,
   weekStartOffset,
 } from '../../lib/dates.js';
+import { formatDateParts, getLang } from '../../lib/i18n.js';
 
 // Общие чистые примитивы дат живут в `lib/dates.ts` (перенос календаря в
 // библиотеку, приёмка №5; резолвер токенов периода перенесён туда же — общий с
@@ -305,18 +306,31 @@ export function compareDays(a: string, b: string, order: SortOrder = 'asc'): num
 
 /**
  * Заголовок группы дат ленты в локальной зоне наблюдателя: «Четверг, 24 сентября
- * 2026» (0.10.1, итерация приёмки №8, п.5). Собирается из частей вручную:
- * `Intl` с `year: 'numeric'` дописывает «г.» («24 сентября 2026 г.»), а в
- * заголовке год нужен без него. Год берётся у самого `Date`, месяц — `Intl`
- * (длинное имя в нужном падеже).
+ * 2026» в ru, «Thursday, September 24, 2026» в en, «2026年9月24日星期四» в zh
+ * (0.10.1, итерация приёмки №8, п.5; локализация — задача e6374cd1).
+ *
+ * Собирается из ЧАСТЕЙ `Intl.DateTimeFormat`: полный формат с `year: 'numeric'`
+ * дописывает языковой суффикс года («г.» в ru), а в заголовке год нужен без
+ * него. Поэтому из частей отбрасываются хвостовые литералы после последней
+ * даты; порядок дня/месяца/года и позиция дня недели остаются языковыми (в zh
+ * день недели идёт после даты). Кеш форматтера — `formatDateParts`
+ * (`lib/i18n.ts`), месяц приходит в нужном падеже.
  */
 export function formatDayLabel(day: string): string {
-  const d = new Date(`${day}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return day;
-  const weekday = new Intl.DateTimeFormat('ru-RU', { weekday: 'long' }).format(d);
-  const dayMonth = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(d);
-  const cap = weekday.charAt(0).toUpperCase() + weekday.slice(1);
-  return `${cap}, ${dayMonth} ${d.getFullYear()}`;
+  const parts = formatDateParts(new Date(`${day}T00:00:00`), {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  if (parts.length === 0) return day;
+  while (parts.length > 1 && parts[parts.length - 1]?.type === 'literal') parts.pop();
+  const text = parts
+    .map((part) => part.value)
+    .join('')
+    .trim();
+  if (text === '') return day;
+  return text.charAt(0).toLocaleUpperCase(getLang()) + text.slice(1);
 }
 
 /**

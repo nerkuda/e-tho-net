@@ -13,7 +13,6 @@
  * IPC (G7).
  */
 import { app, BrowserWindow, ipcMain, powerMonitor, protocol, screen, session, shell } from 'electron';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { CLIENT_META_KEY } from '@etn/shared';
 import { serveEtnimgRequest, type EtnimgServeDeps } from './etnimg.js';
@@ -47,11 +46,17 @@ import {
 } from './window-bounds.js';
 
 /**
- * Directory of the compiled main bundle (`out/main`). Renderer and preload
- * artefacts sit next to it under `out/`, so relative `../renderer` and
- * `../preload` paths resolve both in dev (electron-vite) and in prod.
+ * Directory of the compiled main bundle (`out/main`): `import.meta.dirname`
+ * (Node 20.11+, Electron 31). Renderer and preload artefacts sit next to it
+ * under `out/`, so relative `../renderer` and `../preload` paths resolve both
+ * in dev (electron-vite) and in prod.
+ *
+ * Deliberately no CommonJS path/require globals: the main bundle is pure ESM,
+ * and a single such token makes electron-vite inject the esm-shim at a
+ * regex-guessed spot — the shim regex can land inside a string of the bundled
+ * UI dictionaries (задача d08c422d: английский каталог en.ts).
  */
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const mainDir = import.meta.dirname;
 
 /** `true` when launched via `electron-vite dev`, `false` once packaged. */
 const isDev = !app.isPackaged;
@@ -245,12 +250,12 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
     minHeight: 480,
     title: 'ETN',
     // Window icon (task 650f5038). Dev builds read it from
-    // `<repo>/client/build/icon.png` (`__dirname` is `out/main`, so two levels
-    // up); a packaged build bakes the icon into the executable/resources via
-    // electron-builder and `build/` is not part of the asar bundle, so the
+    // `<repo>/client/build/icon.png` (the main bundle dir is `out/main`, so two
+    // levels up); a packaged build bakes the icon into the executable/resources
+    // via electron-builder and `build/` is not part of the asar bundle, so the
     // option is omitted there — a missing path would only break the window
     // icon instead of falling back to the stamped one.
-    icon: isDev ? path.join(__dirname, '../../build/icon.png') : undefined,
+    icon: isDev ? path.join(mainDir, '../../build/icon.png') : undefined,
     show: false,
     autoHideMenuBar: true,
     backgroundColor: THEME_BG[theme],
@@ -259,7 +264,7 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
       // into `out/preload/`. Resolve it relative to `out/main/` at runtime so
       // dev (`electron-vite dev`) and packaged builds both work without config
       // forks.
-      preload: path.join(__dirname, '../preload/index.mjs'),
+      preload: path.join(mainDir, '../preload/index.mjs'),
       // sandbox disabled: Electron's sandbox uses a restricted loader that
       // cannot import ESM preload scripts. Keeping `contextIsolation: true` +
       // `nodeIntegration: false` + a trusted first-party preload preserves the
@@ -304,7 +309,7 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     void win.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
-    void win.loadFile(path.join(__dirname, '../renderer/index.html'));
+    void win.loadFile(path.join(mainDir, '../renderer/index.html'));
   }
 
   // Save on close regardless of readiness — guarantees a final write if the

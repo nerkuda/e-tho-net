@@ -25,6 +25,7 @@ import { queryKeys } from './live/query-keys.js';
 import { setQueryData, subscribeQuery } from './live/query-registry.js';
 import { currentScreenPair, isCurrentScreenPair } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Поколение установки фокуса (ошибка 1656ef58)
@@ -160,7 +161,7 @@ export async function findRootThought(networkId: string): Promise<Thought> {
   });
   const root = result.items[0];
   if (root === undefined) {
-    throw new Error('Не удалось найти корневую мысль этой сети.');
+    throw new Error(t('layerResync.notSucceededFindKornevuyuThoughtNetwork'));
   }
   return etn.thoughts.get(networkId, root.id);
 }

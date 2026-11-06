@@ -51,7 +51,7 @@ export function mountTabStrip(host: HTMLElement): () => void {
   };
 
   elements.reserveButton.type = 'button';
-  elements.reserveButton.title = 'Открыть сеть';
+  elements.reserveButton.title = t('tabs.openNetwork');
   elements.reserveButton.append(svgIcon('plus', 14));
   elements.reserveButton.addEventListener('click', () => {
     // In-workspace picker overlay (Q-bugfix): the tab strip stays visible
@@ -147,7 +147,7 @@ function render(elements: StripElements<TabDto> & { reserveButton: HTMLButtonEle
       (tab, close) => {
         const row = el('div', 'tab-overflow-row');
         const label = el('span', 'tab-overflow-label', networkShort(tab.network_id));
-        const activateBtn = el('button', 'link-btn', 'Активировать') as HTMLButtonElement;
+        const activateBtn = el('button', 'link-btn', t('tabs.aktivirovat')) as HTMLButtonElement;
         activateBtn.type = 'button';
         activateBtn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -191,7 +191,7 @@ function buildTabButton(
 
   const closeBtn = el('button', 'tab-close') as HTMLButtonElement;
   closeBtn.type = 'button';
-  closeBtn.title = 'Закрыть таб';
+  closeBtn.title = t('tabs.closeTab');
   closeBtn.append(svgIcon('x', 12));
   closeBtn.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -202,7 +202,7 @@ function buildTabButton(
   button.addEventListener('click', () => {
     void activateTab(tab.tab_id);
   });
-  setTooltip(button, flags.inaccessible ? 'Сеть недоступна' : label);
+  setTooltip(button, flags.inaccessible ? t('tabs.networkUnavailable') : label);
   return button;
 }
 

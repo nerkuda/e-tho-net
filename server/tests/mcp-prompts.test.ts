@@ -266,28 +266,28 @@ describe('MCP prompts: аргументы prompts/get — строки (b2223e98
       const handle = await connectMcpClient(ctx, ctx.adminKey);
       try {
         const cases: Array<{ label: string; seedIds: string; patterns: RegExp[] }> = [
-          { label: 'пустая строка', seedIds: '', patterns: [/seed_ids/, /пуст/] },
-          { label: 'только пробелы', seedIds: ' \n\t ', patterns: [/seed_ids/, /пуст/] },
-          { label: 'пустой JSON-массив', seedIds: '[]', patterns: [/seed_ids/, /пуст/] },
+          { label: 'пустая строка', seedIds: '', patterns: [/seed_ids/, /empty/] },
+          { label: 'только пробелы', seedIds: ' \n\t ', patterns: [/seed_ids/, /empty/] },
+          { label: 'пустой JSON-массив', seedIds: '[]', patterns: [/seed_ids/, /empty/] },
           {
             label: 'незакрытый JSON-массив',
             seedIds: '["id-1","id-2"',
-            patterns: [/seed_ids/, /незакрыт/i],
+            patterns: [/seed_ids/, /unterminated/i],
           },
           {
             label: 'битый JSON-массив',
             seedIds: '["id-1" "id-2"]',
-            patterns: [/seed_ids/, /битый JSON/i, /кавычк/i],
+            patterns: [/seed_ids/, /malformed JSON/i, /double quotes/i],
           },
           {
             label: 'id без кавычек в JSON',
             seedIds: '[id-1,id-2]',
-            patterns: [/seed_ids/, /битый JSON/i],
+            patterns: [/seed_ids/, /malformed JSON/i],
           },
           {
             label: 'не строковый элемент JSON',
             seedIds: '["id-1", 2]',
-            patterns: [/seed_ids\[1\]/, /строков/i, /число/i],
+            patterns: [/seed_ids\[1\]/, /string/i, /number/i],
           },
         ];
         for (const probe of cases) {
@@ -357,7 +357,7 @@ describe('MCP prompts: аргументы prompts/get — строки (b2223e98
               },
             }),
             /radius/,
-            /целое число/,
+            /integer/,
           );
         }
       } finally {

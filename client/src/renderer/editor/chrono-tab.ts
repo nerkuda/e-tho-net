@@ -101,7 +101,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
   const top = div('chrono-top');
   const toolbar = div('chrono-toolbar');
   toolbar.append(uiButton({
-    label: 'Добавить',
+    label: t('addDialog.applyLabel.add'),
     role: 'secondary',
     size: 's',
     onClick: () => void startNew(),
@@ -303,7 +303,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
       table.setCurrent(created.id);
       buildEditor(created, true);
     } catch (err) {
-      notice(`Не удалось создать запись: ${errText(err)}`, 'error');
+      notice(t('chronoTab.notSucceededCreateRecord', errText(err)), 'error');
     }
   }
 
@@ -345,7 +345,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
       role: 'ghost',
       size: 's',
       class: 'chrono-date-value',
-      title: 'Дата записи',
+      title: t('chronoTab.title.dateRecords'),
       onClick: () => void openPeriodDialog(),
     });
     const refreshDateLabel = (): void => {
@@ -376,7 +376,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
     const titleInput = fieldInput({ extraClass: 'chrono-meta-input' });
     titleInput.type = 'text';
     titleInput.maxLength = 200;
-    titleInput.placeholder = 'Заголовок';
+    titleInput.placeholder = t('chronoTab.title');
     let releaseTitleKeys: (() => void) | null = null;
 
     /** Надпись заголовка в просмотре; пустая — «Пустая запись». */
@@ -533,7 +533,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
       signalOwnerActivity(ctx.ownerId);
         await reload();
       } catch (err) {
-        notice(`Не удалось сохранить: ${errText(err)}`, 'error');
+        notice(t('chronoTab.notSucceededSave', errText(err)), 'error');
       }
     };
 
@@ -607,7 +607,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
       if (selectedId === comment.id) showEmptyEditor();
       await reload();
     } catch (err) {
-      notice(`Не удалось удалить: ${errText(err)}`, 'error');
+      notice(t('chronoTab.notSucceededDelete', errText(err)), 'error');
     }
   }
 

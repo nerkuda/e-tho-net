@@ -152,12 +152,12 @@ export function createImportRoutes(deps: RouteDeps): FastifyPluginAsync {
 function decodeArchive(archiveB64: string, requestId: string): Buffer {
   const buf = Buffer.from(archiveB64, 'base64');
   if (buf.length === 0) {
-    throw new EtnError('VALIDATION_ERROR', 'Архив пустой или не base64.', undefined, requestId);
+    throw new EtnError('VALIDATION_ERROR', "The archive is empty or not base64.", undefined, requestId);
   }
   if (buf.length > ETNX_MAX_BYTES) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Размер архива ${buf.length} байт превысил лимит ${ETNX_MAX_BYTES}.`,
+      `The archive size ${buf.length} bytes exceeded the limit ${ETNX_MAX_BYTES}.`,
       { limit: ETNX_MAX_BYTES, actual: buf.length },
       requestId,
     );

@@ -59,7 +59,7 @@ export const systemLoggingRoutes: FastifyPluginAsync = async (app: FastifyInstan
       if (typeof body.enabled !== 'boolean') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Поле enabled обязательно и должно быть boolean (true/false).',
+          "The enabled field is required and must be a boolean (true/false).",
           { field: 'enabled' },
           req.id,
         );
@@ -79,7 +79,7 @@ export const systemLoggingRoutes: FastifyPluginAsync = async (app: FastifyInstan
       if (!FileLog.isValidLogFilename(filename)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Имя файла журнала должно иметь вид server-YYYY-MM-DD.log.',
+          "The log file name must have the form server-YYYY-MM-DD.log.",
           { field: 'filename' },
           req.id,
         );
@@ -88,7 +88,7 @@ export const systemLoggingRoutes: FastifyPluginAsync = async (app: FastifyInstan
       // память; `content-length` — из `stat`.
       const file = fileLog.fileStat(filename);
       if (file === null) {
-        throw new EtnError('NOT_FOUND', `Файл журнала ${filename} не найден.`, undefined, req.id);
+        throw new EtnError('NOT_FOUND', `Log file ${filename} not found.`, undefined, req.id);
       }
       reply
         .header('content-type', 'text/plain; charset=utf-8')
@@ -107,14 +107,14 @@ export const systemLoggingRoutes: FastifyPluginAsync = async (app: FastifyInstan
       if (!FileLog.isValidLogFilename(filename)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Имя файла журнала должно иметь вид server-YYYY-MM-DD.log.',
+          "The log file name must have the form server-YYYY-MM-DD.log.",
           { field: 'filename' },
           req.id,
         );
       }
       const result = fileLog.deleteFile(filename, req.auth?.user.username);
       if (result === null) {
-        throw new EtnError('NOT_FOUND', `Файл журнала ${filename} не найден.`, undefined, req.id);
+        throw new EtnError('NOT_FOUND', `Log file ${filename} not found.`, undefined, req.id);
       }
       reply.code(204).send();
     },

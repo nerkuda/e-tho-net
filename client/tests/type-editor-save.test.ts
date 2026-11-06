@@ -231,13 +231,13 @@ describe('type-manager — вкладки несохранённого типа:
       'render() не использует общий хелпер renderNewTypeHint',
     );
     assert.ok(
-      src.includes('Сохраните тип, чтобы добавлять свойства'),
+      src.includes("t('typeManager.sohraniteTypeToDobavlyatPropertiesNovogo')"),
       'текст подсказки на «Свойствах» отсутствует или разошёлся',
     );
     // Ветка заглушки на «Свойствах» — ДО отрисовки таблицы «prop-table».
     // В исходнике — `el('table', 'table-list prop-table')` (без префикса
     // `class:` — dom.ts принимает className вторым аргументом).
-    const hintIdx = src.indexOf('Сохраните тип, чтобы добавлять свойства');
+    const hintIdx = src.indexOf("t('typeManager.sohraniteTypeToDobavlyatPropertiesNovogo')");
     const ownTableIdx = src.indexOf("'table-list prop-table'");
     assert.ok(hintIdx > 0 && ownTableIdx > 0 && hintIdx < ownTableIdx, 'заглушка должна быть ДО таблицы');
   });
@@ -371,7 +371,7 @@ describe('thought-type/views-tab — кнопка «Сохранить» в за
     );
     // Подсказка — та же, что была до правки (совместима с регрессией 51732f9b).
     assert.ok(
-      src.includes('Сохраните тип, чтобы добавлять отборы'),
+      src.includes("t('thoughtTypes.sohraniteTypeToDobavlyatViewsNovogo')"),
       'текст подсказки «Отборов» отсутствует',
     );
   });

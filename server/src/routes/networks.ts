@@ -80,6 +80,7 @@ function networkDto(n: Network) {
     type_roles: n.type_roles,
     has_structure: typeof n.type_roles.table_of_contents === 'string',
     first_day_of_week: n.first_day_of_week,
+    language: n.language,
     created_at: n.created_at,
     updated_at: n.updated_at,
   };
@@ -106,7 +107,7 @@ async function requireOwnerOrAdmin(
     sendEtnError(
       reply,
       'FORBIDDEN',
-      'Требуются права владельца сети или администратора.',
+      "Network owner or administrator rights required.",
       undefined,
       req.id,
     );
@@ -170,7 +171,7 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         const input = parseRest(RestNetworkById, req);
         const network = app.systemDb.getNetworkById(input.network_id);
         if (network === null) {
-          throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Network not found.", undefined, req.id);
         }
         sendSuccess(reply, networkDto(network));
       },
@@ -187,7 +188,7 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         }
         const network = app.systemDb.getNetworkById(networkId);
         if (network === null) {
-          throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Network not found.", undefined, req.id);
         }
         // Единая доменная реализация патча (ADR 8c93f03a): мерж полей,
         // валидация type_roles, запись, audit_log и список изменений.
@@ -208,6 +209,13 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
             { user_id: req.auth!.user.id, client_id: req.auth!.clientId },
             { meta: { request_id: req.id } },
           );
+        }
+        // Смена языка сети (ADR daab6ac4 §3, задача f99f0542): затронутые
+        // сокеты получают `settings.language` с пересчитанной парой
+        // `{ language, source }` — только те, у кого эффективный язык реально
+        // изменился (пользователи без явного «языка приложения»).
+        if (changes['language'] !== undefined) {
+          app.realtimeGateway.notifyNetworkLanguageChanged(networkId, network.language);
         }
         sendSuccess(reply, networkDto(updated));
       },
@@ -235,12 +243,12 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         const userId = input.user_id.trim();
         const target = app.systemDb.getUserById(userId);
         if (target === null) {
-          throw new EtnError('NOT_FOUND', `Пользователь ${userId} не найден.`, undefined, req.id);
+          throw new EtnError('NOT_FOUND', `User ${userId} not found.`, undefined, req.id);
         }
         if (app.members.isMember(userId, networkId)) {
           throw new EtnError(
             'DUPLICATE',
-            'Пользователь уже является участником сети.',
+            "The user is already a network member.",
             undefined,
             req.id,
           );
@@ -280,19 +288,19 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         }
         const role = app.members.getMemberRole(uid, networkId);
         if (role === null) {
-          throw new EtnError('NOT_FOUND', 'Участник не найден.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Member not found.", undefined, req.id);
         }
         if (role === 'owner') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'Владелец не может покинуть сеть — сначала передайте владение.',
+            "The owner cannot leave the network — transfer ownership first.",
             undefined,
             req.id,
           );
         }
         const removed = app.systemDb.removeNetworkMember(networkId, uid);
         if (removed === 0) {
-          throw new EtnError('NOT_FOUND', 'Участник не найден.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Member not found.", undefined, req.id);
         }
         app.members.invalidate(uid, networkId);
         app.systemDb.insertAuditLog({
@@ -329,19 +337,19 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         if (!app.members.isMember(uid, networkId)) {
           throw new EtnError(
             'NOT_FOUND',
-            'Кандидат не является участником сети.',
+            "The candidate is not a network member.",
             undefined,
             req.id,
           );
         }
         const network = app.systemDb.getNetworkById(networkId);
         if (network === null) {
-          throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Network not found.", undefined, req.id);
         }
         if (network.owner_id === uid) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'Пользователь уже является владельцем.',
+            "The user is already the owner.",
             undefined,
             req.id,
           );
@@ -402,7 +410,7 @@ export function createNetworksRoutes(networkService: NetworkService): FastifyPlu
         if (!SUPPORTED_PREFERENCE_KEYS.has(key)) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `Неподдерживаемый ключ предпочтения: ${key}`,
+            `Unsupported preference key: ${key}`,
             { field: 'key' },
             req.id,
           );

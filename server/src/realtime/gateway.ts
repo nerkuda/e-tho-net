@@ -34,11 +34,14 @@ import { WebSocket, type RawData } from 'ws';
 import {
   BASE_LAYER_ID,
   REALTIME_CLOSE_CODES,
+  resolveEffectiveLanguage,
   type AnyRealtimeEvent,
   type RealtimeClientMessage,
   type RealtimeEvent,
   type RealtimeEventType,
+  type RealtimeLanguageFrame,
   type RealtimeMaintenanceFrame,
+  type RealtimeReadyFrame,
   type RealtimeServerControlMessage,
 } from '@etn/shared';
 
@@ -49,6 +52,11 @@ import type { FileLog } from '../log/file-log.js';
 import type { Logger } from '../logger.js';
 import { openNetworkDb } from '../db/network-db.js';
 import { resolveSessionLayer, resolveSessionSwitchSeq } from '../domain/layer-service.js';
+import {
+  getServerLanguage,
+  getUserAppLanguage,
+  resolveLanguageForUserNetwork,
+} from '../domain/language-service.js';
 import { clearLocksForClient } from '../domain/lock-service.js';
 import { emitDomainEvent } from './emit.js';
 import { isEventVisibleInLayer } from './layer-visibility.js';
@@ -260,6 +268,70 @@ export class RealtimeGateway {
     return this.connections.size;
   }
 
+  /**
+   * Смена языка сети (ADR daab6ac4 §3, задача f99f0542): затронутым сокетам —
+   * `settings.language` с пересчитанной парой `{ language, source }`.
+   *
+   * Затронуты только сокеты этой сети, чей пользователь не задал «язык
+   * приложения» явно (`app_language = null`): у остальных эффективный язык —
+   * пользовательский и сменой сети не меняется. Событие уходит лишь тем, у
+   * кого язык реально изменился (например, сеть перешла с `ru` на `en`).
+   *
+   * @param previousLanguage — значение `networks.language` ДО изменения.
+   */
+  notifyNetworkLanguageChanged(networkId: string, previousLanguage: string | null): void {
+    const network = this.systemDb.getNetworkById(networkId);
+    const conns = this.byNetwork.get(networkId);
+    if (network === null || conns === undefined) return;
+    const server = getServerLanguage(this.systemDb);
+    for (const conn of conns) {
+      const user = getUserAppLanguage(this.systemDb, conn.userId);
+      if (user !== null) continue;
+      const before = resolveEffectiveLanguage({ user, network: previousLanguage, server });
+      const after = resolveEffectiveLanguage({ user, network: network.language, server });
+      // Сравнивается ПАРА `{ language, source }` (ADR §3): смена только
+      // источника (`null → en` при сервере `en`) тоже меняет контракт клиента.
+      if (before.language === after.language && before.source === after.source) continue;
+      sendJson(
+        conn,
+        { type: 'settings.language', language: after.language, source: after.source } satisfies RealtimeLanguageFrame,
+        this.logger,
+      );
+    }
+  }
+
+  /**
+   * Смена языка сервера (ADR daab6ac4 §3, задача f99f0542): `settings.language`
+   * уходит сокетам, у которых фактически изменилась пара `{ language, source }`
+   * эффективного языка. Решает резолвинг, а не хранимое значение сети: сеть с
+   * невалидным тегом (ручная правка БД) фактически наследует сервер — событие
+   * ей тоже уходит. Сокеты с явным языком пользователя или валидным языком
+   * сети не затрагиваются (их пара не меняется).
+   *
+   * @param previousServerLanguage — значение `server.language` ДО изменения.
+   */
+  notifyServerLanguageChanged(previousServerLanguage: string): void {
+    const server = getServerLanguage(this.systemDb);
+    if (server === previousServerLanguage) return;
+    for (const conn of this.connections) {
+      const user = getUserAppLanguage(this.systemDb, conn.userId);
+      const network = this.systemDb.getNetworkById(conn.networkId);
+      const networkLanguage = network?.language ?? null;
+      const before = resolveEffectiveLanguage({
+        user,
+        network: networkLanguage,
+        server: previousServerLanguage,
+      });
+      const after = resolveEffectiveLanguage({ user, network: networkLanguage, server });
+      if (before.language === after.language && before.source === after.source) continue;
+      sendJson(
+        conn,
+        { type: 'settings.language', language: after.language, source: after.source } satisfies RealtimeLanguageFrame,
+        this.logger,
+      );
+    }
+  }
+
   /** Authenticate + authorise the upgrade, then track the connection. */
   private handleConnection(socket: WebSocket, req: FastifyRequest): void {
     const networkId = this.queryString(req, 'network_id');
@@ -316,6 +388,19 @@ export class RealtimeGateway {
     this.connections.add(conn);
     this.indexByNetwork(conn);
     this.indexByClient(conn);
+    // Кадр готовности (ADR daab6ac4 §3, задача f99f0542): эффективный язык
+    // пары «пользователь × сеть» — тот же резолвинг, что у REST. Клиент не
+    // собирает цепочку наследования сам; `null` наружу не отдаётся.
+    const effectiveLanguage = resolveLanguageForUserNetwork(this.systemDb, auth.userId, networkId);
+    sendJson(
+      conn,
+      {
+        type: 'ready',
+        language: effectiveLanguage.language,
+        source: effectiveLanguage.source,
+      } satisfies RealtimeReadyFrame,
+      this.logger,
+    );
     this.fileLog?.info('ws', 'client connected', {
       network_id: networkId,
       user_id: auth.userId,

@@ -271,6 +271,7 @@ describe('realtime-вложения открытого редактора (ош�
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,
+        onLanguage: () => undefined,
         onEvent: (handler: (raw: unknown) => void) => {
           realtimeHandler = handler;
         },

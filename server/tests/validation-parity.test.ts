@@ -152,7 +152,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));
       assert.equal(mcpErr.code, 'VALIDATION_ERROR');
-      assert.equal(mcpErr.message, 'limit должен быть целым числом не больше 500.');
+      assert.equal(mcpErr.message, 'limit must be an integer not greater than 500.');
     } finally {
       await closeWorld(w);
     }
@@ -180,7 +180,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));
       assert.equal(mcpErr.code, restErr.error.code);
-      assert.equal(mcpErr.message, 'title обязателен.');
+      assert.equal(mcpErr.message, 'title is required.');
       assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
     } finally {
       await closeWorld(w);
@@ -210,7 +210,7 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
       assert.equal(mcpRes.isError, true);
       const mcpErr = mcpErrorParts(toolText(mcpRes));
       assert.equal(mcpErr.code, restErr.error.code);
-      assert.equal(mcpErr.message, 'items.0.node_key обязателен.');
+      assert.equal(mcpErr.message, 'items.0.node_key is required.');
       assert.equal(mcpErr.message, restErr.error.message, 'MCP и REST дают одинаковый текст');
     } finally {
       await closeWorld(w);
@@ -225,8 +225,8 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
     const w = await pairedWorld();
     try {
       const cases: Array<{ tables: Record<string, unknown>; message: string }> = [
-        { tables: { t1: 123 }, message: 'tables.t1 должен быть массивом строк.' },
-        { tables: { t1: [123] }, message: 'tables.t1.0 должен быть строкой.' },
+        { tables: { t1: 123 }, message: 'tables.t1 must be an array of strings.' },
+        { tables: { t1: [123] }, message: 'tables.t1.0 must be a string.' },
       ];
       for (const { tables, message } of cases) {
         const restRes = await w.rest.app.inject({
@@ -263,14 +263,14 @@ describe('паритет валидации REST ↔ MCP (c9d5f21e)', () => {
         arguments: { network_id: w.rest.networkId },
       });
       assert.equal(missing.isError, true);
-      assert.equal(mcpErrorParts(toolText(missing)).message, 'layer_id обязателен.');
+      assert.equal(mcpErrorParts(toolText(missing)).message, 'layer_id is required.');
 
       const wrongType = await w.handle.client.callTool({
         name: 'etn.layers.select',
         arguments: { network_id: w.rest.networkId, layer_id: 123 },
       });
       assert.equal(wrongType.isError, true);
-      assert.equal(mcpErrorParts(toolText(wrongType)).message, 'layer_id должен быть строкой.');
+      assert.equal(mcpErrorParts(toolText(wrongType)).message, 'layer_id must be a string.');
     } finally {
       await closeWorld(w);
     }

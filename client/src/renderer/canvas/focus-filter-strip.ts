@@ -41,7 +41,7 @@ import { openViewEditorDialog } from '../screens/thought-type/filter-dialog.js';
 import { openCanvasLinkFilterDialog } from './link-filter-dialog.js';
 import { confirmDialog } from '../lib/dialog.js';
 import { etn } from '../lib/etn.js';
-import { div } from '../lib/dom.js';
+import { div, errText } from '../lib/dom.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { isInBaseLayer } from '../lib/layer-base.js';
 import { showMenuAt, menuAction, menuChoice, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
@@ -1162,11 +1162,10 @@ async function deleteView(networkId: string, view: EffectiveViewRow): Promise<vo
 }
 
 function formatStripError(err: unknown, fallback: string): string {
-  if (err !== null && typeof err === 'object' && 'message' in err) {
-    const msg = (err as { message?: unknown }).message;
-    if (typeof msg === 'string' && msg.length > 0) return `${fallback} ${msg}`;
-  }
-  return fallback;
+  // Причина — локализованный текст по коду (ADR daab6ac4 §4); серверный
+  // `message` английский и пользователю не показывается.
+  const text = errText(err);
+  return text === '' ? fallback : `${fallback} ${text}`;
 }
 
 // ---------------------------------------------------------------------------

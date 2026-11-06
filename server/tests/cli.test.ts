@@ -130,7 +130,7 @@ describe('parseInitArgs', () => {
   });
 
   it('throws on unknown argument', () => {
-    assert.throws(() => parseInitArgs(['--username', 'a', '--bogus']), /Неизвестный аргумент/);
+    assert.throws(() => parseInitArgs(['--username', 'a', '--bogus']), /Unknown argument/);
   });
 });
 
@@ -138,7 +138,7 @@ describe('main (no native required)', () => {
   it('prints help and returns 1 when no command is given', async () => {
     const { result, stdout } = await captureConsole(() => main({ argv: ['node', 'etn'] }));
     assert.equal(result, 1);
-    assert.ok(stdout.join('\n').includes('Использование'));
+    assert.ok(stdout.join('\n').includes('Usage'));
   });
 
   it('returns 0 on --help', async () => {
@@ -151,7 +151,7 @@ describe('main (no native required)', () => {
       main({ argv: ['node', 'etn', 'frobnicate'] }),
     );
     assert.equal(result, 1);
-    assert.ok(stderr.join('\n').includes('Неизвестная команда'));
+    assert.ok(stderr.join('\n').includes('Unknown command'));
   });
 
   it('fails with a config error when ETN_DATA_DIR is missing', async () => {
@@ -212,14 +212,14 @@ describe(
       assert.ok(existsSync(path.join(dataDir, '_system.db')), 'system db was created');
       const out1 = first.stdout.join('\n');
       assert.match(out1, /etn_[0-9a-f]{32}/);
-      assert.ok(out1.includes('один раз'));
+      assert.ok(out1.includes('shown once'));
 
       // Re-running must be refused (already initialised).
       const second = await captureConsole(() =>
         main({ argv: ['node', 'etn', 'init', '--username', 'other'], env }),
       );
       assert.equal(second.result, 1);
-      assert.ok(second.stderr.join('\n').includes('уже инициализирован'));
+      assert.ok(second.stderr.join('\n').includes('already initialized'));
 
       // The printed key must not appear in the re-init output.
       assert.doesNotMatch(second.stdout.join('\n'), /etn_[0-9a-f]{32}/);
@@ -258,7 +258,7 @@ describe(
         main({ argv: ['node', 'etn', 'init', '--check'], env: { ETN_DATA_DIR: orphanDbDir } }),
       );
       assert.equal(after.result, 0);
-      assert.match(after.stdout.join('\n'), /первый администратор есть/);
+      assert.match(after.stdout.join('\n'), /first administrator exists/);
     });
 
     it('--check на базе версии до 0.15.1 (нет update_jobs) даёт 0, а не 2', async () => {
@@ -307,7 +307,7 @@ describe(
         main({ argv: ['node', 'etn', 'init', '--check'], env: { ETN_DATA_DIR: dataDir } }),
       );
       assert.equal(check.result, 0, `check: ${check.stderr.join('\n') || check.stdout.join('\n')}`);
-      assert.match(check.stdout.join('\n'), /первый администратор есть/);
+      assert.match(check.stdout.join('\n'), /first administrator exists/);
       assert.doesNotMatch(check.stderr.join('\n'), /no such table/);
     });
 

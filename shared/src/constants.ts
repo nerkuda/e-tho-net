@@ -179,11 +179,18 @@ export type PrefKey = (typeof PREF_KEY)[keyof typeof PREF_KEY];
  * network and are shared by all networks and all devices of the user on this
  * server; access is `/api/v1/users/me/settings`.
  *
- * First (and currently only) key: `comment_hotkeys` — JSON map
- * «command → combination» of the user's comment hotkeys.
+ * First key: `comment_hotkeys` — JSON map «command → combination» of the
+ * user's comment hotkeys. `app_language` (ADR daab6ac4) — язык приложения.
  */
 export const USER_SETTING_KEY = {
   COMMENT_HOTKEYS: 'comment_hotkeys',
+  /**
+   * «Язык приложения» пользователя (ADR daab6ac4, задача f99f0542): `null` —
+   * «использовать язык сетей»; строка — конкретный тег BCP-47. Живёт на
+   * уровне «пользователь × сервер» (L3s) и потому действует на всех клиентах
+   * пользователя; локальный `client_meta.lang` — только кэш (ADR §5).
+   */
+  APP_LANGUAGE: 'app_language',
 } as const satisfies Record<string, string>;
 export type UserSettingKey = (typeof USER_SETTING_KEY)[keyof typeof USER_SETTING_KEY];
 
@@ -271,8 +278,19 @@ export const CLIENT_META_KEY = {
   CLIENT_ID: 'client_id',
   LAST_SEQ: 'last_seq',
   THEME: 'theme',
-  /** Язык интерфейса клиента (задача 57f09136); исходный — `ru`. */
+  /**
+   * Кэш последнего известного эффективного языка интерфейса (ADR daab6ac4 §5,
+   * задача faba9ff4): конкретный тег BCP-47 для офлайн-старта. Источником языка
+   * при доступном сервере не является — серверное значение побеждает.
+   */
   LANG: 'lang',
+  /**
+   * Флаг разовой миграции «язык из кэша → профиль пользователя» (ADR daab6ac4
+   * §5, задача faba9ff4): `'true'` — миграция уже выполнена/проверена. После
+   * него `client_meta.lang` — только кэш, а `null` в профиле означает осознанное
+   * наследование и не перезаписывается.
+   */
+  LANG_MIGRATED: 'lang_migrated',
   ZOOM: 'zoom',
   ACTIVE_PROFILE_ID: 'active_profile_id',
   WINDOW_BOUNDS: 'window_bounds',
@@ -298,8 +316,21 @@ export const SETTING_KEY = {
   REALTIME_EVENT_LOG_TTL_HOURS: 'realtime.event_log_ttl_hours',
   REALTIME_EVENT_LOG_MAX_ROWS: 'realtime.event_log_max_rows',
   AUTH_BAD_ATTEMPTS_PER_MINUTE: 'auth.bad_attempts_per_minute',
+  /**
+   * Язык сервера по умолчанию (ADR daab6ac4 §1–2, задача f99f0542):
+   * конкретный тег BCP-47, значение по умолчанию — `en`. Меняет администратор;
+   * задаёт нижнюю ступень наследования языка интерфейса. На язык серверных
+   * текстов (REST/WS/CLI/MCP) не влияет — они всегда английские.
+   */
+  SERVER_LANGUAGE: 'server.language',
 } as const satisfies Record<string, string>;
 export type SettingKey = (typeof SETTING_KEY)[keyof typeof SETTING_KEY];
+
+/**
+ * Язык сервера по умолчанию, когда настройка `server.language` не задана
+ * (ADR daab6ac4 §1, решение 2026-10-24: английский).
+ */
+export const DEFAULT_SERVER_LANGUAGE = 'en';
 
 // ---------------------------------------------------------------------------
 // Subsystem defaults (mirror L1 defaults from 11-settings-and-state.md §2.1)
@@ -530,7 +561,7 @@ export function validateTypeRoles(input: unknown): TypeRoles {
   if (typeof input !== 'object' || Array.isArray(input)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'type_roles должен быть объектом { [роль]: type_id | null }.',
+      "type_roles must be an object { [role]: type_id | null }.",
       { field: 'type_roles' },
     );
   }
@@ -539,14 +570,14 @@ export function validateTypeRoles(input: unknown): TypeRoles {
     if (!(KNOWN_TYPE_ROLES as readonly string[]).includes(key)) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Неизвестная роль type_roles "${key}" (допустимы: ${KNOWN_TYPE_ROLES.join(', ')}).`,
+        `Unknown type_roles role "${key}" (allowed: ${KNOWN_TYPE_ROLES.join(', ')}).`,
         { field: `type_roles.${key}`, allowed: KNOWN_TYPE_ROLES },
       );
     }
     if (raw !== null && typeof raw !== 'string') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `type_roles["${key}"] должен быть строкой или null.`,
+        `type_roles["${key}"] must be a string or null.`,
         { field: `type_roles.${key}` },
       );
     }

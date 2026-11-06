@@ -25,7 +25,7 @@ import { uiButton } from '../lib/ui/button.js';
 
 /** Role badge text (owner/member). */
 function roleBadge(role: string): HTMLElement {
-  return badge(role === 'owner' ? 'владелец' : 'участник', {
+  return badge(role === 'owner' ? t('networks.owner') : t('networks.member'), {
     tone: role === 'owner' ? 'warn' : 'accent',
   });
 }
@@ -38,22 +38,22 @@ export function buildNetworks(): HTMLElement {
 
   const header = div('form-row');
   header.style.marginBottom = '12px';
-  const title = el('h1', 'networks-title', 'Мыслесети');
+  const title = el('h1', 'networks-title', t('networks.mysleseti'));
   title.style.flex = '1';
   const createButton = uiButton({
-    label: 'Создать сеть',
+    label: t('networks.label.createNetwork'),
     role: 'primary',
     size: 'm',
     onClick: () => void showCreateNetworkDialog(),
   });
   const aboutButton = uiButton({
-    label: 'О программе',
+    label: t('about.title.oProgramme'),
     role: 'secondary',
     size: 'm',
     onClick: () => showAboutDialog(),
   });
   const logoutButton = uiButton({
-    label: 'Отключиться',
+    label: t('networks.label.otklyuchitsya'),
     role: 'secondary',
     size: 'm',
     onClick: () => void confirmDisconnect(),
@@ -70,7 +70,7 @@ export function buildNetworks(): HTMLElement {
   const userLine = el(
     'p',
     'muted',
-    `Подключены как ${store.state.me?.display_name ?? store.state.me?.username ?? '—'}`,
+    t('networks.podklyucheny', store.state.me?.display_name ?? store.state.me?.username ?? '—'),
   );
   userLine.style.margin = '0 0 10px';
   card.append(userLine);
@@ -101,14 +101,14 @@ export function buildNetworks(): HTMLElement {
   function renderList(networks: NetworkListItem[]): void {
     list.replaceChildren();
     if (networks.length === 0) {
-      list.append(el('p', 'muted', 'У вас пока нет сетей. Создайте первую!'));
+      list.append(el('p', 'muted', t('networks.uVasPokaNoNetworksSozdayte')));
       return;
     }
     for (const net of networks) {
       const item = div('network-item');
       const info = div('network-info');
       info.append(span(net.display_name, 'network-name'));
-      info.append(el('p', 'muted', `Владелец: ${net.owner.display_name ?? net.owner.id}`));
+      info.append(el('p', 'muted', t('networks.owner2', net.owner.display_name ?? net.owner.id)));
       info.style.margin = '0';
       item.append(info);
       const meta = div('network-meta');
@@ -132,7 +132,7 @@ export function buildNetworks(): HTMLElement {
 
   /** Confirm disconnect → onboarding. */
   async function confirmDisconnect(): Promise<void> {
-    if (await confirmDialog('Отключиться', 'Вернуться к экрану подключения?')) {
+    if (await confirmDialog(t('networks.label.otklyuchitsya'), t('networks.vernutsyaEkranuPodklyucheniya'))) {
       await disconnect();
     }
   }
@@ -151,8 +151,8 @@ export async function showCreateNetworkDialog(): Promise<void> {
   const errorLine = footerErrorLine();
   const body = div('form-stack');
   body.append(
-    fieldRow({ label: 'Название сети', control: nameInput }),
-    fieldRow({ label: 'Описание (необязательно)', control: descInput }),
+    fieldRow({ label: t('networks.label.titleNetwork'), control: nameInput }),
+    fieldRow({ label: t('networks.label.descriptionOptional'), control: descInput }),
   );
 
   let creating = false;
@@ -162,7 +162,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
       if (creating) return;
       const name = nameInput.value.trim();
       if (name === '') {
-        errorLine.show('Введите название сети.', { field: () => nameInput });
+        errorLine.show(t('networks.enterTitleNetwork'), { field: () => nameInput });
         return;
       }
       creating = true;
@@ -179,7 +179,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
       }
     }
     showDialog({
-      title: 'Создать мыслесеть',
+      title: t('networks.title.createMysleset'),
       body,
       size: 's',
       // Ошибка создания — в панели кнопок, единственное обязательное место
@@ -194,7 +194,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
       buttons: [
         { label: t('actions.cancel'), onClick: () => resolve() },
         {
-          label: 'Создать',
+          label: t('admin.label.create'),
           primary: true,
           keepOpen: true,
           onClick: (close) => void create(close),

@@ -23,14 +23,14 @@ export function registerActivityTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.activity.list',
     {
-      title: 'Лента журнала активности',
+      title: 'Activity log',
       description:
         'Read the activity log of a network: one row per mutating operation by a network member — ' +
         'creation, update, delete, trash/restore of a thought, link, type, property, comment, attachment ' +
         'or layer; `entity_title` is a snapshot at the moment of the event. Captures (`edit.*`) are not ' +
         'recorded. Filters combine with AND; sorted by `occurred_at_ms DESC`; paginated (`limit` default ' +
-        '50, max 200, + `offset`). `ast` — тело отбора профиля «события» (XOR с плоскими фильтрами). ' +
-        'Детали фильтров, AST и пагинации — `etn.guide { topic: "activity.list" }`.',
+        '`ast` — filter body of the "events" profile (XOR with flat filters). ' +
+        'Filter, AST and pagination details — `etn.guide { topic: "activity.list" }`.',
       inputSchema: ActivityList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.activity.list'],
     },

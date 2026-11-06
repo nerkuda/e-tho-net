@@ -50,7 +50,8 @@
 - [userdocs/layers.md](userdocs/layers.md) — слои изменений;
 - [userdocs/install.md](userdocs/install.md) — установка и обновление;
 - [userdocs/admin.md](userdocs/admin.md) — администрирование;
-- [userdocs/ai-agents.md](userdocs/ai-agents.md) — подключение AI-агентов (MCP).
+- [userdocs/ai-agents.md](userdocs/ai-agents.md) — подключение AI-агентов (MCP);
+- [userdocs/glossary.md](userdocs/glossary.md) — глоссарий терминов (RU/EN/ZH).
 
 Остаётся файлом: [history-creation.md](history-creation.md) — история создания
 проекта.

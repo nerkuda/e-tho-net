@@ -34,8 +34,11 @@ import { store } from '../state.js';
  * Подпись НЕИЗВЕСТНОГО участника вместо обрезанного id (требование 9d5e3c4e
  * «представления сущностей, без ID»): до прихода админ-ростера и для того, кого
  * в нём нет, чипы и списки выбора показывают нейтральный текст, а не `id.slice`.
+ * Функция: текст берётся в момент показа (ошибка ebed42d3).
  */
-const UNKNOWN_USER_LABEL = 'неизвестный участник';
+function unknownUserLabel(): string {
+  return t('userSelect.neizvestnyyMember');
+}
 
 /**
  * Подпись участника в списках выбора: «Имя (логин)». Записи-заглушки
@@ -253,7 +256,7 @@ export function buildUserSelectWidget(opts: {
 
   const render = (): void => {
     select.replaceChildren();
-    const placeholder = el('option', undefined, 'любой');
+    const placeholder = el('option', undefined, t('userSelect.lyuboy'));
     placeholder.value = '';
     select.append(placeholder);
     // Сортируем по display_name/username, чтобы список был стабилен.
@@ -285,7 +288,7 @@ export function buildUserSelectWidget(opts: {
     state.byId.set(opts.currentId, {
       id: opts.currentId,
       username: '',
-      display_name: UNKNOWN_USER_LABEL,
+      display_name: unknownUserLabel(),
       is_admin: false,
       is_first_user: false,
       disabled: false,
@@ -343,7 +346,7 @@ export function buildUserMultiSelectWidget(opts: {
       state.byId.set(id, {
         id,
         username: '',
-        display_name: UNKNOWN_USER_LABEL,
+        display_name: unknownUserLabel(),
         is_admin: false,
         is_first_user: false,
         disabled: false,
@@ -364,7 +367,7 @@ export function buildUserMultiSelectWidget(opts: {
     labelOf: (id) => {
       const user = state.byId.get(id);
       // Нет записи в кэше — плейсхолдер, а не id (требование 9d5e3c4e).
-      return user === undefined ? UNKNOWN_USER_LABEL : (user.display_name ?? user.username);
+      return user === undefined ? unknownUserLabel() : (user.display_name ?? user.username);
     },
     onRemove: (id) => {
       ids = ids.filter((x) => x !== id);

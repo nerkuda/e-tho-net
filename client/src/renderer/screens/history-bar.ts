@@ -69,6 +69,7 @@ import { registerDropActions, wireExternalDragSource } from '../canvas/drag-clou
 import { openStructuresThought } from './structures/structures.js';
 import { openChronicleThought } from './chronicle/chronicle.js';
 import { HISTORY_BAR_MORE_RESERVE, planHistoryChips, type HistoryChipPlan } from '../lib/pure.js';
+import { t } from '../lib/i18n.js';
 
 /** How many entries the dropdown source returns at once. */
 const HISTORY_LIMIT = 50;
@@ -262,7 +263,7 @@ function paintHistory(
   clear(host);
   if (visible.length === 0) {
     const empty = div('history-empty');
-    empty.textContent = 'нет предыдущих мыслей';
+    empty.textContent = t('history.noPredyduschihThoughts');
     host.append(empty);
     return;
   }
@@ -357,7 +358,7 @@ function openHistoryMenu(
 
 /** Builds the `▾ N` button anchored to the right edge of the visible chips. */
 function buildMoreButton(count: number, onClick: () => void): HTMLElement {
-  const more = button('', onClick, 'history-more', 'Остальная история');
+  const more = button('', onClick, 'history-more', t('history.ostalnayaIstoriya'));
   more.append(svgIcon('chevron-down', 11), span(` ${count}`));
   return more;
 }

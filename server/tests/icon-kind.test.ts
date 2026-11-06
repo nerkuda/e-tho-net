@@ -28,7 +28,7 @@ import {
   type RestTestContext,
 } from './rest-helpers.js';
 
-const LIBRARY_ICON_MESSAGE = 'icon должен быть именем иконки из каталога Lucide (kebab-case).';
+const LIBRARY_ICON_MESSAGE = 'icon must be a Lucide catalog icon name (kebab-case).';
 
 /** Известное имя каталога (используется в положительных сценариях). */
 const KNOWN_ICON = 'book-open';

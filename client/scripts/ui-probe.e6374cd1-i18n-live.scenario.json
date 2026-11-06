@@ -1,0 +1,99 @@
+{
+  "name": "i18n-live-switch",
+  "description": "Задача e6374cd1: живая смена языка интерфейса без перезапуска. Смена идёт пользовательским путём «Все настройки → Клиент → язык → Применить»; в сборке стенда (--mode test) зарегистрирована тестовая локаль zz (lib/locales/test.ts), потому что каталогов en/zh ещё нет. Проверяется: текущий экран пересобран на новом языке (метка мыслесети, заголовки видов), открытый диалог настроек перерисован целиком (заголовок, кнопки), введённое в форму значение не потеряно, document.lang следует за языком, обратное переключение на ru работает так же. Запуск: npm -w @etn/client run build -- --mode test && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.e6374cd1-i18n-live.scenario.json --out .tmp/e6374cd1/run1",
+  "timeout": 120000,
+  "steps": [
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 25000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+
+    { "name": "lang-before", "probe": "document.documentElement.lang", "expect": "ru" },
+    { "name": "workspace-label-before", "probe": "document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent ?? null", "expect": "Мыслесеть" },
+    { "name": "map-tab-before", "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title')).includes('Карта мыслей')", "expect": true },
+
+    { "name": "open-user-menu", "click": "button[title=\"Меню пользователя\"]" },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    { "name": "settings-dialog", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null" },
+    { "name": "dialog-title-before", "probe": "document.querySelector('.dialog-title')?.textContent ?? null", "expect": "Все настройки" },
+
+    {
+      "name": "type-display-name",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Пользователь'); if (!nav) throw new Error('нет раздела «Пользователь»'); nav.click(); const input = document.querySelector('.settings-section input[type=text]'); if (!input) throw new Error('нет поля имени'); input.value = 'Проверка e6374cd1'; input.dispatchEvent(new Event('input', { bubbles: true })); return input.value; })()"
+    },
+    { "name": "display-name-typed", "probe": "document.querySelector('.settings-section input[type=text]')?.value ?? null", "expect": "Проверка e6374cd1" },
+    {
+      "name": "open-client-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    { "name": "test-locale-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]') !== null" },
+    { "name": "lang-checked-before", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "ru" },
+    {
+      "name": "pick-test-locale",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]'); if (!r) throw new Error('нет локали zz'); r.click(); return r.checked; })()"
+    },
+    { "name": "test-locale-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "zz" },
+    { "name": "apply-enabled", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'Применить' && !b.disabled)" },
+    {
+      "name": "apply-lang",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => e.textContent === 'Применить'); if (!b) throw new Error('нет кнопки «Применить»'); b.click(); return true; })()"
+    },
+
+    { "name": "live-lang-applied", "timeout": 20000, "waitFor": "document.documentElement.lang === 'zz' && document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent === 'TestNet' && document.querySelector('.dialog-title')?.textContent === 'TestSettings'" },
+    { "name": "dialog-buttons-after", "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.textContent)", "expect": ["TestApply", "TestCancel", "TestApplyClose"] },
+    { "name": "lang-checked-after", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "zz" },
+    { "name": "map-tab-after", "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title')).includes('TestMap')", "expect": true },
+
+    {
+      "name": "open-user-section-after-switch",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Пользователь'); if (!nav) throw new Error('нет раздела «Пользователь» после смены языка'); nav.click(); return true; })()"
+    },
+    { "name": "input-preserved", "probe": "document.querySelector('.settings-section input[type=text]')?.value ?? null", "expect": "Проверка e6374cd1" },
+
+    {
+      "name": "close-settings",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'TestCancel'); if (!b) throw new Error('нет кнопки отмены тестовой локали'); b.click(); return true; })()"
+    },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "workspace-stays-localized", "probe": "document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent ?? null", "expect": "TestNet" },
+
+    { "name": "open-user-menu-again", "click": "button[title=\"Меню пользователя\"]" },
+    { "name": "user-menu-again-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-again",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    { "name": "settings-again", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null" },
+    {
+      "name": "open-client-again",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    { "name": "ru-radio-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]') !== null" },
+    {
+      "name": "pick-russian",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+    },
+    { "name": "russian-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "ru" },
+    { "name": "apply-enabled-again", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'TestApply' && !b.disabled)" },
+    {
+      "name": "apply-russian",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => e.textContent === 'TestApply'); if (!b) throw new Error('нет кнопки применения'); b.click(); return true; })()"
+    },
+    { "name": "russian-live-applied", "timeout": 20000, "waitFor": "document.documentElement.lang === 'ru' && document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent === 'Мыслесеть' && document.querySelector('.dialog-title')?.textContent === 'Все настройки'" },
+    {
+      "name": "close-settings-ru",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()"
+    },
+    { "name": "dialog-closed-ru", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "lang-after", "probe": "document.documentElement.lang", "expect": "ru" }
+  ]
+}

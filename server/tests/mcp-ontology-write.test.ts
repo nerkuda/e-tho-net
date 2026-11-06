@@ -1386,7 +1386,7 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
         });
         assert.equal(ttRootParent.isError, true, 'явный parent у корня должен отвергаться');
         assert.ok(
-          toolText(ttRootParent).includes('корневого типа нет родителя'),
+          toolText(ttRootParent).includes('the root type has no parent'),
           `expected root-parent error: ${toolText(ttRootParent)}`,
         );
 
@@ -1399,7 +1399,7 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
           },
         });
         assert.equal(ltRootParent.isError, true, 'parent у корня типа связи должен отвергаться');
-        assert.ok(toolText(ltRootParent).includes('корневого типа нет родителя'));
+        assert.ok(toolText(ltRootParent).includes('the root type has no parent'));
 
         // Родитель корня не изменился и не получил version-инкремента.
         const rootRow = ndb

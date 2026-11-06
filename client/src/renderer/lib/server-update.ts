@@ -29,14 +29,19 @@
  * модель не подставляет путь; если поле появится, оно показывается как есть.
  */
 
-import { EtnError, type UpdateJob, type UpdateJobStage } from '@etn/shared';
+import {
+  EtnError,
+  isUpdateJobFailureReason,
+  type UpdateJob,
+  type UpdateJobStage,
+} from '@etn/shared';
 
 import type {
   ServerDeployment,
   SystemUpdateStatus,
   UpdateChannel,
 } from '../../main/ipc/contract.js';
-import { fmtDateTime } from './dom.js';
+import { errText, fmtDateTime } from './dom.js';
 import { t, type MessageKey } from './i18n.js';
 
 /** Фаза диалога: ожидание, проверка, идущее задание, итог. */
@@ -97,15 +102,79 @@ export function updateDeploymentLabel(deployment: ServerDeployment): MessageKey 
 }
 
 /**
- * Путь к журналу установщика из серверного текста ошибки. Сервер дописывает
- * `журнал: <путь>` в конец причины (`describeFailureExit` и др.); путь может
- * содержать пробелы, поэтому берётся хвост после маркера.
+ * Маркер журнала установщика в серверном тексте ошибки. Сервер дописывает
+ * `log: <путь>` в конец причины (`describeFailureExit`, `InstallerTimeoutError`
+ * и др., ADR daab6ac4 — английский); путь может содержать пробелы, поэтому
+ * берётся хвост после маркера.
  */
+const ENGLISH_JOURNAL_MARKER = /\blog:\s*([^;]+?)(?:\s*;|\s*$)/i;
+
+/**
+ * Русская форма маркера — совместимость с заданиями, сохранёнными до перевода
+ * серверных текстов. Приоритет у английской формы.
+ */
+const RUSSIAN_JOURNAL_MARKER = /журнал(?:\s+установщика)?:\s*([^;]+?)(?:\s*;|\s*$)/i;
+
+/** Путь к журналу установщика из серверного текста ошибки. */
 export function extractJournalPath(error: string | null): string | null {
   if (error === null || error.trim() === '') return null;
-  const match = /журнал(?:\s+установщика)?:\s*(.+?)\s*;?\s*$/i.exec(error);
+  const match =
+    ENGLISH_JOURNAL_MARKER.exec(error) ?? RUSSIAN_JOURNAL_MARKER.exec(error);
   const path = match?.[1]?.trim() ?? '';
   return path === '' ? null : path;
+}
+
+/**
+ * Текст причины сбоя задания по машиночитаемому `reason` (задача 4f6c972a,
+ * ADR daab6ac4 §4). Когда причины нет (`null` или поле отсутствует — задание
+ * сервера 0.15.1 и старше, сохранённое до появления поля), возвращается общий
+ * локализованный текст: английский `job.error` пользователю не показывается
+ * никогда, из него берётся только путь к журналу (`extractJournalPath`).
+ * Неизвестное значение (сервер новее клиента) — тоже общий локализованный
+ * текст, а не сырой английский `error`.
+ *
+ * `installer-*`-причины делят ключи с `502 UPDATE_INSTALLER_FAILED`: один и
+ * тот же отказ установщика показывается одинаково и из конверта ошибки, и из
+ * задания в `/progress`. `installer-exit` и `interrupted` подставляют
+ * параметры из задания (`exit_code`, `failed_stage`), а не из текста.
+ */
+export function updateFailureText(
+  job: Pick<UpdateJob, 'exit_code' | 'failed_stage'> & {
+    reason?: UpdateJob['reason'];
+  },
+): string {
+  const reason = job.reason ?? null;
+  if (reason === null) return t('serverUpdate.failure.noReason');
+  switch (reason) {
+    case 'installer-target':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-target');
+    case 'installer-download':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-download');
+    case 'installer-hash':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-hash');
+    case 'installer-launch':
+      return t('errors.code.UPDATE_INSTALLER_FAILED.installer-launch');
+    case 'installer-exit':
+      return job.exit_code === null
+        ? t('serverUpdate.failure.installerExitNoCode')
+        : t('serverUpdate.failure.installerExit', String(job.exit_code));
+    case 'installer-precondition':
+      return t('serverUpdate.failure.installerPrecondition');
+    case 'installer-timeout':
+      return t('serverUpdate.failure.installerTimeout');
+    case 'not-a-service':
+      return t('serverUpdate.failure.notAService');
+    case 'interrupted':
+      return job.failed_stage === null
+        ? t('serverUpdate.failure.interruptedNoStage')
+        : t('serverUpdate.failure.interrupted', job.failed_stage);
+    case 'internal':
+      return t('serverUpdate.failure.internal');
+    default:
+      // Новое значение причины от более свежего сервера: общий текст, без
+      // разбора английского `error`.
+      return t('serverUpdate.failure.unknown');
+  }
 }
 
 /** Снимок состояния диалога. */
@@ -155,9 +224,18 @@ export interface ServerUpdateViewModel {
   done: boolean;
   /** Итог: задание провалилось. */
   failed: boolean;
-  /** Серверная причина сбоя (итог `failed`). */
+  /**
+   * Причина сбоя (`failed`) — локализованный текст по машиночитаемому
+   * `reason` (ADR daab6ac4 §4). Когда `reason` нет (задание сервера 0.15.1
+   * и старше), показывается общий локализованный текст; английский
+   * `job.error` пользователю не показывается — из него берётся только путь
+   * к журналу (`journalPath`).
+   */
   failureText: string | null;
-  /** Путь к журналу установщика из причины сбоя; `null` — сервер не сообщил. */
+  /**
+   * Путь к журналу установщика: машиночитаемое `job.log_path` в первую
+   * очередь, разбор `job.error` — только фолбэк для старых заданий.
+   */
   journalPath: string | null;
   /** Путь к архиву БД; `null` — сервер не сообщил (сейчас всегда). */
   backupPath: string | null;
@@ -233,8 +311,10 @@ export function serverUpdateViewModel(state: ServerUpdateState): ServerUpdateVie
     running: runningPhase || (job !== null && !isTerminalJobStage(job.stage)),
     done,
     failed,
-    failureText: failed ? (job?.error ?? null) : null,
-    journalPath: failed ? extractJournalPath(job?.error ?? null) : null,
+    failureText: failed && job !== null ? updateFailureText(job) : null,
+    journalPath: failed
+      ? (job?.log_path ?? extractJournalPath(job?.error ?? null))
+      : null,
     backupPath: job?.backup_path ?? null,
     disconnected: state.disconnected,
     checking: state.checking,
@@ -250,8 +330,13 @@ export type ApplyFailureKind = 'in-progress' | 'installer-failed' | 'rejected';
 /** Разобранный отказ `apply`. */
 export interface ApplyFailure {
   kind: ApplyFailureKind;
-  /** Сообщение сервера (для `installer-failed`/`rejected`) или `null`. */
-  message: string | null;
+  /**
+   * Готовый пользовательский текст для `installer-failed`/`rejected` (по коду
+   * `details.reason`, ADR daab6ac4 §4; серверный `message` не показывается)
+   * или `null`. Поле не называется `message`: в контракте ADR это имя
+   * закреплено за английским диагностическим текстом сервера.
+   */
+  text: string | null;
   /** Задание из `details.job`, если сервер его прислал. */
   job: UpdateJob | null;
   /** Сервер разрешает повтор (`details.retryable`); сейчас всегда `false`. */
@@ -278,6 +363,13 @@ function jobFromDetails(details: unknown): UpdateJob | null {
     stage: candidate.stage as UpdateJobStage,
     started_at: candidate.started_at,
     error: typeof candidate.error === 'string' ? candidate.error : null,
+    reason: isUpdateJobFailureReason(candidate.reason) ? candidate.reason : null,
+    failed_stage:
+      typeof candidate.failed_stage === 'string'
+        ? (candidate.failed_stage as UpdateJobStage)
+        : null,
+    exit_code: typeof candidate.exit_code === 'number' ? candidate.exit_code : null,
+    log_path: typeof candidate.log_path === 'string' ? candidate.log_path : null,
     backup_path: typeof candidate.backup_path === 'string' ? candidate.backup_path : null,
   };
 }
@@ -300,29 +392,29 @@ export function classifyApplyFailure(err: unknown): ApplyFailure {
 
   // Обрыв/тайм-аут: apply отвечает только после скачивания и проверки хеша.
   if (transportKind === 'connect-failed') {
-    return { kind: 'in-progress', message: null, job, retryable: false };
+    return { kind: 'in-progress', text: null, job, retryable: false };
   }
   if (error?.code === 'SERVER_UPDATING') {
-    return { kind: 'in-progress', message: null, job, retryable: false };
+    return { kind: 'in-progress', text: null, job, retryable: false };
   }
   if (error?.code === 'VERSION_CONFLICT') {
     if (reason === 'docker' || reason === 'downgrade' || reason === 'version-mismatch') {
-      return { kind: 'rejected', message: error.message, job, retryable: false };
+      return { kind: 'rejected', text: errText(err), job, retryable: false };
     }
     // job-active / installer-alive / 409 без причины — идущее обновление.
-    return { kind: 'in-progress', message: null, job, retryable: false };
+    return { kind: 'in-progress', text: null, job, retryable: false };
   }
   if (error?.code === 'UPDATE_INSTALLER_FAILED') {
     return {
       kind: 'installer-failed',
-      message: error.message,
+      text: errText(err),
       job,
       retryable: details.retryable === true,
     };
   }
   return {
     kind: 'rejected',
-    message: error?.message ?? null,
+    text: errText(err),
     job,
     retryable: false,
   };

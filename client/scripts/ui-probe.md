@@ -48,6 +48,51 @@ node client/scripts/ui-probe-stand.mjs            # свежая база + си
 node client/scripts/ui-probe-stand.mjs --data-from C:/zSpace/ETN_data --api-key etn_…
 ```
 
+### Язык интерфейса (`ru`/`en`/`zh`, профиль и наследование)
+
+С 0.15.2 (ADR `daab6ac4`, задачи faba9ff4 и 222666db) «язык приложения» живёт
+в профиле пользователя на сервере, а `client_meta.lang` — только кэш для
+офлайн-старта. Пользовательский путь — «Все настройки → Клиент → язык
+приложения»; при доступном сервере там «использовать язык сетей» или
+конкретный каталог, значение сохраняется в профиль и применяется на лету.
+Язык сети меняется в «Все настройки → Мыслесеть → Язык сети» (владелец/админ),
+язык сервера — во вкладке «Сервер» админ-панели.
+
+Три сценария покрывают модель целиком (production-сборка, сервер по умолчанию
+`en`; язык ОС на стенде может быть любым):
+
+```bash
+node client/scripts/ui-probe-stand.mjs \
+  --scenario client/scripts/ui-probe.222666db-language-ui.scenario.json
+node client/scripts/ui-probe-stand.mjs \
+  --scenario client/scripts/ui-probe.faba9ff4-language-migration.scenario.json --keep
+node client/scripts/ui-probe-stand.mjs \
+  --scenario client/scripts/ui-probe.faba9ff4-language-second-client.scenario.json \
+  --data-from <work миграции>/data --api-key <ключ миграции> --no-seed
+```
+
+Первый проверяет живое переключение на всех уровнях (профиль, сеть, сервер),
+включая WS-кадр от «второго клиента» и деградацию недоступного каталога;
+второй — разовую миграцию локального кэша в профиль и приоритет профиля над
+кэшем; третий — что новый профиль клиента получает язык из профиля при входе.
+Переходы ru↔en↔zh на конкретных экранах и полноту каталогов проверяют
+сценарии d08c422d (en) и f7dba88c (zh) — они тоже ходят через «Все настройки →
+Клиент».
+
+Режим `test` нужен только сценариям, которым мало production-каталогов
+(фикстура `zz` с узнаваемыми подписями):
+
+```bash
+npm -w @etn/client run build -- --mode test
+node client/scripts/ui-probe-stand.mjs \
+  --scenario client/scripts/ui-probe.e6374cd1-i18n-live.scenario.json
+```
+
+В тестовой сборке `app.ts` регистрирует фикстуру `lib/locales/test.ts` (код
+`zz`, несколько узнаваемых подписей); в production-сборке ветка статически
+ложна, и фикстура в бандл не попадает. После прогона верни обычную сборку
+(`npm -w @etn/client run build`).
+
 ### Фикстура данных сценария (`--scenario-seed`)
 
 Если сценарию нужны данные сверх пробной сети (например, 12 рёбер одной пары),

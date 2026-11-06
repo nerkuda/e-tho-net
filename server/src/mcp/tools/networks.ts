@@ -60,16 +60,16 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
   mcp.registerTool(
     'etn.networks.structure',
     {
-      title: 'Структура сети',
+      title: 'Network structure',
       description:
         'Read the structure declared via `type_roles.table_of_contents`: active thoughts of that type ' +
         'with permanent-comment previews (600 chars, `truncated`+`comment_id` → `etn.comments.get`), ' +
-        'property values (structural link properties «Родители»/«Потомки» are summarized by `counters` ' +
+        'property values (the structural link properties "Parents"/"Children" are summarized by `counters` ' +
         'and not repeated), neighbour counters (`deletion_blocks` too), `thought_types`. ' +
         '`include_conventions: true` adds ' +
         '`conventions` (off by default); `include_examples: true` adds `examples`. Carries `type_roles`, ' +
-        '`first_day_of_week` (ISO 1=пн…7=вс — настройка `$weekStart`/`$weekEnd`, паритет ' +
-        'с `GET /networks/:id`) and ' +
+        '`first_day_of_week` (ISO 1=Mon…7=Sun — the `$weekStart`/`$weekEnd` setting, parity ' +
+        'with `GET /networks/:id`) and ' +
         '`instructions_ref` when the `instructions` role is set. ' +
         '`has_structure: false` → empty `sections`, fall back to search/query.',
       inputSchema: NetworksStructure.schema,
@@ -103,10 +103,10 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
           typeof network.type_roles.instructions === 'string'
             ? {
                 instructions_ref:
-                  'Эта сеть публикует инструкции для агентов. Прочитайте их через ' +
+                  "This network publishes instructions for agents. Read them via " +
                   '`etn.instructions { network_id: ' +
                   args.network_id +
-                  ' }` перед первым изменением.',
+                  " }` before the first change.",
               }
             : {};
         if (sectionTypeId === null) {

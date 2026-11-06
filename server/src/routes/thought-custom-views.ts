@@ -85,7 +85,7 @@ function requireThought(
   if (thought === null) {
     throw new EtnError(
       'NOT_FOUND',
-      `Мысль ${thoughtId} не найдена.`,
+      `Thought ${thoughtId} not found.`,
       { entity: 'thought', id: thoughtId },
       requestId,
     );
@@ -107,7 +107,7 @@ function requireOwnedView(
   if (view === null || view.thought_id !== thoughtId) {
     throw new EtnError(
       'NOT_FOUND',
-      `У мысли ${thoughtId} нет отбора ${viewId}.`,
+      `Thought ${thoughtId} has no view ${viewId}.`,
       { entity: 'thought_custom_view', id: viewId, thought_id: thoughtId },
       requestId,
     );
@@ -258,7 +258,7 @@ export function createThoughtCustomViewsRoutes(deps: RouteDeps): FastifyPluginAs
         if (expectedVersion !== undefined && before.version !== expectedVersion) {
           throw new EtnError(
             'VERSION_CONFLICT',
-            'Версия отбора изменилась с момента чтения.',
+            "The view version changed since it was read.",
             {
               entity: 'thought_custom_view',
               id: viewId,

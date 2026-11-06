@@ -15,7 +15,7 @@ import type { PublicationCreateInput, Shelf } from '@etn/shared';
 
 import { showDialog } from '../../lib/dialog.js';
 import { t } from '../../lib/i18n.js';
-import { div, el } from '../../lib/dom.js';
+import { div, el, errText } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { footerErrorLine } from '../../lib/ui/messages.js';
 import { fieldInput, fieldRow } from '../../lib/ui/field.js';
@@ -136,7 +136,7 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
       // id публикации прежней сети в ней не открывается (ошибка 5768f479).
       if (isCurrentScreenPair(ownerPair)) opts.onCreated(created.id);
     } catch (err) {
-      error.textContent = err instanceof Error ? err.message : t('publication.error');
+      error.textContent = errText(err) || t('publication.error');
     }
   }
 }

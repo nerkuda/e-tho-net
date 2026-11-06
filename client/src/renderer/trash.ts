@@ -23,7 +23,7 @@ import {
   type ThoughtDeletionCheckResult,
   type TrashListResult,
 } from '@etn/shared';
-import { t } from './lib/i18n.js';
+import { t, tp } from './lib/i18n.js';
 import { MENU_SEPARATOR, menuAction, type MenuItem } from './lib/menu.js';
 
 import { onThoughtDeleted, scheduleRefresh } from './app.js';
@@ -32,7 +32,7 @@ import { invalidateRef } from './canvas/canvas.js';
 // ребра локального графа (`edgeTooltip`): подпись связи обязана читаться
 // одинаково в диалоге удаления связи и в строке корзины (ошибки ce687b37,
 // 009784ad).
-import { UNTYPED_LINK_LABEL } from './editor/mini-graph-model.js';
+import { untypedLinkLabel } from './editor/mini-graph-model.js';
 // Мини-облачка строк группового удаления собирает общая фабрика (профиль
 // `chip`): значок, цвета, начертание, бледность и метка корзины — единообразно
 // со всеми остальными списками клиента.
@@ -58,7 +58,6 @@ import { fieldInput } from './lib/ui/field.js';
 import { bindSearchNav } from './lib/ui/search-nav.js';
 import { createTable } from './lib/ui/table.js';
 import { splitterElement, wireSplitter, type SplitterHandle } from './lib/ui/splitter.js';
-import { pluralRu } from './lib/plural.js';
 
 /**
  * Human-readable reasons of a blocked deletion-check (bug 0.5.4: the dialog
@@ -67,20 +66,20 @@ import { pluralRu } from './lib/plural.js';
  * every other entry is a layer that changed the row. `noun` matches the entity.
  */
 export function blockingReasons(
-  noun: 'мысль' | 'связь',
+  noun: string,
   blocking: ThoughtDeletionBlocking | LinkDeletionBlocking,
 ): string[] {
   const reasons: string[] = [];
   if ('properties' in blocking && blocking.properties > 0) {
-    reasons.push(`${noun} используется в свойствах других мыслей`);
+    reasons.push(t('trash.ispolzuetsyaPropertiesOtherThoughts', noun));
   }
   const layers = blocking.layers;
   if (layers.some((l) => l.id === BASE_LAYER_ID)) {
-    reasons.push(`${noun} существует в основе — в слое её можно только пометить на удаление`);
+    reasons.push(t('trash.suschestvuetBaseLayerItsCanOnly', noun));
   }
   const others = layers.filter((l) => l.id !== BASE_LAYER_ID);
   if (others.length > 0) {
-    reasons.push(`${noun} изменена в слоях: ${others.map((l) => `«${l.title}»`).join(', ')}`);
+    reasons.push(t('trash.changedLayers', [noun, others.map((l) => `«${l.title}»`).join(', ')]));
   }
   return reasons;
 }
@@ -92,14 +91,14 @@ async function thoughtVersion(networkId: string, id: string): Promise<number> {
 
 /**
  * Имя типа связи «вперёд» (сторона источника) из кэша типов сети. Тип не задан
- * или не резолвится — слово-заглушка {@link UNTYPED_LINK_LABEL}: то же, что
+ * или не резолвится — слово-заглушка {@link untypedLinkLabel}: то же, что
  * показывает тултип ребра локального графа (`edgeTooltip`), поэтому подпись
  * связи читается одинаково во всех местах клиента.
  */
 export function linkTypeForwardName(typeId: string | null): string {
-  if (typeId === null) return UNTYPED_LINK_LABEL;
+  if (typeId === null) return untypedLinkLabel();
   const type = store.state.linkTypes.find((t) => t.id === typeId);
-  if (type === undefined || type.name_forward.trim() === '') return UNTYPED_LINK_LABEL;
+  if (type === undefined || type.name_forward.trim() === '') return untypedLinkLabel();
   return type.name_forward;
 }
 
@@ -243,20 +242,20 @@ export async function openThoughtDeleteDialog(
       orphaned_children: 0,
     };
   } catch (err) {
-    errorDialog('Удалить мысль', err);
+    errorDialog(t('trash.deleteThought'), err);
     return;
   }
 
   const alreadyMarked = thought.marked_for_deletion;
   const lines: string[] = [];
   if (check.blocked) {
-    for (const reason of blockingReasons('мысль', check.blocking)) {
-      lines.push(`Нельзя удалить совсем — ${reason}.`);
+    for (const reason of blockingReasons(t('clipboard.thought'), check.blocking)) {
+      lines.push(t('trash.cannotDeleteSovsem', reason));
     }
   }
   if (check.orphaned_children > 0) {
     lines.push(
-      `${check.orphaned_children} ${pluralRu(check.orphaned_children, 'потомок', 'потомка', 'потомков')} останется без родителей.`,
+      t('trash.ostanetsyaWithoutParents', [check.orphaned_children, tp('plurals.child', check.orphaned_children)]),
     );
   }
 
@@ -269,7 +268,7 @@ export async function openThoughtDeleteDialog(
   });
 
   openEntityDeleteDialog({
-    title: `Удаление мысли «${target.title}»`,
+    title: t('trash.deleteThought2', target.title),
     lines,
     blocked: check.blocked,
     alreadyMarked,
@@ -286,13 +285,13 @@ export async function openThoughtDeleteDialog(
       if (next === undefined) return null;
       const nextLines: string[] = [];
       if (next.blocked) {
-        for (const reason of blockingReasons('мысль', next.blocking)) {
-          nextLines.push(`Нельзя удалить совсем — ${reason}.`);
+        for (const reason of blockingReasons(t('clipboard.thought'), next.blocking)) {
+          nextLines.push(t('trash.cannotDeleteSovsem', reason));
         }
       }
       if (next.orphaned_children > 0) {
         nextLines.push(
-          `${next.orphaned_children} ${pluralRu(next.orphaned_children, 'потомок', 'потомка', 'потомков')} останется без родителей.`,
+          t('trash.ostanetsyaWithoutParents', [next.orphaned_children, tp('plurals.child', next.orphaned_children)]),
         );
       }
       return { lines: nextLines, blocked: next.blocked };
@@ -308,7 +307,7 @@ export async function openThoughtDeleteDialog(
         await onThoughtDeleted(target.id);
         onDeleted?.();
       } catch (err) {
-        errorDialog('Удалить мысль', err);
+        errorDialog(t('trash.deleteThought'), err);
       }
     },
     onTrash: async (close) => {
@@ -329,9 +328,9 @@ export async function openThoughtDeleteDialog(
         // follower — trash marker in the header, struck-through title),
         // the structures list, pinned and history bars.
         reflectThoughtUpdate(updated, patch);
-        notice(alreadyMarked ? 'Мысль возвращена из корзины.' : 'Мысль помещена в корзину.');
+        notice(alreadyMarked ? t('trash.thoughtVozvraschenaTrash') : t('trash.thoughtPomeschenaTrash'));
       } catch (err) {
-        errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
+        errorDialog(alreadyMarked ? t('actions.restore') : t('actions.toTrash'), err);
       }
     },
     onClose: () => void releaseHeld(handle),
@@ -371,13 +370,13 @@ export async function openLinkDeleteDialog(
       await resolveThoughtTitles(networkId, [link.source_id, link.target_id]),
     );
   } catch (err) {
-    errorDialog('Удалить связь', err);
+    errorDialog(t('trash.deleteLink'), err);
     return;
   }
 
   const alreadyMarked = link.marked_for_deletion;
   const lines = blocked
-    ? blockingReasons('связь', blocking).map((reason) => `Нельзя удалить совсем — ${reason}.`)
+    ? blockingReasons(t('clipboard.link'), blocking).map((reason) => t('trash.cannotDeleteSovsem', reason))
     : [];
 
   // Auto-acquire the link lock for the lifetime of the delete dialog (task
@@ -388,7 +387,7 @@ export async function openLinkDeleteDialog(
   });
 
   openEntityDeleteDialog({
-    title: 'Удаление связи',
+    title: t('trash.title.deleteLink'),
     caption,
     lines,
     blocked,
@@ -405,8 +404,8 @@ export async function openLinkDeleteDialog(
       if (result === undefined) return null;
       return {
         lines: result.blocked
-          ? blockingReasons('связь', result.blocking).map(
-              (reason) => `Нельзя удалить совсем — ${reason}.`,
+          ? blockingReasons(t('clipboard.link'), result.blocking).map(
+              (reason) => t('trash.cannotDeleteSovsem', reason),
             )
           : [],
         blocked: result.blocked,
@@ -418,7 +417,7 @@ export async function openLinkDeleteDialog(
         if (!purged) {
           // Race with a layer/deletion-check change — same picture the
           // disabled button would have shown.
-          notice('Связь не удалена: теперь заблокирована (удерживающий слой).', 'error');
+          notice(t('trash.linkNotDeletedTeperZablokirovanaUderzhivayuschiy'), 'error');
           return;
         }
         patchFocusEdge({ ...link, active: false });
@@ -430,7 +429,7 @@ export async function openLinkDeleteDialog(
         scheduleRefresh();
         onDeleted?.();
       } catch (err) {
-        errorDialog('Удалить связь', err);
+        errorDialog(t('trash.deleteLink'), err);
       }
     },
     onTrash: async (close) => {
@@ -445,9 +444,9 @@ export async function openLinkDeleteDialog(
         // Общий путь отражения связи: метка корзины и чип «+N» на графе
         // редактора не должны ждать realtime-эха (ошибка 42a7c0a1, круг 3).
         reflectLinkUpdate(updated);
-        notice(alreadyMarked ? 'Связь возвращена из корзины.' : 'Связь помещена в корзину.');
+        notice(alreadyMarked ? t('trash.linkVozvraschenaTrash') : t('linkValueRemoval.linkPomeschenaTrash'));
       } catch (err) {
-        errorDialog(alreadyMarked ? 'Вернуть из корзины' : 'Поместить в корзину', err);
+        errorDialog(alreadyMarked ? t('actions.restore') : t('actions.toTrash'), err);
       }
     },
     onClose: () => void releaseHeld(handle),
@@ -532,7 +531,7 @@ export async function openThoughtGroupDeleteDialog(
       resolveThoughtRefs(networkId, ids),
     ]);
   } catch (err) {
-    errorDialog('Удаление выбранного', err);
+    errorDialog(t('trash.deleteVybrannogo'), err);
     return;
   }
   const refById = new Map(refs.map((r) => [r.id, r]));
@@ -552,14 +551,14 @@ export async function openThoughtGroupDeleteDialog(
       label: t('trash.group.allToTrash'),
       role: 'secondary',
       size: 's',
-      title: 'Все строки — «В корзину»',
+      title: t('trash.allRowsTrash'),
       onClick: () => massToggle('all-trash'),
     }),
     uiButton({
       label: t('trash.group.deletePossible'),
       role: 'secondary',
       size: 's',
-      title: 'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
+      title: t('trash.nezablokirovannyeRowsDeleteZablokirovannyeTrash'),
       onClick: () => massToggle('delete-possible'),
     }),
   );
@@ -607,10 +606,10 @@ export async function openThoughtGroupDeleteDialog(
       checked: choice.get(id) === true,
       disabled: blocked,
     });
-    const blockedTooltip = `Нельзя удалить совсем — ${blockingReasons(
-      'мысль',
+    const blockedTooltip = t('trash.cannotDeleteSovsem2', blockingReasons(
+      t('trash.thought'),
       checks[id]?.blocking ?? { properties: 0, layers: [] },
-    ).join('; ')}`;
+    ).join('; '));
     setTooltip(purgeRadio, blocked ? blockedTooltip : t('actions.deleteForever'));
     purgeRadio.addEventListener('change', () => {
       if (purgeRadio.checked) choice.set(id, true);
@@ -619,7 +618,7 @@ export async function openThoughtGroupDeleteDialog(
       name: `gd-${id}`,
       checked: choice.get(id) !== true,
     });
-    setTooltip(trashRadio, 'Поместить в корзину');
+    setTooltip(trashRadio, t('actions.toTrash'));
     trashRadio.addEventListener('change', () => {
       if (trashRadio.checked) choice.set(id, false);
     });
@@ -668,13 +667,13 @@ export async function openThoughtGroupDeleteDialog(
       el(
         'p',
         'dialog-text group-delete-warning',
-        `${totalOrphaned} ${pluralRu(totalOrphaned, 'потомок', 'потомка', 'потомков')} лишится родителя.`,
+        t('trash.lishitsyaParent', [totalOrphaned, tp('plurals.child', totalOrphaned)]),
       ),
     );
   }
 
   showDialog({
-    title: `Удаление выбранного (${ids.length})`,
+    title: t('trash.deleteVybrannogo2', ids.length),
     size: 'l',
     body,
     buttons: [
@@ -682,7 +681,7 @@ export async function openThoughtGroupDeleteDialog(
         label: t('actions.apply'),
         primary: true,
         keepOpen: true,
-        ref: (btn) => setTooltip(btn, 'Применить указанные удаление/помещение в корзину'),
+        ref: (btn) => setTooltip(btn, t('trash.applyUkazannyeDeletePomeschenieTrash')),
         onClick: async (close) => {
           const { trashIds, purgeIds } = splitChoice(ids, choice);
           try {
@@ -728,9 +727,9 @@ export async function openThoughtGroupDeleteDialog(
             // alongside the canvas.
             scheduleStructuresRefresh();
             refreshSearchIfVisible();
-            noticePartial(failures > 0 ? `Применено, ошибок: ${failures}.` : 'Применено.', failures);
+            noticePartial(failures > 0 ? t('trash.primenenoErrors', failures) : t('trash.primeneno'), failures);
           } catch (err) {
-            errorDialog('Удаление выбранного', err);
+            errorDialog(t('trash.deleteVybrannogo'), err);
           }
         },
       },
@@ -842,7 +841,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     if (row.blocked) {
       // Замок — статичная индикация блокировки: видно, не наводя курсор.
       const lock = span('🔒', 'trash-item-lock');
-      setTooltip(lock, row.reason || 'заблокировано для удаления');
+      setTooltip(lock, row.reason || t('trash.zablokirovanoDelete'));
       item.append(lock);
     }
     setTooltip(item, row.label);
@@ -961,7 +960,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     label: t('trash.action.restore'),
     role: 'secondary',
     size: 's',
-    title: 'Вернуть текущую строку из корзины',
+    title: t('trash.vernutTekuschuyuLineTrash'),
     disabled: true,
     onClick: () => void currentRow()?.onRestore(),
   });
@@ -969,15 +968,15 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     label: t('actions.deleteForever'),
     role: 'secondary',
     size: 's',
-    title: 'Удалить текущую строку совсем',
+    title: t('trash.title.deleteTekuschuyuLineSovsem'),
     disabled: true,
     onClick: () => void currentRow()?.onDelete(),
   });
   const purgeAllBtn = uiButton({
-    label: 'Удалить всё, что возможно',
+    label: t('trash.label.deleteAllPossible'),
     role: 'danger',
     size: 's',
-    title: 'Физически удалить все незаблокированные строки корзины',
+    title: t('trash.fizicheskiDeleteAllNezablokirovannyeRowsTrash'),
     onClick: () => void purgeAll(),
   });
   toolbar.append(usageBtn, restoreBtn, deleteBtn, purgeAllBtn);
@@ -1064,10 +1063,10 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     try {
       const { purged, skipped } = await etn.trash.purge(networkId);
       scheduleRefresh();
-      noticePartial(`Удалено ${purged}, осталось заблокировано ${skipped}.`, skipped);
+      noticePartial(t('trash.deletedOstalosZablokirovano', [purged, skipped]), skipped);
       await render();
     } catch (err) {
-      errorDialog('Очистить корзину', err);
+      errorDialog(t('trash.clearTrash'), err);
     }
   }
 
@@ -1076,7 +1075,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     try {
       trash = await etn.trash.list(networkId);
     } catch (err) {
-      errorDialog('Корзина', err);
+      errorDialog(t('filterForm.trash'), err);
       return;
     }
 
@@ -1098,18 +1097,18 @@ export async function openTrashDialog(networkId: string): Promise<void> {
     );
 
     const out: TrashDialogRow[] = [];
-    for (const t of trash.thoughts) {
-      const view = thoughtTrashRow(t, usageById.get(t.id) ?? null);
+    for (const entry of trash.thoughts) {
+      const view = thoughtTrashRow(entry, usageById.get(entry.id) ?? null);
       out.push({
-        id: t.id,
+        id: entry.id,
         kind: 'thought',
         label: view.label,
         title: view.title,
         count: view.count,
-        blocked: t.blocked,
-        reason: blockingReasons('мысль', t.blocking).join('; '),
-        onRestore: () => restoreThought(networkId, t.id),
-        onDelete: () => deleteFromTrash(networkId, t.id),
+        blocked: entry.blocked,
+        reason: blockingReasons(t('clipboard.thought'), entry.blocking).join('; '),
+        onRestore: () => restoreThought(networkId, entry.id),
+        onDelete: () => deleteFromTrash(networkId, entry.id),
       });
     }
     for (const l of trash.links) {
@@ -1121,7 +1120,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
         title: view.title,
         count: view.count,
         blocked: l.blocked,
-        reason: blockingReasons('связь', l.blocking).join('; '),
+        reason: blockingReasons(t('clipboard.link'), l.blocking).join('; '),
         onRestore: () => restoreLink(networkId, l.id),
         onDelete: () => deleteLinkFromTrash(networkId, l.id),
       });
@@ -1155,7 +1154,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       reflectThoughtUpdate(updated, { marked_for_deletion: false });
       await render();
     } catch (err) {
-      errorDialog('Вернуть из корзины', err);
+      errorDialog(t('actions.restore'), err);
     }
   };
   const restoreLink = async (networkId: string, id: string): Promise<void> => {
@@ -1171,7 +1170,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
       reflectLinkUpdate(updated);
       await render();
     } catch (err) {
-      errorDialog('Вернуть из корзины', err);
+      errorDialog(t('actions.restore'), err);
     }
   };
   const deleteFromTrash = async (networkId: string, id: string): Promise<void> => {
@@ -1198,7 +1197,7 @@ export async function openTrashDialog(networkId: string): Promise<void> {
   // Правило 3 требования 11ddd910: футер — только кнопка решения. Массовое
   // «Удалить всё, что возможно» ушло в строку управления над списком.
   showDialog({
-    title: 'Корзина',
+    title: t('filterForm.trash'),
     size: 'xl',
     body,
     // Высота диалога стабильна: задана ролью, не содержимым списка/поиска

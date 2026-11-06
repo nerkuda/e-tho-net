@@ -134,7 +134,7 @@ export function validateLayerColors(value: unknown): LayerColors | null {
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'colors должен быть объектом { focus_stripe, background } с темами dark/light или null.',
+      "colors must be an object { focus_stripe, background } with dark/light themes, or null.",
       { field: 'colors' },
     );
   }
@@ -149,7 +149,7 @@ export function validateLayerColors(value: unknown): LayerColors | null {
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `colors.${key} должен содержать оба ключа dark и light.`,
+        `colors.${key} must contain both the dark and light keys.`,
         { field: 'colors', key },
       );
     }
@@ -159,7 +159,7 @@ export function validateLayerColors(value: unknown): LayerColors | null {
       if (!HEX_COLOR_RE.test(hex)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `colors.${key}.${theme} должен быть hex-строкой #rrggbb.`,
+          `colors.${key}.${theme} must be a hex string #rrggbb.`,
           { field: 'colors', key, theme, value: hex },
         );
       }
@@ -268,7 +268,7 @@ function fieldText(value: string | null | undefined, field: string): string | nu
   if (value === undefined || value === null) return value;
   const trimmed = value.trim();
   if (trimmed.length > TITLE_LIMIT) {
-    throw new EtnError('VALIDATION_ERROR', `${field} длиннее ${TITLE_LIMIT} символов.`, {
+    throw new EtnError('VALIDATION_ERROR', `${field} is longer than ${TITLE_LIMIT} characters.`, {
       field,
       limit: TITLE_LIMIT,
     });
@@ -287,7 +287,7 @@ export function createLayer(ndb: NetworkDb, input: CreateLayerInput): Layer {
   if (title.length === 0 || title.length > TITLE_LIMIT) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `title должен быть непустой строкой не длиннее ${TITLE_LIMIT} символов.`,
+      `title must be a non-empty string of at most ${TITLE_LIMIT} characters.`,
       { field: 'title', limit: TITLE_LIMIT },
     );
   }
@@ -300,7 +300,7 @@ export function createLayer(ndb: NetworkDb, input: CreateLayerInput): Layer {
     if (parent.depth >= MAX_LAYER_DEPTH) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `превышен лимит глубины слоёв (${MAX_LAYER_DEPTH}); родитель «${parent.title}» уже на максимальном уровне`,
+        `the layer depth limit was exceeded (${MAX_LAYER_DEPTH}); parent "${parent.title}" is already at the maximum level`,
         { field: 'parent_id', parent_depth: parent.depth, limit: MAX_LAYER_DEPTH },
       );
     }
@@ -352,7 +352,7 @@ export function updateLayer(
   if (title !== undefined && (title.length === 0 || title.length > TITLE_LIMIT)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `title должен быть непустой строкой не длиннее ${TITLE_LIMIT} символов.`,
+      `title must be a non-empty string of at most ${TITLE_LIMIT} characters.`,
       { field: 'title', limit: TITLE_LIMIT },
     );
   }
@@ -361,7 +361,7 @@ export function updateLayer(
   return ndb.transaction(() => {
     const row = requireLayer(ndb, id);
     if (row.is_base === 1 && title !== undefined) {
-      throw new EtnError('VALIDATION_ERROR', 'название основы фиксировано и не редактируется.', {
+      throw new EtnError('VALIDATION_ERROR', "the base layer name is fixed and cannot be edited.", {
         field: 'title',
         layer_id: id,
       });
@@ -369,7 +369,7 @@ export function updateLayer(
     if (row.is_base === 1 && changes.colors !== undefined) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'у основы не бывает цветов: основа и есть тема по умолчанию.',
+        "the base layer has no colors: the base layer is the default theme.",
         { field: 'colors', layer_id: id },
       );
     }
@@ -461,7 +461,7 @@ export function deleteLayer(
   return ndb.transaction(() => {
     const row = requireLayer(ndb, id);
     if (row.is_base === 1) {
-      throw new EtnError('VALIDATION_ERROR', 'основу удалить нельзя.', {
+      throw new EtnError('VALIDATION_ERROR', "the base layer cannot be deleted.", {
         field: 'layer_id',
         layer_id: id,
       });
@@ -472,14 +472,14 @@ export function deleteLayer(
       if (childrenCount > 0) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'у слоя есть потомки: передайте cascade=<children_count> для подтверждения.',
+          "the layer has children: pass cascade=<children_count> to confirm.",
           { field: 'cascade', children_count: childrenCount },
         );
       }
     } else if (cascade !== childrenCount) {
       throw new EtnError(
         'VERSION_CONFLICT',
-        'число потомков слоя изменилось: обновите список слоёв и повторите.',
+        "the layer's child count changed: refresh the layer list and retry.",
         { field: 'cascade', children_count: childrenCount, cascade },
       );
     }
@@ -623,7 +623,7 @@ export function setSessionLayer(
 ): { id: string; title: string } {
   const row = requireLayer(ndb, layerId);
   if (row.is_service === 1) {
-    throw new EtnError('VALIDATION_ERROR', 'служебный слой нельзя выбрать для работы.', {
+    throw new EtnError('VALIDATION_ERROR', "a service layer cannot be selected for work.", {
       field: 'layer_id',
       layer_id: layerId,
     });

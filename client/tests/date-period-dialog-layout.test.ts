@@ -138,7 +138,7 @@ describe('диалог даты/периода: полный показ без �
   });
 
   it('заголовок не подменяется: вызывающие не передают title в диалог', () => {
-    assert.match(DP_DIALOG, /title: opts\.title \?\? 'Дата\/период'/, 'дефолт каркаса');
+    assert.match(DP_DIALOG, /title: opts\.title \?\? t\('datePeriod\.datePeriod'\)/, 'дефолт каркаса');
     // Панель отбора «Дневника» больше не открывает диалог периода сама (задача
     // 608ecb79: период — строка дерева, значение ведёт общий редактор).
     for (const rel of ['screens/chronicle/chronicle.ts', 'editor/chrono-tab.ts']) {

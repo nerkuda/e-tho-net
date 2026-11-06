@@ -68,7 +68,7 @@ describe('guard: MCP — описания несут контрактные фо
       '`keywords`',
       '`keyword_scope`',
       '§6.10',
-      '`*`-синонима',
+      '`*`-synonym',
     ]);
   });
 
@@ -104,10 +104,10 @@ describe('guard: MCP — описания несут контрактные фо
     const all = await toolDescriptions();
     const description = descriptionOf(all, 'etn.thoughts.query');
     assertMentions(description, 'etn.thoughts.query', [
-      'неизвестное имя в плоских полях — `NOT_FOUND`',
-      'значения `ast`-листьев — только id',
-      'не резолвятся и молча не совпадают',
-      '`ast`-токен → пустая страница и `unresolved`',
+      'an unknown name in flat fields — `NOT_FOUND`',
+      '`ast` leaf values — ids only',
+      'are not resolved and silently do not match',
+      '`ast` token → an empty page and `unresolved`',
     ]);
     // «Пустая страница и `unresolved`» — корректная семантика ТОЛЬКО для
     // ast-токенов (проба: `$thought.id` → hits: [], unresolved: […]): для
@@ -115,8 +115,8 @@ describe('guard: MCP — описания несут контрактные фо
     // вернуть формулировку БЕЗ привязки к ast-токенам, но не блокирует
     // корректную клаузу (задача 54573522); семантика `views.run` — свой сторож
     // ниже, её проверка не расширяется.
-    const phrase = 'пустая страница и `unresolved`';
-    const scopedPhrase = '`ast`-токен → пустая страница и `unresolved`';
+    const phrase = 'an empty page and `unresolved`';
+    const scopedPhrase = '`ast` token → an empty page and `unresolved`';
     const occurrences = description.split(phrase).length - 1;
     const scopedOccurrences = description.split(scopedPhrase).length - 1;
     assert.equal(
@@ -132,11 +132,11 @@ describe('guard: MCP — описания несут контрактные фо
     const all = await toolDescriptions();
     const description = descriptionOf(all, 'etn.views.run');
     assertMentions(description, 'etn.views.run', [
-      '`thought_id` исключается из выдачи и `total`',
+      '`thought_id` is excluded from the result and `total`',
       '`etn.thoughts.get`',
       // 0.14.1 (задача 54573522): `total` корректируется только когда якорь
       // попал на страницу (REST-спека c989a4e2) — оговорка обязательна.
-      '`total` уменьшается, только если якорь попал на страницу',
+      '`total` decreases only if the anchor fell on the page',
     ]);
   });
 
@@ -144,14 +144,14 @@ describe('guard: MCP — описания несут контрактные фо
     const all = await toolDescriptions();
     const description = descriptionOf(all, 'etn.thoughts.write');
     assertMentions(description, 'etn.thoughts.write', [
-      'на уровне элемента `thoughts[]`',
+      'at the `thoughts[]` item level',
       '`{ "ref": "a", "thought": { "title": "…" } }`',
     ]);
     // Прежняя формулировка «блок `thought` … он ОБЯЗАН нести локальный `ref`»
     // читалась как «ref лежит внутри блока» и разошлась со схемой: два живых
     // вызова упали на VALIDATION_ERROR (f87ca85d). Сторож не пускает её назад.
     assert.ok(
-      !description.includes('он ОБЯЗАН нести локальный `ref`'),
+      !description.includes('the `thought` block MUST carry a local `ref`'),
       `etn.thoughts.write: вернулась формулировка «ref внутри блока thought»\n---\n${description}`,
     );
   });

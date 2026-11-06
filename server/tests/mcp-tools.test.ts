@@ -2478,7 +2478,7 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           },
         });
         assert.equal(missing.isError, true);
-        assert.match(toolText(missing), /нет в справочнике сети/);
+        assert.match(toolText(missing), /is not in the network registry/);
       } finally {
         await handle.close();
       }

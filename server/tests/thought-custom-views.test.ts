@@ -901,7 +901,7 @@ describe(
           (err: unknown) => {
             assert.ok(err instanceof EtnError);
             assert.equal(err.code, 'VALIDATION_ERROR');
-            assert.match(err.message, /уникальный ключ/);
+            assert.match(err.message, /unique key/);
             return true;
           },
         );

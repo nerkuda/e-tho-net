@@ -32,7 +32,7 @@ import type {
   UserSettingsMap,
 } from '@etn/shared';
 
-import { EtnError, USER_SETTING_KEY } from '@etn/shared';
+import { EtnError, normalizeLanguageTag, USER_SETTING_KEY } from '@etn/shared';
 
 /** Max length of `users.display_name`; mirrors the schema CHECK. */
 const DISPLAY_NAME_MAX_LENGTH = 200;
@@ -82,7 +82,7 @@ export function parseMaxWritesPerMinute(
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'max_writes_per_minute должен быть положительным целым числом или null.',
+      "max_writes_per_minute must be a positive integer or null.",
       { field: 'max_writes_per_minute' },
       requestId,
     );
@@ -96,18 +96,34 @@ export function parseMaxWritesPerMinute(
  * The `value` field is mandatory. Known keys get a shape check; unknown keys are
  * stored as-is so the table can carry future server-level user settings
  * (ADR 3a829d25) without an allowlist edit per key.
+ *
+ * Returns the value to store: known keys may canonicalise it (the language tag
+ * of `app_language` is normalised to BCP-47 canonical form — ADR daab6ac4).
  */
-export function validateUserSettingValue(key: string, value: unknown, requestId: string): void {
+export function validateUserSettingValue(key: string, value: unknown, requestId: string): unknown {
   if (value === undefined) {
-    throw new EtnError('VALIDATION_ERROR', 'Требуется поле value.', { field: 'value' }, requestId);
+    throw new EtnError('VALIDATION_ERROR', 'value is required.', { field: 'value' }, requestId);
+  }
+  if (key === USER_SETTING_KEY.APP_LANGUAGE) {
+    if (value === null) return null;
+    const language = normalizeLanguageTag(value);
+    if (language === null) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        'app_language must be null or a valid BCP-47 language tag.',
+        { field: 'value', value },
+        requestId,
+      );
+    }
+    return language;
   }
   if (key !== USER_SETTING_KEY.COMMENT_HOTKEYS) {
-    return;
+    return value;
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'comment_hotkeys должен быть JSON-объектом «команда → сочетание».',
+      'comment_hotkeys must be a JSON object "command → combination".',
       { field: 'value' },
       requestId,
     );
@@ -116,12 +132,13 @@ export function validateUserSettingValue(key: string, value: unknown, requestId:
     if (typeof combination !== 'string') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `Сочетание команды «${command}» должно быть строкой.`,
-        { field: 'value' },
+        `Combination of command "${command}" must be a string.`,
+        { field: 'value', command },
         requestId,
       );
     }
   }
+  return value;
 }
 
 /** Build the public DTO of an existing key (no secret). */
@@ -172,7 +189,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         if (trimmed.length > DISPLAY_NAME_MAX_LENGTH) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `Имя не должно превышать ${DISPLAY_NAME_MAX_LENGTH} символов.`,
+            `The name must not exceed ${DISPLAY_NAME_MAX_LENGTH} characters.`,
             { field: 'display_name' },
             req.id,
           );
@@ -183,7 +200,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } else {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Поле display_name должно быть строкой или null.',
+          "The display_name field must be a string or null.",
           { field: 'display_name' },
           req.id,
         );
@@ -215,7 +232,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const updated = app.systemDb.getUserById(me.id);
       if (updated === null) {
         // Should not happen — we just updated an existing user.
-        throw new EtnError('INTERNAL', 'Не удалось прочитать обновлённого пользователя.', undefined, req.id);
+        throw new EtnError('INTERNAL', "Failed to read the updated user.", undefined, req.id);
       }
       sendSuccess(reply, currentUserDto(updated));
     },
@@ -270,13 +287,13 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null || key.user_id !== req.auth!.user.id) {
         // Do not leak ownership: treat a foreign key as not-found.
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       const body = (req.body ?? {}) as UpdateKeyBody;
       if (!('max_writes_per_minute' in body)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'Требуется поле max_writes_per_minute (число или null).',
+          "The max_writes_per_minute field is required (a number or null).",
           { field: 'max_writes_per_minute' },
           req.id,
         );
@@ -303,11 +320,11 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id: keyId } = req.params as KeyIdParams;
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null) {
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       if (key.user_id !== req.auth!.user.id) {
         // Do not leak ownership: treat a foreign key as not-found.
-        throw new EtnError('NOT_FOUND', 'Ключ не найден.', undefined, req.id);
+        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
       }
       app.systemDb.disableApiKey(keyId);
       app.systemDb.insertAuditLog({
@@ -342,9 +359,9 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     async (req: FastifyRequest, reply) => {
       const { key } = parseRest(RestUserSettingKey, req);
       const body = (req.body ?? {}) as { value?: unknown };
-      validateUserSettingValue(key, body.value, req.id);
-      app.systemDb.setUserSetting(req.auth!.user.id, key, body.value);
-      sendSuccess(reply, { key, value: body.value });
+      const value = validateUserSettingValue(key, body.value, req.id);
+      app.systemDb.setUserSetting(req.auth!.user.id, key, value);
+      sendSuccess(reply, { key, value });
     },
   );
 };

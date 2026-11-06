@@ -37,9 +37,8 @@ import { CLIENT_META_KEY, EtnError } from '@etn/shared';
 import { errText, isConnectionLostError, isDuplicateError, isServerUpdatingError } from './lib/dom.js';
 import { etn } from './lib/etn.js';
 import { findPermanentComment } from './lib/permanent-comment.js';
-import { t } from './lib/i18n.js';
+import { t, tp } from './lib/i18n.js';
 import { notice, toast } from './lib/notice.js';
-import { pluralRu } from './lib/plural.js';
 import { serverMaintenanceText } from './lib/server-maintenance-text.js';
 import { isConnected } from './realtime.js';
 import { getRtStatus, store, type RtStatus } from './state.js';
@@ -176,12 +175,12 @@ export function initDrafts(): void {
 }
 
 /**
- * Форма слова «черновик» для счётчика (fb9d6058): сами формы — в словаре
- * (`drafts.noun.*`), выбор — `pluralRu`; литералов кириллицы в модуле нет
- * (сторож i18n).
+ * Форма слова «черновик» для счётчика (fb9d6058): формы — `plurals.draft` в
+ * словаре, категорию числа выбирает `Intl.PluralRules` через `tp`
+ * (литералов кириллицы в модуле нет — сторож i18n).
  */
 function draftNoun(count: number): string {
-  return pluralRu(count, t('drafts.noun.one'), t('drafts.noun.few'), t('drafts.noun.many'));
+  return tp('plurals.draft', count);
 }
 
 /**

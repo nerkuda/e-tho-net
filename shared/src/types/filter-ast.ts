@@ -99,7 +99,11 @@ export const FILTER_LINK_EDGE_STATES = ['active', 'inactive', 'trashed', 'not_tr
 /** Состояние ребра (элемент {@link FILTER_LINK_EDGE_STATES}). */
 export type FilterLinkEdgeState = (typeof FILTER_LINK_EDGE_STATES)[number];
 
-/** Подписи состояний ребра — единый словарь редактора, фразы-превью и справки. */
+/**
+ * Подписи состояний ребра — словарь КЛИЕНТА: редактор условия и фраза-превью.
+ * Справка `etn.guide` английская и эти подписи не использует (ADR daab6ac4,
+ * задача 720b71e5); по проводу ходят сами состояния, а не их подписи.
+ */
 export const FILTER_LINK_EDGE_STATE_LABELS: Readonly<Record<FilterLinkEdgeState, string>> = {
   active: 'актуальные',
   inactive: 'не актуальные',

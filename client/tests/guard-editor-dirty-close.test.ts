@@ -111,7 +111,7 @@ const EDITOR_SPECS: readonly EditorSpec[] = [
   {
     file: 'editor/attachments.ts',
     name: 'добавление вложения',
-    start: "title: 'Добавить вложение',",
+    start: "title: t('contextMenu.addAttachment'),",
     end: 'return root;',
   },
   {

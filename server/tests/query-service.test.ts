@@ -734,7 +734,7 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
 
       assert.throws(
         () => run(ndb, { properties: [{ property_id: 'общее имя', operator: 'eq', value: 'x' }] }),
-        /неоднозначно/,
+        /is ambiguous/,
       );
     });
 

@@ -10,16 +10,17 @@
  */
 
 import type { AuditLogEntry, Network, User } from '@etn/shared';
-import { t } from '../lib/i18n.js';
+import { availableLocales, t } from '../lib/i18n.js';
+import { isLanguageApiSupported } from '../lib/app-language.js';
 
 import { confirmDialog, errorDialog, showDialog } from '../lib/dialog.js';
-import { button, div, el, fmtDateTime, span } from '../lib/dom.js';
+import { button, div, el, errText, fmtDateTime, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { menuAction, type MenuItem } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
-import { fieldInput, fieldRow } from '../lib/ui/field.js';
+import { fieldInput, fieldRow, fieldSelect } from '../lib/ui/field.js';
 import { operationError } from '../lib/ui/messages.js';
 import { loadingState } from '../lib/ui/empty-state.js';
 import { bindSearchNav } from '../lib/ui/search-nav.js';
@@ -29,23 +30,69 @@ import { createTable, type TableHandle } from '../lib/ui/table.js';
 export function openAdminPanel(): void {
   // Вкладки — общий механизм каркаса диалога (задача a57e7998): панели
   // строятся лениво при первом показе, переключение не пересобирает узел.
-  const pane = (render: (host: HTMLElement) => void): (() => HTMLElement) => () => {
+  /**
+   * Хосты построенных вкладок: нужны хуку смены языка, чтобы перечитать их
+   * тексты (задача 7e5099ed). `null` — вкладку ещё не открывали, при первом
+   * показе она построится на актуальном языке.
+   */
+  type AdminPaneId = 'users' | 'networks' | 'audit' | 'server';
+  const hosts: Record<AdminPaneId, HTMLElement | null> = {
+    users: null,
+    networks: null,
+    audit: null,
+    server: null,
+  };
+  const pane = (id: AdminPaneId, render: (host: HTMLElement) => void): (() => HTMLElement) => () => {
     const host = div('admin-content list-dialog-body');
+    hosts[id] = host;
     render(host);
     return host;
   };
 
   showDialog({
-    title: t('userMenu.admin'),
+    // Заголовок-функция: каркас перечитывает его при смене языка.
+    title: () => t('userMenu.admin'),
     size: 'l',
     tabs: [
-      { id: 'users', label: t('admin.tab.users'), content: pane((h) => void renderUsers(h)) },
-      { id: 'networks', label: t('admin.tab.networks'), content: pane((h) => void renderNetworks(h)) },
-      { id: 'audit', label: t('admin.tab.audit'), content: pane((h) => void renderAudit(h)) },
+      {
+        id: 'users',
+        label: () => t('admin.tab.users'),
+        content: pane('users', (h) => void renderUsers(h)),
+      },
+      {
+        id: 'networks',
+        label: () => t('admin.tab.networks'),
+        content: pane('networks', (h) => void renderNetworks(h)),
+      },
+      {
+        id: 'audit',
+        label: () => t('admin.tab.audit'),
+        content: pane('audit', (h) => void renderAudit(h)),
+      },
+      // Язык сервера (ADR daab6ac4 §1–2, задача 222666db п. 3): единственная
+      // административная настройка сервера, поэтому компактная вкладка в
+      // существующей админ-панели — без нового крупного экрана. Вкладка видна
+      // только администратору: диалог открывается лишь пунктом меню
+      // «Администрирование» (проверка `me.is_admin`).
+      {
+        id: 'server',
+        label: () => t('admin.tab.server'),
+        content: pane('server', (h) => void renderServerSettings(h)),
+      },
     ],
     // Правило 3 требования 11ddd910: под списком — кнопка решения. Панель
     // информационная, решение одно — «Закрыть».
-    buttons: [{ label: t('actions.close'), primary: true }],
+    buttons: [{ label: () => t('actions.close'), primary: true }],
+    // Живая смена языка (задача 7e5099ed): каркас перечитывает заголовок,
+    // подписи вкладок и кнопки; содержимое уже построенных панелей
+    // перерисовывается здесь (строки/фильтры сбрасываются — это цена смены
+    // языка на открытой панели, язык меняется редко).
+    onLangChange: () => {
+      if (hosts.users !== null) void renderUsers(hosts.users);
+      if (hosts.networks !== null) void renderNetworks(hosts.networks);
+      if (hosts.audit !== null) renderAudit(hosts.audit);
+      if (hosts.server !== null) void renderServerSettings(hosts.server);
+    },
   });
 }
 
@@ -70,6 +117,73 @@ function adminToolbar(): HTMLElement {
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
+
+/**
+ * Вкладка «Сервер»: язык сервера по умолчанию — нижняя ступень наследования
+ * языка интерфейса (ADR daab6ac4 §1–2, задача 222666db п. 3). Админский
+ * уровень живёт здесь, в существующей админ-панели: отдельного крупного
+ * экрана настроек сервера в клиенте нет. Старый сервер (0.15.1) контракта не
+ * знает — вкладка объясняет, что настройка недоступна.
+ */
+async function renderServerSettings(host: HTMLElement): Promise<void> {
+  if (!isLanguageApiSupported()) {
+    host.replaceChildren(el('p', 'muted', t('admin.serverLanguageUnsupported')));
+    return;
+  }
+  host.replaceChildren(loadingState());
+  let current: string;
+  try {
+    current = (await etn.admin.getServerLanguage()).language;
+  } catch (err) {
+    host.replaceChildren(operationError(err));
+    return;
+  }
+  const choices = availableLocales().map((locale) => ({
+    value: locale.code,
+    label: locale.name,
+  }));
+  if (!choices.some((choice) => choice.value === current)) {
+    choices.push({ value: current, label: current });
+  }
+  let selected = current;
+  const saveButton = uiButton({
+    label: t('actions.save'),
+    role: 'primary',
+    size: 'm',
+    disabled: true,
+    onClick: () => {
+      void (async () => {
+        saveButton.disabled = true;
+        try {
+          await etn.admin.setServerLanguage(selected);
+          current = selected;
+          notice(t('admin.serverLanguageSaved'));
+        } catch (err) {
+          notice(errText(err), 'error');
+          saveButton.disabled = selected === current;
+        }
+      })();
+    },
+  });
+  const select = fieldSelect({
+    value: current,
+    options: choices,
+    onChange: (value) => {
+      selected = value;
+      saveButton.disabled = value === current;
+    },
+  });
+  const stack = div('form-stack');
+  const actions = div('form-row');
+  actions.append(saveButton);
+  stack.append(
+    el('h3', 'settings-section-title', t('admin.serverLanguage')),
+    fieldRow({ control: select }),
+    el('p', 'muted', t('admin.serverLanguageHint')),
+    actions,
+  );
+  host.replaceChildren(stack);
+}
 
 /** Renders the users tab. */
 async function renderUsers(content: HTMLElement): Promise<void> {
@@ -141,15 +255,15 @@ async function renderUsers(content: HTMLElement): Promise<void> {
           const actions = div('admin-user-actions');
           actions.style.whiteSpace = 'nowrap';
           actions.append(
-            button('ключ', () => void generateKey(user), 'link-btn', 'Сгенерировать API-key'),
+            button(t('admin.key'), () => void generateKey(user), 'link-btn', t('admin.sgenerirovatApiKey')),
             span(' · '),
             button(
-              user.disabled ? 'включить' : 'отключить',
+              user.disabled ? t('admin.vklyuchit') : t('admin.otklyuchit'),
               () => void toggleDisabled(user),
               'link-btn',
             ),
             span(' · '),
-            button('удалить', () => void removeUserRow(user, content), 'link-btn'),
+            button(t('admin.delete'), () => void removeUserRow(user, content), 'link-btn'),
           );
           return actions;
         },
@@ -181,7 +295,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     label: t('admin.user.key'),
     role: 'secondary',
     size: 's',
-    title: 'Сгенерировать API-key текущему пользователю',
+    title: t('admin.title.sgenerirovatApiKeyTekuschemuUser'),
     disabled: true,
     onClick: () => {
       const user = currentUser();
@@ -192,7 +306,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     label: t('admin.user.disable'),
     role: 'secondary',
     size: 's',
-    title: 'Включить/отключить текущую учётную запись',
+    title: t('admin.title.vklyuchitOtklyuchitTekuschuyuUchetnuyuRecord'),
     disabled: true,
     onClick: () => {
       const user = currentUser();
@@ -203,7 +317,7 @@ async function renderUsers(content: HTMLElement): Promise<void> {
     label: t('actions.delete'),
     role: 'secondary',
     size: 's',
-    title: 'Удалить текущего пользователя',
+    title: t('admin.title.deleteTekuschegoUser'),
     disabled: true,
     onClick: () => {
       const user = currentUser();
@@ -260,16 +374,16 @@ function addUserRow(): HTMLElement {
   box.style.marginTop = '10px';
   const usernameInput = fieldInput({ placeholder: 'username' });
   usernameInput.style.width = '160px';
-  const displayInput = fieldInput({ placeholder: 'Отображаемое имя' });
+  const displayInput = fieldInput({ placeholder: t('admin.placeholder.otobrazhaemoeName') });
   displayInput.style.width = '180px';
-  const admin = checkboxRow({ label: 'админ' });
+  const admin = checkboxRow({ label: t('admin.label.admin') });
   const adminCheck = admin.input;
   const adminLabel = admin.row;
   // «Добавить пользователя» is enabled only when `username` is non-empty
   // (08-ui-spec.md §10.1; the server rejects empty usernames with
   // VALIDATION_ERROR, so the button is useless until the field has a value).
   const submit = uiButton({
-    label: 'Добавить пользователя',
+    label: t('admin.label.addUser'),
     role: 'primary',
     size: 's',
     onClick: () => {
@@ -283,7 +397,7 @@ function addUserRow(): HTMLElement {
           showApiKey(result.apiKey);
           void renderUsers(contentOf(box));
         } catch (err) {
-          errorDialog('Добавить пользователя', err);
+          errorDialog(t('admin.label.addUser'), err);
         }
       })();
     },
@@ -310,21 +424,21 @@ async function generateKey(user: User): Promise<void> {
     type: 'number',
     min: 1,
     step: 1,
-    placeholder: 'серверный лимит',
+    placeholder: t('admin.placeholder.servernyyLimit'),
   });
   limitInput.style.width = '120px';
   const body = div('form-stack');
   const limitRow = div('hint-field');
-  limitRow.append(limitInput, span('пусто — серверный лимит', 'muted'));
-  body.append(fieldRow({ label: 'Лимит записи MCP (в мин.)', control: limitRow }));
+  limitRow.append(limitInput, span(t('admin.emptyServernyyLimit'), 'muted'));
+  body.append(fieldRow({ label: t('admin.limitRecordsMcpMin'), control: limitRow }));
   showDialog({
-    title: 'Сгенерировать API-key',
+    title: t('admin.sgenerirovatApiKey'),
     size: 's',
     body,
     buttons: [
       { label: t('actions.cancel') },
       {
-        label: 'Создать',
+        label: t('admin.label.create'),
         primary: true,
         keepOpen: true,
         onClick: (close) => {
@@ -333,7 +447,7 @@ async function generateKey(user: User): Promise<void> {
           if (raw !== '') {
             const n = Number(raw);
             if (!Number.isInteger(n) || n <= 0) {
-              errorDialog('Генерация ключа', new Error('Лимит должен быть положительным целым числом.'));
+              errorDialog(t('admin.generaciyaKey'), new Error(t('admin.limitMustBytPolozhitelnymCelymChislom')));
               return;
             }
             maxWritesPerMinute = n;
@@ -344,7 +458,7 @@ async function generateKey(user: User): Promise<void> {
               close();
               showApiKey(result.apiKey);
             } catch (err) {
-              errorDialog('Генерация ключа', err);
+              errorDialog(t('admin.generaciyaKey'), err);
             }
           })();
         },
@@ -360,7 +474,7 @@ function showApiKey(apiKey: string): void {
     el(
       'p',
       'dialog-text',
-      'Ключ показан один раз. Сохраните и передайте его пользователю — после закрытия он больше недоступен.',
+      t('admin.keyPokazanOdinRazSohranitePeredayte'),
     ),
   );
   const keyBox = div('api-key-box');
@@ -368,20 +482,20 @@ function showApiKey(apiKey: string): void {
   keyBox.append(code);
   keyBox.append(
     uiButton({
-      label: 'Копировать',
+      label: t('listActions.copy'),
       role: 'secondary',
       size: 's',
       onClick: () => {
         void navigator.clipboard.writeText(apiKey).then(
-          () => notice('Ключ скопирован.'),
-          () => notice('Не удалось скопировать ключ.'),
+          () => notice(t('admin.keySkopirovan')),
+          () => notice(t('admin.notSucceededCopyKey')),
         );
       },
     }),
   );
   box.append(keyBox);
   showDialog({
-    title: 'API-key (показан один раз)',
+    title: t('admin.title.apiKeyPokazanOdinRaz'),
     size: 'm',
     body: box,
     buttons: [{ label: t('actions.close'), primary: true }],
@@ -398,25 +512,25 @@ async function toggleDisabled(user: User): Promise<void> {
       { display_name: user.display_name, is_admin: user.is_admin, disabled: !user.disabled },
       1,
     );
-    notice('Учётная запись обновлена.');
+    notice(t('admin.uchetnayaRecordObnovlena'));
     // Re-render the list so the «включить»/«отключить» link and the
     // «Статус» cell reflect the new state (08-ui-spec.md §10.1).
     const content = document.querySelector<HTMLElement>('.admin-content');
     if (content !== null) void renderUsers(content);
   } catch (err) {
-    errorDialog('Изменить пользователя', err);
+    errorDialog(t('admin.editUser'), err);
   }
 }
 
 /** Deletes a user after confirmation. */
 async function removeUserRow(user: User, content: HTMLElement): Promise<void> {
-  if (!(await confirmDialog('Удалить пользователя', `Удалить «${user.username}»?`, true))) return;
+  if (!(await confirmDialog(t('admin.deleteUser'), t('admin.delete2', user.username), true))) return;
   try {
     await etn.admin.removeUser(user.id, 1);
-    notice('Пользователь удалён.');
+    notice(t('admin.userDeleted'));
     void renderUsers(content);
   } catch (err) {
-    errorDialog('Удалить пользователя', err);
+    errorDialog(t('admin.deleteUser'), err);
   }
 }
 
@@ -470,7 +584,7 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
         header: t('admin.col.actions'),
         width: '140px',
         render: (network) =>
-          button('удалить сеть', () => void removeNetworkRow(network, content), 'link-btn'),
+          button(t('admin.deleteNetwork'), () => void removeNetworkRow(network, content), 'link-btn'),
       },
     ],
     rows: [],
@@ -494,7 +608,7 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
     label: t('admin.network.delete'),
     role: 'secondary',
     size: 's',
-    title: 'Удалить текущую сеть',
+    title: t('admin.title.deleteTekuschuyuNetwork'),
     disabled: true,
     onClick: () => {
       const network = table.getCurrent()?.row ?? null;
@@ -536,16 +650,16 @@ async function renderNetworks(content: HTMLElement): Promise<void> {
 /** Удаляет сеть после подтверждения и перерисовывает список. */
 async function removeNetworkRow(network: Network, content: HTMLElement): Promise<void> {
   if (
-    !(await confirmDialog('Удалить сеть', `Удалить сеть «${network.display_name}»?`, true))
+    !(await confirmDialog(t('admin.deleteNetwork2'), t('admin.deleteNetwork3', network.display_name), true))
   ) {
     return;
   }
   try {
     await etn.admin.removeNetwork(network.id);
-    notice('Сеть удалена.');
+    notice(t('admin.networkDeleted'));
     void renderNetworks(content);
   } catch (err) {
-    errorDialog('Удалить сеть', err);
+    errorDialog(t('admin.deleteNetwork2'), err);
   }
 }
 
@@ -562,7 +676,7 @@ function renderAudit(content: HTMLElement): void {
   filterRow.style.marginBottom = '8px';
   const categorySelect = el('select', 'select-input');
   categorySelect.style.width = '150px';
-  const categoryPlaceholder = el('option', undefined, 'Все категории');
+  const categoryPlaceholder = el('option', undefined, t('admin.allKategorii'));
   categoryPlaceholder.value = '';
   categorySelect.append(categoryPlaceholder);
   for (const category of ['auth', 'user', 'network', 'membership', 'data', 'system']) {
@@ -575,14 +689,14 @@ function renderAudit(content: HTMLElement): void {
   const toInput = fieldInput({ type: 'date' });
   toInput.style.width = '140px';
   filterRow.append(
-    span('Категория:'),
+    span(t('admin.kategoriya')),
     categorySelect,
-    span('с', undefined),
+    span(t('admin.with'), undefined),
     fromInput,
-    span('по', undefined),
+    span(t('admin.by'), undefined),
     toInput,
     uiButton({
-      label: 'Показать',
+      label: t('admin.label.show'),
       role: 'secondary',
       size: 's',
       onClick: () => void loadAudit(),
@@ -593,10 +707,14 @@ function renderAudit(content: HTMLElement): void {
   // над текущей строкой нечего производить (правила 2 и 5 к нему не применимы).
   // Высота области списка — по раскладке `.list-dialog-body`, а не инлайном
   // (правило 9 требования 11ddd910).
-  content.append(searchRow, filterRow, tableWrap);
+  // `replaceChildren` (а не `append`): вкладка перерисовывается при смене
+  // языка (задача 7e5099ed), повторный `append` удвоил бы строки управления.
+  content.replaceChildren(searchRow, filterRow, tableWrap);
 
   /** Загруженные записи журнала — источник клиентского фильтра поиска. */
   let loaded: AuditLogEntry[] = [];
+  /** Всего записей в окне фильтра на сервере (`meta.total`) — для итога. */
+  let loadedTotal = 0;
   /** Текущая таблица журнала: пересобирается в `paint`, мост ищет её через замыкание. */
   let auditTable: TableHandle<AuditLogEntry> | null = null;
 
@@ -678,7 +796,7 @@ function renderAudit(content: HTMLElement): void {
     });
     tableWrap.replaceChildren(
       table.element,
-      el('p', 'faint', `Всего записей: ${loaded.length}`),
+      el('p', 'faint', t('admin.vsegoRecords', loadedTotal)),
     );
     auditTable = table;
   }
@@ -690,13 +808,14 @@ function renderAudit(content: HTMLElement): void {
   async function loadAudit(): Promise<void> {
     tableWrap.replaceChildren(loadingState());
     try {
-      const result = (await etn.admin.listAudit({
+      const result = await etn.admin.listAudit({
         category: categorySelect.value === '' ? undefined : categorySelect.value,
         from: fromInput.value === '' ? undefined : fromInput.value,
         to: toInput.value === '' ? undefined : toInput.value,
         limit: 100,
-      })) as { entries: AuditLogEntry[]; total: number };
+      });
       loaded = result.entries;
+      loadedTotal = result.total;
       paint();
     } catch (err) {
       tableWrap.replaceChildren(operationError(err));

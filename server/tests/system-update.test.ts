@@ -469,17 +469,17 @@ describe('system/update — администратор и статус', { skip:
       assert.equal(data.instruction, DOCKER_UPDATE_INSTRUCTION);
       assert.ok(data.instruction !== null && data.instruction.includes(DOCKER_UPDATE_COMMAND));
       // Сохранность данных: том, миграции при старте, резервная копия.
-      assert.match(data.instruction!, /том/i);
+      assert.match(data.instruction!, /volume/i);
       assert.match(data.instruction!, /ETN_DATA_DIR/);
-      assert.match(data.instruction!, /схема БД обновляется автоматически/i);
-      assert.match(data.instruction!, /резервную копию/i);
+      assert.match(data.instruction!, /database schema is updated automatically/i);
+      assert.match(data.instruction!, /back up/i);
       // Точная формулировка тома: имя тома и путь внутри, без смешения с переменной.
-      assert.match(data.instruction!, /том[ае]? `etn_data`, внутри — `\/data` \(он же `ETN_DATA_DIR`\)/i);
+      assert.match(data.instruction!, /`etn_data` volume, inside — `\/data` \(also `ETN_DATA_DIR`\)/i);
       // Оговорка про build-only compose: `pull` не обещает скачивание образа.
       assert.match(data.instruction!, /docker compose build/i);
-      assert.match(data.instruction!, /`pull` ничего не скачивает/i);
+      assert.match(data.instruction!, /`pull` downloads nothing/i);
       // Инструкция — про сервер: автообновления клиента не обещает.
-      assert.doesNotMatch(data.instruction!, /клиент/i);
+      assert.doesNotMatch(data.instruction!, /update the client|client update/i, 'инструкция не обещает обновление клиента');
     } finally {
       await closeRestContext(docker);
     }
@@ -627,7 +627,7 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       // Причина и точная команда — в тексте; инструкция доступна полем GET.
       const message = (JSON.parse(res.body) as { error: { message: string } }).error.message;
       assert.match(message, /Docker/i);
-      assert.match(message, /автообновление из клиента невозможно/i);
+      assert.match(message, /auto-update from the client is impossible/i);
       assert.ok(message.includes(DOCKER_UPDATE_COMMAND), message);
       // Та же оговорка, что в инструкции: build-only compose собирается заново.
       assert.match(message, /docker compose build/i);
@@ -699,6 +699,12 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       assert.ok(res.data !== null);
       assert.equal(res.data!.stage, 'failed');
       assert.equal(res.data!.error, NOT_A_SERVICE_MESSAGE);
+      // Машиночитаемая причина (ADR daab6ac4 §4): клиент строит текст по ней,
+      // английский `error` не показывает.
+      assert.equal(res.data!.reason, 'not-a-service');
+      assert.equal(res.data!.failed_stage, 'preparing');
+      assert.equal(res.data!.exit_code, null);
+      assert.equal(res.data!.log_path, null);
       assert.equal(harness.spawns(), 0);
       assert.equal(harness.downloads(), 0);
       // Обслуживание не включалось: changed-запрос проходит.
@@ -746,6 +752,11 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       assert.equal(details.status, 502);
       assert.equal(details.job.stage, 'failed');
       assert.equal(details.job.target_version, TARGET_VERSION);
+      // Причина сбоя машиночитаема и в самом задании, не только в конверте.
+      assert.equal(details.job.reason, 'installer-hash');
+      assert.equal(details.job.failed_stage, 'preparing');
+      assert.equal(details.job.exit_code, null);
+      assert.equal(details.job.log_path, null);
       assert.equal(harness.spawns(), 0);
       // Обслуживание не включалось — сервер продолжает принимать записи.
       assert.equal(ctx.app.maintenance.getState().state, 'idle');
@@ -773,6 +784,8 @@ describe('system/update/apply — конфликты', { skip: !nativeAvailable(
       assert.equal(details.reason, 'installer-target');
       assert.equal(details.retryable, false);
       assert.match(details.job.error ?? '', /HTTPS/i);
+      assert.equal(details.job.reason, 'installer-target');
+      assert.equal(details.job.failed_stage, 'preparing');
       assert.equal(harness.downloads(), 0);
       assert.equal(harness.spawns(), 0);
       assert.equal(ctx.app.maintenance.getState().state, 'idle');
@@ -870,7 +883,10 @@ describe('задание обновления — перезапуск серв�
         assert.ok(job !== null);
         assert.equal(job!.stage, 'failed');
         assert.match(job!.error ?? '', /backing-up/);
-        assert.match(job!.error ?? '', /перезапущен/);
+        assert.match(job!.error ?? '', /restarted/);
+        // Машиночитаемая причина видна и через admin-эндпоинт.
+        assert.equal(job!.reason, 'interrupted');
+        assert.equal(job!.failed_stage, 'backing-up');
         assert.equal(second.updateApply.isJobRunning(), false);
         assert.equal(ctx.sys.getActiveUpdateJob(), null);
       } finally {
@@ -911,7 +927,7 @@ describe('задание обновления — перезапуск серв�
         const job = second.updateApply.getProgress();
         assert.ok(job !== null);
         assert.equal(job!.stage, 'done');
-        assert.match(job!.error ?? '', /завершено после перезапуска/);
+        assert.match(job!.error ?? '', /completed after the restart/);
         assert.equal(second.updateApply.isJobRunning(), false);
         assert.equal(ctx.sys.getActiveUpdateJob(), null);
         const row = ctx.sys.getUpdateJob('completed-job-after-restart');
@@ -1020,8 +1036,13 @@ describe('задание обновления — коды установщик�
       await waitFor(() => service.getProgress()?.stage === 'failed');
       const job = service.getProgress();
       assert.ok(job !== null);
-      assert.match(job!.error ?? '', /кодом 10/);
+      assert.match(job!.error ?? '', /code 10/);
       assert.match(job!.error ?? '', /install-\d{8}-\d{6}\.log/);
+      // Машиночитаемая причина: клиент не разбирает английский текст.
+      assert.equal(job!.reason, 'installer-exit');
+      assert.equal(job!.exit_code, 10);
+      assert.equal(job!.failed_stage, 'backing-up');
+      assert.match(job!.log_path ?? '', /install-\d{8}-\d{6}\.log$/);
     } finally {
       sys.close();
     }
@@ -1042,8 +1063,11 @@ describe('задание обновления — коды установщик�
       await waitFor(() => service.getProgress()?.stage === 'failed');
       const job = service.getProgress();
       assert.ok(job !== null);
-      assert.match(job!.error ?? '', /ручной режим/);
+      assert.match(job!.error ?? '', /manual mode/);
       assert.match(job!.error ?? '', /install-\d{8}-\d{6}\.log/);
+      assert.equal(job!.reason, 'installer-precondition');
+      assert.equal(job!.exit_code, 20);
+      assert.match(job!.log_path ?? '', /install-\d{8}-\d{6}\.log$/);
     } finally {
       sys.close();
     }
@@ -1069,8 +1093,11 @@ describe('задание обновления — тайм-аут и installer a
       await waitFor(() => service.getProgress()?.stage === 'failed', 5_000);
       const failed = service.getProgress();
       assert.ok(failed !== null);
-      assert.match(failed!.error ?? '', /не завершился/);
+      assert.match(failed!.error ?? '', /did not finish/);
       assert.match(failed!.error ?? '', /install-\d{8}-\d{6}\.log/);
+      assert.equal(failed!.reason, 'installer-timeout');
+      assert.equal(failed!.failed_stage, 'backing-up');
+      assert.match(failed!.log_path ?? '', /install-\d{8}-\d{6}\.log$/);
       assert.equal(sys.getActiveUpdateJob(), null, 'задание уже терминальное');
 
       // single-flight runner'а снят тайм-аутом, но флаг «installer alive» — нет.
@@ -1172,6 +1199,12 @@ describe('задание обновления — виды 502', { skip: !native
         const job = service.getProgress();
         assert.ok(job !== null);
         assert.equal(job!.stage, 'failed');
+        // Причина отказа — в самом задании: `/progress` штатный канал, и
+        // клиент локализует её без разбора английского `error`.
+        assert.equal(job!.reason, testCase.expected);
+        assert.equal(job!.failed_stage, testCase.expectedStage);
+        assert.equal(job!.exit_code, null);
+        assert.equal(job!.log_path, null);
         assert.equal(service.isInstallerAlive(), false);
         assert.equal(sys.getActiveUpdateJob(), null);
         assert.equal(harness.spawns(), testCase.spawns);
@@ -1275,6 +1308,11 @@ describe('задание обновления — восстановление',
       assert.ok(row !== null);
       assert.equal(row!.stage, 'failed');
       assert.match(row!.error ?? '', /backing-up/);
+      // Машиночитаемая причина восстановления: клиент строит текст по ней.
+      assert.equal(row!.reason, 'interrupted');
+      assert.equal(row!.failed_stage, 'backing-up');
+      assert.equal(row!.exit_code, null);
+      assert.equal(row!.log_path, null);
       assert.notEqual(row!.finished_at, null);
       // Повторный вызов ничего не меняет: терминальные не трогаются.
       assert.equal(recoverInterruptedUpdateJobs(sys, recoveredAt, serverVersion), 0);
@@ -1296,7 +1334,9 @@ describe('задание обновления — восстановление',
       const row = sys.getUpdateJob('reached-target');
       assert.ok(row !== null);
       assert.equal(row!.stage, 'done');
-      assert.match(row!.error ?? '', /завершено после перезапуска/);
+      assert.match(row!.error ?? '', /completed after the restart/);
+      assert.equal(row!.reason, null, 'успех не несёт машиночитаемой причины');
+      assert.equal(row!.failed_stage, null);
       assert.equal(row!.finished_at, RECOVERED_AT_ISO);
       assert.equal(sys.getActiveUpdateJob(), null);
       // Терминальное задание повторное восстановление не трогает.
@@ -1319,7 +1359,7 @@ describe('задание обновления — восстановление',
       const row = sys.getUpdateJob('older-target');
       assert.ok(row !== null);
       assert.equal(row!.stage, 'done');
-      assert.match(row!.error ?? '', /завершено после перезапуска/);
+      assert.match(row!.error ?? '', /completed after the restart/);
       assert.equal(row!.finished_at, RECOVERED_AT_ISO);
     } finally {
       sys.close();
@@ -1340,7 +1380,9 @@ describe('задание обновления — восстановление',
       assert.ok(row !== null);
       assert.equal(row!.stage, 'failed');
       assert.match(row!.error ?? '', /preparing/);
-      assert.match(row!.error ?? '', /перезапущен/);
+      assert.match(row!.error ?? '', /restarted/);
+      assert.equal(row!.reason, 'interrupted');
+      assert.equal(row!.failed_stage, 'preparing');
       assert.equal(row!.finished_at, RECOVERED_AT_ISO);
     } finally {
       sys.close();
@@ -1361,6 +1403,8 @@ describe('задание обновления — восстановление',
       assert.ok(row !== null);
       assert.equal(row!.stage, 'failed');
       assert.match(row!.error ?? '', /installing/);
+      assert.equal(row!.reason, 'interrupted');
+      assert.equal(row!.failed_stage, 'installing');
     } finally {
       sys.close();
     }

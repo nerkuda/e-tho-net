@@ -1,0 +1,401 @@
+{
+  "name": "i18n-zh-cjk-rendering",
+  "description": "Задача f7dba88c: китайский каталог zh.ts (упрощённый zh-CN) зарегистрирован. Проверяется пользовательский путь «Все настройки → Клиент → 中文 → 应用»: живая смена языка без перезапуска, китайские подписи закладок, меню, кнопок, диалогов и таблиц без сырых ключей словаря и без кириллицы (кроме эндонимов языков), а также CJK-рендеринг: реально установленный CJK-шрифт, отсутствие «тофу» (глиф совпадает с .notdef), отсутствие обрезания и переносов в кнопках/вкладках/диалогах/таблицах (scrollWidth <= clientWidth, scrollHeight <= clientHeight), шрифтовые метрики строки. Запуск: npm -w @etn/server run build && npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.f7dba88c-i18n-zh.scenario.json --out .tmp/f7dba88c/run1",
+  "timeout": 240000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-user-menu",
+      "click": ".top-right button"
+    },
+    {
+      "name": "user-menu-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => ['Настройки', 'Settings', '设置'].includes((e.textContent || '').trim())); if (!row) throw new Error('нет пункта настроек'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section-baseline",
+      "eval": "(() => { const nav = document.querySelectorAll('.settings-nav-item'); if (nav.length < 3) throw new Error('нет третьего раздела настроек (Client)'); nav[2].click(); return (nav[2].textContent || '').trim(); })()"
+    },
+    {
+      "name": "baseline-ru-present",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]') !== null"
+    },
+    {
+      "name": "baseline-pick-ru",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "baseline-apply-enabled",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => ((b.textContent || '').trim() === 'Apply' || (b.textContent || '').trim() === 'Применить' || (b.textContent || '').trim() === '应用') && !b.disabled)"
+    },
+    {
+      "name": "baseline-apply-ru",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => ['Apply', 'Применить', '应用'].includes((e.textContent || '').trim())); if (!b) throw new Error('нет кнопки Apply/Применить/应用'); b.click(); return true; })()"
+    },
+    {
+      "name": "baseline-ru-applied",
+      "timeout": 15000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelector('.dialog-title')?.textContent === 'Все настройки'"
+    },
+    {
+      "name": "lang-before",
+      "probe": "document.documentElement.lang",
+      "expect": "ru"
+    },
+    {
+      "name": "zh-radio-present",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"zh\"]') !== null"
+    },
+    {
+      "name": "lang-labels-before",
+      "probe": "Array.from(document.querySelectorAll('.settings-section label')).map((e) => (e.textContent || '').trim()).filter((s) => ['Русский', 'English', 'Китайский', '中文'].includes(s))",
+      "expect": [
+        "Русский",
+        "English",
+        "中文"
+      ]
+    },
+    {
+      "name": "pick-chinese",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"zh\"]'); if (!r) throw new Error('нет локали zh'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "chinese-picked",
+      "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null",
+      "expect": "zh"
+    },
+    {
+      "name": "apply-enabled",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => (b.textContent || '').trim() === 'Применить' && !b.disabled)"
+    },
+    {
+      "name": "apply-chinese",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Применить'); if (!b) throw new Error('нет кнопки «Применить»'); b.click(); return true; })()"
+    },
+    {
+      "name": "live-lang-applied",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'zh' && document.querySelector('.dialog-title')?.textContent === '所有设置' && (() => { const labels = Array.from(document.querySelectorAll('.toolbar > :last-child .tb-label')); return labels.length > 0 && labels[labels.length - 1].textContent === '想法网络'; })()"
+    },
+    {
+      "name": "tabs-after",
+      "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title'))",
+      "expect": [
+        "想法地图",
+        "想法结构",
+        "日记",
+        "出版物",
+        "事件"
+      ]
+    },
+    {
+      "name": "nav-after",
+      "probe": "Array.from(document.querySelectorAll('.settings-nav-item')).map((e) => (e.textContent || '').trim())",
+      "expect": [
+        "用户",
+        "想法网络",
+        "客户端",
+        "日志记录"
+      ]
+    },
+    {
+      "name": "footer-buttons-after",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => (b.textContent || '').trim())",
+      "expect": [
+        "应用",
+        "取消",
+        "应用并关闭"
+      ]
+    },
+    {
+      "name": "lang-labels-after",
+      "probe": "Array.from(document.querySelectorAll('.settings-section label')).map((e) => (e.textContent || '').trim()).filter((s) => ['Русский', 'English', '中文'].includes(s))",
+      "expect": [
+        "Русский",
+        "English",
+        "中文"
+      ]
+    },
+    {
+      "name": "chrome-no-cyrillic",
+      "probe": "(() => { const nodes = [...document.querySelectorAll('.settings-nav-item'), ...document.querySelectorAll('.settings-footer-buttons button'), ...Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => ({ textContent: b.getAttribute('title') }))]; return nodes.filter((n) => /[А-Яа-яЁё]/.test(n.textContent || '')).map((n) => n.textContent); })()",
+      "expect": []
+    },
+    {
+      "name": "no-raw-dictionary-keys",
+      "probe": "(() => { const text = document.querySelector('.dialog-backdrop')?.innerText ?? ''; return (text.match(/\\b(actions|dialog|list|common|state|table|propertyList|workspace|settings|settingsLogs|userMenu|menu|editor|diary|structures|publications|publication|filter|trash|admin|comment|attachments|chrono)\\.[a-z][a-zA-Z0-9]+/g) ?? []); })()",
+      "expect": []
+    },
+    {
+      "name": "cjk-fonts-detail",
+      "probe": "(() => { const candidates = ['Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Micro Hei', 'SimSun', 'Microsoft JhengHei']; const installed = candidates.filter((f) => document.fonts.check('16px \"' + f + '\"')); const body = getComputedStyle(document.body); return { installed, uiFamily: body.fontFamily, uiFontVar: getComputedStyle(document.documentElement).getPropertyValue('--user-font-ui').trim(), monoFontVar: getComputedStyle(document.documentElement).getPropertyValue('--md-mono').trim() }; })()"
+    },
+    {
+      "name": "cjk-no-tofu",
+      "probe": "(() => { const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 64; const g = canvas.getContext('2d'); const draw = (ch) => { g.clearRect(0, 0, 64, 64); g.font = '32px system-ui, sans-serif'; g.fillStyle = '#000'; g.fillText(ch, 8, 40); return g.getImageData(0, 0, 64, 64).data; }; const han = draw('汉'); const notdef = draw('\\uE123'); let ink = 0; let diff = 0; for (let i = 3; i < han.length; i += 4) { if (han[i] !== 0) ink += 1; if (han[i] !== notdef[i]) diff += 1; } return { inkPixels: ink, differsFromNotdef: diff, tofu: ink > 0 && diff === 0 }; })()"
+    },
+    {
+      "name": "cjk-glyph-width",
+      "probe": "(() => { const g = document.createElement('canvas').getContext('2d'); g.font = '16px system-ui, sans-serif'; const han = g.measureText('汉').width; const full = g.measureText('想法网络').width; return { han, full, sane: han >= 10 && han <= 24 }; })()"
+    },
+    {
+      "name": "chrome-clipping",
+      "probe": "(() => { const sel = '.ui-btn, .view-tab, .settings-nav-item, .settings-footer-buttons button, .dialog-title, .tb-label, .menu-item'; const out = []; for (const el of document.querySelectorAll(sel)) { const r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) continue; const sx = el.scrollWidth > el.clientWidth + 1; const sy = el.scrollHeight > el.clientHeight + 1; if (sx || sy) out.push({ cls: typeof el.className === 'string' ? el.className : '', text: (el.textContent || '').trim().slice(0, 40), sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight }); } return out; })()",
+      "expect": []
+    },
+    {
+      "name": "no-page-horizontal-overflow",
+      "probe": "document.documentElement.scrollWidth <= window.innerWidth + 1",
+      "expect": true
+    },
+    {
+      "name": "font-metrics-sane",
+      "probe": "(() => { const out = []; for (const el of document.querySelectorAll('.ui-btn, .view-tab, .settings-nav-item, .settings-footer-buttons button, .dialog-title, .tb-label, .diary-add-btn, .pub-toolbar button')) { const r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) continue; const cs = getComputedStyle(el); const fs = parseFloat(cs.fontSize); const lh = cs.lineHeight === 'normal' ? fs * 1.2 : parseFloat(cs.lineHeight); if (lh < fs - 0.5) out.push({ cls: typeof el.className === 'string' ? el.className : '', text: (el.textContent || '').trim().slice(0, 40), fontSize: fs, lineHeight: lh }); } return out; })()",
+      "expect": []
+    },
+    {
+      "name": "open-activity",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => e.getAttribute('title') === '事件'); if (!b) throw new Error('нет закладки 事件'); b.click(); return true; })()"
+    },
+    {
+      "name": "activity-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.activity-results .ui-table') !== null"
+    },
+    {
+      "name": "activity-headers-rendered",
+      "timeout": 15000,
+      "waitFor": "(document.querySelector('.activity-results vaadin-grid')?.querySelectorAll('vaadin-grid-sort-column').length ?? 0) >= 5"
+    },
+    {
+      "name": "activity-headers-zh",
+      "probe": "(() => { const grid = document.querySelector('.activity-results vaadin-grid'); if (!grid) return { found: false }; const headers = Array.from(grid.querySelectorAll('vaadin-grid-sort-column')).map((c) => (c.header || '').trim()); return { found: true, headers, cyrillic: headers.filter((s) => /[А-Яа-яЁё]/.test(s)) }; })()",
+      "expect": {
+        "found": true,
+        "headers": [
+          "时间",
+          "作者",
+          "操作",
+          "实体",
+          "层"
+        ],
+        "cyrillic": []
+      }
+    },
+    {
+      "name": "activity-table-no-overflow",
+      "probe": "(() => { const grid = document.querySelector('.activity-results vaadin-grid'); if (!grid) return { found: false }; const content = Array.from(grid.querySelectorAll('vaadin-grid-cell-content')); const headerCells = content.slice(0, 5).map((c) => { const r = c.getBoundingClientRect(); return { text: (c.textContent || '').trim(), width: Math.round(r.width), height: Math.round(r.height), clipX: c.scrollWidth > c.clientWidth + 1, clipY: c.scrollHeight > c.clientHeight + 1 }; }); const clipped = headerCells.filter((c) => c.clipX || c.clipY); return { found: true, headerCells: headerCells.length, texts: headerCells.map((c) => c.text), clipped, overflowX: grid.scrollWidth > grid.clientWidth + 1 }; })()",
+      "expect": {
+        "found": true,
+        "headerCells": 5,
+        "texts": [
+          "时间",
+          "作者",
+          "操作",
+          "实体",
+          "层"
+        ],
+        "clipped": [],
+        "overflowX": false
+      }
+    },
+    {
+      "name": "close-settings",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === '取消'); if (!b) throw new Error('нет кнопки 取消'); b.click(); return true; })()"
+    },
+    {
+      "name": "dialog-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-user-menu-again",
+      "click": ".top-right button"
+    },
+    {
+      "name": "user-menu-again-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "user-menu-items-zh",
+      "probe": "(() => { const items = Array.from(document.querySelectorAll('.menu-item')).map((e) => (e.textContent || '').trim()); return { hasSettings: items.includes('设置'), hasAbout: items.includes('关于'), hasDisconnect: items.includes('断开连接'), cyrillic: items.filter((s) => /[А-Яа-яЁё]/.test(s)) }; })()",
+      "expect": {
+        "hasSettings": true,
+        "hasAbout": true,
+        "hasDisconnect": true,
+        "cyrillic": []
+      }
+    },
+    {
+      "name": "close-user-menu",
+      "key": "Escape"
+    },
+    {
+      "name": "user-menu-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') === null"
+    },
+    {
+      "name": "open-structures",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => e.getAttribute('title') === '想法结构'); if (!b) throw new Error('нет закладки 想法结构'); b.click(); return true; })()"
+    },
+    {
+      "name": "structures-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.ff-extra--commands') !== null"
+    },
+    {
+      "name": "structures-commands-zh",
+      "probe": "(() => { const el = document.querySelector('.ff-extra--commands'); return { text: (el?.textContent || '').trim(), cyrillic: /[А-Яа-яЁё]/.test(el?.textContent || '') }; })()",
+      "expect": {
+        "text": "命令 ▾",
+        "cyrillic": false
+      }
+    },
+    {
+      "name": "open-diary",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => e.getAttribute('title') === '日记'); if (!b) throw new Error('нет закладки 日记'); b.click(); return true; })()"
+    },
+    {
+      "name": "diary-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.diary-add-btn') !== null"
+    },
+    {
+      "name": "diary-add-zh",
+      "probe": "(() => { const el = document.querySelector('.diary-add-btn'); return { text: (el?.textContent || '').trim(), cyrillic: /[А-Яа-яЁё]/.test(el?.textContent || '') }; })()",
+      "expect": {
+        "text": "添加日记记录",
+        "cyrillic": false
+      }
+    },
+    {
+      "name": "open-publications",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => e.getAttribute('title') === '出版物'); if (!b) throw new Error('нет закладки 出版物'); b.click(); return true; })()"
+    },
+    {
+      "name": "publications-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.pub-toolbar') !== null"
+    },
+    {
+      "name": "publications-chrome-zh",
+      "probe": "(() => { const buttons = Array.from(document.querySelectorAll('.pub-toolbar button')).map((b) => (b.textContent || '').trim()).filter((s) => s !== ''); const search = document.querySelector('.pub-toolbar input[type=search]'); return { buttons, searchPlaceholder: search?.placeholder ?? null, cyrillic: /[А-Яа-яЁё]/.test((document.querySelector('.pub-toolbar')?.textContent || '')) }; })()",
+      "expect": {
+        "buttons": [
+          "书架",
+          "列表",
+          "排序: 手动",
+          "书架",
+          "出版物"
+        ],
+        "searchPlaceholder": "按名称搜索…",
+        "cyrillic": false
+      }
+    },
+    {
+      "name": "open-publication-wizard",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.pub-toolbar button')).find((e) => (e.textContent || '').trim() === '出版物'); if (!b) throw new Error('нет кнопки 出版物'); b.click(); return true; })()"
+    },
+    {
+      "name": "wizard-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop .dialog-title')?.textContent === '新建出版物'"
+    },
+    {
+      "name": "wizard-chrome-zh",
+      "probe": "(() => { const labelsAll = Array.from(document.querySelectorAll('.dialog-backdrop .form-stack label')).map((e) => (e.textContent || '').trim()); const chrome = [document.querySelector('.dialog-title')?.textContent ?? '', ...labelsAll, ...Array.from(document.querySelectorAll('.dialog-footer button')).map((b) => (b.textContent || '').trim())].join(' | '); return { title: document.querySelector('.dialog-title')?.textContent ?? null, buttons: Array.from(document.querySelectorAll('.dialog-footer button')).map((b) => (b.textContent || '').trim()), fields: labelsAll.filter((s) => ['名称', '标题', '副标题', '作者'].includes(s)), cyr: chrome.match(/[А-Яа-яЁё].*/g) }; })()",
+      "expect": {
+        "title": "新建出版物",
+        "buttons": [
+          "取消",
+          "创建"
+        ],
+        "fields": [
+          "名称",
+          "副标题",
+          "作者"
+        ],
+        "cyr": null
+      }
+    },
+    {
+      "name": "wizard-clipping",
+      "probe": "(() => { const sel = '.dialog-backdrop .ui-btn, .dialog-backdrop .dialog-title, .dialog-backdrop .form-stack label, .dialog-footer button'; const out = []; for (const el of document.querySelectorAll(sel)) { const r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) continue; if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) out.push({ text: (el.textContent || '').trim().slice(0, 40), sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight }); } return out; })()",
+      "expect": []
+    },
+    {
+      "name": "close-wizard",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-footer button')).find((e) => (e.textContent || '').trim() === '取消'); if (!b) throw new Error('нет кнопки 取消 в мастере'); b.click(); return true; })()"
+    },
+    {
+      "name": "wizard-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "lang-after",
+      "probe": "document.documentElement.lang",
+      "expect": "zh"
+    },
+    {
+      "name": "network-data-not-translated",
+      "probe": "document.body.innerText.includes('GUI-стенд')",
+      "expect": true
+    },
+    {
+      "name": "final-chrome-clipping",
+      "probe": "(() => { const sel = '.ui-btn, .view-tab, .pub-toolbar button, .tb-label, .diary-add-btn, .ff-extra--commands'; const out = []; for (const el of document.querySelectorAll(sel)) { const r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) continue; if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) out.push({ text: (el.textContent || '').trim().slice(0, 40), sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight }); } return out; })()",
+      "expect": []
+    }
+  ]
+}

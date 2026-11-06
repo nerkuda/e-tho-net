@@ -37,6 +37,7 @@ import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { linkEntryMatchesPick } from '../lib/link-entry-match.js';
 import { notice } from '../lib/notice.js';
+import { t } from '../lib/i18n.js';
 
 /**
  * Способ снятия рёбер: `auto` — проверить и удалить совсем либо в корзину,
@@ -153,7 +154,7 @@ async function allPurgeable(networkId: string, linkIds: readonly string[]): Prom
 
 /** Всплывашка об успехе: единственная связь или набор. */
 function noticeTrashed(count: number): void {
-  notice(count > 1 ? `Связи помещены в корзину (${count}).` : 'Связь помещена в корзину.');
+  notice(count > 1 ? t('linkValueRemoval.linkPomeschenyTrash', count) : t('linkValueRemoval.linkPomeschenaTrash'));
 }
 
 /**
@@ -177,14 +178,14 @@ export async function removeLinkValueEdges(opts: LinkValueRemovalOptions): Promi
       try {
         const { purged } = await etn.trash.purge(opts.networkId, linkIds);
         if (purged < linkIds.length) {
-          notice('Часть связей заблокирована и осталась в корзине.', 'warning');
+          notice(t('linkValueRemoval.chastLinksZablokirovanaOstalasTrash'), 'warning');
           return true;
         }
       } catch (err) {
-        notice(`Не удалось удалить связь совсем: ${errText(err)}`, 'error');
+        notice(t('linkValueRemoval.notSucceededDeleteLinkSovsem', errText(err)), 'error');
         return true;
       }
-      notice(count > 1 ? `Связи удалены (${count}).` : 'Связь удалена.');
+      notice(count > 1 ? t('linkValueRemoval.linkDeleted', count) : t('linkValueRemoval.linkDeleted2'));
       return true;
     }
   }

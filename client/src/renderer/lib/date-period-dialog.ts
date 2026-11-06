@@ -41,6 +41,7 @@ import {
 import { fieldInput } from './ui/field.js';
 import { segmentedControl } from './ui/segmented.js';
 import { setButtonActive, uiButton } from './ui/button.js';
+import { t } from './i18n.js';
 
 /** Режим значения: одна дата или период. */
 export type DatePeriodMode = 'date' | 'period';
@@ -275,11 +276,11 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
   const modes = allowPeriod
     ? segmentedControl({
         items: [
-          { id: 'date', label: 'Дата' },
-          { id: 'period', label: 'Период' },
+          { id: 'date', label: t('datePeriod.label.date') },
+          { id: 'period', label: t('datePeriod.label.period') },
         ],
         activeId: mode,
-        ariaLabel: 'Режим даты или периода',
+        ariaLabel: t('datePeriod.ariaLabel.rezhimDatesPeriod'),
         size: 's',
         onChange: (id) => {
           mode = id === 'period' ? 'period' : 'date';
@@ -341,10 +342,10 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
   // видимую рамку-кнопку, включённое состояние заливается акцентом
   // (`.ui-btn--secondary.ui-btn--active`, итерация приёмки №7).
   const timeToggle = uiButton({
-    label: 'С указанием времени',
+    label: t('datePeriod.label.withUkazaniemTime'),
     role: 'secondary',
     size: 's',
-    title: 'Показывать и учитывать время суток',
+    title: t('datePeriod.showUchityvatTimeSutok'),
     class: DPD_TIME_TOGGLE_CLASS,
     onClick: () => {
       hasTime = !hasTime;
@@ -381,9 +382,9 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
       extraClass: DPD_DATE_CLASS,
       value,
       maxLength: 10,
-      ariaLabel: which === 'from' ? 'Дата начала' : 'Дата окончания',
-      title: 'Дата в формате ГГГГ-ММ-ДД',
-      placeholder: 'ГГГГ-ММ-ДД',
+      ariaLabel: which === 'from' ? t('datePeriod.dateStart') : t('datePeriod.dateOkonchaniya'),
+      title: t('dateField.title.dateFormateGgggMmDd'),
+      placeholder: t('dateField.placeholder.ggggMmDd'),
       onChange: (raw) => applyDateInput(which, raw),
     });
     // Поле даты — редактируемый ввод `YYYY-MM-DD` (подсказка мобильной
@@ -419,7 +420,7 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
       type: 'time',
       extraClass: DPD_TIME_CLASS,
       value: which === 'from' ? fromTime : toTime,
-      ariaLabel: which === 'from' ? 'Время начала' : 'Время окончания',
+      ariaLabel: which === 'from' ? t('datePeriod.timeStart') : t('datePeriod.timeOkonchaniya'),
       onChange: (raw) => {
         const time = raw.trim();
         if (!isValidTime(time)) {
@@ -592,7 +593,7 @@ export function openDatePeriodDialog(
       onDayActivate: (value) => finish(value),
     });
     closeSelf = showDialog({
-      title: opts.title ?? 'Дата/период',
+      title: opts.title ?? t('datePeriod.datePeriod'),
       // Роль `s` — нижняя граница ширины (хватает сетке Пн–Вс на 7 колонок);
       // `fitContent` снимает потолок высоты и прокрутку тела, чтобы календарь
       // (до 6 недель), переключатель, время, значение и футер были видны
@@ -601,8 +602,8 @@ export function openDatePeriodDialog(
       fitContent: true,
       body: dialog.root,
       buttons: [
-        { label: 'Отмена', onClick: () => finish(null) },
-        { label: 'ОК', primary: true, confirm: true, onClick: () => finish(dialog.getValue()) },
+        { label: t('actions.cancel'), onClick: () => finish(null) },
+        { label: t('datePeriod.label.ok'), primary: true, confirm: true, onClick: () => finish(dialog.getValue()) },
       ],
       onClose: () => finish(null),
     });

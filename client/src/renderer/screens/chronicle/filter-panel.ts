@@ -92,6 +92,7 @@ import {
   todayLocal,
 } from './diary.js';
 import { isFeedRecordEditorTarget } from './feed-nav.js';
+import { t } from '../../lib/i18n.js';
 
 /** Профиль контекста места: «Дневниковые записи» (со временем). */
 export const FILTER_PROFILE = 'chronicle' as const;
@@ -784,7 +785,7 @@ function presetChronicle(children: FilterAstNode[]): ChronicleFilterDefinition {
  */
 export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
   {
-    name: 'Мои записи за неделю',
+    get name() { return t('chrono.name.moiRecordsZaWeek'); },
     definition: presetChronicle([
       {
         entity: { kind: 'record_time' },
@@ -795,7 +796,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: 'Записи за 30 дней',
+    get name() { return t('chrono.name.recordsZaDney'); },
     definition: presetChronicle([
       {
         entity: { kind: 'record_time' },
@@ -932,7 +933,7 @@ async function searchRecordOptions(query: string): Promise<SuggestEntry[]> {
       recordHits.set(row.id, row);
       out.push({
         value: row.id,
-        label: `${fmtDate(row.valid_from)} — ${row.title ?? 'Запись'}`,
+        label: `${fmtDate(row.valid_from)} — ${row.title ?? t('chrono.record')}`,
         recordId: row.id,
       });
     }
@@ -943,7 +944,7 @@ async function searchRecordOptions(query: string): Promise<SuggestEntry[]> {
 }
 
 function recordSearchSource(): SuggestSource {
-  return { when: 'typed', header: 'Найденные записи', load: (query) => searchRecordOptions(query) };
+  return { when: 'typed', header: t('chrono.header.naydennyeRecords'), load: (query) => searchRecordOptions(query) };
 }
 
 /** Контекст общего поля ключевых слов: пишет срез и держит debounce. */
@@ -970,14 +971,11 @@ function keywordsContext(): FilterFormContext {
 /** Живая строка поиска над деревом: поле слов + три области мыслевого пути. */
 function buildSearchRow(): HTMLElement {
   const section = buildKeywordsSection(keywordsContext(), {
-    title: 'Поиск по записям',
-    placeholder: 'счет* -вод*',
+    title: t('chrono.title.searchZapisyam'),
+    placeholder: t('filterForm.schetVod'),
     showScope: true,
     tooltip:
-      'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. ' +
-      'Условие ищет запись двумя путями (ИЛИ): по телу и заголовку самой записи и по ' +
-      'мыслям-целям в выбранных областях. Подсказка «Найденные записи» открывает ' +
-      'запись переходом (период из записи, прокрутка и подсветка).',
+      t('chrono.slovaViaProbelAllObyazatelnyLyubye'),
     suggestSource: {
       when: 'always',
       load: () =>
@@ -1103,11 +1101,11 @@ function wireSavedFiltersToLayer(): void {
 function orderControl(): HTMLElement {
   const seg = segmentedControl({
     items: [
-      { id: 'asc', label: 'Сначала старые' },
-      { id: 'desc', label: 'Сначала новые' },
+      { id: 'asc', label: t('chrono.label.firstStarye') },
+      { id: 'desc', label: t('chrono.label.firstNovye') },
     ],
     activeId: filter.order,
-    ariaLabel: 'Направление сортировки',
+    ariaLabel: t('chrono.ariaLabel.napravlenieSort'),
     onChange: (id) => {
       filter = { ...filter, order: id === 'desc' ? 'desc' : 'asc' };
     },
@@ -1190,8 +1188,8 @@ function footerExtraButtons(): FilterFooterButtonSpec[] {
       // компоновка, ошибка 4258e694 п.2): кнопка рядом с полем имени, как в
       // «Структурах».
       id: 'saved',
-      label: 'Отборы…',
-      title: 'Выбрать сохранённый отбор',
+      label: t('activity.label.views'),
+      title: t('savedFilters.title.selectSohranennyyView'),
       place: 'name',
       onClick: () => void openSavedPicker(),
     },

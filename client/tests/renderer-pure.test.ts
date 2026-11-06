@@ -74,7 +74,7 @@ import {
   planFocusTransition,
   planEnteringSources,
   resolveFocusFlightOrigin,
-  LAYER_MENU_LABEL_FALLBACK,
+  layerMenuLabelFallback,
   LAYER_MENU_LABEL_MAX,
   layerMenuTooltip,
   truncateLayerMenuLabel,
@@ -756,12 +756,14 @@ describe('search scope resolution (H13)', () => {
     assert.equal(parseThoughtIdLookupQuery('id ec5ba58c'), null);
   });
 
-  it('detects not-found errors via code and via the IPC-surviving message', () => {
+  it('detects not-found errors by the machine-readable code only', () => {
     assert.equal(isNotFoundError({ code: 'NOT_FOUND', message: 'thought x not found' }), true);
-    // ipcRenderer.invoke drops custom fields — only the message survives.
+    // ADR daab6ac4 §4: серверный `message` не разбирается. `reviveIpcError`
+    // восстанавливает `code` на границе IPC (`lib/etn.ts`), fallback не нужен.
     assert.equal(
       isNotFoundError(new Error('Error invoking remote method: Error: thought x not found')),
-      true,
+      false,
+      'текст ошибки — не причина',
     );
     assert.equal(isNotFoundError({ code: 'INTERNAL', message: 'Сетевая ошибка: timeout' }), false);
     assert.equal(isNotFoundError(null), false);
@@ -1464,8 +1466,8 @@ describe('truncateLayerMenuLabel — заголовок меню слоёв (з�
   });
 
   it('слой не выбран — «Основа»', () => {
-    assert.equal(truncateLayerMenuLabel(null), LAYER_MENU_LABEL_FALLBACK);
-    assert.equal(truncateLayerMenuLabel(undefined), LAYER_MENU_LABEL_FALLBACK);
+    assert.equal(truncateLayerMenuLabel(null), layerMenuLabelFallback());
+    assert.equal(truncateLayerMenuLabel(undefined), layerMenuLabelFallback());
   });
 });
 
@@ -1477,8 +1479,8 @@ describe('layerMenuTooltip — полное имя слоя в тултипе (�
   });
 
   it('слой не выбран — «Основа», тултип не пустой', () => {
-    assert.equal(layerMenuTooltip(null), LAYER_MENU_LABEL_FALLBACK);
-    assert.equal(layerMenuTooltip(undefined), LAYER_MENU_LABEL_FALLBACK);
+    assert.equal(layerMenuTooltip(null), layerMenuLabelFallback());
+    assert.equal(layerMenuTooltip(undefined), layerMenuLabelFallback());
   });
 });
 

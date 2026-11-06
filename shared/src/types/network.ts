@@ -61,6 +61,12 @@ export interface Network extends NetworkSelfDescription {
    * ({@link defaultFirstDayOfWeek}), для ранее созданных сетей — понедельник.
    */
   first_day_of_week: number;
+  /**
+   * Язык сети (ADR daab6ac4 §2, задача f99f0542): `null` — «использовать язык
+   * сервера», строка — конкретный тег BCP-47, зафиксированный за сетью и не
+   * меняющийся при смене языка сервера. Меняет владелец сети.
+   */
+  language: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -103,6 +109,13 @@ export interface UpdateNetworkInput {
    * текущий; вне диапазона 1..7 — `VALIDATION_ERROR`. См. {@link Network}.
    */
   first_day_of_week?: number;
+  /**
+   * Язык сети (ADR daab6ac4 §2): `undefined` — сохранить текущий; `null` —
+   * «использовать язык сервера»; строка — конкретный тег BCP-47 (канонизируется
+   * сервером). Некорректный тег — `VALIDATION_ERROR`. Меняет владелец сети
+   * (или администратор сервера).
+   */
+  language?: string | null;
 }
 
 /**
@@ -181,6 +194,12 @@ export interface NetworkListItem {
    * То же значение, что у `GET /networks/:id` (`networkDto`), — единый источник.
    */
   first_day_of_week: number;
+  /**
+   * Язык сети (ADR daab6ac4 §2): `null` — «использовать язык сервера», иначе
+   * конкретный тег. То же значение, что у `GET /networks/:id`, — единый
+   * источник для списка сетей и управления сетью.
+   */
+  language: string | null;
 }
 
 /** Input for `POST /networks/{id}/members` (03-server-api.md §5.3). */

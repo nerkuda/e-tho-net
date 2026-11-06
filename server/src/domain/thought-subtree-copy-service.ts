@@ -155,14 +155,14 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
   for (const id of root_thought_ids) {
     const thought = getThought(source_ndb, id);
     if (thought === null) {
-      throw new EtnError('NOT_FOUND', `Корень ${id} не найден в исходной сети.`, {
+      throw new EtnError('NOT_FOUND', `Root ${id} not found in the source network.`, {
         thought_id: id,
       });
     }
     if (thought.is_root) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'HOME-мысль нельзя копировать как корень подграфа.',
+        "The HOME thought cannot be copied as a subgraph root.",
         { thought_id: id },
       );
     }
@@ -176,7 +176,7 @@ export function copySubtree(params: CopySubtreeParams): CopySubtreeSummary {
   if (traversal.truncated) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Подграф превысил лимит ${MCP_MAX_THOUGHTS_PER_WRITE} узлов. Уменьшите max_depth.`,
+      `The subgraph exceeded the limit of ${MCP_MAX_THOUGHTS_PER_WRITE} nodes. Reduce max_depth.`,
       { limit: MCP_MAX_THOUGHTS_PER_WRITE, reason: traversal.reason ?? 'max_nodes' },
     );
   }
@@ -511,7 +511,7 @@ function checkOntologyCoverage(
   if (missingThoughtTypes.length > 0 || missingLinkTypes.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Онтология целевой сети не покрывает подграф: отсутствуют нужные типы мыслей и/или связей.',
+      "The target network ontology does not cover the subgraph: required thought and/or link types are missing.",
       { missing_thought_types: missingThoughtTypes, missing_link_types: missingLinkTypes },
     );
   }
@@ -575,7 +575,7 @@ function resolveDuplicates(
   if (policy === 'fail' && conflicts.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Найдены конфликты title+synonyms в целевой сети; duplicate_policy=fail запрещает копирование.`,
+      "Title+synonyms conflicts were found in the target network; duplicate_policy=fail forbids copying.",
       { conflicts },
     );
   }
@@ -874,7 +874,7 @@ export function resolveHomeId(target: NetworkDb): string {
     | { id: string }
     | undefined;
   if (home === undefined) {
-    throw new EtnError('INTERNAL', 'HOME-мысль целевой сети не найдена.');
+    throw new EtnError('INTERNAL', "The target network HOME thought was not found.");
   }
   return home.id;
 }

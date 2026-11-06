@@ -42,7 +42,7 @@ import { mountEventAreaResizer } from './event-area-resizer.js';
 import { mountSelectionResizer, mountUsageResizer } from './selection-resizer.js';
 import {
   clampEventAreaW,
-  LAYER_MENU_LABEL_FALLBACK,
+  layerMenuLabelFallback,
   layerMenuTooltip,
   truncateLayerMenuLabel,
 } from '../lib/pure.js';
@@ -262,8 +262,8 @@ export function buildWorkspace(): HTMLElement {
   // индикатором «где я» (§10.3). Метка обрезается до 32 кодпоинтов, а полное
   // имя слоя несёт тултип кнопки (задача 4388305f): refresh() ниже выставляет
   // и то, и другое.
-  const layerMenuButton = uiButton({ role: 'ghost', title: LAYER_MENU_LABEL_FALLBACK });
-  const layerMenuLabel = span(LAYER_MENU_LABEL_FALLBACK, 'tb-label');
+  const layerMenuButton = uiButton({ role: 'ghost', title: layerMenuLabelFallback() });
+  const layerMenuLabel = span(layerMenuLabelFallback(), 'tb-label');
   layerMenuButton.append(
     svgIcon('layers'),
     layerMenuLabel,

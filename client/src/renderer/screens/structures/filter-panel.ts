@@ -808,8 +808,8 @@ function footerExtraButtons(): FilterFooterButtonSpec[] {
   return [
     {
       id: 'commands',
-      label: 'Команды ▾',
-      title: 'Команды над всеми мыслями отбора (без учёта пагинации)',
+      label: t('structures.label.komandy'),
+      title: t('structures.komandyNadVsemiThoughtsViewWithout'),
       onClick: () => {
         const anchor = editor?.root.querySelector<HTMLElement>('.ff-extra--commands');
         if (anchor !== null && anchor !== undefined) callbacks?.onCommands(anchor);
@@ -819,8 +819,8 @@ function footerExtraButtons(): FilterFooterButtonSpec[] {
       // Нижний ряд футера — манипуляции с сохранёнными отборами (решение
       // заказчика 2026-10-14, ошибка 4258e694 п.2): кнопка «…» рядом с именем.
       id: 'saved',
-      label: 'Отборы…',
-      title: 'Выбрать сохранённый отбор',
+      label: t('activity.label.views'),
+      title: t('savedFilters.title.selectSohranennyyView'),
       place: 'name',
       onClick: () => void openSavedPicker(),
     },
@@ -877,7 +877,7 @@ function presetAst(children: FilterAstNode[]): FilterAst {
  */
 export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
   {
-    name: 'Сиротские мысли (без родителей)',
+    get name() { return t('structures.name.sirotskieThoughtWithoutParents'); },
     definition: presetAst([
       { entity: { kind: 'parents' }, operator: 'is_empty' },
       { entity: { kind: 'active' }, operator: 'eq', value: true },
@@ -885,7 +885,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: 'Создано на этой неделе',
+    get name() { return t('structures.name.createdWeek'); },
     definition: presetAst([
       {
         entity: { kind: 'created_at' },
@@ -897,7 +897,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: 'Создано за 30 дней',
+    get name() { return t('structures.name.createdZaDney'); },
     definition: presetAst([
       {
         entity: { kind: 'created_at' },
@@ -909,7 +909,7 @@ export const PREDEFINED_FILTERS: readonly PredefinedFilter[] = [
     ]),
   },
   {
-    name: 'Помеченные на удаление',
+    get name() { return t('structures.name.markedDelete'); },
     definition: presetAst([{ entity: { kind: 'trashed' }, operator: 'eq', value: true }]),
   },
 ];

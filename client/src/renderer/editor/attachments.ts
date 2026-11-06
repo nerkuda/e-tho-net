@@ -193,7 +193,7 @@ function attachmentTitle(a: Attachment): string {
 function attachmentMeta(a: Attachment): string {
   return a.kind === 'url'
     ? (a.url ?? '')
-    : `${a.file_path ?? ''}${a.file_size !== null ? ` · ${a.file_size} Б` : ''}`;
+    : `${a.file_path ?? ''}${a.file_size !== null ? t('attachments.b', a.file_size) : ''}`;
 }
 
 /**
@@ -272,10 +272,10 @@ async function uploadLocalFile(
     if (!res.ok) throw new Error(res.status === 404 ? 'not found' : `HTTP ${res.status}`);
     blob = await res.blob();
   } catch {
-    throw new Error(`Файл не найден или недоступен по пути: ${filePath}`);
+    throw new Error(t('attachments.fileNotFoundUnavailablePath', filePath));
   }
   if (blob.size > ATTACHMENT_MAX_BYTES) {
-    throw new Error(`Файл больше ${ATTACHMENT_MAX_BYTES / (1024 * 1024)} МБ — лимит вложения.`);
+    throw new Error(t('attachments.fileGreaterMbLimitAttachments', ATTACHMENT_MAX_BYTES / (1024 * 1024)));
   }
   // The etnimg protocol maps only common extensions; fall back to a guess so
   // the server keeps the right file extension when storing the copy.
@@ -352,11 +352,11 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
 
   const top = div('attachments-top');
   const drop = div('attachments-drop');
-  drop.textContent = 'Перетащите файлы или ссылки сюда';
+  drop.textContent = t('attachments.peretaschiteFilesLinkRefSyuda');
   const list = div('attachments-list');
   const actions = div('attachments-actions');
   actions.append(uiButton({
-    label: 'Добавить вложение',
+    label: t('contextMenu.addAttachment'),
     role: 'secondary',
     size: 's',
     onClick: () => openAddDialog(),
@@ -435,7 +435,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         await etn.attachments.add(networkId, ownerType, ownerId, { kind: 'url', url });
         added++;
       } catch {
-        notice('Не удалось добавить вложение.', 'error');
+        notice(t('attachments.notSucceededAddAttachment'), 'error');
       }
     }
     if (files !== undefined && files.length > 0) {
@@ -452,7 +452,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
           });
           added++;
         } catch {
-          notice('Не удалось добавить вложение.', 'error');
+          notice(t('attachments.notSucceededAddAttachment'), 'error');
         }
       }
     }
@@ -462,7 +462,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       return;
     }
     // Nothing was recognised — say so instead of failing silently.
-    notice('Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.');
+    notice(t('attachments.peretaschenyNeraspoznannyeDannyePodderzhivayutsyaFilesH'));
   }
 
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
@@ -476,7 +476,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
 
   /** Renders the attachment list. */
   async function reload(): Promise<void> {
-    list.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    list.replaceChildren(el('span', 'muted', t('common.loading')));
     let attachments: Attachment[];
     try {
       attachments = await etn.attachments.list(networkId, ownerType, ownerId);
@@ -506,7 +506,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     rowById.clear();
     renameById.clear();
     if (attachments.length === 0) {
-      list.append(el('p', 'muted', 'Вложений нет.'));
+      list.append(el('p', 'muted', t('attachments.attachmentsNo')));
       return;
     }
     for (const attachment of attachments) {
@@ -704,13 +704,13 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     try {
       if (attachment.kind === 'file' && attachment.file_path !== null) {
         const err = await etn.system.openAttachmentFile(attachment.file_path);
-        if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+        if (err !== '') notice(t('attachments.notSucceededOpen', err), 'error');
       } else if (attachment.kind === 'url' && attachment.url !== null) {
         const err = await etn.system.openExternal(attachment.url);
-        if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+        if (err !== '') notice(t('attachments.notSucceededOpen', err), 'error');
       }
     } catch (err) {
-      notice(`Не удалось открыть: ${errText(err)}`, 'error');
+      notice(t('attachments.notSucceededOpen', errText(err)), 'error');
     }
   }
 
@@ -721,7 +721,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
    */
   function buildOpenDefaultButton(attachment: Attachment): HTMLElement {
     return uiButton({
-      label: 'Открыть в приложении по умолчанию',
+      label: t('attachments.openPrilozheniiDefault'),
       role: 'secondary',
       size: 's',
       onClick: () => void openDefault(attachment),
@@ -735,12 +735,12 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
 
   /** Renders the inline viewer for the selected attachment (L7, §6.5). */
   function showViewer(attachment: Attachment): void {
-    bottom.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    bottom.replaceChildren(el('span', 'muted', t('common.loading')));
 
     if (isImageFile(attachment) && attachment.file_path !== null) {
       const img = el('img', 'attachment-viewer-img');
       img.src = etnimgUrl(attachment.file_path);
-      img.alt = attachment.title ?? 'Вложение';
+      img.alt = attachment.title ?? t('attachments.attachment');
       const frame = div('attachment-view-frame');
       frame.append(img);
       bottom.replaceChildren(frame);
@@ -749,7 +749,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     if (attachment.kind === 'url' && isImageUrl(attachment.url ?? '')) {
       const img = el('img', 'attachment-viewer-img');
       img.src = attachment.url ?? '';
-      img.alt = attachment.title ?? 'Вложение';
+      img.alt = attachment.title ?? t('attachments.attachment');
       const frame = div('attachment-view-frame');
       frame.append(img, buildOpenDefaultButton(attachment));
       bottom.replaceChildren(frame);
@@ -761,7 +761,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     }
     // Everything else: open externally instead of a preview (§6.5).
     const frame = div('attachment-view-frame');
-    frame.append(el('p', 'muted', 'Для этого типа вложения предпросмотр недоступен.'));
+    frame.append(el('p', 'muted', t('attachments.forThisTypeAttachmentsPreviewUnavailable')));
     frame.append(buildOpenDefaultButton(attachment));
     bottom.replaceChildren(frame);
   }
@@ -776,9 +776,9 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     let content: Awaited<ReturnType<typeof etn.attachments.getContent>>;
     try {
       content = await etn.attachments.getContent(networkId, attachment.id);
-      if (content.text === null) throw new Error('не текстовое вложение');
+      if (content.text === null) throw new Error(t('attachments.notTekstovoeAttachment'));
     } catch (err) {
-      bottom.replaceChildren(operationError(err, 'Не удалось прочитать файл'));
+      bottom.replaceChildren(operationError(err, t('attachments.notSucceededReadFile')));
       return;
     }
     // Another attachment may have been picked while the content loaded.
@@ -790,7 +790,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         el(
           'p',
           'muted',
-          'Файл превышает лимит просмотра — показаны первые 200 000 символов, правка отключена.',
+          t('attachments.filePrevyshaetLimitProsmotraPokazanyPervye'),
         ),
       );
       frame.append(el('pre', 'attachment-view-text', content.text));
@@ -842,9 +842,9 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     if (urlIcon !== null) {
       try {
         await assignDataIconToThought(networkId, thought, urlIcon, null);
-        notice('Иконка мысли обновлена.');
+        notice(t('attachments.iconThoughtObnovlena'));
       } catch (err) {
-        notice(`Не удалось назначить иконку: ${errText(err)}`, 'error');
+        notice(t('attachments.notSucceededNaznachitIcon', errText(err)), 'error');
       }
       return;
     }
@@ -857,22 +857,22 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       const blob = await res.blob();
       dataUrl = await blobToDataUrl(blob);
     } catch {
-      notice('Не удалось прочитать файл вложения.', 'error');
+      notice(t('attachments.notSucceededReadFileAttachments'), 'error');
       return;
     }
     if (dataUrlBytes(dataUrl) > ICON_MAX_BYTES) {
       try {
         dataUrl = await makeIconPreview(dataUrl);
       } catch {
-        notice('Не удалось подготовить превью иконки.', 'error');
+        notice(t('attachments.notSucceededPodgotovitPrevyuIcon'), 'error');
         return;
       }
     }
     try {
       await assignDataIconToThought(networkId, thought, dataUrl, attachment.id);
-      notice('Иконка мысли обновлена.');
+      notice(t('attachments.iconThoughtObnovlena'));
     } catch (err) {
-      notice(`Не удалось назначить иконку: ${errText(err)}`, 'error');
+      notice(t('attachments.notSucceededNaznachitIcon', errText(err)), 'error');
     }
   }
 
@@ -1036,14 +1036,14 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     // «Создать новое» — the classic form (URL/path + title + description).
     // «Найти существующее» — network-wide search by title/description/url/file_path,
     // reuses an existing attachment instead of uploading a fresh copy (L25).
-    const tabCreateOpt = radioRow({ label: 'Создать новое', name: 'att-tab', checked: true });
-    const tabSearchOpt = radioRow({ label: 'Найти существующее', name: 'att-tab' });
+    const tabCreateOpt = radioRow({ label: t('attachments.label.createNovoe'), name: 'att-tab', checked: true });
+    const tabSearchOpt = radioRow({ label: t('attachments.label.findSuschestvuyuschee'), name: 'att-tab' });
     const tabCreate = tabCreateOpt.input;
     const tabSearch = tabSearchOpt.input;
 
     // --- create panel (the classic form) ------------------------------------
-    const kindUrlOpt = radioRow({ label: 'Ссылка (URL)', name: 'att-kind', checked: true });
-    const kindFileOpt = radioRow({ label: 'Файл (путь)', name: 'att-kind' });
+    const kindUrlOpt = radioRow({ label: t('attachments.label.linkRefUrl'), name: 'att-kind', checked: true });
+    const kindFileOpt = radioRow({ label: t('attachments.label.filePath'), name: 'att-kind' });
     const kindUrl = kindUrlOpt.input;
     const kindFile = kindFileOpt.input;
 
@@ -1072,7 +1072,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     const locationRow = location.root;
 
     const syncKind = (): void => {
-      locationInput.placeholder = kindFile.checked ? 'Путь к файлу' : 'https://…';
+      locationInput.placeholder = kindFile.checked ? t('attachments.pathFile') : 'https://…';
       pickBtn.style.display = kindFile.checked ? '' : 'none';
     };
     kindUrl.addEventListener('change', syncKind);
@@ -1084,19 +1084,19 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
 
     const createPanel = div('att-tab-panel');
     createPanel.append(
-      fieldRow({ label: 'Тип', control: kindRow }),
-      fieldRow({ label: 'Адрес / путь', control: locationRow }),
-      fieldRow({ label: 'Заголовок (необязательно)', control: titleInput }),
-      fieldRow({ label: 'Комментарий (необязательно)', control: descInput }),
+      fieldRow({ label: t('attachments.label.type'), control: kindRow }),
+      fieldRow({ label: t('attachments.label.adresPath'), control: locationRow }),
+      fieldRow({ label: t('attachments.label.titleOptional'), control: titleInput }),
+      fieldRow({ label: t('attachments.label.kommentariyOptional'), control: descInput }),
     );
     // errorLine уходит в панель кнопок диалога (`footerError`, ошибка
     // add8d09d): сообщение о неудачном добавлении должно быть видно и на
     // вкладке «Найти существующее», а не только в теле «Создать новое».
 
     // --- search panel --------------------------------------------------------
-    const searchInput = fieldInput({ placeholder: 'Название, файл, URL, комментарий…' });
+    const searchInput = fieldInput({ placeholder: t('attachments.placeholder.titleFileUrlKommentariy') });
     const searchResults = div('att-search-results');
-    const searchHint = el('p', 'muted att-search-hint', 'Введите запрос для поиска по сети.');
+    const searchHint = el('p', 'muted att-search-hint', t('attachments.enterZaprosSearchNetwork'));
     searchResults.append(searchHint);
     const searchError = panelErrorLine();
 
@@ -1131,7 +1131,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
 
     const searchPanel = div('att-tab-panel hidden');
     searchPanel.append(
-      fieldRow({ label: 'Поиск', control: searchInput }),
+      fieldRow({ label: t('attachments.label.search'), control: searchInput }),
       searchResults,
       searchError,
     );
@@ -1144,9 +1144,9 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       if (searchDebounce !== null) clearTimeout(searchDebounce);
       const seq = ++searchSeq;
       const q = searchInput.value.trim();
-      searchResults.replaceChildren(el('p', 'muted', 'Поиск…'));
+      searchResults.replaceChildren(el('p', 'muted', t('actions.search')));
       if (q === '') {
-        searchResults.replaceChildren(el('p', 'muted', 'Введите запрос.'));
+        searchResults.replaceChildren(el('p', 'muted', t('attachments.enterZapros')));
         return;
       }
       searchDebounce = setTimeout(() => {
@@ -1177,7 +1177,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       searchRowEls.clear();
       searchResults.replaceChildren();
       if (hits.length === 0) {
-        searchResults.append(el('p', 'muted', 'Ничего не найдено.'));
+        searchResults.append(el('p', 'muted', t('attachments.nichegoNotFound')));
         searchNav.refresh();
         return;
       }
@@ -1235,7 +1235,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     tabSearch.addEventListener('change', applyTabs);
 
     const body = div('form-stack');
-    body.append(fieldRow({ label: 'Режим', control: tabRow }), createPanel, searchPanel);
+    body.append(fieldRow({ label: t('attachments.label.rezhim'), control: tabRow }), createPanel, searchPanel);
 
     /** Создание вложения и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
     async function addNew(close: () => void): Promise<void> {
@@ -1245,7 +1245,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       const kind = kindFile.checked ? 'file' : 'url';
       const location = locationInput.value.trim();
       if (location === '') {
-        errorLine.show('Укажите адрес или путь.');
+        errorLine.show(t('attachments.enterAdresPath'));
         return;
       }
       try {
@@ -1278,7 +1278,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     }
 
     showDialog({
-      title: 'Добавить вложение',
+      title: t('contextMenu.addAttachment'),
       body,
       size: 'm',
       // Навигация результатов и мост поиска живут ровно столько, сколько
@@ -1305,7 +1305,7 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
       buttons: [
         { label: t('actions.cancel') },
         {
-          label: 'Добавить',
+          label: t('addDialog.applyLabel.add'),
           primary: true,
           keepOpen: true,
           onClick: (close) => void addNew(close),

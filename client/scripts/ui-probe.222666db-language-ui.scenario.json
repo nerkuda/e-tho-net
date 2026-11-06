@@ -1,0 +1,603 @@
+{
+  "name": "222666db-language-ui",
+  "description": "Задача 222666db: «язык приложения» с наследованием и «язык сети» в управлении сетью. Сервер поднимается с языком по умолчанию en, но перед онбордингом админским API выставляется ru, поэтому первый экран показывает язык ОС (на стенде en), а после открытия сети серверное значение ru побеждает язык ОС. Проверяется: раздел «Клиент» — «использовать язык сетей» + ru/en/zh, эффективный язык и ступень наследования; сохранение языка приложения в профиль и живое применение; раздел «Мыслесеть» — «язык сети» (наследование/конкретный), PATCH сети и живое переключение; внешняя смена языка сети при профиле пользователя (второй клиент) приходит WS-кадром и меняет интерфейс; при явном языке пользователя смена сети интерфейс не трогает; перезагрузка страницы (следующий старт/другой клиент) поднимает язык из профиля, затем наследование из сети; отсутствующий каталог (de-DE) деградирует на ru без падения и с пояснением в настройках; админская вкладка «Сервер» меняет язык сервера, интерфейс переключается на лету, возврат ru работает. Запуск: npm -w @etn/server run build && npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.222666db-language-ui.scenario.json --out .tmp/222666db/out",
+  "timeout": 240000,
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": {
+          "language": "ru"
+        },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "first-start-language-info",
+      "probe": "(async () => { const preferred = await window.etn.system.preferredLanguage(); const primary = String(preferred || '').split('-')[0]; const expected = ['ru', 'en', 'zh'].includes(primary) ? primary : 'ru'; const shown = document.documentElement.lang; return { preferred, shown, expected, matchesOs: shown === expected }; })()"
+    },
+    {
+      "name": "first-start-matches-os",
+      "probe": "(async () => { const preferred = await window.etn.system.preferredLanguage(); const primary = String(preferred || '').split('-')[0]; const expected = ['ru', 'en', 'zh'].includes(primary) ? primary : 'ru'; return document.documentElement.lang === expected; })()",
+      "expect": true
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "server-language-wins",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "profile-and-cache-after-login",
+      "probe": "(async () => { const settings = await window.etn.me.getLanguageSettings(); const cache = await window.etn.meta.get('lang'); return { cache, user: settings.language, networks: settings.networks.map((n) => ({ language: n.language, source: n.source, stored: n.stored_language, can_edit: n.can_edit })) }; })()",
+      "expect": {
+        "cache": "ru",
+        "user": null,
+        "networks": [
+          {
+            "language": "ru",
+            "source": "server",
+            "stored": null,
+            "can_edit": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "tabs-ru",
+      "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title'))",
+      "expect": [
+        "Карта мыслей",
+        "Структуры мыслей",
+        "Дневник",
+        "Публикации",
+        "События"
+      ]
+    },
+    {
+      "name": "open-user-menu",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => ['Настройки', 'Settings', '所有设置'].includes((e.textContent || '').trim())); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "dialog-title",
+      "probe": "document.querySelector('.dialog-title')?.textContent ?? null",
+      "expect": "Все настройки"
+    },
+    {
+      "name": "open-client-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => ['Клиент', 'Client', '客户端'].includes((e.textContent || '').trim())); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "app-language-radios",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"zh\"]') !== null"
+    },
+    {
+      "name": "client-language-state-ru",
+      "probe": "(() => { const root = document.querySelector('.settings-section'); const radios = Array.from(root.querySelectorAll('input[name=\"settings-app-lang\"]')).map((r) => ({ value: r.value, checked: r.checked })); const checked = root.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null; const muted = Array.from(root.querySelectorAll('p.muted')).map((p) => (p.textContent || '').trim()); return { radios, checked, muted: muted.filter((s) => s.startsWith('Сейчас:') || s.includes('всех ваших клиентах')) }; })()",
+      "expect": {
+        "radios": [
+          {
+            "value": "",
+            "checked": true
+          },
+          {
+            "value": "ru",
+            "checked": false
+          },
+          {
+            "value": "en",
+            "checked": false
+          },
+          {
+            "value": "zh",
+            "checked": false
+          }
+        ],
+        "checked": "",
+        "muted": [
+          "Язык интерфейса. Действует на всех ваших клиентах на этом сервере.",
+          "Сейчас: ru (язык сервера)"
+        ]
+      }
+    },
+    {
+      "name": "open-network-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => ['Мыслесеть', 'Thought network', '想法网络'].includes((e.textContent || '').trim())); if (!nav) throw new Error('нет раздела сети'); nav.click(); return true; })()"
+    },
+    {
+      "name": "network-language-select",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-section select')).some((s) => Array.from(s.options).some((o) => (o.textContent || '').trim() === 'Использовать язык сервера'))"
+    },
+    {
+      "name": "network-language-inherit-before",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => (o.textContent || '').trim() === 'Использовать язык сервера')); return s === undefined ? null : { value: s.value, disabled: s.disabled, options: Array.from(s.options).map((o) => (o.textContent || '').trim()) }; })()",
+      "expect": {
+        "value": "",
+        "disabled": false,
+        "options": [
+          "Использовать язык сервера",
+          "Русский",
+          "English",
+          "中文"
+        ]
+      }
+    },
+    {
+      "name": "pick-network-english",
+      "expect": "en",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => (o.textContent || '').trim() === 'Использовать язык сервера')); if (s === undefined) throw new Error('нет выбора языка сети'); s.value = 'en'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "apply-network-language",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => ['Применить', 'Apply'].includes((e.textContent || '').trim()) && !e.disabled); if (!b) throw new Error('нет активной кнопки «Применить»'); b.click(); return true; })()"
+    },
+    {
+      "name": "network-language-live-en",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'en' && document.querySelector('.dialog-title')?.textContent === 'All settings'"
+    },
+    {
+      "name": "network-language-effective-en",
+      "probe": "(() => { const root = document.querySelector('.settings-section'); const muted = Array.from(root.querySelectorAll('p.muted')).map((p) => (p.textContent || '').trim()); const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Client'); if (nav) nav.click(); const clientRoot = document.querySelector('.settings-section'); const clientMuted = Array.from(clientRoot.querySelectorAll('p.muted')).map((p) => (p.textContent || '').trim()); return { selected: root.querySelector('select')?.value ?? null, sectionMuted: muted.filter((s) => s.startsWith('Current:') || s.includes('network language')), clientMuted: clientMuted.filter((s) => s.startsWith('Current:')) }; })()"
+    },
+    {
+      "name": "server-network-en",
+      "api": {
+        "name": "server-network-en",
+        "method": "GET",
+        "path": "/networks/{{networkId}}",
+        "expression": "data.language"
+      },
+      "expect": "en"
+    },
+    {
+      "name": "server-profile-null-network-en",
+      "api": {
+        "name": "server-profile-null-network-en",
+        "method": "GET",
+        "path": "/users/me/language-settings",
+        "expression": "({ user: data.language, net: data.networks.map((n) => ({ language: n.language, source: n.source, stored: n.stored_language })) })"
+      },
+      "expect": {
+        "user": null,
+        "net": [
+          {
+            "language": "en",
+            "source": "network",
+            "stored": "en"
+          }
+        ]
+      }
+    },
+    {
+      "name": "explicit-ru-picked",
+      "expect": true,
+      "probe": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет языка ru'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "apply-explicit-ru",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => ['Применить', 'Apply'].includes((e.textContent || '').trim()) && !e.disabled); if (!b) throw new Error('нет активной кнопки «Применить»'); b.click(); return true; })()"
+    },
+    {
+      "name": "explicit-ru-live",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelector('.dialog-title')?.textContent === 'Все настройки'"
+    },
+    {
+      "name": "server-profile-ru",
+      "api": {
+        "name": "server-profile-ru",
+        "method": "GET",
+        "path": "/users/me/language-settings",
+        "expression": "({ user: data.language, net: data.networks.map((n) => ({ language: n.language, source: n.source })) })"
+      },
+      "expect": {
+        "user": "ru",
+        "net": [
+          {
+            "language": "ru",
+            "source": "user"
+          }
+        ]
+      }
+    },
+    {
+      "name": "external-network-zh",
+      "api": {
+        "name": "external-network-zh",
+        "method": "PATCH",
+        "path": "/networks/{{networkId}}",
+        "body": {
+          "language": "zh"
+        },
+        "expression": "data.language"
+      },
+      "expect": "zh"
+    },
+    {
+      "name": "settle-external-zh",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 1200)); return 'ок'; })()",
+      "expect": "ок"
+    },
+    {
+      "name": "explicit-ru-survives-network-change",
+      "probe": "({ lang: document.documentElement.lang, tabs: Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title')) })",
+      "expect": {
+        "lang": "ru",
+        "tabs": [
+          "Карта мыслей",
+          "Структуры мыслей",
+          "Дневник",
+          "Публикации",
+          "События"
+        ]
+      }
+    },
+    {
+      "name": "inherit-picked",
+      "expect": true,
+      "probe": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (nav) nav.click(); const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"\"]'); if (!r) throw new Error('нет режима наследования'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "apply-inherit",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Применить' && !e.disabled); if (!b) throw new Error('нет активной кнопки «Применить»'); b.click(); return true; })()"
+    },
+    {
+      "name": "inherit-live-zh",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'zh' && document.querySelector('.dialog-title')?.textContent === '所有设置'"
+    },
+    {
+      "name": "server-profile-null-inherit",
+      "api": {
+        "name": "server-profile-null-inherit",
+        "method": "GET",
+        "path": "/users/me/language-settings",
+        "expression": "({ user: data.language, net: data.networks.map((n) => ({ language: n.language, source: n.source, stored: n.stored_language })) })"
+      },
+      "expect": {
+        "user": null,
+        "net": [
+          {
+            "language": "zh",
+            "source": "network",
+            "stored": "zh"
+          }
+        ]
+      }
+    },
+    {
+      "name": "external-network-en",
+      "api": {
+        "name": "external-network-en",
+        "method": "PATCH",
+        "path": "/networks/{{networkId}}",
+        "body": {
+          "language": "en"
+        },
+        "expression": "data.language"
+      },
+      "expect": "en"
+    },
+    {
+      "name": "ws-network-change-live-en",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'en' && document.querySelector('.dialog-title')?.textContent === 'All settings'"
+    },
+    {
+      "name": "ws-network-change-tabs-en",
+      "probe": "Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title'))",
+      "expect": [
+        "Thought map",
+        "Thought structures",
+        "Diary",
+        "Publications",
+        "Events"
+      ]
+    },
+    {
+      "name": "external-profile-ru",
+      "api": {
+        "name": "external-profile-ru",
+        "method": "PUT",
+        "path": "/users/me/settings/app_language",
+        "body": {
+          "value": "ru"
+        },
+        "expression": "data.value"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "reload-after-profile-ru",
+      "expect": "scheduled",
+      "probe": "(() => { setTimeout(() => location.reload(), 120); return 'scheduled'; })()"
+    },
+    {
+      "name": "profile-ru-after-reload",
+      "timeout": 30000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "cache-ru-after-reload",
+      "probe": "(async () => await window.etn.meta.get('lang'))()",
+      "expect": "ru"
+    },
+    {
+      "name": "external-profile-null",
+      "api": {
+        "name": "external-profile-null",
+        "method": "PUT",
+        "path": "/users/me/settings/app_language",
+        "body": {
+          "value": null
+        },
+        "expression": "data.value"
+      },
+      "expect": null
+    },
+    {
+      "name": "reload-after-profile-null",
+      "expect": "scheduled",
+      "probe": "(() => { setTimeout(() => location.reload(), 120); return 'scheduled'; })()"
+    },
+    {
+      "name": "inherit-network-en-after-reload",
+      "timeout": 30000,
+      "waitFor": "document.documentElement.lang === 'en' && document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "external-profile-unavailable",
+      "api": {
+        "name": "external-profile-unavailable",
+        "method": "PUT",
+        "path": "/users/me/settings/app_language",
+        "body": {
+          "value": "de-DE"
+        },
+        "expression": "data.value"
+      },
+      "expect": "de-DE"
+    },
+    {
+      "name": "reload-after-unavailable",
+      "expect": "scheduled",
+      "probe": "(() => { setTimeout(() => location.reload(), 120); return 'scheduled'; })()"
+    },
+    {
+      "name": "unavailable-degrades-to-ru",
+      "timeout": 30000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-user-menu-unavailable",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    {
+      "name": "user-menu-unavailable",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-unavailable",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-unavailable",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-unavailable",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "unavailable-radio-present",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"de-DE\"]') !== null"
+    },
+    {
+      "name": "unavailable-ui-state",
+      "probe": "(() => { const root = document.querySelector('.settings-section'); const muted = Array.from(root.querySelectorAll('p.muted')).map((p) => (p.textContent || '').trim()); return { checked: root.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null, effective: muted.find((s) => s.startsWith('Сейчас:')) ?? null, notice: muted.find((s) => s.includes('недоступен')) ?? null }; })()",
+      "expect": {
+        "checked": "de-DE",
+        "effective": "Сейчас: de-DE (выбрано в профиле)",
+        "notice": "Каталог языка «de-DE» недоступен в этой сборке. Интерфейс показан на русском."
+      }
+    },
+    {
+      "name": "cleanup-profile",
+      "api": {
+        "name": "cleanup-profile",
+        "method": "PUT",
+        "path": "/users/me/settings/app_language",
+        "body": {
+          "value": null
+        },
+        "expression": "data.value"
+      },
+      "expect": null
+    },
+    {
+      "name": "cleanup-network",
+      "api": {
+        "name": "cleanup-network",
+        "method": "PATCH",
+        "path": "/networks/{{networkId}}",
+        "body": {
+          "language": null
+        },
+        "expression": "data.language"
+      },
+      "expect": null
+    },
+    {
+      "name": "close-settings",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()"
+    },
+    {
+      "name": "settings-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-user-menu-admin",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    {
+      "name": "user-menu-admin",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-admin",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => ['Администрирование', 'Administration'].includes((e.textContent || '').trim())); if (!row) throw new Error('нет пункта администрирования'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "admin-dialog",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop .ui-tablist') !== null"
+    },
+    {
+      "name": "admin-tabs",
+      "probe": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tab')).map((b) => (b.textContent || '').trim())",
+      "expect": [
+        "Пользователи",
+        "Сети",
+        "Аудит",
+        "Сервер"
+      ]
+    },
+    {
+      "name": "open-server-tab",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .ui-tab')).find((e) => ['Сервер', 'Server'].includes((e.textContent || '').trim())); if (!b) throw new Error('нет вкладки «Сервер»'); b.click(); return true; })()"
+    },
+    {
+      "name": "server-tab-ready",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active select')).some((s) => Array.from(s.options).some((o) => (o.textContent || '').trim() === 'Русский'))"
+    },
+    {
+      "name": "server-language-before",
+      "probe": "(() => { const s = document.querySelector('.dialog-backdrop .ui-tabpanel.active select'); return { value: s?.value ?? null, options: Array.from(s?.options ?? []).map((o) => (o.textContent || '').trim()) }; })()",
+      "expect": {
+        "value": "ru",
+        "options": [
+          "Русский",
+          "English",
+          "中文"
+        ]
+      }
+    },
+    {
+      "name": "pick-server-english",
+      "expect": "en",
+      "probe": "(() => { const s = document.querySelector('.dialog-backdrop .ui-tabpanel.active select'); if (!s) throw new Error('нет выбора языка сервера'); s.value = 'en'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "save-server-language",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active button')).find((e) => ['Сохранить', 'Save'].includes((e.textContent || '').trim()) && !e.disabled); if (!b) throw new Error('нет активной кнопки «Сохранить»'); b.click(); return true; })()"
+    },
+    {
+      "name": "server-language-en-live",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'en'"
+    },
+    {
+      "name": "server-language-en-api",
+      "api": {
+        "name": "server-language-en-api",
+        "method": "GET",
+        "path": "/admin/settings/language",
+        "expression": "data.language"
+      },
+      "expect": "en"
+    },
+    {
+      "name": "pick-server-russian",
+      "expect": "ru",
+      "probe": "(() => { const s = document.querySelector('.dialog-backdrop .ui-tabpanel.active select'); if (!s) throw new Error('нет выбора языка сервера'); s.value = 'ru'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "save-server-russian",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .ui-tabpanel.active button')).find((e) => !e.disabled); if (!b) throw new Error('нет активной кнопки сохранения'); b.click(); return true; })()"
+    },
+    {
+      "name": "server-language-ru-live",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.lang === 'ru'"
+    },
+    {
+      "name": "server-language-ru-api",
+      "api": {
+        "name": "server-language-ru-api",
+        "method": "GET",
+        "path": "/admin/settings/language",
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "close-admin",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.dialog-backdrop .dialog-footer button')).find((e) => ['Закрыть', 'Close'].includes((e.textContent || '').trim())); if (!b) throw new Error('нет кнопки «Закрыть»'); b.click(); return true; })()"
+    },
+    {
+      "name": "admin-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "final-language",
+      "probe": "document.documentElement.lang",
+      "expect": "ru"
+    }
+  ]
+}

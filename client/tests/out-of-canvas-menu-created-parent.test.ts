@@ -280,6 +280,7 @@ const bridge: AnyRec = {
     onStale: () => undefined,
     onNetworkLost: () => undefined,
     onLayerControl: () => undefined,
+    onLanguage: () => undefined,
     onEvent: () => undefined,
     notifyOnline: () => undefined,
   },

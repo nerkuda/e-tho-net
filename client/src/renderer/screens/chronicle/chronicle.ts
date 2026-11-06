@@ -1777,12 +1777,12 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   const head = buildRecordHead({
     dayLabel: recordDateLabel(row),
     onDateClick: () => void editRecordDates(row),
-    dateTitle: 'Период дневниковой записи',
+    dateTitle: t('chrono.dateTitle.periodDnevnikovoyRecords'),
     chips: chips.box,
     onAddThought: () => void pickAndAttach(row.id),
     trailing: iconButton({
       icon: svgIcon('menu', 16),
-      title: 'Действия с дневниковой записью',
+      title: t('chrono.title.actionsDnevnikovoyRecord'),
       role: 'ghost',
       size: 's',
       class: 'diary-record-actions',
@@ -2063,7 +2063,7 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
             void import('../active-view.js')
               .then(({ focusThoughtOnMap }) => focusThoughtOnMap(target.thought.id))
               .catch((error) => {
-                console.error('[chronicle] не удалось открыть карту мыслей', error);
+                console.error('[chronicle] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
               });
           },
           extraItems: [
@@ -2082,7 +2082,7 @@ function buildChip(target: ChronicleTarget, rowId: string): HTMLElement {
       role: 'ghost',
       size: 's',
       class: 'diary-chip-remove',
-      title: 'Снять привязку',
+      title: t('chrono.title.unsetPrivyazku'),
       onClick: (event) => {
         event.stopPropagation();
         void detachChip(rowId, target);

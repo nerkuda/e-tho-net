@@ -22,6 +22,7 @@ import { installRowReorderDemo } from './lib/row-reorder-demo.js';
 // MIT) и маппинг токенов ETN → --wa-* (задача 95dd50b9).
 import './lib/ui/index.js';
 import { initScreens } from './screens/screens.js';
+import { t } from './lib/i18n.js';
 
 const appRoot = document.querySelector('#app');
 if (!(appRoot instanceof HTMLElement)) {
@@ -52,7 +53,7 @@ void startDeepLinks(boot).catch((err: unknown) => {
     el(
       'p',
       'onboarding-error',
-      err instanceof Error ? err.message : 'Не удалось запустить приложение.',
+      err instanceof Error ? err.message : t('main.notSucceededZapustitPrilozhenie'),
     ),
   );
   fallback.append(card);

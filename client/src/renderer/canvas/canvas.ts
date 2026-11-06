@@ -346,7 +346,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
   const zoneSplitterH = splitterElement('zone-splitter zone-splitter-h');
 
   const empty = div('canvas-empty');
-  empty.textContent = 'Нет открытой сети';
+  empty.textContent = t('canvas.noOtkrytoyNetwork');
 
   // Layer-name stripe (0.6.4, §2.2a): vertical text at the left edge of the
   // focus zone, non-interactive — painted over the focus band, under the
@@ -785,7 +785,7 @@ function scheduleRender(): void {
       // Отказ render() НЕ должен теряться (ошибка 1656ef58): прежде `void
       // render()` оставлял исключение необработанным отказом, и сбой выглядел
       // как «зависание» без реакции. Логируем и повторяем расклад целиком.
-      console.error('[canvas] рендер прерван — повтор на следующем тике', error);
+      console.error('[canvas] рендер прерван — повтор на следующем тике', error); // i18n: technical — диагностика для разработчика
       rebuildFailures += 1;
       scheduleRebuildRetry();
     });
@@ -980,7 +980,7 @@ async function render(): Promise<void> {
     // «применённым» этот расклад не считаем (lastFocusId/lastFocusResponse не
     // двигаем), следующий тик повторяет render() целиком. Без этого фокус
     // оставался новым, а зоны — прежними до следующего внешнего триггера.
-    console.error('[canvas] пересборка расклада прервана — повтор целиком', error);
+    console.error('[canvas] пересборка расклада прервана — повтор целиком', error); // i18n: technical — диагностика для разработчика
     rebuildFailures += 1;
     scheduleRebuildRetry();
     return;
@@ -1269,10 +1269,10 @@ export function requestZoneAnimation(): void {
 function buildLockBadge(row: { user_id: string }, meId: string | null): HTMLElement | null {
   const isOwn = meId !== null && row.user_id === meId;
   const name = isOwn
-    ? 'вы редактируете'
+    ? t('canvas.youRedaktiruete')
     : resolveLockHolderName(row.user_id) ?? row.user_id;
   const badge = span('🔒', 'cloud-lock-badge' + (isOwn ? ' own' : ''));
-  setTooltip(badge, isOwn ? 'Вы редактируете эту мысль.' : `Редактирует ${name}`);
+  setTooltip(badge, isOwn ? t('canvas.youRedaktirueteEtuThought') : t('canvas.redaktiruet', name));
   // Suppress click/dblclick so the cloud keeps its normal navigation.
   for (const evt of ['click', 'dblclick', 'contextmenu'] as const) {
     badge.addEventListener(evt, (e) => {
@@ -1357,7 +1357,7 @@ function markOverriddenCloud(cloud: HTMLElement, id: string): void {
   cloud.classList.add('overridden');
   const badge = span('', 'cloud-layer-badge');
   badge.append(svgIcon('layers', 15));
-  setTooltip(badge, 'Мысль изменена в текущем слое — её правка уедет в основу при слиянии');
+  setTooltip(badge, t('canvas.thoughtChangedTekuschemLayerItsEdit'));
   cloud.append(badge);
 }
 
@@ -1424,8 +1424,8 @@ function renderFocusRow(focus: FocusResponse): void {
   const bottomEllipse = div('ellipse ellipse-bottom');
   if (parents > 0) topEllipse.classList.add('filled');
   if (children > 0) bottomEllipse.classList.add('filled');
-  setTooltip(topEllipse, `Входящие связи: ${parents}`);
-  setTooltip(bottomEllipse, `Исходящие связи: ${children}`);
+  setTooltip(topEllipse, t('canvas.incomingLink', parents));
+  setTooltip(bottomEllipse, t('canvas.outgoingLink', children));
   wireEllipseDrag(topEllipse, thought.id, thought.title, 'parent');
   wireEllipseDrag(bottomEllipse, thought.id, thought.title, 'child');
   markNeighborsPreview(topEllipse, thought.id, neighborsDirForEllipse('top'), thought.title);
@@ -2021,11 +2021,21 @@ async function resolveZoneRefs(networkId: string, ids: string[]): Promise<void> 
 // Zones
 // ---------------------------------------------------------------------------
 
-/** Empty-zone hints; the double-click hint only where the gesture works (L19). */
+/**
+ * Empty-zone hints; the double-click hint only where the gesture works (L19).
+ * Геттеры: текст берётся в момент рендера — иначе константа зафиксировала бы
+ * язык импорта модуля (ошибка ebed42d3).
+ */
 const ZONE_EMPTY_LABELS: Record<'parents' | 'siblings' | 'children', string> = {
-  parents: 'Влияющих мыслей нет. Двойной клик для добавления',
-  siblings: 'Родственных мыслей нет',
-  children: 'Подчинённых мыслей нет. Двойной клик для добавления',
+  get parents() {
+    return t('canvas.vliyayuschihThoughtsNoDvoynoyKlikAdd');
+  },
+  get siblings() {
+    return t('canvas.siblings.rodstvennyhThoughtsNo');
+  },
+  get children() {
+    return t('canvas.podchinennyhThoughtsNoDvoynoyKlikAdd');
+  },
 };
 
 /**
@@ -2267,15 +2277,15 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
       const viewResult = zone.dataset['viewResult'];
       if (viewResult === 'unresolved') {
         const raw = zone.dataset['unresolved'];
-        let text = 'Не удалось выполнить отбор: токен не разрешился.';
+        let text = t('canvas.notSucceededVypolnitViewTokenNot');
         if (raw !== undefined) {
           try {
             const issues = JSON.parse(raw) as Array<{ token?: string; reason?: string }>;
             if (issues.length > 0) {
               const first = issues[0];
               const token = typeof first?.token === 'string' ? first.token : '?';
-              const reason = typeof first?.reason === 'string' ? first.reason : 'причина не указана';
-              text = `Отбор вернул пустой результат: токен «${token}» не разрешился (${reason}).`;
+              const reason = typeof first?.reason === 'string' ? first.reason : t('canvas.prichinaNotUkazana');
+              text = t('canvas.viewVernulEmptyRezultatTokenNot', [token, reason]);
             }
           } catch {
             // Fall back to the generic message.
@@ -2283,7 +2293,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
         }
         empty.textContent = text;
       } else if (viewResult === 'empty') {
-        empty.textContent = 'Ничего не найдено';
+        empty.textContent = t('list.emptySearch');
       } else {
         empty.textContent = ZONE_EMPTY_LABELS[dir];
       }
@@ -2527,8 +2537,8 @@ function buildCloud(
   const hasOut = neighbor?.has_outgoing === true;
   if (hasIn) topEllipse.classList.add('filled');
   if (hasOut) bottomEllipse.classList.add('filled');
-  setTooltip(topEllipse, hasIn ? 'Есть входящие связи' : 'Входящих связей нет');
-  setTooltip(bottomEllipse, hasOut ? 'Есть исходящие связи' : 'Исходящих связей нет');
+  setTooltip(topEllipse, hasIn ? t('canvas.hasIncomingLink') : t('canvas.incomingLinksNo'));
+  setTooltip(bottomEllipse, hasOut ? t('canvas.hasOutgoingLink') : t('canvas.outgoingLinksNo'));
   wireEllipseDrag(topEllipse, entry.id, cloudTitleFull, 'parent');
   wireEllipseDrag(bottomEllipse, entry.id, cloudTitleFull, 'child');
   markNeighborsPreview(topEllipse, entry.id, neighborsDirForEllipse('top'), cloudTitleFull);
@@ -2557,7 +2567,7 @@ function buildCloud(
     posBadge.hidden = true;
   } else {
     posBadge.textContent = String(position + 1);
-    posBadge.title = `Позиция в зоне: ${position + 1}`;
+    posBadge.title = t('canvas.poziciyaZone', position + 1);
   }
 
   cloud.prepend(topEllipse);
@@ -2907,7 +2917,7 @@ function onDragEnd(_event: MouseEvent): void {
       direction: outcome.direction,
     });
   } else {
-    notice('Диалог добавления мыслей ещё не готов.');
+    notice(t('canvas.dialogAddThoughtsMoreNotGotov'));
   }
 }
 
@@ -2935,7 +2945,7 @@ async function createLinkFromDrop(
       ...grouped.untyped_children.map((u) => u.link),
     ];
     if (linked.some((l) => l.source_id === sourceId && l.target_id === targetId)) {
-      notice('Такая связь уже существует.');
+      notice(t('canvas.takayaLinkAlreadySuschestvuet'));
       return;
     }
     throwOnFailures(await ensureLink(networkId, sourceId, targetId));
@@ -2944,8 +2954,8 @@ async function createLinkFromDrop(
     // update, and animate the thought flowing into its new zone.
     requestZoneAnimation();
     scheduleRefresh();
-    notice('Связь создана.', 'success');
+    notice(t('canvas.linkCreated'), 'success');
   } catch (err) {
-    notice(`Не удалось создать связь: ${errText(err)}`, 'error');
+    notice(t('canvas.notSucceededCreateLink', errText(err)), 'error');
   }
 }

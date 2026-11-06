@@ -41,6 +41,7 @@ import {
 import { notice } from './notice.js';
 import { requireNetworkId } from '../app.js';
 import { getRtStatus, store, type RtStatus } from '../state.js';
+import { t } from './i18n.js';
 
 /**
  * Outcome of {@link acquireOrShowBlocked}.
@@ -134,7 +135,7 @@ export async function acquireOrShowBlocked(
       notice(blockedByLockMessage(entityType, holder), 'warning');
       return { kind: 'blocked', holder };
     }
-    notice(`Не удалось поставить захват: ${stringifyError(err)}`, 'warning');
+    notice(t('lockGuard.notSucceededPostavitZahvat', stringifyError(err)), 'warning');
     return { kind: 'failed', error: err };
   }
 }
@@ -168,7 +169,7 @@ export function foreignLockHeld(entityType: LockEntityType | string, entityId: s
 
 /** Единый текст «объект редактирует <имя> — поля заблокированы». */
 export function blockedByLockMessage(entityType: LockEntityType | string, holder: LockRow): string {
-  return `${entityLabel(entityType)} редактирует ${holderName(holder)} — поля заблокированы.`;
+  return t('lockGuard.redaktiruetFieldsZablokirovany', [entityLabel(entityType), holderName(holder)]);
 }
 
 /**
@@ -365,17 +366,17 @@ export { subscribeLockCache };
 function entityLabel(entityType: string): string {
   switch (entityType) {
     case 'thought':
-      return 'Эту мысль';
+      return t('lockGuard.etuThought');
     case 'link':
-      return 'Эту связь';
+      return t('lockGuard.etuLink');
     case 'thought_type':
-      return 'Этот тип мысли';
+      return t('lockGuard.etotTypeThought');
     case 'link_type':
-      return 'Этот тип связи';
+      return t('lockGuard.etotTypeLink');
     case 'property':
-      return 'Это свойство';
+      return t('lockGuard.thisProperty');
     default:
-      return 'Объект';
+      return t('lockGuard.obekt');
   }
 }
 

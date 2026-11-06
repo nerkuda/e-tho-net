@@ -52,12 +52,12 @@ export function setPinnedThoughts(
   if (orderedIds.length > PINNED_THOUGHTS_LIMIT) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Закрепить можно не более ${PINNED_THOUGHTS_LIMIT} мыслей — сначала открепите лишние.`,
+      `At most ${PINNED_THOUGHTS_LIMIT} thoughts can be pinned — unpin the extras first.`,
       { field: 'ordered_ids', limit: PINNED_THOUGHTS_LIMIT },
     );
   }
   if (new Set(orderedIds).size !== orderedIds.length) {
-    throw new EtnError('VALIDATION_ERROR', 'Дубли закреплённых мыслей не допускаются.', {
+    throw new EtnError('VALIDATION_ERROR', "Duplicate pinned thoughts are not allowed.", {
       field: 'ordered_ids',
     });
   }

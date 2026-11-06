@@ -85,6 +85,7 @@ import {
   shiftEdgeByLane,
   type EdgeVisual,
 } from './mini-graph-model.js';
+import { t } from '../lib/i18n.js';
 
 /** Геометрия пилюли-облачка: высота и границы ширины, px (мир графа). */
 const CLOUD_H = 24;
@@ -416,7 +417,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       const btn = el('button', 'link-trash-badge');
       btn.type = 'button';
       btn.append(svgIcon('trash', 12));
-      setTooltip(btn, 'Связь в корзине — нажмите, чтобы восстановить');
+      setTooltip(btn, t('canvasLinks.linkTrashClickToRestore'));
       // Кнопка — самостоятельный элемент: mousedown не должен стартовать
       // панораму холста (d3-zoom слушает svg), клик — открывать связь.
       btn.addEventListener('mousedown', (event) => event.stopPropagation());
@@ -567,7 +568,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
       btn.append(svgIcon('trash', 11));
       setTooltip(
         btn,
-        `Связи в корзине: ${mass.trashed} — нажмите, чтобы открыть корзину и восстановить`,
+        t('miniGraph.linkTrashClickToOpenTrash', mass.trashed),
       );
       // Кнопка самостоятельна: mousedown не должен стартовать панораму
       // холста (d3-zoom слушает svg), клик — открывать корзину.
@@ -756,7 +757,7 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
   // Подвал с подсказкой.
   const hint = div('mini-graph-hint muted');
   hint.textContent =
-    'Колесо — зум, левая кнопка по пустому месту — панорама, узлы можно таскать. Наведите на связь — тип и подсветка. Ctrl+hover — предпросмотр.';
+    t('miniGraph.kolesoZumLevayaKnopkaPustomuMestu');
   root.append(hint);
 
   // Останавливаем физику, когда граф скрыт (группа свёрнута/вкладка сменилась),
@@ -823,7 +824,7 @@ async function focusLinkRef(id: string): Promise<void> {
     const { focusThoughtOnMap } = await import('../screens/active-view.js');
     await focusThoughtOnMap(id);
   } catch (error) {
-    console.error('[mini-graph] не удалось открыть карту мыслей', error);
+    console.error('[mini-graph] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
   }
 }
 
@@ -848,7 +849,7 @@ async function showCloudContextMenu(node: GNode, anchor: Element): Promise<void>
       trashed: node.ref.marked_for_deletion === true,
     },
     {
-      openLabel: 'Открыть в редакторе',
+      openLabel: t('miniGraph.openLabel.openEditor'),
       openHandler: (id) => void openLinkRefInEditor(id),
       focusHandler: () => void focusLinkRef(node.id),
     },

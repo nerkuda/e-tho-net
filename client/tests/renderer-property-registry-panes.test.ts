@@ -295,6 +295,7 @@ describe('правка реестрового свойства перечиты�
         onStale: () => undefined,
         onNetworkLost: () => undefined,
         onLayerControl: () => undefined,
+        onLanguage: () => undefined,
         onEvent: (handler: (raw: unknown) => void) => {
           realtimeHandler = handler;
         },

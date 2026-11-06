@@ -258,7 +258,7 @@ export class InstallerHashError extends InstallerRunnerError {
   readonly actual: string;
 
   constructor(version: string, expected: string, actual: string) {
-    super(`SHA-256 установщика ${version} не совпал с SHA256SUMS — запуск отменён`);
+    super(`The SHA-256 of installer ${version} does not match SHA256SUMS — launch cancelled`);
     this.name = 'InstallerHashError';
     this.expected = expected;
     this.actual = actual;
@@ -275,7 +275,7 @@ export class InstallerLaunchError extends InstallerRunnerError {
 
 /** Предыдущий вызов runner'а ещё не завершён: второй процесс не создаётся. */
 export class InstallerRunInProgressError extends InstallerRunnerError {
-  constructor(message = 'Запуск установщика обновления уже идёт') {
+  constructor(message = "The update installer is already running") {
     super(message);
     this.name = 'InstallerRunInProgressError';
   }
@@ -293,8 +293,8 @@ export class InstallerTimeoutError extends InstallerRunnerError {
 
   constructor(timeoutMs: number, installerPath: string, logPath: string | null) {
     const minutes = Math.round(timeoutMs / 60_000);
-    const journal = logPath === null ? 'журнал установщика не найден' : `журнал: ${logPath}`;
-    super(`установщик не завершился за ${minutes} мин — он оставлен работать, ${journal}`);
+    const journal = logPath === null ? "installer log not found" : `log: ${logPath}`;
+    super(`the installer did not finish within ${minutes} min — it was left running, ${journal}`);
     this.name = 'InstallerTimeoutError';
     this.timeoutMs = timeoutMs;
     this.installerPath = installerPath;
@@ -328,18 +328,18 @@ const SHA256_PATTERN = /^[0-9a-fA-F]{64}$/;
 function parseDownloadUrl(value: string | null): URL {
   if (value === null || value.trim() === '') {
     throw new InstallerTargetError(
-      'нет ссылки на установщик: обновление недоступно (Docker или версия непригодна)',
+      "no installer link: update is unavailable (Docker or an unsuitable version)",
     );
   }
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new InstallerTargetError('ссылка на установщик не является абсолютным URL');
+    throw new InstallerTargetError("the installer link is not an absolute URL");
   }
   if (parsed.protocol !== 'https:' || parsed.hostname === '') {
     throw new InstallerTargetError(
-      'ссылка на установщик должна быть абсолютным https-адресом: применение обновления только по HTTPS',
+      "the installer link must be an absolute https address: updates apply over HTTPS only",
     );
   }
   return parsed;
@@ -353,17 +353,17 @@ function parseDownloadUrl(value: string | null): URL {
 function normalizeTarget(target: InstallerTarget): NormalizedTarget {
   if (parseSemver(target.version) === null) {
     throw new InstallerTargetError(
-      `версия ${JSON.stringify(target.version)} не является semver — установщик не скачивается`,
+      `version ${JSON.stringify(target.version)} is not semver — the installer is not downloaded`,
     );
   }
   const url = parseDownloadUrl(target.downloadUrl);
   if (target.sha256 === null || target.sha256.trim() === '') {
     throw new InstallerTargetError(
-      `в кеше нет SHA-256 установщика ${target.version} — обновление не начинается`,
+      `the cache has no SHA-256 for installer ${target.version} — the update does not start`,
     );
   }
   if (!SHA256_PATTERN.test(target.sha256)) {
-    throw new InstallerTargetError(`SHA-256 установщика ${target.version} имеет неверный формат`);
+    throw new InstallerTargetError(`the SHA-256 of installer ${target.version} has an invalid format`);
   }
   return { version: target.version, downloadUrl: url.toString(), sha256: target.sha256.toLowerCase() };
 }
@@ -483,7 +483,7 @@ async function downloadInstaller(
   try {
     await mkdir(dir, { recursive: true });
   } catch (err) {
-    throw new InstallerDownloadError(`каталог загрузки недоступен: ${errorReason(err)}`);
+    throw new InstallerDownloadError(`the download directory is unavailable: ${errorReason(err)}`);
   }
 
   let response: InstallerFetchResponse;
@@ -495,18 +495,18 @@ async function downloadInstaller(
   } catch (err) {
     if (isDownloadTimeout(err)) {
       throw new InstallerDownloadError(
-        `скачивание установщика ${target.version}: превышено время ожидания`,
+        `downloading installer ${target.version}: timed out`,
       );
     }
-    throw new InstallerDownloadError(`скачивание установщика ${target.version}: ${errorReason(err)}`);
+    throw new InstallerDownloadError(`downloading installer ${target.version}: ${errorReason(err)}`);
   }
   if (!response.ok) {
     throw new InstallerDownloadError(
-      `скачивание установщика ${target.version}: сервер отдал HTTP ${response.status}`,
+      `downloading installer ${target.version}: the server returned HTTP ${response.status}`,
     );
   }
   if (response.body === null) {
-    throw new InstallerDownloadError(`скачивание установщика ${target.version}: ответ без тела`);
+    throw new InstallerDownloadError(`downloading installer ${target.version}: response without a body`);
   }
 
   const hash = createHash('sha256');
@@ -517,7 +517,7 @@ async function downloadInstaller(
       if (received > INSTALLER_MAX_BYTES) {
         callback(
           new InstallerDownloadError(
-            `установщик ${target.version} больше ${INSTALLER_MAX_BYTES} байт — загрузка прервана`,
+            `installer ${target.version} is larger than ${INSTALLER_MAX_BYTES} bytes — the download was aborted`,
           ),
         );
         return;
@@ -534,11 +534,11 @@ async function downloadInstaller(
     if (err instanceof InstallerDownloadError) throw err;
     if (isDownloadTimeout(err)) {
       throw new InstallerDownloadError(
-        `скачивание установщика ${target.version}: превышено время ожидания`,
+        `downloading installer ${target.version}: timed out`,
       );
     }
     throw new InstallerDownloadError(
-      `скачивание установщика ${target.version} не выполнено: ${errorReason(err)}`,
+      `downloading installer ${target.version} failed: ${errorReason(err)}`,
     );
   }
 
@@ -552,7 +552,7 @@ async function downloadInstaller(
   } catch (err) {
     await rm(partPath, { force: true }).catch(() => undefined);
     throw new InstallerDownloadError(
-      `скачивание установщика ${target.version}: файл не подготовлен (${errorReason(err)})`,
+      `downloading installer ${target.version}: the file was not prepared (${errorReason(err)})`,
     );
   }
   return { version: target.version, installerPath, sha256: actual };
@@ -585,7 +585,7 @@ function launchInstaller(
     try {
       child = options.spawnImpl(installerPath, INSTALLER_SILENT_ARGS);
     } catch (err) {
-      reject(new InstallerLaunchError(`установщик не запущен: ${errorReason(err)}`));
+      reject(new InstallerLaunchError(`the installer was not started: ${errorReason(err)}`));
       return;
     }
 
@@ -596,7 +596,7 @@ function launchInstaller(
         const error = new InstallerTimeoutError(options.runTimeoutMs, installerPath, logPath);
         options.logger?.warn(
           { installerPath, logPath, timeoutMs: options.runTimeoutMs },
-          'update installer: тайм-аут, установщик оставлен работать',
+          "update installer: timeout, the installer was left running",
         );
         reject(error);
       });
@@ -609,7 +609,7 @@ function launchInstaller(
       void findInstallerLogPath(options.logDirs, startedAtMs).then((logPath) => {
         options.logger?.info(
           { code, logPath, installerPath },
-          'update installer: процесс завершён',
+          "update installer: the process completed",
         );
         resolve({ code, logPath, installerPath });
       });
@@ -619,7 +619,7 @@ function launchInstaller(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      reject(new InstallerLaunchError(`установщик не запущен: ${errorReason(err)}`));
+      reject(new InstallerLaunchError(`the installer was not started: ${errorReason(err)}`));
     });
   });
 }
@@ -653,7 +653,7 @@ export function createInstallerRunner(options: InstallerRunnerOptions = {}): Ins
         const normalized = normalizeTarget(target);
         logger?.info(
           { version: normalized.version, downloadRoot },
-          'update installer: скачивание установщика',
+          "update installer: downloading the installer",
         );
         const downloaded = await downloadInstaller(normalized, {
           fetchImpl,
@@ -662,7 +662,7 @@ export function createInstallerRunner(options: InstallerRunnerOptions = {}): Ins
         });
         logger?.info(
           { version: downloaded.version, installerPath: downloaded.installerPath },
-          'update installer: хеш совпал, запуск установщика',
+          "update installer: hash matched, launching the installer",
         );
         // Хук ровно между проверкой хеша и запуском: до него сервер полностью
         // работоспособен, после — клиенты уведомлены об обслуживании. Ошибка

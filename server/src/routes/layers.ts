@@ -142,7 +142,7 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (input.title === undefined && input.comment === undefined && colors === undefined) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'нечего менять: передайте title и/или comment и/или colors.',
+            "nothing to change: provide title and/or comment and/or colors.",
             { fields: ['title', 'comment', 'colors'] },
             req.id,
           );
@@ -370,7 +370,7 @@ export function createLayersRoutes(deps: RouteDeps): FastifyPluginAsync {
             if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
               throw new EtnError(
                 'VALIDATION_ERROR',
-                `неизвестная ветвимая таблица «${table}».`,
+                `unknown branchable table "${table}".`,
                 { field: 'tables', table, allowed: BRANCHABLE_TABLES },
                 req.id,
               );

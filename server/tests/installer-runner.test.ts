@@ -206,6 +206,28 @@ describe('контрактные флаги и путь загрузки', () =>
     ]);
   });
 
+  it('ошибка aa5af30c: /ALLUSERS из LocalSystem включает admin-режим без respawn', () => {
+    // Служба LocalSystem запускает установщик уже элевированным. При
+    // PrivilegesRequired=lowest административный режим сам не включается:
+    // его включает только /ALLUSERS (PrivilegesRequiredOverridesAllowed=
+    // commandline). В этом режиме Inno видит готовый admin-токен и не делает
+    // respawn; каталог программы выбирается по IsAdmin → Program Files.
+    assert.ok(
+      (INSTALLER_SILENT_ARGS as readonly string[]).includes('/ALLUSERS'),
+      'контрактные флаги передают /ALLUSERS',
+    );
+    const iss = readFileSync(new URL('../../installer/etn.iss', import.meta.url), 'utf8');
+    const setup = /\n\[Setup\]\r?\n([\s\S]*?)\r?\n\[/.exec(iss)?.[1] ?? '';
+    assert.match(setup, /^PrivilegesRequired=lowest$/m);
+    assert.match(setup, /^PrivilegesRequiredOverridesAllowed=commandline$/m);
+    assert.doesNotMatch(setup, /^PrivilegesRequired=admin$/m);
+    assert.doesNotMatch(setup, /^PrivilegesRequiredOverridesAllowed=.*\bdialog\b/m);
+    assert.doesNotMatch(setup, /^UsePreviousPrivileges=/m);
+    const appDir = /function GetDefaultAppDir[\s\S]*?\r?\nend;/.exec(iss)?.[0] ?? '';
+    assert.match(appDir, /if IsAdmin then/);
+    assert.match(appDir, /\{commonpf\}/);
+  });
+
   it('скачивает установщик в <корень>/<версия>, проверяет хеш и запускает с контрактными флагами', async () => {
     const downloadRoot = makeTempRoot('etn-runner-dl-');
     const calls: { installerPath: string; args: readonly string[] }[] = [];
@@ -305,7 +327,7 @@ describe('недопустимая цель обновления', () => {
       runner.run(makeTarget({ downloadUrl: null })),
       (err: unknown) => {
         assert.ok(err instanceof InstallerTargetError);
-        assert.match(err.message, /ссылки на установщик/);
+        assert.match(err.message, /installer link/);
         return true;
       },
     );
@@ -405,7 +427,7 @@ describe('ошибки скачивания', () => {
         runner.run(makeTarget()),
         (err: unknown) => {
           assert.ok(err instanceof InstallerDownloadError);
-          assert.match(err.message, /время ожидания/);
+          assert.match(err.message, /timed out/);
           return true;
         },
       );
@@ -544,7 +566,7 @@ describe('тайм-аут ожидания установщика', () => {
         assert.equal(err.timeoutMs, 60);
         assert.equal(err.installerPath, installerPath);
         assert.equal(err.logPath, logPath);
-        assert.match(err.message, /оставлен работать/);
+        assert.match(err.message, /left running/);
         assert.match(err.message, /install-20261029-120000\.log/);
         return true;
       },
@@ -569,7 +591,7 @@ describe('тайм-аут ожидания установщика', () => {
       (err: unknown) => {
         assert.ok(err instanceof InstallerTimeoutError);
         assert.equal(err.logPath, null);
-        assert.match(err.message, /журнал установщика не найден/);
+        assert.match(err.message, /installer log not found/);
         return true;
       },
     );

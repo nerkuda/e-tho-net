@@ -148,15 +148,16 @@ describe('describeConnectFailure: причина вместо «затычки»
     }
   });
 
-  it('серверный текст бизнес-ошибки сохраняется, технические огрызки — нет', () => {
+  it('серверный бизнес-текст не показывается: причина по коду (ADR daab6ac4)', () => {
     const business = describeConnectFailure(
       new EtnError('VALIDATION_ERROR', 'Версия сервера несовместима с клиентом.'),
       { baseUrl: DEAD_URL },
     );
     assert.equal(
       business,
-      `Не удалось подключиться к серверу ${DEAD_URL}: Версия сервера несовместима с клиентом.`,
+      `Не удалось подключиться к серверу ${DEAD_URL}: проверьте введённые данные`,
     );
+    assert.doesNotMatch(business, /Версия сервера несовместима/);
 
     const raw = describeConnectFailure(new Error('HTTP 404: <html>not found</html>'), {
       baseUrl: DEAD_URL,
@@ -252,14 +253,14 @@ describe('describeConnectFailure: несовместимые версии (0afec
     assert.equal(texts.size, 3, 'формулировки причин различаются');
   });
 
-  it('битые details не ломают сообщение: остаётся серверный текст', () => {
+  it('битые details не ломают сообщение: причина по коду, не серверный текст (ADR daab6ac4)', () => {
     const broken = new EtnError('CLIENT_VERSION_UNSUPPORTED', 'Сервер отклонил версию клиента.', {
       kind: 'client-compatibility',
       result: null,
     });
     assert.equal(
       describeConnectFailure(broken, { baseUrl: DEAD_URL }),
-      `Не удалось подключиться к серверу ${DEAD_URL}: Сервер отклонил версию клиента.`,
+      `Не удалось подключиться к серверу ${DEAD_URL}: версия клиента не поддерживается — обновите клиент`,
     );
   });
 });

@@ -330,6 +330,11 @@ export class TabRealtimePool {
     client.onTyped('layer-control', (control) => {
       this.opts.broadcast('realtime:layer', { ...control, networkId });
     });
+    // Язык сокета (ADR daab6ac4 §3, задача faba9ff4): `ready`/`settings.language`
+    // уходят рендереру с сетью сокета; применяется только активная сеть.
+    client.onTyped('language', (frame) => {
+      this.opts.broadcast('realtime:language', { ...frame, networkId });
+    });
     client.onTyped('maintenance', (frame: RealtimeMaintenanceFrame) => {
       this.opts.onMaintenance?.(networkId, frame);
     });

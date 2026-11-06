@@ -367,12 +367,12 @@ describe('приёмка №5, п.1: компоновка карточки за�
     // Строку полей собирает ЕДИНЫЙ конструктор шапки (0.10.3, ошибка 47c2bf05) —
     // те же поля у карточки и у слота; в экране остаются доменные привязки.
     const RECORD_HEAD = read('screens/chronicle/record-head.ts');
-    assert.match(CHRONICLE, /dateTitle: 'Период дневниковой записи'/, 'тултип даты/периода');
-    assert.match(RECORD_HEAD, /label: '\+ мысль'/, 'подпись кнопки — «+ мысль»');
-    assert.match(RECORD_HEAD, /title: 'Добавить мысль'/, 'тултип добавления мысли');
+    assert.match(CHRONICLE, /dateTitle: t\('chrono\.dateTitle\.periodDnevnikovoyRecords'\)/, 'тултип даты/периода');
+    assert.match(RECORD_HEAD, /label: t\('chrono\.label\.thought'\)/, 'подпись кнопки — «+ мысль»');
+    assert.match(RECORD_HEAD, /title: t\('contextMenu\.addThought'\)/, 'тултип добавления мысли');
     assert.match(
       CHRONICLE,
-      /title: 'Действия с дневниковой записью'/,
+      /title: t\('chrono\.title\.actionsDnevnikovoyRecord'\)/,
       'тултип «бутерброда» меню записи',
     );
     assert.ok(!CHRONICLE.includes('Действия…'), 'текстовая кнопка «Действия…» упразднена');
@@ -381,7 +381,7 @@ describe('приёмка №5, п.1: компоновка карточки за�
       RECORD_HEAD.indexOf('const date ='),
       RECORD_HEAD.indexOf('// Заголовок'),
     );
-    const order = ["'diary-record-date'", 'hooks.chips', "label: '+ мысль'", 'hooks.trailing'];
+    const order = ["'diary-record-date'", 'hooks.chips', "label: t('chrono.label.thought')", 'hooks.trailing'];
     let last = -1;
     for (const token of order) {
       const at = row.indexOf(token);

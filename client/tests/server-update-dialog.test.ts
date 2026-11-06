@@ -128,6 +128,10 @@ function job(stage: UpdateJob['stage'], overrides: Partial<UpdateJob> = {}): Upd
     stage,
     started_at: '2026-10-29T12:00:00.000Z',
     error: null,
+    reason: null,
+    failed_stage: null,
+    exit_code: null,
+    log_path: null,
     backup_path: null,
     ...overrides,
   };
@@ -500,11 +504,15 @@ describe('запуск обновления и прогресс', () => {
 
   it('502: причина и журнал, кнопки «Повторить» нет, apply не повторяется', async () => {
     const failed = job('failed', {
-      error: 'SHA-256 установщика не совпал; журнал: C:\\ProgramData\\ETN\\logs\\install-1.log',
+      reason: 'installer-hash',
+      failed_stage: 'preparing',
+      log_path: 'C:\\ProgramData\\ETN\\logs\\install-1.log',
+      error:
+        'SHA-256 mismatch detected; log: C:\\ProgramData\\ETN\\logs\\install-1.log',
     });
     const harness = mount(
       applyingScenario([failed], async () => {
-        throw new EtnError('UPDATE_INSTALLER_FAILED', 'SHA-256 установщика не совпал', {
+        throw new EtnError('UPDATE_INSTALLER_FAILED', 'SHA-256 mismatch detected', {
           status: 502,
           stage: 'preparing',
           reason: 'installer-hash',
@@ -520,7 +528,16 @@ describe('запуск обновления и прогресс', () => {
       const node = dialog();
       const text = node.flatText();
       assert.ok(text.includes(t('serverUpdate.stage.failed')));
-      assert.ok(text.includes('SHA-256 установщика не совпал'), 'осмысленная причина сервера');
+      // ADR daab6ac4 §4: причина — локализованный текст по коду и
+      // `details.reason`, а не английский `job.error`.
+      assert.ok(
+        text.includes(t('errors.code.UPDATE_INSTALLER_FAILED.installer-hash')),
+        'локализованная причина по коду и details.reason',
+      );
+      assert.ok(
+        !text.includes('SHA-256 mismatch detected'),
+        'сырой английский job.error пользователю не показан',
+      );
       assert.ok(
         text.includes('C:\\ProgramData\\ETN\\logs\\install-1.log'),
         'путь к журналу установщика показан',
@@ -556,7 +573,10 @@ describe('запуск обновления и прогресс', () => {
       await tick();
       buttonByLabel(dialog(), t('serverUpdate.apply')).click();
       await tick(10);
-      assert.ok(footerErrorText(dialog()).includes('Сервер развёрнут в Docker'));
+      const footer = footerErrorText(dialog());
+      // Текст — из словаря по `details.reason`, серверный message не показан.
+      assert.ok(footer.includes('автообновление в контейнере Docker невозможно'), footer);
+      assert.ok(!footer.includes('Сервер развёрнут в Docker'), 'серверный текст не ушёл в UI');
       assert.deepEqual(harness.calls.applies, ['0.15.2']);
     } finally {
       harness.stop();
@@ -703,15 +723,81 @@ describe('восстановление прогресса при повторн�
   });
 
   it('после перезапуска задание failed с причиной восстанавливается из /progress', async () => {
+    // Реальный английский текст сервера (`interruptedJobMessage`) пользователю
+    // не показывается: причина локализуется по `reason`, этап — из
+    // `failed_stage` (ADR daab6ac4 §4).
     const failed = job('failed', {
-      error: 'Сервер перезапущен до завершения задания обновления (этап «installing»)',
+      reason: 'interrupted',
+      failed_stage: 'installing',
+      error:
+        'The server restarted before the update job completed (stage "installing"); ' +
+        'the job is not resumed automatically.',
     });
     const harness = mount({ getProgress: async () => ({ job: failed }) });
     try {
       await tick();
       const text = dialog().flatText();
       assert.ok(text.includes(t('serverUpdate.stage.failed')));
-      assert.ok(text.includes('Сервер перезапущен до завершения задания обновления'));
+      assert.ok(
+        text.includes('перезапустился до завершения задания обновления'),
+        'локализованная причина по reason',
+      );
+      assert.ok(text.includes('«installing»'), 'этап из failed_stage');
+      assert.ok(!text.includes('The server restarted'), 'английский job.error не показан');
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('штатный сбой установщика из /progress: причина по reason, журнал из log_path', async () => {
+    // `/progress` — штатный канал сбоя установщика (код выхода/предусловие/
+    // тайм-аут): кода ошибки в конверте нет, причина обязана быть в задании.
+    const failed = job('failed', {
+      reason: 'installer-exit',
+      failed_stage: 'backing-up',
+      exit_code: 10,
+      log_path: 'C:\\ProgramData\\ETN\\logs\\install-from-field.log',
+      error:
+        'The installer exited with code 10; the rollback was performed by the installer, ' +
+        'log: C:\\ProgramData\\ETN\\logs\\install-from-field.log',
+    });
+    const harness = mount({ getProgress: async () => ({ job: failed }) });
+    try {
+      await tick();
+      const text = dialog().flatText();
+      assert.ok(text.includes('установщик завершился с кодом 10'), 'код из exit_code');
+      assert.ok(!text.includes('The installer exited'), 'английский job.error не показан');
+      assert.ok(
+        text.includes('C:\\ProgramData\\ETN\\logs\\install-from-field.log'),
+        'путь из машиночитаемого log_path',
+      );
+    } finally {
+      harness.stop();
+    }
+  });
+
+  it('задание без reason (сервер 0.15.1): общий текст и журнал, английский error не показан', async () => {
+    // Старое задание не несёт поля `reason` вовсе: показывается общий
+    // локализованный текст, путь к журналу — из старого серверного текста.
+    const failed = job('failed', {
+      error:
+        'The installer exited with code 10; the rollback was performed by the installer, ' +
+        'log: C:\\ProgramData\\ETN\\logs\\install-old.log',
+    });
+    delete (failed as { reason?: unknown }).reason;
+    const harness = mount({ getProgress: async () => ({ job: failed }) });
+    try {
+      await tick();
+      const text = dialog().flatText();
+      assert.ok(
+        text.includes(t('serverUpdate.failure.noReason')),
+        'без reason — общий локализованный текст',
+      );
+      assert.ok(!text.includes('The installer exited'), 'английский job.error не показан');
+      assert.ok(
+        text.includes('C:\\ProgramData\\ETN\\logs\\install-old.log'),
+        'путь к журналу извлечён из старого текста',
+      );
     } finally {
       harness.stop();
     }

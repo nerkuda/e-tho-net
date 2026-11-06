@@ -241,7 +241,7 @@ export function parseLinkTypeFilterQuery(
   if (typeIds.length === 0 && includeStructural !== true) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'фильтр типов связей пуст: укажите link_type_id и/или include_structural=true.',
+      "the link-type filter is empty: provide link_type_id and/or include_structural=true.",
       { field: 'link_type_id' },
       requestId,
     );

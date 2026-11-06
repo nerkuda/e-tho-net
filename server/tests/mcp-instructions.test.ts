@@ -352,7 +352,7 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
         });
         assert.equal(amb.isError, true, toolText(amb));
         assert.match(toolText(amb), /VALIDATION_ERROR/);
-        assert.match(toolText(amb), /неоднозначен/);
+        assert.match(toolText(amb), /is ambiguous/);
 
         // Ненайденный префикс — NOT_FOUND (без ложного ответа).
         const gone = await handle.client.callTool({
@@ -504,7 +504,7 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
           },
         });
         assert.equal(err.isError, true);
-        assert.match(toolText(err), /взаимоисключимы/);
+        assert.match(toolText(err), /mutually exclusive/);
       } finally {
         await handle.close();
       }
@@ -767,7 +767,7 @@ describe('etn.instructions (0.7.2)', { skip: !nativeAvailable() }, () => {
             true,
             `ожидалось отвержение аргументов ${JSON.stringify(extra)}`,
           );
-          assert.match(toolText(res), /взаимоисключимы|применим/, toolText(res));
+          assert.match(toolText(res), /mutually exclusive|applies only|apply only/, toolText(res));
         }
       } finally {
         await handle.close();

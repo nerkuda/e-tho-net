@@ -75,7 +75,7 @@ function ownerMismatch(
 ): EtnError {
   return new EtnError(
     'NOT_FOUND',
-    `У владельца ${ownerValue} нет отбора ${viewId}.`,
+    `Owner ${ownerValue} has no view ${viewId}.`,
     {
       entity,
       id: viewId,
@@ -92,7 +92,7 @@ function ownerMismatch(
 function thoughtUnavailable(thoughtId: string, requestId?: string): EtnError {
   return new EtnError(
     'NOT_FOUND',
-    `Мысль ${thoughtId} не найдена или находится в корзине.`,
+    `Thought ${thoughtId} was not found or is in the trash.`,
     { entity: 'thought', id: thoughtId },
     requestId,
   );
@@ -106,7 +106,7 @@ function duplicateCustomViewName(
 ): EtnError {
   return new EtnError(
     'DUPLICATE',
-    `У мысли уже есть отбор с именем "${existingName}".`,
+    `The thought already has a view named "${existingName}".`,
     {
       entity: 'thought_custom_view',
       field: 'name',
@@ -156,7 +156,7 @@ export function moveThoughtCustomViewToType(
   if (thought.type_id === null) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'У мысли нет типа — переносить отбор в отборы типа некуда.',
+      "The thought has no type — there is no type view set to transfer the view into.",
       {
         code: 'THOUGHT_HAS_NO_TYPE',
         entity: 'thought',
@@ -192,7 +192,7 @@ export function moveThoughtCustomViewToType(
       // практически недостижимо (ADR 6021918b), но отвечаем штатным 409.
       throw new EtnError(
         'DUPLICATE',
-        'Отбор с этим id уже есть у типа-получателя.',
+        "The recipient type already has a view with this id.",
         { entity: 'thought_type_view', id: viewId },
         requestId,
       );
@@ -271,7 +271,7 @@ export function moveThoughtTypeViewToThought(
     if (outcome === 'occupied') {
       throw new EtnError(
         'DUPLICATE',
-        'Отбор с этим id уже есть у мысли-получателя.',
+        "The recipient thought already has a view with this id.",
         { entity: 'thought_custom_view', id: viewId },
         requestId,
       );

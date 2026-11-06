@@ -82,6 +82,7 @@ import { subscribe as subscribeUsers } from './users.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { svgIcon } from './ui/icon.js';
 import { segmentedControl } from './ui/segmented.js';
+import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Вид и имена классов
@@ -281,17 +282,17 @@ export function filterSubquerySummary(
       const head = `${filterTreeOperandLabel(current, data)} ${filterTreeOperatorLabel(current.operator)}`;
       return value === '' ? head : `${head} ${value}`;
     }
-    if (current.children.length === 0) return 'без условий';
+    if (current.children.length === 0) return t('filterSubquery.withoutConditions');
     const parts = current.children.map((child) => (child.kind === 'group' ? `(${walk(child)})` : walk(child)));
-    if (current.op === 'not') return `НЕ (${walk(current.children[0]!)})`;
-    return parts.join(current.op === 'or' ? ' ИЛИ ' : ' И ');
+    if (current.op === 'not') return t('filterSubquery.not', walk(current.children[0]!));
+    return parts.join(current.op === 'or' ? t('filterPhrase.or.or') : t('filterPhrase.and.and'));
   };
   return walk(node);
 }
 
 /** Тултип чипа: полный текст подписи и подсказка о повторном открытии. */
 export function filterSubqueryChipTooltip(summary: string): string {
-  return `${summary}\n\nнажмите, чтобы открыть выборку в модальном слое`;
+  return t('filterSubquery.clickToOpenSelectionModalnomLayer', summary);
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +368,7 @@ export function buildSubqueryChip(opts: FilterSubqueryChipOptions): HTMLElement 
     open,
     iconButton({
       icon: svgIcon('x'),
-      title: 'Убрать выборку из значения',
+      title: t('filterSubquery.title.removeSelectionValues'),
       role: 'ghost',
       size: 's',
       class: 'fq-chip__clear',
@@ -444,14 +445,14 @@ export function openFilterSubqueryModal(
     settle = resolve;
   });
   showDialog({
-    title: opts.title ?? 'Выборка',
+    title: opts.title ?? t('filterSubquery.selection'),
     body,
     size: 'l',
     fixedHeight: true,
     buttons: [
-      { label: 'Отмена' },
+      { label: t('actions.cancel') },
       {
-        label: 'Готово',
+        label: t('filterSubquery.label.gotovo'),
         primary: true,
         keepOpen: true,
         onClick: (close) => {
@@ -506,8 +507,8 @@ export function confirmFilterSubqueryReset(
   confirm: FilterSubqueryConfirm = defaultFilterSubqueryConfirm,
 ): void {
   void confirm(
-    'Сменить свойство строки?',
-    'В строке собрана под-выборка — при смене свойства она будет сброшена.',
+    t('filterSubquery.changePropertyRows'),
+    t('filterSubquery.inRowSobranaPodSelectionSmene'),
   ).then((ok) => {
     if (ok) apply();
   });
@@ -555,11 +556,11 @@ export function buildSubqueryValueCell(
    */
   const modeControl = segmentedControl({
     items: [
-      { id: 'list', label: 'Список', title: 'Перечислить значения в строке' },
-      { id: 'subquery', label: 'Выборка', title: 'Собрать под-выборку в модальном слое' },
+      { id: 'list', label: t('filterSubquery.label.list'), title: t('filterSubquery.title.perechislitValuesRow') },
+      { id: 'subquery', label: t('filterSubquery.selection'), title: t('filterSubquery.sobratPodSelectionModalnomLayer') },
     ],
     activeId: isSubquery ? 'subquery' : 'list',
-    ariaLabel: 'Вид значения условия',
+    ariaLabel: t('filterSubquery.ariaLabel.vidValuesConditions'),
     extraClass: FILTER_SUBQUERY_MODE_CLASS,
     role: 'ghost',
     size: 's',
@@ -580,8 +581,8 @@ export function buildSubqueryValueCell(
   const clearSubquery = (): void => {
     const confirm = opts.confirm ?? defaultFilterSubqueryConfirm;
     void confirm(
-      'Сменить вид значения?',
-      'В строке собрана под-выборка — при переходе к списку она будет сброшена.',
+      t('filterSubquery.changeVidValues'),
+      t('filterSubquery.inRowSobranaPodSelectionPerehode'),
     ).then((ok) => {
       if (ok) writeModeValue({ kind: 'none' });
       // Отказ — переключатель возвращаем на «Выборка»: сегмент уже переключился

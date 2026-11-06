@@ -80,22 +80,43 @@ export interface PropertyRegistryRow extends NetworkProperty {
   binding_target_type_ids?: string[];
 }
 
-/** Человекочитаемые подписи видов значения. */
+/**
+ * Человекочитаемые подписи видов значения. Геттеры: подпись берётся в момент
+ * рендера, а не при импорте модуля (ошибка ebed42d3).
+ */
 export const VALUE_TYPE_LABELS: Record<PropertyValueType, string> = {
-  text: 'строка',
-  number: 'число',
-  date: 'дата',
-  bool: 'да/нет',
-  url: 'URL (сайт или файл)',
-  link: 'связь',
-  thought_ref: 'ссылка на мысль (legacy, недоступно)',
+  get text() {
+    return t('valueEditor.row');
+  },
+  get number() {
+    return t('valueEditor.number');
+  },
+  get date() {
+    return t('valueEditor.date');
+  },
+  get bool() {
+    return t('valueEditor.daNo');
+  },
+  get url() {
+    return t('propertyList.url.urlSaytFile');
+  },
+  get link() {
+    return t('clipboard.link');
+  },
+  get thought_ref() {
+    return t('propertyList.linkRefThoughtLegacyUnavailable');
+  },
   // Кросс-сетевая ссылка (задача 7849008a, ADR ae8346d0): адрес
   // `n:<network_id>#<thought_id>` другой сети; снапшот имени хранится
   // служебно, чтение чужой базы не открывает.
-  cross_network_ref: 'кросс-сетевая ссылка',
+  get cross_network_ref() {
+    return t('propertyList.cross_network_ref.krossSetevayaLinkRef');
+  },
   // Ссылка на публикацию (0.11.1, задача f37b468d): значение — публикация
   // текущей сети.
-  publication: 'публикация',
+  get publication() {
+    return t('propertyList.publication.publication');
+  },
 };
 
 /** Предел обрезки имени стороны связи в колонке «Тип значения» (задача
@@ -284,11 +305,11 @@ export function rowBlockReason(
   inheritedPropertyIds: ReadonlySet<string>,
 ): string | null {
   if (row.structural) return null;
-  if (inheritedPropertyIds.has(row.propertyId)) return 'унаследовано';
+  if (inheritedPropertyIds.has(row.propertyId)) return t('propertyList.unasledovano');
   const sides = existingSides.get(row.propertyId);
   if (sides === undefined) return null;
-  if (row.valueType !== 'link') return 'подключено';
-  return row.side !== null && sides.has(row.side) ? 'подключено' : null;
+  if (row.valueType !== 'link') return t('propertyList.connected');
+  return row.side !== null && sides.has(row.side) ? t('propertyList.connected') : null;
 }
 
 /** Обрезка имени стороны связи по 30-й символ включительно, без переноса
@@ -305,7 +326,7 @@ export function valueTypeCellLabel(row: PropertyListRow, full = false): string {
     return VALUE_TYPE_LABELS[row.valueType];
   }
   const cut = (name: string): string => (full ? name : truncateLinkName(name));
-  return `связь (${cut(row.linkNames.forward)} - ${cut(row.linkNames.reverse)})`;
+  return t('propertyList.link', [cut(row.linkNames.forward), cut(row.linkNames.reverse)]);
 }
 
 /**
@@ -733,11 +754,11 @@ export function buildPropertyList(opts: {
       cell.append(span(`  ${blocked}`, 'muted'));
       setTooltip(
         cell,
-        blocked === 'унаследовано'
-          ? 'Свойство уже наследуется этим типом от предка'
+        blocked === t('propertyList.unasledovano')
+          ? t('propertyList.propertyAlreadyNasleduetsyaThisTipomPredka')
           : row.valueType === 'link'
-            ? 'Это имя стороны свойства-связи уже подключено — можно подключить другое имя (обратное).'
-            : 'Свойство уже подключено к этому типу',
+            ? t('propertyList.thisNameStoronyPropertiesLinkAlready')
+            : t('propertyList.propertyAlreadyConnectedEtomuTipu'),
       );
     }
     return cell;

@@ -1,0 +1,112 @@
+{
+  "name": "i18n-lazy-switch",
+  "description": "Ошибка ebed42d3: t()/tp() на уровне модуля фиксировали язык импорта — живая смена языка не перерисовывала подписи. В сборке стенда (--mode test) зарегистрирована тестовая локаль zz (lib/locales/test.ts). Проверяются подписи, которые до исправления вычислялись при импорте: подсказки пустых зон карты (ZONE_EMPTY_LABELS, canvas/canvas.ts — зоны родителей и родственников; зона детей в посеянной сети не пуста: у HOME есть посеянная мысль) и заголовки вкладок редактора (TABS_THOUGHT, editor/editor.ts); метка меню мыслесети — контроль пересборки экрана. Каждая подпись снимается до смены языка, после ru→zz и после обратного zz→ru. Стартовый язык — ru: у свежего сервера стенда язык по умолчанию en, поэтому первый шаг ставит server.language=ru по REST. Язык приложения выбирается радиогруппой settings-app-lang (задача 222666db; прежняя settings-lang — только для старого сервера без контракта языка). Запуск: npm -w @etn/client run build -- --mode test && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ebed42d3-i18n-lazy.scenario.json --out .tmp/ebed42d3/run1",
+  "timeout": 150000,
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "serverLanguage",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": { "language": "ru" }
+      },
+      "expect": { "language": "ru" }
+    },
+    { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    { "name": "workspace-ready", "timeout": 25000, "waitFor": "document.querySelectorAll('button.view-tab').length >= 5" },
+    { "name": "zone-hints-rendered", "timeout": 20000, "waitFor": "document.querySelector('.zone-parents .zone-empty')?.textContent?.trim() !== ''" },
+
+    { "name": "lang-before", "probe": "document.documentElement.lang", "expect": "ru" },
+    { "name": "network-label-before", "probe": "document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent?.trim() ?? null", "expect": "Мыслесеть" },
+    { "name": "parents-empty-before", "probe": "document.querySelector('.zone-parents .zone-empty')?.textContent?.trim() ?? null", "expect": "Влияющих мыслей нет. Двойной клик для добавления" },
+    { "name": "siblings-empty-before", "probe": "document.querySelector('.zone-siblings .zone-empty')?.textContent?.trim() ?? null", "expect": "Родственных мыслей нет" },
+
+    { "name": "open-thought-before", "timeout": 20000, "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null" },
+    { "name": "click-thought-before", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    { "name": "editor-tabs-before-visible", "timeout": 20000, "waitFor": "document.querySelectorAll('.editor-tab-title').length >= 7" },
+    { "name": "editor-tabs-before", "probe": "Array.from(document.querySelectorAll('.editor-tab-title')).map((e) => (e.textContent || '').trim())", "expect": ["Комментарий", "Свойства", "Вложения", "Упоминания", "Дневник", "Граф", "Метаданные"] },
+
+    { "name": "open-user-menu", "click": "button[title=\"Меню пользователя\"]" },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    { "name": "settings-dialog", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null" },
+    {
+      "name": "open-client-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    { "name": "test-locale-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]') !== null" },
+    {
+      "name": "pick-test-locale",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"zz\"]'); if (!r) throw new Error('нет локали zz'); r.click(); return r.checked; })()"
+    },
+    { "name": "test-locale-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "zz" },
+    { "name": "apply-enabled", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'Применить' && !b.disabled)" },
+    {
+      "name": "apply-lang",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => e.textContent === 'Применить'); if (!b) throw new Error('нет кнопки «Применить»'); b.click(); return true; })()"
+    },
+
+    { "name": "live-lang-applied", "timeout": 20000, "waitFor": "document.documentElement.lang === 'zz' && document.querySelector('.dialog-title')?.textContent === 'TestSettings'" },
+    { "name": "network-label-after", "timeout": 20000, "waitFor": "document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent?.trim() === 'TestNet'" },
+    { "name": "parents-empty-after", "timeout": 20000, "waitFor": "document.querySelector('.zone-parents .zone-empty')?.textContent?.trim() === 'TestParentsEmpty'" },
+    { "name": "siblings-empty-after", "timeout": 20000, "waitFor": "document.querySelector('.zone-siblings .zone-empty')?.textContent?.trim() === 'TestSiblingsEmpty'" },
+
+    {
+      "name": "close-settings",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'TestCancel'); if (!b) throw new Error('нет кнопки отмены тестовой локали'); b.click(); return true; })()"
+    },
+    { "name": "dialog-closed", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "open-thought-after", "timeout": 20000, "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null" },
+    { "name": "click-thought-after", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    { "name": "editor-tabs-after-visible", "timeout": 20000, "waitFor": "document.querySelectorAll('.editor-tab-title').length >= 7" },
+    { "name": "editor-tabs-after", "probe": "Array.from(document.querySelectorAll('.editor-tab-title')).map((e) => (e.textContent || '').trim())", "expect": ["TestComment", "TestProps", "TestAttach", "TestMentions", "TestChrono", "TestGraph", "TestMeta"] },
+
+    { "name": "open-user-menu-again", "click": "button[title=\"Меню пользователя\"]" },
+    { "name": "user-menu-again-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-again",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    { "name": "settings-again", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null" },
+    {
+      "name": "open-client-again",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    { "name": "ru-radio-present", "timeout": 10000, "waitFor": "document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]') !== null" },
+    {
+      "name": "pick-russian",
+      "eval": "(() => { const r = document.querySelector('input[name=\"settings-app-lang\"][value=\"ru\"]'); if (!r) throw new Error('нет локали ru'); r.click(); return r.checked; })()"
+    },
+    { "name": "russian-picked", "probe": "document.querySelector('input[name=\"settings-app-lang\"]:checked')?.value ?? null", "expect": "ru" },
+    { "name": "apply-enabled-again", "timeout": 10000, "waitFor": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).some((b) => b.textContent === 'TestApply' && !b.disabled)" },
+    {
+      "name": "apply-russian",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => e.textContent === 'TestApply'); if (!b) throw new Error('нет кнопки применения'); b.click(); return true; })()"
+    },
+    { "name": "russian-live-applied", "timeout": 20000, "waitFor": "document.documentElement.lang === 'ru' && document.querySelector('.dialog-title')?.textContent === 'Все настройки'" },
+    { "name": "network-label-ru", "timeout": 20000, "waitFor": "document.querySelector('button[title=\"Меню мыслесети\"] .tb-label')?.textContent?.trim() === 'Мыслесеть'" },
+    { "name": "parents-empty-ru", "timeout": 20000, "waitFor": "document.querySelector('.zone-parents .zone-empty')?.textContent?.trim() === 'Влияющих мыслей нет. Двойной клик для добавления'" },
+    { "name": "siblings-empty-ru", "timeout": 20000, "waitFor": "document.querySelector('.zone-siblings .zone-empty')?.textContent?.trim() === 'Родственных мыслей нет'" },
+    {
+      "name": "close-settings-ru",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.settings-footer-buttons button')).find((e) => (e.textContent || '').trim() === 'Отмена'); if (!b) throw new Error('нет кнопки «Отмена»'); b.click(); return true; })()"
+    },
+    { "name": "dialog-closed-ru", "timeout": 10000, "waitFor": "document.querySelector('.dialog-backdrop') === null" },
+    { "name": "open-thought-ru", "timeout": 20000, "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null" },
+    { "name": "click-thought-ru", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    { "name": "editor-tabs-ru-visible", "timeout": 20000, "waitFor": "document.querySelectorAll('.editor-tab-title').length >= 7" },
+    { "name": "editor-tabs-ru", "probe": "Array.from(document.querySelectorAll('.editor-tab-title')).map((e) => (e.textContent || '').trim())", "expect": ["Комментарий", "Свойства", "Вложения", "Упоминания", "Дневник", "Граф", "Метаданные"] },
+    { "name": "lang-after", "probe": "document.documentElement.lang", "expect": "ru" }
+  ]
+}

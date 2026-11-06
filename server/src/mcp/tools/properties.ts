@@ -35,7 +35,7 @@ export function registerPropertiesTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.properties.add',
     {
-      title: 'Добавить цель в свойство-связь',
+      title: 'Add a target to a link property',
       description:
         'Add one target (thought id) to a link property by key — idempotent: an already-live edge is a ' +
         'no-op. Accepts an optional `comment` explaining «why this link» and an optional `side` ' +

@@ -55,6 +55,7 @@ import { choiceControl } from './ui/choice-row.js';
 import { svgIcon, type IconName } from './ui/icon.js';
 import { buildLinkEndIcon, type LinkEndIconSpec } from './property-list.js';
 import { createThoughtCloud, type CloudProfile, type ThoughtCloudInput } from './thought-cloud.js';
+import { t } from './i18n.js';
 
 /** Одна выбираемая строка выпадашки. */
 export interface SuggestEntry {
@@ -888,7 +889,7 @@ export function historySuggestSource(opts: {
 }): SuggestSource {
   return {
     when: 'empty',
-    header: opts.header ?? 'Последние значения',
+    header: opts.header ?? t('suggest.poslednieValues'),
     load: () => opts.load(),
   };
 }

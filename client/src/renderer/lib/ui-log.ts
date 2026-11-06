@@ -30,7 +30,11 @@ export type UiEventName =
   | 'ui.editor.props.loaded'
   // Сбой teardown-хендла рабочего пространства (ошибка 37b713de): диагностика
   // того, что один из снимаемых модулей бросил исключение при демонтаже.
-  | 'ui.workspace.teardown_failed';
+  | 'ui.workspace.teardown_failed'
+  // Запрошенный язык интерфейса недоступен в сборке (задача e6374cd1):
+  // эффективный язык деградировал на исходный `ru` — в журнале видно, какой
+  // код просил клиент (серверная настройка, локаль ОС или ручной выбор).
+  | 'ui.i18n.locale_unavailable';
 
 /**
  * Emits one milestone event into the client file journal. Safe to call from

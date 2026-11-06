@@ -169,7 +169,7 @@ function validateValueType(valueType: unknown): PropertyValueType {
   if (valueType === 'thought_ref') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'value_type "thought_ref" упразднён (миграция 040); используйте свойство-связь',
+      "value_type \"thought_ref\" was removed (migration 040); use a link property",
       { field: 'value_type' },
     );
   }
@@ -308,7 +308,7 @@ function validateLinkSide(
     if (side !== null && side !== undefined) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'сторона привязки задаётся только для свойств-связей',
+        "binding side is set only for link properties",
         { field: 'side', side },
       );
     }
@@ -320,7 +320,7 @@ function validateLinkSide(
     if (side !== null && side !== undefined) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'структурное свойство-связь не имеет стороны — направление в config.direction',
+        "a structural link property has no side — direction comes from config.direction",
         { field: 'side', side },
       );
     }
@@ -476,19 +476,19 @@ function validateLinkConfig(
     if (typeof linkTypeId === 'string' && linkTypeId !== '') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'структурное свойство-связь не может иметь тип связи',
+        "a structural link property cannot have a link type",
         { field: `${field}.link_type_id`, link_type_id: linkTypeId },
       );
     }
   } else {
     if (typeof linkTypeId !== 'string' || linkTypeId === '') {
-      throw new EtnError('VALIDATION_ERROR', 'свойство-связь требует config.link_type_id', {
+      throw new EtnError('VALIDATION_ERROR', "a link property requires config.link_type_id", {
         field: `${field}.link_type_id`,
       });
     }
     const lt = getLinkType(ndb, linkTypeId);
     if (lt === null) {
-      throw new EtnError('VALIDATION_ERROR', `тип связи ${linkTypeId} не найден`, {
+      throw new EtnError('VALIDATION_ERROR', `link type ${linkTypeId} not found`, {
         field: `${field}.link_type_id`,
         link_type_id: linkTypeId,
       });
@@ -496,7 +496,7 @@ function validateLinkConfig(
     if (lt.is_root) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'корневой тип связи не может быть свойством-связью',
+        "a root link type cannot be a link property",
         { field: `${field}.link_type_id`, link_type_id: linkTypeId },
       );
     }
@@ -516,14 +516,14 @@ function validateLinkConfig(
     if (!Array.isArray(allowed) || allowed.some((id) => typeof id !== 'string' || id === '')) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'allowed_target_type_ids должен быть массивом id типов мыслей',
+        "allowed_target_type_ids must be an array of thought type ids",
         { field: `${field}.allowed_target_type_ids` },
       );
     }
     for (const id of allowed) {
       const row = ndb.prepare('SELECT id FROM thought_types_v WHERE id = ?').get(id);
       if (!row) {
-        throw new EtnError('VALIDATION_ERROR', `тип мысли ${id} не найден`, {
+        throw new EtnError('VALIDATION_ERROR', `thought type ${id} not found`, {
           field: `${field}.allowed_target_type_ids`,
           id,
         });
@@ -541,14 +541,14 @@ function validateLinkConfig(
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'allowed_source_type_ids должен быть массивом id типов мыслей',
+        "allowed_source_type_ids must be an array of thought type ids",
         { field: `${field}.allowed_source_type_ids` },
       );
     }
     for (const id of allowedSources) {
       const row = ndb.prepare('SELECT id FROM thought_types_v WHERE id = ?').get(id);
       if (!row) {
-        throw new EtnError('VALIDATION_ERROR', `тип мысли ${id} не найден`, {
+        throw new EtnError('VALIDATION_ERROR', `thought type ${id} not found`, {
           field: `${field}.allowed_source_type_ids`,
           id,
         });
@@ -615,7 +615,7 @@ function assertLinkPropertyPairUnique(
     if (rowSide !== side) continue;
     throw new EtnError(
       'DUPLICATE',
-      'свойство-связь с этим типом связи и стороной уже есть в типе',
+      "the type already has a link property with this link type and side",
       {
         owner_type: ownerType,
         owner_id: ownerId,
@@ -945,12 +945,12 @@ function normalizeLinkTargets(
   // здесь — `VALIDATION_ERROR`.
   if (Array.isArray(value)) {
     if (value.some((v) => typeof v !== 'string' || v === '')) {
-      throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мыслей`, { key });
+      throw new EtnError('VALIDATION_ERROR', `property "${key}" expects thought ids`, { key });
     }
     return [...new Set(resolve(value as string[]))];
   }
   if (typeof value === 'string' && value !== '') return resolve([value]);
-  throw new EtnError('VALIDATION_ERROR', `свойство «${key}» ожидает id мысли или массив id`, {
+  throw new EtnError('VALIDATION_ERROR', `property "${key}" expects a thought id or an array of ids`, {
     key,
   });
 }
@@ -1011,7 +1011,7 @@ function validateLinkTargetType(
   if (!target) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `значение свойства «${prop.name}» ссылается на несуществующую мысль`,
+      `value of property "${prop.name}" references a missing thought`,
       { key: prop.name, ref: targetId },
     );
   }
@@ -1028,7 +1028,7 @@ function validateLinkTargetType(
   if (allowedIds.length > 0 && (target.type_id === null || !allowedIds.includes(target.type_id))) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `свойство «${prop.name}» не принимает значение этого типа`,
+      `property "${prop.name}" does not accept a value of this type`,
       {
         key: prop.name,
         ref: targetId,
@@ -1054,7 +1054,7 @@ function normalizeLinkDefaultValue(
   if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || id === '')) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `дефолт свойства-связи «${prop.name}» — массив id мыслей`,
+      `default of link property "${prop.name}" must be an array of thought ids`,
       { key: prop.name, expected: 'link' },
     );
   }
@@ -1078,7 +1078,7 @@ function normalizeLinkDefaultValueTarget(
   value: unknown,
 ): string[] | null {
   if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || id === '')) {
-    throw new EtnError('VALIDATION_ERROR', 'default_value_target — массив id мыслей', {
+    throw new EtnError('VALIDATION_ERROR', "default_value_target must be an array of thought ids", {
       field: `${field}.default_value_target`,
     });
   }
@@ -1088,7 +1088,7 @@ function normalizeLinkDefaultValueTarget(
   for (const id of ids) {
     const row = ndb.prepare('SELECT id FROM thoughts_v WHERE id = ?').get(id);
     if (!row) {
-      throw new EtnError('VALIDATION_ERROR', `мысль ${id} не найдена`, {
+      throw new EtnError('VALIDATION_ERROR', `thought ${id} not found`, {
         field: `${field}.default_value_target`,
         id,
       });
@@ -1275,7 +1275,7 @@ function setLinkPropertyTargets(
     if (src === dst) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `свойство «${prop.name}» не может связать мысль с самой собой`,
+        `property "${prop.name}" cannot link a thought to itself`,
         { key: prop.name, ref: targetId },
       );
     }
@@ -1448,7 +1448,7 @@ function addLinkPropertyTarget(
   if (src === dst) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `свойство «${prop.name}» не может связать мысль с самой собой`,
+      `property "${prop.name}" cannot link a thought to itself`,
       { key: prop.name, ref: targetId },
     );
   }
@@ -1662,7 +1662,7 @@ export function resolveConditionPropertyRef(
   if (candidates.size > 1) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Имя свойства «${ref}» неоднозначно: совпадает с несколькими сторонами свойств-связей.`,
+      `Property name "${ref}" is ambiguous: it matches several link-property sides.`,
       {
         field: 'property_id',
         name: ref,
@@ -1685,7 +1685,7 @@ function assertNameAvailable(ndb: NetworkDb, name: string, exceptId: string | nu
     .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?)')
     .get(name) as { id: string } | undefined;
   if (row && row.id !== exceptId) {
-    throw new EtnError('DUPLICATE', `свойство «${name}» уже есть в этой мыслесети`, {
+    throw new EtnError('DUPLICATE', `property "${name}" already exists in this network`, {
       name,
       conflict_property_id: row.id,
     });
@@ -1725,7 +1725,7 @@ export function createNetworkProperty(
       if (forward === '' || reverse === '') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          'для свойства-связи без существующего типа связи нужно передать name_forward и name_reverse',
+          "a link property without an existing link type requires name_forward and name_reverse",
           { field: 'config.link_type_id' },
         );
       }
@@ -1814,13 +1814,13 @@ function assertNoLinkScalarCategorySwitch(
   if (currentIsLink !== nextIsLink) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'категория вида значения неизменна: переход скаляр ↔ связь запрещён',
+      "the value-type category is immutable: switching between scalar and link is forbidden",
       {
         field: 'value_type',
         from: currentValueType,
         to: nextValueType,
         reason:
-          'значения свойства-связи живут рёбрами, а не в property_values — конвертация бессмысленна',
+          'link-property values live as edges, not in property_values — conversion is meaningless',
       },
     );
   }
@@ -2021,7 +2021,7 @@ export function deleteNetworkProperty(
   if (typesCount > 0 || valuesCount > 0) {
     throw new EtnError(
       'DUPLICATE',
-      'свойство подключено к типам или заполнено — сначала отключите его от всех типов и разберите значения',
+      "the property is bound to types or has values — first unbind it from all types and clear the values",
       { property_id: id, types_count: typesCount, values_count: valuesCount },
     );
   }
@@ -2198,7 +2198,7 @@ function assertNoTargetDefaultForScalar(config: PropertyConfig | null): void {
   ) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'config.default_value_target допустим только для свойства-связи',
+      "config.default_value_target is allowed only for a link property",
       { field: 'config.default_value_target' },
     );
   }
@@ -2522,7 +2522,7 @@ function assertOverridableProperty(
     if (typeId === ownerId && options.requireInherited) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'собственные свойства правятся в справочнике — описание сразу для всех типов',
+        "own properties are edited in the registry — the description applies to all types at once",
         { entity: 'type_property', id: registryId, owner_id: ownerId },
       );
     }
@@ -2542,7 +2542,7 @@ function assertOverridableProperty(
     if (!attached) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'переопределять можно только свойства, подключённые предками этого типа',
+        "only properties bound by ancestors of this type can be overridden",
         { entity: 'type_property', id: registryId, owner_id: ownerId },
       );
     }
@@ -2907,7 +2907,7 @@ export function createTypeProperty(
       }
       throw new EtnError(
         'DUPLICATE',
-        `свойство «${key}» уже подключено родительским типом — оно и так наследуется`,
+        `property "${key}" is already bound by a parent type — it is inherited anyway`,
         { owner_type: ownerType, owner_id: ownerId, key, clash_owner_id: typeId },
       );
     }
@@ -3654,7 +3654,7 @@ function resolveLiveLinkDirection(
       if (allowAmbiguous) return null;
       throw new EtnError(
         'VALIDATION_ERROR',
-        `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
+        `property name "${key}" addresses both sides of the link and both sides are live — specify side`,
         {
           field: 'side',
           reason: PROPERTY_SIDE_ERROR_REASON.required,
@@ -3743,7 +3743,7 @@ function resolveSamePropertyLinkDirection(
     if (allowAmbiguous) return null;
     throw new EtnError(
       'VALIDATION_ERROR',
-      `имя свойства «${key}» адресует обе стороны связи, и обе стороны живые — укажите side`,
+      `property name "${key}" addresses both sides of the link and both sides are live — specify side`,
       {
         field: 'side',
         reason: PROPERTY_SIDE_ERROR_REASON.required,
@@ -3779,7 +3779,7 @@ function ambiguousPropertyNameError(
 ): EtnError {
   return new EtnError(
     'VALIDATION_ERROR',
-    `имя свойства «${key}» используют несколько свойств сети — уточните, какое имеется в виду`,
+    `property name "${key}" is used by several network properties — specify which one is meant`,
     {
       field: 'property',
       reason: PROPERTY_SIDE_ERROR_REASON.ambiguous,
@@ -3908,7 +3908,7 @@ export function resolveDefinition(
             if (side === null) {
               throw new EtnError(
                 'VALIDATION_ERROR',
-                `имя свойства «${key}» принадлежит нескольким свойствам сети — укажите side`,
+                `property name "${key}" belongs to several network properties — specify side`,
                 {
                   field: 'side',
                   reason: PROPERTY_SIDE_ERROR_REASON.required,
@@ -3960,7 +3960,7 @@ export function resolveDefinition(
         if (allLink && side === null) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `имя свойства «${key}» адресует обе стороны связи — укажите side`,
+            `property name "${key}" addresses both sides of the link — specify side`,
             {
               field: 'side',
               reason: PROPERTY_SIDE_ERROR_REASON.required,
@@ -4711,7 +4711,7 @@ function validateAndCoerce(
       // Запись через свойства — отдельная задача (3), здесь — явный отказ.
       throw new EtnError(
         'VALIDATION_ERROR',
-        `свойство «${prop.name}» — связь: заполняется ребром, а не значением`,
+        `property "${prop.name}" is a link: it is filled with an edge, not a value`,
         { key: prop.name, expected: 'link' },
       );
     case 'thought_ref': {
@@ -4955,7 +4955,7 @@ export function setPropertyValue(
       if (ownerType === 'thought') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `свойства «${key}» нет в справочнике сети — создайте его явно (ontology.write)`,
+          `property "${key}" is not in the network registry — create it explicitly (ontology.write)`,
           { owner_type: ownerType, owner_id: ownerId, key },
         );
       }
@@ -4966,7 +4966,7 @@ export function setPropertyValue(
       });
     }
     if (side !== null && prop.value_type !== 'link') {
-      throw new EtnError('VALIDATION_ERROR', 'side задаётся только для свойств-связей', {
+      throw new EtnError('VALIDATION_ERROR', "side is set only for link properties", {
         field: 'side',
         key,
         side,
@@ -5065,7 +5065,7 @@ function setPropertyValueForProperty(
   // разрешена (обратная сторона/внетиповое свойство) — требование ab06aa20.
   if (prop.value_type === 'link') {
     if (ownerType !== 'thought') {
-      throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+      throw new EtnError('VALIDATION_ERROR', "link properties are filled on thoughts only", {
         owner_type: ownerType,
         key: errKey.key,
       });
@@ -5192,7 +5192,7 @@ function setPropertyValueForProperty(
       if (crossNetworkAccess === undefined) {
         throw new EtnError(
           'INTERNAL',
-          'cross_network_ref: запись требует CrossNetworkAccessContext',
+          "cross_network_ref: writing requires CrossNetworkAccessContext",
           { key: errKey.key, owner_type: ownerType, owner_id: ownerId },
         );
       }
@@ -5358,7 +5358,7 @@ export function addLinkPropertyValue(
   side: LinkPropertySide | null = null,
 ): { link_id: string; created: boolean; warnings: MutationWarning[] } {
   if (ownerType !== 'thought') {
-    throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+    throw new EtnError('VALIDATION_ERROR', "link properties are filled on thoughts only", {
       owner_type: ownerType,
       key,
     });
@@ -5369,7 +5369,7 @@ export function addLinkPropertyValue(
       if (prop === null) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `свойства «${key}» нет в справочнике сети — создайте его явно (ontology.write)`,
+          `property "${key}" is not in the network registry — create it explicitly (ontology.write)`,
           { owner_type: ownerType, owner_id: ownerId, key },
         );
       }
@@ -5429,7 +5429,7 @@ export function removeLinkPropertyValue(
   side: LinkPropertySide | null = null,
 ): { link_id: string | null; action: LinkRemovalAction | null; link: Link | null } {
   if (ownerType !== 'thought') {
-    throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+    throw new EtnError('VALIDATION_ERROR', "link properties are filled on thoughts only", {
       owner_type: ownerType,
       key,
     });
@@ -5444,7 +5444,7 @@ export function removeLinkPropertyValue(
       if (prop === null) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `свойства «${key}» нет в справочнике сети`,
+          `property "${key}" is not in the network registry`,
           { owner_type: ownerType, owner_id: ownerId, key },
         );
       }
@@ -5467,7 +5467,7 @@ export function removeLinkPropertyValue(
       if (outLive && inLive) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `цель соединена рёбрами обеих сторон свойства «${key}» — укажите side`,
+          `the target has edges on both sides of property "${key}" — specify side`,
           { field: 'side', key, target: targetId, allowed: LINK_PROPERTY_SIDES },
         );
       }
@@ -5607,7 +5607,7 @@ export function deletePropertyValue(
       if (ownerType === 'thought') {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `свойства «${key}» нет в справочнике сети`,
+          `property "${key}" is not in the network registry`,
           { owner_type: ownerType, owner_id: ownerId, key },
         );
       }
@@ -5618,7 +5618,7 @@ export function deletePropertyValue(
       });
     }
     if (side !== null && prop.value_type !== 'link') {
-      throw new EtnError('VALIDATION_ERROR', 'side задаётся только для свойств-связей', {
+      throw new EtnError('VALIDATION_ERROR', "side is set only for link properties", {
         field: 'side',
         key,
         side,
@@ -5630,7 +5630,7 @@ export function deletePropertyValue(
     // f7623077: «Очистить свойство» = `DELETE …/properties/{key}`).
     if (prop.value_type === 'link' && !isStructuralLinkProperty(prop.config ?? {})) {
       if (ownerType !== 'thought') {
-        throw new EtnError('VALIDATION_ERROR', 'свойства-связи заполняются только у мыслей', {
+        throw new EtnError('VALIDATION_ERROR', "link properties are filled on thoughts only", {
           owner_type: ownerType,
           key,
         });
@@ -5657,7 +5657,7 @@ export function deletePropertyValue(
       if (side !== null && existing.size === 0 && opposite.size > 0) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `сторона «${side}» не совпадает с фактическим направлением рёбер свойства «${key}»`,
+          `side "${side}" does not match the actual edge direction of property "${key}"`,
           {
             field: 'side',
             reason: PROPERTY_SIDE_ERROR_REASON.mismatch,
@@ -5764,7 +5764,7 @@ export function crossResolvePropertyValue(
     if (prop.value_type !== 'cross_network_ref') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `cross-resolve применим только к свойствам вида cross_network_ref`,
+        "cross-resolve applies only to cross_network_ref properties",
         { key, value_type: prop.value_type },
       );
     }

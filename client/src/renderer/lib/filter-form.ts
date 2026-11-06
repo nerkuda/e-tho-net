@@ -207,14 +207,14 @@ let keywordsContextSeq = 0;
  * составное поведение и реакция на Enter — параметры сборки.
  */
 export function buildKeywordsSection(ctx: FilterFormContext, opts: KeywordsSectionOptions = {}): FilterSection {
-  const section = buildFilterBlock(opts.title ?? 'Ключевые слова', {
+  const section = buildFilterBlock(opts.title ?? t('filterForm.klyuchevyeSlova'), {
     isNonEmpty: () => ctx.getState().keywords.trim() !== '',
   });
   const wrap = div('st-f-kw-wrap');
   const input = el('input', 'st-f-input st-f-keywords') as HTMLInputElement;
   input.type = 'text';
   input.value = ctx.getState().keywords;
-  input.placeholder = opts.placeholder ?? 'счет* -вод*';
+  input.placeholder = opts.placeholder ?? t('filterForm.schetVod');
   if (opts.tooltip !== undefined) setTooltip(input, opts.tooltip);
   input.addEventListener('input', () => {
     ctx.getState().keywords = input.value;
@@ -315,9 +315,9 @@ export function buildKeywordScopeRow(ctx: FilterFormContext): HTMLElement {
     set: (v: boolean) => void;
     input: HTMLInputElement | null;
   }> = [
-    { label: 'наименование', get: () => ctx.getState().keywordInTitle, set: (v) => (ctx.getState().keywordInTitle = v), input: null },
-    { label: 'синонимы', get: () => ctx.getState().keywordInSynonyms, set: (v) => (ctx.getState().keywordInSynonyms = v), input: null },
-    { label: 'комментарий', get: () => ctx.getState().keywordInComment, set: (v) => (ctx.getState().keywordInComment = v), input: null },
+    { label: t('filterForm.label.naimenovanie'), get: () => ctx.getState().keywordInTitle, set: (v) => (ctx.getState().keywordInTitle = v), input: null },
+    { label: t('filterForm.label.synonyms'), get: () => ctx.getState().keywordInSynonyms, set: (v) => (ctx.getState().keywordInSynonyms = v), input: null },
+    { label: t('filterForm.label.kommentariy'), get: () => ctx.getState().keywordInComment, set: (v) => (ctx.getState().keywordInComment = v), input: null },
   ];
   for (const item of items) {
     const lbl = el('label', 'checkbox-row st-f-kw-scope-item') as HTMLLabelElement;
@@ -507,7 +507,7 @@ export function buildParentThoughtsSection(
   /** Полное имя корня для меню: снапшот облачка → сырой id. */
   const titleOf = (id: string): string => clouds.get(id)?.title ?? id;
   const section = buildEntityChipSection(ctx, {
-    title: opts.title ?? 'Родительские мысли',
+    title: opts.title ?? t('filterForm.roditelskieThought'),
     getValues: () => ctx.getState().parentIds,
     setValues: (values) => {
       ctx.getState().parentIds = values;
@@ -526,10 +526,10 @@ export function buildParentThoughtsSection(
         return [];
       }
     },
-    optionsHeader: 'Мысли',
+    optionsHeader: t('editor.title.thought'),
     cloudOf: (id) => (id.startsWith('$') ? null : (clouds.get(id) ?? null)),
-    placeholder: opts.placeholder ?? 'Название мысли…',
-    addPlaceholder: opts.addPlaceholder ?? '+ ещё одну мысль',
+    placeholder: opts.placeholder ?? t('valueEditor.titleThought'),
+    addPlaceholder: opts.addPlaceholder ?? t('valueEditor.moreOdnuThought'),
     ...(opts.extraSources !== undefined ? { extraSources: opts.extraSources } : {}),
     ...(opts.tooltip !== undefined ? { tooltip: opts.tooltip } : {}),
     ...(opts.picker !== undefined ? { picker: opts.picker } : {}),
@@ -619,7 +619,7 @@ export function buildConditionsSection(
   collapse: { get: () => boolean; set: (v: boolean) => void },
   opts: ConditionsSectionOptions = {},
 ): FilterSection {
-  const section = buildFilterBlock(opts.title ?? 'Свойства', {
+  const section = buildFilterBlock(opts.title ?? t('editor.title.properties'), {
     collapsible: true,
     getCollapsed: collapse.get,
     setCollapsed: collapse.set,
@@ -641,7 +641,7 @@ export function buildConditionsSection(
     });
   };
   render();
-  const add = el('button', 'st-f-add', '+ условие по свойству') as HTMLButtonElement;
+  const add = el('button', 'st-f-add', t('filterForm.conditionProperty')) as HTMLButtonElement;
   add.type = 'button';
   add.addEventListener('click', () => {
     const first = ctx.registry.values().next().value as NetworkProperty | undefined;
@@ -677,7 +677,7 @@ function buildConditionRow(
 
   const propSelect = el('select', 'st-f-input st-f-prop') as HTMLSelectElement;
   if (!ctx.registry.has(cond.propertyId)) {
-    const placeholder = el('option', '', cond.propertyId === '' ? '— свойство —' : '?') as HTMLOptionElement;
+    const placeholder = el('option', '', cond.propertyId === '' ? t('filterForm.property') : '?') as HTMLOptionElement;
     placeholder.value = cond.propertyId;
     propSelect.append(placeholder);
   }
@@ -745,7 +745,7 @@ function buildConditionValueEditor(
   const box = div('st-f-values');
   const isList = cond.op === 'in' || cond.op === 'not_in';
   if (cond.op === 'is_empty' || cond.op === 'not_empty') {
-    box.append(el('span', 'st-f-value-hint', 'значение не требуется'));
+    box.append(el('span', 'st-f-value-hint', t('filter.valueNotTrebuetsya')));
     return box;
   }
 
@@ -787,7 +787,7 @@ function buildConditionValueEditor(
       // просим редактор вернуть массив, иначе два и более значения склеивались
       // в одну строку и отбор пустел (ошибка b610729c-2fdf-4f18-b526-7e7aeddb860f).
       ...(isList ? { textListAsArray: true } : {}),
-      ...(valueType === 'date' ? { placeholder: 'YYYY-MM-DD или токен ($today+7d)…' } : {}),
+      ...(valueType === 'date' ? { placeholder: t('filterForm.placeholder.yyyyMmDdTokenToday7d') } : {}),
       save: (next) => {
         if (Array.isArray(next)) setValues(next.map((v) => String(v)));
         else if (next === null || next === undefined || next === '') setValues(['']);
@@ -822,9 +822,9 @@ export function buildTriRow(
   row.append(el('span', 'st-f-tri-label', label));
   const select = el('select', 'st-f-input') as HTMLSelectElement;
   for (const opt of [
-    { v: '', label: 'не важно' },
-    { v: 'true', label: options?.yes ?? 'да' },
-    { v: 'false', label: options?.no ?? 'нет' },
+    { v: '', label: t('filterForm.label.notVazhno') },
+    { v: 'true', label: options?.yes ?? t('valueEditor.da') },
+    { v: 'false', label: options?.no ?? t('valueEditor.no') },
   ]) {
     const o = el('option', '', opt.label) as HTMLOptionElement;
     o.value = opt.v;
@@ -850,7 +850,7 @@ export function buildTriRow(
  *  «Показывать неактуальное». */
 export function buildTrashedRow(
   ctx: FilterFormContext,
-  label = 'Включая помеченные на удаление',
+  label = t('filterForm.vklyuchayaMarkedDelete'),
   opts: { disabled?: boolean; tooltip?: string } = {},
 ): HTMLElement {
   const row = div('st-f-tri-row');
@@ -867,7 +867,7 @@ export function buildTrashedRow(
     ctx.touch();
   });
   lbl.append(cb, span(label));
-  row.append(el('span', 'st-f-tri-label', 'Корзина'), lbl);
+  row.append(el('span', 'st-f-tri-label', t('filterForm.trash')), lbl);
   return row;
 }
 
@@ -904,7 +904,7 @@ export function buildExtrasSection(
   collapse: { get: () => boolean; set: (v: boolean) => void },
   opts: ExtrasSectionOptions = {},
 ): FilterSection {
-  const section = buildFilterBlock(opts.title ?? 'Дополнительно', {
+  const section = buildFilterBlock(opts.title ?? t('filterForm.dopolnitelno'), {
     collapsible: true,
     getCollapsed: collapse.get,
     setCollapsed: collapse.set,
@@ -912,17 +912,17 @@ export function buildExtrasSection(
     ...(opts.caretKind !== undefined ? { caretKind: opts.caretKind } : {}),
   });
   section.body.append(
-    buildTriRow(ctx, 'Есть значение свойства', () => ctx.getState().hasProperties, (v) => (ctx.getState().hasProperties = v)),
-    buildTriRow(ctx, 'Есть постоянный комментарий', () => ctx.getState().hasComment, (v) => (ctx.getState().hasComment = v)),
-    buildTriRow(ctx, 'Есть вложения', () => ctx.getState().hasAttachments, (v) => (ctx.getState().hasAttachments = v)),
-    buildTriRow(ctx, 'Есть хронология', () => ctx.getState().hasChronology, (v) => (ctx.getState().hasChronology = v)),
-    buildTriRow(ctx, 'Только актуальные', () => ctx.getState().active, (v) => (ctx.getState().active = v), {
-      yes: 'актуальные',
-      no: 'не актуальные',
+    buildTriRow(ctx, t('filterForm.hasValueProperties'), () => ctx.getState().hasProperties, (v) => (ctx.getState().hasProperties = v)),
+    buildTriRow(ctx, t('cloud.hasPostoyannyyKommentariy'), () => ctx.getState().hasComment, (v) => (ctx.getState().hasComment = v)),
+    buildTriRow(ctx, t('filter.attachments.hasAttachments'), () => ctx.getState().hasAttachments, (v) => (ctx.getState().hasAttachments = v)),
+    buildTriRow(ctx, t('filterForm.hasHronologiya'), () => ctx.getState().hasChronology, (v) => (ctx.getState().hasChronology = v)),
+    buildTriRow(ctx, t('filterForm.onlyAktualnye'), () => ctx.getState().active, (v) => (ctx.getState().active = v), {
+      yes: t('filterForm.yes.aktualnye'),
+      no: t('filterForm.no.notAktualnye'),
       ...(opts.activeDisabled === true ? { disabled: true } : {}),
       ...(opts.activeTooltip !== undefined ? { tooltip: opts.activeTooltip } : {}),
     }),
-    buildTrashedRow(ctx, 'Включая помеченные на удаление', {
+    buildTrashedRow(ctx, t('filterForm.vklyuchayaMarkedDelete'), {
       ...(opts.trashedDisabled === true ? { disabled: true } : {}),
       ...(opts.trashedTooltip !== undefined ? { tooltip: opts.trashedTooltip } : {}),
     }),
@@ -953,7 +953,7 @@ export function buildAuthorshipSection(
   collapse: { get: () => boolean; set: (v: boolean) => void },
   opts: AuthorshipSectionOptions = {},
 ): FilterSection {
-  const section = buildFilterBlock(opts.title ?? 'Автор / Редактор', {
+  const section = buildFilterBlock(opts.title ?? t('filterForm.avtorEditor'), {
     collapsible: true,
     getCollapsed: collapse.get,
     setCollapsed: collapse.set,
@@ -971,7 +971,7 @@ export function buildAuthorshipSection(
     const state = ctx.getState();
     rows.append(
       buildAuthorConditionRow({
-        label: opts.authorLabel ?? 'Автор',
+        label: opts.authorLabel ?? t('filter.author.avtor'),
         op: state.authorOp,
         singleId: state.authorId,
         listIds: state.authorIds,
@@ -994,7 +994,7 @@ export function buildAuthorshipSection(
         },
       }),
       buildAuthorConditionRow({
-        label: opts.editorLabel ?? 'Редактор',
+        label: opts.editorLabel ?? t('filter.editor.editor'),
         op: state.editorOp,
         singleId: state.editorId,
         listIds: state.editorIds,
@@ -1185,7 +1185,7 @@ export function buildDateRangeRow(ctx: FilterFormContext, opts: DateRangeOptions
         definition: { value_type: 'date', config: null, required: false, default_value: null },
         value,
         commitOn: 'change',
-        placeholder: 'YYYY-MM-DD или токен…',
+        placeholder: t('filterForm.placeholder.yyyyMmDdToken'),
         ...(opts.suggestSource !== undefined ? { extraSuggest: [opts.suggestSource] } : {}),
         save: (next) => {
           set(next === null || next === undefined ? '' : String(next));
@@ -1197,8 +1197,8 @@ export function buildDateRangeRow(ctx: FilterFormContext, opts: DateRangeOptions
   };
 
   row.append(
-    buildField(opts.after, 'от', (v) => opts.onAfterChange(v)),
-    buildField(opts.before, 'до', (v) => opts.onBeforeChange(v)),
+    buildField(opts.after, t('filterForm.from'), (v) => opts.onAfterChange(v)),
+    buildField(opts.before, t('filterForm.to'), (v) => opts.onBeforeChange(v)),
   );
   return row;
 }
@@ -1231,7 +1231,7 @@ export interface DateRangeSpec {
 export function defaultDateRanges(ctx: FilterFormContext): DateRangeSpec[] {
   return [
     {
-      label: 'Создано',
+      label: t('filterForm.label.created'),
       getFrom: () => ctx.getState().createdAfter,
       getTo: () => ctx.getState().createdBefore,
       setFrom: (v) => {
@@ -1242,7 +1242,7 @@ export function defaultDateRanges(ctx: FilterFormContext): DateRangeSpec[] {
       },
     },
     {
-      label: 'Изменено',
+      label: t('filterForm.label.changed'),
       getFrom: () => ctx.getState().updatedAfter,
       getTo: () => ctx.getState().updatedBefore,
       setFrom: (v) => {
@@ -1264,7 +1264,7 @@ export function buildDatesSection(
   collapse: { get: () => boolean; set: (v: boolean) => void },
   opts: DatesSectionOptions = {},
 ): FilterSection {
-  const section = buildFilterBlock(opts.title ?? 'Даты', {
+  const section = buildFilterBlock(opts.title ?? t('filterForm.dates'), {
     collapsible: true,
     getCollapsed: collapse.get,
     setCollapsed: collapse.set,
@@ -1386,7 +1386,7 @@ export interface SortSectionOptions {
  * конструктора; списки собираются только отсюда.
  */
 export function buildSortSection(ctx: FilterFormContext, opts: SortSectionOptions = {}): FilterSection {
-  const section = buildFilterBlock(opts.title ?? 'Сортировка');
+  const section = buildFilterBlock(opts.title ?? t('contextMenu.sort'));
   const row = div('st-f-sort');
   if ((opts.showSort ?? true) === true) {
     const sortSelect = el('select', 'st-f-input') as HTMLSelectElement;

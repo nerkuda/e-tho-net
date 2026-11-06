@@ -16,6 +16,7 @@
  */
 
 import path from 'node:path';
+import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -30,13 +31,45 @@ const inFacades = (rel: string): boolean => rel.startsWith('routes/') || rel.sta
 const PREPARE_CALL = /\.(prepare|pragma)\s*\(/;
 
 /**
- * Строка содержит строковый SQL-фрагмент: в кавычках/бэктиках ключевое
- * слово запроса (SELECT/INSERT/UPDATE/DELETE) И структурный маркер
- * (FROM/INTO/SET/VALUES/WHERE/JOIN/TABLE). Двухмаркерность отсекает
- * описания инструментов («update … from» в прозе без структуры запроса).
+ * Английские артикли и притяжательные местоимения: в SQL сразу после
+ * ключевого слова или маркера их не бывает, а в прозе они стоят почти всегда
+ * (`Delete from the registry`, `Select a network from the list`,
+ * `Update the value in the table`). Это единственное, что отличает прозу от
+ * SQL при регистронезависимом поиске.
  */
-const SQL_FRAGMENT =
-  /['"`][^'"`]*(?:SELECT|INSERT|UPDATE|DELETE)[^'"`]*(?:FROM\s+|INTO\s+|SET\s+|VALUES\s*\(|WHERE\s+|JOIN\s+|TABLE\s+)[^'"`]*['"`]/i;
+const PROSE_AFTER_SQL =
+  '(?!\\s+(?:a|an|the|this|that|these|those|its|their|his|her|my|your|our)\\b)';
+
+/**
+ * Строка содержит строковый SQL-фрагмент: внутри кавычек/бэктиков есть
+ * ключевое слово (SELECT/INSERT/UPDATE/DELETE) и структурный маркер
+ * (FROM/INTO/SET/VALUES/WHERE/JOIN/TABLE).
+ *
+ * Условия отсекают английскую прозу, не ослабляя детектор:
+ *  1. **Строковый литерал.** Реальный SQL — это литерал целиком
+ *     (`'SELECT id FROM thoughts'`), а прозаические глаголы стоят в середине
+ *     предложения («the server deletes the rows … from the layer»).
+ *  2. **Ключевое слово целиком** (`\b`) — словоформы `deleted`/`deletes`/
+ *     `selects`/`sub-selection` не считаются SQL.
+ *  3. **Никакого артикля сразу после ключевого слова или маркера** — проза
+ *     (`Delete from the registry`) не проходит; `SELECT id FROM thoughts`
+ *     проходит.
+ *  4. **Регистронезависимость** (`/i`): строчный SQL (`select id from
+ *     thoughts`) и ключевое слово в любом месте литерала (`query: SELECT …`)
+ *     ловятся так же, как SQL в верхнем регистре.
+ *
+ * Между ключевым словом и маркером допускается `*` и звёздочный SQL-комментарий
+ * без пробелов — так ловятся `SELECT*FROM` и `DELETE`, отделённый от `FROM`
+ * комментарием (бывшая узкая версия с обязательным пробелом их пропускала).
+ * Самотест — ниже.
+ */
+const SQL_FRAGMENT = new RegExp(
+  "['\"`][^'\"`]*?\\b(?:SELECT|INSERT|UPDATE|DELETE)\\b" +
+    PROSE_AFTER_SQL +
+    "[^'\"`]*?(?:\\*\\/|\\*|\\s)\\s*(?:FROM|INTO|SET|VALUES|WHERE|JOIN|TABLE)\\b" +
+    PROSE_AFTER_SQL,
+  'i',
+);
 
 describe('guard: слои сервера — фасады без SQL и взаимных импортов', () => {
   it('в routes/* и mcp/* нет ndb.prepare и сырого SQL', () => {
@@ -152,4 +185,62 @@ describe('guard: слои сервера — фасады без SQL и взаи
       },
     ]);
   });
+});
+
+/**
+ * Самотест детектора SQL (задача 7e5099ed п. 2). Детектор — эвристика на
+ * английской прозе, поэтому обе стороны проверяются явно: позитивы — формы,
+ * которые пропускала сужённая версия с обязательным пробелом после ключевого
+ * слова, строчный SQL и ключевое слово не в начале литерала; негативы —
+ * реальные строки `server/src/mcp` после перевода на английский (задача
+ * 720b71e5), включая предложения с глаголом в начале и строчные словоформы.
+ * Негатив, который снова начнёт ловиться, — сигнал, что сторож красит прозу,
+ * а не SQL.
+ */
+describe('guard: SQL_FRAGMENT — самотест детектора', () => {
+  /** Настоящие SQL-фрагменты: детектор обязан их ловить. */
+  const positives = [
+    // Сужённая версия требовала пробел после ключевого слова и теряла эти две.
+    "'SELECT*FROM thoughts'",
+    "'DELETE/**/FROM thoughts'",
+    // Обычные запросы с колонками, значениями и условием.
+    '"SELECT id, title FROM thoughts"',
+    "'INSERT INTO thoughts (id, title) VALUES (?, ?)'",
+    "'UPDATE thoughts SET title = ? WHERE id = ?'",
+    '`SELECT ${columns} FROM thoughts`',
+    "'  SELECT id FROM thoughts'",
+    // Регистронезависимость: строчный SQL — тоже SQL.
+    "'select id from thoughts'",
+    // Ключевое слово не в начале литерала: префикс (label, комментарий) не спасает.
+    "'query: SELECT id FROM thoughts'",
+    "'sql=select id from thoughts'",
+  ];
+  /** Английская проза из MCP-описаний: детектор обязан молчать. */
+  const negatives = [
+    "'Reserve layer: if the merge overwrites or deletes anything, the server automatically creates a service reserve layer'",
+    "'physically deletes the rows of the thought from the layer'",
+    "': a sub-selection of THOUGHTS (the thoughts profile); targets in the network'",
+    "'(including one deleted from the registry)'",
+    "'… selects thoughts into sections; two forms: the old flat'",
+    // Проза с глаголом в начале предложения — регистр отличает её от SQL.
+    "'Delete from the registry after the check'",
+    "'Select a network from the list'",
+    "'Update the value in the table'",
+    "'delete one ontology entity (thought_type / link_type / property)'",
+    "'delete a comment (permanent or chronological) together with attachments'",
+    // Строчная проза: глаголы в любой форме, кроме точного ключевого слова.
+    "'the server deletes the rows of the thought from the layer'",
+    "'a query that selects thoughts from a section'",
+  ];
+
+  for (const line of positives) {
+    it(`ловит SQL: ${line}`, () => {
+      assert.equal(SQL_FRAGMENT.test(line), true, 'SQL-фрагмент обязан ловиться');
+    });
+  }
+  for (const line of negatives) {
+    it(`не ловит прозу: ${line}`, () => {
+      assert.equal(SQL_FRAGMENT.test(line), false, 'английская проза — не SQL');
+    });
+  }
 });

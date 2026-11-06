@@ -38,6 +38,7 @@ import {
   type ApiList,
   type ApiSuccess,
   type AuditListResult,
+  type AuditLogEntry,
   type DuplicateHit,
   type DuplicateSearchMode,
   type EtnErrorBody,
@@ -1157,6 +1158,16 @@ export class RestClient {
     });
   }
 
+  /**
+   * `GET /users/me/language-settings` — «язык приложения» пользователя
+   * (`null` — наследование) и эффективный язык по каждой доступной сети
+   * (ADR daab6ac4 §3, задача f99f0542). Резолвинг выполняет сервер; клиент
+   * цепочку наследования не собирает.
+   */
+  public async getMyLanguageSettings(): Promise<import('@etn/shared').UserLanguageSettings> {
+    return this.request('GET', '/users/me/language-settings');
+  }
+
   // -------------------------------------------------------------------------
   // §4 Admin: users
   // -------------------------------------------------------------------------
@@ -1164,6 +1175,25 @@ export class RestClient {
   /** `GET /admin/users`. */
   public async adminListUsers(): Promise<import('@etn/shared').User[]> {
     return this.request('GET', '/admin/users');
+  }
+
+  /**
+   * `GET /admin/settings/language` — язык сервера по умолчанию, нижняя ступень
+   * наследования языка интерфейса (ADR daab6ac4 §1–2, задача f99f0542).
+   */
+  public async getServerLanguage(): Promise<import('@etn/shared').ServerLanguageSettings> {
+    return this.request('GET', '/admin/settings/language');
+  }
+
+  /** `PUT /admin/settings/language` — сменить язык сервера (админ). */
+  public async setServerLanguage(
+    language: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ServerLanguageSettings> {
+    return this.request('PUT', '/admin/settings/language', {
+      body: { language },
+      requestOptions: opts,
+    });
   }
 
   /** `POST /admin/users` — create a user (admin); a key is generated for hand-off. */
@@ -1240,7 +1270,15 @@ export class RestClient {
     });
   }
 
-  /** `GET /admin/audit` — query the audit log (admin). */
+  /**
+   * `GET /admin/audit` — query the audit log (admin).
+   *
+   * REST отдаёт список `{ data, meta: { total, offset, limit } }`; метод
+   * собирает его в `{ entries, total }` — форма IPC/рендерера (ошибка
+   * 0111ca49: раньше `request()` возвращал только `data`-массив, а админ-панель
+   * ждала `{ entries, total }`). `total` — размер окна до пагинации; при
+   * отсутствии `meta.total` берётся размер страницы.
+   */
   public async adminListAudit(
     query?: import('@etn/shared').AuditQuery,
   ): Promise<AuditListResult> {
@@ -1254,7 +1292,14 @@ export class RestClient {
       if (query.limit !== undefined) q['limit'] = query.limit;
       if (query.offset !== undefined) q['offset'] = query.offset;
     }
-    return this.request('GET', '/admin/audit', { query: Object.keys(q).length ? q : undefined });
+    const { data: entries, meta: envelope } = await this.requestEnvelope<AuditLogEntry[]>(
+      'GET',
+      '/admin/audit',
+      { query: Object.keys(q).length ? q : undefined },
+    );
+    const meta = envelope as { total?: number } | undefined;
+    const total = typeof meta?.total === 'number' ? meta.total : entries.length;
+    return { entries, total };
   }
 
   // -------------------------------------------------------------------------

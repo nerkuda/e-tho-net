@@ -343,7 +343,7 @@ function decodeDiffCursor(raw: string, allowed: readonly LayerDiffSection[]): Di
   const invalid = (details: Record<string, unknown> = {}): never => {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Некорректный keyset-курсор диффа: продолжение страницы невозможно.',
+      "Invalid diff keyset cursor: the page cannot be continued.",
       { field: 'cursor', ...details },
     );
   };
@@ -480,7 +480,7 @@ export function structuralLayerDiffPage(
   const requested = options.sections ?? [];
   for (const section of requested) {
     if (!SECTION_ORDER.includes(section)) {
-      throw new EtnError('VALIDATION_ERROR', `Неизвестная секция диффа «${section}».`, {
+      throw new EtnError('VALIDATION_ERROR', `Unknown diff section "${section}".`, {
         field: 'sections',
         section,
         allowed: SECTION_ORDER,
@@ -587,7 +587,7 @@ export function resolveDiffTarget(
     .prepare('SELECT id, title FROM layers WHERE id = ? LIMIT 1')
     .get(layerRow.parent_id ?? '') as { id: string; title: string } | undefined;
   if (targetRow === undefined) {
-    throw new EtnError('VALIDATION_ERROR', 'у слоя нет родителя: дифф основы невозможен.', {
+    throw new EtnError('VALIDATION_ERROR', "the layer has no parent: a base-layer diff is impossible.", {
       field: 'layer_id',
       layer_id: layerId,
     });

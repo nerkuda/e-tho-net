@@ -195,20 +195,20 @@ export function registerTypesListTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.types.list',
     {
-      title: 'Каталог типов',
+      title: 'Type catalogue',
       description:
-        'Каталоги типов мыслей и связей: иерархия (`parent_id`/`is_root`), AI-описание, ' +
-        'эффективные свойства (свои + унаследованные: `key`, `value_type`, `required`, `config`, ' +
-        '`default_value`, `property_id`), `views[]`; тексты — с развёрнутыми трансклюзиями. Для ' +
-        'ОДНОГО типа используй `etn.types.get` — не выкачивай каталог целиком. `keywords` — по ' +
-        'именам типов (мысли — `name`; связи — обе стороны) в мини-синтаксисе §6.10 (AND, `*`, ' +
-        '`-слово`, регистр не важен) ДО `limit`/`offset`; totals — по фильтру. `compact` — только ' +
-        '`id`, имена, `parent_id`, `is_root`, `usage_count` (при `in_subtree_of`). `scope` — ' +
-        'каталог; `in_subtree_of`(+`max_depth`) — типы поддерева с `usage_count`; `limit`/`offset` ' +
-        '(1..500 / ≥0) пагинируют каждый каталог отдельно; `max_chars` (≥1000) — мягкий потолок. ' +
-        'Любой из `limit`/`offset`/`max_chars`/`keywords`/`compact` включает `meta`: `truncated`, ' +
-        '`reason`, totals, `has_more`, `next_offset` (`null` — выдано всё; `has_more` без сдвига ' +
-        '`next_offset` — страница не влезла в `max_chars`).',
+        'Thought and link type catalogues: hierarchy (`parent_id`/`is_root`), AI description, ' +
+        'effective properties (own + inherited: `key`, `value_type`, `required`, `config`, ' +
+        '`default_value`, `property_id`), `views[]`; texts — with expanded transclusions. For ' +
+        'ONE type use `etn.types.get` — do not download the whole catalogue. `keywords` — by ' +
+        'type names (thoughts — `name`; links — both sides) in the §6.10 mini-syntax (AND, `*`, ' +
+        '`-word`, case-insensitive) BEFORE `limit`/`offset`; totals — by the filter. `compact` — only ' +
+        '`id`, names, `parent_id`, `is_root`, `usage_count` (with `in_subtree_of`). `scope` — ' +
+        'the catalogue; `in_subtree_of`(+`max_depth`) — subtree types with `usage_count`; `limit`/`offset` ' +
+        '(1..500 / ≥0) paginate each catalogue separately; `max_chars` (≥1000) — a soft ceiling. ' +
+        'Any of `limit`/`offset`/`max_chars`/`keywords`/`compact` enables `meta`: `truncated`, ' +
+        '`reason`, totals, `has_more`, `next_offset` (`null` — everything returned; `has_more` without a shift ' +
+        'of `next_offset` — the page did not fit `max_chars`).',
       inputSchema: TypesList.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.types.list'],
     },
@@ -439,15 +439,15 @@ export function registerTypesGetTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.types.get',
     {
-      title: 'Тип по имени или id',
+      title: 'Type by name or id',
       description:
-        'Один тип по `id` XOR `name` — вместо каталога целиком. `scope` — каталог поиска ' +
-        '(`thoughts`/`links`/`all`, дефолт `all`); имя мысли — по `name`, связи — по `name_forward` ' +
-        'ИЛИ `name_reverse` (регистр не важен). Несколько совпадений в одном каталоге → ' +
-        '`VALIDATION_ERROR` с `details.candidates`; совпадения в разных при `all` — не ' +
-        'неоднозначность, возвращаются оба; нет — `NOT_FOUND`. Форма записи — как в ' +
-        '`etn.types.list` (трансклюзии, `comment_template_md`, `icon`, эффективные свойства, ' +
-        '`views[]`, `structural_properties_note`), без `usage_count`.',
+        'One type by `id` XOR `name` — instead of the whole catalogue. `scope` — the search catalogue ' +
+        '(`thoughts`/`links`/`all`, default `all`); a thought name — by `name`, a link — by `name_forward` ' +
+        'OR `name_reverse` (case-insensitive). Several matches in one catalogue → ' +
+        '`VALIDATION_ERROR` with `details.candidates`; matches in different catalogues with `all` — not ' +
+        'an ambiguity, both are returned; none — `NOT_FOUND`. The record shape — as in ' +
+        '`etn.types.list` (transclusions, `comment_template_md`, `icon`, effective properties, ' +
+        '`views[]`, `structural_properties_note`), without `usage_count`.',
       inputSchema: TypesGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.types.get'],
     },

@@ -69,26 +69,26 @@ export function showImportEtnxDialog(
     });
 
     const includeTypes = checkboxRow({
-      label: 'Импортировать типы мыслей и связей',
+      label: t('importExport.importirovatTypesThoughtsLinks'),
       checked: initial.include_types ?? DEFAULT_SLICES.include_types,
     });
     const includeAttachments = checkboxRow({
-      label: 'Импортировать вложения (файлы внутри архива)',
+      label: t('importExport.importirovatAttachmentsFilesVnutriArchive'),
       checked: initial.include_attachments ?? DEFAULT_SLICES.include_attachments,
     });
     const includeChronology = checkboxRow({
-      label: 'Импортировать хронологические комментарии',
+      label: t('importExport.label.importirovatHronologicheskieKommentarii'),
       checked: initial.include_chronology ?? DEFAULT_SLICES.include_chronology,
     });
 
     const pathField = fieldRow({
-      label: 'Файл архива',
+      label: t('importExport.label.fileArchive'),
       control: pathInput,
       id: 'etnx-import-filepath',
     });
 
     const optionsHead = el('h4', 'dialog-subhead');
-    optionsHead.textContent = 'Что импортировать';
+    optionsHead.textContent = t('importExport.chtoImportirovat');
 
     const optionsStack = div('form-stack');
     optionsStack.append(
@@ -99,13 +99,13 @@ export function showImportEtnxDialog(
 
     const hint = el('p', 'dialog-text');
     hint.textContent =
-      'Мысли с совпадающим id будут обновлены; по совпадению названия — переиспользованы (синонимы объединятся). Остальное создастся заново.';
+      t('importExport.thoughtSovpadayuschimIdWillObnovlenySovpadeniyu');
 
     const body = div('form-stack');
     body.append(pathField, optionsHead, optionsStack, hint);
 
     showDialog({
-      title: 'Импорт из .etnx',
+      title: t('importExport.title.importEtnx'),
       body,
       size: 'm',
       buttons: [
@@ -114,7 +114,7 @@ export function showImportEtnxDialog(
           onClick: () => finish(cancelled),
         },
         {
-          label: 'Импортировать',
+          label: t('importExport.label.importirovat'),
           primary: true,
           onClick: () => {
             const path = pathInput.value.trim();

@@ -336,7 +336,7 @@ describe('parseUpdateFeed', () => {
       [{ tag_name: '' }],
       [42],
     ]) {
-      assert.throws(() => parseUpdateFeed(payload), /фида|tag_name/i);
+      assert.throws(() => parseUpdateFeed(payload), /feed|tag_name/i);
     }
   });
 
@@ -526,7 +526,7 @@ describe('createUpdateChecker', () => {
     });
     const cache = await checker.checkNow();
     assert.equal(cache.available_version, null);
-    assert.match(cache.check_error ?? '', /нет хеша для ETN-Setup-0\.15\.2\.exe/);
+    assert.match(cache.check_error ?? '', /has no hash for ETN-Setup-0\.15\.2\.exe/);
   });
 
   it('нет установщика в релизе — версия непригодна', async () => {
@@ -535,7 +535,7 @@ describe('createUpdateChecker', () => {
     });
     const cache = await checker.checkNow();
     assert.equal(cache.available_version, null);
-    assert.match(cache.check_error ?? '', /нет установщика ETN-Setup-0\.15\.2\.exe/);
+    assert.match(cache.check_error ?? '', /has no installer ETN-Setup-0\.15\.2\.exe/);
   });
 
   it('непригодная самая новая версия не подменяется более старой', async () => {
@@ -581,7 +581,7 @@ describe('createUpdateChecker', () => {
     });
     const cache = await checker.checkNow();
     assert.equal(cache.available_version, null);
-    assert.match(cache.check_error ?? '', /Фид обновлений: запрос не выполнен/);
+    assert.match(cache.check_error ?? '', /Update feed: the request failed/);
   });
 
   it('ошибка сети после успешной проверки не обнуляет последний результат', async () => {
@@ -629,18 +629,18 @@ describe('createUpdateChecker', () => {
 
   it('невалидный фид: не-JSON и не-список релизов', async () => {
     const nonJson = buildChecker({ routes: { [FEED]: { body: '<html>404</html>' } } });
-    assert.match((await nonJson.checker.checkNow()).check_error ?? '', /не JSON/);
+    assert.match((await nonJson.checker.checkNow()).check_error ?? '', /not JSON/);
 
     const nonList = buildChecker({
       routes: { [FEED]: { body: JSON.stringify({ message: 'Not Found' }) } },
     });
-    assert.match((await nonList.checker.checkNow()).check_error ?? '', /не список релизов/);
+    assert.match((await nonList.checker.checkNow()).check_error ?? '', /not a list of releases/);
   });
 
   it('HTTP-ошибка фида попадает в check_error', async () => {
     const { checker } = buildChecker({ routes: { [FEED]: { status: 503, body: '' } } });
     const cache = await checker.checkNow();
-    assert.match(cache.check_error ?? '', /Фид обновлений: HTTP 503/);
+    assert.match(cache.check_error ?? '', /Update feed: HTTP 503/);
   });
 
   it('Docker: версия видна, ссылки и хеша нет', async () => {
@@ -660,7 +660,7 @@ describe('createUpdateChecker', () => {
     const { checker } = buildChecker({ releases: [], currentVersion: '0.15' });
     const cache = await checker.checkNow();
     assert.equal(cache.available_version, null);
-    assert.match(cache.check_error ?? '', /не является semver/);
+    assert.match(cache.check_error ?? '', /is not semver/);
   });
 
   it('вторая проверка во время первой отклоняется (429 у эндпоинта)', async () => {

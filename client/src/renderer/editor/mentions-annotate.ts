@@ -31,6 +31,7 @@ import { notice } from '../lib/notice.js';
 import { asRealtimeCause, onQueryInvalidated } from '../lib/live/index.js';
 import { store } from '../state.js';
 import { openThoughtByRef } from './wiki-link.js';
+import { t } from '../lib/i18n.js';
 
 /** Block-level elements treated as independent scanning units. */
 const BLOCK_SELECTOR = 'p, li, td, th, blockquote, h1, h2, h3, h4, h5, h6, dd, dt';
@@ -287,18 +288,18 @@ function buildActions(
 ): MenuItem[] {
   return [
     {
-      label: `Перейти к «${thought.title}»`,
+      label: t('mentions.pereyti', thought.title),
       onClick: () => {
         // `navigateToMention` ловит отказ чтения мысли; сюда приходит только
         // отказ открытия (структуры/хроника/фокус) — показываем его тостом,
         // иначе промис уходил в unhandled rejection (ошибка 1656ef58).
         void navigateToMention(thought).catch((error) => {
-          notice(`Не удалось открыть «${thought.title}»: ${errText(error)}`, 'error');
+          notice(t('mentions.notSucceededOpen', [thought.title, errText(error)]), 'error');
         });
       },
     },
     {
-      label: `Вставить ссылку на «${thought.title}»`,
+      label: t('mentions.pasteLinkRef', thought.title),
       onClick: () => onInsertLink(thought, matchedText),
     },
   ];
@@ -310,7 +311,7 @@ async function navigateToMention(thought: MentionsScanThought): Promise<void> {
   try {
     full = await etn.thoughts.get(networkId, thought.id);
   } catch (err) {
-    notice(`Не удалось открыть «${thought.title}»: ${errText(err)}`, 'error');
+    notice(t('mentions.notSucceededOpen', [thought.title, errText(err)]), 'error');
     return;
   }
   await openThoughtByRef(full);

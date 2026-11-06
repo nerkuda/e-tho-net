@@ -49,15 +49,15 @@ export const DOCKER_UPDATE_COMMAND = 'docker compose pull && docker compose up -
  * поэтому других шагов нет.
  */
 export const DOCKER_UPDATE_INSTRUCTION =
-  `Обновление выполняется на хосте с compose-файлом: ${DOCKER_UPDATE_COMMAND}. ` +
-  'Если в compose-файле образ собирается из исходников (указан `build:`), `pull` ничего не скачивает: ' +
-  'обновите исходники и выполните `docker compose build`, затем `docker compose up -d`. ' +
-  'Данные лежат в томе `etn_data`, внутри — `/data` (он же `ETN_DATA_DIR`), ' +
-  'поэтому пересоздание контейнера их не затрагивает, ' +
-  'а схема БД обновляется автоматически при старте новой версии. ' +
-  'Перед обновлением сделайте резервную копию каталога данных; ' +
-  'порядок обновления и отката — в разделе «Обновление сервера в Docker» ' +
-  'документации (`docs/userdocs/install.md`).';
+  `The update runs on the host with the compose file: ${DOCKER_UPDATE_COMMAND}. ` +
+  "If the compose file builds the image from sources (`build:` is set), `pull` downloads nothing: " +
+  "update the sources and run `docker compose build`, then `docker compose up -d`. " +
+  "The data lives in the `etn_data` volume, inside — `/data` (also `ETN_DATA_DIR`), " +
+  "so recreating the container does not affect them, " +
+  "and the database schema is updated automatically when the new version starts. " +
+  "Before updating, back up the data directory; " +
+  "the update and rollback procedure — in the \"Updating the server in Docker\" section " +
+  "of the documentation (`docs/userdocs/install.md`).";
 
 /**
  * Текст отказа `POST /api/v1/system/update/apply` в Docker (`409`,
@@ -65,10 +65,10 @@ export const DOCKER_UPDATE_INSTRUCTION =
  * запустить установщик Windows внутри контейнера.
  */
 export const DOCKER_APPLY_UNAVAILABLE_MESSAGE =
-  'Сервер развёрнут в Docker — автообновление из клиента невозможно. ' +
-  `Обновите контейнер на хосте: ${DOCKER_UPDATE_COMMAND}; ` +
-  'если образ собирается из исходников (`build:`), сначала `docker compose build`. ' +
-  'Порядок обновления и отката — в инструкции (поле `instruction` ответа GET /api/v1/system/update).';
+  "The server is deployed in Docker — auto-update from the client is impossible. " +
+  `Update the container on the host: ${DOCKER_UPDATE_COMMAND}; ` +
+  "if the image is built from sources (`build:`), run `docker compose build` first. " +
+  "The update and rollback procedure — in the instruction (the `instruction` field of the GET /api/v1/system/update response).";
 
 /**
  * Некорректное значение `ETN_DEPLOYMENT`. `config.ts` перевыбрасывает его как

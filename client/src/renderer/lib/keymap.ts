@@ -1,3 +1,4 @@
+
 /**
  * Общеклиентский диспетчер контекстов сочетаний клавиш (ADR
  * «Диспетчер контекстов сочетаний клавиш — общеклиентский библиотечный модуль
@@ -35,6 +36,7 @@
 /** Обработчик команды. `false` — команда отказалась обработать событие,
  *  поиск продолжается по нижележащим контекстам; любое другое значение —
  *  событие обработано (диспетчер зовёт `preventDefault`). */
+
 export type KeyCommandHandler = (event: KeyboardEvent) => boolean | void;
 
 /** Привязка «команда — сочетание — контекст». */
@@ -431,7 +433,7 @@ export function undefineKeyContext(id: string): void {
  */
 export function pushKeyContext(id: string): () => void {
   if (!isKnownContext(id)) {
-    throw new Error(`Контекст "${id}" не объявлен через defineKeyContext`);
+    throw new Error(`Контекст "${id}" не объявлен через defineKeyContext`); // i18n: technical — ошибка программиста, не пользовательская строка
   }
   const token = Symbol(id);
   stack.push({ id, token });

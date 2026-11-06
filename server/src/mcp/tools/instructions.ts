@@ -44,7 +44,7 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.instructions',
     {
-      title: 'Витрина инструкций сети',
+      title: 'Network instructions',
       // 0.14.1 (ошибка feb520de): «ROOT only (no untyped parent link)» читалось
       // как «нет структурного родителя вовсе». Фактическое правило
       // (`rootInstructionClause`, instructions-service.ts): корневая — та, среди
@@ -59,7 +59,7 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
         'Modes: `{ instruction_id }` → FULL comment; `{ instruction_ids }` → cards (title, synonyms, ' +
         'preview ≤ 300) in order; unresolved → `missing`; `{ keywords }` → filter over title+synonyms ' +
         'of ALL instructions incl. sub-instructions (whitespace-AND, `-word`; plain word also matches ' +
-        'a stored `*`-synonym word: `задач*` → «задачи»; root filter off); `{ network_id }` → active, ' +
+        'a stored `*`-synonym word: `task*` → "tasks"; root filter off); `{ network_id }` → active, ' +
         'default ROOT only (no other INSTRUCTION among structural parents; sections/catalogues ' +
         'children count as root), `scope: "all"` adds sub-instructions. No role → ' +
         '`{ has_instructions: false, instructions: [] }`.',
@@ -70,7 +70,7 @@ export function registerInstructionsTool(mcp: McpServer, rt: McpRuntime): void {
       runTool(async () => {
         const network = rt.deps.systemDb.getNetworkById(args.network_id);
         if (network === null) {
-          throw new EtnError('NOT_FOUND', `Сеть ${args.network_id} не найдена.`, {
+          throw new EtnError('NOT_FOUND', `Network ${args.network_id} not found.`, {
             network_id: args.network_id,
           });
         }

@@ -980,7 +980,7 @@ describe('publication-assembly-service: кандидаты (временная �
       assert.equal(doc.sections.length, 0);
       assert.equal(doc.publication.new_candidates, 0);
       assert.ok(
-        doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        doc.warnings.some((w) => w.includes('the heading view is not set')),
         `warnings: ${JSON.stringify(doc.warnings)}`,
       );
       assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
@@ -1053,7 +1053,7 @@ describe('publication-assembly-service: кандидаты (временная �
       const warnings: string[] = [];
       assert.deepEqual(selectRecipeIds(ndb, USER, recipe, warnings), []);
       assert.ok(
-        warnings.some((w) => w.includes('отбор заголовков не задан')),
+        warnings.some((w) => w.includes('the heading view is not set')),
         `warnings: ${JSON.stringify(warnings)}`,
       );
 
@@ -1062,7 +1062,7 @@ describe('publication-assembly-service: кандидаты (временная �
       const doc = assemblePublication(ndb, pub.id, USER);
       assert.equal(doc.sections.length, 0);
       assert.ok(
-        doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        doc.warnings.some((w) => w.includes('the heading view is not set')),
         `warnings: ${JSON.stringify(doc.warnings)}`,
       );
     } finally {
@@ -1082,7 +1082,7 @@ describe('publication-assembly-service: кандидаты (временная �
       const doc = assemblePublication(ndb, pub.id, USER);
       assert.equal(doc.sections.length, 0);
       assert.ok(
-        doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        doc.warnings.some((w) => w.includes('the heading view is not set')),
         `warnings: ${JSON.stringify(doc.warnings)}`,
       );
       assert.equal(listPublicationCandidates(ndb, pub.id, USER).total, 0);
@@ -1099,7 +1099,7 @@ describe('publication-assembly-service: кандидаты (временная �
       const pub = createPublication(ndb, { title: 'Док', title_recipe: recipeForType(type.id) }, USER);
       const doc = assemblePublication(ndb, pub.id, USER);
       assert.ok(
-        !doc.warnings.some((w) => w.includes('отбор заголовков не задан')),
+        !doc.warnings.some((w) => w.includes('the heading view is not set')),
         `warnings: ${JSON.stringify(doc.warnings)}`,
       );
       assert.ok(doc.sections.length > 0, 'валидный рецепт даёт разделы');

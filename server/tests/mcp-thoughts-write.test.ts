@@ -452,7 +452,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
         assert.ok(
-          text.includes('на уровне элемента'),
+          text.includes('item level'),
           `expected correct-place hint for ref: ${text}`,
         );
         assert.ok(text.includes('"ref": "a"'), `expected correct example: ${text}`);
@@ -480,7 +480,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
         assert.ok(
-          text.includes('на уровне элемента'),
+          text.includes('item level'),
           `expected correct-place hint for ref: ${text}`,
         );
         assert.ok(text.includes('"ref": "a"'), `expected correct example: ${text}`);
@@ -507,7 +507,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         assert.equal(result.isError, true, 'expected VALIDATION_ERROR');
         const text = toolText(result);
         assert.ok(text.includes('VALIDATION_ERROR'), text);
-        assert.ok(text.includes('thoughts') && text.includes('массивом'), text);
+        assert.ok(text.includes('thoughts') && text.includes('array'), text);
         assert.ok(text.includes('string'), `expected received type in error: ${text}`);
         assert.ok(
           text.includes(String(MCP_MAX_THOUGHTS_PER_WRITE)),
@@ -1988,7 +1988,7 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
         // со схемой. Теперь описание обязано называть уровень элемента и
         // давать корректный пример; старую формулировку сторож не пускает.
         assert.ok(
-          description.includes('на уровне элемента `thoughts[]`'),
+          description.includes('at the `thoughts[]` item level'),
           'описание обязано называть уровень элемента `thoughts[]` для `ref` новой мысли (f87ca85d)',
         );
         assert.ok(
@@ -1996,11 +1996,11 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           'описание обязано давать корректный пример элемента ref+thought (f87ca85d)',
         );
         assert.ok(
-          !description.includes('он ОБЯЗАН нести локальный `ref`'),
+          !description.includes('the `thought` block MUST carry a local `ref`'),
           'описание не должно утверждать, что `ref` лежит внутри блока `thought` (f87ca85d)',
         );
         assert.ok(
-          description.includes('ВНУТРИ `thought`'),
+          description.includes('INSIDE `thought`'),
           'описание обязано отправлять `synonyms` внутрь блока `thought` (521aa4b9)',
         );
 
@@ -2011,15 +2011,15 @@ describe('etn.thoughts.write (0.7.2)', { skip: !nativeAvailable() }, () => {
           }),
         );
         assert.ok(
-          guide.includes('обязательно объяви `ref`'),
+          guide.includes('declare `ref`'),
           'etn.guide { topic: "etn.how_to_write_batch" } обязан нести правило ref (521aa4b9)',
         );
         assert.ok(
-          guide.includes('на уровне элемента `thoughts[]`'),
+          guide.includes('at the `thoughts[]` item level'),
           'etn.guide { topic: "etn.how_to_write_batch" } обязан называть уровень `ref` (f87ca85d)',
         );
         assert.ok(
-          guide.includes('вместе с блоком `thought` отвергаются'),
+          guide.includes('together with the `thought` block are rejected'),
           'etn.guide { topic: "etn.how_to_write_batch" } обязан нести правило synonyms (521aa4b9)',
         );
       } finally {

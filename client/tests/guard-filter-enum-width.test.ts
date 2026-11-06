@@ -439,7 +439,7 @@ describe('guard: перечисления редактора отбора — с
 
   it('enumControl строит buildEntityChipField закрытого набора, без прежних компонентов', () => {
     assert.ok(enumBody.includes('buildEntityChipField('), 'перечисление — чип-поле закрытого набора');
-    assert.ok(enumBody.includes("optionsHeader: 'Значения'"), 'выпадашка — группа «Значения»');
+    assert.ok(enumBody.includes("optionsHeader: t('filterValue.optionsHeader.values')"), 'выпадашка — группа «Значения»');
     assert.ok(enumBody.includes('initialOptions'), 'каталог заполняет подписи чипов сразу');
     assert.ok(enumBody.includes('loadOptions'), 'живой поиск по каталогу');
     assert.ok(enumBody.includes('knownCodes.has'), 'в AST попадают только коды словаря');

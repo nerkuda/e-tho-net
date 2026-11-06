@@ -152,9 +152,9 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
     iconBox.replaceChildren(svgIcon(visible ? 'x' : 'filter'));
     setTooltip(
       toggle,
-      visible ? 'Скрыть панель отбора' : 'Показать панель отбора',
+      visible ? t('filterPanel.hidePanelView') : t('filterPanel.showPanelView'),
     );
-    toggle.setAttribute('aria-label', visible ? 'Скрыть панель отбора' : 'Показать панель отбора');
+    toggle.setAttribute('aria-label', visible ? t('filterPanel.hidePanelView') : t('filterPanel.showPanelView'));
     toggle.dataset['placement'] = placement;
   };
 

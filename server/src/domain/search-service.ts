@@ -1242,9 +1242,9 @@ export function assertSearchAstExclusive(request: SearchRequest): void {
   if (conflicting.length === 0) return;
   throw new EtnError(
     'VALIDATION_ERROR',
-    `Поле ast несовместимо с плоскими мыслевыми параметрами (${conflicting.join(
+    `The ast field is incompatible with flat thought parameters (${conflicting.join(
       ', ',
-    )}): передайте либо ast, либо плоские параметры.`,
+    )}): provide either ast or flat parameters.`,
     { field: 'ast', conflicting },
   );
 }
@@ -1316,7 +1316,7 @@ function resolveSearchThoughtTokens(
         path: '',
         token,
         reason: 'unknown_token' as const,
-        message: `Токен «${token}» требует мысли в фокусе карты: задайте мысль в фокусе и повторите поиск.`,
+        message: `Token "${token}" requires a map focus thought: set a focus thought and repeat the search.`,
       })),
     };
   }
@@ -1328,7 +1328,7 @@ function resolveSearchThoughtTokens(
         path: '',
         token,
         reason: 'unknown_token' as const,
-        message: `Мысль в фокусе карты (${focusThoughtId}) не найдена — токен «${token}» не разрешён.`,
+        message: `The map focus thought (${focusThoughtId}) was not found — token "${token}" is not allowed.`,
       })),
     };
   }

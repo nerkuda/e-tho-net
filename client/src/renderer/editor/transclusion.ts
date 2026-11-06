@@ -1830,7 +1830,7 @@ export function transclusionNavHandlers(
       void import('../screens/active-view.js')
         .then((m) => m.focusThoughtOnMap(sourceId))
         .catch((error) => {
-          console.error('[transclusion] не удалось открыть карту мыслей', error);
+          console.error('[transclusion] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
         });
     },
     'transclusion.copyLink': () => {
@@ -2134,7 +2134,7 @@ export function openTransclusionLinkPopover(
       void import('../screens/active-view.js')
         .then((m) => m.focusThoughtOnMap(currentSourceId))
         .catch((error) => {
-          console.error('[transclusion] не удалось открыть карту мыслей', error);
+          console.error('[transclusion] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
         });
     }),
     commandButton('copy', t('comment.transclusion.menu.copy'), () => {

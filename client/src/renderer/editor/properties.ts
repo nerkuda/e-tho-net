@@ -508,12 +508,12 @@ async function openPropertyEditorById(propertyId: string): Promise<void> {
     const registry = await etn.propertyRegistry.list(networkId);
     const row = registry.find((candidate) => candidate.id === propertyId);
     if (row === undefined) {
-      notice('Свойство не найдено в справочнике сети.');
+      notice(t('properties.propertyNotFoundSpravochnikeNetwork'));
       return;
     }
     openPropertyManagerEditor(row, refreshPropertiesPanels);
   } catch (err) {
-    errorDialog('Изменить свойство', err);
+    errorDialog(t('properties.editProperty'), err);
   }
 }
 
@@ -562,16 +562,16 @@ async function clearRowValue(ref: RowPropertyRef): Promise<void> {
       );
     }
     if (marked.length === 0) {
-      notice('Помеченных связей этого свойства нет.', 'info');
+      notice(t('properties.pomechennyhLinksThisPropertiesNo'), 'info');
     } else {
-      notice(marked.length > 1 ? `Восстановлено связей: ${marked.length}.` : 'Связь восстановлена.');
+      notice(marked.length > 1 ? t('properties.vosstanovlenoLinks', marked.length) : t('properties.linkRestored'));
     }
     // Своя мутация (снятие пометки корзины с рёбер свойства) — та же граница
     // чтения, что у скаляра: ответ чтения, начатого до неё, не применяется.
     bumpValueReads({ ownerType: ref.ownerType, ownerId: ref.ownerId });
     refreshPropertiesPanels();
   } catch (err) {
-    errorDialog('Очистить', err);
+    errorDialog(t('actions.reset'), err);
   }
 }
 
@@ -592,7 +592,7 @@ async function removeOutsideRowValue(ref: RowPropertyRef): Promise<void> {
     bumpValueReads({ ownerType: ref.ownerType, ownerId: ref.ownerId });
     refreshPropertiesPanels();
   } catch (err) {
-    errorDialog('Удалить', err);
+    errorDialog(t('actions.delete'), err);
   }
 }
 
@@ -616,11 +616,11 @@ async function promoteRowProperty(opts: {
       required: false,
       ...(opts.isLink && opts.side !== null ? { side: opts.side } : {}),
     });
-    notice('Свойство перенесено в типовые.');
+    notice(t('properties.propertyMovedTipovye'));
     refreshPropertiesPanels();
     return true;
   } catch (err) {
-    errorDialog('Перенести в типовые свойства', err);
+    errorDialog(t('properties.perenestiTipovyeProperties'), err);
     return false;
   }
 }
@@ -660,8 +660,8 @@ async function excludeTypedProperty(opts: {
       );
       notice(
         mirrored
-          ? 'Строка зеркальная: привязка свойства живёт на другом типе — исключите её там.'
-          : 'Привязка свойства не найдена.',
+          ? t('properties.rowZerkalnayaPrivyazkaPropertiesZhivetDrugom')
+          : t('properties.privyazkaPropertiesNotFound'),
       );
       return;
     }
@@ -675,12 +675,12 @@ async function excludeTypedProperty(opts: {
     }
     notice(
       matches.length > 1
-        ? `Свойство исключено из типов: ${matches.length}.`
-        : 'Свойство исключено из типовых.',
+        ? t('properties.propertyIsklyuchenoTypes', matches.length)
+        : t('properties.propertyIsklyuchenoTipovyh'),
     );
     refreshPropertiesPanels();
   } catch (err) {
-    errorDialog('Исключить из типовых свойств', err);
+    errorDialog(t('properties.isklyuchitTipovyhProperties'), err);
   }
 }
 
@@ -982,7 +982,7 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // but a network mid-migration might have no root either — show empty state).
   const typeId = resolveEditorTypeId(ctx);
   if (typeId === null) {
-    box.append(el('p', 'muted', 'Свойства недоступны — нет подходящего типа.'));
+    box.append(el('p', 'muted', t('properties.propertiesNedostupnyNoPodhodyaschegoType')));
     return box;
   }
   // The mutable target this pane renders: a same-type entity switch retargets it
@@ -1029,7 +1029,7 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // values are rendered inline as a second group further down.
   const typeGroup = groupSection({
     id: 'properties.type',
-    title: 'Свойства типа',
+    title: t('properties.title.propertiesType'),
     defaultCollapsed: false,
     buildBody: () => buildPropertiesBodyFor(target, lifecycle),
     // Тело уходит с экрана при сворачивании: набранное без Enter в чип-полях
@@ -1041,7 +1041,7 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // срез задачи 626b29bd; пикер и «Создать новое…» живут в диалоге.
   const addPropertyBtn = iconButton({
     icon: svgIcon('plus', 14),
-    title: 'Добавить свойство',
+    title: t('properties.title.addProperty'),
     role: 'ghost',
     size: 's',
     class: 'prop-outside-add',
@@ -1052,7 +1052,7 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   });
   const outsideGroup = groupSection({
     id: 'properties.outside',
-    title: 'Свойства вне типа',
+    title: t('properties.title.propertiesVneType'),
     defaultCollapsed: false,
     lazyCount: true,
     actions: [addPropertyBtn],
@@ -1232,7 +1232,7 @@ function buildPropertiesBodyFor(
   const networkId = requireNetworkId();
   const box = div('properties-body');
   if (target.typeId === null) {
-    box.append(el('p', 'muted', 'Свойства недоступны.'));
+    box.append(el('p', 'muted', t('properties.propertiesNedostupny')));
     return box;
   }
   const typeOwner = target.ownerType === 'thought' ? 'thought_type' : 'link_type';
@@ -1314,7 +1314,7 @@ async function openOutsidePropertyPicker(target: PropertiesTarget): Promise<void
         ? []
         : await etn.types.listTypeProperties(networkId, typeOwner, target.typeId);
   } catch (err) {
-    errorDialog('Добавить свойство', err);
+    errorDialog(t('properties.title.addProperty'), err);
     return;
   }
   await ensurePropertyLinkTypes(networkId, registryRows);
@@ -1393,7 +1393,7 @@ async function openOutsidePropertyPicker(target: PropertiesTarget): Promise<void
     body.append(list.root);
 
     const close = showDialog({
-      title: 'Добавить свойство',
+      title: t('properties.title.addProperty'),
       body,
       size: 'l',
       // Высота стабильна: задана ролью, не содержимым списка (правило 9
@@ -1403,7 +1403,7 @@ async function openOutsidePropertyPicker(target: PropertiesTarget): Promise<void
       buttons: [
         { label: t('actions.cancel') },
         {
-          label: 'Создать новое…',
+          label: t('properties.label.createNovoe'),
           keepOpen: true,
           onClick: () => {
             openPropertyManagerEditor(
@@ -1420,7 +1420,7 @@ async function openOutsidePropertyPicker(target: PropertiesTarget): Promise<void
           },
         },
         {
-          label: 'Выбрать',
+          label: t('actions.select'),
           primary: true,
           keepOpen: true,
           onClick: () => {
@@ -1450,7 +1450,7 @@ function buildOutsidePropertiesBody(
 
   const box = div('properties-outside-body');
   const wrap = div('admin-table-wrap prop-wrap');
-  wrap.append(el('span', 'muted', 'Загрузка…'));
+  wrap.append(el('span', 'muted', t('common.loading')));
   box.append(wrap);
 
   // Инкрементальная таблица (стандарт «Списки рендерятся инкрементально»):
@@ -1587,7 +1587,7 @@ function buildOutsidePropertiesBody(
         await etn.properties.reorder(networkId, requestOwnerId, items);
       } catch (err) {
         if (requestOwnerId !== target.ownerId) return;
-        notice(`Не удалось сохранить порядок свойств: ${errText(err)}`, 'error');
+        notice(t('properties.notSucceededSaveOrderProperties', errText(err)), 'error');
         await reload(true);
       }
     })();
@@ -1706,7 +1706,7 @@ function buildOutsidePropertiesBody(
     void pendingCommits.flush();
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
-    if (!tableAttached) wrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    if (!tableAttached) wrap.replaceChildren(el('span', 'muted', t('common.loading')));
     let values: Array<PropertyValue | LinkPropertyValues>;
     // Поколение чтения (ошибка da7bbb53, круг 2) фиксируем ДО запроса: ответ
     // актуален, только если данных владельца не изменили, пока он был в пути.
@@ -1783,7 +1783,7 @@ function buildOutsidePropertiesBody(
       rowNodes.clear();
       nav?.refresh();
       reorder?.refresh();
-      wrap.replaceChildren(el('p', 'muted', 'Нет значений вне типа.'));
+      wrap.replaceChildren(el('p', 'muted', t('properties.noValuesVneType')));
       return;
     }
     if (!tableAttached) {
@@ -2110,8 +2110,8 @@ function outsideRowSpec(
       setTooltip(
         nameCell,
         current.property_id !== ''
-          ? 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.'
-          : 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
+          ? t('properties.propertyLinkNotConnectedTipuOwner')
+          : t('properties.typeLinkNotImeetPropertiesReestre'),
       );
       wireOutsideRowMenu(
         nameCell,
@@ -2148,7 +2148,7 @@ function outsideRowSpec(
     });
     setTooltip(
       nameCell,
-      'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
+      t('properties.propertyGreaterNotConnectedTipuOwner'),
     );
     wireOutsideRowMenu(
       nameCell,
@@ -2262,12 +2262,12 @@ function fillPendingOutsideRow(
   if (isLink) {
     setTooltip(
       nameCell,
-      'Свойство-связь не подключено к типу владельца — введите значения здесь; подключение свойства к типу вернёт их в основную таблицу.',
+      t('properties.propertyLinkNotConnectedTipuOwner2'),
     );
   } else {
     setTooltip(
       nameCell,
-      'Свойство не подключено к типу владельца — введите значение здесь; подключение свойства к типу вернёт его в основную таблицу.',
+      t('properties.propertyNotConnectedTipuOwnerEnter'),
     );
   }
   wireOutsideRowMenu(nameCell, target, {
@@ -2408,7 +2408,7 @@ function buildOutsideLinkCell(
       onRemove();
       return true;
     } catch (err) {
-      notice(`Не удалось удалить значение: ${errText(err)}`, 'error');
+      notice(t('properties.notSucceededDeleteValue', errText(err)), 'error');
       return false;
     }
   };
@@ -2455,7 +2455,7 @@ function buildOutsideLinkCell(
   // диалога (задача 0d4f793a).
   const clearBtn = el('button', 'st-f-clear-inline prop-outside-remove', '×');
   clearBtn.type = 'button';
-  clearBtn.title = 'Удалить значение';
+  clearBtn.title = t('properties.deleteValue');
   clearBtn.addEventListener('click', (event) => {
     event.stopPropagation();
     if (currentIds.length === 0) return;
@@ -2507,7 +2507,7 @@ function buildTypePropertiesBody(
 ): HTMLElement {
   const box = div('properties-type-body');
   const tableWrap = div('admin-table-wrap prop-wrap');
-  tableWrap.append(span('Загрузка…', 'muted'));
+  tableWrap.append(span(t('common.loading'), 'muted'));
   box.append(tableWrap);
 
   let everMounted = false;
@@ -2774,7 +2774,7 @@ function buildTypePropertiesBody(
     const startedAt = Date.now();
     // Плейсхолдер — только пока таблица не прикреплена; иначе инкрементальное
     // обновление не мигает «Загрузкой…» на каждой правке значения.
-    if (!tableAttached) tableWrap.replaceChildren(el('span', 'muted', 'Загрузка…'));
+    if (!tableAttached) tableWrap.replaceChildren(el('span', 'muted', t('common.loading')));
     let definitions: EffectiveTypeProperty[];
     try {
       definitions = await etn.types.listTypeProperties(networkId, typeOwner, typedId);
@@ -2848,7 +2848,7 @@ function buildTypePropertiesBody(
       shownRows = [];
       rowNodes.clear();
       nav?.refresh();
-      tableWrap.replaceChildren(el('p', 'muted', 'У типа нет свойств.'));
+      tableWrap.replaceChildren(el('p', 'muted', t('properties.uTypeNoProperties')));
       tableAttached = false;
       return;
     }
@@ -3076,7 +3076,7 @@ function buildEditorCell(opts: {
       // toast (`notice`) is anchored to the document and survives the
       // rebuild — it is the only reliable surface for a deferred failure.
       notice(
-        `Не удалось сохранить «${definition.key}»: ${errText(err)}`,
+        t('properties.notSucceededSave', [definition.key, errText(err)]),
         'error',
       );
       return false;
@@ -3190,10 +3190,10 @@ export function buildMultiUrlReadonly(opts: {
 /** Builds a disabled «Открыть» button bound to {@link onOpen}; used in readonly cells. */
 function buildUrlOpenBtnStatic(value: string, onOpen: (value: string) => void): HTMLButtonElement {
   const btn = uiButton({
-    label: 'Открыть',
+    label: t('properties.label.open'),
     role: 'secondary',
     size: 's',
-    title: 'Открыть в системном обработчике',
+    title: t('properties.title.openSistemnomObrabotchike'),
     onClick: () => onOpen(value),
   });
   btn.disabled = value.trim() === '';
@@ -3270,14 +3270,14 @@ export function buildCrossNetworkRefReadonly(values: CrossNetworkRefValue[]): HT
   }
   for (const v of values) {
     const row = div('prop-outside-cross-network-ref-row');
-    const net = v.network_id === '' ? '(нет сети)' : shortNetworkLabel(v.network_id);
+    const net = v.network_id === '' ? t('properties.noNetwork') : shortNetworkLabel(v.network_id);
     row.append(
       span(v.title_snapshot, 'prop-outside-text'),
       span(` — ${net}`, 'muted prop-outside-text'),
     );
     if (v.unresolved) {
-      const flag = span(' (нерезолвлено)', 'muted prop-outside-text');
-      setTooltip(flag, 'Последний живой резолв отказал — сеть или цель удалены. Нажмите «Обновить имя» в основной таблице.');
+      const flag = span(t('properties.nerezolvleno'), 'muted prop-outside-text');
+      setTooltip(flag, t('properties.lastZhivoyRezolvOtkazalNetworkTarget'));
       row.append(flag);
     }
     root.append(row);

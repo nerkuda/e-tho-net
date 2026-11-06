@@ -97,7 +97,7 @@ export function diagnoseFilterAst(
         code: 'entity_deleted',
         path: `sort[${i}]`,
         label: key.key,
-        message: `Свойство «${key.key}» сортировки удалено из реестра сети — отбор нельзя применить.`,
+        message: `Sort property "${key.key}" was deleted from the network registry — the view cannot be applied.`,
       });
       return;
     }
@@ -108,7 +108,7 @@ export function diagnoseFilterAst(
         code: 'property_detached',
         path: `sort[${i}]`,
         label: def.name,
-        message: `Свойство «${def.name}» сортировки больше не входит в набор свойств этого типа — порядок считается по фактическим значениям вне типа.`,
+        message: `Sort property "${def.name}" is no longer part of this type's property set — ordering uses actual values outside the type.`,
       });
     }
   });
@@ -127,7 +127,7 @@ export function filterDiagnosticsError(
   const first = errors[0];
   return new EtnError(
     'VALIDATION_ERROR',
-    first?.message ?? 'Отбор нельзя применить: сущность условия удалена из сети.',
+    first?.message ?? "The view cannot be applied: a condition entity was deleted from the network.",
     { reason: 'filter_entity_deleted', diagnostics: errors },
     requestId,
   );
@@ -178,7 +178,7 @@ function diagnoseLeaf(
           code: 'entity_deleted',
           path: `${path}.entity`,
           label,
-          message: `Свойство${label ? ` «${label}»` : ''} удалено из реестра сети — отбор нельзя применить.`,
+          message: `Property${label ? ` "${label}"` : ''} was deleted from the network registry — the view cannot be applied.`,
         });
         return;
       }
@@ -190,7 +190,7 @@ function diagnoseLeaf(
           code: 'property_detached',
           path: `${path}.entity`,
           label: name,
-          message: `Свойство «${name}» больше не входит в набор свойств этого типа — отбор исполнится по фактическим значениям вне типа.`,
+          message: `Property "${name}" is no longer part of this type's property set — the view will run using actual values outside the type.`,
         });
       }
       // Значение-мысль: у ссылочных свойств строковые значения — id целей.
@@ -205,7 +205,7 @@ function diagnoseLeaf(
               path: `${path}.value`,
               label: leaf.labels?.entity ?? def.name,
               value_label: leaf.labels?.value ?? id,
-              message: `Значение «${leaf.labels?.value ?? id}» ссылается на удалённую мысль — отбор нельзя применить.`,
+              message: `The value "${leaf.labels?.value ?? id}" references a deleted thought — the view cannot be applied.`,
             });
           }
         }
@@ -225,9 +225,9 @@ function diagnoseLeaf(
           severity: 'error',
           code: 'entity_deleted',
           path: `${path}.value`,
-          label: leaf.labels?.entity ?? 'Тип',
+          label: leaf.labels?.entity ?? "Type",
           value_label: leaf.labels?.value ?? id,
-          message: `Тип «${leaf.labels?.value ?? id}» удалён из сети — отбор нельзя применить.`,
+          message: `Type "${leaf.labels?.value ?? id}" was deleted from the network — the view cannot be applied.`,
         });
       }
       return;
@@ -239,9 +239,9 @@ function diagnoseLeaf(
           severity: 'error',
           code: 'entity_deleted',
           path: `${path}.value`,
-          label: leaf.labels?.entity ?? 'Тип связи',
+          label: leaf.labels?.entity ?? "Link type",
           value_label: leaf.labels?.value ?? id,
-          message: `Тип связи «${leaf.labels?.value ?? id}» удалён из сети — отбор нельзя применить.`,
+          message: `Link type "${leaf.labels?.value ?? id}" was deleted from the network — the view cannot be applied.`,
         });
       }
       return;
@@ -275,7 +275,7 @@ function diagnosePropertyIdList(
         path: `${path}.value`,
         label: leaf.labels?.entity ?? null,
         value_label: label,
-        message: `Свойство «${label ?? ref}» удалено из реестра сети — отбор нельзя применить.`,
+        message: `Property "${label ?? ref}" was deleted from the network registry — the view cannot be applied.`,
       });
     }
   }

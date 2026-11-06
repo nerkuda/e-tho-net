@@ -48,6 +48,8 @@ import type {
 // Текст строки-диагностики — из словаря (`lib/i18n.ts`), а не литералом
 // (требование 0e5ff1c6): формулировка меняется в одном месте — каталоге.
 import { t } from './i18n.js';
+// Текст неразрешённого токена — общий помощник со строкой поиска.
+import { tokenIssueMessage } from './token-issue-message.js';
 
 // ---------------------------------------------------------------------------
 // Вид записи диагностики
@@ -105,8 +107,6 @@ export interface FilterDiagnosticsPayload {
   warnings?: readonly FilterDiagnostic[];
   /** `unresolved` — нераскрытые токены (`ids` пуст). */
   unresolved?: readonly FilterUnresolvedToken[];
-  /** Строковые предупреждения сборки/рецепта (адреса у них нет). */
-  messages?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ function emptyGroupIssue(path: string): FilterIssue {
     source: 'constructor',
     code: 'empty_group',
     path,
-    message: 'группа пуста — добавьте условие или группу',
+    message: t('filterDiagnostics.groupPustaDobavteConditionGroup'),
   };
 }
 
@@ -259,7 +259,7 @@ function contradictionIssues(group: FilterTreeGroup, groupPath: readonly number[
         out.push(
           contradictionIssue(
             b.path,
-            'условия требуют одновременного «заполнено» и «не заполнено» — ни одна мысль не подойдёт',
+            t('filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno'),
           ),
         );
         continue;
@@ -274,7 +274,7 @@ function contradictionIssues(group: FilterTreeGroup, groupPath: readonly number[
         out.push(
           contradictionIssue(
             b.path,
-            'нижняя граница диапазона не меньше верхней — ни одна мысль не подойдёт',
+            t('filterDiagnostics.nizhnyayaGranicaDiapazonaNotLessVerhney'),
           ),
         );
       }
@@ -342,11 +342,27 @@ function issueFromDiagnostic(diagnostic: FilterDiagnostic): FilterIssue {
     source: 'server',
     code: diagnostic.code,
     path: typeof diagnostic.path === 'string' ? diagnostic.path : '',
-    message: diagnostic.message,
+    message: diagnosticMessage(diagnostic),
     label: diagnostic.label ?? null,
     valueLabel: diagnostic.value_label ?? null,
     deletedAt: diagnostic.deleted_at ?? null,
   };
+}
+
+/**
+ * Пользовательский текст диагностики ядра по machine-readable `code`
+ * (ADR daab6ac4, п. 4): серверный `message` английский и не показывается.
+ * Снапшоты имён и дату добавляет {@link filterIssueReason}.
+ */
+function diagnosticMessage(diagnostic: FilterDiagnostic): string {
+  switch (diagnostic.code) {
+    case 'entity_deleted':
+      return t('filterDiagnostics.server.entityDeleted');
+    case 'property_detached':
+      return t('filterDiagnostics.server.propertyDetached');
+    default:
+      return t('filterDiagnostics.server.unknown');
+  }
 }
 
 /** Свести серверные данные выборки/ошибки в список записей редактора. */
@@ -360,16 +376,7 @@ export function filterIssuesFromPayload(payload: FilterDiagnosticsPayload): Filt
       source: 'server',
       code: 'token_unresolved',
       path: typeof token.path === 'string' ? token.path : '',
-      message: token.message,
-    });
-  }
-  for (const message of payload.messages ?? []) {
-    out.push({
-      severity: 'warning',
-      source: 'server',
-      code: 'build_warning',
-      path: '',
-      message,
+      message: tokenIssueMessage(token.token, token.reason),
     });
   }
   return dedupeIssues(out);
@@ -409,7 +416,7 @@ export function lostConditionIssues(lost: readonly string[]): FilterIssue[] {
     source: 'constructor' as const,
     code: 'build_warning' as const,
     path: '',
-    message: `${condition}. Правка заменит сохранённое определение.`,
+    message: t('filterDiagnostics.editZamenitSohranennoeOpredelenie', condition),
   }));
 }
 
@@ -508,10 +515,10 @@ export function filterIssueReason(issue: FilterIssue): string {
     parts.push(`«${issue.label}»`);
   }
   if (issue.valueLabel !== null && issue.valueLabel !== undefined && issue.valueLabel !== '') {
-    parts.push(`значение «${issue.valueLabel}»`);
+    parts.push(t('filterDiagnostics.value', issue.valueLabel));
   }
   if (issue.deletedAt !== null && issue.deletedAt !== undefined && issue.deletedAt !== '') {
-    parts.push(`удалено ${issue.deletedAt}`);
+    parts.push(t('filterDiagnostics.deleted', issue.deletedAt));
   }
   return parts.join(' · ');
 }

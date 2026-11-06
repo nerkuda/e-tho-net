@@ -133,7 +133,7 @@ export function acquireLock(
       }
       throw new EtnError(
         'LOCKED',
-        'объект редактируется другим участником',
+        "the object is being edited by another member",
         {
           entity_type: params.entityType,
           entity_id: params.entityId,
@@ -187,7 +187,7 @@ export function releaseLock(ndb: NetworkDb, lockId: string, userId: string): Loc
     }
     if (row.user_id !== userId) {
       // Чужой захват — снять его нельзя (только clear для всех или владельцу).
-      throw new EtnError('FORBIDDEN', 'снять чужой захват может только его владелец', {
+      throw new EtnError('FORBIDDEN', "only the lock owner can release someone else's lock", {
         lock_id: lockId,
         holder_user_id: row.user_id,
       });
@@ -338,7 +338,7 @@ export function enforceLock(
   }
   throw new EtnError(
     'LOCKED',
-    'объект редактируется другим участником',
+    "the object is being edited by another member",
     {
       entity_type: entityType,
       entity_id: entityId,

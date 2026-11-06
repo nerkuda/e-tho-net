@@ -184,7 +184,7 @@ function assertBodyWithinRenderLimit(bodyMd: string, field: string): void {
   if (bodyMd.length > DEFAULT_MAX_LENGTH) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `body_md превышает лимит рендера (${bodyMd.length} > ${DEFAULT_MAX_LENGTH} символов).`,
+      `body_md exceeds the render limit (${bodyMd.length} > ${DEFAULT_MAX_LENGTH} characters).`,
       { field, limit: DEFAULT_MAX_LENGTH },
     );
   }

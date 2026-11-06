@@ -49,6 +49,7 @@ import { filterSortAstKeys, isSortOrder, withReverseLinkPropertySides } from './
 import { VALUE_TYPE_LABELS } from './property-list.js';
 import { iconButton, uiButton } from './ui/button.js';
 import { svgIcon, type IconName } from './ui/icon.js';
+import { t } from './i18n.js';
 
 export const FILTER_SORT_SECTION_CLASS = 'fs-sort';
 export const FILTER_SORT_CHIP_CLASS = 'fs-chip';
@@ -59,10 +60,17 @@ export const FILTER_SORT_ORDER_GLYPHS: Readonly<Record<SortOrder, string>> = {
   desc: '↓',
 };
 
-/** Подписи направления (подсказки кнопки чипа). */
+/**
+ * Подписи направления (подсказки кнопки чипа). Геттеры: текст берётся в
+ * момент рендера (ошибка ebed42d3).
+ */
 export const FILTER_SORT_ORDER_LABELS: Readonly<Record<SortOrder, string>> = {
-  asc: 'возрастание',
-  desc: 'убывание',
+  get asc() {
+    return t('filter.label.asc');
+  },
+  get desc() {
+    return t('filter.label.desc');
+  },
 };
 
 /** Одно доступное поле сортировки. */
@@ -154,7 +162,7 @@ export function filterSortKeyOptions(data: FilterSortData): FilterSortKeyOption[
       valueType: entry.value_type,
       detail: direct
         ? VALUE_TYPE_LABELS[entry.value_type]
-        : `${VALUE_TYPE_LABELS[entry.value_type]} · обратная сторона`,
+        : t('filterSort.obratnayaStorona', VALUE_TYPE_LABELS[entry.value_type]),
       ...(icon !== null ? { icon } : {}),
     });
   }
@@ -173,7 +181,7 @@ export function filterSortKeyLabel(
 
 /** Подсказка чипа: «поле · направление» (порядок применения — порядок чипов). */
 export function filterSortChipTitle(key: string, order: SortOrder, label: string): string {
-  return `${label} · ${FILTER_SORT_ORDER_LABELS[order]} · порядок применения — порядок чипов`;
+  return t('filterSort.orderPrimeneniyaOrderChipov', [label, FILTER_SORT_ORDER_LABELS[order]]);
 }
 
 /** Следующее направление ключа по клику (направление задаётся на каждый ключ). */
@@ -216,12 +224,12 @@ export function filterSortAddMenu(
         ...(entry.icon !== undefined ? { icon: entry.icon } : {}),
       }));
   return {
-    title: 'Ключ сортировки',
+    title: t('filterSort.title.keySort'),
     search: true,
-    placeholder: 'Поиск поля…',
+    placeholder: t('filterSort.placeholder.searchFields'),
     groups: [
-      { label: 'Поля отбора', items: pick('engine'), columns: 2 },
-      { label: 'Свойства сети', items: pick('properties'), columns: 2 },
+      { label: t('filterSort.label.fieldsView'), items: pick('engine'), columns: 2 },
+      { label: t('filterSort.label.propertiesNetwork'), items: pick('properties'), columns: 2 },
     ].filter((group) => group.items.length > 0),
   };
 }
@@ -233,7 +241,7 @@ export function filterSortAddMenu(
 /** Собрать секцию сортировки над единой моделью хоста. */
 export function buildFilterSortSection(opts: FilterSortSectionOptions): FilterSortSectionHandle {
   const root = div(FILTER_SORT_SECTION_CLASS);
-  root.append(el('div', 'fs-sort__head', opts.title ?? 'Сортировка'));
+  root.append(el('div', 'fs-sort__head', opts.title ?? t('contextMenu.sort')));
 
   const chipsRow = div('fs-sort__chips');
   root.append(chipsRow);
@@ -279,7 +287,7 @@ export function buildFilterSortSection(opts: FilterSortSectionOptions): FilterSo
           role: 'ghost',
           size: 's',
           class: 'fs-chip__order',
-          title: `направление: ${FILTER_SORT_ORDER_LABELS[entry.order]} — нажмите, чтобы сменить`,
+          title: t('filterSort.napravlenieClickToChange', FILTER_SORT_ORDER_LABELS[entry.order]),
           onClick: () =>
             commit(
               keys.map((current, i) =>
@@ -289,7 +297,7 @@ export function buildFilterSortSection(opts: FilterSortSectionOptions): FilterSo
         }),
         iconButton({
           icon: svgIcon('x'),
-          title: 'Убрать ключ сортировки',
+          title: t('filterSort.title.removeKeySort'),
           role: 'ghost',
           size: 's',
           class: 'fs-chip__remove',
@@ -309,7 +317,7 @@ export function buildFilterSortSection(opts: FilterSortSectionOptions): FilterSo
       role: 'ghost',
       size: 's',
       class: 'fs-add',
-      title: 'Добавить ключ сортировки',
+      title: t('filterSort.title.addKeySort'),
       onClick: () => openAddMenu(addButton),
     });
     chipsRow.append(addButton);

@@ -163,7 +163,7 @@ function edgeLinkTypeLeafClause(
   const fail = (): never => {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Операнд «Тип связи»: оператор «${op}» недопустим.`,
+      `Operand "Link type": operator "${op}" is not allowed.`,
       { field: 'link_filter' },
       requestId,
     );
@@ -227,7 +227,7 @@ function edgeLinkFilterClause(
   if (node.entity.kind !== 'link_type') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Фильтр типов связей допускает только операнд «Тип связи», получен «${node.entity.kind}».`,
+      `The link-type filter allows only the "Link type" operand, got "${node.entity.kind}".`,
       { field: 'link_filter' },
       requestId,
     );
@@ -287,13 +287,13 @@ export function assertParentValid(
   }
   if (typeId !== null) {
     if (parentId === typeId) {
-      throw new EtnError('VALIDATION_ERROR', 'тип не может быть родителем самого себя', {
+      throw new EtnError('VALIDATION_ERROR', "a type cannot be its own parent", {
         entity: 'type',
         id: typeId,
       });
     }
     if (subtreeIds(ndb, table, typeId).includes(parentId)) {
-      throw new EtnError('VALIDATION_ERROR', 'родительский тип не может быть подчинённым этого типа', {
+      throw new EtnError('VALIDATION_ERROR', "the parent type cannot be a descendant of this type", {
         entity: 'type',
         id: typeId,
         parent_id: parentId,
@@ -307,7 +307,7 @@ export function assertParentValid(
   if (parentDepth + subtree > MAX_TYPE_DEPTH) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `вложенность типов ограничена ${MAX_TYPE_DEPTH} уровнями, включая корневой тип`,
+      `type nesting is limited to ${MAX_TYPE_DEPTH} levels including the root type`,
       { entity: 'type', id: typeId, parent_id: parentId },
     );
   }

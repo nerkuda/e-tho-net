@@ -106,7 +106,7 @@ export function createAuthPreHandler(
       sendEtnError(
         reply,
         'RATE_LIMITED',
-        'Слишком много неудачных попыток входа. Попробуйте позже.',
+        "Too many failed sign-in attempts. Try again later.",
         { retry_after_seconds: retryAfter },
         requestId,
       );
@@ -236,7 +236,7 @@ function replyAuthFailure(reply: FastifyReply, requestId: string, result: RateLi
     sendEtnError(
       reply,
       'RATE_LIMITED',
-      'Слишком много неудачных попыток входа. Попробуйте позже.',
+      "Too many failed sign-in attempts. Try again later.",
       { retry_after_seconds: result.retryAfterSeconds },
       requestId,
     );
@@ -245,7 +245,7 @@ function replyAuthFailure(reply: FastifyReply, requestId: string, result: RateLi
   sendEtnError(
     reply,
     'UNAUTHORIZED',
-    'Недействительный или отсутствующий API-key.',
+    "Invalid or missing API key.",
     undefined,
     requestId,
   );

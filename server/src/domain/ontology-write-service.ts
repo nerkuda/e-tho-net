@@ -338,7 +338,7 @@ function narrowDefaultValue(value: unknown, field: string): PropertyValueValue {
   if (!isScalar && !isLinkDefault) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'default_value должен быть строкой, числом, булевым, массивом id мыслей (свойство-связь) или null',
+      "default_value must be a string, number, boolean, an array of thought ids (a link property) or null",
       { field },
     );
   }
@@ -602,7 +602,7 @@ function resolveTypeProperties(
       if (oppositeSet.has(ref) && !validSet.has(ref)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `type_ref "${ref}" указывает на ${item.owner === 'thought_type' ? 'link_type' : 'thought_type'}, но owner=${item.owner}`,
+          `type_ref "${ref}" points to ${item.owner === 'thought_type' ? 'link_type' : 'thought_type'}, but owner=${item.owner}`,
           { field: `type_properties[${index}].type_ref` },
         );
       }
@@ -839,7 +839,7 @@ function validateRefHierarchy(
       if (t === 1) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `цикл в parent_ref: иерархия ${sectionLabel} должна быть деревом`,
+          `cycle in parent_ref: the ${sectionLabel} hierarchy must be a tree`,
           { cycle: Array.from(color.keys()).filter((k) => color.get(k) === 1) },
         );
       }
@@ -868,7 +868,7 @@ function validateRefHierarchy(
   if (depth > 4) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `вложенность типов ограничена 4 уровнями, включая корневой тип (${sectionLabel})`,
+      `type nesting is limited to 4 levels including the root type (${sectionLabel})`,
       { depth },
     );
   }
@@ -1130,7 +1130,7 @@ export function writeOntology(
         // приведён к тому же контракту (ошибка 1eb2a430).
         if (existing.is_root) {
           if (item.parent.kind !== 'unchanged') {
-            throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
+            throw new EtnError('VALIDATION_ERROR', "the root type has no parent", {
               entity: 'thought_type',
               id,
               field: `thought_types[${item.index}].parent`,
@@ -1253,7 +1253,7 @@ export function writeOntology(
         // связи родителя не назначают — `VALIDATION_ERROR` (как REST PATCH).
         if (existing.is_root) {
           if (item.parent.kind !== 'unchanged') {
-            throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
+            throw new EtnError('VALIDATION_ERROR', "the root type has no parent", {
               entity: 'link_type',
               id,
               field: `link_types[${item.index}].parent`,
@@ -1674,7 +1674,7 @@ export function writeOntology(
       if (resolvedId === undefined) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          `ref_for_update "${item.ref_for_update}" не удалось разрешить в этом батче`,
+          `ref_for_update "${item.ref_for_update}" could not be resolved in this batch`,
           { field: `type_views[${item.index}].ref_for_update` },
         );
       }

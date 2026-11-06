@@ -79,13 +79,13 @@ const JSON_MIME = 'application/json';
 
 /** Render a thought's comments as Markdown (05 §3: comments as Markdown). */
 function commentsMarkdown(title: string, comments: Comment[]): string {
-  const lines: string[] = [`# Комментарии: ${title}`, ''];
+  const lines: string[] = [`# Comments: ${title}`, ''];
   if (comments.length === 0) {
-    lines.push('_Комментариев нет._');
+    lines.push('_No comments._');
     return lines.join('\n');
   }
   for (const c of comments) {
-    const heading = c.title ?? (c.kind === 'permanent' ? 'Постоянный' : 'Хронология');
+    const heading = c.title ?? (c.kind === 'permanent' ? 'Permanent' : 'Chronological');
     lines.push(`## ${heading}`);
     const range =
       c.kind === 'chronological'
@@ -108,9 +108,9 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     'etn.networks',
     'etn://networks',
     {
-      title: 'Доступные сети',
+      title: 'Available networks',
       description:
-        'Список сетей, участником которых является пользователь ключа, с ролью в каждой.',
+        'The networks the key user is a member of, with the role in each.',
       mimeType: JSON_MIME,
     },
     (uri) =>
@@ -125,8 +125,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     'etn.network.meta',
     new ResourceTemplate('etn://networks/{network_id}', { list: undefined }),
     {
-      title: 'Метаданные сети',
-      description: 'Реестровая запись сети и роль пользователя ключа в ней.',
+      title: 'Network metadata',
+      description: 'The network registry record and the key user role in it.',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -147,11 +147,11 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     'etn.thought',
     new ResourceTemplate('etn://networks/{network_id}/thoughts/{thought_id}', { list: undefined }),
     {
-      title: 'Мысль (полная)',
+      title: 'Thought (full)',
       description:
-        'Мысль целиком: свойства, синонимы, тип (с описанием для AI), стили и значения свойств. ' +
-        'Блок `meta` — счётчики связей/вложений/хроники и **полный** текст постоянного ' +
-        'комментария (как у `etn.thoughts.get`).',
+        'The thought in full: properties, synonyms, type (with AI description), styles and property values. ' +
+        'The `meta` block — link/attachment/chronicle counters and the **full** text of the permanent ' +
+        'comment (same as `etn.thoughts.get`).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -189,10 +189,10 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       list: undefined,
     }),
     {
-      title: 'Соседи мысли',
+      title: 'Thought neighbors',
       description:
-        'Родители, дети и «братья/сёстры» мысли (как на канве фокуса), плюс каталоги ' +
-        'использованных типов (`link_types`/`thought_types` с описаниями для AI).',
+        'Parents, children and siblings of the thought (as on the focus canvas), plus the catalogues ' +
+        'of the types used (`link_types`/`thought_types` with AI descriptions).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -232,10 +232,10 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       list: undefined,
     }),
     {
-      title: 'Использование мысли',
+      title: 'Thought usage',
       description:
-        'Мысли, ссылающиеся на эту через свойства-связи (формальные связи, ' +
-        '«Использование» в редакторе), сгруппированные по свойству.',
+        'Thoughts referencing this one through link properties (formal links, ' +
+        '"Usage" in the editor), grouped by property.',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -255,13 +255,13 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       list: undefined,
     }),
     {
-      title: 'Ссылки на мысль',
+      title: 'References to the thought',
       description:
-        'Комментарии, в body_md которых есть явная ID-ссылка [[#<id>]] или ' +
-        '[[n:<net>#<id>]] на эту мысль (фаза R). Семантически отличается от ' +
-        'упоминаний по имени/синониму (`etn.ops { action: "thoughts.mentions" }`, ' +
-        'FTS по title/synonyms) — здесь явный UUID. ' +
-        'Возвращает массив MentionHit (один элемент на (owner_type, owner_id)).',
+        'Comments whose body_md contains an explicit ID reference [[#<id>]] or ' +
+        '[[n:<net>#<id>]] to this thought (phase R). Semantically different from ' +
+        'mentions by name/synonym (`etn.ops { action: "thoughts.mentions" }`, ' +
+        'FTS over title/synonyms) — here it is an explicit UUID. ' +
+        'Returns a MentionHit array (one item per (owner_type, owner_id)).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -281,8 +281,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       list: undefined,
     }),
     {
-      title: 'Комментарии мысли (Markdown)',
-      description: 'Постоянный и хронологические комментарии мысли в виде Markdown.',
+      title: 'Thought comments (Markdown)',
+      description: 'The permanent and chronological comments of the thought as Markdown.',
       mimeType: 'text/markdown',
     },
     (uri, vars) =>
@@ -311,8 +311,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       list: undefined,
     }),
     {
-      title: 'Вложения мысли',
-      description: 'Список вложений (url/file) мысли.',
+      title: 'Thought attachments',
+      description: 'The list of thought attachments (url/file).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -333,8 +333,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       list: undefined,
     }),
     {
-      title: 'Вложения публикации',
-      description: 'Список вложений (url/file) публикации.',
+      title: 'Publication attachments',
+      description: 'The list of publication attachments (url/file).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -354,8 +354,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     'etn.link',
     new ResourceTemplate('etn://networks/{network_id}/links/{link_id}', { list: undefined }),
     {
-      title: 'Связь (с метаданными)',
-      description: 'Связь между мыслями с её типом (включая описание типа).',
+      title: 'Link (with metadata)',
+      description: 'A link between thoughts with its type (including the type description).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -377,10 +377,10 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     'etn.trash',
     new ResourceTemplate('etn://networks/{network_id}/trash', { list: undefined }),
     {
-      title: 'Корзина сети',
+      title: 'Network basket',
       description:
-        'Помеченные на удаление мысли и связи сети, каждая — с предрасчитанной блокировкой ' +
-        '(S13; вызов — `etn.ops { action: "trash.list" }`).',
+        'Thoughts and links of the network marked for deletion, each with a precomputed block ' +
+        '(S13; call — `etn.ops { action: "trash.list" }`).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -395,8 +395,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     'etn.thought-types',
     new ResourceTemplate('etn://networks/{network_id}/thought-types', { list: undefined }),
     {
-      title: 'Типы мыслей',
-      description: 'Все определения типов мыслей сети (с description для AI).',
+      title: 'Thought types',
+      description: 'All thought type definitions of the network (with description for AI).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -411,8 +411,8 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
     'etn.link-types',
     new ResourceTemplate('etn://networks/{network_id}/link-types', { list: undefined }),
     {
-      title: 'Типы связей',
-      description: 'Все определения типов связей сети (с description для AI).',
+      title: 'Link types',
+      description: 'All link type definitions of the network (with description for AI).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>
@@ -428,14 +428,14 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
       list: undefined,
     }),
     {
-      title: 'Тип мысли (свойства и описание)',
+      title: 'Thought type (properties and description)',
       description:
-        'Один тип мысли: определение, `description` для AI-контекста и **эффективные** привязки ' +
-        'свойств — собственные плюс унаследованные от предков (L21, 02-data-model.md §3.4.1). ' +
-        'Каждая запись несёт `property_id` реестрового свойства, `defined_on` (на каком типе ' +
-        'привязка объявлена), `inherited`, `default_value` с учётом override-цепочки и ' +
-        '`description_overridden` (description-override этого типа). Это та же форма, ' +
-        'что отдаёт `etn.types.list`, — ресурс оставлен для совместимости.',
+        'One thought type: the definition, `description` for AI context and the **effective** property ' +
+        'bindings — own plus inherited from ancestors (L21, 02-data-model.md §3.4.1). ' +
+        'Each record carries the `property_id` of the registry property, `defined_on` (on which type ' +
+        'the binding is declared), `inherited`, `default_value` with the override chain and ' +
+        '`description_overridden` (the description override of this type). This is the same shape ' +
+        'that `etn.types.list` returns — the resource is kept for compatibility.',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>

@@ -226,15 +226,58 @@ interface EditorTabDef {
 /**
  * Tab set of the thought editor — the full set, порядок фиксирован
  * (08-ui-spec.md §6.3). Не менять порядок: на него опираются тесты вёрстки.
+ * Подписи — геттеры: текст берётся в момент рендера (ошибка ebed42d3).
  */
 const TABS_THOUGHT: EditorTabDef[] = [
-  { id: 'main', title: 'Комментарий', counted: false },
-  { id: 'properties', title: 'Свойства', counted: false },
-  { id: 'attachments', title: 'Вложения', counted: true },
-  { id: 'links', title: 'Упоминания', counted: false },
-  { id: 'chrono', title: 'Дневник', counted: true },
-  { id: 'graph', title: 'Граф', counted: false },
-  { id: 'metadata', title: 'Метаданные', counted: false },
+  {
+    id: 'main',
+    get title() {
+      return t('comment.title.kommentariy');
+    },
+    counted: false,
+  },
+  {
+    id: 'properties',
+    get title() {
+      return t('editor.title.properties');
+    },
+    counted: false,
+  },
+  {
+    id: 'attachments',
+    get title() {
+      return t('editor.title.attachments');
+    },
+    counted: true,
+  },
+  {
+    id: 'links',
+    get title() {
+      return t('editor.title.mentions');
+    },
+    counted: false,
+  },
+  {
+    id: 'chrono',
+    get title() {
+      return t('editor.title.dnevnik');
+    },
+    counted: true,
+  },
+  {
+    id: 'graph',
+    get title() {
+      return t('editor.title.graph');
+    },
+    counted: false,
+  },
+  {
+    id: 'metadata',
+    get title() {
+      return t('editor.title.metadata');
+    },
+    counted: false,
+  },
 ];
 
 /**
@@ -244,9 +287,27 @@ const TABS_THOUGHT: EditorTabDef[] = [
  * мысли, чтобы предпочтение активной вкладки не сбрасывалось).
  */
 const TABS_LINK: EditorTabDef[] = [
-  { id: 'main', title: 'Комментарий', counted: false },
-  { id: 'links', title: 'Мысли', counted: false },
-  { id: 'metadata', title: 'Метаданные', counted: false },
+  {
+    id: 'main',
+    get title() {
+      return t('comment.title.kommentariy');
+    },
+    counted: false,
+  },
+  {
+    id: 'links',
+    get title() {
+      return t('editor.title.thought');
+    },
+    counted: false,
+  },
+  {
+    id: 'metadata',
+    get title() {
+      return t('editor.title.metadata');
+    },
+    counted: false,
+  },
 ];
 
 /**
@@ -768,11 +829,11 @@ export function mountEditor(editorHost: HTMLElement): void {
   positionButton = uiButton({
     label: '',
     size: 's',
-    title: 'Положение редактора',
+    title: t('editor.title.polozhenieEditor'),
     onClick: () => void openPositionMenu(),
   });
   positionButton.append(svgIcon('chevron-down', 12));
-  positionButton.setAttribute('aria-label', 'Положение редактора');
+  positionButton.setAttribute('aria-label', t('editor.title.polozhenieEditor'));
   header.append(titleEl, positionButton);
   scrollBox = div('editor-scroll');
   // Carries the saved list max-heights as --clamp-* variables (ee745368).
@@ -990,7 +1051,7 @@ function buildTabPane(id: EditorTabId): HTMLElement {
       .map((section) => section(ctx, lifecycle))
       .filter((spec): spec is GroupSpec => spec !== null);
     if (specs.length === 0) {
-      pane.append(el('p', 'muted', 'Нет содержимого.'));
+      pane.append(el('p', 'muted', t('editor.noSoderzhimogo')));
       return pane;
     }
     if (specs.length === 1) {
@@ -1036,7 +1097,7 @@ function buildTabPane(id: EditorTabId): HTMLElement {
   }
   const builder = tabContentBuilders.get(id);
   pane.append(
-    builder !== undefined ? builder(ctx, lifecycle) : el('p', 'muted', 'Нет содержимого.'),
+    builder !== undefined ? builder(ctx, lifecycle) : el('p', 'muted', t('editor.noSoderzhimogo')),
   );
   return pane;
 }
@@ -1379,7 +1440,7 @@ function buildTrashTitleMark(thought: Thought): HTMLElement {
   const mark = el('button', 'editor-trash-mark') as HTMLButtonElement;
   mark.type = 'button';
   mark.append(svgIcon('trash', 14));
-  setTooltip(mark, 'Мысль в корзине. Нажмите для восстановления или удаления');
+  setTooltip(mark, t('editor.thoughtTrashClickRestoreDelete'));
   mark.addEventListener('click', (event) => {
     event.stopPropagation();
     const networkId = store.state.networkId;
@@ -1398,7 +1459,7 @@ function updateTitleEl(ctx: EditorContext | null): void {
   if (ctx !== null && ctx.ownerType === 'thought' && ctx.thought?.marked_for_deletion === true) {
     titleEl.append(buildTrashTitleMark(ctx.thought));
   }
-  titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? 'Связь' : 'Мысль');
+  titleEl.append(ctx === null ? '' : ctx.ownerType === 'link' ? t('editor.link') : t('editor.thought'));
 }
 
 /**
@@ -1829,7 +1890,7 @@ function renderFull(ctx: EditorContext | null): void {
 
   if (ctx === null) {
     const empty = div('editor-empty');
-    empty.textContent = 'Выберите мысль или связь.';
+    empty.textContent = t('editor.selectThoughtLink');
     scrollBox.append(empty);
     return;
   }
@@ -2094,11 +2155,11 @@ async function openPositionMenu(): Promise<void> {
   if (positionButton === null) return;
   const positions: Array<{ value: 'left' | 'right' | 'top' | 'bottom' | 'hidden'; label: string }> =
     [
-      { value: 'right', label: 'Справа' },
-      { value: 'left', label: 'Слева' },
-      { value: 'top', label: 'Сверху' },
-      { value: 'bottom', label: 'Снизу' },
-      { value: 'hidden', label: 'Скрыть' },
+      { value: 'right', label: t('editor.label.sprava') },
+      { value: 'left', label: t('editor.label.sleva') },
+      { value: 'top', label: t('editor.label.sverhu') },
+      { value: 'bottom', label: t('editor.label.snizu') },
+      { value: 'hidden', label: t('editor.label.hide') },
     ];
   const items: MenuItem[] = positions.map((p) => ({
     label: p.label,
@@ -2285,9 +2346,9 @@ async function saveThought(patch: ThoughtUpdateInput): Promise<boolean> {
   } catch (err) {
     if (isVersionConflict(err)) {
       await refreshFocus().catch(() => undefined);
-      notice('⚠ Мысль изменена другим пользователем — данные обновлены.', 'error');
+      notice(t('editor.thoughtChangedDrugimPolzovatelemDannyeObnovleny'), 'error');
     } else {
-      notice(`Не удалось сохранить: ${errText(err)}`, 'error');
+      notice(t('chronoTab.notSucceededSave', errText(err)), 'error');
     }
     return false;
   }
@@ -2324,9 +2385,9 @@ async function saveLink(link: Link, patch: LinkUpdateInput): Promise<boolean> {
     return true;
   } catch (err) {
     if (isVersionConflict(err)) {
-      notice('⚠ Связь изменена другим пользователем.', 'error');
+      notice(t('editor.linkChangedDrugimPolzovatelem'), 'error');
     } else {
-      notice(`Не удалось сохранить: ${errText(err)}`, 'error');
+      notice(t('chronoTab.notSucceededSave', errText(err)), 'error');
     }
     return false;
   }
@@ -2387,14 +2448,14 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   const iconBox = el('button', 'editor-icon-box') as HTMLButtonElement;
   iconBox.type = 'button';
   applyThoughtIcon(iconBox, thought);
-  setTooltip(iconBox, 'Изменить иконку');
+  setTooltip(iconBox, t('contextMenu.editIcon'));
   iconBox.addEventListener('click', () => void changeThoughtIcon(thought));
 
   const titleArea = fieldTextarea({ extraClass: 'editor-title-input', bare: true }) as HTMLTextAreaElement;
   titleArea.value = thought.title;
   titleArea.maxLength = 400;
   titleArea.rows = 1;
-  titleArea.placeholder = 'Заголовок';
+  titleArea.placeholder = t('chronoTab.title');
   // A trashed thought shows its title struck-through (S13, 08-ui-spec.md
   // §6.2.1): the field stays fully editable — only the rendering is crossed
   // out, mirroring the dimmed canvas cloud.
@@ -2452,7 +2513,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     titleArea.value = hit.value;
     titleDraftId = hit.id;
     resizeTitle();
-    notice('Восстановлен несохранённый черновик заголовка.');
+    notice(t('editor.vosstanovlenNesohranennyyChernovikTitle'));
   });
 
   const commitTitle = (): void => {
@@ -2502,10 +2563,10 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
 
   const settingsBtn = iconButton({
     icon: svgIcon('settings', 14),
-    title: 'Цвет и стиль',
+    title: t('editor.title.cvetStil'),
     onClick: () => openThoughtSettings(thought),
   });
-  settingsBtn.setAttribute('aria-label', 'Настройки мысли');
+  settingsBtn.setAttribute('aria-label', t('editor.settingsThought'));
 
   topRow.append(iconBox, titleArea, settingsBtn);
   box.append(topRow);
@@ -2514,7 +2575,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   const synonymsInput = fieldInput({ extraClass: 'synonyms-input' });
   synonymsInput.type = 'text';
   synonymsInput.value = thought.synonyms.join(', ');
-  synonymsInput.placeholder = 'Синонимы (через запятую)';
+  synonymsInput.placeholder = t('editor.synonymsViaZapyatuyu');
   const commitSynonyms = (): void => {
     const synonyms = parseSynonymsField(synonymsInput.value);
     if (synonymsEqual(synonyms, thought.synonyms)) return;
@@ -2572,8 +2633,8 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     networkId,
     kind: 'thought-types',
     value: thought.type_id,
-    placeholder: 'без типа',
-    emptyLabel: 'без типа',
+    placeholder: t('addDialog.placeholder.withoutType'),
+    emptyLabel: t('addDialog.placeholder.withoutType'),
     onChange: (typeId) => {
       void saveThought({ type_id: typeId }).then((ok) => {
         const focusComment = focusCommentAfterTypeSave;
@@ -2589,7 +2650,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     },
   });
 
-  const activeRow = checkboxRow({ label: 'актуально', checked: thought.active });
+  const activeRow = checkboxRow({ label: t('editor.label.aktualno'), checked: thought.active });
   const activeLabel = activeRow.row;
   const activeCheck = activeRow.input;
   activeCheck.disabled = thought.is_protected && thought.is_root; // HOME always active
@@ -2601,7 +2662,7 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   // облачка: «В фокус», toggle выделения, toggle закрепления. Меню открывается
   // и с клавиатуры (Enter/Space).
   const actionsBtn = uiButton({
-    label: 'Действия ▾',
+    label: t('editor.label.actions'),
     role: 'secondary',
     size: 's',
     onClick: () => void openThoughtActionsMenu(thought, actionsBtn),
@@ -2662,7 +2723,7 @@ function focusOnMapFromMenu(
     return;
   }
   void focusOnMap(thoughtId).catch((error: unknown) => {
-    console.error('[editor] не удалось открыть карту мыслей', error);
+    console.error('[editor] не удалось открыть карту мыслей', error); // i18n: technical — диагностика для разработчика
     notice(t('editor.focusOnMapFailed', errText(error)), 'error');
   });
 }
@@ -2786,7 +2847,7 @@ async function savePickedIcon(
       });
       attachmentId = attachment.id;
     } catch (err) {
-      notice(`Не удалось загрузить файл во вложения: ${errText(err)}`, 'error');
+      notice(t('editor.notSucceededLoadFileAttachments', errText(err)), 'error');
       return false;
     }
     // The attachments tab (if built) reloads and the 📎 indicator repaints —
@@ -2827,16 +2888,16 @@ function buildThoughtHeaderLoading(thoughtId: string): HTMLElement {
   const topRow = div('editor-top-row');
 
   const iconBox = el('span', 'editor-icon-box editor-icon-loading');
-  iconBox.setAttribute('aria-label', 'Загрузка мысли');
+  iconBox.setAttribute('aria-label', t('editor.loadingThought'));
   iconBox.append(svgIcon('loader', 18));
   topRow.append(iconBox);
 
   const titleArea = fieldTextarea({ extraClass: 'editor-title-input', bare: true }) as HTMLTextAreaElement;
-  titleArea.value = `…загрузка ${thoughtId.slice(0, 8)}`;
+  titleArea.value = t('editor.loading', thoughtId.slice(0, 8));
   titleArea.maxLength = 400;
   titleArea.rows = 1;
   titleArea.readOnly = true;
-  titleArea.placeholder = 'Заголовок';
+  titleArea.placeholder = t('chronoTab.title');
   titleArea.style.height = 'auto';
   titleArea.style.height = `${titleArea.scrollHeight}px`;
   topRow.append(titleArea);
@@ -2860,7 +2921,7 @@ function buildLinkHeaderLoading(linkId: string): HTMLElement {
   headerShapeKey = 'link|@loading';
   const box = div('editor-fields');
   const row = div('editor-header-row');
-  const placeholder = el('span', 'muted editor-icon-loading', `…загрузка связи ${linkId.slice(0, 8)}`);
+  const placeholder = el('span', 'muted editor-icon-loading', t('editor.loadingLink', linkId.slice(0, 8)));
   row.append(placeholder);
   box.append(row);
   return box;
@@ -2889,8 +2950,8 @@ function buildLinkHeader(initial: Link): HTMLElement {
     networkId,
     kind: 'link-types',
     value: link.type_id,
-    placeholder: 'без типа',
-    emptyLabel: 'без типа',
+    placeholder: t('addDialog.placeholder.withoutType'),
+    emptyLabel: t('addDialog.placeholder.withoutType'),
     onChange: (typeId) => {
       void saveLink(link, { type_id: typeId }).then((ok) => {
         const focusComment = focusCommentAfterTypeSave;
@@ -2922,11 +2983,11 @@ function buildLinkHeader(initial: Link): HTMLElement {
 
   const settingsBtn = iconButton({
     icon: svgIcon('settings', 14),
-    title: 'Цвет и стиль линии',
+    title: t('editor.title.cvetStilLinii'),
     onClick: () => openLinkSettings(link),
   });
 
-  const activeRow = checkboxRow({ label: 'актуально', checked: link.active });
+  const activeRow = checkboxRow({ label: t('editor.label.aktualno'), checked: link.active });
   const activeLabel = activeRow.row;
   const activeCheck = activeRow.input;
   activeCheck.addEventListener('change', () => {

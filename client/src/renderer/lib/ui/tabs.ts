@@ -71,6 +71,12 @@ export interface TabsHandle {
   activeId(): string;
   /** Обновляет счётчик `(N)` вкладки; `undefined` — бейдж скрывается. */
   setCount(id: string, count: number | undefined): void;
+  /**
+   * Обновляет подпись вкладки (смена языка интерфейса — задача 7e5099ed):
+   * текст меняется на месте, бейдж счётчика сохраняется. `id`
+   * отсутствующего/чужого владельца — no-op.
+   */
+  setLabel(id: string, label: string): void;
 }
 
 /** Счётчик для уникальных id вкладок и панелей (aria-связи). */
@@ -143,6 +149,21 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
     }
     badge.textContent = `(${count})`;
     badge.classList.remove('hidden');
+  }
+
+  /**
+   * Обновляет подпись вкладки, не теряя бейдж счётчика: текст — первым
+   * дочерним узлом, бейдж остаётся на месте (задача 7e5099ed — живая смена
+   * языка открытого диалога). `replaceChildren` не используется: полная
+   * пересборка коллекции в `lib/ui/**` запрещена сторожем 6952c619, а здесь
+   * меняется подпись одной вкладки.
+   */
+  function setLabel(id: string, label: string): void {
+    const btn = buttons.get(id);
+    if (btn === undefined) return;
+    const badge = countBadges.get(id);
+    btn.textContent = label;
+    if (badge !== undefined) btn.append(badge);
   }
 
   const focusAt = (index: number): void => {
@@ -236,5 +257,6 @@ export function uiTabs(opts: TabsOptions): TabsHandle {
     setActive: (id: string): void => activate(id, true),
     activeId: (): string => active,
     setCount,
+    setLabel,
   };
 }

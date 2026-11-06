@@ -48,7 +48,7 @@ export function createInstructionsRoutes(deps: RouteDeps): FastifyPluginAsync {
 
         const network = app.systemDb.getNetworkById(input.network_id);
         if (network === null) {
-          throw new EtnError('NOT_FOUND', 'Сеть не найдена.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Network not found.", undefined, req.id);
         }
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         // REST-парсер repeatable-массива кладёт `[]` при отсутствии параметра —

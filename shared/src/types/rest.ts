@@ -73,10 +73,58 @@ export type UpdateJobStage =
   | 'failed';
 
 /**
+ * Машиночитаемые причины сбоя задания обновления сервера — `UpdateJob.reason`
+ * (задача 4f6c972a, ADR daab6ac4 §4).
+ *
+ * `error` задания — английский диагностический текст для разработчиков,
+ * агентов и журналов; пользовательский текст клиент строит по ЭТИМ значениям
+ * (и параметрам `failed_stage`/`exit_code`/`log_path`), не разбирая `error`.
+ * Значения — протокольные идентификаторы, не локализуются (ADR §6).
+ *
+ *   * `installer-target` — runner не принял целевой ассет (не-HTTPS, нет
+ *     ссылки/хеша);
+ *   * `installer-download` — установщик не скачался;
+ *   * `installer-hash` — SHA-256 скачанного установщика не сошёлся;
+ *   * `installer-launch` — процесс установщика не стартовал;
+ *   * `installer-exit` — установщик завершился ненулевым кодом (`exit_code`),
+ *     откат выполнил он же;
+ *   * `installer-precondition` — код 20: установщику нужен ручной режим;
+ *   * `installer-timeout` — установщик не уложился в тайм-аут и оставлен
+ *     работать;
+ *   * `not-a-service` — сервер запущен не службой Windows, автообновление
+ *     невозможно (сценарий 6b7c09a9);
+ *   * `interrupted` — задание восстановлено при старте сервера: цель не
+ *     достигнута, задание не возобновляется (`failed_stage` — где остановилось);
+ *   * `internal` — непредвиденная ошибка задания.
+ */
+export const UPDATE_JOB_FAILURE_REASONS = [
+  'installer-target',
+  'installer-download',
+  'installer-hash',
+  'installer-launch',
+  'installer-exit',
+  'installer-precondition',
+  'installer-timeout',
+  'not-a-service',
+  'interrupted',
+  'internal',
+] as const;
+export type UpdateJobFailureReason = (typeof UPDATE_JOB_FAILURE_REASONS)[number];
+
+/** Значение из `reason` задания — известная причина сбоя? */
+export function isUpdateJobFailureReason(value: unknown): value is UpdateJobFailureReason {
+  return (
+    typeof value === 'string' &&
+    (UPDATE_JOB_FAILURE_REASONS as readonly string[]).includes(value)
+  );
+}
+
+/**
  * Задание обновления сервера в том виде, в каком его отдают admin-эндпоинты
- * (`POST /system/update/apply`, `GET /system/update/progress`) — ровно поля
- * сущности 1f39811c. Контракт общий: сервер собирает payload этим типом,
- * клиент читает его же (стандарт 01268f2d).
+ * (`POST /system/update/apply`, `GET /system/update/progress`) — поля
+ * сущности 1f39811c плюс машиночитаемая причина сбоя (задача 4f6c972a).
+ * Контракт общий: сервер собирает payload этим типом, клиент читает его же
+ * (стандарт 01268f2d).
  */
 export interface UpdateJob {
   id: string;
@@ -85,11 +133,33 @@ export interface UpdateJob {
   /** ISO-8601 момента создания задания. */
   started_at: string;
   /**
-   * Причина сбоя (`failed`). У восстановленного после перезапуска задания
-   * `done` — справочное пояснение итога (какая версия достигнута, когда);
-   * `null` — сбоя и пояснения нет (сущность 1f39811c).
+   * Английский диагностический текст сбоя (`failed`). У восстановленного
+   * после перезапуска задания `done` — справочное пояснение итога (какая
+   * версия достигнута, когда); `null` — сбоя и пояснения нет (сущность
+   * 1f39811c). Пользователю не показывается: причина строится по `reason`,
+   * а когда поля нет (задания, сохранённые до его появления), клиент
+   * показывает общий локализованный текст; из `error` берётся только путь
+   * к журналу установщика (ADR daab6ac4 §4).
    */
   error: string | null;
+  /**
+   * Машиночитаемая причина сбоя (`failed`); `null` — сбоя нет либо задание
+   * сохранено до появления поля. Пользовательский текст строится по ней.
+   */
+  reason: UpdateJobFailureReason | null;
+  /**
+   * Этап, на котором задание остановилось: для `interrupted` — последний
+   * записанный этап до перезапуска процесса, для остальных сбоев — этап в
+   * момент отказа. `null` — сбой не связан с этапом либо неизвестен.
+   */
+  failed_stage: UpdateJobStage | null;
+  /**
+   * Код возврата установщика (`installer-exit`); `null` — кода нет или сбой
+   * произошёл до/без запуска установщика.
+   */
+  exit_code: number | null;
+  /** Путь к журналу установщика; `null` — журнал не найден или не искался. */
+  log_path: string | null;
   /** Путь к архиву БД; `null` — неизвестен (архив создаёт установщик). */
   backup_path: string | null;
 }

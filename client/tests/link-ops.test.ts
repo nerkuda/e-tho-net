@@ -8,6 +8,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { EtnError } from '@etn/shared';
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const { ensureLink, unlinkParents, unlinkChildren, setOnlyParents, throwOnFailures } =
@@ -69,15 +71,29 @@ describe('lib/link-ops — пакетные payload' + 'ы рёбер (6dcd6db7)
     ]);
   });
 
-  it('throwOnFailures passes on success and throws the first failure message', () => {
+  it('throwOnFailures passes on success and throws the first failure as EtnError', () => {
     assert.doesNotThrow(() => throwOnFailures({ affected: 1, failures: [] }));
     assert.throws(
       () =>
         throwOnFailures({
           affected: 0,
-          failures: [{ id: 'x', code: 'VALIDATION_ERROR', message: 'нет мысли' }],
+          failures: [
+            {
+              id: 'x',
+              code: 'VALIDATION_ERROR',
+              message: 'No link between a and b.',
+              details: { reason: 'no-link' },
+            },
+          ],
         }),
-      /нет мысли/,
+      (err: unknown) =>
+        err instanceof EtnError &&
+        err.code === 'VALIDATION_ERROR' &&
+        // Сообщение сохраняется диагностикой, но код/детали — то, по чему
+        // клиент строит пользовательский текст (ADR daab6ac4 §4).
+        err.message === 'No link between a and b.' &&
+        (err.details as { reason?: string }).reason === 'no-link',
+      'отказ DTO пробрасывается как EtnError с кодом и details',
     );
   });
 });

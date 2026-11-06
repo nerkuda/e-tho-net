@@ -76,20 +76,20 @@ async function exportSingleThought(networkId: string, thoughtId: string): Promis
       format: 'etnx',
       etnx: dialog.options,
     });
-    notice(`Экспорт запущен (${job_id})…`);
+    notice(t('contextMenu.exportZapuschen', job_id));
     const job = await pollJob(job_id);
     if (job.status !== 'done') {
-      notice('Экспорт завершился с ошибкой.', 'error');
+      notice(t('contextMenu.exportZavershilsyaOshibkoy'), 'error');
       return;
     }
     const result = await etn.system.downloadExport(job_id, '', dialog.targetPath);
     if (result.error !== undefined) {
-      notice(`Не удалось сохранить файл: ${result.error}`, 'error');
+      notice(t('contextMenu.notSucceededSaveFile', result.error), 'error');
       return;
     }
-    notice(`Экспорт сохранён: ${result.saved_path}`);
+    notice(t('contextMenu.exportSaved', String(result.saved_path)));
   } catch (err) {
-    notice(`Экспорт не удался: ${errText(err)}`, 'error');
+    notice(t('contextMenu.exportNotSucceeded', errText(err)), 'error');
   }
 }
 
@@ -106,12 +106,12 @@ async function importToThought(networkId: string, parentThoughtId: string): Prom
   try {
     picked = await etn.system.pickArchiveFile();
   } catch (err) {
-    notice(`Импорт не удался: ${errText(err)}`, 'error');
+    notice(t('contextMenu.importNotSucceeded', errText(err)), 'error');
     return;
   }
   if (picked.cancelled) return;
   if (picked.error !== undefined || picked.filePath === null) {
-    notice(`Импорт не удался: ${picked.error ?? 'файл не выбран'}`, 'error');
+    notice(t('contextMenu.importNotSucceeded', picked.error ?? t('contextMenu.fileNotSelected')), 'error');
     return;
   }
   const dialog = await showImportEtnxDialog(picked.filePath);
@@ -125,16 +125,15 @@ async function importToThought(networkId: string, parentThoughtId: string): Prom
     );
     if (result.cancelled) return;
     if (result.error !== undefined) {
-      notice(`Импорт не удался: ${result.error}`, 'error');
+      notice(t('contextMenu.importNotSucceeded', result.error), 'error');
       return;
     }
     const s = result.summary;
     notice(
-      `Импорт ${result.filename}: создано ${s.thoughts_created}, обновлено ${s.thoughts_updated}, ` +
-        `новых связей ${s.links_created}, вложений ${s.attachments_imported}.`,
+      t('contextMenu.importCreatedObnovlenoNovyhLinksAttachments', [result.filename, s.thoughts_created, s.thoughts_updated, s.links_created, s.attachments_imported]),
     );
   } catch (err) {
-    notice(`Импорт не удался: ${errText(err)}`, 'error');
+    notice(t('contextMenu.importNotSucceeded', errText(err)), 'error');
   }
 }
 
@@ -210,9 +209,9 @@ export function showLinkContextMenu(event: MouseEvent, linkId: string): void {
 /** Builds the link menu items: properties / activity / invert / delete. */
 function buildLinkMenuItems(networkId: string, linkId: string): MenuItem[] {
   return [
-    menuAction('Изменить свойства', () => void openLinkSettings(networkId, linkId)),
-    menuAction('Изменить актуальность', () => void toggleLinkActive(networkId, linkId)),
-    menuAction('Инвертировать', () => void invertLink(networkId, linkId)),
+    menuAction(t('contextMenu.editProperties'), () => void openLinkSettings(networkId, linkId)),
+    menuAction(t('contextMenu.editActive'), () => void toggleLinkActive(networkId, linkId)),
+    menuAction(t('contextMenu.invert'), () => void invertLink(networkId, linkId)),
     MENU_SEPARATOR,
     menuAction(t('actions.delete'), () => void deleteLink(networkId, linkId), { danger: true }),
   ];
@@ -224,7 +223,7 @@ async function openLinkSettings(networkId: string, linkId: string): Promise<void
     const link = await etn.links.get(networkId, linkId);
     linkSettingsHook?.(link);
   } catch (err) {
-    errorDialog('Изменить свойства', err);
+    errorDialog(t('contextMenu.editProperties'), err);
   }
 }
 
@@ -243,7 +242,7 @@ async function toggleLinkActive(networkId: string, linkId: string): Promise<void
     // (активность влияет на состав рёбер — ошибка 42a7c0a1, круг 3).
     reflectLinkUpdate(updated);
   } catch (err) {
-    errorDialog('Изменить актуальность', err);
+    errorDialog(t('contextMenu.editActive'), err);
   }
 }
 
@@ -268,13 +267,13 @@ async function invertLink(networkId: string, linkId: string): Promise<void> {
     // рёбер, видимые на графе (ошибка 42a7c0a1, круг 3).
     reflectLinkUpdate(updated);
     requestZoneAnimation();
-    notice('Связь инвертирована.');
+    notice(t('contextMenu.linkInverted'));
   } catch (err) {
     if ((err as { code?: string } | null)?.code === 'DUPLICATE') {
-      notice('В обратном направлении такая связь уже существует.');
+      notice(t('contextMenu.inObratnomNapravleniiTakayaLinkAlready'));
       return;
     }
-    errorDialog('Инвертировать связь', err);
+    errorDialog(t('contextMenu.invertLink'), err);
   }
 }
 
@@ -466,10 +465,10 @@ export function buildThoughtMenuItems(
 ): MenuItem[] {
   /** Команда «Копировать ID» — единственная, не требующая объекта мысли. */
   const copyIdItem = (): MenuItem =>
-    menuAction('Копировать ID', () => {
+    menuAction(t('contextMenu.copyId'), () => {
       void navigator.clipboard.writeText(target.id).then(
-        () => notice('ID мысли скопирован.'),
-        () => notice('Не удалось скопировать ID.'),
+        () => notice(t('contextMenu.idThoughtSkopirovan')),
+        () => notice(t('contextMenu.notSucceededCopyId')),
       );
     });
   // Мысль недоступна в сети (значение условия осталось по снапшоту имени):
@@ -540,7 +539,7 @@ export function buildThoughtMenuItems(
       ? []
       : [
           menuAction(
-            inSelection ? 'Убрать из выделенных' : 'Добавить к выделению',
+            inSelection ? t('contextMenu.removeSelection') : t('contextMenu.addVydeleniyu'),
             () => addToSelectionHook?.(target.id),
           ),
         ];
@@ -549,15 +548,15 @@ export function buildThoughtMenuItems(
     ...(opts.hideAddCommand === true
       ? []
       : [
-          menuSubmenu('Добавить', [
-            menuAction('вверх (родитель)', () =>
+          menuSubmenu(t('addDialog.applyLabel.add'), [
+            menuAction(t('contextMenu.upParent'), () =>
               openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'parent' }),
             ),
-            menuAction('вниз (ребёнок)', () =>
+            menuAction(t('contextMenu.downChild'), () =>
               openAddDialog({ anchorId: target.id, anchorTitle: target.title, direction: 'child' }),
             ),
             menuAction(
-              'налево (родственник)',
+              t('contextMenu.leftSibling'),
               () => {
                 if (siblingParentId !== null) {
                   openAddDialog({
@@ -571,43 +570,43 @@ export function buildThoughtMenuItems(
             ),
           ]),
         ]),
-    menuAction('Изменить актуальность', () => void toggleActive(networkId, target.id)),
+    menuAction(t('contextMenu.editActive'), () => void toggleActive(networkId, target.id)),
     // Submenu is enabled only while the zone is sorted «ручной» (08-ui-spec.md
     // §2.7). Siblings never accept manual order (§6.2); for parents/children
     // each row self-gates on its own position condition so the user gets a
     // precise signal of what is and is not possible right now.
     menuSubmenu(
-      'Изменить порядок',
+      t('contextMenu.editOrder'),
       [
         menuAction(
-          'сделать первой',
+          t('contextMenu.doFirst'),
           () => void moveInZone(networkId, target.id, target.dir as OrderableDir, 0),
           { disabled: !canReorder || isZoneFirst },
         ),
         menuAction(
-          'сдвинуть назад',
+          t('contextMenu.sdvinutBack'),
           () => void moveInZone(networkId, target.id, target.dir as OrderableDir, zoneIdx - 1),
           { disabled: !canReorder || isZoneFirst },
         ),
         menuAction(
-          'сдвинуть вперёд',
+          t('contextMenu.sdvinutForward'),
           () => void moveInZone(networkId, target.id, target.dir as OrderableDir, zoneIdx + 1),
           { disabled: !canReorder || isZoneLast },
         ),
         menuAction(
-          'сделать последней',
+          t('contextMenu.doLast'),
           () => void moveInZone(networkId, target.id, target.dir as OrderableDir, zoneLen - 1),
           { disabled: !canReorder || isZoneLast },
         ),
       ],
       { disabled: !canReorder },
     ),
-    menuAction('Изменить тип', () => void pickTypeForThought(networkId, target.id)),
-    menuAction('Изменить иконку', () => void changeIcon(networkId, target.id)),
+    menuAction(t('contextMenu.editType'), () => void pickTypeForThought(networkId, target.id)),
+    menuAction(t('contextMenu.editIcon'), () => void changeIcon(networkId, target.id)),
     // In the structures view (L15) both commands open the editor without
     // switching the canvas focus; on the canvas they focus the thought.
     // В редакторе мысль уже открыта — контекст ведёт на вкладку «Вложения».
-    menuAction('Добавить вложение', () => {
+    menuAction(t('contextMenu.addAttachment'), () => {
       if (opts.attachmentHandler !== undefined) opts.attachmentHandler(target.id);
       else if (opts.openHandler !== undefined) opts.openHandler(target.id);
       else focusFromUi(target.id);
@@ -616,13 +615,13 @@ export function buildThoughtMenuItems(
     ...(opts.hideOpenCommand === true
       ? []
       : [
-          menuAction(opts.openLabel ?? 'Открыть редактор', () => {
+          menuAction(opts.openLabel ?? t('contextMenu.openEditor'), () => {
             if (opts.openHandler !== undefined) opts.openHandler(target.id);
             else focusFromUi(target.id);
           }),
         ]),
     ...(opts.focusHandler !== undefined
-      ? [menuAction('В фокус', () => opts.focusHandler?.())]
+      ? [menuAction(t('contextMenu.inFocus'), () => opts.focusHandler?.())]
       : []),
     // Сценарий «просмотр и обслуживание ленты «События»», шаг 3 (7a1a354b):
     // переход в ленту по выбранной сущности — вид «События» с отбором по
@@ -639,24 +638,24 @@ export function buildThoughtMenuItems(
         setActiveView('activity');
       })();
     }),
-    menuAction('Экспорт…', () => void exportSingleThought(networkId, target.id)),
-    menuAction('Импорт…', () => void importToThought(networkId, target.id)),
+    menuAction(t('contextMenu.export'), () => void exportSingleThought(networkId, target.id)),
+    menuAction(t('contextMenu.import'), () => void importToThought(networkId, target.id)),
     ...(opts.findOnMapHandler !== undefined
       ? [
           // Structures-only command (L23, 08-ui-spec.md §15.8): jump to the
           // map view with this thought focused.
-          menuAction('Найти на карте мыслей', () => opts.findOnMapHandler?.(target.id)),
+          menuAction(t('contextMenu.findMapThoughts'), () => opts.findOnMapHandler?.(target.id)),
         ]
       : []),
     // Pinned-thoughts command (L18, 08-ui-spec.md §16): available in every
     // thought menu — the canvas, the selection panel, the structures tree,
     // the history chips and the pinned panel itself.
-    menuAction(isPinned(target.id) ? 'Открепить мысль' : 'Закрепить мысль', () =>
+    menuAction(isPinned(target.id) ? t('contextMenu.unpinThought') : t('contextMenu.pinThought'), () =>
       void togglePinned(target.id),
     ),
     ...selectionItem,
-    menuAction('Копировать', () => void copyThought(target, networkId)),
-    menuAction('Вставить', () => void pasteThoughtsTo(networkId, target.id), {
+    menuAction(t('listActions.copy'), () => void copyThought(target, networkId)),
+    menuAction(t('clipboard.paste'), () => void pasteThoughtsTo(networkId, target.id), {
       disabled: !hasClipboard(),
     }),
     copyIdItem(),
@@ -664,7 +663,7 @@ export function buildThoughtMenuItems(
     // «Переписать» / «Объединить»).
     ...(overriddenInLayer
       ? [
-          menuAction('Слить мысль в основу…', () =>
+          menuAction(t('contextMenu.mergeThoughtBase'), () =>
             openThoughtMergeDialog(networkId, target.id, target.title),
           ),
         ]
@@ -680,7 +679,7 @@ export function buildThoughtMenuItems(
     // «Удалить/восстановить» (S13, 08-ui-spec.md §2.6) — the action is the
     // same two-phase dialog either way.
     menuAction(
-      trashed ? 'Удалить/восстановить' : t('actions.delete'),
+      trashed ? t('contextMenu.deleteRestore') : t('actions.delete'),
       () => void deleteThought(networkId, target),
       { danger: true },
     ),
@@ -701,15 +700,15 @@ async function pickTypeForThought(networkId: string, thoughtId: string): Promise
   const picked = await pickEntitiesModal({
     networkId,
     kind: 'thought-types',
-    title: 'Изменить тип',
+    title: t('contextMenu.editType'),
     single: true,
     allowEmpty: true,
     extraOptions: [
       {
         id: CLEAR_TYPE_ID,
-        title: 'Без типа',
+        title: t('contextMenu.title.withoutType'),
         selectable: true,
-        cloud: { id: CLEAR_TYPE_ID, title: 'Без типа', icon: '∅', icon_kind: 'emoji' },
+        cloud: { id: CLEAR_TYPE_ID, title: t('contextMenu.title.withoutType'), icon: '∅', icon_kind: 'emoji' },
       },
     ],
   });
@@ -723,7 +722,7 @@ async function toggleActive(networkId: string, id: string): Promise<void> {
   try {
     const thought = await etn.thoughts.get(networkId, id);
     if (thought.is_protected && thought.is_root) {
-      notice('HOME-мысль нельзя деактивировать.');
+      notice(t('contextMenu.homeThoughtCannotDeaktivirovat'));
       return;
     }
     await etn.thoughts.update(networkId, id, { active: !thought.active }, thought.version);
@@ -732,7 +731,7 @@ async function toggleActive(networkId: string, id: string): Promise<void> {
     invalidateRef(id);
     scheduleRefresh();
   } catch (err) {
-    errorDialog('Изменить актуальность', err);
+    errorDialog(t('contextMenu.editActive'), err);
   }
 }
 
@@ -752,14 +751,14 @@ async function changeType(networkId: string, id: string, typeId: string | null):
     invalidateRef(id);
     scheduleRefresh();
   } catch (err) {
-    errorDialog('Изменить тип', err);
+    errorDialog(t('contextMenu.editType'), err);
   }
 }
 
 /** Prompts for a new emoji icon. */
 async function changeIcon(networkId: string, id: string): Promise<void> {
   const current = await etn.thoughts.get(networkId, id).catch(() => null);
-  const value = await promptDialog('Изменить иконку', 'Эмодзи', current?.icon ?? '');
+  const value = await promptDialog(t('contextMenu.editIcon'), t('contextMenu.emodzi'), current?.icon ?? '');
   if (value === null) return;
   try {
     const thought = await etn.thoughts.get(networkId, id);
@@ -771,7 +770,7 @@ async function changeIcon(networkId: string, id: string): Promise<void> {
     // as the attachments-tab «Назначить иконкой мысли» command).
     reflectThoughtUpdate(updated, patch as Record<string, unknown>);
   } catch (err) {
-    errorDialog('Изменить иконку', err);
+    errorDialog(t('contextMenu.editIcon'), err);
   }
 }
 
@@ -789,9 +788,9 @@ async function copyThought(
     const thought = await etn.thoughts.get(networkId, target.id);
     const deps = makeSnapshotDeps(networkId);
     await buildSingleThoughtSnapshot(thought, deps);
-    notice(`Скопировано: «${thought.title}»`);
+    notice(t('app.skopirovano', thought.title));
   } catch (err) {
-    errorDialog('Копировать', err);
+    errorDialog(t('listActions.copy'), err);
   }
 }
 
@@ -947,7 +946,7 @@ async function moveInZone(
     requestZoneAnimation();
     scheduleRefresh();
   } catch (err) {
-    errorDialog('Изменить порядок', err);
+    errorDialog(t('contextMenu.editOrder'), err);
   }
 }
 
@@ -992,7 +991,7 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
     dir === 'siblings'
       ? []
       : [
-          menuAction('Добавить мысль', () =>
+          menuAction(t('contextMenu.addThought'), () =>
             openAddDialog({
               anchorId: focus.focused.id,
               anchorTitle: focus.focused.title,
@@ -1007,18 +1006,18 @@ export function showZoneContextMenu(event: MouseEvent, dir: ZoneDir): void {
     // показываем заглушку подменю, чтобы сразу было видно, что режим
     // сменился. Подменю недоступно, пока в фокусе активен отбор.
     menuSubmenu(
-      'Сортировка',
+      t('contextMenu.sort'),
       viewResultActive
-        ? [menuAction('порядок задаётся отбором', undefined, { disabled: true })]
+        ? [menuAction(t('contextMenu.orderZadaetsyaOtborom'), undefined, { disabled: true })]
         : [
-            sortItem('по алфавиту (возр)', 'alpha', 'asc'),
-            sortItem('по алфавиту (убыв)', 'alpha', 'desc'),
-            sortItem('по дате создания (возр)', 'created', 'asc'),
-            sortItem('по дате создания (убыв)', 'created', 'desc'),
-            sortItem('по дате просмотра (возр)', 'viewed', 'asc'),
-            sortItem('по дате просмотра (убыв)', 'viewed', 'desc'),
+            sortItem(t('contextMenu.byAlfavituAsc'), 'alpha', 'asc'),
+            sortItem(t('contextMenu.byAlfavituDesc'), 'alpha', 'desc'),
+            sortItem(t('contextMenu.byDateCreateAsc'), 'created', 'asc'),
+            sortItem(t('contextMenu.byDateCreateDesc'), 'created', 'desc'),
+            sortItem(t('contextMenu.byDateProsmotraAsc'), 'viewed', 'asc'),
+            sortItem(t('contextMenu.byDateProsmotraDesc'), 'viewed', 'desc'),
             menuChoice(
-              'ручной',
+              t('contextMenu.ruchnoy'),
               current.sort === 'manual',
               () => {
                 if (manual) void setZoneSort(networkId, focus.focused.id, dir, 'manual', 'asc');
@@ -1069,7 +1068,7 @@ async function setZoneSort(
     });
     scheduleRefresh();
   } catch (err) {
-    errorDialog('Сортировка', err);
+    errorDialog(t('contextMenu.sort'), err);
   }
 }
 
@@ -1140,6 +1139,6 @@ async function commitOrder(dir: OrderableDir, ids: string[]): Promise<void> {
     });
     scheduleRefresh();
   } catch (err) {
-    errorDialog('Изменить порядок', err);
+    errorDialog(t('contextMenu.editOrder'), err);
   }
 }

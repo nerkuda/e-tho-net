@@ -97,7 +97,7 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
   const nameWrap = div('st-f-kw-wrap');
   const nameInput = el('input', 'st-f-input sfb-name') as HTMLInputElement;
   nameInput.type = 'text';
-  nameInput.placeholder = 'имя отбора';
+  nameInput.placeholder = t('filterFooter.placeholder.nameView');
   nameInput.maxLength = 200;
   nameInput.value = opts.getName();
   nameInput.addEventListener('input', () => opts.setName(nameInput.value));
@@ -105,21 +105,21 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
 
   const saveBtn = iconButton({
     icon: svgIcon('save', 15),
-    title: 'Записать настройки отбора',
+    title: t('filterFooter.title.writeSettingsView'),
     size: 's',
     onClick: () => void save(),
   });
 
   const deleteBtn = iconButton({
     icon: svgIcon('x', 15),
-    title: 'Удалить настройки отбора',
+    title: t('savedFilters.title.deleteSettingsView'),
     size: 's',
     onClick: () => void removeCurrent(),
   });
 
   const moreBtn = iconButton({
     icon: el('span', undefined, '…'),
-    title: 'Выбрать сохранённый отбор',
+    title: t('savedFilters.title.selectSohranennyyView'),
     size: 's',
     class: 'sfb-more',
     onClick: () => openPicker(),
@@ -143,7 +143,7 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
   async function save(): Promise<void> {
     const name = nameInput.value.trim();
     if (name === '') {
-      notice('Введите имя отбора');
+      notice(t('savedFilters.enterNameView'));
       return;
     }
     const definition = opts.buildDefinition();
@@ -157,12 +157,12 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
         opts.setSelectedId(created.id);
       }
     } catch (err) {
-      errorDialog('Сохранить отбор', err);
+      errorDialog(t('savedFilters.saveView'), err);
       return;
     }
     opts.onPersist?.();
     await load();
-    notice(`Отбор «${name}» сохранён`);
+    notice(t('savedFilters.viewSaved', name));
   }
 
   /** Удаляет отбор по имени из поля, иначе — выбранный. */
@@ -175,7 +175,7 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
     const selected = opts.selectedId();
     const target = byName ?? (selected === null ? undefined : entries.find((e) => e.id === selected));
     if (target === undefined) {
-      notice('Отбор с таким именем не найден');
+      notice(t('savedFilters.viewTakimNameNotFound'));
       return;
     }
     await removeEntry(target);
@@ -184,15 +184,15 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
   /** Удаляет запись после подтверждения. */
   async function removeEntry(entry: SavedFilterEntry): Promise<void> {
     const confirmed = await confirmDialog(
-      'Удалить отбор',
-      `Удалить сохранённый отбор «${entry.name}»?`,
+      t('savedFilters.deleteView'),
+      t('savedFilters.deleteSohranennyyView', entry.name),
       true,
     );
     if (!confirmed) return;
     try {
       await opts.store.remove(entry.id);
     } catch (err) {
-      errorDialog('Удалить отбор', err);
+      errorDialog(t('savedFilters.deleteView'), err);
       return;
     }
     if (opts.selectedId() === entry.id) opts.setSelectedId(null);
@@ -202,13 +202,13 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
 
   /** Переименовывает запись (исправление опечаток) через диалог ввода. */
   async function renameEntry(entry: SavedFilterEntry): Promise<string | null> {
-    const name = await promptDialog('Переименовать отбор', 'Имя', entry.name);
+    const name = await promptDialog(t('savedFilters.pereimenovatView'), t('savedFilters.name'), entry.name);
     const trimmed = (name ?? '').trim();
     if (trimmed === '' || trimmed === entry.name) return null;
     try {
       await opts.store.update(entry.id, { name: trimmed });
     } catch (err) {
-      errorDialog('Переименовать отбор', err);
+      errorDialog(t('savedFilters.pereimenovatView'), err);
       return null;
     }
     await load();
@@ -231,7 +231,7 @@ export function buildSavedFilterBar(opts: SavedFilterBarOptions): SavedFilterBar
     try {
       created = await opts.store.create(copyName, entry.definition);
     } catch (err) {
-      errorDialog('Скопировать отбор', err);
+      errorDialog(t('savedFilters.copyView'), err);
       return null;
     }
     await load();

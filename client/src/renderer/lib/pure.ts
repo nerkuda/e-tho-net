@@ -725,14 +725,13 @@ export function parseThoughtIdLookupQuery(q: string): string | null {
 }
 
 /**
- * Whether `err` means "no entity with this id". IPC (`ipcRenderer.invoke`)
- * drops custom error fields of `EtnError`, so the server's `… not found`
- * message is checked as a fallback for the lost `code`.
+ * Whether `err` means "no entity with this id". The cause is read from the
+ * machine-readable `code` only (ADR daab6ac4 §4): the server `message` is
+ * English and is never parsed. `reviveIpcError` restores `code` in the
+ * renderer (`lib/etn.ts`), so the IPC boundary no longer loses it.
  */
 export function isNotFoundError(err: unknown): boolean {
-  const shape = err as { code?: unknown; message?: unknown } | null;
-  if (shape?.code === 'NOT_FOUND') return true;
-  return typeof shape?.message === 'string' && shape.message.includes('not found');
+  return (err as { code?: unknown } | null)?.code === 'NOT_FOUND';
 }
 
 // ---------------------------------------------------------------------------
@@ -916,81 +915,81 @@ export function isRealtimeEvent(value: unknown): value is AnyRealtimeEvent {
 
 /** Russian one-word descriptions of realtime event types (status bar). */
 const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
-  'thought.created': 'создана мысль',
-  'thought.updated': 'изменена мысль',
-  'thought.deleted': 'удалена мысль',
-  'thought.reordered': 'изменён порядок мыслей',
-  'thought.properties.reordered': 'изменён порядок свойств',
-  'link.created': 'создана связь',
-  'link.updated': 'изменена связь',
-  'link.deleted': 'удалена связь',
-  'thought-type.created': 'создан тип мыслей',
-  'thought-type.updated': 'изменён тип мыслей',
-  'thought-type.deleted': 'удалён тип мыслей',
-  'link-type.created': 'создан тип связей',
-  'link-type.updated': 'изменён тип связей',
-  'link-type.deleted': 'удалён тип связей',
-  'property-definition.created': 'добавлено свойство типа',
-  'property-definition.updated': 'изменено свойство типа',
-  'property-definition.deleted': 'удалено свойство типа',
-  'property-registry.created': 'добавлено свойство',
-  'property-registry.updated': 'изменено свойство',
-  'property-registry.deleted': 'удалено свойство',
-  'comment.created': 'добавлен комментарий',
-  'comment.updated': 'изменён комментарий',
-  'comment.deleted': 'удалён комментарий',
-  'attachment.created': 'добавлено вложение',
-  'attachment.updated': 'изменено вложение',
-  'attachment.deleted': 'удалено вложение',
-  'attachment.owner.added': 'у вложения добавлен владелец',
-  'attachment.owner.removed': 'у вложения снят владелец',
-  'property-value.set': 'изменено свойство',
-  'property-value.deleted': 'удалено свойство',
-  'network.updated': 'изменена сеть',
-  'network.deleted': 'сеть удалена',
-  'member.added': 'добавлен участник сети',
-  'member.removed': 'участник покинул сеть',
-  'member.role_changed': 'изменена роль участника',
-  'presence.joined': 'участник подключился',
-  'presence.left': 'участник отключился',
-  'presence.focus_changed': 'участник сменил фокус',
-  'user-preference.updated': 'обновлены настройки',
-  'user-focus-preferences.updated': 'обновлена сортировка зон',
-  'user-focus-order.updated': 'обновлён порядок зоны',
-  'thought-view.updated': 'обновлён просмотр',
-  'saved-filter.created': 'сохранён отбор',
-  'saved-filter.updated': 'изменён отбор',
-  'saved-filter.deleted': 'удалён отбор',
-  'pinned-thoughts.updated': 'обновлены закреплённые',
-  'layer.merged': 'слит слой',
+  get 'thought.created'() { return t('events.createdThought'); },
+  get 'thought.updated'() { return t('events.changedThought'); },
+  get 'thought.deleted'() { return t('events.deletedThought'); },
+  get 'thought.reordered'() { return t('events.changedOrderThoughts'); },
+  get 'thought.properties.reordered'() { return t('events.changedOrderProperties'); },
+  get 'link.created'() { return t('events.createdLink'); },
+  get 'link.updated'() { return t('events.changedLink'); },
+  get 'link.deleted'() { return t('events.deletedLink'); },
+  get 'thought-type.created'() { return t('events.createdTypeThoughts'); },
+  get 'thought-type.updated'() { return t('events.changedTypeThoughts'); },
+  get 'thought-type.deleted'() { return t('events.deletedTypeThoughts'); },
+  get 'link-type.created'() { return t('events.createdTypeLinks'); },
+  get 'link-type.updated'() { return t('events.changedTypeLinks'); },
+  get 'link-type.deleted'() { return t('events.deletedTypeLinks'); },
+  get 'property-definition.created'() { return t('events.addedPropertyType'); },
+  get 'property-definition.updated'() { return t('events.changedPropertyType'); },
+  get 'property-definition.deleted'() { return t('events.deletedPropertyType'); },
+  get 'property-registry.created'() { return t('events.addedProperty'); },
+  get 'property-registry.updated'() { return t('events.changedProperty'); },
+  get 'property-registry.deleted'() { return t('events.deletedProperty'); },
+  get 'comment.created'() { return t('events.addedKommentariy'); },
+  get 'comment.updated'() { return t('events.changedKommentariy'); },
+  get 'comment.deleted'() { return t('events.deletedKommentariy'); },
+  get 'attachment.created'() { return t('events.addedAttachment'); },
+  get 'attachment.updated'() { return t('events.changedAttachment'); },
+  get 'attachment.deleted'() { return t('events.deletedAttachment'); },
+  get 'attachment.owner.added'() { return t('events.uAttachmentsAddedOwner'); },
+  get 'attachment.owner.removed'() { return t('events.uAttachmentsUnsetOwner'); },
+  get 'property-value.set'() { return t('events.changedProperty'); },
+  get 'property-value.deleted'() { return t('events.deletedProperty'); },
+  get 'network.updated'() { return t('events.changedNetwork'); },
+  get 'network.deleted'() { return t('events.networkDeleted'); },
+  get 'member.added'() { return t('events.addedMemberNetwork'); },
+  get 'member.removed'() { return t('events.memberPokinulNetwork'); },
+  get 'member.role_changed'() { return t('events.changedRolMember'); },
+  get 'presence.joined'() { return t('events.memberPodklyuchilsya'); },
+  get 'presence.left'() { return t('events.memberOtklyuchilsya'); },
+  get 'presence.focus_changed'() { return t('events.memberSmenilFocus'); },
+  get 'user-preference.updated'() { return t('events.obnovlenySettings'); },
+  get 'user-focus-preferences.updated'() { return t('events.obnovlenaSortZon'); },
+  get 'user-focus-order.updated'() { return t('events.obnovlenOrderZony'); },
+  get 'thought-view.updated'() { return t('events.obnovlenProsmotr'); },
+  get 'saved-filter.created'() { return t('events.savedView'); },
+  get 'saved-filter.updated'() { return t('events.changedView'); },
+  get 'saved-filter.deleted'() { return t('events.deletedView'); },
+  get 'pinned-thoughts.updated'() { return t('events.obnovlenyZakreplennye'); },
+  get 'layer.merged'() { return t('events.mergedLayer'); },
   // Object-lock indicators (task 2031df5e). Title is not used; clients show
   // holder's name in the card overlay, not in the status bar.
-  'edit.acquired': 'захвачен объект',
-  'edit.released': 'снят захват',
-  'edit.cleared': 'сброшен захват',
+  get 'edit.acquired'() { return t('events.zahvachenObekt'); },
+  get 'edit.released'() { return t('events.unsetZahvat'); },
+  get 'edit.cleared'() { return t('events.sbroshenZahvat'); },
   // Thought-type views (задача 65de7eaa) — отборы типов мыслей.
   // В статус-баре показываем только `run` (факт чтения/исполнения);
   // created/updated/deleted — это синхронизация набора кнопок на холсте,
   // отдельного уведомления не требуется.
-  'thought-type-view.created': 'добавлен отбор типа',
-  'thought-type-view.updated': 'изменён отбор типа',
-  'thought-type-view.deleted': 'удалён отбор типа',
-  'thought-type-view.run': 'исполнен отбор',
+  get 'thought-type-view.created'() { return t('events.addedViewType'); },
+  get 'thought-type-view.updated'() { return t('events.changedViewType'); },
+  get 'thought-type-view.deleted'() { return t('events.deletedViewType'); },
+  get 'thought-type-view.run'() { return t('events.ispolnenView'); },
   // Внетиповые отборы мысли (0.14.1, задача a28d444b) — те же правила.
-  'thought-custom-view.created': 'добавлен отбор мысли',
-  'thought-custom-view.updated': 'изменён отбор мысли',
-  'thought-custom-view.deleted': 'удалён отбор мысли',
-  'thought-custom-view.run': 'исполнен отбор',
+  get 'thought-custom-view.created'() { return t('events.addedViewThought'); },
+  get 'thought-custom-view.updated'() { return t('events.changedViewThought'); },
+  get 'thought-custom-view.deleted'() { return t('events.deletedViewThought'); },
+  get 'thought-custom-view.run'() { return t('events.ispolnenView'); },
   // Публикации и полки (0.11.1, задача c59ce742) — только строки статус-бара.
-  'publication.updated': 'изменена публикация',
-  'publication.order.reordered': 'изменён порядок публикации',
-  'publication.exclusions.changed': 'изменены исключения публикации',
-  'publication.rebuilt': 'публикация пересобрана',
-  'publication.trashed': 'публикация в корзине',
-  'publication.restored': 'публикация восстановлена',
-  'publication.purged': 'публикация удалена',
-  'shelf.updated': 'изменена полка',
-  'shelf.deleted': 'полка удалена',
+  get 'publication.updated'() { return t('events.changedPublication'); },
+  get 'publication.order.reordered'() { return t('events.changedOrderPublication'); },
+  get 'publication.exclusions.changed'() { return t('events.changedIsklyucheniyaPublication'); },
+  get 'publication.rebuilt'() { return t('events.publicationPeresobrana'); },
+  get 'publication.trashed'() { return t('events.publicationTrash'); },
+  get 'publication.restored'() { return t('events.publicationRestored'); },
+  get 'publication.purged'() { return t('events.publicationDeleted'); },
+  get 'shelf.updated'() { return t('events.changedShelf'); },
+  get 'shelf.deleted'() { return t('events.shelfDeleted'); },
 };
 
 /**
@@ -1019,7 +1018,7 @@ export function neighborsDirForEllipse(kind: 'top' | 'bottom'): 'parents' | 'chi
 /** Popup head text for the neighbours preview, direction-prefixed so the
  *  same thought's two ellipses read as two distinct lists. */
 export function neighborsPreviewHeading(dir: 'parents' | 'children', thoughtTitle: string): string {
-  return `${dir === 'parents' ? 'Входящие связи' : 'Исходящие связи'}: ${thoughtTitle}`;
+  return `${dir === 'parents' ? t('events.incomingLink') : t('events.outgoingLink')}: ${thoughtTitle}`;
 }
 
 /**
@@ -1340,10 +1339,10 @@ export function filterSavedByName<T extends { name: string }>(
  */
 export function duplicateFilterName(name: string, existingNames: readonly string[]): string {
   const taken = new Set(existingNames.map((n) => n.toLowerCase()));
-  const base = `${name} (копия)`;
+  const base = t('events.copy', name);
   if (!taken.has(base.toLowerCase())) return base;
   for (let i = 2; i < 1000; i += 1) {
-    const candidate = `${name} (копия ${i})`;
+    const candidate = t('events.copy2', [name, i]);
     if (!taken.has(candidate.toLowerCase())) return candidate;
   }
   return base;
@@ -1626,8 +1625,10 @@ export function resolveFocusFlightOrigin(
 // Размер файла в человекочитаемом виде (задача c69b078d, 0.9.1)
 // ---------------------------------------------------------------------------
 
-/** Единицы размера по возрастанию (байты → терабайты). */
-const FILE_SIZE_UNITS = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'] as const;
+/** Единицы размера по возрастанию (байты → терабайты); текст — в момент вызова. */
+function fileSizeUnits(): readonly string[] {
+  return [t('events.b'), t('events.kb'), t('events.mb'), t('events.gb'), t('events.tb')];
+}
 
 /**
  * Форматирует размер в байтах как «<число> <единица>» с авто-выбором
@@ -1637,17 +1638,18 @@ const FILE_SIZE_UNITS = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'] as const;
  * значение трактуется как 0. Чистая функция — покрыта юнит-тестами.
  */
 export function formatFileSize(bytes: number): string {
+  const units = fileSizeUnits();
   const safe = Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : 0;
-  if (safe < 1024) return `${safe} ${FILE_SIZE_UNITS[0]}`;
+  if (safe < 1024) return `${safe} ${units[0]}`;
   let value = safe / 1024;
   let unit = 1;
-  while (value >= 1024 && unit < FILE_SIZE_UNITS.length - 1) {
+  while (value >= 1024 && unit < units.length - 1) {
     value /= 1024;
     unit += 1;
   }
   const rounded = Math.round(value * 10) / 10;
   const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace('.', ',');
-  return `${text} ${FILE_SIZE_UNITS[unit]}`;
+  return `${text} ${units[unit]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1663,8 +1665,13 @@ export function formatFileSize(bytes: number): string {
  */
 export const LAYER_MENU_LABEL_MAX = 32;
 
-/** Метка заголовка меню слоёв, когда слой сессии не выбран (основа). */
-export const LAYER_MENU_LABEL_FALLBACK = 'Основа';
+/**
+ * Метка заголовка меню слоёв, когда слой сессии не выбран (основа).
+ * Функция: текст берётся в момент рендера (ошибка ebed42d3).
+ */
+export function layerMenuLabelFallback(): string {
+  return t('events.base');
+}
 
 /**
  * Полное имя слоя для тултипа кнопки-заголовка: имя слоя, а для основы —
@@ -1672,7 +1679,7 @@ export const LAYER_MENU_LABEL_FALLBACK = 'Основа';
  * метка (требование задачи 4388305f).
  */
 export function layerMenuTooltip(title: string | null | undefined): string {
-  return title ?? LAYER_MENU_LABEL_FALLBACK;
+  return title ?? layerMenuLabelFallback();
 }
 
 /**
@@ -1727,13 +1734,15 @@ export function planSelectionRows(
 export const SELECTION_UNAVAILABLE_TITLE_KEY = 'selection.unavailable';
 
 /**
- * Подпись строки панели выделенных для подтверждённо отсутствующей мысли
- * (значение на момент импорта — для сравнений и тестов). В отрисовке берётся
- * `t(SELECTION_UNAVAILABLE_TITLE_KEY)`, чтобы смена языка подхватывалась
- * следующей перерисовкой. Текст — из словаря, не литерал (требование
+ * Подпись строки панели выделенных для подтверждённо отсутствующей мысли.
+ * Функция: в отрисовке берётся `t(SELECTION_UNAVAILABLE_TITLE_KEY)`, чтобы
+ * смена языка подхватывалась следующей перерисовкой (ошибка ebed42d3); тесты
+ * сравнивают с тем же вызовом. Текст — из словаря, не литерал (требование
  * 0e5ff1c6, замечание верификатора к b213cf60).
  */
-export const SELECTION_UNAVAILABLE_TITLE = t(SELECTION_UNAVAILABLE_TITLE_KEY);
+export function selectionUnavailableTitle(): string {
+  return t(SELECTION_UNAVAILABLE_TITLE_KEY);
+}
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 

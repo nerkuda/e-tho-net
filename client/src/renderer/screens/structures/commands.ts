@@ -119,22 +119,22 @@ async function cmdSelection(ctx: FilterCommandsContext, add: boolean): Promise<v
   try {
     ids = await collectAllIds(ctx);
   } catch (err) {
-    errorDialog('Команды отбора', err);
+    errorDialog(t('structures.komandyView'), err);
     return;
   }
   if (ids.length === 0) {
-    notice('Отбор пуст — команда не применена.');
+    notice(t('structures.viewPustKomandaNotPrimenena'));
     return;
   }
   if (add) {
     addToSelection(ids);
-    notice(`Добавлено к выделению: ${ids.length}.`);
+    notice(t('structures.addedVydeleniyu', ids.length));
     return;
   }
   const selected = new Set(store.state.selection);
   const overlap = ids.filter((id) => selected.has(id)).length;
   removeFromSelection(ids);
-  notice(overlap > 0 ? `Убрано из выделения: ${overlap}.` : 'Отобранных мыслей в выделении нет.');
+  notice(overlap > 0 ? t('structures.ubranoSelection', overlap) : t('structures.selectedThoughtsVydeleniiNo'));
 }
 
 /** «Изменить тип…»: the searchable type picker, «Без типа» clears the type. */
@@ -170,7 +170,7 @@ async function pickAnchors(
     networkId,
     allowCreate,
     allowLinkType: allowCreate,
-    title: dir === 'parents' ? 'Родительские мысли' : 'Подчинённые мысли',
+    title: dir === 'parents' ? t('filterForm.roditelskieThought') : t('structures.podchinennyeThought'),
     applyLabel,
   });
   if (result === null) return null;
@@ -197,9 +197,9 @@ async function pickAnchors(
     }
   }
   if (failed > 0) {
-    notice(`Не удалось создать ${failed} новых мыслей — они пропущены.`, 'error');
+    notice(t('structures.notSucceededCreateNovyhThoughtsOni', failed), 'error');
   }
-  if (created > 0) notice(`Создано новых мыслей: ${created}.`);
+  if (created > 0) notice(t('structures.createdNovyhThoughts', created));
   if (ids.length === 0) return null;
   return { ids, linkTypeId: allowCreate ? result.linkTypeId : null };
 }
@@ -209,7 +209,7 @@ async function cmdLinkAnchors(
   ctx: FilterCommandsContext,
   dir: 'parents' | 'children',
 ): Promise<void> {
-  const anchors = await pickAnchors(dir, 'Добавить', true);
+  const anchors = await pickAnchors(dir, t('addDialog.applyLabel.add'), true);
   if (anchors === null) return;
   if (dir === 'parents') {
     await cmdBatch(ctx, 'link_parents', {
@@ -226,17 +226,16 @@ async function cmdLinkAnchors(
 
 /** «Сделать единственными родителями…»: destructive, confirmed. */
 async function cmdOnlyParents(ctx: FilterCommandsContext): Promise<void> {
-  const anchors = await pickAnchors('parents', 'Выбрать', true);
+  const anchors = await pickAnchors('parents', t('actions.select'), true);
   if (anchors === null) return;
   await cmdBatch(
     ctx,
     'set_only_parents',
     { parent_ids: anchors.ids, link_type_id: anchors.linkTypeId },
     {
-      confirmTitle: 'Сделать единственными родителями',
+      confirmTitle: t('structures.confirmTitle.doEdinstvennymiParents'),
       confirmText: (n) =>
-        `У ${n} отобранных мыслей будут удалены все входящие связи, кроме связей ` +
-        `с выбранными мыслями (${anchors.ids.length}). Продолжить?`,
+        t('structures.uSelectedThoughtsWillDeletedAll', [n, anchors.ids.length]),
     },
   );
 }
@@ -247,10 +246,10 @@ async function cmdUnlinkAnchors(
   dir: 'parents' | 'children',
 ): Promise<void> {
   // Destructive command: no new thoughts, no type picking (§15.3.1).
-  const anchors = await pickAnchors(dir, 'Разорвать', false);
+  const anchors = await pickAnchors(dir, t('structures.razorvat'), false);
   if (anchors === null) return;
   const title =
-    dir === 'parents' ? 'Разорвать связи с родителями' : 'Разорвать связи с подчинёнными';
+    dir === 'parents' ? t('structures.razorvatLinkParents') : t('structures.razorvatLinkPodchinennymi');
   await cmdBatch(
     ctx,
     dir === 'parents' ? 'unlink_parents' : 'unlink_children',
@@ -258,8 +257,7 @@ async function cmdUnlinkAnchors(
     {
       confirmTitle: title,
       confirmText: (n) =>
-        `У ${n} отобранных мыслей будут удалены связи с выбранными мыслями ` +
-        `(${anchors.ids.length}). Продолжить?`,
+        t('structures.uSelectedThoughtsWillDeletedLink', [n, anchors.ids.length]),
     },
   );
 }
@@ -267,8 +265,8 @@ async function cmdUnlinkAnchors(
 /** «Удалить»: confirmed batch delete (protected HOME surfaces as a failure). */
 async function cmdDelete(ctx: FilterCommandsContext): Promise<void> {
   await cmdBatch(ctx, 'delete', {}, {
-    confirmTitle: 'Удалить мысли',
-    confirmText: (n) => `Удалить ${n} отобранных мыслей?`,
+    confirmTitle: t('structures.confirmTitle.deleteThought'),
+    confirmText: (n) => t('structures.deleteSelectedThoughts', n),
   });
 }
 
@@ -298,11 +296,11 @@ async function cmdBatch(
   try {
     ids = await collectAllIds(ctx);
   } catch (err) {
-    errorDialog('Команды отбора', err);
+    errorDialog(t('structures.komandyView'), err);
     return;
   }
   if (ids.length === 0) {
-    notice('Отбор пуст — команда не применена.');
+    notice(t('structures.viewPustKomandaNotPrimenena'));
     return;
   }
   if (confirm !== undefined) {
@@ -312,16 +310,27 @@ async function cmdBatch(
   try {
     const result = await etn.thoughts.batch(networkId, { ids, op, args });
     if (result.failures.length > 0) {
+      // Причина — по машиночитаемому коду и `details` отказа (ADR
+      // daab6ac4 §4): серверный `message` английский и в UI не показывается,
+      // а `details.reason`/`details.issue` уточняют формулировку.
+      const firstFailure = result.failures[0];
+      const reason =
+        firstFailure === undefined
+          ? ''
+          : errText({ code: firstFailure.code, details: firstFailure.details });
       notice(
-        `Не удалось применить к ${result.failures.length} из ${ids.length} мыслей ` +
-          `(${result.failures[0]?.message ?? ''}).`,
+        t('structures.notSucceededApplyThoughts', [
+          result.failures.length,
+          ids.length,
+          reason,
+        ]),
         'error',
       );
     } else {
-      notice(`Применено к ${result.affected} мыслям.`);
+      notice(t('structures.primenenoThoughts', result.affected));
     }
   } catch (err) {
-    errorDialog('Команды отбора', `Не удалось выполнить команду: ${errText(err)}`);
+    errorDialog(t('structures.komandyView'), t('structures.notSucceededVypolnitKomandu', errText(err)));
     return;
   }
   ctx.refresh();

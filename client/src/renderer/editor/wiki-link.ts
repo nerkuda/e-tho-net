@@ -45,6 +45,7 @@ import {
 } from './wiki-link-resolver.js';
 import { tryCreateThoughtFromLegacyLink } from './wiki-link-create.js';
 import { transclusionSectionCompletions } from './transclusion.js';
+import { t } from '../lib/i18n.js';
 
 /** Chars allowed inside an in-progress wiki prefix (no closing/alias/newline). */
 const WIKI_PREFIX_RE = /^[^[\]\n|]*$/;
@@ -189,16 +190,16 @@ export function confirmSwitchToMap(): Promise<boolean> {
       resolve(value);
     };
     showDialog({
-      title: 'Мысль не отображается',
+      title: t('wikiLink.title.thoughtNotOtobrazhaetsya'),
       size: 's',
       body: el(
         'p',
         'dialog-text',
-        'Эта мысль не отображается в структуре мыслей. Переключиться на карту мыслей?',
+        t('wikiLink.etaThoughtNotOtobrazhaetsyaStruktureThoughts'),
       ),
       buttons: [
-        { label: 'Нет', onClick: () => finish(false) },
-        { label: 'Да', primary: true, onClick: () => finish(true) },
+        { label: t('wikiLink.label.no'), onClick: () => finish(false) },
+        { label: t('wikiLink.label.da'), primary: true, onClick: () => finish(true) },
       ],
       // Esc и × — отказ: контракт «`false` on cancel»,
       // ровно как по кнопке «Нет» (ошибка aff5a96c).
@@ -218,7 +219,7 @@ export function confirmSwitchToMap(): Promise<boolean> {
  */
 export async function openThoughtByRef(thought: Thought): Promise<void> {
   if (!thought.active && !store.state.showInactive) {
-    notice('Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.');
+    notice(t('deepLink.notMoguOpenNeaktualnuyuThoughtNeaktualnye'));
     return;
   }
 
@@ -300,7 +301,7 @@ async function openResolvedThought(networkId: string, thoughtId: string, name: s
   try {
     thought = await etn.thoughts.get(networkId, thoughtId);
   } catch (err) {
-    notice(`Не удалось открыть «${name}»: ${errText(err)}`, 'error');
+    notice(t('mentions.notSucceededOpen', [name, errText(err)]), 'error');
     return;
   }
   await openThoughtByRef(thought);
@@ -314,7 +315,7 @@ async function openResolvedThought(networkId: string, thoughtId: string, name: s
 export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<void> {
   const networkId = safeCurrentNetworkId();
   if (networkId === null) {
-    notice('Сначала откройте сеть.');
+    notice(t('wikiLink.firstOpenNetwork'));
     return;
   }
 
@@ -322,7 +323,7 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
   try {
     candidates = await resolveLegacyWikiCandidates(networkId, target.name);
   } catch (err) {
-    notice(`Не удалось открыть «${target.name}»: ${errText(err)}`, 'error');
+    notice(t('mentions.notSucceededOpen', [target.name, errText(err)]), 'error');
     return;
   }
 
@@ -355,7 +356,7 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
           // Поздний отказ открытия (после диалога создания) — тостом: это
           // уже отдельная от создания операция.
           void openResolvedThought(networkId, thoughtId, target.name).catch((error) => {
-            notice(`Не удалось открыть «${target.name}»: ${errText(error)}`, 'error');
+            notice(t('mentions.notSucceededOpen', [target.name, errText(error)]), 'error');
           });
         },
       });
@@ -384,7 +385,7 @@ export async function runLegacyWikiLinkFork(target: LegacyForkTarget): Promise<v
       showLegacyCandidatesPopover(target, candidates, (thoughtId) => {
         if (plan.navigate) {
           void openResolvedThought(networkId, thoughtId, target.name).catch((error) => {
-            notice(`Не удалось открыть «${target.name}»: ${errText(error)}`, 'error');
+            notice(t('mentions.notSucceededOpen', [target.name, errText(error)]), 'error');
           });
         } else doConvert(thoughtId);
       });
@@ -448,11 +449,11 @@ export function openCandidatePopover(
     body.append(group);
   }
   if (truncated) {
-    body.append(el('p', 'muted', `Показаны первые ${LEGACY_CANDIDATE_LIMIT}, уточните имя.`));
+    body.append(el('p', 'muted', t('wikiLink.pokazanyPervyeUtochniteName', LEGACY_CANDIDATE_LIMIT)));
   }
   handle = openPopover({
     anchor,
-    content: { title: `Найдено несколько мыслей: «${displayName}»`, body },
+    content: { title: t('wikiLink.foundNeskolkoThoughts', displayName), body },
     extraClass: 'legacy-candidates-popover',
     onClose: () => {
       if (!picked) onCancel?.();
@@ -486,7 +487,7 @@ export async function openWikiIdTarget(targetNetworkId: string, thoughtId: strin
       await openNetwork(targetNetworkId, existingTabId);
     } catch (err) {
       notice(
-        `Сеть недоступна: ${errText(err)}. Ссылка на мысль в другой сети не может быть открыта.`,
+        t('wikiLink.networkUnavailableLinkRefThoughtOtherNetwork', errText(err)),
         'error',
       );
       return;
@@ -498,7 +499,7 @@ export async function openWikiIdTarget(targetNetworkId: string, thoughtId: strin
   try {
     thought = await etn.thoughts.get(targetNetworkId, thoughtId);
   } catch (err) {
-    notice(`Мысль удалена или недоступна: ${errText(err)}`, 'error');
+    notice(t('deepLink.thoughtDeletedUnavailable', errText(err)), 'error');
     return;
   }
 
@@ -565,7 +566,7 @@ export function initWikiLinkNavigation(): void {
       anchorEl: widget,
       ...(edit !== undefined ? { edit } : {}),
     }).catch((error) => {
-      notice(`Не удалось открыть «${name}»: ${errText(error)}`, 'error');
+      notice(t('mentions.notSucceededOpen', [name, errText(error)]), 'error');
     });
   });
 
@@ -590,11 +591,11 @@ export function initWikiLinkNavigation(): void {
     if (id !== null && id !== '') {
       const targetNetworkId = link.getAttribute(WIKI_LINK_NETWORK_ATTR) ?? safeCurrentNetworkId();
       if (targetNetworkId === null) {
-        notice('Сначала откройте сеть.');
+        notice(t('wikiLink.firstOpenNetwork'));
         return;
       }
       void openWikiIdTarget(targetNetworkId, id).catch((error) => {
-        notice(`Не удалось открыть мысль: ${errText(error)}`, 'error');
+        notice(t('deepLink.notSucceededOpenThought', errText(error)), 'error');
       });
       return;
     }
@@ -605,7 +606,7 @@ export function initWikiLinkNavigation(): void {
     const name = link.getAttribute(WIKI_LINK_TARGET_ATTR);
     if (name === null || name === '') return;
     void runLegacyWikiLinkFork({ name, anchorEl: link }).catch((error) => {
-      notice(`Не удалось открыть «${name}»: ${errText(error)}`, 'error');
+      notice(t('mentions.notSucceededOpen', [name, errText(error)]), 'error');
     });
   });
 }

@@ -335,7 +335,7 @@ export function updateLinkType(
     }
     if (changes.parent_id !== undefined) {
       if (current.is_root) {
-        throw new EtnError('VALIDATION_ERROR', 'у корневого типа нет родителя', {
+        throw new EtnError('VALIDATION_ERROR', "the root type has no parent", {
           entity: 'link_type',
           id,
         });
@@ -364,7 +364,7 @@ export function updateLinkType(
           }));
           throw new EtnError(
             'VALIDATION_ERROR',
-            `смена родителя запрещена: в ${impact.layers_open_count} живом(ых) слое(ях) есть ${impact.total_count} связей с типом из затронутого множества; сначала слейте или отмените слой.`,
+            `reparenting is forbidden: ${impact.layers_open_count} open layer(s) contain ${impact.total_count} links with a type from the affected set; merge or discard the layer first.`,
             {
               entity: 'link_type',
               id,
@@ -453,7 +453,7 @@ export function deleteLinkType(
       });
     }
     if (current.is_root) {
-      throw new EtnError('VALIDATION_ERROR', 'корневой тип связи удалить нельзя', {
+      throw new EtnError('VALIDATION_ERROR', "the root link type cannot be deleted", {
         entity: 'link_type',
         id,
       });
@@ -464,7 +464,7 @@ export function deleteLinkType(
     if (childCount.c > 0) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `у типа есть подчинённые типы (${childCount.c}); сначала удалите или переместите их`,
+        `the type has child types (${childCount.c}); delete or move them first`,
         { entity: 'link_type', id, children: childCount.c },
       );
     }
@@ -568,7 +568,7 @@ export function assertLinkTypeAssignable(ndb: NetworkDb, typeId: string): void {
   if (row.is_root === 1) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'корневой тип не назначается связям; оставьте связь без типа',
+      "the root type is not assigned to links; leave the link untyped",
       { entity: 'link_type', id: typeId },
     );
   }

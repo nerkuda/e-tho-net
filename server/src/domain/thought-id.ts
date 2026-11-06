@@ -81,8 +81,8 @@ export function resolveThoughtId(ndb: NetworkDb, id: string): string | null {
     const shown = rows.slice(0, CANDIDATE_LIMIT).map((r) => r.id);
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Короткий id «${id}» неоднозначен: подходит ${rows.length} мыслей. ` +
-        'Уточните id до однозначного.',
+      `Short id "${id}" is ambiguous: ${rows.length} thoughts match. ` +
+        "Make the id unambiguous.",
       { id, candidates: shown },
     );
   }

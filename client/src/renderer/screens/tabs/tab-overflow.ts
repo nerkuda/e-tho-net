@@ -21,6 +21,7 @@
  * workspace tabs, just a clickable label for editor tabs).
  */
 import { el } from '../../lib/dom.js';
+import { t } from '../../lib/i18n.js';
 
 /** Live DOM state of the tab strip, kept by the caller. */
 export interface StripElements<T> {
@@ -164,7 +165,7 @@ export function recomputeOverflow<T>(
     overflowBtn.hidden = !needsOverflow;
     if (needsOverflow) {
       overflowBtn.textContent = `▾${elements.hidden.length}`;
-      overflowBtn.title = `Ещё ${elements.hidden.length}`;
+      overflowBtn.title = t('tabs.more', elements.hidden.length);
     }
   }
 }

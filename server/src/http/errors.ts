@@ -156,7 +156,7 @@ export function normaliseError(
       statusCode: 400,
       body: buildErrorBody(
         'BAD_REQUEST',
-        `Тело запроса не удалось разобрать как JSON в кодировке UTF-8: ${rawMessage}`,
+        `Failed to parse the request body as UTF-8 JSON: ${rawMessage}`,
         undefined,
         requestId,
       ),
@@ -167,7 +167,7 @@ export function normaliseError(
   const message = err instanceof Error ? err.message : String(err);
   return {
     statusCode: 500,
-    body: buildErrorBody('INTERNAL', 'Внутренняя ошибка сервера', undefined, requestId),
+    body: buildErrorBody('INTERNAL', "Internal server error", undefined, requestId),
     internalMessage: message,
   };
 }

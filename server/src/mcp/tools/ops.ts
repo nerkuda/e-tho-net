@@ -592,7 +592,7 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWritable(rt);
       requireWriteBudget(rt);
       if (a.title === undefined && a.comment === undefined) {
-        throw new EtnError('VALIDATION_ERROR', 'нечего менять: передайте title и/или comment.', {
+        throw new EtnError('VALIDATION_ERROR', "nothing to change: provide title and/or comment.", {
           fields: ['title', 'comment'],
         });
       }
@@ -763,7 +763,7 @@ const HANDLERS: Record<string, OpHandler> = {
         selection = {};
         for (const [table, ids] of Object.entries(a.tables)) {
           if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
-            throw new EtnError('VALIDATION_ERROR', `неизвестная ветвимая таблица «${table}».`, {
+            throw new EtnError('VALIDATION_ERROR', `unknown branchable table "${table}".`, {
               field: 'tables',
               table,
               allowed: BRANCHABLE_TABLES,
@@ -839,7 +839,7 @@ const HANDLERS: Record<string, OpHandler> = {
       const selection: MergeSelection = {};
       for (const [table, ids] of Object.entries(a.tables)) {
         if (!(BRANCHABLE_TABLES as readonly string[]).includes(table)) {
-          throw new EtnError('VALIDATION_ERROR', `неизвестная ветвимая таблица «${table}».`, {
+          throw new EtnError('VALIDATION_ERROR', `unknown branchable table "${table}".`, {
             field: 'tables',
             table,
             allowed: BRANCHABLE_TABLES,
@@ -1282,7 +1282,7 @@ const HANDLERS: Record<string, OpHandler> = {
       const result = await subgraphAsync(ndb, a.seed_ids, a.radius, { maxNodes: rt.limits.maxNodesPerSubgraph });
       // `destination` — только для файлового `.etnx` (задача 99c16033).
       if (a.destination !== undefined && format !== 'etnx') {
-        throw new EtnError('VALIDATION_ERROR', 'destination применим только к format: "etnx".', {
+        throw new EtnError('VALIDATION_ERROR', "destination applies only to format: \"etnx\".", {
           field: 'destination',
         });
       }
@@ -1494,7 +1494,7 @@ const HANDLERS: Record<string, OpHandler> = {
       if (a.network_id === undefined) {
         const displayName = (a.display_name ?? '').trim();
         if (displayName.length === 0) {
-          throw new EtnError('VALIDATION_ERROR', 'display_name обязательно при создании сети.', {
+          throw new EtnError('VALIDATION_ERROR', "display_name is required when creating a network.", {
             field: 'display_name',
           });
         }
@@ -1504,7 +1504,7 @@ const HANDLERS: Record<string, OpHandler> = {
           if (value !== null) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              `На создании сети нельзя указывать непустую роль type_roles.${role}: в новой сети ещё нет типов.`,
+              `A non-empty type_roles.${role} role cannot be provided when creating a network: the new network has no types yet.`,
               { field: `type_roles.${role}`, value },
             );
           }
@@ -1528,11 +1528,11 @@ const HANDLERS: Record<string, OpHandler> = {
         const networkId = a.network_id;
         const existing = rt.deps.systemDb.getNetworkById(networkId);
         if (existing === null) {
-          throw new EtnError('NOT_FOUND', `Сеть ${networkId} не найдена.`, { network_id: networkId });
+          throw new EtnError('NOT_FOUND', `Network ${networkId} not found.`, { network_id: networkId });
         }
         const role = rt.deps.systemDb.getMemberRole(rt.deps.auth.userId, networkId);
         if (!rt.deps.auth.isAdmin && role !== 'owner') {
-          throw new EtnError('FORBIDDEN', 'Требуются права владельца сети или администратора.', {
+          throw new EtnError('FORBIDDEN', "Network owner or administrator rights are required.", {
             network_id: networkId,
           });
         }
@@ -1593,13 +1593,13 @@ const HANDLERS: Record<string, OpHandler> = {
       requireWritable(rt);
       requireWriteBudget(rt);
       if (!rt.deps.auth.isAdmin) {
-        throw new EtnError('FORBIDDEN', 'Удаление сети доступно только администратору сервера.', {
+        throw new EtnError('FORBIDDEN', "Only a server administrator can delete a network.", {
           network_id: a.network_id,
         });
       }
       const existing = rt.deps.systemDb.getNetworkById(a.network_id);
       if (existing === null) {
-        throw new EtnError('NOT_FOUND', `Сеть ${a.network_id} не найдена.`, { network_id: a.network_id });
+        throw new EtnError('NOT_FOUND', `Network ${a.network_id} not found.`, { network_id: a.network_id });
       }
       // Удаление → событие (ошибка abcd3f0b): при сбое удаления фантомного
       // network.deleted быть не должно.
@@ -1925,10 +1925,10 @@ function renderRegistry(): string {
     else bucket.entries.push(entry);
   }
   const lines: string[] = [
-    '# Редкие операции MCP (etn.ops)',
+    '# Rare MCP operations (etn.ops)',
     '',
-    'Вызов: `etn.ops { action, params, confirm: true }` — `confirm` обязателен для деструктивных.',
-    'Полная инструкция по действию: `etn.guide { topic: "<action>" }`.',
+    'Call: `etn.ops { action, params, confirm: true }` — `confirm` is required for destructive ones.',
+    'Full instruction for an action: `etn.guide { topic: "<action>" }`.',
     '',
   ];
   for (const { group, entries } of groups) {
@@ -1940,7 +1940,7 @@ function renderRegistry(): string {
     lines.push('');
   }
   if (GUIDE_TOPICS.length > 0) {
-    lines.push('## Частые операции — детали');
+    lines.push('## Frequent operations — details');
     for (const topic of GUIDE_TOPICS) {
       lines.push(`- **${topic.topic}** — ${topic.when}`);
     }
@@ -1956,31 +1956,31 @@ function renderTopic(entry: OpEntry): string {
     '',
     entry.when,
     '',
-    `Группа: ${entry.group}. Снят из постоянного набора: \`${entry.tool}\`.`,
-    `Вызов — только через \`etn.ops { action: "${entry.action}" }\`.`,
-    `Деструктивна: ${entry.destructive ? 'да — требуется `confirm: true` на верхнем уровне `etn.ops`' : 'нет'}.`,
-    `Read-only: ${entry.readOnly ? 'да' : 'нет'}.`,
+    `Group: ${entry.group}. Removed from the permanent set: \`${entry.tool}\`.`,
+    `Call only via \`etn.ops { action: "${entry.action}" }\`.`,
+    `Destructive: ${entry.destructive ? 'yes — `confirm: true` is required at the top level of `etn.ops`' : 'no'}.`,
+    `Read-only: ${entry.readOnly ? 'yes' : 'no'}.`,
     ...((entry.mutatingParams ?? []).length === 0
       ? []
       : [
-          `Изменяет БД при аргументах: ${entry.mutatingParams!
+          `Writes to the DB with arguments: ${entry.mutatingParams!
             .map((rule) => `\`${rule.param}: ${JSON.stringify(rule.equals)}\``)
-            .join(', ')} — такой вызов блокируется при обслуживании сервера (SERVER_UPDATING).`,
+            .join(', ')} — such a call is blocked during server maintenance (SERVER_UPDATING).`,
         ]),
     '',
     '## params',
   ];
   if (entry.params.length === 0) {
-    lines.push('Параметров нет.');
+    lines.push('No parameters.');
   } else {
     for (const param of entry.params) {
-      lines.push(`- \`${param.name}\`${param.required === true ? ' (обязателен)' : ''} — ${param.desc}`);
+      lines.push(`- \`${param.name}\`${param.required === true ? ' (required)' : ''} — ${param.desc}`);
     }
   }
-  lines.push('', '## Эффекты', entry.effects, '', '## Ошибки', entry.errors, '');
-  lines.push('## Пример');
+  lines.push('', '## Effects', entry.effects, '', '## Errors', entry.errors, '');
+  lines.push('## Example');
   const exampleParams = entry.params.reduce<Record<string, string>>((acc, param) => {
-    if (param.required === true) acc[param.name] = '<значение>';
+    if (param.required === true) acc[param.name] = '<value>';
     return acc;
   }, {});
   lines.push(
@@ -2004,13 +2004,13 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.guide',
     {
-      title: 'Справочник редких операций',
+      title: 'Rare operations reference',
       description:
-        'Справочник MCP (прогрессивное раскрытие). Без параметров — реестр ' +
-        '«действие/тема → когда нужно». С `topic` — полная инструкция: для редких операций — ' +
-        'состав `params`, `confirm`, эффекты, коды ошибок; для частых — детали из их `description`. ' +
-        'Редкие операции включают публикации и полки (`publications.*`/`shelves.*`). ' +
-        'Исполнитель редких операций — `etn.ops`.',
+        'MCP reference (progressive disclosure). Without parameters — the registry of ' +
+        '"action/topic → when it is needed". With `topic` — the full instruction: for rare operations — ' +
+        'the `params` shape, `confirm`, effects, error codes; for frequent ones — details from their `description`. ' +
+        'Rare operations include publications and shelves (`publications.*`/`shelves.*`). ' +
+        'The executor of rare operations is `etn.ops`.',
       inputSchema: Guide.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.guide'],
     },
@@ -2033,7 +2033,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (topic !== undefined) {
           return { content: [{ type: 'text', text: topic.body_md }] };
         }
-        throw new EtnError('VALIDATION_ERROR', `Неизвестное действие «${args.topic}».`, {
+        throw new EtnError('VALIDATION_ERROR', `Unknown action "${args.topic}".`, {
           field: 'topic',
           allowed: [...OPS_ACTION_NAMES, ...GUIDE_TOPIC_NAMES],
         });
@@ -2046,13 +2046,13 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.ops',
     {
-      title: 'Исполнитель редких операций',
+      title: 'Rare operations executor',
       description:
-        'Исполнитель редких операций, снятых из постоянного набора (прогрессивное раскрытие). ' +
-        '`action` — имя из справочника `etn.guide`; `params` — плоский объект; `confirm: true` ' +
-        'обязателен для деструктивных (delete/purge/truncate/import/layers.delete/merge), ' +
-        'без него VALIDATION_ERROR. Сначала прочитай `etn.guide { topic }` — состав params и эффекты. ' +
-        'Среди редких — администрирование, слои, экспорт/импорт, публикации и полки.',
+        'The executor of rare operations removed from the permanent set (progressive disclosure). ' +
+        '`action` — a name from the `etn.guide` reference; `params` — a flat object; `confirm: true` ' +
+        'is required for destructive ones (delete/purge/truncate/import/layers.delete/merge), ' +
+        'without it VALIDATION_ERROR. First read `etn.guide { topic }` — the params shape and effects. ' +
+        'Rare ones include administration, layers, export/import, publications and shelves.',
       inputSchema: Ops.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ops'],
     },
@@ -2060,7 +2060,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
       try {
         const entry = OPS_ACTIONS_BY_NAME.get(args.action);
         if (entry === undefined) {
-          throw new EtnError('VALIDATION_ERROR', `Неизвестное действие «${args.action}». Список — в etn.guide.`, {
+          throw new EtnError('VALIDATION_ERROR', `Unknown action "${args.action}". See the list in etn.guide.`, {
             field: 'action',
             allowed: OPS_ACTION_NAMES,
           });
@@ -2082,7 +2082,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (entry.destructive && args.confirm !== true) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            `Действие «${entry.action}» деструктивно: требуется confirm: true.`,
+            `Action "${entry.action}" is destructive: confirm: true is required.`,
             { field: 'confirm' },
           );
         }
@@ -2091,7 +2091,7 @@ export function registerGuideTools(mcp: McpServer, rt: McpRuntime): void {
         if (verr !== null) throw verr;
         const handler = HANDLERS[entry.action];
         if (handler === undefined) {
-          throw new EtnError('INTERNAL', `Нет обработчика для действия «${entry.action}».`);
+          throw new EtnError('INTERNAL', `No handler for action "${entry.action}".`);
         }
         return await handler(rt, params, extra as { requestId?: string | number });
       } catch (err) {

@@ -80,25 +80,26 @@ import {
 const PAGE_SIZE = 50;
 
 /** Russian labels for action codes (the wire format is English); из словаря
- *  локализации — это строки списка (задача ae76b75e, требование 93115633). */
+ *  локализации — это строки списка (задача ae76b75e, требование 93115633).
+ *  Геттеры: подписи берутся в момент рендера (ошибка ebed42d3). */
 const ACTION_LABELS: Record<ActionFilter, string> = {
-  created: t('activity.action.created'),
-  updated: t('activity.action.updated'),
-  deleted: t('activity.action.deleted'),
-  trashed: t('activity.action.trashed'),
-  restored: t('activity.action.restored'),
+  get created() { return t('activity.action.created'); },
+  get updated() { return t('activity.action.updated'); },
+  get deleted() { return t('activity.action.deleted'); },
+  get trashed() { return t('activity.action.trashed'); },
+  get restored() { return t('activity.action.restored'); },
 };
 
 /** Russian labels for entity types used in the «сущность» column. */
 const ENTITY_LABELS: Record<string, string> = {
-  thought: t('activity.entity.thought'),
-  link: t('activity.entity.link'),
-  thought_type: t('activity.entity.thought_type'),
-  link_type: t('activity.entity.link_type'),
-  property: t('activity.entity.property'),
-  comment: t('activity.entity.comment'),
-  attachment: t('activity.entity.attachment'),
-  layer: t('activity.entity.layer'),
+  get thought() { return t('activity.entity.thought'); },
+  get link() { return t('activity.entity.link'); },
+  get thought_type() { return t('activity.entity.thought_type'); },
+  get link_type() { return t('activity.entity.link_type'); },
+  get property() { return t('activity.entity.property'); },
+  get comment() { return t('activity.entity.comment'); },
+  get attachment() { return t('activity.entity.attachment'); },
+  get layer() { return t('activity.entity.layer'); },
 };
 
 /** Подпись действия строки (метка из словаря, иначе — сырой код). */
@@ -111,16 +112,22 @@ function entityTypeLabel(entityType: string): string {
   return ENTITY_LABELS[entityType] ?? entityType;
 }
 
-/** Варианты enum-ячейки «Тип действия» (флажки словаря, требование db5e1063). */
-const ACTION_ENUM_OPTIONS: ReadonlyArray<FilterValueEnumOption> = (
-  ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActionFilter>
-).map((action) => ({ value: action, label: ACTION_LABELS[action] }));
+/** Варианты enum-ячейки «Тип действия» (флажки словаря, требование db5e1063).
+ *  Функция: подписи берутся в момент рендера (ошибка ebed42d3). */
+function actionEnumOptions(): ReadonlyArray<FilterValueEnumOption> {
+  return (ACTIVITY_ACTION_FILTERS as ReadonlyArray<ActionFilter>).map((action) => ({
+    value: action,
+    label: ACTION_LABELS[action],
+  }));
+}
 
-/** Варианты enum-ячейки «Вид сущности» — словарь экрана. */
-const ENTITY_TYPE_ENUM_OPTIONS: ReadonlyArray<FilterValueEnumOption> = ENTITY_TYPE_OPTIONS.map((o) => ({
-  value: o.value,
-  label: ENTITY_LABELS[o.value] ?? o.value,
-}));
+/** Варианты enum-ячейки «Вид сущности» — словарь экрана; текст — в момент рендера. */
+function entityTypeEnumOptions(): ReadonlyArray<FilterValueEnumOption> {
+  return ENTITY_TYPE_OPTIONS.map((o) => ({
+    value: o.value,
+    label: ENTITY_LABELS[o.value] ?? o.value,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -575,8 +582,8 @@ function mountFilterPanel(area: HTMLElement): void {
     },
     sort: false,
     enumOptions: (leaf) => {
-      if (leaf.entity.kind === 'action') return ACTION_ENUM_OPTIONS;
-      if (leaf.entity.kind === 'entity_type') return ENTITY_TYPE_ENUM_OPTIONS;
+      if (leaf.entity.kind === 'action') return actionEnumOptions();
+      if (leaf.entity.kind === 'entity_type') return entityTypeEnumOptions();
       // Остальные операнды профиля выбирают ячейку значения сами
       // (дата/время, выбор сущности, текстовый ввод).
       return [];
@@ -587,8 +594,8 @@ function mountFilterPanel(area: HTMLElement): void {
       extra: [
         {
           id: 'saved',
-          label: 'Отборы…',
-          title: 'Выбрать сохранённый отбор',
+          label: t('activity.label.views'),
+          title: t('savedFilters.title.selectSohranennyyView'),
           place: 'name',
           onClick: () => void savedFilters?.openPicker(),
         },
@@ -619,7 +626,7 @@ function mountFilterPanel(area: HTMLElement): void {
             source: 'constructor' as const,
             code: 'build_warning' as const,
             path: '',
-            message: `Условие прежнего отбора не выражается профилем «События» и отброшено: ${condition}.`,
+            message: t('activity.conditionPrezhnegoViewNotVyrazhaetsyaProfilem', condition),
           })),
         ),
     },
@@ -1051,7 +1058,7 @@ function resolveIdName(entityType: string, id: string): string | null {
   if (entityType === 'link') {
     return thoughtTitles.get(id) ?? typeNames.get(id) ?? null;
   }
-  // Снимок мысли: «мысль типа <id>, …».
+  // Снимок мысли: `thought of type <id>, …`.
   if (entityType === 'thought') {
     return typeNames.get(id) ?? null;
   }
@@ -1202,12 +1209,12 @@ async function openEntity(row: ActivityRow): Promise<void> {
           const rows = await etn.propertyRegistry.list(networkId);
           const prop = rows.find((r) => r.value_type === 'link' && r.config?.link_type_id === row.entity_id);
           if (prop === undefined) {
-            notice('Для этого типа связи ещё нет свойства в реестре — редактирование невозможно.');
+            notice(t('activity.forThisTypeLinkMoreNo'));
             return;
           }
           openPropertyManagerEditor(prop, () => undefined);
         } catch (err) {
-          errorDialog('Открыть свойство-связь', err);
+          errorDialog(t('activity.openPropertyLink'), err);
         }
         return;
       }
@@ -1257,7 +1264,7 @@ async function openCommentOrAttachmentOwner(
   if (target.owner_type === 'publication') {
     // Редактор публикации появится вместе с экраном «Публикации» (задача
     // a3cfc018) — до тех пор показываем снимок из журнала.
-    throw new Error('редактор публикации недоступен');
+    throw new Error('редактор публикации недоступен'); // i18n: technical — ошибка программиста, не пользовательская строка
   }
   const link = await etn.links.get(networkId, target.owner_id, atLayer);
   store.update({
@@ -1270,23 +1277,23 @@ async function openCommentOrAttachmentOwner(
  *  editor. Shows the snapshot title + the action context. */
 function showSnapshotDialog(row: ActivityRow): void {
   const body = div('form-stack');
-  body.append(el('p', 'muted', 'Сущность удалена или недоступна. Снимок из журнала:'));
+  body.append(el('p', 'muted', t('activity.suschnostDeletedUnavailableSnapshotLog')));
   // Снимок — двухколоночная таблица «поле → значение»; собирается тем же
   // фасадом (ручной `<table>` в модуле запрещён сторожем guard-ui-tables).
   const meta: Array<{ name: string; value: string }> = [
-    { name: 'Тип', value: entityTypeLabel(row.entity_type) },
-    { name: 'Действие', value: actionLabel(row.action) },
+    { name: t('attachments.label.type'), value: entityTypeLabel(row.entity_type) },
+    { name: t('activity.name.action'), value: actionLabel(row.action) },
     {
-      name: 'Название',
+      name: t('activity.name.title'),
       value:
         row.entity_title === ''
           ? '—'
           : resolveEntityTitle(row.entity_type, row.entity_title),
     },
-    { name: 'Автор', value: row.user_name ?? row.user_id },
-    { name: 'Когда', value: formatDateTime(row.occurred_at_ms) },
-    { name: 'Слой', value: row.layer_id === null ? '—' : layerDisplayName(row.layer_id) },
-    { name: 'id сущности', value: row.entity_id },
+    { name: t('filter.author.avtor'), value: row.user_name ?? row.user_id },
+    { name: t('activity.name.kogda'), value: formatDateTime(row.occurred_at_ms) },
+    { name: t('activity.name.layer'), value: row.layer_id === null ? '—' : layerDisplayName(row.layer_id) },
+    { name: t('activity.name.idSuschnosti'), value: row.entity_id },
   ];
   const table = createTable<{ name: string; value: string }>({
     columns: [
@@ -1312,7 +1319,7 @@ function showSnapshotDialog(row: ActivityRow): void {
   table.element.style.height = '260px';
   body.append(table.element);
   showDialog({
-    title: 'Снимок события',
+    title: t('activity.title.snapshotEvents'),
     body,
     size: 'm',
     buttons: [{ label: t('actions.close'), primary: true }],
@@ -1327,14 +1334,14 @@ function showSnapshotDialog(row: ActivityRow): void {
  *  request. Toasts the resulting `{ removed, kept }` counts. */
 async function rollupDialog(): Promise<void> {
   await runMaintenance({
-    title: 'Свернуть журнал до даты',
-    buttonLabel: 'Свернуть',
+    title: t('activity.title.collapseLogDates'),
+    buttonLabel: t('listActions.collapse'),
     danger: false,
-    verb: 'Свернуть',
+    verb: t('listActions.collapse'),
     success(removed: number, kept: number | undefined): string {
       return kept === undefined
-        ? `Удалено записей: ${removed}.`
-        : `Удалено ${removed}, оставлено ${kept}.`;
+        ? t('activity.deletedRecords', removed)
+        : t('activity.deletedOstavleno', [removed, kept]);
     },
     run: (untilMs) => etn.activity.rollup(requireNetworkId(), untilMs),
   });
@@ -1342,12 +1349,12 @@ async function rollupDialog(): Promise<void> {
 
 async function truncateDialog(): Promise<void> {
   await runMaintenance({
-    title: 'Обрезать журнал до даты',
-    buttonLabel: 'Обрезать',
+    title: t('activity.title.obrezatLogDates'),
+    buttonLabel: t('activity.buttonLabel.obrezat'),
     danger: true,
-    verb: 'Обрезать',
+    verb: t('activity.buttonLabel.obrezat'),
     success(removed: number): string {
-      return `Удалено записей: ${removed}.`;
+      return t('activity.deletedRecords', removed);
     },
     run: (untilMs) => etn.activity.truncate(requireNetworkId(), untilMs),
   });
@@ -1365,12 +1372,12 @@ interface MaintenanceOpts {
 async function runMaintenance(opts: MaintenanceOpts): Promise<void> {
   const input = fieldInput({ extraClass: 'activity-date' }) as HTMLInputElement;
   input.type = 'date';
-  setTooltip(input, 'Все записи журнала до этой даты будут затронуты.');
-  const dateField = fieldRow({ label: 'Дата (включительно)', control: input });
+  setTooltip(input, t('activity.allRecordsLogDatesWillZatronuty'));
+  const dateField = fieldRow({ label: t('activity.label.dateVklyuchitelno'), control: input });
   const body = div('form-stack');
   body.append(
     dateField,
-    el('p', 'muted activity-maintenance-hint', 'Операция необратима — записи будут удалены без возможности восстановления.'),
+    el('p', 'muted activity-maintenance-hint', t('activity.operationNeobratimaRecordsWillDeletedWithout')),
   );
   const ok = await new Promise<number | null>((resolve) => {
     showDialog({
@@ -1397,7 +1404,7 @@ async function runMaintenance(opts: MaintenanceOpts): Promise<void> {
   if (ok === null) return;
   const confirmed = await confirmDialog(
     opts.title,
-    `${opts.verb} все записи журнала активности до выбранной даты? Действие необратимо.`,
+    t('activity.allRecordsLogAktivnostiVybrannoyDates', opts.verb),
     opts.danger,
   );
   if (!confirmed) return;

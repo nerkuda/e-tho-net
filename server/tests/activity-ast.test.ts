@@ -422,7 +422,7 @@ describe('события: отбор на общий AST (задача 2b230e8e)
           { network_id: NET, ast: { version: FILTER_AST_VERSION, filter: { op: 'and', children: [] } }, from_ms: 1 },
           'r',
         ),
-      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR' && /несовместимо/.test(e.message),
+      (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR' && /incompatible/.test(e.message),
     );
     // Пагинация допустима с AST.
     assert.doesNotThrow(() =>

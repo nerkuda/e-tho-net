@@ -21,7 +21,8 @@ import { CLIENT_META_KEY, EtnError, NOT_CONNECTED_ERROR_TEXT, NOT_CONNECTED_NETW
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
-import type { AppInfo, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult, ServerMaintenanceDto } from './contract.js';
+import type { AppInfo, ClientLanguage, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult, ServerMaintenanceDto } from './contract.js';
+import { mapSystemLanguage } from '../system-locale.js';
 import type { CompatibilityResult } from '../compatibility.js';
 import type { ConnectPrefill } from '../connect-prefill.js';
 import { openClientUpdatePage } from '../client-update.js';
@@ -1826,6 +1827,16 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'admin.listAudit',
     bind((filters?: Record<string, unknown>) => requireRest(deps).adminListAudit(filters ?? {})),
   );
+  // Язык сервера (ADR daab6ac4, задача f99f0542): нижняя ступень наследования
+  // интерфейса; меняет администратор.
+  handlers.set(
+    'admin.getServerLanguage',
+    bind(() => requireRest(deps).getServerLanguage()),
+  );
+  handlers.set(
+    'admin.setServerLanguage',
+    bind((language: string) => requireRest(deps).setServerLanguage(language)),
+  );
 
   // --- me ---------------------------------------------------------------------
   handlers.set(
@@ -1861,6 +1872,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'me.setSetting',
     bind((key: string, value: unknown) => requireRest(deps).setMySetting(key, value)),
+  );
+  // «Язык приложения» из профиля пользователя (ADR daab6ac4 §3, задача faba9ff4):
+  // хранимое значение и эффективный язык по каждой сети резолвит сервер.
+  handlers.set(
+    'me.getLanguageSettings',
+    bind(() => requireRest(deps).getMyLanguageSettings()),
   );
 
   // --- object locks (task 4f141756, docs/03-server-api.md §13c) --------------
@@ -2054,6 +2071,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     }),
   );
   handlers.set('system.appInfo', bind(() => appInfo()));
+  handlers.set('system.preferredLanguage', bind(() => preferredLanguage()));
   handlers.set(
     'system.health',
     bind(() => requireRest(deps).getHealth()),
@@ -2551,6 +2569,21 @@ async function appInfo(): Promise<AppInfo> {
     chrome: process.versions.chrome ?? '',
     node: process.versions.node ?? '',
   };
+}
+
+/**
+ * Язык системного окружения для первого запуска (задача e6374cd1): первое
+ * предпочтение ОС, сведённое к коду каталога (`src/main/system-locale.ts`).
+ * Пустой список/сбой Electron — исходный `ru`: стартовое отображение не может
+ * блокировать запуск.
+ */
+async function preferredLanguage(): Promise<ClientLanguage> {
+  const { app } = await import('electron');
+  try {
+    return mapSystemLanguage(app.getPreferredSystemLanguages()[0]);
+  } catch {
+    return 'ru';
+  }
 }
 
 /**

@@ -90,7 +90,7 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'the right button no longer pans the canvas',
     );
     assert.ok(
-      src.includes('левая кнопка по пустому месту'),
+      src.includes("t('miniGraph.kolesoZumLevayaKnopkaPustomuMestu')"),
       'the hint documents the left-button pan',
     );
     assert.ok(
@@ -325,11 +325,11 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'every header stat carries an explanatory tooltip',
     );
     const model = readText(SRC.model);
-    for (const label of ['Соседей:', 'Скрыто массовых:', 'Ещё не поместилось:']) {
-      assert.ok(model.includes(label), `the model names the stat «${label}»`);
+    for (const key of ['miniGraph.neighbours', 'miniGraph.hiddenMassovyh', 'miniGraph.moreNotPomestilos']) {
+      assert.ok(model.includes(`t('${key}'`), `the model names the stat «${key}»`);
     }
     assert.ok(
-      model.includes("LINKS_TAB_TITLE = 'Свойства'") && model.includes('LINKS_TAB_TITLE'),
+      model.includes("linksTabTitle()") && model.includes('export function linksTabTitle'),
       'the tooltip explains how to see the hidden links',
     );
     // Вкладки «Связи» в клиенте нет — прямые связи живут на «Свойствах»
@@ -393,19 +393,20 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
   it('подсказки: склонение, сторона при совпадении имён, реальная вкладка — 42a7c0a1', () => {
     const model = readText(SRC.model);
     assert.ok(
-      model.includes("from '../lib/plural.js'") && model.includes('pluralRu('),
-      'the «связь/связи/связей» form comes from the shared plural helper',
+      model.includes("from '../lib/i18n.js'") && model.includes("tp('plurals.link', n)"),
+      'the «связь/связи/связей» form comes from the shared plural API (e6374cd1)',
     );
     assert.ok(
-      model.includes("'связь', 'связи', 'связей'"),
-      'the plural forms are wired for the links word',
+      model.includes("'plurals.link'"),
+      'the plural key of the links word is one dictionary entry',
     );
     assert.ok(
-      /pair\.side === 'out' \? 'исходящие' : 'входящие'/.test(model),
+      /pair\.side === 'out' \? t\('miniGraph\.outgoing'\) : t\('miniGraph\.incoming'\)/.test(model),
       'colliding side names are distinguished by direction',
     );
     assert.ok(
-      model.includes('LINKS_TAB_TITLE = \'Свойства\''),
+      model.includes('export function linksTabTitle') &&
+        model.includes("return t('editor.title.properties')"),
       'the model knows where the full link list actually lives',
     );
   });
@@ -425,7 +426,7 @@ describe('локальный граф на d3 (приёмка 0.8.1)', () => {
       'the badge opens the shared trash dialog (restore path)',
     );
     assert.ok(
-      /Связи в корзине: \$\{mass\.trashed\}/.test(src),
+      /t\('miniGraph\.linkTrashClickToOpenTrash', mass\.trashed\)/.test(src),
       'the badge tooltip names the hidden trashed count',
     );
     const css = readText(SRC.css);

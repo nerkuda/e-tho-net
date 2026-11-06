@@ -35,14 +35,14 @@ import { store } from '../state.js';
 const APP_URL = 'https://github.com/nerkuda/e-tho-net';
 
 /** Author and licence (root `LICENSE`: MIT © 2026). */
-const APP_COPYRIGHT = '© 2026 В. Зайцев (aka Nerkuda)';
+const APP_COPYRIGHT = (): string => t('about.inZaycevAkaNerkuda');
 const APP_LICENSE = 'MIT';
 
-/** External links shown in the dialog (08-ui-spec.md §8.2). */
+/** External links shown in the dialog (08-ui-spec.md §8.2); подписи — геттеры. */
 const ABOUT_LINKS: Array<{ label: string; url: string }> = [
-  { label: 'Новое в версии', url: `${APP_URL}/blob/main/CHANGELOG.md` },
-  { label: 'Собранные релизы', url: `${APP_URL}/releases` },
-  { label: 'Текст лицензии', url: `${APP_URL}/blob/main/LICENSE` },
+  { get label() { return t('about.label.novoeVersion'); }, url: `${APP_URL}/blob/main/CHANGELOG.md` },
+  { get label() { return t('about.label.sobrannyeRelizy'); }, url: `${APP_URL}/releases` },
+  { get label() { return t('about.label.textLicenzii'); }, url: `${APP_URL}/blob/main/LICENSE` },
 ];
 
 /** Opens the «О программе» dialog. */
@@ -53,7 +53,7 @@ export function showAboutDialog(): void {
   logo.src = './logo.svg';
   logo.alt = 'ETN';
 
-  const versionLine = el('p', 'about-version', 'Версия …');
+  const versionLine = el('p', 'about-version', t('about.version'));
   const techLine = el('p', 'about-tech muted', '');
   techLine.hidden = true;
   const serverLine = el('p', 'about-server muted', '');
@@ -67,9 +67,9 @@ export function showAboutDialog(): void {
   left.append(
     logo,
     el('h2', 'about-title', 'ETN'),
-    el('p', 'about-tagline muted', 'The Endless Thought Network — self-hosted граф мыслей'),
+    el('p', 'about-tagline muted', t('about.theEndlessThoughtNetworkSelfHosted')),
     versionLine,
-    el('p', 'about-meta', `${APP_COPYRIGHT} · Лицензия ${APP_LICENSE}`),
+    el('p', 'about-meta', t('about.licenziya', [APP_COPYRIGHT(), APP_LICENSE])),
     linksRow,
     techLine,
     serverLine,
@@ -82,7 +82,7 @@ export function showAboutDialog(): void {
   body.append(left, right);
 
   showDialog({
-    title: 'О программе',
+    title: t('about.title.oProgramme'),
     body,
     // Две равные половины требуют места: прежняя роль `s` (460px) обрезала даже
     // версию/авторство. `l` (900px шириной) + фиксированная высота: тело не
@@ -96,7 +96,7 @@ export function showAboutDialog(): void {
   });
 
   void etn.system.appInfo().then((info) => {
-    versionLine.textContent = `Версия ${info.version}`;
+    versionLine.textContent = t('about.version2', info.version);
     techLine.textContent = `Electron ${info.electron} · Chromium ${info.chrome} · Node ${info.node}`;
     techLine.hidden = false;
   });
@@ -114,7 +114,7 @@ export function showAboutDialog(): void {
 async function loadServerLine(serverLine: HTMLElement): Promise<void> {
   const profileId = store.state.profileId;
   if (profileId === null) {
-    serverLine.textContent = 'Сервер: нет подключения';
+    serverLine.textContent = t('about.serverNoPodklyucheniya');
     serverLine.hidden = false;
     return;
   }
@@ -124,10 +124,10 @@ async function loadServerLine(serverLine: HTMLElement): Promise<void> {
       etn.system.version(),
     ]);
     const active = profiles.find((p) => p.id === profileId);
-    const name = active !== undefined ? `${active.label} (${active.baseUrl})` : 'сервер';
-    serverLine.textContent = `Сервер: ${name} · версия ${version.version}`;
+    const name = active !== undefined ? `${active.label} (${active.baseUrl})` : t('about.server');
+    serverLine.textContent = t('about.serverVersion', [name, version.version]);
   } catch {
-    serverLine.textContent = 'Сервер: нет подключения';
+    serverLine.textContent = t('about.serverNoPodklyucheniya');
   }
   serverLine.hidden = false;
 }
@@ -165,5 +165,5 @@ function thirdPartyRow(comp: ThirdPartyComponent): HTMLElement {
 /** Opens an external link in the OS browser; failures surface as a toast. */
 async function openLink(url: string): Promise<void> {
   const err = await etn.system.openExternal(url);
-  if (err !== '') notice(`Не удалось открыть: ${err}`, 'error');
+  if (err !== '') notice(t('attachments.notSucceededOpen', err), 'error');
 }

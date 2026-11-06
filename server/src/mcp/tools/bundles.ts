@@ -196,8 +196,8 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
     // отбросил неизвестный ключ.
     .refine((v) => v.thought === undefined || v.ref !== undefined, {
       message:
-        'элемент с блоком `thought` (новая мысль) обязан объявить локальный `ref` ' +
-        'на уровне элемента `thoughts[]`, рядом с `thought`, а не внутри него: ' +
+        'an item with a `thought` block (a new thought) must declare a local `ref` ' +
+        'at the `thoughts[]` item level, next to `thought`, not inside it: ' +
         '`{ "ref": "a", "thought": { "title": "…" } }`',
     })
     // Item-level `type_id`/`type` (bug 870c0c0d): тип задаётся по id ИЛИ по
@@ -220,28 +220,28 @@ export function registerBundleTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.thoughts.write',
     {
-      title: 'Батч-запись мыслей',
+      title: 'Thought batch write',
       description:
-        'Пишет 1–' +
+        'Writes 1–' +
         MCP_MAX_THOUGHTS_PER_WRITE +
-        ' связанных единиц знания одной транзакцией: мысли, постоянные и хронологические ' +
-        'комментарии, свойства, связи, вложения. `thought_id` XOR `thought`: новая мысль идёт ' +
-        'блоком `thought`; локальный `ref` — на уровне элемента `thoughts[]`, рядом с ' +
-        '`thought`: `{ "ref": "a", "thought": { "title": "…" } }`; `ref` ВНУТРИ `thought` — ' +
+        ' related units of knowledge in one transaction: thoughts, permanent and chronological ' +
+        'comments, properties, links, attachments. `thought_id` XOR `thought`: a new thought goes ' +
+        'in the `thought` block; the local `ref` lives at the `thoughts[]` item level, next to ' +
+        '`thought`: `{ "ref": "a", "thought": { "title": "…" } }`; `ref` INSIDE `thought` — ' +
         '`VALIDATION_ERROR`; ' +
-        '`title`/`synonyms`/`type`/`type_id` — ВНУТРИ `thought`, у существующей мысли их задают ' +
-        'item-level (вместе с `thought` — `VALIDATION_ERROR`; `synonyms` ЗАМЕНЯЮТ набор, ' +
-        'item-level `active` — в обоих случаях). `links[].target_id` XOR `target_ref`; ' +
-        'свойства-связи в `properties` тоже принимают `ref`; `on_duplicate`: ' +
-        '`fail`/`reuse`/`update`. `properties` принимает ЛЮБОЕ свойство справочника, не только ' +
-        'привязанное к типу: значение создаётся как внетиповое (`outside_type: true` в чтении). ' +
-        'Для свойства-связи ключ адресует сторону по её имени; при неоднозначном (симметричном) ' +
-        'имени сторону задаёт `etn.properties.add` с `side`. ' +
-        'ВНИМАНИЕ: item-level `title` ПЕРЕИМЕНОВЫВАЕТ мысль; ' +
-        'заголовок записи — `chronicle[].title`. ' +
-        'Один write-бюджет и одна строка `audit_log` на вызов; ' +
-        '`warnings` — по батчу. Неизвестные ключи отвергаются `VALIDATION_ERROR` ' +
-        '(`details.fields`). Пошагово — `etn.how_to_write_batch`.',
+        '`title`/`synonyms`/`type`/`type_id` — INSIDE `thought`; on an existing thought they are set at ' +
+        'item level (together with `thought` — `VALIDATION_ERROR`; `synonyms` REPLACE the set, ' +
+        'item-level `active` — in both cases). `links[].target_id` XOR `target_ref`; ' +
+        'link properties in `properties` accept `ref` too; `on_duplicate`: ' +
+        '`fail`/`reuse`/`update`. `properties` accepts ANY property from the catalogue, not only ' +
+        'one bound to the type: the value is created as out-of-type (`outside_type: true` on read). ' +
+        'For a link property the key addresses the side by its name; with an ambiguous (symmetric) ' +
+        'name the side is set by `etn.properties.add` with `side`. ' +
+        'WARNING: item-level `title` RENAMES the thought; ' +
+        'an entry title is `chronicle[].title`. ' +
+        'One write budget and one `audit_log` row per call; ' +
+        '`warnings` are per batch. Unknown keys are rejected with `VALIDATION_ERROR` ' +
+        '(`details.fields`). Step-by-step — `etn.how_to_write_batch`.',
       inputSchema: defineContract('etn.thoughts.write', WriteSchema, {}).schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.write'],
     },

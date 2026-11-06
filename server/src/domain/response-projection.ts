@@ -235,9 +235,9 @@ export function stripStructuralLinkProperties<T extends { properties?: unknown }
  * карточки и в `counters` разделов структуры.
  */
 export const STRUCTURAL_PROPERTIES_NOTE =
-  'Структурные свойства-связи «Родители»/«Потомки» объявлены на корневом типе ' +
-  'и наследуются всеми типами мыслей — в properties[] каждого типа они не ' +
-  'повторяются.';
+  "The structural link properties \"Parents\"/\"Descendants\" are declared on the root type " +
+  "and are inherited by all thought types — they are not repeated in each type's properties[] " +
+  "entries.";
 
 /**
  * Сервисные поля привязки свойства в записи `properties[]` каталога

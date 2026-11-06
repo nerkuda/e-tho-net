@@ -213,7 +213,7 @@ function parseAttachBody(body: Record<string, unknown>, requestId: string): Atta
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'при property_id поля key/value_type/config/description не допускаются — это поля свойства в справочнике.',
+        "with property_id the key/value_type/config/description fields are not allowed — these are registry property fields.",
         { field: 'property_id' },
         requestId,
       );
@@ -230,7 +230,7 @@ function parseAttachBody(body: Record<string, unknown>, requestId: string): Atta
   if (key === undefined || key.trim() === '' || out.value_type === undefined) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'нужны либо property_id, либо key и value_type.',
+      "either property_id or key and value_type are required.",
       { field: 'key' },
       requestId,
     );
@@ -296,7 +296,7 @@ function parseTypePropertyUpdateBody(
   if (rejected.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `PATCH …/properties/{id} меняет только роль в типе (required, position, side, allowed_target_type_ids, allowed_source_type_ids); нельзя: ${rejected.join(', ')}.`,
+      `PATCH …/properties/{id} only changes the role in the type (required, position, side, allowed_target_type_ids, allowed_source_type_ids); not allowed: ${rejected.join(', ')}.`,
       { field: rejected[0], allowed },
       requestId,
     );
@@ -458,7 +458,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (referencedRole !== undefined) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              `Тип используется сетью в роли «${referencedRole}»; сначала снимите роль через PATCH /networks/{id}.`,
+              `The type is used by the network in the "${referencedRole}" role; remove the role via PATCH /networks/{id} first.`,
               {
                 entity: 'thought_type',
                 id,
@@ -547,7 +547,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         // Здесь — 422 со ссылкой на правильный контракт.
         throw new EtnError(
           'VALIDATION_ERROR',
-          'создание типа связи идёт через свойство-связь — POST /networks/{nid}/properties с value_type="link" и парой name_forward/name_reverse.',
+          "a link type is created through a link property — POST /networks/{nid}/properties with value_type=\"link\" and a name_forward/name_reverse pair.",
           {
             field: 'endpoint',
             hint: 'POST /networks/{nid}/properties',
@@ -623,11 +623,11 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         // (требование 09f692ff).
         throw new EtnError(
           'VALIDATION_ERROR',
-          'удаление типа связи идёт через свойство-связь — DELETE /networks/{nid}/properties/{id}.',
+          "a link type is deleted through a link property — DELETE /networks/{nid}/properties/{id}.",
           {
             field: 'endpoint',
             hint: 'DELETE /networks/{nid}/properties/{id}',
-            note: 'рёбра теряют type_id и становятся структурными',
+            note: "edges lose type_id and become structural",
           },
           reply.request.id,
         );
@@ -700,7 +700,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
               if (existing !== null) {
                 throw new EtnError(
                   'DUPLICATE',
-                  `свойство «${input.key}» уже есть в этой мыслесети`,
+                  `property "${input.key}" already exists in this network`,
                   { name: input.key, property_id: existing.id },
                   req.id,
                 );
@@ -913,7 +913,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (!('value' in body)) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'value обязателен (значение или null).',
+              "value is required (a value or null).",
               { field: 'value' },
               req.id,
             );
@@ -928,7 +928,7 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (value !== null && !scalarOk && !linkDefaultOk) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'value должен быть строкой, числом, булевым, массивом id мыслей (свойство-связь) или null.',
+              "value must be a string, number, boolean, an array of thought ids (a link property) or null.",
               { field: 'value' },
               req.id,
             );

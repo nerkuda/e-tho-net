@@ -107,7 +107,7 @@ describe('MCP stdio transport (F1)', { skip: !nativeAvailable() }, () => {
         encoding: 'utf8',
       });
       assert.equal(run.status, 1);
-      assert.match(run.stderr, /API-key/);
+      assert.match(run.stderr, /API key/);
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }

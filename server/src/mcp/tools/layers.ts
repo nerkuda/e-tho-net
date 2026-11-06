@@ -34,7 +34,7 @@ export function registerLayersReadTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.layers.list',
     {
-      title: 'Список слоёв',
+      title: 'List layers',
       description:
         'All layers of the network with hierarchy metadata: id, parent_id, title, comment, git_branch, ' +
         "depth, children_count (the DELETE cascade confirmation) and `current` — true on the calling key's " +
@@ -58,7 +58,7 @@ export function registerLayersWriteTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.layers.select',
     {
-      title: 'Переключить текущий слой',
+      title: 'Switch current layer',
       description:
         "Switch the calling API key's current session layer: every later call of this key — reads and " +
         "writes alike — runs in the new layer's context. A service (reserve) layer cannot be selected; " +

@@ -130,7 +130,7 @@ describe(
             'описание etn.thoughts.write обязано называть chronicle[].title (заголовок записи)',
           );
           assert.ok(
-            description.includes('ПЕРЕИМЕНОВЫВАЕТ'),
+            description.includes('RENAMES'),
             'описание etn.thoughts.write обязано предупреждать, что item-level title переименовывает мысль',
           );
 
@@ -145,7 +145,7 @@ describe(
               ? (first as { text: string }).text
               : '';
           assert.ok(
-            promptText.includes('chronicle[].title') && promptText.includes('ПЕРЕИМЕНОВЫВАЕТ'),
+            promptText.includes('chronicle[].title') && promptText.includes('RENAMES'),
             'etn.how_to_write_batch обязан различать item-level title и chronicle[].title',
           );
         } finally {

@@ -47,7 +47,7 @@ export type MaintenanceReason = typeof MAINTENANCE_REASON;
  * Текст отказа периода обслуживания — общий для REST (`503`) и MCP: одна и та
  * же формулировка из требования «сервер обновляется, повторите позже».
  */
-export const SERVER_UPDATING_MESSAGE = 'Сервер обновляется, повторите позже.';
+export const SERVER_UPDATING_MESSAGE = "The server is updating, try again later.";
 
 /** Рекомендуемая пауза до повтора по умолчанию, секунды. */
 export const DEFAULT_MAINTENANCE_RETRY_AFTER_SECONDS = 300;

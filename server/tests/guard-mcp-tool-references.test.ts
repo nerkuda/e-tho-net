@@ -23,10 +23,10 @@
  * Разрешены ссылки только на живой набор: `MCP_TOOL_NAMES`,
  * `MCP_PROMPT_NAMES`, имена MCP-ресурсов и темы справочника. Историческая
  * справка допустима, только если ссылка явно помечена формулировкой снятия:
- * «миграция», «заменён(ы)», «поглощён» или «снят из постоянного набора»
+ * «migration», «replaced», «absorbed» или «removed from the permanent set»
  * (строка-маркер распространяется на абзац до пустой строки — так живёт
- * таблица миграции в `etn.how_to_write_batch`). Голые «удалён»/«снят»/
- * «удаление»/«снятие» маркером НЕ считаются: рядом с бытовым словом ссылка
+ * таблица миграции в `etn.how_to_write_batch`). Голые «deleted»/«removed»/
+ * «deletion» маркером НЕ считаются: рядом с бытовым словом ссылка
  * на несуществующий инструмент обязана краснеть.
  *
  * Сторож поднимает реальную MCP-сессию (`buildMcpContext` +
@@ -55,11 +55,11 @@ const TOOL_REF = /etn\.[a-z_]+(?:\.[a-z_]+)+/g;
 
 /**
  * Маркеры исторической справки — только явная формулировка снятия инструмента.
- * Бытовая лексика («удаление», «снятие», «помеченные на удаление») маркером не
+ * Бытовая лексика («deleted», «removed», «marked for deletion») маркером не
  * является: иначе висячая ссылка в такой фразе остаётся незамеченной.
  */
 const REMOVAL_MARKERS =
-  /миграц|заменен|заменён|поглощ|снят[а-яё]*\s+из\s+постоянного\s+набора/iu;
+  /migration|replaced|absorbed|removed\s+from\s+the\s+permanent\s+set/iu;
 
 /** Живые имена инструментов и промптов, на которые вправе ссылаться тексты. */
 const LIVE_REFS: ReadonlySet<string> = new Set<string>([
@@ -214,23 +214,23 @@ describe('guard: агентские тексты MCP не ссылаются н�
     // покраснеть именно на этой поверхности (возврат верификатора, круг 1).
     const resourceProbe = danglingRefs({
       source: 'resources/templates/list etn.trash.description',
-      text: 'Помеченные на удаление мысли и связи сети, см. `etn.trash.list`.',
+      text: 'Thoughts and links of the network marked for deletion, see `etn.trash.list`.',
     });
     assert.equal(resourceProbe.length, 1);
     assert.match(resourceProbe[0] ?? '', /etn\.trash\.list/);
 
-    // Бытовая лексика «удаление»/«снятие» — не маркер снятия инструмента.
+    // Бытовая лексика «deleted»/«removed» — не маркер снятия инструмента.
     assert.equal(
       danglingRefs({
         source: 'tools/list etn.layers.list.description',
-        text: 'Помеченные на удаление слои показываются вместе с `etn.layers.ghost_probe`.',
+        text: 'Layers marked for deletion are shown together with `etn.layers.ghost_probe`.',
       }).length,
       1,
     );
     assert.equal(
       danglingRefs({
         source: 'probe',
-        text: 'Снятие пометки не затрагивает `etn.layers.ghost_probe`.',
+        text: 'Clearing the mark does not touch `etn.layers.ghost_probe`.',
       }).length,
       1,
     );
@@ -239,21 +239,21 @@ describe('guard: агентские тексты MCP не ссылаются н�
     assert.deepEqual(
       danglingRefs({
         source: 'probe',
-        text: 'Снят из постоянного набора: `etn.layers.merge`.',
+        text: 'Removed from the permanent set: `etn.layers.merge`.',
       }),
       [],
     );
     assert.deepEqual(
       danglingRefs({
         source: 'probe',
-        text: ['9. Миграция со старых инструментов:', '- `etn.thoughts.create` → `thought`.', ''].join('\n'),
+        text: ['9. Migration from the old tools:', '- `etn.thoughts.create` → `thought`.', ''].join('\n'),
       }),
       [],
     );
     assert.deepEqual(
       danglingRefs({
         source: 'probe',
-        text: 'Эти операции заменены батчем: `etn.thoughts.create`, `etn.links.create`.',
+        text: 'These operations are replaced by the batch: `etn.thoughts.create`, `etn.links.create`.',
       }),
       [],
     );

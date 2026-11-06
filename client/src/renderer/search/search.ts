@@ -103,6 +103,9 @@ import { createDebouncedWriter } from '../lib/debounced-writer.js';
 import { menuAction, isInsideMenu, showMenuAt } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { t } from '../lib/i18n.js';
+// Пользовательский текст неразрешённого токена — по `reason`, а не по
+// серверному `message` (ADR daab6ac4 §4); помощник общий с редактором отбора.
+import { tokenIssueMessage } from '../lib/token-issue-message.js';
 import {
   UI_STATE_KEY,
   type Link,
@@ -228,7 +231,7 @@ export function mountSearch(next: SearchChrome): () => void {
 
   const toggle = iconButton({
     icon: svgIcon('filter'),
-    title: 'Настройки поиска',
+    title: t('search.title.settingsSearch'),
     role: 'ghost',
     class: 'search-settings-toggle',
     onClick: () => {
@@ -787,7 +790,7 @@ async function run(): Promise<void> {
   persistState();
   const resultsBox = chrome.host.querySelector('.search-results');
   if (resultsBox !== null) {
-    resultsBox.replaceChildren(el('span', 'muted', 'Поиск…'));
+    resultsBox.replaceChildren(el('span', 'muted', t('actions.search')));
   }
   const idQuery = parseThoughtIdLookupQuery(q);
   if (idQuery !== null) {
@@ -825,7 +828,7 @@ async function run(): Promise<void> {
     renderResults(lastResults);
   } catch (err) {
     if (resultsBox !== null) {
-      resultsBox.replaceChildren(operationError(err, 'Ошибка поиска'));
+      resultsBox.replaceChildren(operationError(err, t('search.errorSearch')));
     }
   }
 }
@@ -848,7 +851,7 @@ async function runById(networkId: string, id: string): Promise<void> {
     if (chrome !== null) {
       const resultsBox = chrome.host.querySelector('.search-results');
       if (resultsBox !== null) {
-        resultsBox.replaceChildren(operationError(err, 'Ошибка поиска'));
+        resultsBox.replaceChildren(operationError(err, t('search.errorSearch')));
       }
     }
   }
@@ -867,7 +870,7 @@ function renderIdResult(thought: Thought | null): void {
   const section = div('search-group');
   const header = div('search-group-header');
   const caret = span('▾', 'group-caret');
-  const label = span(`Мысль по ID (${thought === null ? 0 : 1})`, 'group-title');
+  const label = span(t('search.thoughtId', thought === null ? 0 : 1), 'group-title');
   header.append(caret, label);
   const body = div('search-group-body');
   header.addEventListener('click', () => {
@@ -906,7 +909,7 @@ function renderIdResult(thought: Thought | null): void {
     markThoughtCommentPreview(row, thought.id, thought.title);
     body.append(row);
   } else {
-    body.append(el('p', 'muted', 'Мысль с указанным ID отсутствует.'));
+    body.append(el('p', 'muted', t('addDialog.thoughtUkazannymIdOtsutstvuet')));
   }
   section.append(header, body);
   resultsBox.append(section);
@@ -1029,7 +1032,7 @@ function renderUnresolvedDiagnostics(
   const block = div('search-diagnostics');
   block.append(el('p', 'search-diagnostic-warning', t('search.unresolvedTokens')));
   for (const issue of issues) {
-    block.append(el('div', 'search-diagnostic-item', issue.message));
+    block.append(el('div', 'search-diagnostic-item', tokenIssueMessage(issue.token, issue.reason)));
   }
   box.append(block);
 }
@@ -1040,7 +1043,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
   if (resultsBox === null) return;
   resultsBox.replaceChildren();
   if (response === null) {
-    resultsBox.append(el('p', 'muted', 'Введите запрос (минимум 3 символа).'));
+    resultsBox.append(el('p', 'muted', t('search.enterZaprosMinimumSimvola')));
     return;
   }
   // Диагностика неразрешённых токенов AST (требование b7fdab20) — НАД группами
@@ -1084,7 +1087,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
   }> = [
     {
       key: 'names',
-      title: 'Найдено по именам',
+      title: t('search.title.foundImenam'),
       hits: response.by_names.map((hit) => {
         const key = `thought:${hit.thought_id}`;
         const activate = activateHit(key, () => focusFromUi(hit.thought_id));
@@ -1110,7 +1113,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
     },
     {
       key: 'texts',
-      title: 'Найдено по текстам',
+      title: t('search.title.foundTekstam'),
       hits: response.by_texts.map((hit) => {
         const key = `thought:${hit.thought_id}`;
         const activate = activateHit(key, () => focusFromUi(hit.thought_id));
@@ -1138,7 +1141,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
     },
     {
       key: 'links',
-      title: 'Найдено связей',
+      title: t('search.title.foundLinks'),
       hits: response.by_links.map((hit) => {
         const key = `link:${hit.link_id}`;
         const activate = activateHit(key, () => void openLinkHit(hit.link_id));
@@ -1155,7 +1158,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
     },
     {
       key: 'chronology',
-      title: 'Найдено в хронологии',
+      title: t('search.title.foundHronologii'),
       hits: response.by_chrono.map((hit) => {
         const key = `chrono:${hit.owner}:${hit.owner_id}`;
         const activate = activateHit(key, () => void openChronoHit(hit.owner, hit.owner_id));
@@ -1190,7 +1193,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
     });
     section.append(header, body);
     if (empty) {
-      body.append(el('p', 'muted', 'Ничего не найдено.'));
+      body.append(el('p', 'muted', t('attachments.nichegoNotFound')));
     } else {
       for (const hit of group.hits) {
         const row = div('search-hit');
@@ -1357,10 +1360,10 @@ function buildSettingsZone(zone: HTMLElement): void {
   };
   const placesRow = div('search-settings-row');
   placesRow.append(
-    span('Места поиска:', 'search-settings-label'),
-    mkCheck('мысли', 'onlyThoughts'),
-    mkCheck('связи', 'onlyLinks'),
-    mkCheck('хроники', 'onlyChrono'),
+    span(t('search.placesSearch'), 'search-settings-label'),
+    mkCheck(t('clipboard.thought2'), 'onlyThoughts'),
+    mkCheck(t('clipboard.link2'), 'onlyLinks'),
+    mkCheck(t('search.hroniki'), 'onlyChrono'),
   );
 
   // --- мыслевые настройки: единый редактор (профиль «мысли») ---------------

@@ -130,9 +130,9 @@ describe('помеченное ребро на карте — якоря отр�
     assert.ok(src.includes("const TRASHED_DASH = '4 4'"), 'штриховая линия корзины');
     assert.ok(src.includes('TRASHED_OPACITY'), 'приглушение линии корзины');
     assert.ok(src.includes("classList.add('link-trashed')"), 'класс помеченной линии');
-    assert.ok(src.includes('TRASHED_LABEL_SUFFIX'), 'подпись «в корзине» у типа связи');
-    assert.ok(src.includes("' · в корзине'"), 'попап называет корзину словами');
-    assert.ok(src.includes("'Связь в корзине'"), 'подсказка линии называет корзину');
+    assert.ok(src.includes('trashedLabelSuffix'), 'подпись «в корзине» у типа связи');
+    assert.ok(src.includes("t('canvasLinks.inTrash2')"), 'попап называет корзину словами');
+    assert.ok(src.includes("t('canvasLinks.linkTrash')"), 'подсказка линии называет корзину');
   });
 
   it('клик по метке корзины открывает диалог связи (восстановление)', () => {

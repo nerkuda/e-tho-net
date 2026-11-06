@@ -313,7 +313,7 @@ describe(
         // а не только в статистике: иначе зависание в допуске остаётся немым.
         t.mock.timers.tick(queueWaitWarnMs);
         const admissionWarn = warns.find(
-          (w) => w.msg === 'write pool: задача долго ждёт допуска',
+          (w) => w.msg === 'write pool: job is waiting for admission for a long time',
         );
         assert.ok(
           admissionWarn !== undefined,
@@ -378,7 +378,7 @@ describe(
       });
       const admissionWaits = (): number[] =>
         warns
-          .filter((w) => w.msg === 'write pool: задача долго ждёт допуска')
+          .filter((w) => w.msg === 'write pool: job is waiting for admission for a long time')
           .map((w) => Number(w.fields.waitMs));
 
       try {
@@ -432,7 +432,7 @@ describe(
         debug: (): void => {},
         info: (): void => {},
         warn: (fields: unknown, msg?: string): void => {
-          if (msg === 'write pool: задача долго ждёт допуска') {
+          if (msg === 'write pool: job is waiting for admission for a long time') {
             warns.push({ atMs: Date.now(), waitMs: Number((fields as { waitMs?: number }).waitMs) });
           }
         },
@@ -803,8 +803,8 @@ describe(
         const aRecords = records
           .filter((r) => r.networkId === networkId)
           .map((r) => r.msg);
-        const stopped = aRecords.indexOf('write pool: воркер сети остановлен, база освобождена');
-        const spawnedAgain = aRecords.indexOf('write pool: воркер сети поднят', 1);
+        const stopped = aRecords.indexOf('write pool: network worker stopped, database released');
+        const spawnedAgain = aRecords.indexOf('write pool: network worker started', 1);
         assert.ok(stopped >= 0, 'завершение прежнего воркера зафиксировано');
         assert.ok(spawnedAgain >= 0, 'новый воркер сети A поднят');
         assert.ok(

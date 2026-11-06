@@ -35,9 +35,11 @@ import {
   searchSettingsPlacement,
 } from '../src/renderer/lib/pure.js';
 import { assembledStylesFile } from './renderer-css.js';
+import { tokenIssueMessage } from '../src/renderer/lib/token-issue-message.js';
 
 const RENDERER = resolve(import.meta.dirname, '..', 'src', 'renderer');
 const SEARCH_TS = resolve(RENDERER, 'search', 'search.ts');
+const FILTER_DIAGNOSTICS_TS = resolve(RENDERER, 'lib', 'filter-diagnostics.ts');
 const WORKSPACE_TS = resolve(RENDERER, 'screens', 'workspace.ts');
 const STYLES_CSS = assembledStylesFile();
 const CONSTANTS_TS = resolve(
@@ -264,7 +266,7 @@ describe('компоновка зоны настроек: места поиск�
 
   it('строка «Места поиска» — первая; корпусных полей «Ограничения» нет', () => {
     const search = readText(SEARCH_TS);
-    assert.match(search, /span\('Места поиска:', 'search-settings-label'\)/);
+    assert.match(search, /span\(t\('search\.placesSearch'\), 'search-settings-label'\)/);
     assert.ok(!search.includes("span('Ограничения:'"), 'строки «Ограничения» больше нет');
     assert.equal(
       (search.match(/div\('search-settings-row'\)/g) ?? []).length,
@@ -286,14 +288,14 @@ describe('компоновка зоны настроек: места поиск�
 
   it('флажки мест поиска: мысли, связи, хроники (области FTS)', () => {
     const search = readText(SEARCH_TS);
-    for (const [label, key] of [
-      ["'мысли'", "'onlyThoughts'"],
-      ["'связи'", "'onlyLinks'"],
-      ["'хроники'", "'onlyChrono'"],
+    for (const [labelKey, key] of [
+      ['clipboard.thought2', 'onlyThoughts'],
+      ['clipboard.link2', 'onlyLinks'],
+      ['search.hroniki', 'onlyChrono'],
     ] as const) {
       assert.ok(
-        search.includes(`mkCheck(${label}, ${key})`),
-        `флажок ${label} привязан к ${key}`,
+        search.includes(`mkCheck(t('${labelKey}'), '${key}')`),
+        `флажок ${labelKey} привязан к ${key}`,
       );
     }
     assert.ok(!search.includes("mkCheck('неактуальные'"), 'неактуальные — строка редактора');
@@ -386,6 +388,32 @@ describe('единый редактор, подвал команд и запро
       search,
       /search-diagnostic-warning/,
       'предупреждение о неразрешённых токенах — своим блоком',
+    );
+  });
+
+  it('текст диагностики токена — по reason, серверный message не показывается', () => {
+    const search = readText(SEARCH_TS);
+    assert.match(
+      search,
+      /tokenIssueMessage\(issue\.token, issue\.reason\)/,
+      'пользовательский текст строится по машиночитаемой причине',
+    );
+    assert.ok(!/issue\.message/.test(search), 'серверный message в поиске не рисуется');
+    // Помощник один: редактор отбора берёт его же, второй switch не заводится.
+    assert.match(
+      readText(FILTER_DIAGNOSTICS_TS),
+      /from '\.\/token-issue-message\.js'/,
+      'редактор отбора использует общий помощник',
+    );
+    // Причина известна — локализованный текст; неизвестна — общий, без падения.
+    assert.equal(tokenIssueMessage('$ghost', 'unknown_token'), 'токен «$ghost» не разрешён');
+    assert.equal(
+      tokenIssueMessage('$ghost', 'future_reason'),
+      'условие «$ghost» не удалось разрешить',
+    );
+    assert.ok(
+      !/Unknown token|unrecognized/i.test(tokenIssueMessage('$ghost', 'unknown_token')),
+      'английский серверный текст не уходит пользователю',
     );
   });
 });

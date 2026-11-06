@@ -43,8 +43,8 @@ import {
 
 /** Текст предупреждения о ссылке на установщик не по HTTPS. */
 export const INSTALLER_HTTPS_WARNING =
-  'Ссылка на установщик получена не по HTTPS: настраиваемый фид должен отдавать ' +
-  'ассет по https — иначе обновление будет отклонено.';
+  "The installer link was received over non-HTTPS: a custom feed must serve " +
+  "the asset over https — otherwise the update will be rejected.";
 
 /**
  * Предупреждение для ответа: `download_url` есть, но не https (или не URL).
@@ -94,7 +94,7 @@ function targetVersionFromBody(req: FastifyRequest): string {
   if (typeof raw !== 'string' || raw.trim() === '') {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'Поле target_version обязательно и должно быть строкой версии (например, "0.15.1").',
+      "The target_version field is required and must be a version string (for example, \"0.15.1\").",
       { field: 'target_version' },
       req.id,
     );
@@ -156,7 +156,7 @@ export const systemUpdateRoutes: FastifyPluginAsync = async (app: FastifyInstanc
       await app.updateChecker.checkNow();
     } catch (err) {
       if (err instanceof UpdateCheckInProgressError) {
-        throw new EtnError('RATE_LIMITED', 'Проверка обновлений уже идёт.', undefined, req.id);
+        throw new EtnError('RATE_LIMITED', "An update check is already running.", undefined, req.id);
       }
       throw err;
     }

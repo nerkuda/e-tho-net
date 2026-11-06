@@ -22,6 +22,8 @@ import {
   type ShelfItem,
 } from '@etn/shared';
 
+import { formatDate, getLang } from '../../lib/i18n.js';
+
 /** Вид библиотеки: горизонтальные полки или плоский список (полки — группы). */
 export type PublicationsViewMode = 'shelves' | 'list';
 
@@ -186,7 +188,7 @@ export function coverInitials(title: string): string {
     .slice(0, 2)
     .map((word) => [...word][0] ?? '')
     .join('');
-  return letters.toLocaleUpperCase('ru-RU');
+  return letters.toLocaleUpperCase(getLang());
 }
 
 /** Отображаемое авторство: переопределённый текст или создатель. */
@@ -316,12 +318,12 @@ export function nextShelfTitle(current: string, raw: string): string | null {
   return title;
 }
 
-/** Строковое представление «даты сборки» публикации (ISO → локальная дата). */
+/** Строковое представление «даты сборки» публикации (ISO → дата текущего языка). */
 export function assemblyDateLabel(iso: string | null): string {
   if (iso === null || iso === '') return '';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleDateString('ru-RU');
+  return formatDate(date);
 }
 
 // ---------------------------------------------------------------------------

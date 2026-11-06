@@ -50,7 +50,7 @@ describe('диалоги слоя: роль m и цвета в одну стро
     const src = read('screens/layers.ts');
     assert.match(
       src,
-      /title:\s*'Новый слой изменений',[\s\S]{0,200}?size:\s*'m'/,
+      /title:\s*t\('layers\.title\.novyyLayerChanges'\),[\s\S]{0,200}?size:\s*'m'/,
       'диалог создания слоя обязан использовать роль m без прокрутки',
     );
   });
@@ -59,7 +59,7 @@ describe('диалоги слоя: роль m и цвета в одну стро
     const src = read('screens/layers.ts');
     assert.match(
       src,
-      /Свойства слоя[\s\S]{0,400}?size:\s*'m'/,
+      /layers\.propertiesLayer2[\s\S]{0,400}?size:\s*'m'/,
       'диалог свойств слоя обязан использовать роль m без прокрутки',
     );
     assert.match(

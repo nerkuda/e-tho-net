@@ -19,6 +19,7 @@ import { confirmDialog, errorDialog, promptDialog } from './dialog.js';
 import { duplicateFilterName } from './pure.js';
 import { openSavedFilterDialog } from './saved-filter-bar.js';
 import { notice } from './notice.js';
+import { t } from './i18n.js';
 
 /** Запись сохранённого отбора; `definition` — непрозрачное определение вида. */
 export interface SavedFilterRow {
@@ -125,7 +126,7 @@ export function createSavedFilterController(
   async function save(request: { name: string; asCopy: boolean }): Promise<void> {
     const name = request.name.trim();
     if (name === '') {
-      notice('Введите имя отбора');
+      notice(t('savedFilters.enterNameView'));
       return;
     }
     const definition = opts.buildDefinition();
@@ -145,13 +146,13 @@ export function createSavedFilterController(
       opts.setName(name);
       opts.onSaved?.({ id: saved.id, name, definition });
     } catch (err) {
-      errorDialog('Сохранить отбор', err);
+      errorDialog(t('savedFilters.saveView'), err);
       return;
     }
     opts.onPersist?.();
     opts.onRefresh?.();
     await reload();
-    notice(`Отбор «${name}» сохранён`);
+    notice(t('savedFilters.viewSaved', name));
   }
 
   async function openPicker(): Promise<void> {
@@ -170,12 +171,12 @@ export function createSavedFilterController(
         opts.setName(entry.name);
       },
       onRename: async (entry) => {
-        const name = (await promptDialog('Переименовать отбор', 'Имя', entry.name) ?? '').trim();
+        const name = (await promptDialog(t('savedFilters.pereimenovatView'), t('savedFilters.name'), entry.name) ?? '').trim();
         if (name === '' || name === entry.name) return null;
         try {
           await opts.store.update(entry.id, { name });
         } catch (err) {
-          errorDialog('Переименовать отбор', err);
+          errorDialog(t('savedFilters.pereimenovatView'), err);
           return null;
         }
         await refresh();
@@ -195,21 +196,21 @@ export function createSavedFilterController(
           opts.onPersist?.();
           return created.id;
         } catch (err) {
-          errorDialog('Скопировать отбор', err);
+          errorDialog(t('savedFilters.copyView'), err);
           return null;
         }
       },
       onDelete: async (entry) => {
         const confirmed = await confirmDialog(
-          'Удалить отбор',
-          `Удалить сохранённый отбор «${entry.name}»?`,
+          t('savedFilters.deleteView'),
+          t('savedFilters.deleteSohranennyyView', entry.name),
           true,
         );
         if (!confirmed) return;
         try {
           await opts.store.remove(entry.id);
         } catch (err) {
-          errorDialog('Удалить отбор', err);
+          errorDialog(t('savedFilters.deleteView'), err);
           return;
         }
         if (opts.getSelectedId() === entry.id) {

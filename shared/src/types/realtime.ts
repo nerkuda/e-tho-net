@@ -21,6 +21,7 @@ import type {
 } from '../enums.js';
 
 import type { Link, LinkUpdateInput } from './link.js';
+import type { LanguageSource } from '../language.js';
 import type { LinkType } from './link-type.js';
 import type { Comment } from './comment.js';
 import type { Attachment } from './attachment.js';
@@ -854,7 +855,39 @@ export type RealtimeServerControlMessage =
   | { type: 'resume.stale'; last_seq: number }
   | { type: 'layer.switched'; layer: { id: string; title: string } }
   | { type: 'layer.deleted'; layer: { id: string; title: string } }
+  | RealtimeReadyFrame
+  | RealtimeLanguageFrame
   | RealtimeMaintenanceFrame;
+
+/**
+ * Кадр готовности сокета (ADR daab6ac4 §3, задача f99f0542): сервер сообщает
+ * эффективный язык пары «пользователь × сеть» сразу после успешного
+ * подключения — тот же резолвинг, что у REST. Клиент применяет пару
+ * `{ language, source }` и не собирает цепочку наследования сам.
+ *
+ * `seq`/`network_id` в кадре нет — это служебный кадр, а не событие
+ * каталога; старый клиент, не знающий его, безопасно игнорирует.
+ */
+export interface RealtimeReadyFrame {
+  type: 'ready';
+  /** Конкретный тег BCP-47 (канонический вид). */
+  language: string;
+  source: LanguageSource;
+}
+
+/**
+ * Событие смены языка (ADR daab6ac4 §3, задача f99f0542): уходит затронутым
+ * сокетам при смене языка сети или сервера — только если их эффективный язык
+ * реально изменился. Своя смена «языка приложения» пользователя событием не
+ * рассылается (MVP: остальные устройства пользователя получают её при
+ * следующем старте/входе — задача faba9ff4).
+ */
+export interface RealtimeLanguageFrame {
+  type: 'settings.language';
+  /** Конкретный тег BCP-47 (канонический вид). */
+  language: string;
+  source: LanguageSource;
+}
 
 /**
  * WebSocket close codes used by the gateway (04-realtime.md §2).

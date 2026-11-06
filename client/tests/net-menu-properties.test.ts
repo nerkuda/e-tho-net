@@ -28,6 +28,7 @@ const NETWORK: Network = {
   examples: null,
   type_roles: {},
   first_day_of_week: 1,
+  language: null,
   created_at: '2025-01-01T00:00:00.000Z',
   updated_at: '2025-01-01T00:00:00.000Z',
 };

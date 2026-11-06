@@ -39,14 +39,14 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
   mcp.registerTool(
     'etn.ontology.write',
     {
-      title: 'Батч-запись онтологии',
+      title: 'Ontology batch write',
       description:
-        'Идемпотентный upsert онтологии сети одной транзакцией в пяти секциях: `thought_types[]` / ' +
-        '`link_types[]` / `properties[]` / `type_properties[]` / `type_views[]`; upsert по `id` XOR ' +
-        'имени, локальные `ref` действуют только внутри батча. Один write-бюджет + одна строка ' +
-        '`audit_log` на вызов; real-time события — по одному на изменённую сущность. Неизвестный ' +
-        'ключ верхнего уровня → `VALIDATION_ERROR` (`details.fields`). Детали секций, конверсия ' +
-        '`value_type`, единый жизненный цикл свойства-связи ↔ link_type и правила смены родителя — ' +
+        'Idempotent upsert of the network ontology in one transaction across five sections: `thought_types[]` / ' +
+        '`link_types[]` / `properties[]` / `type_properties[]` / `type_views[]`; upsert by `id` XOR ' +
+        'name, local `ref`s work only inside the batch. One write budget + one ' +
+        '`audit_log` row per call; real-time events — one per changed entity. An unknown ' +
+        'top-level key → `VALIDATION_ERROR` (`details.fields`). Section details, `value_type` ' +
+        'conversion, the unified link property ↔ link_type lifecycle and parent-change rules — ' +
         '`etn.guide { topic: "ontology.write" }`.',
       inputSchema: OntologyWrite.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.ontology.write'],

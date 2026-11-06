@@ -156,7 +156,7 @@ export function scanMentions(
     if (opts.source_thought_id === undefined) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        '`create_links: true` требует `source_thought_id` — мысль-источник связей.',
+        "`create_links: true` requires `source_thought_id` — the thought that sources the links.",
       );
     }
     if (opts.link_type !== undefined && opts.link_type !== '') {
@@ -164,7 +164,7 @@ export function scanMentions(
         resolvedLinkTypeId = resolveLinkTypeIdByName(ndb, opts.link_type);
       } catch (err) {
         if (err instanceof EtnError && err.code === 'NOT_FOUND') {
-          throw new EtnError('VALIDATION_ERROR', `Тип связи "${opts.link_type}" не найден.`);
+          throw new EtnError('VALIDATION_ERROR', `Link type "${opts.link_type}" not found.`);
         }
         throw err;
       }

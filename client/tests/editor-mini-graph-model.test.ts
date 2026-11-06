@@ -19,7 +19,7 @@ import {
   MASS_LINK_THRESHOLD,
   PERIPHERY_CAP,
   TRASHED_EDGE_DASH,
-  UNTYPED_LINK_LABEL,
+  untypedLinkLabel,
   assignEdgeLanes,
   computeGraphStats,
   edgeTooltip,
@@ -103,7 +103,7 @@ describe('mini-graph-model — направление и тултип ребра
   it('тултип: «<тип>: <источник> -> <назначение>», без типа — слово «связь»', () => {
     assert.equal(edgeTooltip('включает', 'Работа', 'Задача'), 'включает: Работа -> Задача');
     assert.equal(edgeTooltip('', 'Работа', 'Задача'), 'связь: Работа -> Задача');
-    assert.equal(UNTYPED_LINK_LABEL, 'связь');
+    assert.equal(untypedLinkLabel(), 'связь');
     // Направление — фактическое: для входящей ребра источник и цель меняются.
     const inc = orientLink(link({ source_id: OTHER, target_id: CENTER }), CENTER);
     const text = edgeTooltip('включает', 'Сосед', 'Центр');
@@ -364,7 +364,7 @@ describe('mini-graph-model — массовые связи (п.6, ошибка 4
     const plan = planGraphEdges(outgoing(MASS_LINK_THRESHOLD, null, 'u'), CENTER, visible, []);
     assert.equal(plan.drawnIds.size, 1);
     assert.equal(plan.hidden, MASS_LINK_THRESHOLD - 1);
-    assert.equal(plan.massByNeighbour.get(OTHER)?.label, UNTYPED_LINK_LABEL);
+    assert.equal(plan.massByNeighbour.get(OTHER)?.label, untypedLinkLabel());
   });
 
   it('план ограничен нарисованными соседями: у соседа без чипа нет и «скрытых»', () => {

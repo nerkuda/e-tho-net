@@ -76,7 +76,7 @@ export function parseStructureFilter(
   const keywords = body['keywords'];
   if (keywords !== undefined) {
     if (typeof keywords !== 'string') {
-      throw new EtnError('VALIDATION_ERROR', 'keywords должен быть строкой.', {
+      throw new EtnError('VALIDATION_ERROR', "keywords must be a string.", {
         field: 'keywords',
       }, requestId);
     }
@@ -95,7 +95,7 @@ export function parseStructureFilter(
         'VALIDATION_ERROR',
         // Список областей — из словаря сети, чтобы текст не отставал от словаря
         // (0.13.1: добавлена область `diary`, ошибка 2bc251de).
-        `keyword_scope должен быть массивом из ${STRUCTURE_KEYWORD_SCOPES.map((v) => `"${v}"`).join('/')}.`,
+        `keyword_scope must be an array of ${STRUCTURE_KEYWORD_SCOPES.map((v) => `"${v}"`).join('/')}.`,
         { field: 'keyword_scope', allowed: STRUCTURE_KEYWORD_SCOPES },
         requestId,
       );
@@ -106,7 +106,7 @@ export function parseStructureFilter(
   const parentIds = body['parent_ids'];
   if (parentIds !== undefined) {
     if (!Array.isArray(parentIds) || parentIds.some((v) => typeof v !== 'string')) {
-      throw new EtnError('VALIDATION_ERROR', 'parent_ids должен быть массивом строк.', {
+      throw new EtnError('VALIDATION_ERROR', "parent_ids must be an array of strings.", {
         field: 'parent_ids',
       }, requestId);
     }
@@ -116,7 +116,7 @@ export function parseStructureFilter(
   const typeIds = body['type_ids'];
   if (typeIds !== undefined) {
     if (!Array.isArray(typeIds) || typeIds.some((v) => typeof v !== 'string')) {
-      throw new EtnError('VALIDATION_ERROR', 'type_ids должен быть массивом строк.', {
+      throw new EtnError('VALIDATION_ERROR', "type_ids must be an array of strings.", {
         field: 'type_ids',
       }, requestId);
     }
@@ -131,7 +131,7 @@ export function parseStructureFilter(
     ) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'link_type_ids должен быть массивом строк.',
+        "link_type_ids must be an array of strings.",
         { field: 'link_type_ids' },
         requestId,
       );
@@ -148,7 +148,7 @@ export function parseStructureFilter(
   const showInactive = body['show_inactive'];
   if (showInactive !== undefined) {
     if (typeof showInactive !== 'boolean') {
-      throw new EtnError('VALIDATION_ERROR', 'show_inactive должен быть boolean.', {
+      throw new EtnError('VALIDATION_ERROR', "show_inactive must be a boolean.", {
         field: 'show_inactive',
       }, requestId);
     }
@@ -159,7 +159,7 @@ export function parseStructureFilter(
     const raw = body[field];
     if (raw !== undefined) {
       if (typeof raw !== 'boolean') {
-        throw new EtnError('VALIDATION_ERROR', `${field} должен быть boolean.`, { field }, requestId);
+        throw new EtnError('VALIDATION_ERROR', `${field} must be a boolean.`, { field }, requestId);
       }
       filter[field] = raw;
     }
@@ -186,14 +186,14 @@ export function parseStructureFilter(
     const raw = body[field];
     if (raw === undefined) continue;
     if (typeof raw !== 'string') {
-      throw new EtnError('VALIDATION_ERROR', `${field} должен быть строкой ISO-8601.`, {
+      throw new EtnError('VALIDATION_ERROR', `${field} must be an ISO-8601 string.`, {
         field,
       }, requestId);
     }
     const trimmed = raw.trim();
     if (trimmed === '') continue;
     if (!isIso8601(trimmed)) {
-      throw new EtnError('VALIDATION_ERROR', `${field} должен быть ISO-8601 (например, 2024-01-02 или 2024-01-02T15:04:05Z).`, {
+      throw new EtnError('VALIDATION_ERROR', `${field} must be ISO-8601 (for example, 2024-01-02 or 2024-01-02T15:04:05Z).`, {
         field,
       }, requestId);
     }
@@ -203,7 +203,7 @@ export function parseStructureFilter(
   const properties = body['properties'];
   if (properties !== undefined) {
     if (!Array.isArray(properties)) {
-      throw new EtnError('VALIDATION_ERROR', 'properties должен быть массивом условий.', {
+      throw new EtnError('VALIDATION_ERROR', "properties must be an array of conditions.", {
         field: 'properties',
       }, requestId);
     }
@@ -248,7 +248,7 @@ function isIso8601(value: string): boolean {
 function parseAuthorOp(raw: unknown, requestId?: string): StructureAuthorOp {
   if (raw === undefined) return 'eq';
   if (typeof raw !== 'string' || !(STRUCTURE_AUTHOR_OPS as readonly string[]).includes(raw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимая операция фильтра авторства.', {
+    throw new EtnError('VALIDATION_ERROR', "Invalid authorship filter operation.", {
       field: 'op',
       allowed: STRUCTURE_AUTHOR_OPS,
     }, requestId);
@@ -272,14 +272,14 @@ function parseAuthorValue(
   }
   if (op === 'in' || op === 'not_in') {
     if (!Array.isArray(raw) || raw.length === 0) {
-      throw new EtnError('VALIDATION_ERROR', 'Для операции in/not_in нужен непустой массив id.', {
+      throw new EtnError('VALIDATION_ERROR', "The in/not_in operation requires a non-empty array of ids.", {
         field: 'value',
       }, requestId);
     }
     const ids: string[] = [];
     for (const v of raw) {
       if (typeof v !== 'string' || v.trim() === '') {
-        throw new EtnError('VALIDATION_ERROR', 'Каждый id должен быть непустой строкой.', {
+        throw new EtnError('VALIDATION_ERROR', "Each id must be a non-empty string.", {
           field: 'value',
         }, requestId);
       }
@@ -288,7 +288,7 @@ function parseAuthorValue(
     return ids;
   }
   if (typeof raw !== 'string') {
-    throw new EtnError('VALIDATION_ERROR', 'Значение должно быть строкой (id пользователя).', {
+    throw new EtnError('VALIDATION_ERROR', "The value must be a string (a user id).", {
       field: 'value',
     }, requestId);
   }
@@ -299,7 +299,7 @@ function parseAuthorValue(
 /** Parse one `{ property_id, op, value }` condition from an untrusted object. */
 function parsePropertyCondition(raw: unknown, requestId?: string): StructurePropertyCondition {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Условие свойства должно быть объектом.', {
+    throw new EtnError('VALIDATION_ERROR', "A property condition must be an object.", {
       field: 'properties',
     }, requestId);
   }
@@ -314,20 +314,20 @@ function parsePropertyCondition(raw: unknown, requestId?: string): StructureProp
   if (unknown.length > 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Условие свойства содержит неизвестные поля: ${unknown.join(', ')}. Допустимы: ${STRUCTURE_PROPERTY_CONDITION_KEYS.join(', ')}.`,
+      `The property condition contains unknown fields: ${unknown.join(', ')}. Allowed: ${STRUCTURE_PROPERTY_CONDITION_KEYS.join(', ')}.`,
       { field: 'properties', fields: unknown },
       requestId,
     );
   }
   const propertyId = obj['property_id'];
   if (typeof propertyId !== 'string' || propertyId === '') {
-    throw new EtnError('VALIDATION_ERROR', 'property_id должен быть непустой строкой.', {
+    throw new EtnError('VALIDATION_ERROR', "property_id must be a non-empty string.", {
       field: 'property_id',
     }, requestId);
   }
   const op = obj['op'];
   if (typeof op !== 'string' || !(STRUCTURE_PROPERTY_OPS as readonly string[]).includes(op)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимая операция условия свойства.', {
+    throw new EtnError('VALIDATION_ERROR', "Invalid property condition operation.", {
       field: 'op',
       allowed: STRUCTURE_PROPERTY_OPS,
     }, requestId);
@@ -365,7 +365,7 @@ function parsePropertyCondition(raw: unknown, requestId?: string): StructureProp
   if (!isScalar && !isList) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      'value должен быть скаляром (строка/число/логическое) или массивом скаляров.',
+      "value must be a scalar (string/number/boolean) or an array of scalars.",
       { field: 'value' },
       requestId,
     );
@@ -399,14 +399,14 @@ export function parseSavedFilterDefinition(
   const filter = parseStructureFilter(body, requestId);
   const sortRaw = body['sort'];
   if (typeof sortRaw !== 'string' || !(STRUCTURE_SORTS as readonly string[]).includes(sortRaw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимый sort.', {
+    throw new EtnError('VALIDATION_ERROR', "Invalid sort.", {
       field: 'sort',
       allowed: STRUCTURE_SORTS,
     }, requestId);
   }
   const orderRaw = body['order'];
   if (typeof orderRaw !== 'string' || !(SORT_ORDERS as readonly string[]).includes(orderRaw)) {
-    throw new EtnError('VALIDATION_ERROR', 'Недопустимый order.', {
+    throw new EtnError('VALIDATION_ERROR', "Invalid order.", {
       field: 'order',
       allowed: SORT_ORDERS,
     }, requestId);
@@ -480,14 +480,14 @@ function authorFilterIsEmpty(
 function validateFilterName(name: string, requestId?: string): string {
   const trimmed = name.trim();
   if (trimmed === '') {
-    throw new EtnError('VALIDATION_ERROR', 'Имя отбора не может быть пустым.', {
+    throw new EtnError('VALIDATION_ERROR', "The view name must not be empty.", {
       field: 'name',
     }, requestId);
   }
   if ([...trimmed].length > SAVED_FILTER_NAME_MAX) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `Имя отбора должно быть не длиннее ${SAVED_FILTER_NAME_MAX} символов.`,
+      `The view name must be at most ${SAVED_FILTER_NAME_MAX} characters long.`,
       { field: 'name', limit: SAVED_FILTER_NAME_MAX },
       requestId,
     );
@@ -669,7 +669,7 @@ function getSavedFilterOrThrow(
     .prepare(`SELECT ${SAVED_FILTER_COLUMNS} WHERE id = ? AND user_id = ? LIMIT 1`)
     .get(filterId, userId) as SavedFilterRow | undefined;
   if (!row) {
-    throw new EtnError('NOT_FOUND', 'Отбор не найден.', { entity: 'saved_filter', id: filterId });
+    throw new EtnError('NOT_FOUND', "View not found.", { entity: 'saved_filter', id: filterId });
   }
   return rowToSavedFilterView(row);
 }
@@ -702,7 +702,7 @@ function assertNameAvailable(
     (row) => row.id !== exceptId && row.name.toLowerCase() === name.toLowerCase(),
   );
   if (clash) {
-    throw new EtnError('DUPLICATE', 'Отбор с таким именем уже существует.', {
+    throw new EtnError('DUPLICATE', "A view with this name already exists.", {
       field: 'name',
       name,
     });

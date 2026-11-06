@@ -358,12 +358,12 @@ async function openLayerPropsDialogAsync(networkId: string, layerId: string): Pr
     const layers = await etn.layers.list(networkId);
     const layer = layers.find((l) => l.id === layerId);
     if (layer === undefined) {
-      errorDialog('Свойства слоя', new Error(`Слой ${layerId} не найден`));
+      errorDialog(t('layers.propertiesLayer'), new Error(t('layers.layerNotFound', layerId)));
       return;
     }
     showLayerPropsDialog(networkId, layer);
   } catch (err) {
-    errorDialog('Свойства слоя', err);
+    errorDialog(t('layers.propertiesLayer'), err);
   }
 }
 
@@ -376,12 +376,12 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
 
   const body = div('form-stack');
   body.append(
-    fieldRow({ label: 'Название', control: titleInput }),
-    fieldRow({ label: 'Комментарий', control: commentInput }),
+    fieldRow({ label: t('activity.name.title'), control: titleInput }),
+    fieldRow({ label: t('comment.title.kommentariy'), control: commentInput }),
   );
 
   // Colour indication (0.6.4): only for non-base layers.
-  const themeLabel = theme === 'dark' ? 'тёмной' : 'светлой';
+  const themeLabel = theme === 'dark' ? t('layers.dark') : t('layers.light');
   let stripeRow: ReturnType<typeof colorPickerRow> | null = null;
   let bgRow: ReturnType<typeof colorPickerRow> | null = null;
   /** Исходные цвета пары при открытии — база «грязной» проверки (b58f6aad). */
@@ -393,10 +393,10 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     const initialBg = layer.colors?.background[theme] ?? defaults.background[theme];
     stripeInitial = initialStripe;
     bgInitial = initialBg;
-    stripeRow = colorPickerRow('Полоса фокуса', initialStripe);
-    bgRow = colorPickerRow('Фон холста', initialBg);
+    stripeRow = colorPickerRow(t('layers.polosaFocus'), initialStripe);
+    bgRow = colorPickerRow(t('layers.fonHolsta'), initialBg);
     const hint = div('layer-hint');
-    hint.textContent = `Цвета для ${themeLabel} темы; второй вариант вычисляется инверсией светлоты.`;
+    hint.textContent = t('layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey', themeLabel);
     // Парные цветовые поля — на одной строке (ошибка 57e05439): в столбик они
     // съедали высоту и выталкивали содержимое за роль размера.
     const colorsRow = div('form-row two-col-row layer-colors-row');
@@ -441,12 +441,12 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
       await syncLayersForTab(networkId, store.state.currentLayer?.id ?? null);
       void updated;
     } catch (err) {
-      errorDialog('Не удалось сохранить слой', err);
+      errorDialog(t('layers.notSucceededSaveLayer'), err);
     }
   }
 
   showDialog({
-    title: layer.is_base ? 'Свойства основы' : `Свойства слоя «${layer.title}»`,
+    title: layer.is_base ? t('layers.propertiesBase') : t('layers.propertiesLayer2', layer.title),
     body,
     // Роль `m` (требование 13464c39): имя, комментарий и парные цветовые поля
     // (в одну строку) помещаются без прокрутки (ошибка 57e05439).
@@ -470,23 +470,23 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
 }
 
 /** Create-layer dialog (§10.3: the explaining one-liner + comment + git branch). */function openCreateLayerDialog(networkId: string): void {
-  const titleInput = fieldInput({ placeholder: 'Например: Правки августа' });
+  const titleInput = fieldInput({ placeholder: t('layers.placeholder.naprimerEditsAvgusta') });
   const commentInput = fieldTextarea({
-    placeholder: 'Зачем этот слой — чтобы следующий (или агент) понял без расспросов',
+    placeholder: t('layers.zachemLayerToSleduyuschiyAgentPonyal'),
   });
-  const branchInput = fieldInput({ placeholder: 'ветка git (необязательно)' });
+  const branchInput = fieldInput({ placeholder: t('layers.placeholder.vetkaGitOptional') });
 
   const body = div('form-stack');
   const hint = div('layer-hint');
-  hint.append('Правки останутся в слое. Основа не изменится, пока вы не сольёте слой.');
+  hint.append(t('layers.editsOstanutsyaLayerBaseNotIzmenitsya'));
   const colorsHint = div('layer-hint');
   colorsHint.textContent =
-    'Новый слой получит собственные цвета карты (полоса фокуса и фон), чтобы его было видно; их можно поменять в «Свойствах слоя».';
+    t('layers.novyyLayerPoluchitSobstvennyeCvetaMap');
   body.append(
     hint,
-    fieldRow({ label: 'Название', control: titleInput }),
-    fieldRow({ label: 'Комментарий', control: commentInput }),
-    fieldRow({ label: 'Ветка git', control: branchInput }),
+    fieldRow({ label: t('activity.name.title'), control: titleInput }),
+    fieldRow({ label: t('comment.title.kommentariy'), control: commentInput }),
+    fieldRow({ label: t('layers.label.vetkaGit'), control: branchInput }),
     colorsHint,
   );
 
@@ -509,12 +509,12 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
       close();
       await selectLayerForTab(networkId, layer.id);
     } catch (err) {
-      errorDialog('Не удалось создать слой', err);
+      errorDialog(t('layers.notSucceededCreateLayer'), err);
     }
   }
 
   showDialog({
-    title: 'Новый слой изменений',
+    title: t('layers.title.novyyLayerChanges'),
     body,
     // Роль `m` (требование 13464c39): подсказки, имя, комментарий и ветка
     // помещаются без прокрутки (ошибка 57e05439).
@@ -530,7 +530,7 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     },
     buttons: [
       { label: t('actions.cancel'), onClick: (close) => close() },
-      { label: 'Создать', primary: true, onClick: (close) => void create(close) },
+      { label: t('admin.label.create'), primary: true, onClick: (close) => void create(close) },
     ],
     extraShortcuts: undefined,
     onMount: () => titleInput.focus(),
@@ -568,26 +568,26 @@ export async function openDeleteLayerDialog(
   if (children.length > 0) {
     body.append(
       span(
-        `Слой будет удалён вместе с ${children.length} дочерними слоями: ${children
+        t('layers.layerWillDeletedVmesteDochernimiLayers', [children.length, children
           .map((c) => `«${c.title}»`)
-          .join(', ')}.`,
+          .join(', ')]),
         'layer-hint',
       ),
     );
   }
   const safeNote = div('layer-hint layer-hint-safe');
   safeNote.textContent =
-    'Удаление слоя не меняет основу: теневые правки слоя будут потеряны, всё остальное останется как есть.';
+    t('layers.deleteLayerNotMenyaetBaseTenevye');
   body.append(safeNote);
 
   showDialog({
-    title: `Удалить слой «${layer.title}»?`,
+    title: t('layers.deleteLayer', layer.title),
     body,
     size: 's',
     buttons: [
       { label: t('actions.cancel'), onClick: (close) => close() },
       {
-        label: 'Удалить слой',
+        label: t('layers.label.deleteLayer'),
         danger: true,
         onClick: async (close) => {
           try {
@@ -609,7 +609,7 @@ export async function openDeleteLayerDialog(
             await syncLayersForTab(networkId, layer.parent_id);
             onDeleted?.();
           } catch (err) {
-            errorDialog('Не удалось удалить слой', err);
+            errorDialog(t('layers.notSucceededDeleteLayer'), err);
           }
         },
       },
@@ -622,23 +622,23 @@ function openMergeLayerDialog(networkId: string, layerId: string): void {
   const layer = store.state.layers.find((l) => l.id === layerId);
   if (layer === undefined) return;
   const targetTitle =
-    store.state.layers.find((l) => l.id === layer.parent_id)?.title ?? 'Основу';
+    store.state.layers.find((l) => l.id === layer.parent_id)?.title ?? t('layerMerge.base');
 
   const body = div('form-stack');
   const hint = div('layer-hint');
   hint.append(
-    `Все правки слоя будут перенесены в «${targetTitle}». При конфликте (строка изменилась в основе после создания слоя) слияние не выполнится — вы увидите список расхождений.`,
+    t('layers.allEditsLayerWillMovedKonflikte', targetTitle),
   );
   body.append(hint);
 
   showDialog({
-    title: `Слить «${layer.title}» в «${targetTitle}»?`,
+    title: t('layers.merge', [layer.title, targetTitle]),
     body,
     size: 's',
     buttons: [
       { label: t('actions.cancel'), onClick: (close) => close() },
       {
-        label: 'Слить',
+        label: t('layers.label.merge'),
         primary: true,
         onClick: async (close) => {
           try {
@@ -647,7 +647,7 @@ function openMergeLayerDialog(networkId: string, layerId: string): void {
             showMergeReport(report);
             await syncLayersForTab(networkId, layer.id);
           } catch (err) {
-            errorDialog('Слияние отклонено', err);
+            errorDialog(t('layers.mergeRejected'), err);
           }
         },
       },
@@ -660,21 +660,21 @@ function showMergeReport(report: LayerMergeReport): void {
   const lines: string[] = [];
   const totals = Object.entries(report.applied);
   if (totals.length > 0) {
-    lines.push('Перенесено строк:');
+    lines.push(t('layers.movedRows'));
     for (const [table, count] of totals) lines.push(`• ${table}: ${count}`);
   }
   if (report.reorder_collapsed.length > 0) {
     lines.push(
-      `Порядок связей изменён у ${report.reorder_collapsed.length} мыслей (свёрнуто).`,
+      t('layers.orderLinksChangedThoughtsSvernuto', report.reorder_collapsed.length),
     );
   }
   if (report.skipped.length > 0) {
-    lines.push(`Связи с исчезнувшим концом пропущены: ${report.skipped.length}.`);
+    lines.push(t('layers.linkIscheznuvshimKoncomPropuscheny', report.skipped.length));
   }
   lines.push(
     report.reserve_layer_id !== null
-      ? 'Перед слиянием создан резервный слой для ручного отката.'
-      : 'Резервный слой не понадобился.',
+      ? t('layers.beforeSliyaniemCreatedRezervnyyLayerRuchnogo')
+      : t('layers.rezervnyyLayerNotNeeded'),
   );
 
   const body = div('form-stack');
@@ -684,7 +684,7 @@ function showMergeReport(report: LayerMergeReport): void {
     body.append(row);
   }
   showDialog({
-    title: 'Слой слит',
+    title: t('layers.title.layerMerged'),
     body,
     size: 's',
     buttons: [{ label: t('actions.close'), onClick: (close) => close() }],
@@ -703,7 +703,7 @@ function showMergeReport(report: LayerMergeReport): void {
 export async function openDiffDialog(networkId: string, layerId: string): Promise<void> {
   const layer = store.state.layers.find((l) => l.id === layerId);
   const targetTitle =
-    store.state.layers.find((l) => l.id === layer?.parent_id)?.title ?? 'Основа';
+    store.state.layers.find((l) => l.id === layer?.parent_id)?.title ?? t('events.base');
 
   // Слот состояний (загрузка/пусто/ошибка) и отдельный keyed-контейнер списка:
   // дозагрузка обязана обновлять только новые строки, не трогая существующие
@@ -770,7 +770,7 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
     if (loading || done) return;
     loading = true;
     const first = rows.length === 0;
-    if (first) setState(loadingState('Загрузка списка отличий…'));
+    if (first) setState(loadingState(t('layers.loadingListOtlichiy')));
     try {
       const page = await etn.layers.diffPage(networkId, layerId, {
         limit: DIFF_PAGE_LIMIT,
@@ -783,8 +783,8 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
       if (rows.length === 0 && done) {
         setState(
           emptyState({
-            title: 'Отличий нет',
-            hint: 'Слой не меняет основу — сравнивать нечего.',
+            title: t('layers.title.otlichiyNo'),
+            hint: t('layers.layerNotMenyaetBaseSravnivatNechego'),
           }),
         );
       } else {
@@ -795,9 +795,9 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
       setState(
         errorState(
           rows.length === 0
-            ? `Не удалось загрузить отличия: ${errText(err)}`
-            : `Не удалось догрузить отличия: ${errText(err)}`,
-          { label: 'Повторить', onClick: () => void loadNext() },
+            ? t('layers.notSucceededLoadOtlichiya', errText(err))
+            : t('layers.notSucceededDogruzitOtlichiya', errText(err)),
+          { label: t('layers.label.povtorit'), onClick: () => void loadNext() },
         ),
       );
     } finally {
@@ -807,7 +807,7 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
   }
 
   showDialog({
-    title: `Отличия «${layer?.title ?? 'слоя'}» от «${targetTitle}»`,
+    title: t('layers.otlichiya', [layer?.title ?? t('layers.layer'), targetTitle]),
     // Роль `l` + фиксированная высота (требование 13464c39): список растёт
     // дозагрузкой, окно при этом не «дёргается», прокрутка — в теле диалога.
     size: 'l',
@@ -839,15 +839,16 @@ export async function openDiffDialog(networkId: string, layerId: string): Promis
 const DIFF_PAGE_LIMIT = 100;
 
 /** Human-readable heading of every diff section (the canonical server order
- *  is preserved; headings appear in the order the stream delivers them). */
+ *  is preserved; headings appear in the order the stream delivers them).
+ *  Геттеры: заголовки берутся в момент рендера (ошибка ebed42d3). */
 const DIFF_SECTION_LABELS: Record<LayerDiffSection, string> = {
-  'links.added': 'Добавленные связи',
-  'links.removed': 'Удалённые связи',
-  'links.type_changed': 'Изменённый тип связи',
-  'links.reorder_collapsed': 'Изменённый порядок связей',
-  'links.reparented': 'Сменённый родитель',
-  'overridden.thought_ids': 'Изменённые мысли',
-  'overridden.link_ids': 'Изменённые связи',
+  get 'links.added'() { return t('layers.dobavlennyeLink'); },
+  get 'links.removed'() { return t('layers.udalennyeLink'); },
+  get 'links.type_changed'() { return t('layers.izmenennyyTypeLink'); },
+  get 'links.reorder_collapsed'() { return t('layers.izmenennyyOrderLinks'); },
+  get 'links.reparented'() { return t('layers.smenennyyParent'); },
+  get 'overridden.thought_ids'() { return t('layers.izmenennyeThought'); },
+  get 'overridden.link_ids'() { return t('layers.izmenennyeLink'); },
 };
 
 /** One rendered difference: a link change or an overridden entity. */
@@ -881,7 +882,7 @@ function diffRowNode(row: DiffRow, onOpen: (row: DiffRow) => void): HTMLElement 
     node.classList.add('diff-row-thought');
     node.setAttribute('role', 'button');
     node.tabIndex = 0;
-    node.title = 'Показать построчный дифф';
+    node.title = t('layers.showPostrochnyyDiff');
     node.addEventListener('click', () => onOpen(row));
     // Клавиатура строки — через общеклиентский диспетчер (ADR b420b08c,
     // задача fd3d84f4): открыватель привязан к узлу, клавиши разбирает
@@ -1004,7 +1005,7 @@ async function pageToRows(networkId: string, page: LayerDiffPage): Promise<DiffR
     push('links.removed', r.id, null, `− ${name(r.source_id)} → ${name(r.target_id)}`);
   }
   for (const r of page.links.type_changed ?? []) {
-    push('links.type_changed', r.id, null, `≈ связь ${r.id.slice(0, 8)}`);
+    push('links.type_changed', r.id, null, t('layers.link', r.id.slice(0, 8)));
   }
   for (const r of page.links.reparented ?? []) {
     push(
@@ -1021,7 +1022,7 @@ async function pageToRows(networkId: string, page: LayerDiffPage): Promise<DiffR
     push('overridden.thought_ids', id, id, name(id));
   }
   for (const id of page.overridden.link_ids ?? []) {
-    push('overridden.link_ids', id, null, `связь ${id.slice(0, 8)}`);
+    push('overridden.link_ids', id, null, t('layers.link2', id.slice(0, 8)));
   }
   return rows;
 }
@@ -1039,17 +1040,17 @@ function openThoughtDiffDialog(
   title: string,
 ): void {
   const host = div('diff-thought');
-  host.append(loadingState('Загрузка текстового диффа…'));
+  host.append(loadingState(t('layers.loadingTekstovogoDiffa')));
 
   const load = async (): Promise<void> => {
-    host.replaceChildren(loadingState('Загрузка текстового диффа…'));
+    host.replaceChildren(loadingState(t('layers.loadingTekstovogoDiffa')));
     try {
       const diff = await etn.layers.thoughtDiff(networkId, layerId, thoughtId);
       host.replaceChildren(renderThoughtDiff(diff));
     } catch (err) {
       host.replaceChildren(
-        errorState(`Не удалось загрузить текстовый дифф: ${errText(err)}`, {
-          label: 'Повторить',
+        errorState(t('layers.notSucceededLoadTekstovyyDiff', errText(err)), {
+          label: t('layers.label.povtorit'),
           onClick: () => void load(),
         }),
       );
@@ -1057,7 +1058,7 @@ function openThoughtDiffDialog(
   };
 
   showDialog({
-    title: `Правки мысли «${title}»`,
+    title: t('layers.editsThought', title),
     size: 'l',
     fixedHeight: true,
     body: host,
@@ -1070,11 +1071,11 @@ function openThoughtDiffDialog(
 
 /** Field label of the per-thought diff, by server field key. */
 const THOUGHT_DIFF_FIELD_LABELS: Record<LayerThoughtDiffFieldKey, string> = {
-  title: 'Название',
-  type: 'Тип',
-  synonyms: 'Синонимы',
-  active: 'Актуальность',
-  comment: 'Постоянный комментарий',
+  get title() { return t('activity.name.title'); },
+  get type() { return t('attachments.label.type'); },
+  get synonyms() { return t('layers.synonyms.synonyms'); },
+  get active() { return t('filter.active.active'); },
+  get comment() { return t('layers.comment.postoyannyyKommentariy'); },
 };
 
 /** Render the per-thought diff: one labelled block per changed attribute with
@@ -1084,7 +1085,7 @@ function renderThoughtDiff(diff: LayerThoughtDiff): HTMLElement {
   const changed = diff.fields.filter((f) => f.changed);
   if (changed.length === 0) {
     host.append(
-      emptyState({ title: 'Отличий нет', hint: 'Мысль в слое совпадает с основой.' }),
+      emptyState({ title: t('layers.title.otlichiyNo'), hint: t('layers.thoughtLayerSovpadaetBase') }),
     );
     return host;
   }

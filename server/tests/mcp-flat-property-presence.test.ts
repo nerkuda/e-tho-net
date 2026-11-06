@@ -508,7 +508,7 @@ describe(
           assert.equal(rest.statusCode, 422, `${operator} [] REST — 422`);
           const err = (rest.body as { error: { code: string; message: string } }).error;
           assert.equal(err.code, 'VALIDATION_ERROR');
-          assert.match(err.message, /непуст/i, `${operator} []: понятный текст — ${err.message}`);
+          assert.match(err.message, /non-empty/i, `${operator} []: понятный текст — ${err.message}`);
 
           const mcp = await mcpQuery(world.handle, world.rest.networkId, {
             in_subtree_of: root,
@@ -516,7 +516,7 @@ describe(
           });
           assert.equal(mcp.isError, true, `${operator} [] MCP обязан падать`);
           assert.match(mcp.text, /VALIDATION_ERROR/);
-          assert.match(mcp.text, /массив/i, `${operator} [] MCP: понятный текст — ${mcp.text}`);
+          assert.match(mcp.text, /array/i, `${operator} [] MCP: понятный текст — ${mcp.text}`);
         }
       } finally {
         await closeWorld(world);
@@ -667,7 +667,7 @@ describe(
           assert.equal(restError.code, 'VALIDATION_ERROR', `${tag}: REST code`);
           assert.equal(
             restError.message,
-            'Для операции contains value должен быть строкой.',
+            'For the contains operation, value must be a string.',
             `${tag}: REST message`,
           );
           assert.deepEqual(restError.details, expectedDetails, `${tag}: REST details`);

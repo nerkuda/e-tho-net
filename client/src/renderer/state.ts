@@ -35,6 +35,7 @@ import {
   type ThoughtType,
 } from '@etn/shared';
 import type { CompatibilityResult, ServerMaintenanceDto, TabDto } from '../main/ipc/contract.js';
+import { t } from './lib/i18n.js';
 
 /** Top-level screens of the application. */
 export type Screen = 'onboarding' | 'networks' | 'workspace';
@@ -503,7 +504,7 @@ export function patchFocusEdge(link: Link): void {
 /** Helper: current network id, or throws for callers that require an open network. */
 export function requireNetworkId(): string {
   const id = store.state.networkId;
-  if (id === null) throw new Error('Сеть не открыта.');
+  if (id === null) throw new Error(t('app.networkNotOpen'));
   return id;
 }
 

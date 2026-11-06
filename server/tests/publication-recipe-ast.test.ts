@@ -267,7 +267,7 @@ describe('рецепт заголовков публикаций на общий
       const timeWarnings: string[] = [];
       assert.deepEqual(selectRecipeIds(ndb, USER, timeRecipe, timeWarnings, ctx), []);
       assert.equal(timeWarnings.length, 1, 'неразрешимый токен — предупреждение сборки');
-      assert.match(timeWarnings[0]!, /рецепт заголовков не исполнен/);
+      assert.match(timeWarnings[0]!, /heading recipe was not executed/);
 
       // Сборка документа видит тот же контекст (сценарий b0a50833): разделы —
       // только февраль 2024, а не вся сеть и не текущий месяц.
@@ -443,7 +443,7 @@ describe('рецепт заголовков публикаций на общий
       const warnings: string[] = [];
       assert.deepEqual(selectRecipeIds(ndb, USER, foreign, warnings), []);
       assert.equal(warnings.length, 1);
-      assert.match(warnings[0]!, /не соответствует профилю|не виден/);
+      assert.match(warnings[0]!, /does not match the .* profile|is not visible/);
 
       // Запись отвергается (требование 0095daad).
       assert.throws(
@@ -621,7 +621,7 @@ describe('рецепт заголовков публикаций: wire (REST)', 
       const doc = assembly.json().data as { sections: unknown[]; warnings: string[] };
       assert.deepEqual(doc.sections, [], '$now неразрешим в профиле без времени — пусто, не вся сеть');
       assert.ok(
-        doc.warnings.some((w) => w.startsWith('рецепт заголовков не исполнен')),
+        doc.warnings.some((w) => w.startsWith('heading recipe was not executed')),
         `сборка поясняет неразрешимый токен: ${JSON.stringify(doc.warnings)}`,
       );
     } finally {

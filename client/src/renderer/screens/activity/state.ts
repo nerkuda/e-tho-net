@@ -25,6 +25,7 @@ import {
   type ActivityActionFilter,
   type FilterCriteriaState,
 } from '../../lib/filter-builder.js';
+import { t } from '../../lib/i18n.js';
 
 /** Подпись отброшенного миграцией условия: «Автор события — не заполнено». */
 function describeDroppedActivityCondition(leaf: FilterAstLeaf): string {
@@ -42,14 +43,14 @@ export const ENTITY_TYPE_OPTIONS: ReadonlyArray<{
   value: ActivityEntityType;
   label: string;
 }> = [
-  { value: 'thought', label: 'мысль' },
-  { value: 'link', label: 'связь' },
-  { value: 'thought_type', label: 'тип мысли' },
-  { value: 'link_type', label: 'тип связи' },
-  { value: 'property', label: 'свойство' },
-  { value: 'comment', label: 'комментарий' },
-  { value: 'attachment', label: 'вложение' },
-  { value: 'layer', label: 'слой' },
+  { value: 'thought', get label() { return t('clipboard.thought'); } },
+  { value: 'link', get label() { return t('clipboard.link'); } },
+  { value: 'thought_type', get label() { return t('activity.label.typeThought'); } },
+  { value: 'link_type', get label() { return t('activity.label.typeLink'); } },
+  { value: 'property', get label() { return t('activity.label.property'); } },
+  { value: 'comment', get label() { return t('filterForm.label.kommentariy'); } },
+  { value: 'attachment', get label() { return t('activity.label.attachment'); } },
+  { value: 'layer', get label() { return t('activity.label.layer'); } },
 ];
 
 /** Критерии отбора «Событий» — общая модель конструктора (профиль «события»). */

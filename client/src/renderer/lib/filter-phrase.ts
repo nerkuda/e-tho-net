@@ -69,9 +69,11 @@ import {
   type ThoughtType,
 } from '@etn/shared';
 import { canonicalGlobalToken, isGlobalDateToken, panelAnchorLabel, PERIOD_TOKEN_PRESETS } from './period-editor.js';
+import { tp } from './i18n.js';
 // Перечень пользовательских операндов — из каталога природы значения
 // (`lib/filter-tokens.ts`), а не вторым словарём (ошибка 23c7d3e9 п. A1).
 import { FILTER_USER_OPERAND_KINDS } from './filter-tokens.js';
+import { t } from './i18n.js';
 
 /** Предел длины фразы по умолчанию; полный текст в тултипе не обрезается. */
 export const FILTER_PHRASE_LIMIT = 300;
@@ -88,11 +90,16 @@ export const FILTER_PHRASE_NAME_LIMIT = 32;
  * пока имя не догружено (или мысль недоступна), фраза не показывает сырой или
  * обрезанный UUID — только нейтральный текст. Как только кэш имён наполнится
  * (`lib/thought-names.ts`), подписка перерисует фразу с настоящим именем.
+ * Функция: текст берётся в момент сборки фразы (ошибка ebed42d3).
  */
-export const FILTER_PHRASE_UNKNOWN_THOUGHT = 'без названия';
+export function filterPhraseUnknownThought(): string {
+  return t('filterPhrase.withoutTitle');
+}
 
 /** Тот же плейсхолдер для неизвестного участника (`ctx.userName` не нашёл имя). */
-export const FILTER_PHRASE_UNKNOWN_USER = 'без имени';
+export function filterPhraseUnknownUser(): string {
+  return t('filterPhrase.withoutName');
+}
 
 /** Состояние отбора, нужное композеру (часть единой модели `FilterCriteriaState`). */
 export interface FilterPhraseState {
@@ -122,7 +129,7 @@ export interface FilterPhraseContext extends FilterLabelData {
    * фразе-превью показывается её ИМЯ, а не UUID. Источник — кэш имён клиента
    * (`lib/thought-names.ts`); функцию передают данными, поэтому модуль остаётся
    * чистым (догрузка имён — ВНЕ композера). Резолвер задан, а имени нет
-   * (мысль ещё не догружена/удалена) — {@link FILTER_PHRASE_UNKNOWN_THOUGHT};
+   * (мысль ещё не догружена/удалена) — {@link filterPhraseUnknownThought};
    * резолвер не задан — значение остаётся как есть (прежняя деградация для
    * вызовов без кэша, например в юнит-тестах композера).
    */
@@ -136,19 +143,30 @@ export interface FilterPhraseContext extends FilterLabelData {
  *  `Record<StructureKeywordScope, string>` требует подпись для КАЖДОГО кода:
  *  новый код области, добавленный в shared, ломает сборку, пока подпись не
  *  заведена (ошибка 2bc251de). Словарь ОДИН на клиент — он же рисует чекбоксы
- *  ячейки (`lib/filter-value.ts`), поэтому фраза-превью и ячейка не расходятся. */
+ *  ячейки (`lib/filter-value.ts`), поэтому фраза-превью и ячейка не расходятся.
+ *  Геттеры: подписи берутся в момент сборки фразы (ошибка ebed42d3). */
 const KEYWORD_SCOPE_LABELS: Readonly<Record<StructureKeywordScope, string>> = {
-  title: 'в именах',
-  synonyms: 'в именах',
-  comment: 'в комментарии',
-  diary: 'в дневниках',
+  get title() {
+    return t('filterPhrase.title.inImenah');
+  },
+  get synonyms() {
+    return t('filterPhrase.title.inImenah');
+  },
+  get comment() {
+    return t('filterPhrase.comment.inKommentarii');
+  },
+  get diary() {
+    return t('filterPhrase.diary.inDnevnikah');
+  },
 };
 
 /** Области поиска «Найти слова» в порядке словаря: код → подпись во фразе. */
-export const FILTER_PHRASE_KEYWORD_SCOPES: readonly {
+export function filterPhraseKeywordScopeOptions(): readonly {
   value: StructureKeywordScope;
   label: string;
-}[] = STRUCTURE_KEYWORD_SCOPES.map((value) => ({ value, label: KEYWORD_SCOPE_LABELS[value] }));
+}[] {
+  return STRUCTURE_KEYWORD_SCOPES.map((value) => ({ value, label: KEYWORD_SCOPE_LABELS[value] }));
+}
 
 /** Подпись области из словаря: ячейка значения и фраза берут её отсюда —
  *  подписи в одном месте (элемент интерфейса 9ecf405b). */
@@ -158,18 +176,31 @@ export function filterKeywordScopeLabel(value: StructureKeywordScope): string {
 
 /** Подписи оператора под-выборки (wire `FilterAstSubqueryValue['operator']`). */
 const SUBQUERY_OPERATOR_LABELS: Readonly<Record<string, string>> = {
-  in: 'в выборке',
-  not_in: 'не в выборке',
-  all_in: 'все в выборке',
+  get in() {
+    return t('filterPhrase.in.inSelection');
+  },
+  get not_in() {
+    return t('filterPhrase.not_in.notSelection');
+  },
+  get all_in() {
+    return t('filterPhrase.all_in.allSelection');
+  },
 };
 
 /** Коннекция группы во фразе — оператор В ВЕРХНЕМ РЕГИСТРЕ между условиями
  *  (правка заказчика 2026-10-14, ошибка 4258e694 п.12а): служебные префиксы
- *  «все условия»/«любое условие» убраны. `НЕ` — префикс к единственному ребёнку. */
+ *  «все условия»/«любое условие» убраны. `НЕ` — префикс к единственному ребёнку.
+ *  Геттеры: текст берётся в момент сборки фразы (ошибка ebed42d3). */
 const GROUP_SEPARATOR: Readonly<Record<string, string>> = {
-  and: ' И ',
-  or: ' ИЛИ ',
-  not: 'НЕ ',
+  get and() {
+    return t('filterPhrase.and.and');
+  },
+  get or() {
+    return t('filterPhrase.or.or');
+  },
+  get not() {
+    return t('filterPhrase.not.not');
+  },
 };
 
 /**
@@ -208,14 +239,6 @@ function phraseOperatorToken(op: FilterPhraseOperator): FilterPhraseToken {
 }
 
 
-/** Русское число с согласованием: `1 условие` / `2 условия` / `5 условий`. */
-function pluralRu(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
-}
 
 /** Человекочитаемая композиция границы-токена; неизвестное — как есть. */
 export function filterPhraseToken(token: string): string {
@@ -241,17 +264,17 @@ export function filterPhraseShift(signed: string, unit: string): string {
 export function filterPhraseUnit(unit: string): string {
   switch (unit) {
     case 'd':
-      return 'дн.';
+      return t('filterPhrase.d');
     case 'w':
-      return 'нед.';
+      return t('filterPhrase.w');
     case 'mo':
-      return 'мес.';
+      return t('filterPhrase.mo');
     case 'y':
-      return 'г.';
+      return t('filterPhrase.g');
     case 'h':
-      return 'ч.';
+      return t('filterPhrase.ch');
     case 'mi':
-      return 'мин.';
+      return t('filterPhrase.min');
     default:
       return unit;
   }
@@ -259,8 +282,8 @@ export function filterPhraseUnit(unit: string): string {
 
 /** Подпись областей поиска «Найти слова» (пусто — «области не выбраны»). */
 export function filterPhraseKeywordScopes(scope: readonly string[] | undefined): string {
-  const active = FILTER_PHRASE_KEYWORD_SCOPES.filter((s) => (scope ?? []).includes(s.value));
-  if (active.length === 0) return 'области не выбраны';
+  const active = filterPhraseKeywordScopeOptions().filter((s) => (scope ?? []).includes(s.value));
+  if (active.length === 0) return t('filterPhrase.oblastiNotSelected');
   // «В именах» — имена И синонимы вместе: во фразе не дублируется.
   const labels = [...new Set(active.map((s) => s.label))];
   return labels.join(', ');
@@ -293,16 +316,16 @@ export function filterPhraseValue(leaf: FilterTreeLeaf, ctx: FilterPhraseContext
       if (items.length === 0) return '';
       // Пара границ «между» читается через «и», набор — через запятую; длинный
       // набор сворачивается с остатком.
-      const separator = leaf.operator === 'between' || leaf.operator === 'not_between' ? ' и ' : ', ';
+      const separator = leaf.operator === 'between' || leaf.operator === 'not_between' ? t('filterPhrase.and') : ', ';
       if (items.length > 3) {
-        return `${items.slice(0, 3).join(separator)} и ещё ${items.length - 3}`;
+        return t('filterPhrase.andMore', [items.slice(0, 3).join(separator), items.length - 3]);
       }
       return items.join(separator);
     }
     case 'subquery': {
       const count = filterPhraseLeafCount(value.node);
       const label = SUBQUERY_OPERATOR_LABELS[value.operator] ?? value.operator;
-      return `${label} (${count} ${pluralRu(count, 'условие', 'условия', 'условий')})`;
+      return `${label} (${count} ${tp('plurals.condition', count)})`;
     }
     default:
       return '';
@@ -321,7 +344,7 @@ function filterPhraseScalar(
   ctx: FilterPhraseContext,
   allowSnapshot: boolean,
 ): string {
-  if (typeof value === 'boolean') return value ? 'да' : 'нет';
+  if (typeof value === 'boolean') return value ? t('valueEditor.da') : t('valueEditor.no');
   if (typeof value !== 'string') return String(value);
   return filterPhraseNamedValue(leaf, value, ctx, allowSnapshot);
 }
@@ -336,10 +359,10 @@ function filterPhraseScalar(
  *      совместимость с уже сохранёнными отборами;
  *   3. имя МЫСЛИ из резолвера `ctx.thoughtName` — для операндов-ссылок на мысль
  *      и значений свойств-ссылок (ошибка d17a8bfd); резолвер задан, имени нет —
- *      {@link FILTER_PHRASE_UNKNOWN_THOUGHT} (без ID, требование 9d5e3c4e);
+ *      {@link filterPhraseUnknownThought} (без ID, требование 9d5e3c4e);
  *   4. каталог контекста (тип мысли, тип связи, реестр свойств);
  *   5. имя ПОЛЬЗОВАТЕЛЯ из `ctx.userName`; кэш задан, имени нет —
- *      {@link FILTER_PHRASE_UNKNOWN_USER};
+ *      {@link filterPhraseUnknownUser};
  *   6. как было — само значение (id), тоже обрезанное (нет резолвера).
  */
 function filterPhraseNamedValue(
@@ -359,7 +382,7 @@ function filterPhraseNamedValue(
   if (filterPhraseValueIsThoughtRef(leaf, ctx.registry)) {
     const name = ctx.thoughtName?.(raw) ?? null;
     if (name !== null && name !== '') return truncateFilterName(name);
-    if (ctx.thoughtName !== undefined) return FILTER_PHRASE_UNKNOWN_THOUGHT;
+    if (ctx.thoughtName !== undefined) return filterPhraseUnknownThought();
   }
   const catalogue = filterPhraseCatalogueValue(leaf.entity.kind, raw, ctx);
   if (catalogue !== null && catalogue !== '') return truncateFilterName(catalogue);
@@ -368,7 +391,7 @@ function filterPhraseNamedValue(
   if (FILTER_USER_OPERAND_KINDS.has(leaf.entity.kind)) {
     const name = ctx.userName?.(raw) ?? null;
     if (name !== null && name !== '') return truncateFilterName(name);
-    if (ctx.userName !== undefined) return FILTER_PHRASE_UNKNOWN_USER;
+    if (ctx.userName !== undefined) return filterPhraseUnknownUser();
   }
   return truncateFilterName(raw);
 }
@@ -469,7 +492,7 @@ export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext)
   else if (value === '') phrase = comparisonWithoutValue ? operand : `${operand} ${operator}`;
   else phrase = `${operand} ${operator} ${value}`;
   // Режим обхода «по всем связям» — отличие от структурного (по умолчанию).
-  if (leaf.mode === 'all_links') phrase += ' (по всем связям)';
+  if (leaf.mode === 'all_links') phrase += t('filterPhrase.byVsemLinks');
   // Состояния РЕБРА у «Есть входящие/исходящие связи» (требование 60db9614):
   // полный набор (в т.ч. отсутствие `states`) — суффикса нет; иначе — список
   // выбранных состояний в порядке общего словаря. Формат закреплён тестом.
@@ -480,7 +503,7 @@ export function filterPhraseLeaf(leaf: FilterTreeLeaf, ctx: FilterPhraseContext)
       const labels = FILTER_LINK_EDGE_STATES
         .filter((state) => states.includes(state))
         .map((state) => FILTER_LINK_EDGE_STATE_LABELS[state]);
-      phrase += ` (связи: ${labels.join(', ')})`;
+      phrase += t('filterPhrase.link', labels.join(', '));
     }
   }
   // «Найти слова»: чем ограничен поиск — видно во фразе (требование 0882f8d5).
@@ -579,9 +602,9 @@ export function filterPhraseSort(
   if (keys.length === 0) return '';
   const parts = keys.map((sort) => {
     const label = filterPhraseSortKeyLabel(sort.key, registry);
-    return sort.order === 'desc' ? `${label} (убыв.)` : label;
+    return sort.order === 'desc' ? t('filterPhrase.desc', label) : label;
   });
-  return `сортировка: ${parts.join(', ')}`;
+  return t('filterPhrase.sort', parts.join(', '));
 }
 
 /** Обрезка фразы по пределу: режем по последнему пробелу и помечаем «…». */

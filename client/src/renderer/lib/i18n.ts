@@ -1,7 +1,7 @@
 /**
  * Каркас локализации клиента (задача 57f09136, требование 0e5ff1c6
  * «Локализация: все строки интерфейса — из словаря, с подстановками
- * параметров»).
+ * параметров»; плюрализация и Intl-форматы — задача e6374cd1).
  *
  * **Зачем.** Пользовательские строки жили литералами в разметке и разошлись
  * по формулировкам; без единого словаря каждый следующий компонент приносил
@@ -24,6 +24,18 @@
  * причине %2». Отсутствующий параметр не подставляется — в строке остаётся
  * `%n` (заметная ошибка вызова), исключения не бросаются.
  *
+ * **Плюрализация.** `tp(key, n, params?)` берёт формы ключа `*Plurals` файла
+ * языка и выбирает категорию через `Intl.PluralRules` (`lib/plural.ts`):
+ * ru `one/few/many/other`, en `one/other`, zh `other`. `%1` — само число,
+ * дополнительные параметры идут с `%2`. Язык без своего каталога форм (пока
+ * каталог не зарегистрирован) добирает формы исходного `ru`.
+ *
+ * **Intl-форматы.** `formatDate`/`formatDateTime`/`formatNumber` форматируют
+ * по текущему языку; готовые `Intl.*Format` кешируются по `(язык, options)`,
+ * потому что создание форматтера на каждую строку таблицы дорого. Даты и
+ * числа вне этого API не форматируются: иначе формат расходится с языком
+ * (`toLocaleDateString('ru-RU')` в переведённом экране).
+ *
  * **Fallback.** Ключа нет ни в выбранном языке, ни в исходном — возвращается
  * сам ключ: интерфейс не падает и видно, что именно не переведено.
  *
@@ -31,10 +43,21 @@
  * юнит-тестами; персист выбора языка живёт в `lib/lang.ts`.
  */
 
-import { ru } from './locales/ru.js';
+import {
+  pluralCategory,
+  type PluralCatalog,
+  type PluralCategory,
+  type PluralForms,
+} from './plural.js';
+import { en, enPlurals } from './locales/en.js';
+import { ru, ruPlurals } from './locales/ru.js';
+import { zh, zhPlurals } from './locales/zh.js';
 
 /** Ключ строки словаря — только ключи исходного языка (`ru`). */
 export type MessageKey = keyof typeof ru;
+
+/** Ключ плюрализации — только ключи форм исходного языка (`ruPlurals`). */
+export type PluralKey = keyof typeof ruPlurals;
 
 /** Параметр подстановки: строка или число. */
 export type MessageParam = string | number;
@@ -55,6 +78,9 @@ export const DEFAULT_LANG = 'ru';
 
 /** Зарегистрированные каталоги: код языка → словарь. */
 const catalogs = new Map<string, MessageCatalog>();
+
+/** Зарегистрированные каталоги форм плюрализации: код языка → формы. */
+const pluralCatalogs = new Map<string, PluralCatalog>();
 
 /** Текущий язык интерфейса. */
 let current = DEFAULT_LANG;
@@ -99,11 +125,122 @@ export function t(key: MessageKey, params?: MessageParam | readonly MessageParam
 }
 
 /**
- * Регистрирует (или заменяет) каталог языка. Исходный `ru` зарегистрирован
- * при загрузке модуля.
+ * Текст с согласованием числа по правилам текущего языка: `tp('plurals.child',
+ * 3)` → «3 потомка». `n` подставляется в `%1`, `params` — дальше с `%2`.
+ *
+ * Категорию выбирает `Intl.PluralRules` (не арифметика по модулю 10): дробные
+ * числа в русском — `other`, а правила других языков задаёт ICU. У языка нет
+ * своего каталога форм — берутся формы исходного `ru`, чтобы интерфейс не
+ * остался без текста.
  */
-export function registerLocale(code: string, catalog: MessageCatalog): void {
+export function tp(
+  key: PluralKey,
+  n: number,
+  params?: MessageParam | readonly MessageParam[],
+): string {
+  const forms: PluralForms | undefined =
+    pluralCatalogs.get(current)?.[key] ?? (ruPlurals[key] as PluralForms | undefined);
+  const category: PluralCategory = pluralCategory(current, n);
+  const template =
+    forms?.[category] ?? forms?.other ?? forms?.many ?? forms?.few ?? forms?.one ?? key;
+  const extra: readonly MessageParam[] =
+    params === undefined ? [] : Array.isArray(params) ? params : [params as MessageParam];
+  return interpolate(template, [n, ...extra]);
+}
+
+/** Кеш форматтеров даты/времени по `(язык, options)`. */
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+
+/** Кеш числовых форматтеров по `(язык, options)`. */
+const numberFormats = new Map<string, Intl.NumberFormat>();
+
+/** Ключ кеша форматтера: язык + сериализованные опции. */
+function formatKey(lang: string, options?: Intl.DateTimeFormatOptions | Intl.NumberFormatOptions): string {
+  return `${lang}|${options === undefined ? '' : JSON.stringify(options)}`;
+}
+
+/** `Date` из значения форматтера; `null` — значение не является датой. */
+function toDate(value: Date | number | string): Date | null {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Форматтер даты/времени текущего языка — один на пару `(язык, options)`. */
+function dateFormatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = formatKey(current, options);
+  let formatter = dateFormats.get(key);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat(current, options);
+    dateFormats.set(key, formatter);
+  }
+  return formatter;
+}
+
+/**
+ * Дата по текущему языку. По умолчанию — короткая форма (`24.09.2026` в ru,
+ * `9/24/26` в en, `2026/9/24` в zh). Невалидная дата — пустая строка:
+ * вызывающий сам решает, показать прочерк или исходное значение.
+ */
+export function formatDate(
+  value: Date | number | string,
+  options?: Intl.DateTimeFormatOptions,
+): string {
+  const date = toDate(value);
+  if (date === null) return '';
+  return dateFormatter(options ?? { dateStyle: 'short' }).format(date);
+}
+
+/** Дата и время по текущему языку (по умолчанию короткая дата + среднее время). */
+export function formatDateTime(
+  value: Date | number | string,
+  options?: Intl.DateTimeFormatOptions,
+): string {
+  const date = toDate(value);
+  if (date === null) return '';
+  return dateFormatter(options ?? { dateStyle: 'short', timeStyle: 'medium' }).format(date);
+}
+
+/**
+ * Части отформатированной даты — для заголовков, которым год нужен без
+ * языкового суффикса (ru «г.»): вызывающий собирает текст из частей сам
+ * (образец — `formatDayLabel` в `screens/chronicle/diary.ts`).
+ */
+export function formatDateParts(
+  value: Date | number | string,
+  options?: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormatPart[] {
+  const date = toDate(value);
+  if (date === null) return [];
+  return dateFormatter(options ?? { dateStyle: 'short' }).formatToParts(date);
+}
+
+/**
+ * Число по текущему языку: группировка разрядов и разделитель дробной части
+ * берутся из локали (`1 234,5` в ru, `1,234.5` в en/zh).
+ */
+export function formatNumber(value: number, options?: Intl.NumberFormatOptions): string {
+  const key = formatKey(current, options);
+  let formatter = numberFormats.get(key);
+  if (formatter === undefined) {
+    formatter = new Intl.NumberFormat(current, options);
+    numberFormats.set(key, formatter);
+  }
+  return formatter.format(value);
+}
+
+/**
+ * Регистрирует (или заменяет) каталог языка. Исходный `ru` зарегистрирован
+ * при загрузке модуля. `plurals` — формы плюрализации языка; без них `tp`
+ * добирает формы `ru` (перевод плюралов появится вместе с каталогом языка).
+ */
+export function registerLocale(
+  code: string,
+  catalog: MessageCatalog,
+  plurals?: PluralCatalog,
+): void {
   catalogs.set(code, catalog);
+  if (plurals !== undefined) pluralCatalogs.set(code, plurals);
+  else pluralCatalogs.delete(code);
 }
 
 /** Языки, доступные для выбора, в порядке регистрации. */
@@ -119,15 +256,30 @@ export function getLang(): string {
   return current;
 }
 
+/** Зарегистрирован ли каталог языка (выбор возможен только для него). */
+export function hasLocale(code: string): boolean {
+  return catalogs.has(code);
+}
+
 /**
  * Переключает язык интерфейса. Незарегистрированный код игнорируется
  * (возвращает `false`) — рабочий язык остаётся прежним.
+ *
+ * Ошибка одного подписчика не отменяет остальных и не меняет результат:
+ * перерисовка экранов — независимые обработчики, падение одного не должно
+ * оставить интерфейс на смеси языков (задача e6374cd1).
  */
 export function setLang(lang: string): boolean {
   if (!catalogs.has(lang)) return false;
   if (lang === current) return true;
   current = lang;
-  for (const listener of listeners) listener(lang);
+  for (const listener of [...listeners]) {
+    try {
+      listener(lang);
+    } catch (err) {
+      console.error('[i18n] onLangChange listener failed', err);
+    }
+  }
   return true;
 }
 
@@ -144,4 +296,10 @@ export function hasMessage(lang: string, key: MessageKey): boolean {
   return lookup(lang, key) !== undefined;
 }
 
-registerLocale(DEFAULT_LANG, ru);
+registerLocale(DEFAULT_LANG, ru, ruPlurals);
+// Английский каталог (задача d08c422d): полный перевод ключей `ru.ts`,
+// регистрация делает язык доступным для выбора (`availableLocales`).
+registerLocale('en', en, enPlurals);
+// Китайский каталог, упрощённый zh-CN (задача f7dba88c): полный перевод
+// `ru.ts`, плюралы — единственная категория `other` по правилам `zh`.
+registerLocale('zh', zh, zhPlurals);

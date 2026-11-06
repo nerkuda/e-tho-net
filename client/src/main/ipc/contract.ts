@@ -34,6 +34,7 @@ export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState
 
 import type {
   ApiKey,
+  AuditListResult,
   Attachment,
   AttachmentContent,
   AttachmentContentUpdateInput,
@@ -79,6 +80,7 @@ import type {
   FocusResponse,
   HealthResponse,
   HierarchyResponse,
+  LanguageSource,
   Link,
   LinkPropertyValues,
   LinkDeletionCheckResult,
@@ -100,6 +102,7 @@ import type {
   NetworkPropertyUpdateInput,
   UpdateNetworkInput,
   EffectiveTypeProperty,
+  UserLanguageSettings,
   AttachPropertyInput,
   PropertyDefinition,
   PropertyDefinitionUpdateInput,
@@ -124,6 +127,7 @@ import type {
   ShelfInput,
   SearchRequest,
   SearchResponse,
+  ServerLanguageSettings,
   StructureQueryRequest,
   StructureQueryResponse,
   StructureIdsQueryResult,
@@ -362,6 +366,13 @@ export interface AppInfo {
   /** Node.js runtime version. */
   node: string;
 }
+
+/**
+ * Код языка каталога, который клиент умеет показать (задача e6374cd1).
+ * Автодетект ОС сводит любое предпочтение к одному из этих кодов
+ * (`src/main/system-locale.ts`); остальные каталоги появятся вместе с en/zh.
+ */
+export type ClientLanguage = 'ru' | 'en' | 'zh';
 
 /**
  * State of the client file journal (task f051bf95, 07-client-electron.md §7):
@@ -1358,7 +1369,14 @@ export interface EtnApi {
     removeUserKey(id: string, keyId: string): Promise<void>;
     listNetworks(): Promise<Network[]>;
     removeNetwork(id: string): Promise<void>;
-    listAudit(filters?: Record<string, unknown>): Promise<unknown>;
+    listAudit(filters?: Record<string, unknown>): Promise<AuditListResult>;
+    /**
+     * `GET /admin/settings/language` — язык сервера по умолчанию, нижняя
+     * ступень наследования языка интерфейса (ADR daab6ac4 §1–2).
+     */
+    getServerLanguage(): Promise<ServerLanguageSettings>;
+    /** `PUT /admin/settings/language` — сменить язык сервера (админ). */
+    setServerLanguage(language: string): Promise<ServerLanguageSettings>;
   };
   me: {
     get(): Promise<CurrentUser>;
@@ -1385,6 +1403,14 @@ export interface EtnApi {
      * server validates the value shape (`comment_hotkeys` — a string map).
      */
     setSetting(key: string, value: unknown): Promise<void>;
+    /**
+     * `GET /users/me/language-settings` — «язык приложения» пользователя
+     * (`null` — «использовать язык сетей») и эффективный язык `{ language,
+     * source }` по каждой доступной сети (ADR daab6ac4 §3, задача f99f0542).
+     * Старый сервер (0.15.1) маршрута не знает — вызов отвергается `NOT_FOUND`;
+     * клиент трактует это как отсутствие серверной настройки.
+     */
+    getLanguageSettings(): Promise<UserLanguageSettings>;
   };
   /**
    * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,
@@ -1465,6 +1491,20 @@ export interface EtnApi {
         kind: 'switched' | 'deleted';
         networkId: string;
         layer: { id: string; title: string };
+      }) => void,
+    ): () => void;
+    /**
+     * Кадры языка сокета (ADR daab6ac4 §3, задача f99f0542): `ready` при
+     * подключении и `settings.language` при смене языка сети/сервера.
+     * `language` — конкретный тег, `source` — ступень наследования.
+     * `networkId` — сеть сокета; рендерер применяет язык, только если это
+     * активная сеть (задача faba9ff4).
+     */
+    onLanguage(
+      cb: (payload: {
+        networkId: string;
+        language: string;
+        source: LanguageSource;
       }) => void,
     ): () => void;
     /**
@@ -1662,6 +1702,14 @@ export interface EtnApi {
      * a connection.
      */
     appInfo(): Promise<AppInfo>;
+    /**
+     * Язык системного окружения для ПЕРВОГО запуска (задача e6374cd1): первый
+     * элемент `app.getPreferredSystemLanguages()`, сведённый к коду каталога
+     * (`en-*` → `en`, `zh-*` → `zh`, иначе `ru`). Используется только как
+     * стартовое отображение, пока `client_meta.lang` пуст; никуда не
+     * персистится. Работает без соединения с сервером.
+     */
+    preferredLanguage(): Promise<ClientLanguage>;
     /**
      * Читает системный буфер обмена главным процессом (задача 78eaf07a):
      * текст и/или картинку как `data:`-URL PNG. Рендерер не имеет доступа к

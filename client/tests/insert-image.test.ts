@@ -144,6 +144,7 @@ function installEtn(calls: Calls, uploaded: Attachment): void {
       onStale: () => undefined,
       onNetworkLost: () => undefined,
       onLayerControl: () => undefined,
+      onLanguage: () => undefined,
       onEvent: () => undefined,
       notifyOnline: () => undefined,
     },

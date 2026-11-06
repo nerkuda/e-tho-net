@@ -157,7 +157,7 @@ function execute(task: WriteTask): WriteTaskResponse {
       if (task.context.crossNetworkAccess !== undefined) {
         throw new EtnError(
           'INTERNAL',
-          'write.thoughts с кросс-сетевым контекстом исполняется в главном потоке',
+          "write.thoughts with a cross-network context runs on the main thread",
         );
       }
       // Ядро обёртки исполняет транзакцию и пишет журнал активности в этом же

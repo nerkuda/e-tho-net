@@ -94,8 +94,8 @@
 ; Задача 9b310991 (0.15.1) — каталог данных, порт, брандмауэр и предпроверки:
 ;   * каталог данных фиксирован %ProgramData%\ETN (ADR 144bcdb0), поля выбора
 ;     в 0.15.1 нет; сервер получает его через ETN_DATA_DIR; каталог программы —
-;     {autopf}\ETN (Program Files в машинной установке), служебные файлы
-;     службы — {app}\service (ADR db60302a);
+;     GetDefaultAppDir (Program Files при запуске от имени администратора,
+;     профиль при обычном), служебные файлы службы — {app}\service (ADR db60302a);
 ;   * экран «Параметры сервера»: порт (по умолчанию 4321) и чекбокс
 ;     «Разрешить подключения с других компьютеров в локальной сети»;
 ;   * чекбокс — единственный источник ETN_HOST: включён — 0.0.0.0,
@@ -123,6 +123,53 @@
 ;     из install.json, поля на экране только показывают значения;
 ;   * установка только клиента серверных каталогов и правила не создаёт.
 ;
+; Ошибка 5b9743da (0.15.2) — «Переустановить клиент ETN», «Далее»/«Отмена» не
+; реагируют (мнимое зависание GUI):
+;   * зависание по опубликованной сборке не воспроизвелось: и в ВМ, и на машине
+;     пользователя процесс установщика жив, окно отвечает, «Далее» и «Отмена»
+;     активны и принимают нажатия; в журнале нет ни одной строки обработчика —
+;     значит, нажатие до установщика не дошло (окно было перекрыто другим);
+;   * следствие в коде: нажатие неактивной «Далее» не оставляло в журнале ни
+;     строки, а причина неактивности уезжала за нижний край поверхности
+;     страницы (длинные подписи состояния клиента) — состояние «кнопка мертва,
+;     объяснения нет» было неотличимо от зависания;
+;   * раскладка экрана компонентов гарантирует, что содержимое умещается:
+;     FitComponentsPage уступает (в порядке: пояснение режима, каталог данных,
+;     описания компонентов, ссылка), но выбор, состояния и причина остаются;
+;     пояснение режима не дублируется, когда показан текст фиксированной
+;     области (он говорит то же самое);
+;   * причина неактивности — одна функция ComponentsReasonText: она же пишется
+;     в журнал при каждой смене экрана вместе с состоянием кнопки;
+;   * вход в NextButtonClick и CancelButtonClick логируется: по журналу видно,
+;     дошло ли нажатие до установщика;
+;   * долгие операции (закрытие запущенного клиента, удаление старого NSIS-
+;     клиента) убраны из NextButtonClick в PrepareToInstall: Inno показывает на
+;     этом шаге страницу «Подготовка к установке», само копирование ещё не
+;     начато, а долгое ожидание идёт там, где мастер это предусматривает;
+;     ошибка возвращается строкой и печатается на той же странице, файлы не
+;     заменяются. Бюджеты ожидания прежние, но короче: 45 с на клиента и 10 с
+;     на исчезновение записи старого клиента (прежние 2 минуты неподвижного
+;     цикла в NextButtonClick и выглядели зависанием);
+;   * подпись состояния клиента в режиме «только для меня» поверх машинной
+;     копии больше не предлагает «выберите клиент, чтобы заменить его».
+;
+; Ошибка aa5af30c (0.15.2) — мастер не принимает ввод мыши на машине
+; пользователя:
+;   * причина — respawn мастера после диалога режима Inno (PrivilegesRequired=
+;     admin + PrivilegesRequiredOverridesAllowed=dialog): после перезапуска
+;     окно на этой машине не принимало ни клики, ни программные сообщения;
+;     без respawn мастер был живой;
+;   * продуктовая сборка вернулась к PrivilegesRequired=lowest и
+;     PrivilegesRequiredOverridesAllowed=commandline: мастер стартует и
+;     работает в одном процессе, без диалога режима и без respawn;
+;   * режим — по фактическим правам процесса: обычный запуск — только клиент
+;     «только для меня»; запуск от имени администратора — сервер и клиент «для
+;     всех» (GetDefaultAppDir → Program Files); попытка выбрать сервер в
+;     обычном запуске объясняет, что установщик надо запустить от имени
+;     администратора;
+;   * /ALLUSERS сохранён для тихого автообновления службы: LocalSystem уже
+;     элевирован, Inno включает административный режим без UAC и respawn.
+;
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
 ; Проверка silent-контракта и предпроверок: installer/tests/silent-codes.ps1.
 ; Проверка init и ключа: installer/tests/init-key.ps1.
@@ -144,6 +191,7 @@
 ;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
 ;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
 ;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID,
+;   /TESTPORTBINDFAIL, /TESTLISTENERTABLEOFF, /TESTNOSERVICE,
 ;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
 ;   /TESTSERVICEWAIT, /TESTSERVICEINSTALL, /TESTSERVICEUNINSTALL,
 ;   /TESTSERVICEREALFILE, /TESTUNINSTALLSERVICE, /TESTHEALTHURL,
@@ -174,12 +222,14 @@
   #define AppDir TestAppDir
   #define DataDir TestDataDir
 #else
-  ; Каталог программы выбирается по режиму установки: административный режим
-  ; (по умолчанию) — %ProgramFiles%\ETN; «только для меня» (диалог режима или
-  ; /CURRENTUSER) — %LOCALAPPDATA%\Programs\ETN без прав администратора.
-  ; Жёсткий {commonpf} здесь недопустим: в user-режиме экземпляр не сможет
-  ; создать каталог и записать деинсталлятор (Error 5: Отказано в доступе).
-  #define AppDir "{autopf}\ETN"
+  ; Каталог программы выбирается по ФАКТИЧЕСКИМ правам процесса (ошибка
+  ; aa5af30c): запуск от имени администратора — %ProgramFiles%\ETN, обычный
+  ; запуск — %LOCALAPPDATA%\Programs\ETN. При PrivilegesRequired=lowest Inno
+  ; всегда работает в неадминистративном режиме, поэтому {autopf} указывает на
+  ; профиль даже у элевированного процесса — вычислить каталог обязана
+  ; GetDefaultAppDir. Жёсткий {commonpf} здесь недопустим: в user-режиме
+  ; экземпляр не сможет создать каталог и записать деинсталлятор (Error 5).
+  #define AppDir "{code:GetDefaultAppDir}"
   #define DataDir "{commonappdata}\ETN"
 #endif
 
@@ -221,9 +271,12 @@
 ; должен трогать настоящий рабочий стол и меню «Пуск» пользователя.
 ;
 ; Пользовательская область (ошибка 0f8dd0f3, п.7 карточки 860def0d) задана
-; ЯВНО, а не через {autodesktop}/{autoprograms}: в административном режиме
-; установки (/ALLUSERS) авто-константы указывают на общие ярлыки и Program
-; Files, хотя выбран вариант «только для меня». Явный каталог клиента в
+; ЯВНО, а не через {autodesktop}/{autoprograms}: машинная копия клиента ставится
+; при элевированном запуске, когда Inno (PrivilegesRequired=lowest) остаётся в
+; неадминистративном режиме и авто-константы указывают на профиль, а не на
+; общие ярлыки. Машинные ярлыки заданы явно {commondesktop}/{commonprograms}
+; (в административном режиме /ALLUSERS они совпадают с авто-константами), а
+; пользовательские — {userdesktop}/{userprograms}. Явный каталог клиента в
 ; профиле совпадает с ClientInstallPath — область в install.json и реальное
 ; место файлов больше не расходятся.
 #ifdef TestMode
@@ -233,26 +286,34 @@
   #define ShortcutUserMenuDir ShortcutMenuDir
   #define ClientUserDir TestAppDir
 #else
-  #define ShortcutDesktopDir "{autodesktop}"
-  #define ShortcutMenuDir "{autoprograms}\ETN"
+  #define ShortcutDesktopDir "{commondesktop}"
+  #define ShortcutMenuDir "{commonprograms}\ETN"
   #define ShortcutUserDesktopDir "{userdesktop}"
   #define ShortcutUserMenuDir "{userprograms}\ETN"
   #define ClientUserDir "{localappdata}\Programs\ETN"
 #endif
 
 ; ============================================================================
+; AppId — единственный источник идентификатора: из него Inno строит запись
+; деинсталляции `{AppId}_is1`, по нему же ищется и чистится запись прежней
+; области реестра (ошибка a7394117). Литералы в [Setup] и [Code] не дублируются.
+#define ProductAppId "6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70"
+#define TestUninstallAppId "B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E"
+#define ProductUninstallKey "{" + ProductAppId + "}_is1"
+#define TestUninstallKey "{" + TestUninstallAppId + "}_is1"
+
 [Setup]
 ; Идентификатор продукта: по нему Inno ведёт запись установки и обновление
 ; поверх прежней версии. Менять нельзя — иначе повторный запуск не увидит
-; предыдущую установку.
+; предыдущую установку. `{{` — литеральная скобка: AppId начинается с `{`.
 #ifdef TestUninstallable
 ; Проба настоящего деинсталлятора (installer/tests/silent-codes.ps1, приёмка
 ; 8b1f5980): у тестовой установки отдельный AppId, чтобы запись установки и
 ; удаление не касались продуктовой установки на машине. Определяется только
 ; вместе с TestMode (см. Uninstallable ниже).
-AppId={{B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E}
+AppId={{{#TestUninstallAppId}}
 #else
-AppId={{6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70}
+AppId={{{#ProductAppId}}
 #endif
 AppName=ETN
 AppVersion={#MyAppVersion}
@@ -266,9 +327,8 @@ AppSupportURL=https://github.com/nerkuda/e-tho-net/issues
 AppUpdatesURL=https://github.com/nerkuda/e-tho-net/releases
 
 ; Каталог программы: имя ETN фиксировано (ADR 144bcdb0), расположение — по
-; режиму установки ({autopf}\ETN: административный режим — %ProgramFiles%\ETN,
-; «только для меня» (диалог режима или /CURRENTUSER) —
-; %LOCALAPPDATA%\Programs\ETN, без прав администратора).
+; фактическим правам процесса (ошибка aa5af30c): запуск от имени администратора
+; — %ProgramFiles%\ETN, обычный запуск — %LOCALAPPDATA%\Programs\ETN, без прав.
 ; Каталог данных — %ProgramData%\ETN (поля выбора в 0.15.1 нет).
 DefaultDirName={#AppDir}
 DisableDirPage=yes
@@ -287,36 +347,31 @@ DisableWelcomePage=yes
 CloseApplications=no
 RestartApplications=no
 
-; Элевация — штатная, силами Inno и до [Code] (ошибка 2dd215f7): скриптовый
-; self-exec установщика платформа запрещает (Exec/ShellExec/FileCopy по
-; {srcexe} до старта установки дают код 5). Права запрашивает Windows один раз
-; при старте; диалог режима позволяет выбрать установку «только для меня»
-; (/CURRENTUSER) — она идёт без элевации.
-;   admin    — режим по умолчанию: сервер и клиент «для всех пользователей»;
-;   dialog   — диалог режима на старте; /ALLUSERS и /CURRENTUSER его отменяют;
-;   UsePreviousPrivileges=no — диалог режима показывается при КАЖДОМ запуске.
-;              Так требует мастер: подсказки «закройте установщик и запустите
-;              снова, выбрав „для всех пользователей"» должны быть выполнимы.
-;              С yes (при уже установленной user-версии) Inno подавлял диалог:
-;              повторный запуск молча шёл в прошлом режиме — тупик (блокер
-;              приёмки 2dd215f7). Смена режима — повторный двойной клик, без
-;              флагов; /ALLUSERS и /CURRENTUSER по-прежнему отменяют диалог.
-#ifdef TestMode
-; В тестовой сборке привилегий нет (иначе UAC в CI): административный режим
-; моделируется хуком /TESTADMINMODE=1, неадминистративный — /TESTUSERONLYMODE=1.
+; Элевация и режим — по фактическим правам процесса (ошибка aa5af30c).
+; Продуктовая сборка работает с PrivilegesRequired=lowest: мастер стартует и
+; работает в одном процессе и НЕ перезапускается после диалога режима —
+; respawn оставлял на машине пользователя окно, не принимающее ввод.
+;   * обычный запуск (процесс не элевирован) — только клиент «только для меня»
+;     в профиль; сервер недоступен, причина и способ — на экране компонентов:
+;     запустить установщик от имени администратора (правый клик → Запуск от
+;     имени администратора);
+;   * запуск от имени администратора — сервер и клиент «для всех» в Program
+;     Files (IsAdmin); каталог программы вычисляет GetDefaultAppDir.
+; /ALLUSERS разрешён (commandline) для тихого автообновления: служба LocalSystem
+; запускает установщик уже элевированным — Inno включает административный режим
+; без UAC и без respawn. /CURRENTUSER не нужен: обычный запуск и так lowest.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
-#else
-PrivilegesRequired=admin
-PrivilegesRequiredOverridesAllowed=commandline dialog
-UsePreviousPrivileges=no
+; Один установщик за раз (наблюдение заказчика 2026-11-04): параллельный запуск
+; второй версии во время первого оставлял залипший сеанс ввода. Inno создаёт
+; мьютекс и второй экземпляр останавливает сообщением «установка уже
+; запущена», ничего не меняя; в silent-режиме сообщение подавляется.
+SetupMutex=ETNSetup
 ; Предупреждение Inno «per-user areas in admin mode» снято осознанно: пути
 ; {localappdata}/{userdesktop}/{userprograms} используются только установкой
-; клиента «только для меня», а в административном режиме она недоступна
-; (GAdminMachineScope и Check InstallClientUser отключают ветку); машинный
-; клиент ставится в {autopf}. Ярлыки и файлы per-user остаются под Check.
+; клиента «только для меня», а в элевированном (административном) запуске эта
+; ветка отключена Check-условиями (GAdminMachineScope/InstallClientUser).
 UsedUserAreasWarning=no
-#endif
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -347,23 +402,6 @@ UsePreviousTasks=no
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
-
-[Messages]
-; Диалог режима установки (PrivilegesRequiredOverridesAllowed=commandline
-; dialog) — то единственное место, где пользователь выбирает «для всех» или
-; «только для меня»: он показывается до мастера, вместе со штатным запросом
-; прав Windows (ошибка 2dd215f7). Стандартные тексты Inno говорят о
-; «привилегиях администратора» без последствий, поэтому здесь прямо сказано,
-; что именно ставится в каждом режиме и когда появится UAC. Text1 — текущий
-; режим по умолчанию admin, Text2 — lowest (тестовая сборка).
-PrivilegesRequiredOverrideTitle=Режим установки ETN
-PrivilegesRequiredOverrideInstruction=Выберите, для кого установить ETN
-PrivilegesRequiredOverrideText1=%1 может быть установлена для всех пользователей компьютера (сервер-служба и клиент; Windows запросит права администратора) или только для вас (клиент в вашем профиле, без прав администратора).
-PrivilegesRequiredOverrideText2=%1 может быть установлена только для вас (клиент в вашем профиле, без прав администратора) или для всех пользователей компьютера (сервер-служба и клиент; Windows запросит права администратора).
-PrivilegesRequiredOverrideAllUsers=Установить для всех пользователей (сервер и клиент)
-PrivilegesRequiredOverrideAllUsersRecommended=Установить для всех пользователей (рекомендуется: сервер и клиент)
-PrivilegesRequiredOverrideCurrentUser=Установить только для меня (клиент, без прав администратора)
-PrivilegesRequiredOverrideCurrentUserRecommended=Установить только для меня (клиент, без прав администратора)
 
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
@@ -470,12 +508,26 @@ const
   { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
     клиент electron-builder (NSIS) и запись установки Inno. }
   UNINSTALL_KEY = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
+  { Та же ветка в 32-битном представлении профиля пользователя (WOW6432Node):
+    запись прежней 32-битной установки могла остаться и там. }
+  UNINSTALL_KEY_WOW = 'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall';
+  { Имя ключа записи деинсталляции Inno: AppId из [Setup] с суффиксом _is1
+    (в реестре AppId записан с одной ведущей скобкой). У тестовой сборки с
+    деинсталлятором свой AppId — продуктовую запись она не трогает.
+    Ошибка a7394117: по этому ключу удаляется запись прежней области реестра. }
+#ifdef TestUninstallable
+  UNINSTALL_KEY_NAME = '{#TestUninstallKey}';
+#else
+  UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';
+#endif
   { Ожидание исчезновения записи Uninstall после удаления старого клиента:
     деинсталлятор NSIS с _?= завершается синхронно, но старая версия могла
     проигнорировать параметр и удалять в фоне — запись исчезает с задержкой.
-    Опрос — раз в 250 мс, общий бюджет — 2 минуты (112642a4). }
-  LEGACY_GONE_WAIT_MS = 120000;
-  LEGACY_GONE_STEP_MS = 250;
+    Опрос — раз в 500 мс, общий бюджет — 10 секунд (112642a4). Бюджет сокращён
+    с 2 минут (ошибка 5b9743da): цикл не прокачивает сообщения, и долгое
+    ожидание выглядело зависанием; в норме запись исчезает сразу. }
+  LEGACY_GONE_WAIT_MS = 10000;
+  LEGACY_GONE_STEP_MS = 500;
   { Закрытие запущенного клиента (задача 98ad5eec): сначала мягко (taskkill
     без /F — WM_CLOSE, Electron завершает процесс сам), ожидание выхода 30 с;
     только после таймаута — принудительно (/F /T) и ожидание ещё 15 с.
@@ -492,9 +544,9 @@ var
   GPrivilegedPhase: Boolean;
   GIsElevated: Boolean;
   { Административный режим установки: установщик работает «для всех
-    пользователей» (PrivilegesRequired=admin или /ALLUSERS). Права запрашивает
-    сам Inno при старте (native respawn); скриптового самозапуска нет —
-    ошибка 2dd215f7. В TestMode моделируется /TESTADMINMODE=1. }
+    пользователей» (запуск от имени администратора или /ALLUSERS). Права даёт
+    элевированный процесс; Inno не перезапускает мастер (ошибка aa5af30c).
+    В TestMode моделируется /TESTADMINMODE=1. }
   GAdminInstallMode: Boolean;
   { Неадминистративный режим («только для меня»): сервер и клиент «для всех»
     недоступны, ставится только клиент в профиль пользователя (сценарий n2). }
@@ -588,6 +640,14 @@ var
     без настоящей элевации (проверка «клиент только для всех»); без него
     тестовая сборка работает как неадминистративный режим «только для меня». }
   GTestAdminMode: String;
+  { Ошибка a7394117: /TESTINNOADMINMODE=1 моделирует административный режим
+    самого Inno (/ALLUSERS): запись деинсталляции он пишет в HKLM; без хука
+    тестовая сборка (PrivilegesRequired=lowest) пишет её в HKCU.
+    /TESTUNINSTROOT=<подключ> уводит машинную область записи в песочницу HKCU:
+    прав на настоящий HKLM в прогоне нет. Пользовательская область остаётся
+    настоящим ключом Inno — так проверяется удаление оставшейся записи. }
+  GTestInnoAdminMode: String;
+  GTestUninstallRoot: String;
   { /TESTUSERONLYMODE=1 — явная проверка неадминистративного режима в тестовой
     сборке: сервер недоступен, ставится только клиент «для меня». }
   GTestUserOnlyMode: String;
@@ -595,6 +655,14 @@ var
     CIM-запроса и PID, который считается PID службы (проверка потомков). }
   GTestServiceName: String;
   GTestOwnServicePid: String;
+  { 1dddac77: имитация неизвестного отказа пробного bind в запасной ветке —
+    проверка перехода в статус 2 (fail-closed, код 20 с причиной). }
+  GTestPortBindFail: String;
+  { 1dddac77: имитация недоступной TCP-таблицы Windows (сборка без перечисления
+    слушателей) и отсутствия службы ETN — проверка ветки «своя служба жива,
+    таблица сломана» без реальной аномалии ОС. }
+  GTestListenerTableOff: String;
+  GTestNoService: String;
   { Тестовые хуки bb063ac3: служба и health-check без реальной службы Windows
     и без настоящего сервера — подмена исполняемого файла службы, её состояния
     и команд, базового URL health-check, бюджетов ожидания и сбоя отката. }
@@ -649,6 +717,9 @@ var
 
   { Выбор компонентов и параметры }
   GServerSelected: Boolean;
+  { Пользователь (или тестовый хук) пытался выбрать сервер в обычном запуске:
+    сервер не выбирается, на экране — причина ServerUnavailableReason. }
+  GServerRequested: Boolean;
   GClientSelected: Boolean;
   GClientScopeUser: Boolean;
   GServerMode: String;
@@ -714,9 +785,9 @@ var
   GClientStateLabel: TNewStaticText;
   GClientHintLabel: TNewStaticText;
   GScopeHintLabel: TNewStaticText;
-  { Область клиента: выбора в мастере нет (её задаёт диалог режима), при
-    обновлении показывается текст выбранной области (ea8e223a, 4a66b7a5;
-    замечание приёмки 98ad5eec). }
+  { Область клиента: выбора в мастере нет (её задают фактические права
+    процесса), при обновлении показывается текст выбранной области (ea8e223a,
+    4a66b7a5; замечание приёмки 98ad5eec). }
   GScopeFixedLabel: TNewStaticText;
   GDataNoteLabel: TNewStaticText;
   GReasonLabel: TNewStaticText;
@@ -1278,6 +1349,27 @@ begin
     GInstalledClientScope := '';
 end;
 
+{ Каталог программы по фактическим правам процесса (ошибка aa5af30c).
+  PrivilegesRequired=lowest всегда оставляет Inno в неадминистративном режиме,
+  поэтому autopf у элевированного процесса указывал бы на профиль. Запуск от
+  имени администратора — Program Files; обычный запуск — профиль пользователя
+  (тот же каталог, что ClientUserDir). Функция вызывается и директивой
+  DefaultDirName, и при вычислении GServerDir в InitializeSetup, — путь всегда
+  один и тот же. }
+function GetDefaultAppDir(Param: String): String;
+begin
+#ifdef TestMode
+  { В тестовой сборке каталог изолирован и задан build.ps1; функция в этой
+    ветке не участвует в выборе режима. }
+  Result := ExpandConstant('{#AppDir}');
+#else
+  if IsAdmin then
+    Result := ExpandConstant('{commonpf}\ETN')
+  else
+    Result := ExpandConstant('{localappdata}\Programs\ETN');
+#endif
+end;
+
 function MachineAppDir: String;
 begin
 #ifdef TestMode
@@ -1365,7 +1457,7 @@ end;
   Показывается на экране компонентов; запущенный клиент ищется по обоим
   вариантам (ClientCloseRoots), потому что обновление может застать клиента
   прежней области. Каталог фиксирован ADR 144bcdb0, но область установки
-  пользователь выбирает в диалоге режима Inno.
+  определяют фактические права процесса (ошибка aa5af30c).
 
   Ограничение Administrator Protection (2dd215f7): в элевированном процессе
   {localappdata} может указывать на профиль SMAA, а не на профиль запустившего
@@ -1409,9 +1501,254 @@ begin
   if GTestRecord = '1' then Result := True;
   Exit;
 #endif
-  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
-    '{6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70}_is1';
+  Key := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
   Result := RegKeyExists(HKLM, Key) or RegKeyExists(HKLM64, Key);
+end;
+
+{ Нормализация пути из значения реестра: снимаются кавычки и хвостовые
+  обратные слэши. Inno пишет InstallLocation с AddBackslash, а UninstallString
+  — в кавычках (см. Setup.Install.pas, RegisterUninstallInfo). }
+function NormalizeRecordPath(const Value: String): String;
+begin
+  Result := Trim(Value);
+  if (Length(Result) >= 2) and (Result[1] = '"') and
+    (Result[Length(Result)] = '"') then
+    Result := Trim(Copy(Result, 2, Length(Result) - 2));
+  while (Length(Result) > 3) and (Result[Length(Result)] = '\') do
+    Result := Copy(Result, 1, Length(Result) - 1);
+end;
+
+(* Каталог текущей машинной установки: {app} (обычно Program Files\ETN) либо
+  MachineAppDir. Сравнение без учёта регистра — пути Windows. *)
+function IsMachineInstallDir(const Dir: String): Boolean;
+var
+  Candidate, AppDir, MachineDir: String;
+begin
+  Result := False;
+  Candidate := NormalizeRecordPath(Dir);
+  if Candidate = '' then Exit;
+  AppDir := NormalizeRecordPath(ExpandConstant('{app}'));
+  MachineDir := NormalizeRecordPath(MachineAppDir);
+  Result := (AppDir <> '') and (CompareText(Candidate, AppDir) = 0);
+  if (not Result) and (MachineDir <> '') then
+    Result := CompareText(Candidate, MachineDir) = 0;
+end;
+
+{ Путь к exe из UninstallString: Inno пишет его в кавычках, возможен хвост
+  вида « /LOG». Без кавычек поддерживается путь до первого пробела. }
+function UninstallExeFromString(const Value: String): String;
+var
+  S: String;
+  P: Integer;
+begin
+  S := Trim(Value);
+  Result := '';
+  if S = '' then Exit;
+  if S[1] = '"' then
+  begin
+    P := 2;
+    while (P <= Length(S)) and (S[P] <> '"') do
+      P := P + 1;
+    if P <= Length(S) then
+      Result := Copy(S, 2, P - 2)
+    else
+      Result := Copy(S, 2, Length(S) - 1);
+  end
+  else
+  begin
+    P := Pos(' /', S);
+    if P > 0 then Result := Copy(S, 1, P - 1) else Result := S;
+  end;
+  Result := NormalizeRecordPath(Result);
+end;
+
+(* Ошибка 7dcbeb0c: под нашим AppId в реестре может лежать ЛЕГИТИМНАЯ
+  per-user установка клиента «только для меня» (%LOCALAPPDATA%\Programs\ETN).
+  Удаляем только запись машинной установки: InstallLocation или UninstallString
+  указывают в каталог текущей машинной установки ({app}). Запись без этих
+  значений или с чужим каталогом не трогаем: удалить чужое хуже, чем оставить
+  дубль, о котором сообщит журнал. *)
+function IsMachineUninstallRecord(const Root: Integer;
+  const SubKey: String): Boolean;
+var
+  Location, Cmd, Exe: String;
+begin
+  Result := False;
+  if RegQueryStringValue(Root, SubKey, 'InstallLocation', Location) and
+    IsMachineInstallDir(Location) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if RegQueryStringValue(Root, SubKey, 'UninstallString', Cmd) then
+  begin
+    Exe := UninstallExeFromString(Cmd);
+    if (Exe <> '') and IsMachineInstallDir(ExtractFileDir(Exe)) then
+      Result := True;
+  end;
+end;
+
+{ Удаляет запись деинсталляции по одному корню реестра. Возвращает 1, если
+  запись была и удалена. Удаляется только запись машинной установки (ошибка
+  7dcbeb0c); чужая (per-user клиент) остаётся с записью в журнале. Ошибка
+  удаления установку не отменяет: WARN в журнал (ошибка a7394117). }
+function DeleteUninstallRecordAt(const Root: Integer; const RootName,
+  SubKey: String): Integer;
+begin
+  Result := 0;
+  if not RegKeyExists(Root, SubKey) then Exit;
+  if not IsMachineUninstallRecord(Root, SubKey) then
+  begin
+    LogLine('INFO', 'Запись деинсталляции другой установки оставлена: ' +
+      RootName + '\' + SubKey);
+    Exit;
+  end;
+  if RegDeleteKeyIncludingSubkeys(Root, SubKey) then
+  begin
+    Result := 1;
+    LogLine('INFO', 'Удалена запись деинсталляции прежней области: ' +
+      RootName + '\' + SubKey);
+  end
+  else
+    LogLine('WARN', 'Запись деинсталляции прежней области не удалена: ' +
+      RootName + '\' + SubKey + ' (установка продолжается)');
+end;
+
+{ SID загруженного профиля пользователя. Служебные профили (LocalSystem,
+  LocalService, NetworkService) и псевдонимы (`.DEFAULT`, `…_Classes`)
+  пропускаются: записи установки в них не бывает, а трогать их незачем. }
+function IsUserProfileSid(const Name: String): Boolean;
+begin
+  Result := (CompareText(Copy(Name, 1, 4), 'S-1-') = 0) and
+    (Pos('_', Name) = 0) and
+    (CompareText(Name, 'S-1-5-18') <> 0) and
+    (CompareText(Name, 'S-1-5-19') <> 0) and
+    (CompareText(Name, 'S-1-5-20') <> 0);
+end;
+
+{ Ошибка a7394117 (доработка по ревью верификатора): при тихом /ALLUSERS
+  установщик запускает служба под LocalSystem, поэтому HKCU процесса — профиль
+  системы, а запись GUI-админ-установки лежит в профиле пользователя.
+  Перечисляем ЗАГРУЖЕННЫЕ профили (HKEY_USERS\<SID>) и удаляем в каждом запись
+  нашего AppId — обычную и WOW6432Node. Удаляется только запись машинной
+  установки (ошибка 7dcbeb0c): per-user клиент в профиле пользователя
+  (%LOCALAPPDATA%\Programs\ETN) принадлежит другой установке и остаётся.
+  Незагруженный профиль (пользователь вышел) сюда не виден: это ограничение
+  отмечено в карточке компонента. Возвращает число удалённых ключей. }
+function DeleteUninstallRecordInUserHives: Integer;
+var
+  Names: TArrayOfString;
+  I: Integer;
+  Base, Profile, SubKey, RootName: String;
+begin
+  Result := 0;
+  Base := '';
+  RootName := 'HKU';
+#ifdef TestMode
+  { Песочница теста: профили моделируются поддеревом HKCU\<root>\Profiles,
+    реальные HKU в прогоне без прав администратора не читаются. }
+  if GTestUninstallRoot <> '' then
+  begin
+    Base := GTestUninstallRoot + '\Profiles';
+    RootName := 'HKCU\' + Base;
+  end;
+#endif
+  if Base <> '' then
+  begin
+    if not RegGetSubkeyNames(HKCU, Base, Names) then Exit;
+  end
+  else if not RegGetSubkeyNames(HKU, '', Names) then
+  begin
+    LogLine('WARN', 'Не удалось перечислить профили пользователей (HKU): ' +
+      'запись деинсталляции в них не проверена (установка продолжается)');
+    Exit;
+  end;
+  for I := 0 to GetArrayLength(Names) - 1 do
+  begin
+    Profile := Names[I];
+    if not IsUserProfileSid(Profile) then Continue;
+    SubKey := Profile + '\' + UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
+    if Base <> '' then
+    begin
+      SubKey := Base + '\' + SubKey;
+      Result := Result + DeleteUninstallRecordAt(HKCU, RootName, SubKey);
+    end
+    else
+      Result := Result + DeleteUninstallRecordAt(HKU, RootName, SubKey);
+    SubKey := Profile + '\' + UNINSTALL_KEY_WOW + '\' + UNINSTALL_KEY_NAME;
+    if Base <> '' then
+    begin
+      SubKey := Base + '\' + SubKey;
+      Result := Result + DeleteUninstallRecordAt(HKCU, RootName, SubKey);
+    end
+    else
+      Result := Result + DeleteUninstallRecordAt(HKU, RootName, SubKey);
+  end;
+end;
+
+{ Удаляет запись деинсталляции в машинной (HKLM) или пользовательской (HKCU)
+  области — в той, куда Inno её НЕ записал (ошибка a7394117). В тестовой
+  сборке машинная область моделируется поддеревом HKCU: прав на HKLM в прогоне
+  silent-codes.ps1 нет, а пользовательская область остаётся настоящим ключом
+  Inno. Возвращает число удалённых ключей. }
+function DeleteForeignUninstallRecord(const MachineScope: Boolean): Integer;
+var
+  SubKey: String;
+begin
+  Result := 0;
+  SubKey := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
+  if MachineScope then
+  begin
+#ifdef TestMode
+    if GTestUninstallRoot <> '' then
+    begin
+      Result := DeleteUninstallRecordAt(HKCU, 'HKCU',
+        GTestUninstallRoot + '\Machine\' + UNINSTALL_KEY_NAME);
+      Exit;
+    end;
+#endif
+    { HKLM в 32- и 64-битном представлении — разные ветки реестра: прежняя
+      установка могла записать запись в любую из них. }
+    Result := DeleteUninstallRecordAt(HKLM64, 'HKLM64', SubKey);
+    Result := Result + DeleteUninstallRecordAt(HKLM32, 'HKLM32', SubKey);
+  end
+  else
+  begin
+    { HKCU процесса — это профиль того, кто запустил установщик. При
+      /ALLUSERS из службы LocalSystem это профиль системы, поэтому основную
+      работу делает обход загруженных профилей пользователей. }
+    Result := DeleteUninstallRecordAt(HKCU, 'HKCU', SubKey);
+    Result := Result + DeleteUninstallRecordInUserHives;
+  end;
+end;
+
+{ Ошибка a7394117: PrivilegesRequired=lowest пишет запись деинсталляции в
+  HKCU при элевированном GUI-запуске (Inno остаётся в неадминистративном
+  режиме) и в HKLM при тихом /ALLUSERS-обновлении. Прежнюю запись Inno не
+  мигрирует — после обновления в «Программах и компонентах» две строки.
+  После успешной установки удаляем запись в области, куда Inno её не записал.
+  Удаляется только запись машинной установки — per-user клиент «только для
+  меня» сохраняется (ошибка 7dcbeb0c). В режиме «только для меня» ничего не
+  удаляем: запись одна, прав на HKLM нет. }
+procedure RemoveDuplicateUninstallRecord;
+var
+  ForeignMachineScope: Boolean;
+begin
+#ifdef TestMode
+  { Тестовая сборка без деинсталлятора (Uninstallable=no) запись не создаёт,
+    а её AppId — продуктовый: удалять по нему запись на машине нельзя. }
+  #ifndef TestUninstallable
+  Exit;
+  #endif
+#endif
+  if not GAdminInstallMode then Exit;
+  { IsAdminInstallMode: Inno в административном режиме (/ALLUSERS) — запись
+    HKLM, значит удаляем HKCU; иначе (элевированный GUI-запуск) — наоборот. }
+  ForeignMachineScope := not IsAdminInstallMode;
+#ifdef TestMode
+  if GTestInnoAdminMode = '1' then ForeignMachineScope := False;
+#endif
+  DeleteForeignUninstallRecord(ForeignMachineScope);
 end;
 
 procedure DetectState;
@@ -1546,7 +1883,18 @@ begin
         Result := 'клиент уже установлен — при обновлении он будет заменён';
     end
     else
-      Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
+    begin
+      { Режим «только для меня» поверх машинной копии (ошибка 5b9743da):
+        «выберите клиент, чтобы заменить его» — неправда, выбор снят именно
+        потому, что без прав администратора машинную копию не заменить.
+        Подпись обязана совпадать с причиной неактивности «Далее», иначе экран
+        противоречит сам себе. }
+      if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+        Result := 'клиент установлен для всех пользователей — нужны права ' +
+          'администратора'
+      else
+        Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
+    end;
   end
   else if GLegacyClientFound and GClientSelected then
   begin
@@ -1574,7 +1922,7 @@ end;
 { Область установки клиента при обновлении фиксирована: менять её нельзя
   (ea8e223a, 4a66b7a5 — иначе на машине остались бы файлы и ярлыки старой
   области). В этом состоянии выводится текст области (ClientScopeText):
-  выбора в мастере нет — его задаёт диалог режима Inno. }
+  выбора в мастере нет — его задают фактические права процесса. }
 function ClientScopeFixed: Boolean;
 begin
   Result := GClientState = 'installed';
@@ -1601,40 +1949,39 @@ begin
     end;
     Exit;
   end;
-  { Режим «только для меня» (2dd215f7): клиент «для всех» без прав
-    администратора не заменить — говорим, что сделать, вместо невнятного
-    «выберите хотя бы один компонент». UsePreviousPrivileges=no: диалог режима
-    показывается при каждом запуске, поэтому совет выполним. }
+  { Обычный запуск (ошибка aa5af30c): клиент «для всех» без прав администратора
+    не заменить — говорим, что сделать, вместо невнятного «выберите хотя бы
+    один компонент». Мастер не просит прав и не перезапускается: сервер и
+    клиент «для всех» ставятся запуском установщика от имени администратора. }
   if GUserOnlyMode and (GInstalledClientScope = 'machine') then
   begin
     Result := 'Клиент установлен для всех пользователей: его обновление ' +
-      'требует прав администратора. Закройте установщик и запустите его снова: ' +
-      'в диалоге режима выберите «Установить для всех пользователей».';
+      'требует прав администратора. Закройте установщик и запустите его от ' +
+      'имени администратора (правый клик → Запуск от имени администратора).';
     Exit;
   end;
   { Режим «только для меня»: клиент в профиле обновляется на месте; другой
-    вариант — запуск установщика с выбором «для всех пользователей». }
+    вариант — запуск установщика от имени администратора (см. выше). }
   if GUserOnlyMode then
   begin
     Result := 'Клиент установлен в варианте «только для меня» — обновление ' +
       'продолжится в ваш профиль. Чтобы поставить клиент «для всех ' +
-      'пользователей», закройте установщик и запустите его снова: в диалоге ' +
-      'режима выберите «Установить для всех пользователей».';
+      'пользователей», закройте установщик и запустите его от имени ' +
+      'администратора (правый клик → Запуск от имени администратора).';
     Exit;
   end;
   { Остальные состояния (тестовый прогон без моделируемого режима): та же
     формулировка пользователя (860def0d, n5), что и в режиме «только для
-    меня», — сменить вариант можно повторным запуском и выбором в диалоге
-    режима. «Удалите клиента и установите заново» больше не советуем:
-    UsePreviousPrivileges=no, диалог показывается при каждом запуске. }
+    меня», — сменить вариант можно повторным запуском с нужными правами.
+    «Удалите клиента и установите заново» больше не советуем. }
   if GClientScopeUser then
     Result := 'Клиент установлен в варианте «только для меня». Чтобы поставить ' +
       'клиент «для всех пользователей», закройте установщик и запустите его ' +
-      'снова: в диалоге режима выберите «Установить для всех пользователей».'
+      'от имени администратора (правый клик → Запуск от имени администратора).'
   else
     Result := 'Клиент установлен в варианте «для всех пользователей». Чтобы ' +
-      'поставить клиент «только для меня», закройте установщик и запустите его ' +
-      'снова: в диалоге режима выберите «Установить только для меня».';
+      'поставить клиент «только для меня», запустите установщик обычным ' +
+      'двойным кликом (без прав администратора).';
 end;
 
 { Понятное название режима запуска сервера (ошибка 860def0d, n6): «service» и
@@ -2089,7 +2436,8 @@ begin
       старый остаётся; на экране компонентов обещания удаления нет. }
     LogLine('WARN', 'Старый клиент ETN ' + Version + ' установлен для всех ' +
       'пользователей: удаление требует прав администратора — запустите ' +
-      'установщик, выбрав «Установить для всех пользователей»');
+      'установщик от имени администратора (правый клик → Запуск от имени ' +
+      'администратора)');
     Exit;
   end;
   if IsMachine then
@@ -3176,10 +3524,10 @@ begin
   { Привилегированная фаза — та, что пишет в каталог программы и каталог
     данных: silent (предусловие — уже элевирован), внутренняя фаза
     /PRIVILEGEDPHASE (тесты установщика; GUI её больше не запускает), либо
-    административный режим установки — его обеспечивает сам Inno
-    (PrivilegesRequired=admin), autopf = Program Files. Элевированный, но не
-    административный процесс пишет в профиль пользователя и привилегированной
-    фазой не считается — иначе сервер попал бы и в Program Files, и в профиль.
+    элевированный процесс (запуск от имени администратора или /ALLUSERS);
+    каталог программы при этом выбирает GetDefaultAppDir. Неэлевированный
+    процесс пишет в профиль пользователя и привилегированной фазой не
+    считается — иначе сервер попал бы и в Program Files, и в профиль.
     GAdminInstallMode, а не IsAdminInstallMode: в тестовой сборке режим
     моделируется хуком /TESTADMINMODE. }
   Result := GWorkAllowed and
@@ -5002,26 +5350,56 @@ end;
   входят (IPv6-only слушатель серверу не мешает); dual-stack `::` показывается
   в Get-NetTCPConnection и ловится перебором адресов. Если сервер начнёт
   слушать IPv6, перечисление надо расширить.
-  Если командлет недоступен или IPv4-слушателей нет, порт проверяется без
-  пробного bind на все интерфейсы: зарезервированные диапазоны (Hyper-V/WinNAT,
-  TIME_WAIT после перезапуска) читаются из netsh, затем пробный bind на
-  127.0.0.1 (loopback). Пробный bind 0.0.0.0 вызывал диалог Windows Security
-  «Allow для Windows PowerShell» прямо во время установки (ошибка 860def0d,
-  п.4).
+  Пустой или неуспешный ответ перечисления НЕ означает «порт свободен»:
+  на Windows 11 build 28000 (KB5133111/KB5127653) TCP-таблица не показывает
+  только что созданные слушатели — Get-NetTCPConnection падает с ObjectNotFound,
+  netstat по порту пуст, а TcpClient.Connect успешен (ошибка 1dddac77). Поэтому
+  запасная ветка работает fail-closed: зарезервированные диапазоны
+  (Hyper-V/WinNAT) читаются из netsh, затем выполняется эксклюзивный bind на
+  0.0.0.0 (SO_EXCLUSIVEADDRUSE) БЕЗ Listen. Раньше здесь был TcpListener на
+  loopback: у него ExclusiveAddressUse=false, bind проходил при живом
+  слушателе на 0.0.0.0/чужом конкретном адресе (SO_REUSEADDR), и порт
+  считался свободным — fail-open. Эксклюзивный bind на 0.0.0.0 ловит все
+  такие случаи и не срабатывает на свободном порту. Listen() не вызывается
+  сознательно: он создаёт слушающий endpoint, и Windows Security показывает
+  диалог «Allow для Windows PowerShell» прямо во время установки (ошибка
+  860def0d, п.4); bind без Listen диалога не вызывает (проверено на build
+  28000: положительный контроль с listen() даёт диалог, bind — нет).
+  Ошибка bind AddressAlreadyInUse/AccessDenied — порт занят (1); любая другая
+  ошибка (проверить не удалось) — статус 2.
+  На сборках Windows с неработающей TCP-таблицей (build 28000,
+  KB5133111/KB5127653) владельца слушателя не узнать: own-PID сопоставление
+  невозможно, а эксклюзивный bind падает на порту живой своей службы — тогда
+  установка и автообновление поверх работающей установки всегда получали бы
+  20. Поэтому доступность таблицы проверяется пробой: временный TcpListener на
+  loopback с портом 0 обязан появиться в Get-NetTCPConnection со своим PID
+  (listen только на loopback диалога брандмауэра не даёт). Если таблица не
+  работает, но служба ETN зарегистрирована и запущена (svcFound=1), порт
+  считается своим (0): службу остановит ssInstall, а её работоспособность
+  проверит health-check. Без запущенной службы — прежний fail-closed (netsh +
+  эксклюзивный bind). Если таблица работает, логика не меняется: строки есть —
+  foreign/own, строк нет — netsh + эксклюзивный bind.
   Возвращает 0 — свободен (или держит служба ETN), 1 — занят, 2 — проверить
   не удалось. Тестовые хуки (только TestMode): TESTSERVICENAME подменяет имя
   службы, и скрипт возвращает 0/2 по факту её нахождения (поведенческая проба
   CIM-запроса); TESTOWNSERVICEPID задаёт PID «своей» службы вместо CIM-запроса
-  (поведенческая проба сравнения владельцев и цепочки потомков). }
+  (поведенческая проба сравнения владельцев и цепочки потомков);
+  TESTPORTBINDFAIL=1 имитирует неизвестный отказ пробного bind (статус 2);
+  TESTLISTENERTABLEOFF=1 — недоступную TCP-таблицу, TESTNOSERVICE=1 —
+  отсутствие службы (проверка новых веток без аномальной ОС). }
 function ServerPortStatus(const Port: String): Integer;
 var
-  Script, Args, SvcName, SvcNameLiteral, SvcProbe, OwnSeed: String;
+  Script, Args, SvcName, SvcNameLiteral, SvcProbe, OwnSeed, BindFail,
+  TableOff, NoSvc: String;
   Code: Integer;
 begin
   Result := 2;
   SvcName := SERVICE_NAME;
   SvcProbe := '0';
   OwnSeed := '0';
+  BindFail := '0';
+  TableOff := '0';
+  NoSvc := '0';
 #ifdef TestMode
   if GTestServiceName <> '' then
   begin
@@ -5031,6 +5409,12 @@ begin
   { Валидация PID: строка из параметра идёт в скрипт только если это число. }
   if StrToIntDef(GTestOwnServicePid, 0) > 0 then
     OwnSeed := IntToStr(StrToIntDef(GTestOwnServicePid, 0));
+  if GTestPortBindFail = '1' then
+    BindFail := '1';
+  if GTestListenerTableOff = '1' then
+    TableOff := '1';
+  if GTestNoService = '1' then
+    NoSvc := '1';
 #endif
   { Имя службы — в одинарные кавычки PowerShell; кавычки внутри имени
     удваиваются (правило PS-литерала). Двойных кавычек в скрипте нет. }
@@ -5039,10 +5423,11 @@ begin
   Script :=
     '$ErrorActionPreference=''SilentlyContinue'';$port=' + Port + ';' +
     '$svcName=''' + SvcNameLiteral + ''';' +
-    '$svcProbe=' + SvcProbe + ';$ownSeed=' + OwnSeed + ';' +
+    '$svcProbe=' + SvcProbe + ';$ownSeed=' + OwnSeed + ';$bindFail=' + BindFail +
+    ';$tableOff=' + TableOff + ';$noSvc=' + NoSvc + ';' +
     '$svcFound=0;$own=@();' +
-    'if($ownSeed -gt 0){$own+=$ownSeed}' +
-    'else{try{$svc=Get-CimInstance Win32_Service|' +
+    'if($ownSeed -gt 0){$own+=$ownSeed;$svcFound=1}' +
+    'elseif($noSvc -eq 0){try{$svc=Get-CimInstance Win32_Service|' +
     'Where-Object{$_.Name -eq $svcName}|Select-Object -First 1;' +
     'if($svc -and ([int]$svc.ProcessId -gt 0)){$svcFound=1;' +
     '$own+=[int]$svc.ProcessId}}catch{}};' +
@@ -5054,26 +5439,58 @@ begin
     'if($front -contains [int]$p.ParentProcessId){' +
     '$own+=[int]$p.ProcessId;$next+=[int]$p.ProcessId}};' +
     '$front=$next}};' +
-    '$v4=$null;' +
-    'try{$v4=@(Get-NetTCPConnection -LocalPort $port -State Listen ' +
-    '-ErrorAction Stop|Where-Object{$_.LocalAddress -notmatch '':''})}catch{};' +
+    { Доступность TCP-таблицы: временный слушатель на loopback с портом 0
+      обязан появиться в перечислении со своим PID. На аномальной сборке
+      Windows (1dddac77) таблица его не показывает — тогда перечисление
+      непригодно, и порт проверяется запасной веткой. Проба не даёт диалога
+      брандмауэра: listen только на loopback. }
+    '$tableOk=0;$v4=$null;' +
+    'if($tableOff -eq 0){' +
+    '$pl=$null;try{$pl=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,0);' +
+    '$pl.Start();$pp=([Net.IPEndPoint]$pl.LocalEndpoint).Port;$tableOk=0;' +
+    'for($i=0;$i -lt 10;$i++){' +
+    '$c=@(Get-NetTCPConnection -LocalPort $pp -State Listen -ErrorAction Stop|' +
+    'Where-Object{[int]$_.OwningProcess -eq $PID});' +
+    'if($c.Count -gt 0){$tableOk=1;break};Start-Sleep -Milliseconds 100}}' +
+    'catch{$tableOk=0}' +
+    'finally{if($pl){$pl.Stop()}};' +
+    'if($tableOk -eq 1){try{' +
+    '$v4=@(Get-NetTCPConnection -LocalPort $port -State Listen ' +
+    '-ErrorAction Stop|Where-Object{$_.LocalAddress -notmatch '':''})' +
+    '}catch{$v4=$null}}};' +
     'if($null -ne $v4 -and $v4.Count -gt 0){' +
     '$foreign=@($v4|Where-Object{$own -notcontains [int]$_.OwningProcess});' +
     'if($foreign.Count -eq 0){exit 0};exit 1};' +
-    { Порт в зарезервированном диапазоне (Hyper-V/WinNAT, TIME_WAIT после
-      перезапуска) слушателя не имеет, но bind на 0.0.0.0 для него закрыт.
-      Раньше это ловилось пробным bind на все интерфейсы — он и вызывал диалог
-      Windows Security «Allow для Windows PowerShell» во время установки.
-      Диапазоны читаем через netsh, пробный bind остаётся только на loopback
-      (loopback диалога не вызывает). Ошибка 860def0d, п.4. }
+    { Таблица недоступна, но служба ETN зарегистрирована и запущена: порт
+      считаем своим — службу остановит ssInstall, работоспособность проверит
+      health-check. Иначе повторная установка/автообновление на аномальной ОС
+      всегда падали бы с «порт занят» на собственной службе. }
+    'if(($tableOk -eq 0) -and ($svcFound -eq 1)){exit 0};' +
+    { Пустое перечисление — не признак свободного порта: на аномальной
+      сборке Windows TCP-таблица не показывает новые слушатели (1dddac77).
+      Порт в зарезервированном диапазоне (Hyper-V/WinNAT) слушателя не имеет,
+      но bind/Listen для него закрыт; диапазоны читаем через netsh (bind без
+      Listen исключения не проверяет). Ошибка 860def0d, п.4. }
     'try{$ex=@(netsh int ipv4 show excludedportrange protocol=tcp)}catch{$ex=@()};' +
     'foreach($ln in $ex){$t=@(($ln.Trim()) -split ''\s+'');' +
     'if($t.Count -ge 2){$a=0;$b=0;' +
     'if([int]::TryParse($t[0],[ref]$a)){if([int]::TryParse($t[1],[ref]$b)){' +
     'if(($port -ge $a) -and ($port -le $b)){exit 1}}}}}' +
-    'try{$l=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,$port);' +
-    '$l.Start();$l.Stop()}catch{exit 1};' +
-    'exit 0';
+    { Fail-closed проба: эксклюзивный bind на 0.0.0.0 без Listen. }
+    'if($bindFail -eq 1){exit 2};' +
+    '$sock=$null;' +
+    'try{$sock=New-Object Net.Sockets.Socket([Net.Sockets.AddressFamily]::InterNetwork,' +
+    '[Net.Sockets.SocketType]::Stream,[Net.Sockets.ProtocolType]::Tcp);' +
+    '$sock.SetSocketOption([Net.Sockets.SocketOptionLevel]::Socket,' +
+    '[Net.Sockets.SocketOptionName]::ExclusiveAddressUse,$true);' +
+    '$ep=New-Object Net.IPEndPoint([Net.IPAddress]::Any,$port);' +
+    '$sock.Bind($ep);$sock.Close();exit 0}' +
+    'catch{' +
+    'if($sock){$sock.Close()};' +
+    '$se=$_.Exception;while($se.InnerException){$se=$se.InnerException};' +
+    '$ec=-1;if($se -is [Net.Sockets.SocketException]){$ec=[int]$se.SocketErrorCode};' +
+    { 10048 = AddressAlreadyInUse, 10013 = AccessDenied. }
+    'if(($ec -eq 10048) -or ($ec -eq 10013)){exit 1};exit 2}';
   Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"';
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '',
     SW_HIDE, ewWaitUntilTerminated, Code) then
@@ -5413,10 +5830,9 @@ begin
     FailPrecondition('/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена');
   if not GIsElevated then
     FailPrecondition('процесс не элевирован: нужны права администратора');
-  { Административный режим установки гарантирует сам Inno: в продуктовой
-    сборке PrivilegesRequired=admin, поэтому silent-прогон сразу идёт в
-    административном режиме. Скриптового перезапуска для этого больше нет:
-    self-exec установщика запрещён платформой (2dd215f7). }
+  { Административный режим установки даёт элевированный процесс или /ALLUSERS:
+    silent-прогон службы идёт с /ALLUSERS и уже элевирован, поэтому Inno не
+    перезапускает мастер (ошибка aa5af30c). }
   if not GInstallJsonPresent then
     FailPrecondition('нет ' + GInstallJsonPath + ' — сервер не устанавливался установщиком');
   if not GInstallJsonValid then
@@ -5469,8 +5885,8 @@ begin
     FailPrecondition('/PRIVILEGEDPHASE допустим только с /VERYSILENT');
   if not GIsElevated then
     FailPrecondition('привилегированная фаза запущена без прав администратора');
-  { Административный режим установки обеспечивает сам Inno
-    (PrivilegesRequired=admin); скриптового перезапуска нет (2dd215f7). }
+  { Административный режим обеспечивает элевированный процесс (или /ALLUSERS);
+    скриптового перезапуска нет (ошибка aa5af30c). }
   if (not GServerSelected) and (not GClientSelected) then
     FailPrecondition('не выбран ни один компонент: файл параметров пуст или повреждён');
   if GBlockedDowngrade then
@@ -5499,23 +5915,6 @@ begin
     Result := GFailureReason
   else
     Result := 'причина не записана — смотрите журнал установки';
-end;
-
-{ Возврат на экран компонентов: ошибка закрытия запущенного клиента или
-  удаления старого клиента не должна выбрасывать пользователя из мастера —
-  выбор компонентов сохраняется. Перейти на страницу напрямую Inno не даёт,
-  поэтому «Назад» нажимается программно. }
-procedure ReturnToComponentsPage;
-var
-  Guard: Integer;
-begin
-  if (WizardForm = nil) or (GComponentsPage = nil) then Exit;
-  Guard := 0;
-  while (WizardForm.CurPageID <> GComponentsPage.ID) and (Guard < 20) do
-  begin
-    WizardForm.BackButton.OnClick(WizardForm.BackButton);
-    Guard := Guard + 1;
-  end;
 end;
 
 { Свободный порт рядом с занятым: подсказка на экране параметров. Поле не
@@ -5852,14 +6251,17 @@ end;
 
 { Единая точка чтения выбора: обработчики OnClick чекбоксов (компоненты,
   лицензия) и тестовый хук /TESTSELECT. Радиокнопок области в мастере нет:
-  в продуктовой сборке область задаёт диалог режима Inno (GAdminMachineScope /
-  GUserOnlyMode), при обновлении — install.json. Третий аргумент — только для
-  /TESTSELECT и сохранения текущей области в UpdateComponentsState. }
+  в продуктовой сборке область задают фактические права процесса
+  (GAdminMachineScope / GUserOnlyMode), при обновлении — install.json. Третий
+  аргумент — только для /TESTSELECT и сохранения текущей области. }
 procedure ApplySelection(const ServerChecked, ClientChecked,
   MachineScopeChecked: Boolean);
 begin
   { В режиме «только для меня» сервера нет: права на него не запрашивались
-    (2dd215f7). Флаг остаётся ложным даже если чекбокс программно отмечен. }
+    (ошибка aa5af30c: нет элевации — нет сервера). Флаг остаётся ложным даже
+    если чекбокс программно отмечен; попытка запоминается для причины на
+    экране. }
+  GServerRequested := ServerChecked;
   GServerSelected := ServerChecked and (not GUserOnlyMode);
   GClientSelected := ClientChecked;
   { В административном режиме область одна — «для всех» (GAdminMachineScope).
@@ -5875,11 +6277,15 @@ end;
   зависит от переноса текста, а раскладка, посчитанная один раз при создании,
   при росте подписей давала наложение и «мелькающие остатки» (ошибка
   860def0d, п.1). Скрытые контролы места не занимают; позиция им всё равно
-  назначается — при показе они встанут на своё место. }
-procedure LayoutComponentsPage;
+  назначается — при показе они встанут на своё место.
+
+  Возвращает нижнюю границу содержимого: по ней FitComponentsPage проверяет,
+  что страница уместилась (ошибка 5b9743da). }
+function LayoutComponentsPage: Integer;
 var
   Y: Integer;
 begin
+  Result := 0;
   if (GComponentsPage = nil) or (GServerCheck = nil) then Exit;
   Y := 0;
   GServerCheck.Top := Y;
@@ -5919,7 +6325,8 @@ begin
 
   { Область клиента: при обновлении — поясняющий текст (ea8e223a), в
     административном режиме — постоянное объяснение; иначе (режим «только для
-    меня») — подсказка ниже. Радиокнопок нет: область задаёт диалог режима. }
+    меня») — подсказка ниже. Радиокнопок нет: область задают фактические права
+    процесса. }
   if GScopeFixedLabel <> nil then
   begin
     GScopeFixedLabel.Top := Y;
@@ -5950,6 +6357,100 @@ begin
     GReasonLabel.Top := Y;
     Y := Y + GReasonLabel.Height;
   end;
+  Result := Y;
+end;
+
+{ Страховка раскладки экрана компонентов (ошибка 5b9743da): содержимое обязано
+  уместиться на поверхности страницы. Иначе нижние подписи («Каталог данных» и
+  причина неактивности «Далее») уезжают за край и пользователь видит окно, где
+  «Далее» неактивна, а причины нет — это читается как зависание установщика.
+
+  Порядок уступок — от наименее важного к важному: сначала пояснение режима
+  (оно дублирует текст области клиента), затем «Каталог данных» (фиксирован и
+  повторяется в итоговой сводке), затем описания компонентов, затем ссылка на
+  другие варианты. Выбор компонентов, их состояние и причина неактивности
+  «Далее» не скрываются никогда.
+
+  Базовые состояния видимости восстанавливаются перед каждой укладкой: смена
+  выбора обязана вернуть подсказки, скрытые в прошлой, более тесной, раскладке. }
+procedure FitComponentsPage;
+var
+  Step: Integer;
+begin
+  if GComponentsPage = nil then Exit;
+  if GServerHintLabel <> nil then GServerHintLabel.Visible := True;
+  if GClientHintLabel <> nil then GClientHintLabel.Visible := True;
+  if GServerAltLink <> nil then GServerAltLink.Visible := True;
+  if GDataNoteLabel <> nil then GDataNoteLabel.Visible := True;
+  if GScopeFixedLabel <> nil then
+    GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
+  { Пояснение режима не дублирует текст фиксированной области (ошибка
+    5b9743da): при обновлении клиента оба говорят одно и то же, а вместе они не
+    помещаются на страницу. Показываем подробный текст области, подсказку — только
+    когда области-текста нет. В режиме «только для меня» подсказку режима
+    заменяет подсказка сервера (она объясняет и режим, и как поставить сервер),
+    поэтому при нехватке места уступает именно пояснение режима. }
+  if GScopeHintLabel <> nil then
+    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
+      (not ClientScopeFixed);
+  for Step := 1 to 5 do
+  begin
+    if LayoutComponentsPage <= GComponentsPage.SurfaceHeight then Exit;
+    if (GScopeHintLabel <> nil) and GScopeHintLabel.Visible then
+      GScopeHintLabel.Visible := False
+    else if (GDataNoteLabel <> nil) and GDataNoteLabel.Visible then
+      GDataNoteLabel.Visible := False
+    else if (GClientHintLabel <> nil) and GClientHintLabel.Visible then
+      GClientHintLabel.Visible := False
+    else if (GServerHintLabel <> nil) and GServerHintLabel.Visible then
+      GServerHintLabel.Visible := False
+    else if (GServerAltLink <> nil) and GServerAltLink.Visible then
+      GServerAltLink.Visible := False
+    else
+      Exit;
+  end;
+  { Последняя укладка — с уже скрытыми блоками: позиции должны совпасть с
+    фактической видимостью. }
+  LayoutComponentsPage;
+end;
+
+{ Причина недоступности сервера в обычном (неэлевированном) запуске — одна
+  строка для экрана компонентов и журнала (ошибка aa5af30c). Права из мастера
+  не запрашиваются: чтобы получить сервер, пользователь закрывает установщик и
+  запускает его от имени администратора — мастер при этом остаётся одним
+  процессом, без respawn. }
+function ServerUnavailableReason: String;
+begin
+  Result := 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).';
+end;
+
+{ Причина неактивности «Далее» — одна функция для экрана и журнала (ошибка
+  5b9743da): по спеке (элемент интерфейса «Экран установщика — выбор
+  компонентов и лицензия») кнопка неактивна без выбранного компонента или без
+  принятой лицензии, и причина обязана быть на экране. Раньше причина жила
+  только в обработчике экрана, уезжала за нижний край и в журнал не попадала —
+  по журналу нельзя было понять, почему «Далее» не отвечает. }
+function ComponentsReasonText: String;
+begin
+  if GBlockedDowngrade then
+    Result := 'Установлена более новая версия ' + ServerVersionText +
+      ' — понижение версии не поддерживается. Доступна только отмена.'
+  else if GComponentsNotice <> '' then
+    Result := GComponentsNotice
+  else if GUserOnlyMode and GServerRequested and (not GServerSelected) then
+    Result := ServerUnavailableReason
+  else if (not GServerSelected) and (not GClientSelected) then
+  begin
+    if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+      Result := 'Клиент установлен для всех пользователей: нужны права ' +
+        'администратора.'
+    else
+      Result := 'Выберите хотя бы один компонент.';
+  end
+  else if LicensePromptNeeded and (not GLicenseAccepted) then
+    Result := 'Примите условия лицензии MIT, чтобы продолжить.'
+  else
+    Result := '';
 end;
 
 procedure UpdateComponentsState(Sender: TObject);
@@ -5963,8 +6464,9 @@ begin
       (not GClientScopeUser) or GAdminMachineScope);
   if GLicenseCheck <> nil then
     GLicenseAccepted := GLicenseCheck.Checked;
-  { Область клиента: выбора в мастере нет — её задаёт диалог режима Inno;
-    при обновлении выбранная область выводится текстом (ea8e223a, 4a66b7a5). }
+  { Область клиента: выбора в мастере нет — её задают фактические права
+    процесса; при обновлении выбранная область выводится текстом (ea8e223a,
+    4a66b7a5). }
   if GScopeFixedLabel <> nil then
   begin
     GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
@@ -5976,15 +6478,12 @@ begin
   end;
   if GServerHintLabel <> nil then
   begin
-    { В режиме «только для меня» сервер недоступен не случайно: служба Windows
-      требует прав администратора, а они не запрашивались (2dd215f7). Говорим,
-      что сделать, — иначе выключенный чекбокс выглядит поломкой. }
+    { В обычном запуске сервер недоступен не случайно: служба Windows требует
+      прав администратора, а их у процесса нет (ошибка aa5af30c). Говорим
+      ровно то, что нужно сделать; та же строка — причина в журнале и в
+      ComponentsReasonText. }
     if GUserOnlyMode then
-      GServerHintLabel.Caption :=
-        'Сервер не устанавливается в режиме «только для меня»: он работает как ' +
-        'служба Windows и требует прав администратора. Чтобы установить сервер, ' +
-        'закройте установщик и запустите его снова: в диалоге режима выберите ' +
-        '«Установить для всех пользователей» — Windows запросит права.'
+      GServerHintLabel.Caption := ServerUnavailableReason
     else
       GServerHintLabel.Caption :=
         'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
@@ -6031,46 +6530,39 @@ begin
       GScopeHintLabel.Caption :=
         'Режим «только для меня»: клиент ставится в ваш профиль, права ' +
         'администратора не нужны. Чтобы установить сервер или клиент «для всех ' +
-        'пользователей», закройте установщик и запустите его снова, выбрав в ' +
-        'диалоге режима «Установить для всех пользователей».'
+        'пользователей», закройте установщик и запустите его от имени ' +
+        'администратора (правый клик → Запуск от имени администратора).'
     else
       GScopeHintLabel.Caption :=
         '«Только для меня» — клиент в вашем профиле, права администратора не ' +
         'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
         'администратора.';
     FitLabel(GScopeHintLabel);
-    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope);
+    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
+      (not ClientScopeFixed);
   end;
   if GReasonLabel <> nil then
   begin
-    if GBlockedDowngrade then
-      GReasonLabel.Caption := 'Установлена более новая версия ' + ServerVersionText +
-        ' — понижение версии не поддерживается. Доступна только отмена.'
-    else if GComponentsNotice <> '' then
-      GReasonLabel.Caption := GComponentsNotice
-    else if (not GServerSelected) and (not GClientSelected) then
-    begin
-      if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-        GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
-          'обновление требует прав администратора — закройте установщик и ' +
-          'запустите его снова: в диалоге режима выберите «Установить для всех ' +
-          'пользователей».'
-      else
-        GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
-    end
-    else if LicensePromptNeeded and (not GLicenseAccepted) then
-      GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.'
-    else
-      GReasonLabel.Caption := '';
+    GReasonLabel.Caption := ComponentsReasonText;
     FitLabel(GReasonLabel);
   end;
   { Раскладка — после подписей и высот: иначе выросшая подпись наезжает на
-    следующие контролы (ошибка 860def0d, п.1). }
-  LayoutComponentsPage;
+    следующие контролы (ошибка 860def0d, п.1). FitComponentsPage дополнительно
+    гарантирует, что содержимое (и в первую очередь причина неактивности
+    «Далее») поместилось на поверхность страницы (ошибка 5b9743da). }
+  FitComponentsPage;
   if WizardForm <> nil then
+  begin
     WizardForm.NextButton.Enabled :=
       (not GBlockedDowngrade) and (GServerSelected or GClientSelected) and
       ((not LicensePromptNeeded) or GLicenseAccepted);
+    { Состояние кнопки и причина — в журнал при каждой смене (ошибка 5b9743da):
+      раньше нажатие неактивной «Далее» не оставляло в журнале ни строки, и
+      причина зависания не восстанавливалась по логу. }
+    LogLine('INFO', 'Экран компонентов: «Далее» ' +
+      Pick(WizardForm.NextButton.Enabled, 'активна', 'неактивна') +
+      IfStr(ComponentsReasonText = '', '', ' — причина: ' + ComponentsReasonText));
+  end;
 end;
 
 { Изменение выбора пользователем: уведомление об ошибке закрытия клиента или
@@ -6163,10 +6655,10 @@ begin
   GClientHintLabel.Caption := '';
   FitLabel(GClientHintLabel);
 
-  { Область клиента: выбора в мастере нет — её задаёт диалог режима Inno
-    (радиокнопки убраны как недостижимые в продуктовой сборке, замечание
-    верификатора 2dd215f7 п.4). При обновлении — текст выбранной области
-    (ea8e223a). }
+  { Область клиента: выбора в мастере нет — её задают фактические права
+    процесса (радиокнопки убраны как недостижимые в продуктовой сборке,
+    замечание верификатора 2dd215f7 п.4). При обновлении — текст выбранной
+    области (ea8e223a). }
   GScopeFixedLabel := TNewStaticText.Create(GComponentsPage);
   GScopeFixedLabel.Parent := GComponentsPage.Surface;
   GScopeFixedLabel.Left := 20;
@@ -6641,6 +7133,7 @@ begin
   GExitCode := EXIT_OK;
   GWorkAllowed := True;
   GServerSelected := False;
+  GServerRequested := False;
   GClientSelected := False;
   GClientScopeUser := True;
   GAdminMachineScope := False;
@@ -6677,6 +7170,9 @@ begin
   GTestResult := '';
   GTestServiceName := '';
   GTestOwnServicePid := '';
+  GTestPortBindFail := '';
+  GTestListenerTableOff := '';
+  GTestNoService := '';
   GTestServiceCmd := '';
   GTestServiceState := '';
   GTestServiceStop := '';
@@ -6736,6 +7232,8 @@ begin
   GTestConnectParams := '';
   GTestAdminMode := '';
   GTestUserOnlyMode := '';
+  GTestInnoAdminMode := '';
+  GTestUninstallRoot := '';
   GParamsPath := '';
   GReasonFile := '';
   GDeferredLog := '';
@@ -6780,6 +7278,9 @@ begin
   GTestResult := ParamValue('TESTRESULT');
   GTestServiceName := ParamValue('TESTSERVICENAME');
   GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
+  GTestPortBindFail := ParamValue('TESTPORTBINDFAIL');
+  GTestListenerTableOff := ParamValue('TESTLISTENERTABLEOFF');
+  GTestNoService := ParamValue('TESTNOSERVICE');
   GTestServiceCmd := ParamValue('TESTSERVICECMD');
   GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
   GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
@@ -6821,6 +7322,8 @@ begin
   GTestConnectParams := ParamValue('TESTCONNECTPARAMS');
   GTestAdminMode := ParamValue('TESTADMINMODE');
   GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
+  GTestInnoAdminMode := ParamValue('TESTINNOADMINMODE');
+  GTestUninstallRoot := ParamValue('TESTUNINSTROOT');
   { /TESTGUIMODE=1 имитирует GUI-запуск в silent-прогоне: silent-термин снимается
     ДО расчёта режима (GUserOnlyMode) и выбора компонентов — иначе контекст
     всегда привилегированный, а режим «только для меня» не смоделировать. }
@@ -6855,12 +7358,14 @@ begin
     клиента и предупреждение о его удалении видны на первом экране. }
   DetectLegacyClient;
 
-  { Режим установки выбирает Inno до [Code]: PrivilegesRequired=admin и
-    PrivilegesRequiredOverridesAllowed=commandline dialog (2dd215f7). В
-    TestMode привилегий нет — административный и неадминистративный режимы
-    моделируются хуками /TESTADMINMODE и /TESTUSERONLYMODE. }
-  GAdminInstallMode := IsAdminInstallMode;
+  { Режим по фактическим правам процесса (ошибка aa5af30c): обычный запуск —
+    клиент «только для меня», запуск от имени администратора — сервер и клиент
+    «для всех». IsAdminInstallMode остаётся в формуле для /ALLUSERS: тихое
+    автообновление службы включает административный режим Inno без respawn.
+    В TestMode привилегий нет — режимы моделируются хуками /TESTADMINMODE и
+    /TESTUSERONLYMODE, чтобы прогон не зависел от прав машины. }
 #ifdef TestMode
+  GAdminInstallMode := IsAdminInstallMode;
   if GTestAdminMode = '1' then
   begin
     GAdminInstallMode := True;
@@ -6871,10 +7376,12 @@ begin
     GAdminInstallMode := False;
     LogOrDefer('WARN', 'TESTUSERONLYMODE=1: режим «только для меня» смоделирован (тестовый режим)');
   end;
+#else
+  GAdminInstallMode := IsAdmin or IsAdminInstallMode;
 #endif
   { Привилегированная фаза всегда административная: вызывающий запускает её с
-    /ALLUSERS, и клиент «для меня» ставит не она. Silent-прогон в продуктовой
-    сборке тоже административный (PrivilegesRequired=admin). }
+    /ALLUSERS, и клиент «для меня» ставит не она. Silent-прогон с /ALLUSERS
+    тоже административный; без /ALLUSERS он элевацию требует предусловием. }
   GAdminMachineScope := GAdminInstallMode and (not GPrivilegedPhase);
   GUserOnlyMode := (not GAdminInstallMode) and (not GPrivilegedPhase) and
     (not GSilent);
@@ -6979,9 +7486,13 @@ begin
       ' machine_copy=' + Pick(ClientMachineCopyPresent, '1', '0') +
       ' need_elevation=' + Pick(NeedElevation, '1', '0') +
       ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
+      ' admin_mode=' + Pick(GAdminInstallMode, '1', '0') +
+      ' server_enabled=' + Pick(not GUserOnlyMode, '1', '0') +
       ' legacy=' + IfStr(GLegacyClientVersion = '', '-', GLegacyClientVersion) +
       ' legacy_machine=' + Pick(GLegacyClientMachine, '1', '0') +
       ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
+    LogLine('INFO', 'TESTSTATE_NOTICE server_notice=' +
+      IfStr(GUserOnlyMode, ServerUnavailableReason, ''));
     ExitProcess(EXIT_OK);
   end;
 
@@ -7016,7 +7527,7 @@ begin
   end;
 
   { /TESTELEVHELPER удалён вместе со скриптовой элевацией (2dd215f7):
-    режим установки выбирается диалогом Inno до мастера. }
+    режим определяют фактические права процесса; мастер не перезапускается. }
 
   { /TESTPRECHECK=1 — прогон предпроверок без окон: та же функция, что вызывают
     экран параметров сервера и привилегированная фаза. Результат — в журнале и
@@ -7155,6 +7666,12 @@ begin
     ' client_selected=' + Pick(GClientSelected, '1', '0') +
     ' scope_user=' + Pick(GClientScopeUser, '1', '0') +
     ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
+  { Кнопка «Далее» и причина её неактивности (ошибка 5b9743da): прогон обязан
+    проверить, что неактивная кнопка всегда объяснена, а причина видна. }
+  if WizardForm <> nil then
+    LogLine('INFO', 'TESTLAYOUT next enabled=' +
+      Pick(WizardForm.NextButton.Enabled, '1', '0') +
+      ' reason_chars=' + IntToStr(Length(ComponentsReasonText)));
   DumpPageSurface('components', GComponentsPage);
   DumpControl('components', 'serverCheck', GServerCheck);
   DumpText('components', 'serverState', GServerStateLabel);
@@ -7401,9 +7918,9 @@ function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
 var
   S: String;
 begin
-  { Права уже запрошены Inno при старте (PrivilegesRequired=admin): к экрану
-    готовности UAC позади, и второй раз он не появится. В режиме «только для
-    меня» прав нет вовсе — сказано на экране компонентов (2dd215f7). }
+  { Права не запрашиваются ни на одном экране мастера: их даёт запуск от имени
+    администратора (или /ALLUSERS в silent). В обычном запуске прав нет вовсе —
+    сказано на экране компонентов (ошибка aa5af30c). }
   S := '';
   if GUserOnlyMode then
     S := 'Режим «только для меня»: права администратора не требуются.' +
@@ -7416,6 +7933,10 @@ var
   Reason, PortText, FreePort: String;
 begin
   Result := True;
+  { Первая строка обработчика — в журнал (ошибка 5b9743da): по логу должно быть
+    видно, дошло ли нажатие до установщика вообще. Неактивная кнопка сюда не
+    попадает и следа не оставляет — именно это и выдавало себя за зависание. }
+  LogLine('INFO', 'Кнопка «Далее»: страница ' + IntToStr(CurPageID));
   if (GComponentsPage <> nil) and (CurPageID = GComponentsPage.ID) then
   begin
     UpdateComponentsState(nil);
@@ -7431,8 +7952,8 @@ begin
         if GUserOnlyMode and (GInstalledClientScope = 'machine') then
           GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
             'обновление требует прав администратора — закройте установщик и ' +
-            'запустите его снова: в диалоге режима выберите «Установить для всех ' +
-            'пользователей».'
+            'запустите его от имени администратора (правый клик → Запуск от ' +
+            'имени администратора).'
         else
           GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
       end;
@@ -7446,9 +7967,9 @@ begin
        (GServerSelected or (GClientSelected and (not GClientScopeUser))) then
     begin
       if GReasonLabel <> nil then
-        GReasonLabel.Caption := 'Для установки сервера или клиента «для всех ' +
-          'пользователей» закройте установщик и запустите его снова: в диалоге ' +
-          'режима выберите «Установить для всех пользователей».';
+        GReasonLabel.Caption := 'Для установки компонентов, требующих прав ' +
+          'администратора, закройте установщик и запустите его от имени ' +
+          'администратора (правый клик → Запуск от имени администратора).';
       LogLine('WARN', 'Экран компонентов: в режиме «только для меня» выбраны ' +
         'компоненты, требующие прав администратора');
       Result := False;
@@ -7540,47 +8061,24 @@ begin
       LogLine('WARN', 'Не удалось удалить временный файл ключа: ' + KeyFilePath);
     GPendingKey := '';
   end;
-  { Готовность: до копирования файлов удаляется старый NSIS-клиент. Режим
-    установки выбран до мастера (диалог Inno, PrivilegesRequiredOverridesAllowed):
-    в неадминистративном режиме сервер недоступен, поэтому повышать права здесь
-    нечего и нельзя — self-exec установщика запрещён (2dd215f7). }
+  { Экран готовности файлы не копирует и долгих операций не выполняет (ошибка
+    5b9743da): закрытие запущенного клиента и удаление старого NSIS-клиента
+    перенесены в PrepareToInstall, где Inno сам показывает страницу «Подготовка
+    к установке» (кнопки скрыты, «Отмена» отключена) — пауза выглядит как
+    штатная подготовка, а не как окно с неотвечающими кнопками. Здесь остаётся
+    только отметка в журнале, что нажатие дошло до обработчика. }
   if CurPageID = wpReady then
-  begin
-    LogLine('INFO', 'Экран готовности: проверка перед установкой (silent=' +
+    LogLine('INFO', 'Экран готовности: нажата «Далее» (silent=' +
       Pick(GSilent, 'да', 'нет') + ', privileged_phase=' +
       Pick(GPrivilegedPhase, 'да', 'нет') + ', admin_mode=' +
       Pick(GAdminInstallMode, 'да', 'нет') + ')');
-    if GSilent or GPrivilegedPhase then Exit;
-    { Запущенный клиент закрывается до копирования: замена ETN.exe невозможна,
-      пока процесс работает. Отказ пользователя или неудача закрытия —
-      установка не начинается (код 20), выбор сохраняется. Машинный клиент
-      другого пользователя без прав не закроется: в административном режиме
-      установщик уже элевирован, поэтому попытка выполняется с его правами. }
-    Reason := '';
-    if GClientSelected and (not CloseRunningClient(True, Reason)) then
-    begin
-      GComponentsNotice := 'Установка не начата: ' + Reason;
-      SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
-        mbError, MB_OK, IDOK);
-      ReturnToComponentsPage;
-      Result := False;
-      Exit;
-    end;
-    Reason := '';
-    if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
-    begin
-      GComponentsNotice := 'Установка не начата: ' + Reason;
-      SuppressibleMsgBox('Установка не начата.' + #13#10#13#10 + Reason,
-        mbError, MB_OK, IDOK);
-      ReturnToComponentsPage;
-      Result := False;
-      Exit;
-    end;
-  end;
 end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
 begin
+  { Нажатие «Отмены» — в журнал (ошибка 5b9743da): отмена открывает штатный
+    диалог подтверждения Inno, и по логу должно быть видно, что кнопка жива. }
+  LogLine('INFO', 'Кнопка «Отмена»: страница ' + IntToStr(CurPageID));
   if (GKeyPage <> nil) and (CurPageID = GKeyPage.ID) and (GPendingKey <> '') then
   begin
     { Закрытие без подтверждения: предупредить и удалить временный файл.
@@ -7601,10 +8099,16 @@ begin
   end;
 end;
 
-{ Подтверждение перед установкой. Права запрашивает Inno при старте (режим
-  выбран диалогом до мастера), поэтому здесь — только предпроверки окружения
-  до замены файлов (9b310991). Скриптовой элевации нет: self-exec установщика
-  запрещён платформой (2dd215f7). }
+{ Подготовка перед копированием файлов. Долгие операции (закрытие запущенного
+  клиента, удаление старого NSIS-клиента) выполняются здесь, а не в
+  NextButtonClick(wpReady) (ошибка 5b9743da): на время PrepareToInstall Inno
+  сам показывает страницу «Подготовка к установке» с отключённой «Отменой»,
+  поэтому ожидание завершения процессов больше не выглядит неподвижным окном с
+  неотвечающими кнопками. Ошибка возвращается строкой: Inno печатает её на этой
+  же странице, «Назад» и «Отмена» остаются доступны, файлы не заменяются.
+  Права запрашивает Inno при старте (режим выбран диалогом до мастера), поэтому
+  скриптовой элевации нет — self-exec установщика запрещён (2dd215f7); здесь
+  только предпроверки окружения до замены файлов (9b310991). }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Reason: String;
@@ -7612,6 +8116,36 @@ begin
   Result := '';
   NeedsRestart := False;
   if GSilent or GPrivilegedPhase then Exit;
+  LogLine('INFO', 'Подготовка к установке: предпроверки перед копированием файлов (server=' +
+    Pick(GServerSelected, 'да', 'нет') + ', client=' +
+    Pick(GClientSelected, 'да', 'нет') + ', admin_mode=' +
+    Pick(GAdminInstallMode, 'да', 'нет') + ')');
+  { Запущенный клиент закрывается до копирования: замена ETN.exe невозможна,
+    пока процесс работает. Отказ пользователя или неудача закрытия —
+    установка не начинается, выбор компонентов сохраняется. Машинный клиент
+    другого пользователя без прав не закроется: в административном режиме
+    установщик уже элевирован, поэтому попытка выполняется с его правами. }
+  if GClientSelected then
+  begin
+    Reason := '';
+    if not CloseRunningClient(True, Reason) then
+    begin
+      GComponentsNotice := 'Установка не начата: ' + Reason;
+      LogLine('ERROR', GComponentsNotice);
+      Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+      Exit;
+    end;
+  end;
+  { Старый NSIS-клиент удаляется до копирования файлов: его файлы и запись
+    деинсталляции не должны пережить установку. }
+  Reason := '';
+  if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
+  begin
+    GComponentsNotice := 'Установка не начата: ' + Reason;
+    LogLine('ERROR', GComponentsNotice);
+    Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+    Exit;
+  end;
   if not NeedElevation then Exit;
   if not GServerSelected then Exit;
   { Административный режим: этот экземпляр сам выполняет привилегированную
@@ -7812,6 +8346,13 @@ begin
         end;
       end;
     end;
+    { Ошибка a7394117: запись деинсталляции прежней области реестра удаляется
+      только после успешной установки — при откате она остаётся точкой
+      возврата. В машинном режиме Inno пишет запись только в одну область
+      (HKCU или HKLM), вторую удаляем, чтобы в «Программах и компонентах» была
+      одна строка. }
+    if (GExitCode = EXIT_OK) and GAdminInstallMode then
+      RemoveDuplicateUninstallRecord;
     { Снимок отката удаляется последним — только после того, как install.json
       зафиксировал новую версию (замечание приёмки: сбой записи при уже
       удалённом снимке оставлял установку без пути отката). }

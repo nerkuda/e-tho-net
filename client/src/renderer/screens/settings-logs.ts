@@ -56,16 +56,16 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
   function renderClient(): void {
     clientBox.replaceChildren(
-      el('h3', 'settings-section-title', 'Клиент'),
+      el('h3', 'settings-section-title', t('settingsLogs.client')),
       el(
         'p',
         'muted',
-        'Файловый журнал клиента для диагностики. Переключатель применяется немедленно; ERROR-записи пишутся всегда.',
+        t('settingsLogs.fileLogClientDiagnosticsToggleApply'),
       ),
     );
 
     const logToggle = checkboxRow({
-      label: 'Логирование клиента',
+      label: t('settingsLogs.label.loggingClient'),
       checked: clientState?.enabled ?? false,
       disabled: clientState === null,
       onChange: (next) => {
@@ -75,7 +75,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
           .setClientLogging(next)
           .then((state) => {
             clientState = state;
-            setClientMsg(next ? 'Логирование клиента включено.' : 'Логирование клиента выключено.');
+            setClientMsg(next ? t('settingsLogs.loggingClientEnabled') : t('settingsLogs.loggingClientDisabled'));
             renderClient();
           })
           .catch((err: unknown) => {
@@ -96,10 +96,10 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
     const btnRow = div('form-row');
     const btnOpen = uiButton({
-      label: 'Открыть',
+      label: t('properties.label.open'),
       role: 'secondary',
       size: 's',
-      title: 'Открыть файл журнала',
+      title: t('settingsLogs.title.openFileLog'),
       onClick: () => void openClientJournal(),
     });
     btnOpen.disabled = clientState === null;
@@ -107,7 +107,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       label: t('actions.delete'),
       role: 'danger',
       size: 's',
-      title: 'Удалить все файлы журнала клиента',
+      title: t('settingsLogs.deleteAllFilesLogClient'),
       onClick: () => void deleteClientJournals(),
     });
     btnDelete.disabled = clientState === null;
@@ -115,7 +115,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
     clientBox.append(
       toggleLabel,
-      el('p', 'muted', 'Текущий файл журнала:'),
+      el('p', 'muted', t('settingsLogs.currentFileLog')),
       fileCode,
       btnRow,
       clientMsg,
@@ -133,13 +133,13 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
   async function deleteClientJournals(): Promise<void> {
     const ok = await confirm(
-      'Удалить журналы клиента?',
-      'Все файлы журнала клиента будут удалены, текущий суточный файл — очищен. Действие необратимо.',
+      t('settingsLogs.deleteLogsClient'),
+      t('settingsLogs.allFilesLogClientWillDeleted'),
     );
     if (!ok) return;
     try {
       const result: DeleteLogsResult = await etn.system.deleteClientLogs();
-      setClientMsg(`Удалено файлов: ${result.deleted}; текущий файл усечён.`);
+      setClientMsg(t('settingsLogs.deletedFilesCurrentFileUsechen', result.deleted));
       clientState = await etn.system.getClientLogState();
       renderClient();
     } catch (err) {
@@ -162,7 +162,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
   function renderServer(): void {
     serverBox.replaceChildren(
-      el('h3', 'settings-section-title', 'Сервер'),
+      el('h3', 'settings-section-title', t('settingsLogs.server')),
     );
 
     if (serverError !== null) {
@@ -170,7 +170,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       // block shows the reason and stays inert (08-ui-spec.md §9.7).
       serverBox.append(
         errorParagraph(serverError),
-        el('p', 'muted', 'Управление журналом сервера доступно администратору при подключённом сервере.'),
+        el('p', 'muted', t('settingsLogs.upravlenieLogServerDostupnoAdminPodklyuchennom')),
       );
       return;
     }
@@ -180,12 +180,12 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       el(
         'p',
         'muted',
-        'Файловый журнал сервера для диагностики. Флаг живёт в памяти сервера и сбрасывается при перезапуске; переключатель применяется немедленно.',
+        t('settingsLogs.fileLogServerDiagnosticsFlagZhivet'),
       ),
     );
 
     const logToggle = checkboxRow({
-      label: 'Логирование сервера',
+      label: t('settingsLogs.label.loggingServer'),
       checked: status?.enabled ?? false,
       disabled: status === null,
       onChange: (next) => {
@@ -195,7 +195,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
           .setServerLogging(next)
           .then((fresh) => {
             serverStatus = fresh;
-            setServerMsg(next ? 'Логирование сервера включено.' : 'Логирование сервера выключено.');
+            setServerMsg(next ? t('settingsLogs.loggingServerEnabled') : t('settingsLogs.loggingServerDisabled'));
             renderServer();
           })
           .catch((err: unknown) => {
@@ -215,9 +215,9 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
     const filesWrap = div('admin-table-wrap');
     if (status === null) {
-      filesWrap.append(el('span', 'muted', 'Загрузка…'));
+      filesWrap.append(el('span', 'muted', t('common.loading')));
     } else if (status.files.length === 0) {
-      filesWrap.append(el('p', 'muted', 'Файлов журнала сервера ещё нет.'));
+      filesWrap.append(el('p', 'muted', t('settingsLogs.filesLogServerMoreNo')));
     } else {
       const table = el('table', 'table-list settings-log-files');
       const tbody = el('tbody');
@@ -246,18 +246,18 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
     const btnRow = div('form-row');
     const btnDownload = uiButton({
-      label: 'Скачать…',
+      label: t('settingsLogs.label.download'),
       role: 'secondary',
       size: 's',
-      title: 'Скачать файл журнала сервера',
+      title: t('settingsLogs.title.downloadFileLogServer'),
       onClick: () => void downloadServerJournal(),
     });
     btnDownload.disabled = status === null;
     const btnOpen = uiButton({
-      label: 'Открыть',
+      label: t('properties.label.open'),
       role: 'secondary',
       size: 's',
-      title: 'Открыть текущий файл журнала сервера',
+      title: t('settingsLogs.openCurrentFileLogServer'),
       onClick: () => void openServerJournal(),
     });
     btnOpen.disabled = status === null;
@@ -265,7 +265,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       label: t('actions.delete'),
       role: 'danger',
       size: 's',
-      title: 'Удалить все файлы журнала сервера',
+      title: t('settingsLogs.deleteAllFilesLogServer'),
       onClick: () => void deleteServerJournals(),
     });
     btnDelete.disabled = status === null;
@@ -273,9 +273,9 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
     serverBox.append(
       toggleLabel,
-      el('p', 'muted', `Каталог журнала на сервере (хранение ${status?.retentionDays ?? '—'} дн.):`),
+      el('p', 'muted', t('settingsLogs.katalogLogServerHranenieD', status?.retentionDays ?? '—')),
       dirCode,
-      el('p', 'muted', 'Файлы журнала (выберите файл для скачивания):'),
+      el('p', 'muted', t('settingsLogs.filesLogSelectFileSkachivaniya')),
       filesWrap,
       btnRow,
       serverMsg,
@@ -290,7 +290,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
         return;
       }
       if (result.cancelled) return;
-      setServerMsg(`Сохранено: ${result.saved_path ?? ''}`);
+      setServerMsg(t('settingsLogs.saved', result.saved_path ?? ''));
     } catch (err) {
       setServerMsg(errText(err), true);
     }
@@ -307,14 +307,14 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
   async function deleteServerJournals(): Promise<void> {
     const ok = await confirm(
-      'Удалить журналы сервера?',
-      'Все файлы журнала сервера будут удалены, текущий суточный файл — очищен. Действие необратимо.',
+      t('settingsLogs.deleteLogsServer'),
+      t('settingsLogs.allFilesLogServerWillDeleted'),
     );
     if (!ok) return;
     try {
       await etn.system.deleteServerLogs();
       serverStatus = await etn.system.getServerLogging();
-      setServerMsg('Файлы журнала сервера удалены.');
+      setServerMsg(t('settingsLogs.filesLogServerDeleted'));
       selectedServerFile = null;
       renderServer();
     } catch (err) {
@@ -359,7 +359,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 export function serverUnavailableReason(err: unknown): string {
   const msg = errText(err);
   if (/права администратора|FORBIDDEN/i.test(msg)) {
-    return 'Нет прав администратора: управление журналом сервера доступно только администратору.';
+    return t('settingsLogs.noPravAdminUpravlenieLogServer');
   }
   // `errText` already maps connection-lost/INTERNAL/raw transport failures to
   // friendly lowercase phrases (GUI review remark); recognise them here while
@@ -371,17 +371,17 @@ export function serverUnavailableReason(err: unknown): string {
       msg,
     )
   ) {
-    return 'Сервер недоступен, попробуйте позже.';
+    return t('settingsLogs.serverUnavailablePoprobuytePozzhe');
   }
-  return `Не удалось получить состояние журнала сервера: ${msg}`;
+  return t('settingsLogs.notSucceededPoluchitStateLogServer', msg);
 }
 
 /** Formats a byte size in Russian units (`Б` / `КБ` / `МБ`). */
 export function formatBytes(size: number): string {
   if (!Number.isFinite(size) || size < 0) return '—';
-  if (size < 1024) return `${size} Б`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} КБ`;
-  return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
+  if (size < 1024) return t('settingsLogs.b', size);
+  if (size < 1024 * 1024) return t('settingsLogs.kb', (size / 1024).toFixed(1));
+  return t('settingsLogs.mb', (size / (1024 * 1024)).toFixed(1));
 }
 
 /** Test seam: internals reused by unit tests. */

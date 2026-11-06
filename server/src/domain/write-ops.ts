@@ -411,7 +411,7 @@ export function composeThoughtBatch(
               : [focus!.focus_thought_id, id];
           const found = findLinksBetween(ndb, sourceId, targetId, focus!.find_link_type_id);
           if (found.length === 0) {
-            throw new EtnError('NOT_FOUND', `Нет связи между ${sourceId} и ${targetId}.`);
+            throw new EtnError('NOT_FOUND', `No link between ${sourceId} and ${targetId}.`);
           }
           for (const link of found) {
             deleteLink(ndb, link.id, undefined);
@@ -424,7 +424,7 @@ export function composeThoughtBatch(
       affected += 1;
     } catch (err) {
       if (err instanceof EtnError) {
-        failures.push({ id, code: err.code, message: err.message });
+        failures.push({ id, code: err.code, message: err.message, details: err.details });
       } else {
         failures.push({ id, code: 'INTERNAL', message: 'internal error' });
       }

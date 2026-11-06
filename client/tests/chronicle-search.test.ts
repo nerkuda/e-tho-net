@@ -84,7 +84,7 @@ describe('дневник: строка поиска с debounce (T7)', () => {
     assert.match(panel, /window\.setTimeout\([\s\S]*actions\.apply\(\)/, 'по паузе запускается применение');
     assert.match(panel, /scheduleSearchApply\(\)/, 'секция поиска подключена к debounce');
     // Критерий — тот же keywords, что и в определении отбора/сохранённого фильтра.
-    assert.match(panel, /title: 'Поиск по записям'/, 'строка поиска подписана «Поиск по записям»');
+    assert.match(panel, /title: t\('chrono\.title\.searchZapisyam'\)/, 'строка поиска подписана «Поиск по записям»');
     assert.match(panel, /keywords: needle/, 'подсказки ищут записи критерием keywords');
   });
 

@@ -12,6 +12,10 @@ import { describe, it } from 'node:test';
 import {
   DEFAULT_LANG,
   availableLocales,
+  formatDate,
+  formatDateParts,
+  formatDateTime,
+  formatNumber,
   getLang,
   hasMessage,
   onLangChange,
@@ -77,5 +81,80 @@ describe('i18n: реестр языков', () => {
     off();
     setLang(DEFAULT_LANG);
     assert.deepEqual(seen, ['zz3']);
+  });
+
+  it('ошибка одного подписчика не прерывает остальных и не отменяет смену', () => {
+    registerLocale('zz4', {});
+    const seen: string[] = [];
+    const offBad = onLangChange(() => {
+      throw new Error('listener boom');
+    });
+    const offGood = onLangChange((lang) => seen.push(lang));
+    const originalError = console.error;
+    console.error = () => undefined;
+    let applied: boolean;
+    try {
+      applied = setLang('zz4');
+    } finally {
+      console.error = originalError;
+      offBad();
+      offGood();
+    }
+    assert.equal(applied, true);
+    assert.equal(getLang(), 'zz4');
+    assert.deepEqual(seen, ['zz4'], 'второй подписчик получил смену языка');
+    setLang(DEFAULT_LANG);
+  });
+});
+
+describe('i18n: Intl-форматы текущего языка', () => {
+  it('formatDate: короткая дата по языку', () => {
+    const date = new Date(2026, 8, 24);
+    assert.equal(formatDate(date), '24.09.2026');
+    registerLocale('en', {});
+    registerLocale('zh', {});
+    setLang('en');
+    assert.equal(formatDate(date), '9/24/26');
+    setLang('zh');
+    assert.equal(formatDate(date), '2026/9/24');
+    setLang(DEFAULT_LANG);
+  });
+
+  it('formatDateTime: короткая дата + время по языку', () => {
+    const date = new Date(2026, 8, 24, 13, 5, 7);
+    const expectedRu = new Intl.DateTimeFormat('ru', {
+      dateStyle: 'short',
+      timeStyle: 'medium',
+    }).format(date);
+    assert.equal(formatDateTime(date), expectedRu);
+  });
+
+  it('formatNumber: группировка и дробный разделитель по языку', () => {
+    const value = 1234567.5;
+    assert.equal(formatNumber(value), new Intl.NumberFormat('ru').format(value));
+    registerLocale('en', {});
+    setLang('en');
+    assert.equal(formatNumber(value), new Intl.NumberFormat('en').format(value));
+    assert.ok(formatNumber(value).includes(','), 'в en тысячи разделены запятой');
+    setLang(DEFAULT_LANG);
+    assert.equal(formatNumber(value), new Intl.NumberFormat('ru').format(value));
+  });
+
+  it('formatDateParts отдаёт части для языкового заголовка (год без «г.»)', () => {
+    const parts = formatDateParts(new Date(2026, 8, 24), {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    const types = parts.map((part) => part.type);
+    assert.ok(types.includes('weekday') && types.includes('year'));
+    assert.ok(types.includes('month') && types.includes('day'));
+  });
+
+  it('невалидная дата — пустая строка, без исключения', () => {
+    assert.equal(formatDate('не дата'), '');
+    assert.equal(formatDateTime('не дата'), '');
+    assert.deepEqual(formatDateParts('не дата'), []);
   });
 });

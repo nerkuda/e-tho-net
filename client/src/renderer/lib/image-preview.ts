@@ -9,6 +9,7 @@
  */
 
 import { el } from './dom.js';
+import { t } from './i18n.js';
 
 /** Icon size limit — mirrors the server (`assertImageIcon`). */
 export const ICON_MAX_BYTES = 256 * 1024;
@@ -63,5 +64,5 @@ export async function makeIconPreview(dataUrl: string): Promise<string> {
       if (dataUrlBytes(jpeg) <= ICON_MAX_BYTES) return jpeg;
     }
   }
-  throw new Error('не удалось ужать картинку до лимита иконки');
+  throw new Error(t('imagePreview.notSucceededUzhatImageLimitIcon'));
 }

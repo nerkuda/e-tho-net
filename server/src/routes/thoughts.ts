@@ -152,7 +152,7 @@ function parseAnchorIds(
   if (!res.success) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      `${field} должен быть непустым массивом непустых строк.`,
+      `${field} must be a non-empty array of non-empty strings.`,
       { field: `args.${field}` },
       requestId,
     );
@@ -311,7 +311,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             : openRouteNetworkDb(deps, req, networkId, app.appLogger);
         const thought = getThought(ndb, id);
         if (thought === null) {
-          throw new EtnError('NOT_FOUND', 'Мысль не найдена.', undefined, req.id);
+          throw new EtnError('NOT_FOUND', "Thought not found.", undefined, req.id);
         }
         sendSuccess(reply, thought);
       },
@@ -476,7 +476,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (ids === undefined || ids.length === 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'ids обязателен (непустой массив строк).',
+            "ids is required (a non-empty array of strings).",
             { field: 'ids' },
             req.id,
           );
@@ -562,7 +562,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         ) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'ids должен быть непустым массивом непустых строк.',
+            "ids must be a non-empty array of non-empty strings.",
             { field: 'ids' },
             req.id,
           );
@@ -572,7 +572,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (!isBatchOp(op)) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            'Недопустимая операция.',
+            "Invalid operation.",
             { field: 'op', allowed: BATCH_OPS },
             req.id,
           );
@@ -598,7 +598,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (raw === undefined) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'Для set_type нужен args.type_id.',
+              "args.type_id is required for set_type.",
               { field: 'args.type_id' },
               req.id,
             );
@@ -606,7 +606,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (raw !== null && typeof raw !== 'string') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'args.type_id должен быть строкой или null.',
+              "args.type_id must be a string or null.",
               { field: 'args.type_id' },
               req.id,
             );
@@ -618,7 +618,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (typeof rawFocus !== 'string' || rawFocus === '') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'Для связи с фокусом нужен args.focus_thought_id.',
+              "args.focus_thought_id is required for linking to the focus thought.",
               { field: 'args.focus_thought_id' },
               req.id,
             );
@@ -628,7 +628,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (rawDirection !== undefined && rawDirection !== 'parent' && rawDirection !== 'child') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'args.direction должен быть "parent" или "child".',
+              "args.direction must be \"parent\" or \"child\".",
               { field: 'args.direction' },
               req.id,
             );
@@ -638,7 +638,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           if (rawType !== undefined && rawType !== null && typeof rawType !== 'string') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'args.link_type_id должен быть строкой или null.',
+              "args.link_type_id must be a string or null.",
               { field: 'args.link_type_id' },
               req.id,
             );
@@ -661,7 +661,7 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
           ) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'args.link_type_id должен быть строкой или null.',
+              "args.link_type_id must be a string or null.",
               { field: 'args.link_type_id' },
               req.id,
             );

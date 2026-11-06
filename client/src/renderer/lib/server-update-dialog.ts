@@ -29,10 +29,11 @@
  * обновления — ожидаемое состояние («сервер останавливается»), а не ошибка.
  * После перезапуска сервер завершает незавершённое задание (29257463): если он
  * поднялся на целевой версии задания или новее — `done` (диалог показывает
- * итог и подсказку о переподключении), иначе — `failed` с причиной, называющей
- * последний этап (`interruptedJobMessage`). Журнала в этой причине нет, поэтому
- * у восстановленного `failed` пути к журналу не бывает: он приходит только с
- * отказом установщика (`502`, `describeFailureExit`). Путь к архиву БД
+ * итог и подсказку о переподключении), иначе — `failed` с машиночитаемой
+ * причиной `interrupted` и этапом `failed_stage`; текст строит клиент по
+ * причине (ADR daab6ac4 §4), английский `job.error` пользователю не
+ * показывается. Путь к журналу установщика — из `job.log_path` (разбор
+ * серверного текста — только фолбэк для заданий без поля). Путь к архиву БД
  * (`backup_path`) сейчас всегда `null` — выдуманный путь не показывается;
  * появится поле — покажется.
  *
@@ -49,7 +50,7 @@ import type {
   SystemUpdateStatus,
 } from '../../main/ipc/contract.js';
 import { confirmDialog, showDialog } from './dialog.js';
-import { div, el } from './dom.js';
+import { div, el, errText } from './dom.js';
 import { t } from './i18n.js';
 import {
   classifyApplyFailure,
@@ -111,8 +112,7 @@ function isRateLimited(err: unknown): boolean {
 
 /** Человеческая причина ошибки для строки футера. */
 function errorText(err: unknown): string {
-  if (err instanceof Error && err.message.trim() !== '') return err.message;
-  return t('serverUpdate.reasonUnknown');
+  return errText(err) || t('serverUpdate.reasonUnknown');
 }
 
 /**
@@ -380,7 +380,14 @@ export function openServerUpdateDialog(
     progressNote.textContent = note;
     progressNote.hidden = note === '';
 
-    const failure = view.failureText ?? state.failureOverride;
+    // Причина: локализованный текст по машиночитаемому `job.reason` (ADR
+    // daab6ac4 §4) — в том числе для штатных сбоев установщика, пришедших
+    // через `/progress`. `failureOverride` (готовый текст из конверта `502`)
+    // приоритетнее: он несёт уточнение `details.reason` ошибки. Сырой
+    // английский `job.error` не показывается никогда: у задания без `reason`
+    // `failureText` — общий локализованный текст, а из `job.error` берётся
+    // только путь к журналу (`journalPath`, `server-update.ts`).
+    const failure = state.failureOverride ?? view.failureText;
     failureLine.hidden = !view.failed || failure === null;
     failureLine.textContent =
       view.failed && failure !== null ? t('serverUpdate.failure.reason', failure) : '';
@@ -547,14 +554,14 @@ export function openServerUpdateDialog(
         state.installerFailed = true;
         if (failure.job !== null) applyJob(failure.job);
         else state.phase = 'failed';
-        state.failureOverride = failure.message === null ? null : failure.message;
+        state.failureOverride = failure.text === null ? null : failure.text;
         render();
         return;
       }
       // Настоящий отказ — строка ошибки в футере, диалог остаётся в ожидании.
       state.phase = state.job !== null && state.job.stage === 'done' ? 'done' : 'idle';
       errorLine.show(
-        t('serverUpdate.applyFailed', failure.message ?? t('serverUpdate.reasonUnknown')),
+        t('serverUpdate.applyFailed', failure.text ?? t('serverUpdate.reasonUnknown')),
       );
       render();
     }

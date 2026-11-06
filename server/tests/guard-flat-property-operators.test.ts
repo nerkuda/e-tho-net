@@ -170,7 +170,7 @@ describe(
       // верификатора круга 2.
       assert.match(
         topic!.body_md,
-        /нет живого ребра `links_v`/,
+        /no live `links_v` edge/,
         'справка обязана говорить: для свойства-связи наличие — по живым рёбрам `links_v`',
       );
     });
@@ -178,10 +178,10 @@ describe(
     it('справка etn.guide { topic: "thoughts.query" } = канон', () => {
       const topic = GUIDE_TOPICS_BY_NAME.get('thoughts.query');
       assert.ok(topic !== undefined, 'тема thoughts.query обязана быть в реестре гайда');
-      const match = /Плоская форма — канон из 14 операторов `([a-z_/]+)`/.exec(topic.body_md);
+      const match = /The flat form is the canon of 14 operators `([a-z_/]+)`/.exec(topic.body_md);
       assert.ok(
         match !== null,
-        'в справке не найден маркер «Плоская форма — канон из 14 операторов `…`»',
+        'в справке не найден маркер «The flat form is the canon of 14 operators `…`»',
       );
       assert.deepEqual(
         opsOf(splitOps(match![1]!)),
@@ -198,10 +198,10 @@ describe(
           const { tools } = await handle.client.listTools();
           const tool = tools.find((t) => t.name === 'etn.thoughts.query');
           assert.ok(tool !== undefined, 'инструмент etn.thoughts.query обязан быть в tools/list');
-          const match = /канон ([a-z_/]+);/.exec(tool!.description ?? '');
+          const match = /canon ([a-z_/]+);/.exec(tool!.description ?? '');
           assert.ok(
             match !== null,
-            'в описании etn.thoughts.query не найден маркер «канон <операторы>;»',
+            'в описании etn.thoughts.query не найден маркер «canon <операторы>;»',
           );
           assert.deepEqual(
             opsOf(splitOps(match![1]!)),

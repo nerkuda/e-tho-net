@@ -34,22 +34,28 @@ import {
   type EntityPickerDialogCtx,
 } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
+import { errText } from '../lib/dom.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 
 /** Synthetic row id for the structural («Родители»/«Потомки») checkbox —
  *  never a real link-type id, so it can share the same `checked` set. */
 const STRUCTURAL_ROW_ID = '__structural__';
-const STRUCTURAL_LABEL = 'Структура (Родители/Потомки)';
 
-/** Синтетический вариант пикера — строка «Структура». */
-const STRUCTURAL_OPTION: EntityOption = {
-  id: STRUCTURAL_ROW_ID,
-  title: STRUCTURAL_LABEL,
-  depth: 0,
-  selectable: true,
-  cloud: { id: STRUCTURAL_ROW_ID, title: STRUCTURAL_LABEL, icon: '🔗', icon_kind: 'emoji' },
-};
+/**
+ * Синтетический вариант пикера — строка «Структура». Собирается при каждом
+ * открытии: подпись берётся из словаря в момент рендера (ошибка ebed42d3).
+ */
+function structuralOption(): EntityOption {
+  const title = t('linkFilter.strukturaParentsChildren');
+  return {
+    id: STRUCTURAL_ROW_ID,
+    title,
+    depth: 0,
+    selectable: true,
+    cloud: { id: STRUCTURAL_ROW_ID, title, icon: '🔗', icon_kind: 'emoji' },
+  };
+}
 
 /** Opens the dialog. Fetches the current preference + property registry
  *  fresh on every open — infrequent action, no need to cache. */
@@ -68,7 +74,7 @@ async function loadAndOpen(networkId: string): Promise<void> {
     properties = propsResp;
     storedRaw = prefs.find((p) => p.key === PREF_KEY.CANVAS_LINK_FILTER)?.value;
   } catch (err) {
-    notice(formatError(err, 'Не удалось загрузить фильтр типов связей.'), 'error');
+    notice(formatError(err, t('linkFilter.notSucceededLoadFiltrTypesLinks')), 'error');
     return;
   }
   const defaultFilter = computeDefaultCanvasLinkFilter(properties);
@@ -81,11 +87,11 @@ async function loadAndOpen(networkId: string): Promise<void> {
   const picked = await pickEntitiesModal({
     networkId,
     kind: 'link-types',
-    title: 'Фильтр типов связей на карте',
+    title: t('linkFilter.filtrTypesLinksMap'),
     currentIds: [...checked],
     allowEmpty: false,
     applyLabel: t('actions.applyClose'),
-    extraOptions: [STRUCTURAL_OPTION],
+    extraOptions: [structuralOption()],
     commands: linkFilterCommands(defaultFilter),
   });
   if (picked === null) return;
@@ -105,7 +111,7 @@ export function linkFilterCommands(
   return (ctx) => [
     {
       icon: 'check-check',
-      title: 'Пометить все',
+      title: t('listActions.checkAll'),
       onClick: () => {
         const all = [
           ...store.state.linkTypes.filter((t) => !t.is_root).map((t) => t.id),
@@ -117,7 +123,7 @@ export function linkFilterCommands(
     },
     {
       icon: 'rotate-ccw',
-      title: 'Вернуть умолчания',
+      title: t('linkFilter.title.vernutUmolchaniya'),
       onClick: () => {
         ctx.checked.clear();
         for (const id of defaultFilter.type_ids ?? []) ctx.checked.add(id);
@@ -135,7 +141,7 @@ async function applyFilter(networkId: string, checked: ReadonlySet<string>): Pro
   // is rejected by the server as an invalid `link_filter` (see requirement
   // «Дефолт и хранение фильтра типов связей на карте»).
   if (checked.size === 0) {
-    notice('Оставьте хотя бы один тип связи.');
+    notice(t('linkFilter.ostavteHotyaOdinTypeLink'));
     return;
   }
   const includeStructural = checked.has(STRUCTURAL_ROW_ID);
@@ -147,14 +153,13 @@ async function applyFilter(networkId: string, checked: ReadonlySet<string>): Pro
     store.update({ canvasLinkFilter: value });
     await refreshFocus();
   } catch (err) {
-    notice(formatError(err, 'Не удалось сохранить фильтр типов связей.'), 'error');
+    notice(formatError(err, t('linkFilter.notSucceededSaveFiltrTypesLinks')), 'error');
   }
 }
 
 function formatError(err: unknown, fallback: string): string {
-  if (err !== null && typeof err === 'object' && 'message' in err) {
-    const msg = (err as { message?: unknown }).message;
-    if (typeof msg === 'string' && msg.length > 0) return `${fallback} ${msg}`;
-  }
-  return fallback;
+  // Причина — локализованный текст по коду (ADR daab6ac4 §4); серверный
+  // `message` английский и пользователю не показывается.
+  const text = errText(err);
+  return text === '' ? fallback : `${fallback} ${text}`;
 }

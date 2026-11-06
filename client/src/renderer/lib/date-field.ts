@@ -25,6 +25,7 @@ import { isValidLocalDay } from './dates.js';
 import { svgIcon } from './ui/icon.js';
 import { iconButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
+import { t } from './i18n.js';
 
 /** Класс корня поля. */
 export const DATE_FIELD_CLASS = 'date-field';
@@ -86,9 +87,9 @@ export function dateField(opts: DateFieldOptions = {}): DateFieldHandle {
     type: 'text',
     extraClass: DATE_FIELD_INPUT_CLASS,
     value: current,
-    placeholder: 'ГГГГ-ММ-ДД',
+    placeholder: t('dateField.placeholder.ggggMmDd'),
     maxLength: 10,
-    title: 'Дата в формате ГГГГ-ММ-ДД',
+    title: t('dateField.title.dateFormateGgggMmDd'),
     ariaLabel: opts.ariaLabel,
     disabled: opts.disabled === true,
   });
@@ -126,7 +127,7 @@ export function dateField(opts: DateFieldOptions = {}): DateFieldHandle {
   let picking = false;
   const pickBtn = iconButton({
     icon: svgIcon('calendar-month', 16),
-    title: 'Выбрать дату в календаре',
+    title: t('dateField.title.selectDateKalendare'),
     role: 'ghost',
     size: 's',
     class: DATE_FIELD_PICK_CLASS,
@@ -153,7 +154,7 @@ export function dateField(opts: DateFieldOptions = {}): DateFieldHandle {
 
   const clearBtn = iconButton({
     icon: svgIcon('x', 16),
-    title: 'Очистить дату',
+    title: t('dateField.title.clearDate'),
     role: 'ghost',
     size: 's',
     class: DATE_FIELD_CLEAR_CLASS,

@@ -76,24 +76,24 @@ describe('parseSeedIds: формы ввода', () => {
 
 describe('parseSeedIds: ошибки ввода', () => {
   it('пустая строка, только пробелы и пустой JSON-массив', () => {
-    assertInvalid(() => parseSeedIds(''), /seed_ids/, /пуст/);
-    assertInvalid(() => parseSeedIds(' \n\t '), /seed_ids/, /пуст/);
-    assertInvalid(() => parseSeedIds('[]'), /seed_ids/, /пуст/);
-    assertInvalid(() => parseSeedIds('[" "]'), /seed_ids/, /пуст/);
+    assertInvalid(() => parseSeedIds(''), /seed_ids/, /empty/);
+    assertInvalid(() => parseSeedIds(' \n\t '), /seed_ids/, /empty/);
+    assertInvalid(() => parseSeedIds('[]'), /seed_ids/, /empty/);
+    assertInvalid(() => parseSeedIds('[" "]'), /seed_ids/, /empty/);
   });
 
   it('незакрытый JSON-массив', () => {
-    assertInvalid(() => parseSeedIds('["id-1","id-2"'), /seed_ids/, /незакрыт/i);
+    assertInvalid(() => parseSeedIds('["id-1","id-2"'), /seed_ids/, /unterminated/i);
   });
 
   it('битый JSON: пропущенные запятая/кавычки', () => {
-    assertInvalid(() => parseSeedIds('["id-1" "id-2"]'), /seed_ids/, /битый JSON/i, /кавычк/i);
-    assertInvalid(() => parseSeedIds('[id-1,id-2]'), /seed_ids/, /битый JSON/i);
+    assertInvalid(() => parseSeedIds('["id-1" "id-2"]'), /seed_ids/, /malformed JSON/i, /double quotes/i);
+    assertInvalid(() => parseSeedIds('[id-1,id-2]'), /seed_ids/, /malformed JSON/i);
   });
 
   it('не строковый элемент JSON-массива', () => {
-    assertInvalid(() => parseSeedIds('["id-1", 2]'), /seed_ids\[1\]/, /строков/i, /число/i);
-    assertInvalid(() => parseSeedIds('[["id-1"]]'), /seed_ids\[0\]/, /строков/i, /массив/i);
+    assertInvalid(() => parseSeedIds('["id-1", 2]'), /seed_ids\[1\]/, /string/i, /number/i);
+    assertInvalid(() => parseSeedIds('[["id-1"]]'), /seed_ids\[0\]/, /string/i, /array/i);
   });
 
   it('больше предела 20 id', () => {
@@ -103,7 +103,7 @@ describe('parseSeedIds: ошибки ввода', () => {
   });
 
   it('не строка и не массив (обход типов на прямом вызове)', () => {
-    assertInvalid(() => parseSeedIds(42 as unknown as string), /seed_ids/, /число/);
+    assertInvalid(() => parseSeedIds(42 as unknown as string), /seed_ids/, /number/);
   });
 });
 
@@ -123,8 +123,8 @@ describe('parseRadiusArg: диапазон и формы', () => {
 
   it('не целое число — ошибка формата', () => {
     for (const value of ['abc', '2.5', '', '3x']) {
-      assertInvalid(() => parseRadiusArg(value), /radius/, /целое число/);
+      assertInvalid(() => parseRadiusArg(value), /radius/, /integer/);
     }
-    assertInvalid(() => parseRadiusArg(2.5), /radius/, /целое число/);
+    assertInvalid(() => parseRadiusArg(2.5), /radius/, /integer/);
   });
 });

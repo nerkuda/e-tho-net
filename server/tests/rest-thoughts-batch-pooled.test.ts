@@ -361,8 +361,8 @@ describe(
           'простаивающая привязка вытеснена по таймеру допуска',
         );
         assert.ok(
-          logs.some((l) => l.includes('write pool: задача долго ждёт допуска')),
-          `ожидание допуска обязано быть видно в логах; получено: ${logs.join('\n')}`,
+          logs.some((l) => l.includes('write pool: job is waiting for admission for a long time')),
+          `admission wait must be visible in the logs; получено: ${logs.join('\n')}`,
         );
       } finally {
         await closeWritePool();

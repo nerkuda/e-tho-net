@@ -102,6 +102,7 @@ import {
   type ScreenPair,
 } from '../tabs/tab-state.js';
 import { mountFilterPanelFrame, type FilterPanelFrameHandle } from '../../lib/filter-panel-frame.js';
+import { t } from '../../lib/i18n.js';
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -516,7 +517,7 @@ async function applyQuery(reset: boolean, keepScroll = false): Promise<void> {
     if (!isCurrentScreenPair(pair)) return;
     // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
     setFilterServerIssues(filterIssuesFromQueryError(err));
-    notice(`Ошибка отбора: ${errText(err)}`, 'error');
+    notice(t('structures.errorView', errText(err)), 'error');
   } finally {
     if (inflightQuery === controller) inflightQuery = null;
   }
@@ -659,7 +660,7 @@ async function toggleExpand(row: TreeRow, dir: HierarchyDir): Promise<void> {
     expansion.set(row.key, { ...flags, [dir]: true });
     renderTree(true);
   } catch (err) {
-    notice(`Не удалось раскрыть: ${errText(err)}`, 'error');
+    notice(t('structures.notSucceededRaskryt', errText(err)), 'error');
   }
 }
 
@@ -684,7 +685,7 @@ async function loadMoreNeighbors(nodeKey: string, thoughtId: string, rootId: str
     for (const [id, flags] of Object.entries(data.directions)) directions.set(id, flags);
     renderTree(true);
   } catch (err) {
-    notice(`Не удалось загрузить ещё: ${errText(err)}`, 'error');
+    notice(t('structures.notSucceededLoadMore', errText(err)), 'error');
   }
 }
 
@@ -703,7 +704,7 @@ export async function openStructuresThought(id: string): Promise<void> {
     const thought = await etn.thoughts.get(networkId, id);
     await setThoughtEditorTarget(thought);
   } catch (err) {
-    notice(`Не удалось открыть мысль: ${errText(err)}`, 'error');
+    notice(t('deepLink.notSucceededOpenThought', errText(err)), 'error');
   }
 }
 
@@ -720,7 +721,7 @@ async function openStructureLink(linkId: string): Promise<void> {
       selectedLinkId: link.id,
     });
   } catch (err) {
-    notice(`Не удалось открыть связь: ${errText(err)}`, 'error');
+    notice(t('structures.notSucceededOpenLink', errText(err)), 'error');
   }
 }
 
@@ -1101,16 +1102,16 @@ function renderTree(keepScroll = false): void {
   // keyset cursor of the last page (`total` feeds only the counter, 3f2fdc41).
   if (total === 0) {
     const empty = div('st-empty');
-    empty.textContent = 'Ничего не найдено — измените критерии отбора';
+    empty.textContent = t('structures.nichegoNotFoundIzmeniteKriteriiView');
     results.append(empty);
   }
   if (resultPager.hasMore) {
-    const more = el('button', 'st-more', 'Показать ещё');
+    const more = el('button', 'st-more', t('structures.showMore'));
     more.type = 'button';
     more.addEventListener('click', () => void applyQuery(false, true));
     results.append(more);
   }
-  const counter = badge(`Показано ${resultIds.length} из ${total}`, {
+  const counter = badge(t('structures.pokazano', [resultIds.length, total]), {
     kind: 'quiet',
     extraClass: 'ui-badge--block',
   });
@@ -1352,7 +1353,7 @@ function fillRow(rowEl: HTMLElement, row: TreeRow, selection: Set<string>): void
 
 /** Builds one per-node «Показать ещё» button (§15.5 pagination). */
 function buildMoreButton(marker: MoreMarker, node: TreeRow): HTMLElement {
-  const btn = el('button', 'st-more', 'Показать ещё');
+  const btn = el('button', 'st-more', t('structures.showMore'));
   btn.type = 'button';
   applyMoreButton(btn, marker, node);
   return btn;
@@ -1444,8 +1445,8 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   if (expanded?.children === true) bottomEllipse.classList.add('st-expanded');
   // Same wording as the canvas ellipse tooltip (§15.4: the cloud matches the
   // canvas 1-to-1) — connectivity state, not the expand/collapse action.
-  setTooltip(topEllipse, dir?.has_incoming === true ? 'Есть входящие связи' : 'Входящих связей нет');
-  setTooltip(bottomEllipse, dir?.has_outgoing === true ? 'Есть исходящие связи' : 'Исходящих связей нет');
+  setTooltip(topEllipse, dir?.has_incoming === true ? t('canvas.hasIncomingLink') : t('canvas.incomingLinksNo'));
+  setTooltip(bottomEllipse, dir?.has_outgoing === true ? t('canvas.hasOutgoingLink') : t('canvas.outgoingLinksNo'));
   // The ellipse click must not reach the cloud handler: the click means
   // "toggle this direction", not "activate the thought" (§15.5).
   topEllipse.addEventListener('click', (event) => {
@@ -1774,7 +1775,7 @@ function drawLinks(): void {
           showLinkContextMenu(event, bundle.edges[0]!.id);
         } else {
           const items: MenuItem[] = bundle.edges.map((edge) => ({
-            label: `Связь: ${linkLabel(edge)}`,
+            label: t('structures.link', linkLabel(edge)),
             onClick: () => showLinkContextMenuAt(event, edge.id),
           }));
           showMenuAt(event.clientX, event.clientY, items);

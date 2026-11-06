@@ -59,10 +59,10 @@ export function availableMergeVariants(input: {
 /** Подпись цели слияния по слою сессии. */
 function targetTitle(): string {
   const current = store.state.currentLayer;
-  if (current === null) return 'Основу';
+  if (current === null) return t('layerMerge.base');
   const parentId = store.state.layers.find((l) => l.id === current.id)?.parent_id ?? null;
-  if (parentId === null || parentId === BASE_LAYER_ID) return 'Основу';
-  return store.state.layers.find((l) => l.id === parentId)?.title ?? 'Основу';
+  if (parentId === null || parentId === BASE_LAYER_ID) return t('layerMerge.base');
+  return store.state.layers.find((l) => l.id === parentId)?.title ?? t('layerMerge.base');
 }
 
 /** Итог применения выбранного варианта ко всем мыслям. */
@@ -137,19 +137,19 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
     const titleOne = subjects.length === 1 ? subjects[0]!.title : null;
     const titleText =
       titleOne !== null
-        ? `мысли «${titleOne}»`
-        : `${subjects.length} выбранных мыслей, изменённых в слое`;
+        ? t('layerMerge.thought', titleOne)
+        : t('layerMerge.vybrannyhThoughtsIzmenennyhLayer', subjects.length);
 
     const body = div('form-stack');
     const hint = div('layer-hint');
-    hint.textContent = `Правки ${titleText} в слое «${current.title}» разрешаются по отношению к «${target}».`;
+    hint.textContent = t('layerMerge.editsLayerRazreshayutsyaOtnosheniyu', [titleText, current.title, target]);
     body.append(hint);
     if (diffFailed) {
       // Инлайн-сообщение в теле диалога (штатный паттерн: тост для ошибок
       // диалога не используется — lib/notice.ts, требование 397c5a56).
       const warn = div('layer-hint layer-hint-error');
       warn.textContent =
-        'Не удалось прочитать отличия мысли — вариант «Объединить изменения» недоступен.';
+        t('layerMerge.notSucceededReadOtlichiyaThoughtVariant');
       body.append(warn);
     }
 
@@ -162,20 +162,20 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
     const rows: Array<[LayerMergeVariant, string, string]> = [
       [
         'discard',
-        'Отказаться от изменений',
-        `Все правки в слое будут удалены — вернётся версия «${target}». Отменить нельзя.`,
+        t('layerMerge.otkazatsyaChanges'),
+        t('layerMerge.allEditsLayerWillDeletedVernetsya', target),
       ],
       [
         'overwrite',
-        'Полностью переписать мысль в основе',
-        `Версия слоя переносится целиком, изменения «${target}» по этим мыслям затираются.`,
+        t('layerMerge.polnostyuPerepisatThoughtBase'),
+        t('layerMerge.versionLayerPerenositsyaCelikomChangesThis', target),
       ],
     ];
     if (combineAvailable) {
       rows.push([
         'combine',
-        'Объединить изменения',
-        'Постоянный комментарий объединяется с основой (маркеры конфликтов git-стиля); связи, свойства и синонимы берутся из слоя.',
+        t('layerMerge.mergeChanges'),
+        t('layerMerge.postoyannyyKommentariyObedinyaetsyaBaseMarkeryKonflikto'),
       ]);
     }
     for (const [value, label, hintText] of rows) {
@@ -192,14 +192,14 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
     showDialog({
       title:
         titleOne !== null
-          ? `Слить мысль в «${target}»?`
-          : `Слить выбранные мысли в «${target}»?`,
+          ? t('layerMerge.mergeThought', target)
+          : t('layerMerge.mergeVybrannyeThought', target),
       body,
       size: 'm',
       buttons: [
         { label: t('actions.cancel'), onClick: (close) => close() },
         {
-          label: 'Выполнить',
+          label: t('layerMerge.label.vypolnit'),
           primary: true,
           keepOpen: true,
           onClick: (close) => {
@@ -207,8 +207,8 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
               const confirmed =
                 selected !== 'discard' ||
                 (await confirmDialog(
-                  'Отказаться от изменений?',
-                  `Все правки ${titleText} в слое будут удалены безвозвратно. Основа не изменится.`,
+                  t('layerMerge.otkazatsyaChanges2'),
+                  t('layerMerge.allEditsLayerWillDeletedBezvozvratno', titleText),
                   true,
                 ));
               if (!confirmed) return;
@@ -217,17 +217,17 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
                 close();
                 scheduleLayerOverridesRefresh();
                 if (selected === 'discard') {
-                  notice(`Изменения ${titleText} удалены из слоя.`);
+                  notice(t('layerMerge.changesDeletedLayer', titleText));
                 } else if (combineAvailable && result.conflicts > 0) {
                   noticePartial(
-                    `Слито мыслей: ${result.merged}. Комментарий объединён, конфликтных блоков: ${result.conflicts}.`,
+                    t('layerMerge.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov', [result.merged, result.conflicts]),
                     result.conflicts,
                   );
                 } else {
-                  notice(`Слито в «${target}»: ${result.merged}.`);
+                  notice(t('layerMerge.merged', [target, result.merged]));
                 }
               } catch (err) {
-                errorDialog('Не удалось разрешить изменения', err);
+                errorDialog(t('layerMerge.notSucceededRazreshitChanges'), err);
               }
             })();
           },

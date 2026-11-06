@@ -5,7 +5,8 @@
  * Правило: технические слова и коды (`fetch`, `ECONN*`, `ETIMEDOUT`,
  * `AbortError`, «запрос», «сокет», «WebSocket», «REST») не попадают к
  * пользователю; `connection-lost` и `INTERNAL`/сырые сетевые сбои получают
- * человеческие формулировки, бизнес-ошибки — свой серверный текст.
+ * человеческие формулировки, серверные ошибки — текст словаря по коду и
+ * `details.reason`/`details.issue` (ADR daab6ac4), а не серверный `message`.
  */
 
 import assert from 'node:assert/strict';
@@ -86,15 +87,42 @@ describe('errText: дружелюбные сообщения', () => {
     assert.equal(errText(new Error('read ECONNABORTED')), SERVER_UNAVAILABLE);
   });
 
-  it('бизнес-ошибки сохраняют серверный текст', () => {
-    for (const [code, message] of [
-      ['VALIDATION_ERROR', 'Поле «Название» обязательно'],
-      ['DUPLICATE', 'Мысль с таким названием уже есть'],
-      ['LOCKED', 'Объект редактирует другой пользователь'],
-      ['VERSION_CONFLICT', 'Версия устарела — перечитайте объект'],
-    ] as const) {
-      assert.equal(errText(new EtnError(code, message)), message);
+  it('серверные ошибки — словарный текст по коду, message не показывается (ADR daab6ac4)', () => {
+    // Сервер отдаёт английский диагностический message; пользователь видит
+    // текст словаря, выбранный по machine-readable коду.
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['VALIDATION_ERROR', 'проверьте введённые данные'],
+      ['DUPLICATE', 'такая запись уже существует'],
+      ['LOCKED', 'объект редактирует другой участник'],
+      ['VERSION_CONFLICT', 'данные уже изменились — обновите и повторите'],
+      ['NOT_FOUND', 'объект не найден — возможно, его удалили'],
+      ['CLIENT_VERSION_UNSUPPORTED', 'версия клиента не поддерживается — обновите клиент'],
+    ];
+    for (const [code, expected] of cases) {
+      const text = errText(
+        new EtnError(code as EtnError['code'], 'server-authored English diagnostic'),
+      );
+      assert.equal(text, expected, `код ${code}`);
+      assertFriendly(text);
     }
+  });
+
+  it('уточняющая причина 426 — текст по details.reason (ADR daab6ac4)', () => {
+    const text = errText(
+      new EtnError('CLIENT_VERSION_UNSUPPORTED', 'client version is out of range', {
+        reason: 'version-out-of-range',
+      }),
+    );
+    assert.equal(text, 'версия клиента не подходит серверу — обновите клиент');
+    assertFriendly(text);
+  });
+
+  it('неизвестный код — общий текст, без серверного message (ADR daab6ac4)', () => {
+    const err = { code: 'SOME_FUTURE_CODE', message: 'internal diagnostic text' };
+    const text = errText(err);
+    assert.equal(text, 'не удалось выполнить действие');
+    assert.doesNotMatch(text, /SOME_FUTURE_CODE|internal diagnostic/);
+    assertFriendly(text);
   });
 
   it('422 по стороне свойства-связи — пользовательский текст, без source/target/side (d9bc6012)', () => {

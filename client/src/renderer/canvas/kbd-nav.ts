@@ -30,6 +30,7 @@ import { notice } from '../lib/notice.js';
 import { pickSpatialTarget, shouldDrawCurrentFrame } from '../lib/ui/nav-core.js';
 import { store } from '../state.js';
 import { reorderZone } from './drag-cloud.js';
+import { t } from '../lib/i18n.js';
 
 /** Frame class applied to the cloud under the keyboard cursor. */
 const CURSOR_CLS = 'kbd-cursor';
@@ -386,7 +387,7 @@ async function reorderCursor(delta: -1 | 1): Promise<void> {
   const dir = zone?.dataset['dir'];
   if (dir !== 'parents' && dir !== 'children') return;
   if (store.state.zoneSorts[dir].sort !== 'manual') {
-    notice('Упорядочивание работает при сортировке зоны «ручной» (правый клик по зоне → порядок).');
+    notice(t('dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy'));
     return;
   }
   const order = store.state.zoneOrder[dir];

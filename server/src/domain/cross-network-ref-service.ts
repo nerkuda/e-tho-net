@@ -212,7 +212,7 @@ export function resolveAndBuildSnapshotsForWrite(
   const items: CrossRefSnapshotItem[] = [];
   for (const address of addresses) {
     if (!isCrossNetworkAddress(address)) {
-      throw new EtnError('VALIDATION_ERROR', 'некорректный адрес кросс-сетевой ссылки', {
+      throw new EtnError('VALIDATION_ERROR', "invalid cross-network reference address", {
         address,
         expected_format: 'n:<network_uuid>#<thought_uuid>',
       });
@@ -223,7 +223,7 @@ export function resolveAndBuildSnapshotsForWrite(
     if (parsed.networkId === ctx.currentNetworkId) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'кросс-сетевая ссылка не может адресовать собственную сеть — заведите свойство-связь',
+        "a cross-network reference cannot target its own network — create a link property instead",
         { address, current_network_id: ctx.currentNetworkId },
       );
     }
@@ -231,7 +231,7 @@ export function resolveAndBuildSnapshotsForWrite(
     if (status.kind !== 'resolved') {
       throw new EtnError(
         'VALIDATION_ERROR',
-        'цель кросс-сетевой ссылки нерезолвится при записи',
+        "the cross-network reference target cannot be resolved on write",
         { address, reason: status.reason },
       );
     }

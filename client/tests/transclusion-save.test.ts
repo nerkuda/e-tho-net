@@ -403,7 +403,10 @@ test('reportCommitFailures: сбой окружения без блоков — 
   reportCommitFailures({ networkId: NET, result, notify: (m) => notices.push(m) });
   assert.equal(notices.length, 1, 'ровно одно сообщение о сбое окружения');
   assert.match(notices[0]!, /Не удалось сохранить комментарий/);
-  assert.match(notices[0]!, /конфликт версии комментария/, 'названа причина');
+  // Причина — словарный текст по коду ошибки, а не серверный message
+  // (ADR daab6ac4: диагностический текст сервера пользователю не показывается).
+  assert.match(notices[0]!, /данные уже изменились — обновите и повторите/, 'названа причина');
+  assert.doesNotMatch(notices[0]!, /конфликт версии комментария/);
   assert.ok(
     !/исправьте помеченные блоки/i.test(notices[0]!),
     'блок-текст не показывается при нуле сбойных блоков',

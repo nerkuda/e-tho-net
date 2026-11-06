@@ -165,7 +165,7 @@ function requireOwnedView(
   if (view === null || view.thought_type_id !== thoughtTypeId) {
     throw new EtnError(
       'NOT_FOUND',
-      `У типа мысли ${thoughtTypeId} нет отбора ${viewId}.`,
+      `Thought type ${thoughtTypeId} has no view ${viewId}.`,
       {
         entity: 'thought_type_view',
         id: viewId,
@@ -396,7 +396,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         if (expectedVersion !== undefined && before.version !== expectedVersion) {
           throw new EtnError(
             'VERSION_CONFLICT',
-            'Версия отбора изменилась с момента чтения.',
+            "The view version changed since it was read.",
             {
               entity: 'thought_type_view',
               id: viewId,
@@ -505,7 +505,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         if (thought === null) {
           throw new EtnError(
             'NOT_FOUND',
-            `Мысль ${thoughtId} не найдена.`,
+            `Thought ${thoughtId} not found.`,
             { entity: 'thought', id: thoughtId },
             req.id,
           );
@@ -523,7 +523,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         if (matched === null) {
           throw new EtnError(
             'NOT_FOUND',
-            `У мысли ${thoughtId} нет отбора «${view}».`,
+            `Thought ${thoughtId} has no view "${view}".`,
             {
               entity: 'thought_type_view',
               thought_id: thoughtId,
@@ -648,7 +648,7 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
         if (thought === null) {
           throw new EtnError(
             'NOT_FOUND',
-            `Мысль ${thoughtId} не найдена.`,
+            `Thought ${thoughtId} not found.`,
             { entity: 'thought', id: thoughtId },
             req.id,
           );

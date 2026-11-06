@@ -22,6 +22,8 @@ import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { store } from '../state.js';
 import { openPublicationInWorkspace } from '../screens/active-view.js';
+import { t } from '../lib/i18n.js';
+import { errText } from '../lib/dom.js';
 
 let wired = false;
 
@@ -53,7 +55,7 @@ export function initDeepLinkHandler(): void {
     // unhandled rejection: у пользователя есть окно, поэтому показываем тост.
     // Штатные отказы (сеть/мысль/публикация/фокус) applyDeepLink показывает сам.
     void handleDeepLink(link).catch((error) => {
-      notice(`Не удалось открыть ссылку: ${errToText(error)}`, 'error');
+      notice(t('deepLink.notSucceededOpenLinkRef', errText(error)), 'error');
     });
   });
 }
@@ -112,7 +114,7 @@ export async function applyDeepLink(
     try {
       await deps.openNetwork(link.networkId);
     } catch (err) {
-      deps.notice(`Сеть недоступна: ${errToText(err)}`, 'error');
+      deps.notice(t('deepLink.networkUnavailable', errText(err)), 'error');
       return;
     }
   }
@@ -123,7 +125,7 @@ export async function applyDeepLink(
     try {
       await deps.getPublication(link.networkId, link.publicationId);
     } catch (err) {
-      deps.notice(`Публикация удалена или недоступна: ${errToText(err)}`, 'error');
+      deps.notice(t('deepLink.publicationDeletedUnavailable', errText(err)), 'error');
       return;
     }
     await deps.openPublicationInWorkspace(link.publicationId);
@@ -135,13 +137,13 @@ export async function applyDeepLink(
   try {
     thought = await deps.getThought(link.networkId, link.thoughtId);
   } catch (err) {
-    deps.notice(`Мысль удалена или недоступна: ${errToText(err)}`, 'error');
+    deps.notice(t('deepLink.thoughtDeletedUnavailable', errText(err)), 'error');
     return;
   }
 
   if (!thought.active && !deps.showInactive()) {
     deps.notice(
-      'Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.',
+      t('deepLink.notMoguOpenNeaktualnuyuThoughtNeaktualnye'),
       'error',
     );
     return;
@@ -157,7 +159,7 @@ export async function applyDeepLink(
   try {
     await deps.setFocus(thought.id);
   } catch (err) {
-    deps.notice(`Не удалось открыть мысль: ${errToText(err)}`, 'error');
+    deps.notice(t('deepLink.notSucceededOpenThought', errText(err)), 'error');
   }
 }
 
@@ -167,9 +169,4 @@ function safeCurrentNetworkId(): string | null {
   } catch {
     return null;
   }
-}
-
-function errToText(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return typeof err === 'string' ? err : 'unknown error';
 }

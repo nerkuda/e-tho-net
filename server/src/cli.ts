@@ -118,26 +118,26 @@ export function parseInitArgs(tokens: string[]): InitArgs {
     } else if (t === '--help' || t === '-h') {
       throw new CliError(HELP_INIT);
     } else {
-      throw new CliError(`Неизвестный аргумент: ${t}`);
+      throw new CliError(`Unknown argument: ${t}`);
     }
   }
 
   if (check) {
     if (username !== null || displayName !== null || keyOut !== null) {
       throw new CliError(
-        'Аргумент --check несовместим с --username, --display-name и --key-out: ' +
-          'он только сообщает состояние инициализации.',
+        "The --check argument is incompatible with --username, --display-name and --key-out: " +
+          "it only reports the initialization state.",
       );
     }
     return { username: '', displayName: null, check: true, keyOut: null };
   }
 
   if (username === null || username.trim() === '') {
-    throw new CliError('Аргумент --username обязателен. Пример: etn init --username admin');
+    throw new CliError("The --username argument is required. Example: etn init --username admin");
   }
   const trimmedName = username.trim();
   if (trimmedName.length === 0) {
-    throw new CliError('--username не может быть пустым.');
+    throw new CliError("--username must not be empty.");
   }
   return {
     username: trimmedName,
@@ -147,97 +147,97 @@ export function parseInitArgs(tokens: string[]): InitArgs {
   };
 }
 
-const HELP_GLOBAL = `Использование: etn <команда> [опции]
+const HELP_GLOBAL = `Usage: etn <command> [options]
 
-Команды:
-  init          Первичная инициализация сервера: создаёт _system.db, первого
-                администратора и первичный API-key. "etn init --check" только
-                сообщает состояние инициализации (для установщика).
-  mcp           MCP-сервер в stdio-режиме (для локальных AI-агентов). API-key —
-                через ETN_API_KEY или --api-key.
-  publications  Пересборка публикаций в каталог (CI и git-хуки).
+Commands:
+  init          Initial server setup: creates _system.db, the first
+                administrator and the primary API key. "etn init --check" only
+                reports the initialization state (for the installer).
+  mcp           MCP server in stdio mode (for local AI agents). The API key —
+                via ETN_API_KEY or --api-key.
+  publications  Rebuild publications into a directory (CI and git hooks).
 
-Переменные окружения:
-  ETN_DATA_DIR       Каталог данных сервера (обязательный).
-  ETN_HOST           Адрес привязки (по умолчанию 127.0.0.1).
-  ETN_PORT           Порт (по умолчанию 3000).
+Environment variables:
+  ETN_DATA_DIR       Server data directory (required).
+  ETN_HOST           Bind address (default 127.0.0.1).
+  ETN_PORT           Port (default 3000).
   ETN_TLS_CERT,
-  ETN_TLS_KEY        Сертификат и ключ для HTTPS/WSS (оба или ни одного).
-  ETN_LOG_LEVEL      Уровень логирования (по умолчанию info).
-  ETN_MCP_ENABLED    1 — поднять HTTP-эндпоинт MCP /mcp на основном сервере.
-  ETN_MCP_PORT       Опционально: отдельный порт только для /mcp.
+  ETN_TLS_KEY        Certificate and key for HTTPS/WSS (both or neither).
+  ETN_LOG_LEVEL      Log level (default info).
+  ETN_MCP_ENABLED    1 — expose the MCP HTTP endpoint /mcp on the main server.
+  ETN_MCP_PORT       Optional: a separate port for /mcp only.
   ETN_MCP_SESSION_IDLE_TTL_MS
-                     Время жизни простаивающей MCP-сессии, мс (по умолчанию
-                     86400000 — 24 часа; допустимо 1000…2592000000).
+                     Idle MCP session lifetime, ms (default
+                     86400000 — 24 hours; allowed 1000…2592000000).
   ETN_CLIENT_COMPATIBILITY
-                     Аварийный override диапазона совместимых клиентов
-                     (по умолчанию — minor-окно версии сервера,
+                     Emergency override of the compatible client range
+                     (default — the server version's minor window,
                      ">=X.Y.0 <X.(Y+1).0").
   ETN_RECOMMENDED_CLIENT_VERSION
-                     Аварийный override рекомендованной версии клиента
-                     (по умолчанию — версия сервера; обязана входить
-                     в диапазон совместимости).
+                     Emergency override of the recommended client version
+                     (default — the server version; must fall within
+                     the compatibility range).
   ETN_CLIENT_DOWNLOAD_URL
-                     Аварийный override страницы релиза для кнопки
-                     «Обновить клиент» (абсолютный https:// URL).
-  ETN_CLIENT_SHA256  SHA-256 (64 hex) Linux-архива клиента для install.sh.
-  ETN_API_KEY        API-key для "etn mcp" и "etn publications" (если не
-                     передан --api-key).
+                     Emergency override of the release page for the
+                     "Update client" button (an absolute https:// URL).
+  ETN_CLIENT_SHA256  SHA-256 (64 hex) of the Linux client archive for install.sh.
+  ETN_API_KEY        API key for "etn mcp" and "etn publications" (unless
+                     --api-key is passed).
 
-Запустите: etn <команда> --help для справки по команде.`;
+Run: etn <command> --help for command help.`;
 
-const HELP_INIT = `Использование: etn init --username <логин> [--display-name "<имя>"] [--key-out <файл>]
+const HELP_INIT = `Usage: etn init --username <login> [--display-name "<name>"] [--key-out <file>]
                 etn init --check
 
-Создаёт корневого администратора и первичный API-key. Повторный запуск
-завершается ошибкой «уже инициализировано».
+Creates the root administrator and the primary API key. A repeated run
+fails with "already initialized".
 
-  --key-out <файл>   Записать ключ в файл (для установщика — каталог с
-                     ограниченным доступом) и не печатать его. Ключ всё равно
-                     выдаётся один раз: восстановить его нельзя.
-  --check            Только сообщить состояние инициализации, ничего не менять
-                     и не создавать. Коды: 0 — первый администратор есть,
-                     1 — сервер не инициализирован, 2 — проверить не удалось.
-                     База открывается строго на чтение; SQLite в режиме WAL
-                     может создать рядом служебные файлы _system.db-shm и
-                     _system.db-wal — это нормальные файлы SQLite, содержимое
-                     _system.db не меняется.`;
+  --key-out <file>   Write the key to a file (for the installer — a directory
+                     with restricted access) and do not print it. The key is
+                     still issued once: it cannot be recovered.
+  --check            Only report the initialization state, change nothing
+                     and create nothing. Codes: 0 — the first administrator exists,
+                     1 — the server is not initialized, 2 — the check failed.
+                     The database is opened strictly read-only; SQLite in WAL mode
+                     may create the service files _system.db-shm and
+                     _system.db-wal next to it — these are normal SQLite files, the
+                     contents of _system.db do not change.`;
 
-const HELP_MCP = `Использование: etn mcp [--api-key <ключ>]
+const HELP_MCP = `Usage: etn mcp [--api-key <key>]
 
-Запускает MCP-сервер в stdio-режиме для локального AI-агента (например,
-Claude Desktop или IDE-агент). API-key берётся из --api-key или из
-переменной окружения ETN_API_KEY — без ключа запуск отклоняется.`;
+Starts the MCP server in stdio mode for a local AI agent (for example,
+Claude Desktop or an IDE agent). The API key is taken from --api-key or from
+the ETN_API_KEY environment variable — startup is rejected without a key.`;
 
-const HELP_PUBLICATIONS = `Использование: etn publications <команда> [опции]
+const HELP_PUBLICATIONS = `Usage: etn publications <command> [options]
 
-Команды:
-  rebuild   Пересобрать публикации сети в каталог файлов или единый zip
-            (для CI-пайплайнов и git-хуков).
+Commands:
+  rebuild   Rebuild the network's publications into a file directory or a single zip
+            (for CI pipelines and git hooks).
 
-Запустите: etn publications <команда> --help для справки по команде.`;
+Run: etn publications <command> --help for command help.`;
 
-const HELP_PUBLICATIONS_REBUILD = `Использование: etn publications rebuild --out <каталог> (--network <id> | --network-name <имя>) [опции]
+const HELP_PUBLICATIONS_REBUILD = `Usage: etn publications rebuild --out <directory> (--network <id> | --network-name <name>) [options]
 
-Пересобирает публикации сети тем же доменным кодом экспорта, что и REST/клиент.
-Без --zip пишет в каталог файлы <slug>.md|.html и assets/; с --zip — один архив.
-Повторный запуск без изменений в базе не меняет содержимое файлов (mtime не в счёт).
+Rebuilds the network's publications with the same export domain code as REST/the client.
+Without --zip it writes <slug>.md|.html files and assets/ into the directory; with --zip — a single archive.
+A repeated run with no database changes does not change the file contents (mtime does not count).
 
-Обязательно:
-  --out <каталог>        Каталог для файлов (или zip при --zip).
-  --network <id>         Сеть по id (для агентов).
-  --network-name <имя>   Сеть по отображаемому имени (для людей).
+Required:
+  --out <directory>      Directory for the files (or the zip with --zip).
+  --network <id>         Network by id (for agents).
+  --network-name <name>  Network by display name (for humans).
 
-Опции:
-  --layer <id>           Слой сборки (по умолчанию — основа).
-  --ids <id,...>         Пересобрать перечисленные публикации (через запятую).
-  --all-active           Пересобрать все актуальные публикации сети.
-  --format <md|html>     Формат документа (по умолчанию md).
-  --zip                  Единый zip вместо каталога файлов.
-  --api-key <ключ>       API-key (иначе ETN_API_KEY).
+Options:
+  --layer <id>           Build layer (default — base).
+  --ids <id,...>         Rebuild the listed publications (comma-separated).
+  --all-active           Rebuild all active publications of the network.
+  --format <md|html>     Document format (default md).
+  --zip                  A single zip instead of a file directory.
+  --api-key <key>        API key (otherwise ETN_API_KEY).
 
-API-key обязателен: документ собирается от имени его пользователя.
-Переменные окружения: ETN_DATA_DIR (обязательна), ETN_API_KEY, ETN_LOG_LEVEL.`;
+The API key is required: the document is built on behalf of its user.
+Environment variables: ETN_DATA_DIR (required), ETN_API_KEY, ETN_LOG_LEVEL.`;
 
 /** Parsed arguments for the `mcp` subcommand. */
 export interface McpArgs {
@@ -261,7 +261,7 @@ export function parseMcpArgs(tokens: string[]): McpArgs {
     } else if (t === '--help' || t === '-h') {
       throw new CliError(HELP_MCP);
     } else {
-      throw new CliError(`Неизвестный аргумент: ${t}`);
+      throw new CliError(`Unknown argument: ${t}`);
     }
   }
   return { apiKey: apiKey?.trim() || null };
@@ -296,7 +296,7 @@ export interface PublicationsRebuildArgs {
 /** Require a value for a flag (`--flag value` / `--flag=value`). */
 function requireValue(flag: string, value: string | undefined): string {
   if (value === undefined || value.trim() === '') {
-    throw new CliError(`Аргумент ${flag} требует значения.`);
+    throw new CliError(`Argument ${flag} requires a value.`);
   }
   return value.trim();
 }
@@ -308,7 +308,7 @@ function parseIds(raw: string): string[] {
     .map((s) => s.trim())
     .filter((s) => s !== '');
   if (ids.length === 0) {
-    throw new CliError('Аргумент --ids не содержит ни одного id.');
+    throw new CliError("The --ids argument contains no ids.");
   }
   return ids;
 }
@@ -316,7 +316,7 @@ function parseIds(raw: string): string[] {
 /** Parse `--format` (only `md` | `html`). */
 function parseFormat(raw: string): PublicationExportFormat {
   if (raw === 'md' || raw === 'html') return raw;
-  throw new CliError(`Неизвестный формат: ${raw} (ожидается md или html).`);
+  throw new CliError(`Unknown format: ${raw} (expected md or html).`);
 }
 
 /**
@@ -361,25 +361,25 @@ export function parsePublicationsRebuildArgs(tokens: string[]): PublicationsRebu
     else if (t.startsWith('--api-key='))
       apiKey = requireValue('--api-key', t.slice('--api-key='.length));
     else if (t === '--help' || t === '-h') throw new CliError(HELP_PUBLICATIONS_REBUILD);
-    else throw new CliError(`Неизвестный аргумент: ${t}`);
+    else throw new CliError(`Unknown argument: ${t}`);
   }
 
   if (out === null) {
     throw new CliError(
-      'Аргумент --out обязателен. Пример: etn publications rebuild --out ./docs --network <id> --all-active',
+      "The --out argument is required. Example: etn publications rebuild --out ./docs --network <id> --all-active",
     );
   }
   if (networkId !== null && networkName !== null) {
-    throw new CliError('Укажите что-то одно: --network или --network-name.');
+    throw new CliError("Provide only one of: --network or --network-name.");
   }
   if (networkId === null && networkName === null) {
-    throw new CliError('Укажите сеть: --network <id> или --network-name <имя>.');
+    throw new CliError("Specify a network: --network <id> or --network-name <name>.");
   }
   if (ids !== null && allActive) {
-    throw new CliError('Укажите что-то одно: --ids или --all-active.');
+    throw new CliError("Provide only one of: --ids or --all-active.");
   }
   if (ids === null && !allActive) {
-    throw new CliError('Укажите, что пересобирать: --ids <id,...> или --all-active.');
+    throw new CliError("Specify what to rebuild: --ids <id,...> or --all-active.");
   }
 
   return { out, networkId, networkName, layerId, ids, allActive, format, zip, apiKey: apiKey?.trim() || null };
@@ -406,7 +406,7 @@ function resolveCliNetwork(
 ): string {
   if (args.networkId !== null) {
     if (sys.getNetworkById(args.networkId) === null) {
-      throw new CliError(`Сеть не найдена: ${args.networkId}`);
+      throw new CliError(`Network not found: ${args.networkId}`);
     }
     assertCliNetworkAccess(sys, auth, args.networkId);
     return args.networkId;
@@ -416,11 +416,11 @@ function resolveCliNetwork(
   const matches = list.filter((n) => n.display_name.trim().toLowerCase() === wanted);
   if (matches.length === 0) {
     const names = list.map((n) => n.display_name).join(', ') || '—';
-    throw new CliError(`Сеть с именем «${args.networkName}» не найдена. Доступные: ${names}.`);
+    throw new CliError(`Network named "${args.networkName}" not found. Available: ${names}.`);
   }
   if (matches.length > 1) {
     const variants = matches.map((n) => `${n.id} (${n.display_name})`).join('; ');
-    throw new CliError(`Имя «${args.networkName}» неоднозначно, уточните --network: ${variants}.`);
+    throw new CliError(`The name "${args.networkName}" is ambiguous, specify --network: ${variants}.`);
   }
   const id = matches[0]!.id;
   assertCliNetworkAccess(sys, auth, id);
@@ -435,7 +435,7 @@ function assertCliNetworkAccess(
 ): void {
   if (auth.isAdmin) return;
   if (sys.getMemberRole(auth.userId, networkId) === null) {
-    throw new CliError(`Нет доступа к сети ${networkId}: пользователь не участник.`);
+    throw new CliError(`No access to network ${networkId}: the user is not a member.`);
   }
 }
 
@@ -449,10 +449,10 @@ function resolveCliLayer(config: ServerConfig, networkId: string, requested: str
   const baseNdb = openNetworkDb(config.dataDir, networkId, undefined, BASE_LAYER_ID);
   const layer = listLayers(baseNdb, { includeService: true }).find((l) => l.id === layerId);
   if (layer === undefined) {
-    throw new CliError(`Слой ${layerId} не найден в сети ${networkId}.`);
+    throw new CliError(`Layer ${layerId} not found in network ${networkId}.`);
   }
   if (layer.is_service) {
-    throw new CliError(`Слой ${layerId} служебный — выбрать его нельзя.`);
+    throw new CliError(`Layer ${layerId} is a service layer — it cannot be selected.`);
   }
   return layerId;
 }
@@ -473,7 +473,7 @@ async function runPublicationsRebuild(
   const apiKey = args.apiKey ?? env.ETN_API_KEY?.trim() ?? null;
   if (apiKey === null || apiKey === '') {
     console.error(
-      'Для сборки публикаций нужен API-key: задайте ETN_API_KEY или передайте --api-key.',
+      "An API key is required to build publications: set ETN_API_KEY or pass --api-key.",
     );
     return 1;
   }
@@ -483,7 +483,7 @@ async function runPublicationsRebuild(
   try {
     const auth = createApiKeyAuthProvider(sys)(apiKey);
     if (auth === null) {
-      console.error('Невалидный или отключённый API-key (проверьте ETN_API_KEY / --api-key).');
+      console.error("Invalid or disabled API key (check ETN_API_KEY / --api-key).");
       return 1;
     }
 
@@ -505,19 +505,19 @@ async function runPublicationsRebuild(
       ids = selected.ids;
       if (selected.total > PUBLICATION_EXPORT_BATCH_MAX) {
         warnings.push(
-          `список усечён до ${PUBLICATION_EXPORT_BATCH_MAX} публикаций (в сети ${selected.total} актуальных)`,
+          `the list was truncated to ${PUBLICATION_EXPORT_BATCH_MAX} publications (the network has ${selected.total} active ones)`,
         );
       }
     }
 
     const found: string[] = [];
     for (const id of ids) {
-      if (getPublication(ndb, id) === null) warnings.push(`публикация не найдена: ${id}`);
+      if (getPublication(ndb, id) === null) warnings.push(`publication not found: ${id}`);
       else found.push(id);
     }
     if (found.length === 0) {
-      console.log('Публикаций для пересборки нет.');
-      for (const w of warnings) console.log(`предупреждение: ${w}`);
+      console.log("No publications to rebuild.");
+      for (const w of warnings) console.log(`warning: ${w}`);
       return 0;
     }
 
@@ -548,17 +548,17 @@ async function runPublicationsRebuild(
         );
         const artifact = buildPublicationArtifact(ndb, document, args.format, true, '', slug);
         entries.push(...artifact.entries);
-        for (const w of artifact.entry.warnings) warnings.push(w);
+        for (const w of artifact.entry.warnings) warnings.push(w.message);
       } catch (err) {
         const title = titleById.get(id) ?? id;
         warnings.push(
-          `публикация «${title}» не собрана: ${err instanceof Error ? err.message : String(err)}`,
+          `publication "${title}" was not built: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
     if (entries.length === 0) {
-      console.log('Не удалось собрать ни одной публикации.');
-      for (const w of warnings) console.log(`предупреждение: ${w}`);
+      console.log("Failed to build any publication.");
+      for (const w of warnings) console.log(`warning: ${w}`);
       return 0;
     }
 
@@ -587,9 +587,9 @@ async function runPublicationsRebuild(
         console.log(`  ${entry.name}`);
       }
     }
-    for (const w of warnings) console.log(`предупреждение: ${w}`);
+    for (const w of warnings) console.log(`warning: ${w}`);
     console.log(
-      `Готово: файлов ${written + unchanged} (обновлено ${written}, без изменений ${unchanged}).`,
+      `Done: ${written + unchanged} files (updated ${written}, unchanged ${unchanged}).`,
     );
     return 0;
   } catch (err) {
@@ -623,10 +623,10 @@ function writeKeyOutFile(keyPath: string, key: string): boolean {
     return true;
   } catch (err) {
     console.error(
-      `Не удалось записать ключ в ${keyPath}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to write the key to ${keyPath}: ${err instanceof Error ? err.message : String(err)}`,
     );
     console.error(
-      'Ключ не создан в базе: исправьте доступ к каталогу и повторите etn init.',
+      "The key was not created in the database: fix the directory access and repeat etn init.",
     );
     return false;
   }
@@ -648,8 +648,8 @@ function runInit(args: InitArgs, config: ServerConfig): number {
   try {
     if (sys.hasFirstUser()) {
       console.error(
-        'Ошибка: сервер ETN уже инициализирован (первый администратор существует). ' +
-          'Повторная инициализация не требуется.',
+        "Error: the ETN server is already initialized (the first administrator exists). " +
+          "Re-initialization is not required.",
       );
       return 1;
     }
@@ -693,25 +693,25 @@ function runInit(args: InitArgs, config: ServerConfig): number {
       throw err;
     }
 
-    console.log('ETN инициализирован.');
+    console.log("ETN is initialized.");
     console.log('');
-    console.log('Создан пользователь-администратор:');
-    console.log(`  Имя пользователя:  ${args.username}`);
+    console.log("Administrator user created:");
+    console.log(`  Username:          ${args.username}`);
     if (args.displayName) {
-      console.log(`  Отображаемое имя:  ${args.displayName}`);
+      console.log(`  Display name:      ${args.displayName}`);
     }
     console.log('');
     if (keyPath !== null) {
-      console.log('Первичный API-key записан в защищённый файл (в консоль не выводится):');
+      console.log("The primary API key was written to a protected file (not printed to the console):");
       console.log(`  ${keyPath}`);
     } else {
-      console.log('Первичный API-key (показан один раз — сохраните его):');
+      console.log("Primary API key (shown once — save it):");
       console.log(`  ${gen.key}`);
     }
     console.log('');
     console.log(
-      'Внимание: ключ не передавайте по открытым каналам. Восстановить его ' +
-        'нельзя — только перевыпустить через администратора.',
+      "Warning: do not send the key over open channels. It cannot be " +
+        "recovered — only reissued by an administrator.",
     );
     return 0;
   } finally {
@@ -742,19 +742,19 @@ const INIT_CHECK_FAILED = 2;
 function runInitCheck(config: ServerConfig): number {
   const result = SystemDb.checkFirstUser(config.dataDir);
   if (result.state === 'unreadable') {
-    console.error(`Не удалось проверить инициализацию: ${result.error}`);
+    console.error(`Failed to check initialization: ${result.error}`);
     return INIT_CHECK_FAILED;
   }
   if (result.state === 'initialized') {
-    console.log('Сервер инициализирован: первый администратор есть.');
+    console.log("The server is initialized: the first administrator exists.");
     return INIT_CHECK_INITIALIZED;
   }
   if (result.reason === 'no-db') {
-    console.log('Сервер не инициализирован: файла _system.db нет.');
+    console.log("The server is not initialized: the _system.db file does not exist.");
   } else if (result.reason === 'no-users-table') {
-    console.log('Сервер не инициализирован: в _system.db нет таблицы users.');
+    console.log("The server is not initialized: _system.db has no users table.");
   } else {
-    console.log('Сервер не инициализирован: первого администратора нет.');
+    console.log("The server is not initialized: there is no first administrator.");
   }
   return INIT_CHECK_NOT_INITIALIZED;
 }
@@ -790,7 +790,7 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       config = loadConfig(env);
     } catch (err) {
       console.error(
-        err instanceof ConfigError ? `Ошибка конфигурации: ${err.message}` : (err as Error).message,
+        err instanceof ConfigError ? `Configuration error: ${err.message}` : (err as Error).message,
       );
       return 1;
     }
@@ -810,7 +810,7 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       config = loadConfig(env);
     } catch (err) {
       console.error(
-        err instanceof ConfigError ? `Ошибка конфигурации: ${err.message}` : (err as Error).message,
+        err instanceof ConfigError ? `Configuration error: ${err.message}` : (err as Error).message,
       );
       return 1;
     }
@@ -841,7 +841,7 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       // записи и закрыть воркеры, потом читателей.
       const drained = await drainWritePool();
       if (!drained.drained) {
-        console.error('write pool: очередь не слилась в отведённое время');
+        console.error("write pool: the queue did not drain within the allotted time");
       }
       await closeWritePool();
       await closeReaderPool();
@@ -867,18 +867,18 @@ export async function main(opts: MainOptions = {}): Promise<number> {
         config = loadConfig(env);
       } catch (err) {
         console.error(
-          err instanceof ConfigError ? `Ошибка конфигурации: ${err.message}` : (err as Error).message,
+          err instanceof ConfigError ? `Configuration error: ${err.message}` : (err as Error).message,
         );
         return 1;
       }
       return runPublicationsRebuild(parsed, config, env);
     }
-    console.error(`Неизвестная команда: publications ${sub}`);
+    console.error(`Unknown command: publications ${sub}`);
     console.log(HELP_PUBLICATIONS);
     return 1;
   }
 
-  console.error(`Неизвестная команда: ${command}`);
+  console.error(`Unknown command: ${command}`);
   printGlobalHelp();
   return 1;
 }

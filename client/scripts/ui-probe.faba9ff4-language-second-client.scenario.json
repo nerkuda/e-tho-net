@@ -1,0 +1,39 @@
+{
+  "name": "faba9ff4-language-second-client",
+  "description": "Задача faba9ff4 п. 3: второй профиль/клиент получает «язык приложения» из профиля пользователя при следующем входе. Запускается на копии данных первого прогона (ui-probe.faba9ff4-language-migration.scenario.json), где профиль пользователя переведён в ru, а каталог ru у второго клиента есть. Язык ОС на стенде — en, локального кэша у нового профиля нет: до входа интерфейс английский, после входа обязан стать русским (профиль побеждает язык ОС), кэш нового клиента становится ru. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.faba9ff4-language-second-client.scenario.json --data-from .tmp/faba9ff4/stand/data --api-key <ключ первого прогона> --no-seed --out .tmp/faba9ff4/second",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "second-client-first-start",
+      "timeout": 15000,
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "second-client-no-cache",
+      "probe": "(async () => ({ cache: await window.etn.meta.get('lang'), ui: document.documentElement.lang }))()",
+      "expect": { "cache": null, "ui": "en" }
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    { "name": "networks-visible", "waitFor": "document.querySelectorAll('.network-item').length > 0" },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "profile-language-on-second-client",
+      "timeout": 25000,
+      "waitFor": "document.documentElement.lang === 'ru' && document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "second-client-state",
+      "probe": "(async () => { const settings = await window.etn.me.getLanguageSettings(); return { user: settings.language, networks: settings.networks.map((n) => ({ language: n.language, source: n.source })), cache: await window.etn.meta.get('lang'), tabs: Array.from(document.querySelectorAll('.toolbar button.view-tab')).map((b) => b.getAttribute('title')) }; })()",
+      "expect": {
+        "user": "ru",
+        "networks": [{ "language": "ru", "source": "user" }],
+        "cache": "ru",
+        "tabs": ["Карта мыслей", "Структуры мыслей", "Дневник", "Публикации", "События"]
+      }
+    }
+  ]
+}
