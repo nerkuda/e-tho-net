@@ -184,6 +184,29 @@
 ;   * /ALLUSERS сохранён для тихого автообновления службы: LocalSystem уже
 ;     элевирован, Inno включает административный режим без UAC и respawn.
 ;
+; Задача c4b68d78 (0.15.3) — экран компонентов на TNewCheckListBox:
+;   * ручная пиксельная раскладка (LayoutComponentsPage/FitComponentsPage с
+;     циклом скрытия подсказок) удалена: два пункта списка — сервер и клиент
+;     (checkbox, уровень 0), под каждым строки статуса и описания (group,
+;     уровень 1); необязательная строка области клиента — тоже group;
+;   * TNewCheckListBox переносит caption по словам, но ItemSubItem — одна
+;     строка без переноса; поэтому статусы и описания — group-строки, subitem
+;     всегда пуст;
+;   * список получает остаток высоты и прокручивается сам; нижний блок
+;     (ссылка на другие варианты установки, каталог данных, лицензия, причина
+;     неактивности «Далее») закреплён от низа поверхности:
+;     GComponentsList.Height := GServerAltLink.Top - ScaleY(8);
+;   * серые статусы/подсказки — ItemEnabled := False (как прежний clGray):
+;     средство доступности считает такую строку недоступной — принятый
+;     компромисс, потому что TNewCheckListBox не умеет менять цвет строки;
+;   * причина неактивности «Далее» — по-прежнему одна функция
+;     ComponentsReasonText (экран и журнал), на экране — с префиксом
+;     «Далее недоступна: »; FitLabel и пересчёт нижнего блока — после каждой
+;     смены текста;
+;   * Items.Add/AddSubItem/SubItems и запись ItemLevel/State запрещены: они
+;     рассинхронизируют FStateList (сторож — installer/tests/silent-codes.ps1);
+;     Items.Delete допустим только для последней строки области клиента.
+;
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
 ; Проверка silent-контракта и предпроверок: installer/tests/silent-codes.ps1.
 ; Проверка init и ключа: installer/tests/init-key.ps1.
@@ -211,8 +234,9 @@
 ;   /TESTSERVICEREALFILE, /TESTSERVICESTATUS, /TESTSERVICEIMAGE,
 ;   /TESTSERVICESTARTTYPE, /TESTSERVICEDELETEFLAG, /TESTUNINSTALLSERVICE,
 ;   /TESTHEALTHURL, /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK,
-;   /TESTADMINMODE, /TESTUSERONLYMODE, /TESTGUIMODE — только в тестовой
-;   сборке (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
+;   /TESTADMINMODE, /TESTUSERONLYMODE, /TESTGUIMODE, /TESTNOTICE — только в
+;   тестовой сборке (installer/tests/silent-codes.ps1, init-key.ps1,
+;   staged-app.ps1).
 ; ============================================================================
 
 #ifndef MyAppVersion
@@ -593,6 +617,16 @@ const
   CLIENT_CLOSE_WAIT_MS = 30000;
   CLIENT_KILL_WAIT_MS = 15000;
   CLIENT_POLL_STEP_MS = 250;
+  { Строки экрана компонентов (задача c4b68d78): два checkbox уровня 0 и
+    group-строки уровня 1 под ними. Строка области клиента (6) —
+    необязательная: удаляется и добавляется последней, индексы 0–5 стабильны. }
+  COMP_ITEM_SERVER = 0;
+  COMP_ITEM_SERVER_STATUS = 1;
+  COMP_ITEM_SERVER_DESC = 2;
+  COMP_ITEM_CLIENT = 3;
+  COMP_ITEM_CLIENT_STATUS = 4;
+  COMP_ITEM_CLIENT_DESC = 5;
+  COMP_ITEM_CLIENT_SCOPE = 6;
 
 var
   { Режим запуска }
@@ -623,8 +657,10 @@ var
   GTestGui: String;
   { /TESTLAYOUT=1 (ошибка 860def0d): снять раскладку экранов без окон — тест
     проверяет, что подписи не обрезаны (Height не «дельта» AdjustHeight) и не
-    налезают друг на друга. }
+    налезают друг на друга. /TESTNOTICE=<текст> (c4b68d78) подставляет
+    уведомление после возврата на экран компонентов для проверки его причины. }
   GTestLayout: String;
+  GTestNotice: String;
   { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
   GTestInit: String;
   GTestNodeExe: String;
@@ -854,23 +890,23 @@ var
   GLastServiceCode: Integer;
   GLastServiceError: String;
 
-  { Экран компонентов }
+  { Экран компонентов: список TNewCheckListBox (задача c4b68d78) и
+    фиксированный нижний блок. Два checkbox уровня 0 (сервер и клиент), под
+    каждым group-строки статуса и описания уровня 1 — TNewCheckListBox переносит
+    caption по словам, а subitem остаётся одной строкой. }
   GComponentsPage: TWizardPage;
-  GServerCheck: TNewCheckBox;
-  GServerStateLabel: TNewStaticText;
-  { Что такое сервер и что такое клиент, чем области установки клиента
-    отличаются (договорённость ТП; ошибка 860def0d, п.2). }
-  GServerHintLabel: TNewStaticText;
+  GComponentsList: TNewCheckListBox;
+  { Последняя строка списка (область клиента) сейчас существует: она
+    удаляется/добавляется, индексы 0–5 при этом не сдвигаются. }
+  GComponentsScopeRow: Boolean;
+  { Ссылка на другие варианты установки сервера — в нижнем блоке, всегда
+    видима (спека: «Другие варианты установки сервера (удалённый сервер,
+    Docker)»). }
   GServerAltLink: TNewLinkLabel;
-  GClientCheck: TNewCheckBox;
-  GClientStateLabel: TNewStaticText;
-  GClientHintLabel: TNewStaticText;
-  GScopeHintLabel: TNewStaticText;
-  { Область клиента: выбора в мастере нет (её задают фактические права
-    процесса), при обновлении показывается текст выбранной области (ea8e223a,
-    4a66b7a5; замечание приёмки 98ad5eec). }
-  GScopeFixedLabel: TNewStaticText;
+  { Каталог данных сервера — виден, когда сервер выбран или уже установлен. }
   GDataNoteLabel: TNewStaticText;
+  { Причина неактивности «Далее» — внизу экрана, с префиксом «Далее
+    недоступна: » (одна функция ComponentsReasonText — экран и журнал). }
   GReasonLabel: TNewStaticText;
   { Лицензия MIT (112642a4): чекбокс и ссылка на локальный текст; показываются
     только при первой установке (нет ни сервера, ни клиента). }
@@ -881,9 +917,8 @@ var
     закрытия клиента, ошибка удаления старого клиента): показывается вместо
     обычной причины и сбрасывается при изменении выбора. }
   GComponentsNotice: String;
-  { Экран компонентов построен и начальный выбор перенесён в контролы. До этого
-    обработчики Checked (Inno вызывает OnClick и при программной установке
-    Checked) не должны читать ещё не заполненные контролы (ошибка 860def0d). }
+  { Экран компонентов построен и начальный выбор перенесён в список. До этого
+    обработчики не должны читать ещё не заполненный список. }
   GComponentsReady: Boolean;
   GDowngradeWarned: Boolean;
 
@@ -6729,148 +6764,6 @@ begin
     GClientScopeUser := (not MachineScopeChecked) and (not GAdminMachineScope);
 end;
 
-{ Разложить контролы экрана компонентов сверху вниз по ФАКТИЧЕСКИМ высотам.
-  Вызывается после каждой смены подписей (UpdateComponentsState): высота
-  зависит от переноса текста, а раскладка, посчитанная один раз при создании,
-  при росте подписей давала наложение и «мелькающие остатки» (ошибка
-  860def0d, п.1). Скрытые контролы места не занимают; позиция им всё равно
-  назначается — при показе они встанут на своё место.
-
-  Возвращает нижнюю границу содержимого: по ней FitComponentsPage проверяет,
-  что страница уместилась (ошибка 5b9743da). }
-function LayoutComponentsPage: Integer;
-var
-  Y: Integer;
-begin
-  Result := 0;
-  if (GComponentsPage = nil) or (GServerCheck = nil) then Exit;
-  Y := 0;
-  GServerCheck.Top := Y;
-  Y := Y + GServerCheck.Height + ScaleY(2);
-
-  if GServerStateLabel <> nil then
-  begin
-    GServerStateLabel.Top := Y;
-    Y := Y + GServerStateLabel.Height + ScaleY(4);
-  end;
-  if GServerHintLabel <> nil then
-  begin
-    GServerHintLabel.Top := Y;
-    Y := Y + GServerHintLabel.Height + ScaleY(4);
-  end;
-  if GServerAltLink <> nil then
-  begin
-    GServerAltLink.Top := Y;
-    Y := Y + GServerAltLink.Height + ScaleY(6);
-  end;
-
-  if GClientCheck <> nil then
-  begin
-    GClientCheck.Top := Y;
-    Y := Y + GClientCheck.Height + ScaleY(2);
-  end;
-  if GClientStateLabel <> nil then
-  begin
-    GClientStateLabel.Top := Y;
-    Y := Y + GClientStateLabel.Height + ScaleY(2);
-  end;
-  if GClientHintLabel <> nil then
-  begin
-    GClientHintLabel.Top := Y;
-    Y := Y + GClientHintLabel.Height + ScaleY(4);
-  end;
-
-  { Область клиента: при обновлении — поясняющий текст (ea8e223a), в
-    административном режиме — постоянное объяснение; иначе (режим «только для
-    меня») — подсказка ниже. Радиокнопок нет: область задают фактические права
-    процесса. }
-  if GScopeFixedLabel <> nil then
-  begin
-    GScopeFixedLabel.Top := Y;
-    if GScopeFixedLabel.Visible then
-      Y := Y + GScopeFixedLabel.Height + ScaleY(4);
-  end;
-  if GScopeHintLabel <> nil then
-  begin
-    GScopeHintLabel.Top := Y;
-    if GScopeHintLabel.Visible then
-      Y := Y + GScopeHintLabel.Height + ScaleY(4);
-  end;
-
-  if GDataNoteLabel <> nil then
-  begin
-    GDataNoteLabel.Top := Y;
-    Y := Y + GDataNoteLabel.Height + ScaleY(4);
-  end;
-  if (GLicenseCheck <> nil) and GLicenseCheck.Visible then
-  begin
-    GLicenseCheck.Top := Y;
-    if GLicenseLink <> nil then
-      GLicenseLink.Top := Y + ScaleY(2);
-    Y := Y + GLicenseCheck.Height + ScaleY(6);
-  end;
-  if GReasonLabel <> nil then
-  begin
-    GReasonLabel.Top := Y;
-    Y := Y + GReasonLabel.Height;
-  end;
-  Result := Y;
-end;
-
-{ Страховка раскладки экрана компонентов (ошибка 5b9743da): содержимое обязано
-  уместиться на поверхности страницы. Иначе нижние подписи («Каталог данных» и
-  причина неактивности «Далее») уезжают за край и пользователь видит окно, где
-  «Далее» неактивна, а причины нет — это читается как зависание установщика.
-
-  Порядок уступок — от наименее важного к важному: сначала пояснение режима
-  (оно дублирует текст области клиента), затем «Каталог данных» (фиксирован и
-  повторяется в итоговой сводке), затем описания компонентов, затем ссылка на
-  другие варианты. Выбор компонентов, их состояние и причина неактивности
-  «Далее» не скрываются никогда.
-
-  Базовые состояния видимости восстанавливаются перед каждой укладкой: смена
-  выбора обязана вернуть подсказки, скрытые в прошлой, более тесной, раскладке. }
-procedure FitComponentsPage;
-var
-  Step: Integer;
-begin
-  if GComponentsPage = nil then Exit;
-  if GServerHintLabel <> nil then GServerHintLabel.Visible := True;
-  if GClientHintLabel <> nil then GClientHintLabel.Visible := True;
-  if GServerAltLink <> nil then GServerAltLink.Visible := True;
-  if GDataNoteLabel <> nil then GDataNoteLabel.Visible := True;
-  if GScopeFixedLabel <> nil then
-    GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
-  { Пояснение режима не дублирует текст фиксированной области (ошибка
-    5b9743da): при обновлении клиента оба говорят одно и то же, а вместе они не
-    помещаются на страницу. Показываем подробный текст области, подсказку — только
-    когда области-текста нет. В режиме «только для меня» подсказку режима
-    заменяет подсказка сервера (она объясняет и режим, и как поставить сервер),
-    поэтому при нехватке места уступает именно пояснение режима. }
-  if GScopeHintLabel <> nil then
-    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
-      (not ClientScopeFixed);
-  for Step := 1 to 5 do
-  begin
-    if LayoutComponentsPage <= GComponentsPage.SurfaceHeight then Exit;
-    if (GScopeHintLabel <> nil) and GScopeHintLabel.Visible then
-      GScopeHintLabel.Visible := False
-    else if (GDataNoteLabel <> nil) and GDataNoteLabel.Visible then
-      GDataNoteLabel.Visible := False
-    else if (GClientHintLabel <> nil) and GClientHintLabel.Visible then
-      GClientHintLabel.Visible := False
-    else if (GServerHintLabel <> nil) and GServerHintLabel.Visible then
-      GServerHintLabel.Visible := False
-    else if (GServerAltLink <> nil) and GServerAltLink.Visible then
-      GServerAltLink.Visible := False
-    else
-      Exit;
-  end;
-  { Последняя укладка — с уже скрытыми блоками: позиции должны совпасть с
-    фактической видимостью. }
-  LayoutComponentsPage;
-end;
-
 { Причина недоступности сервера в обычном (неэлевированном) запуске — одна
   строка для экрана компонентов и журнала (ошибка aa5af30c). Права из мастера
   не запрашиваются: чтобы получить сервер, пользователь закрывает установщик и
@@ -6910,104 +6803,205 @@ begin
     Result := '';
 end;
 
+{ ---------------------------------------------------------------------------
+  Экран компонентов: список TNewCheckListBox и фиксированный нижний блок
+  (задача c4b68d78, 0.15.3)
+  --------------------------------------------------------------------------- }
+
+{ Статус сервера: состояние машины и признак инициализации. }
+function ServerStatusRowText: String;
+begin
+  Result := ServerStateText + IfStr(InitStateText = '', '', ' ' + InitStateText);
+end;
+
+{ Описание сервера. В обычном (неэлевированном) запуске вместо описания —
+  причина недоступности сервера (ошибка aa5af30c): пользователь должен видеть,
+  что именно сделать, чтобы получить сервер. }
+function ServerDescriptionRowText: String;
+begin
+  if GUserOnlyMode then
+    Result := ServerUnavailableReason
+  else
+    Result := 'Сервер хранит графовые базы знаний на этом компьютере и отдаёт ' +
+      'к ним доступ по сети. Node.js входит в установку.';
+end;
+
+{ Описание клиента: что это, что понадобится при первом запуске и каталог
+  установки выбранной области (ADR 144bcdb0). Текст состояния клиента зависит
+  от выбора: обещание удалить старый NSIS-клиент — только когда клиент выбран. }
+function ClientDescriptionRowText: String;
+begin
+  if GClientSelected and (not GServerSelected) then
+    Result := 'Сервер не выбран: при первом запуске понадобится адрес ' +
+      'существующего сервера и ключ. Профили, серверы и ключи у каждого ' +
+      'пользователя свои.'
+  else
+    Result := 'Клиент — окно для работы с базами; нужны адрес сервера и ключ.';
+  if GClientSelected then
+    Result := Result + ' Каталог установки: ' + ClientInstallPath + '.';
+end;
+
+{ Строка области клиента. Выбора в мастере нет: область задают фактические
+  права процесса. При установленном клиенте — текст выбранной области
+  (ClientScopeText, ea8e223a/4a66b7a5), в административном режиме — постоянное
+  объяснение; в режиме «только для меня» — пояснение режима (п.2 ошибки
+  860def0d). Радиокнопки недостижимы в продуктовой сборке и удалены. }
+function ClientScopeRowText: String;
+begin
+  if ClientScopeFixed or GAdminMachineScope then
+    Result := ClientScopeText
+  else
+    Result := 'Режим «только для меня»: клиент ставится в ваш профиль, права ' +
+      'администратора не нужны. Чтобы установить сервер или клиент «для всех ' +
+      'пользователей», закройте установщик и запустите его от имени ' +
+      'администратора (правый клик → Запуск от имени администратора).';
+end;
+
+{ Нужна ли необязательная строка области клиента: текст области показывается
+  при установленном клиенте и в административном режиме, пояснение режима —
+  когда клиент выбран. }
+function ClientScopeRowNeeded: Boolean;
+begin
+  Result := ClientScopeFixed or GAdminMachineScope or GClientSelected;
+end;
+
+{ Обновить строки списка на месте. TNewCheckListBox.SetCaption сохраняет
+  Checked/ItemEnabled (внутри Items[Index] := ...), но сбрасывает ItemIndex и
+  прокрутку — сохраняем и восстанавливаем их через LB_GETTOPINDEX ($018E) и
+  LB_SETTOPINDEX ($0197). Список не пересоздаётся: спека требует, чтобы он
+  сохранял прокрутку и выделение при смене выбора.
+
+  Строки статусов и описаний — group уровня 1 и серые: ItemEnabled := False.
+  Это единственный способ сделать их серыми в TNewCheckListBox; средство
+  доступности считает такую строку недоступной — принятый компромисс.
+
+  Items.Add/AddSubItem и запись ItemLevel/State запрещены: они рассинхронизируют
+  FStateList (сторож в silent-codes.ps1). Items.Delete допустим только для
+  последней строки области клиента — её состояние удаляется вместе с ней. }
+procedure SyncComponentsList;
+var
+  SavedIndex, SavedTop: Integer;
+begin
+  if GComponentsList = nil then Exit;
+  SavedIndex := GComponentsList.ItemIndex;
+  SavedTop := SendMessage(GComponentsList.Handle, $018E, 0, 0);
+
+  GComponentsList.ItemCaption[COMP_ITEM_SERVER] := ServerCheckCaption;
+  GComponentsList.ItemCaption[COMP_ITEM_SERVER_STATUS] := ServerStatusRowText;
+  GComponentsList.ItemCaption[COMP_ITEM_SERVER_DESC] := ServerDescriptionRowText;
+  GComponentsList.ItemCaption[COMP_ITEM_CLIENT] := ClientCheckCaption;
+  GComponentsList.ItemCaption[COMP_ITEM_CLIENT_STATUS] := ClientStateText;
+  GComponentsList.ItemCaption[COMP_ITEM_CLIENT_DESC] := ClientDescriptionRowText;
+  { В режиме «только для меня» сервер недоступен: строка выключена, причина —
+    в описании сервера и в причине неактивности «Далее». }
+  GComponentsList.ItemEnabled[COMP_ITEM_SERVER] := not GUserOnlyMode;
+
+  if ClientScopeRowNeeded then
+  begin
+    if GComponentsScopeRow then
+      GComponentsList.ItemCaption[COMP_ITEM_CLIENT_SCOPE] := ClientScopeRowText
+    else
+    begin
+      GComponentsList.AddGroup(ClientScopeRowText, '', 1, nil);
+      GComponentsScopeRow := True;
+    end;
+    GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_SCOPE] := False;
+  end
+  else if GComponentsScopeRow then
+  begin
+    GComponentsList.Items.Delete(COMP_ITEM_CLIENT_SCOPE);
+    GComponentsScopeRow := False;
+  end;
+
+  { ItemCaption/Delete/AddGroup сбрасывают выделение и прокрутку — возвращаем
+    их; список при этом не пересоздаётся. }
+  if GComponentsList.ItemIndex <> SavedIndex then
+    GComponentsList.ItemIndex := SavedIndex;
+  SendMessage(GComponentsList.Handle, $0197, SavedTop, 0);
+  GComponentsList.Invalidate;
+end;
+
+{ Текст причины для экрана: с префиксом (спека, элемент интерфейса «Экран
+  установщика — выбор компонентов и лицензия»). В журнал по-прежнему идёт
+  ComponentsReasonText без префикса — по нему причина ищется в логе. }
+function ComponentsReasonLabelText: String;
+begin
+  Result := ComponentsReasonText;
+  if Result <> '' then
+    Result := 'Далее недоступна: ' + Result;
+end;
+
+{ Нижний блок закреплён от низа поверхности страницы: причина — в самом низу,
+  выше лицензия (когда нужна), выше каталог данных (когда показывается), выше
+  ссылка на другие варианты установки. Все элементы блока видимы всегда
+  (лицензия — по правилу LicensePromptNeeded): раньше нехватка места скрывала
+  подсказки, и причина неактивности «Далее» уезжала за нижний край (ошибка
+  5b9743da). Список получает остаток высоты и прокручивается сам — высоту
+  строк он считает по переносу caption, ручная раскладка не нужна. }
+procedure LayoutComponentsBottom;
+var
+  Y: Integer;
+begin
+  if (GComponentsPage = nil) or (GComponentsList = nil) then Exit;
+  Y := GComponentsPage.SurfaceHeight;
+  if GReasonLabel <> nil then
+  begin
+    GReasonLabel.Top := Y - GReasonLabel.Height;
+    Y := GReasonLabel.Top - ScaleY(6);
+  end;
+  if (GLicenseCheck <> nil) and GLicenseCheck.Visible then
+  begin
+    GLicenseCheck.Top := Y - GLicenseCheck.Height;
+    if GLicenseLink <> nil then
+      GLicenseLink.Top := GLicenseCheck.Top + ScaleY(2);
+    Y := GLicenseCheck.Top - ScaleY(4);
+  end;
+  if (GDataNoteLabel <> nil) and GDataNoteLabel.Visible then
+  begin
+    GDataNoteLabel.Top := Y - GDataNoteLabel.Height;
+    Y := GDataNoteLabel.Top - ScaleY(4);
+  end;
+  if GServerAltLink <> nil then
+  begin
+    GServerAltLink.Top := Y - GServerAltLink.Height;
+    Y := GServerAltLink.Top - ScaleY(8);
+  end;
+  GComponentsList.Top := 0;
+  GComponentsList.Left := 0;
+  GComponentsList.Width := GComponentsPage.SurfaceWidth;
+  if Y < 0 then Y := 0;
+  GComponentsList.Height := Y;
+end;
+
+
 procedure UpdateComponentsState(Sender: TObject);
 begin
   if GSilent or (not GComponentsReady) then Exit;
-  if (GServerCheck <> nil) and (GClientCheck <> nil) then
+  if GComponentsList <> nil then
     { Радиокнопок области нет: третий аргумент сохраняет текущую область
       (install.json при обновлении) и принудительно включает машинную только
       в административном режиме. }
-    ApplySelection(GServerCheck.Checked, GClientCheck.Checked,
+    ApplySelection(GComponentsList.Checked[COMP_ITEM_SERVER],
+      GComponentsList.Checked[COMP_ITEM_CLIENT],
       (not GClientScopeUser) or GAdminMachineScope);
   if GLicenseCheck <> nil then
     GLicenseAccepted := GLicenseCheck.Checked;
-  { Область клиента: выбора в мастере нет — её задают фактические права
-    процесса; при обновлении выбранная область выводится текстом (ea8e223a,
-    4a66b7a5). }
-  if GScopeFixedLabel <> nil then
-  begin
-    GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
-    if ClientScopeFixed or GAdminMachineScope then
-    begin
-      GScopeFixedLabel.Caption := ClientScopeText;
-      FitLabel(GScopeFixedLabel);
-    end;
-  end;
-  if GServerHintLabel <> nil then
-  begin
-    { В обычном запуске сервер недоступен не случайно: служба Windows требует
-      прав администратора, а их у процесса нет (ошибка aa5af30c). Говорим
-      ровно то, что нужно сделать; та же строка — причина в журнале и в
-      ComponentsReasonText. }
-    if GUserOnlyMode then
-      GServerHintLabel.Caption := ServerUnavailableReason
-    else
-      GServerHintLabel.Caption :=
-        'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
-        'доступ по сети. Node.js входит в установку.';
-    FitLabel(GServerHintLabel);
-  end;
-  if GServerCheck <> nil then
-  begin
-    GServerCheck.Caption := ServerCheckCaption;
-    GServerCheck.Enabled := not GUserOnlyMode;
-  end;
-  if GClientCheck <> nil then GClientCheck.Caption := ClientCheckCaption;
-  { Текст состояния клиента зависит от выбора: обещание удалить старый
-    NSIS-клиент — только когда клиент действительно выбран (замечание приёмки
-    112642a4). }
-  if GClientStateLabel <> nil then
-  begin
-    GClientStateLabel.Caption := ClientStateText;
-    FitLabel(GClientStateLabel);
-  end;
-  if GClientHintLabel <> nil then
-  begin
-    if GClientSelected and (not GServerSelected) then
-      GClientHintLabel.Caption :=
-        'Сервер не выбран: при первом запуске понадобится адрес существующего ' +
-        'сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.'
-    else
-      GClientHintLabel.Caption :=
-        'Клиент — окно для работы с базами; нужны адрес сервера и ключ.';
-    { Каталог установки виден до начала установки: область клиента меняет и
-      его, а отдельного экрана каталога нет (ADR 144bcdb0). }
-    if GClientSelected then
-      GClientHintLabel.Caption := GClientHintLabel.Caption + ' Каталог установки: ' +
-        ClientInstallPath + '.';
-    FitLabel(GClientHintLabel);
-  end;
-  { Чем «только для меня» отличается от «для всех пользователей» (п.2
-    ошибки 860def0d): в режиме «только для меня» подсказка объясняет сам режим
-    и как получить сервер; в административном режиме её роль играет
-    ClientScopeText, поэтому она скрыта. }
-  if GScopeHintLabel <> nil then
-  begin
-    if GUserOnlyMode then
-      GScopeHintLabel.Caption :=
-        'Режим «только для меня»: клиент ставится в ваш профиль, права ' +
-        'администратора не нужны. Чтобы установить сервер или клиент «для всех ' +
-        'пользователей», закройте установщик и запустите его от имени ' +
-        'администратора (правый клик → Запуск от имени администратора).'
-    else
-      GScopeHintLabel.Caption :=
-        '«Только для меня» — клиент в вашем профиле, права администратора не ' +
-        'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
-        'администратора.';
-    FitLabel(GScopeHintLabel);
-    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
-      (not ClientScopeFixed);
-  end;
+  { Ссылка на другие варианты установки видна всегда (спека). }
+  if GServerAltLink <> nil then GServerAltLink.Visible := True;
+  { Каталог данных нужен только тому, кто ставит сервер или уже его имеет:
+    в режиме «только клиент» строки нет (спека, экран 1). }
+  if GDataNoteLabel <> nil then
+    GDataNoteLabel.Visible := GServerSelected or (GServerState <> 'not-installed');
+  { Строки списка — после выбора: текст статуса и описания зависит от него. }
+  SyncComponentsList;
   if GReasonLabel <> nil then
   begin
-    GReasonLabel.Caption := ComponentsReasonText;
+    GReasonLabel.Caption := ComponentsReasonLabelText;
     FitLabel(GReasonLabel);
   end;
-  { Раскладка — после подписей и высот: иначе выросшая подпись наезжает на
-    следующие контролы (ошибка 860def0d, п.1). FitComponentsPage дополнительно
-    гарантирует, что содержимое (и в первую очередь причина неактивности
-    «Далее») поместилось на поверхность страницы (ошибка 5b9743da). }
-  FitComponentsPage;
+  { Нижний блок — после подписей: высота причины зависит от переноса текста,
+    список получает остаток высоты поверхности. }
+  LayoutComponentsBottom;
   if WizardForm <> nil then
   begin
     WizardForm.NextButton.Enabled :=
@@ -7032,110 +7026,72 @@ end;
 
 procedure CreateComponentsPage;
 begin
-  { До переноса начального выбора экран не готов: программная установка Checked
-    вызывает OnClick, и ранний обработчик снял бы выбор клиента. }
+  { До заполнения списка экран не готов: обработчик OnClickCheck не должен
+    читать ещё не созданные строки. }
   GComponentsReady := False;
   { Первый экран — приветствие и выбор компонентов (стандартные страницы
-    welcome/license отключены в [Setup]). Позиции контролов назначает
-    LayoutComponentsPage по фактическим высотам подписей (ошибка 860def0d,
-    п.1): текст зависит от состояния машины и выбора, поэтому статическая
-    раскладка при создании не годится. }
+    welcome/license отключены в [Setup]). Раскладку задаёт LayoutComponentsBottom:
+    список занимает остаток высоты и прокручивается сам, нижний блок закреплён
+    от низа поверхности (задача c4b68d78). }
   GComponentsPage := CreateCustomPage(wpWelcome, 'ETN — установка',
     'Добро пожаловать в ETN: сервер хранит графовые базы знаний на этом ' +
     'компьютере, клиент — окно для работы с ними.');
 
-  GServerCheck := TNewCheckBox.Create(GComponentsPage);
-  GServerCheck.Parent := GComponentsPage.Surface;
-  GServerCheck.Left := 0;
-  GServerCheck.Width := GComponentsPage.SurfaceWidth;
-  GServerCheck.Caption := ServerCheckCaption;
-  GServerCheck.OnClick := @ComponentsChanged;
+  { Список компонентов: два checkbox уровня 0 и group-строки статуса/описания
+    уровня 1. TNewCheckListBox переносит caption по словам, поэтому длинные
+    статусы и описания видны целиком; subitem не используется — он остаётся
+    одной строкой. Width задаётся ДО Add*: иначе Inno меряет строки по нулевой
+    ширине (высота переноса получается неверной). }
+  GComponentsList := TNewCheckListBox.Create(GComponentsPage);
+  GComponentsList.Parent := GComponentsPage.Surface;
+  GComponentsList.Left := 0;
+  GComponentsList.Top := 0;
+  GComponentsList.Width := GComponentsPage.SurfaceWidth;
+  GComponentsList.BorderStyle := bsNone;
+  GComponentsList.ShowLines := False;
+  GComponentsList.MinItemHeight := ScaleY(22);
+  GComponentsList.Offset := ScaleX(4);
+  GComponentsList.OnClickCheck := @ComponentsChanged;
+  { Начальный выбор вычислен в ApplyDefaultSelection (чистая машина — оба
+    компонента, частичная — только установленные); он передаётся в AddCheckBox.
+    Программная установка Checked событие OnClickCheck не поднимает, поэтому
+    обработчик не снимает только что выставленный выбор. }
+  GComponentsList.AddCheckBox(ServerCheckCaption, '', 0, GServerSelected,
+    not GUserOnlyMode, False, False, nil);
+  GComponentsList.AddGroup(ServerStatusRowText, '', 1, nil);
+  GComponentsList.AddGroup(ServerDescriptionRowText, '', 1, nil);
+  GComponentsList.AddCheckBox(ClientCheckCaption, '', 0, GClientSelected,
+    True, False, False, nil);
+  GComponentsList.AddGroup(ClientStateText, '', 1, nil);
+  GComponentsList.AddGroup(ClientDescriptionRowText, '', 1, nil);
+  { Необязательная последняя строка области клиента: добавляется и удаляется
+    только она, индексы 0–5 не сдвигаются. }
+  GComponentsScopeRow := ClientScopeRowNeeded;
+  if GComponentsScopeRow then
+    GComponentsList.AddGroup(ClientScopeRowText, '', 1, nil);
+  { Статусы и описания — серые, как прежний clGray: ItemEnabled := False.
+    Средство доступности считает такую строку недоступной — принятый
+    компромисс, потому что TNewCheckListBox не умеет менять цвет строки. }
+  GComponentsList.ItemEnabled[COMP_ITEM_SERVER_STATUS] := False;
+  GComponentsList.ItemEnabled[COMP_ITEM_SERVER_DESC] := False;
+  GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_STATUS] := False;
+  GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_DESC] := False;
+  if GComponentsScopeRow then
+    GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_SCOPE] := False;
 
-  GServerStateLabel := TNewStaticText.Create(GComponentsPage);
-  GServerStateLabel.Parent := GComponentsPage.Surface;
-  GServerStateLabel.Left := 20;
-  GServerStateLabel.AutoSize := False;
-  GServerStateLabel.WordWrap := True;
-  GServerStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GServerStateLabel.Font.Color := clGray;
-  GServerStateLabel.Caption := ServerStateText +
-    IfStr(InitStateText = '', '', ' ' + InitStateText);
-  FitLabel(GServerStateLabel);
-
-  { Что такое сервер (договорённость ТП; ошибка 860def0d, п.2). }
-  GServerHintLabel := TNewStaticText.Create(GComponentsPage);
-  GServerHintLabel.Parent := GComponentsPage.Surface;
-  GServerHintLabel.Left := 20;
-  GServerHintLabel.AutoSize := False;
-  GServerHintLabel.WordWrap := True;
-  GServerHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GServerHintLabel.Font.Color := clGray;
-  GServerHintLabel.Caption := '';
-  FitLabel(GServerHintLabel);
-
-  { Node.js входит в поставку; другие варианты — для опытных (спека, экран 1).
-    Подпись ссылки — в одну строку: у TNewLinkLabel нет переноса, и длинный
-    текст уходил за правый край страницы (ошибка 860def0d, п.1). }
+  { Ссылка на другие варианты установки сервера — в нижнем блоке, всегда
+    видима. Подпись в одну строку: у TNewLinkLabel нет переноса, длинный текст
+    уходил бы за правый край (ошибка 860def0d, п.1). }
   GServerAltLink := TNewLinkLabel.Create(GComponentsPage);
   GServerAltLink.Parent := GComponentsPage.Surface;
-  GServerAltLink.Left := 20;
-  GServerAltLink.Width := GComponentsPage.SurfaceWidth - 20;
+  GServerAltLink.Left := 0;
+  GServerAltLink.Width := GComponentsPage.SurfaceWidth;
   GServerAltLink.Caption := '<a href="server-options">Другие варианты установки ' +
     'сервера (удалённый сервер, Docker)</a>';
   GServerAltLink.OnLinkClick := @OpenServerOptions;
 
-  GClientCheck := TNewCheckBox.Create(GComponentsPage);
-  GClientCheck.Parent := GComponentsPage.Surface;
-  GClientCheck.Left := 0;
-  GClientCheck.Width := GComponentsPage.SurfaceWidth;
-  GClientCheck.Caption := ClientCheckCaption;
-  GClientCheck.OnClick := @ComponentsChanged;
-
-  GClientStateLabel := TNewStaticText.Create(GComponentsPage);
-  GClientStateLabel.Parent := GComponentsPage.Surface;
-  GClientStateLabel.Left := 20;
-  GClientStateLabel.AutoSize := False;
-  GClientStateLabel.WordWrap := True;
-  GClientStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GClientStateLabel.Font.Color := clGray;
-  GClientStateLabel.Caption := ClientStateText;
-  FitLabel(GClientStateLabel);
-
-  { Что такое клиент (договорённость ТП; ошибка 860def0d, п.2). }
-  GClientHintLabel := TNewStaticText.Create(GComponentsPage);
-  GClientHintLabel.Parent := GComponentsPage.Surface;
-  GClientHintLabel.Left := 20;
-  GClientHintLabel.AutoSize := False;
-  GClientHintLabel.WordWrap := True;
-  GClientHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GClientHintLabel.Font.Color := clGray;
-  GClientHintLabel.Caption := '';
-  FitLabel(GClientHintLabel);
-
-  { Область клиента: выбора в мастере нет — её задают фактические права
-    процесса (радиокнопки убраны как недостижимые в продуктовой сборке,
-    замечание верификатора 2dd215f7 п.4). При обновлении — текст выбранной
-    области (ea8e223a). }
-  GScopeFixedLabel := TNewStaticText.Create(GComponentsPage);
-  GScopeFixedLabel.Parent := GComponentsPage.Surface;
-  GScopeFixedLabel.Left := 20;
-  GScopeFixedLabel.AutoSize := False;
-  GScopeFixedLabel.WordWrap := True;
-  GScopeFixedLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GScopeFixedLabel.Caption := '';
-  GScopeFixedLabel.Visible := False;
-  FitLabel(GScopeFixedLabel);
-
-  GScopeHintLabel := TNewStaticText.Create(GComponentsPage);
-  GScopeHintLabel.Parent := GComponentsPage.Surface;
-  GScopeHintLabel.Left := 20;
-  GScopeHintLabel.AutoSize := False;
-  GScopeHintLabel.WordWrap := True;
-  GScopeHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GScopeHintLabel.Font.Color := clGray;
-  GScopeHintLabel.Caption := '';
-  FitLabel(GScopeHintLabel);
-
+  { Каталог данных сервера — в нижнем блоке; видимость задаёт
+    UpdateComponentsState (сервер выбран или уже установлен). }
   GDataNoteLabel := TNewStaticText.Create(GComponentsPage);
   GDataNoteLabel.Parent := GComponentsPage.Surface;
   GDataNoteLabel.Left := 0;
@@ -7164,6 +7120,8 @@ begin
   GLicenseLink.OnLinkClick := @OpenLocalLicense;
   GLicenseLink.Visible := LicensePromptNeeded;
 
+  { Причина неактивности «Далее» — внизу экрана, всегда видима: раньше она
+    уезжала за нижний край и «Далее» выглядела зависшей (ошибка 5b9743da). }
   GReasonLabel := TNewStaticText.Create(GComponentsPage);
   GReasonLabel.Parent := GComponentsPage.Surface;
   GReasonLabel.Left := 0;
@@ -7174,13 +7132,8 @@ begin
   GReasonLabel.Font.Color := clRed;
   FitLabel(GReasonLabel);
 
-  { Начальный выбор вычислен в ApplyDefaultSelection (чистая машина — оба
-    компонента, частичная — только установленные); здесь он лишь переносится
-    в контролы. Присваивание Checked в Inno вызывает OnClick, поэтому до этого
-    места экран считается неготовым: иначе первый же обработчик прочитал бы
-    ещё не заполненные чекбоксы и снял выбор клиента (найдено при 860def0d). }
-  GServerCheck.Checked := GServerSelected;
-  GClientCheck.Checked := GClientSelected;
+  { Начальный выбор уже передан в AddCheckBox; здесь заполняются тексты строк
+    и раскладывается нижний блок. }
   GLicenseAccepted := False;
   GComponentsReady := True;
   UpdateComponentsState(nil);
@@ -7610,6 +7563,7 @@ begin
   GTestParams := '';
   GTestGui := '';
   GTestLayout := '';
+  GTestNotice := '';
   GTestInit := '';
   GTestNodeExe := '';
   GTestLogin := '';
@@ -7727,6 +7681,7 @@ begin
   GTestParams := ParamValue('TESTPARAMS');
   GTestGui := ParamValue('TESTGUIMODE');
   GTestLayout := ParamValue('TESTLAYOUT');
+  GTestNotice := ParamValue('TESTNOTICE');
   GTestInit := ParamValue('TESTINIT');
   GTestNodeExe := ParamValue('TESTNODEEXE');
   GTestLogin := ParamValue('TESTLOGIN');
@@ -7799,6 +7754,11 @@ begin
   GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
   GTestInnoAdminMode := ParamValue('TESTINNOADMINMODE');
   GTestUninstallRoot := ParamValue('TESTUNINSTROOT');
+  { /TESTNOTICE=<текст>: уведомление после возврата на экран компонентов.
+    Проверяет, что причина неактивности «Далее» показывает уведомление и
+    помещается в нижний блок (задача c4b68d78). }
+  if GTestNotice <> '' then
+    GComponentsNotice := GTestNotice;
   { /TESTGUIMODE=1 имитирует GUI-запуск в silent-прогоне: silent-термин снимается
     ДО расчёта режима (GUserOnlyMode) и выбора компонентов — иначе контекст
     всегда привилегированный, а режим «только для меня» не смоделировать. }
@@ -8135,6 +8095,38 @@ begin
     ' height=' + IntToStr(P.SurfaceHeight));
 end;
 
+{ Список компонентов (задача c4b68d78): прямоугольник, число строк и по
+  строке на элемент. Высота строки — LB_GETITEMHEIGHT ($01A1): в Pascal Script
+  нет ни ItemRect, ни ItemHeight, ни TopIndex, а SendMessage есть. chars —
+  длина caption (перенос считается самим списком), sub_chars — длина subitem
+  (обязана быть 0: статусы/описания — group-строки, а не subitem). }
+procedure DumpList(const PageName: String; L: TNewCheckListBox);
+var
+  I, ItemH: Integer;
+begin
+  if L = nil then
+  begin
+    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' list missing');
+    Exit;
+  end;
+  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' list left=' + IntToStr(L.Left) +
+    ' top=' + IntToStr(L.Top) + ' width=' + IntToStr(L.Width) +
+    ' height=' + IntToStr(L.Height));
+  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' items count=' +
+    IntToStr(L.Items.Count));
+  for I := 0 to L.Items.Count - 1 do
+  begin
+    ItemH := SendMessage(L.Handle, $01A1, I, 0);
+    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' item idx=' + IntToStr(I) +
+      ' level=' + IntToStr(Ord(L.ItemLevel[I])) +
+      ' checked=' + Pick(L.Checked[I], '1', '0') +
+      ' enabled=' + Pick(L.ItemEnabled[I], '1', '0') +
+      ' height=' + IntToStr(ItemH) +
+      ' chars=' + IntToStr(Length(L.ItemCaption[I])) +
+      ' sub_chars=' + IntToStr(Length(L.ItemSubItem[I])));
+  end;
+end;
+
 procedure DumpLayout;
 begin
   LogLine('INFO', 'TESTLAYOUT state server_selected=' + Pick(GServerSelected, '1', '0') +
@@ -8142,21 +8134,16 @@ begin
     ' scope_user=' + Pick(GClientScopeUser, '1', '0') +
     ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
   { Кнопка «Далее» и причина её неактивности (ошибка 5b9743da): прогон обязан
-    проверить, что неактивная кнопка всегда объяснена, а причина видна. }
+    проверить, что неактивная кнопка всегда объяснена, а причина видна. Текст
+    причины — точный (T6), а не только длина: тест сверяет его с ожидаемым. }
   if WizardForm <> nil then
     LogLine('INFO', 'TESTLAYOUT next enabled=' +
       Pick(WizardForm.NextButton.Enabled, '1', '0') +
-      ' reason_chars=' + IntToStr(Length(ComponentsReasonText)));
+      ' reason_chars=' + IntToStr(Length(ComponentsReasonLabelText)) +
+      ' reason=' + ComponentsReasonLabelText);
   DumpPageSurface('components', GComponentsPage);
-  DumpControl('components', 'serverCheck', GServerCheck);
-  DumpText('components', 'serverState', GServerStateLabel);
-  DumpText('components', 'serverHint', GServerHintLabel);
+  DumpList('components', GComponentsList);
   DumpControl('components', 'serverAltLink', GServerAltLink);
-  DumpControl('components', 'clientCheck', GClientCheck);
-  DumpText('components', 'clientState', GClientStateLabel);
-  DumpText('components', 'clientHint', GClientHintLabel);
-  DumpText('components', 'scopeFixed', GScopeFixedLabel);
-  DumpText('components', 'scopeHint', GScopeHintLabel);
   DumpText('components', 'dataNote', GDataNoteLabel);
   DumpControl('components', 'license', GLicenseCheck);
   DumpText('components', 'reason', GReasonLabel);
@@ -8266,17 +8253,9 @@ begin
   if GSilent then Exit;
   if (GComponentsPage <> nil) and (CurPageID = GComponentsPage.ID) then
   begin
-    if GServerStateLabel <> nil then
-    begin
-      GServerStateLabel.Caption := ServerStateText +
-        IfStr(InitStateText = '', '', ' ' + InitStateText);
-      FitLabel(GServerStateLabel);
-    end;
-    if GClientStateLabel <> nil then
-    begin
-      GClientStateLabel.Caption := ClientStateText;
-      FitLabel(GClientStateLabel);
-    end;
+    { Статусы и описания в списке обновляет SyncComponentsList внутри
+      UpdateComponentsState: при возврате на экран (например, после ошибки
+      закрытия клиента) они не должны оставаться старыми. }
     UpdateComponentsState(nil);
     { Понижение версии: один раз на запуск — объяснить и оставить «Отмена». }
     if GBlockedDowngrade and (not GDowngradeWarned) then
@@ -8422,16 +8401,16 @@ begin
     end;
     if (not GServerSelected) and (not GClientSelected) then
     begin
-      if GReasonLabel <> nil then
-      begin
-        if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-          GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
-            'обновление требует прав администратора — закройте установщик и ' +
-            'запустите его от имени администратора (правый клик → Запуск от ' +
-            'имени администратора).'
-        else
-          GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
-      end;
+      { Причина уже есть в ComponentsReasonText; уведомление сохраняет её на
+        экране до смены выбора и не пишет подпись в обход нижнего блока. }
+      if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+        GComponentsNotice := 'Клиент установлен для всех пользователей: ' +
+          'обновление требует прав администратора — закройте установщик и ' +
+          'запустите его от имени администратора (правый клик → Запуск от ' +
+          'имени администратора).'
+      else
+        GComponentsNotice := 'Выберите хотя бы один компонент.';
+      UpdateComponentsState(nil);
       Result := False;
       Exit;
     end;
@@ -8441,10 +8420,10 @@ begin
     if GUserOnlyMode and
        (GServerSelected or (GClientSelected and (not GClientScopeUser))) then
     begin
-      if GReasonLabel <> nil then
-        GReasonLabel.Caption := 'Для установки компонентов, требующих прав ' +
-          'администратора, закройте установщик и запустите его от имени ' +
-          'администратора (правый клик → Запуск от имени администратора).';
+      GComponentsNotice := 'Для установки компонентов, требующих прав ' +
+        'администратора, закройте установщик и запустите его от имени ' +
+        'администратора (правый клик → Запуск от имени администратора).';
+      UpdateComponentsState(nil);
       LogLine('WARN', 'Экран компонентов: в режиме «только для меня» выбраны ' +
         'компоненты, требующие прав администратора');
       Result := False;
@@ -8452,8 +8431,9 @@ begin
     end;
     if LicensePromptNeeded and (not GLicenseAccepted) then
     begin
-      if GReasonLabel <> nil then
-        GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.';
+      { Причина лицензии уже в ComponentsReasonText; здесь только фокус на
+        чекбоксе, чтобы клавиатура и мышь вели к нему. }
+      UpdateComponentsState(nil);
       if (WizardForm <> nil) and (GLicenseCheck <> nil) then
         WizardForm.ActiveControl := GLicenseCheck;
       LogLine('WARN', 'Экран компонентов: не принята лицензия MIT');

@@ -1206,7 +1206,7 @@ Add-StaticResult -Name 'static:mode-by-process-rights' -Ok $modeByRightsOk `
 $serverReasonBody = Get-IssFunctionBody -Text $issText -Name 'ServerUnavailableReason'
 $serverReason = 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).'
 $serverReasonOk = (Test-IssCode -Text $serverReasonBody -Pattern ([regex]::Escape($serverReason))) -and
-    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState') -Pattern ([regex]::Escape('ServerUnavailableReason'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'SyncComponentsList') -Pattern ([regex]::Escape('ServerDescriptionRowText'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ComponentsReasonText') -Pattern ([regex]::Escape('ServerUnavailableReason')))
 Add-StaticResult -Name 'static:server-needs-admin-launch' -Ok $serverReasonOk `
     -Note 'причина недоступности сервера в обычном запуске — дословно «запустите от имени администратора» (экран и журнал)'
@@ -1218,7 +1218,7 @@ $userOnlyOk = (Test-IssCode -Text $initBody -Pattern ([regex]::Escape('GUserOnly
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplySelection') -Pattern ([regex]::Escape('ServerChecked and (not GUserOnlyMode)'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplyDefaultSelection') -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ApplyDefaultSelection') -Pattern ([regex]::Escape('GClientScopeUser := True'))) -and
-    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState') -Pattern ([regex]::Escape('GServerCheck.Enabled := not GUserOnlyMode'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'SyncComponentsList') -Pattern ([regex]::Escape('GComponentsList.ItemEnabled[COMP_ITEM_SERVER] := not GUserOnlyMode'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo') -Pattern ([regex]::Escape('if GUserOnlyMode then')))
 Add-StaticResult -Name 'static:user-only-mode' -Ok $userOnlyOk `
     -Note 'режим «только для меня»: сервер выключен, клиент в профиль, экран объясняет отказ и путь к серверу'
@@ -1336,10 +1336,15 @@ $rmOff = ($setupSection -match '(?m)^\s*CloseApplications\s*=\s*no\s*$') -and
     ($setupSection -match '(?m)^\s*RestartApplications\s*=\s*no\s*$')
 Add-StaticResult -Name 'static:restart-manager-off' -Ok $rmOff `
     -Note 'Restart Manager выключен: список ETN и «Игнорировать» недоступны'
-# Обновление: область клиента фиксирована — радиокнопки скрыты, область
-# выводится текстом (ea8e223a, 4a66b7a5; замечание приёмки 98ad5eec).
+# Обновление: область клиента фиксирована — радиокнопок нет, область выводится
+# текстом в необязательной последней строке списка (ea8e223a, 4a66b7a5;
+# c4b68d78: строка области — group уровня 1).
 $updateStateBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
-$scopeLabelOk = (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope'))) -and
+$scopeRowBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeRowNeeded'
+$scopeRowTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeRowText'
+$scopeLabelOk = (Test-IssCode -Text $scopeRowBody -Pattern ([regex]::Escape('ClientScopeFixed or GAdminMachineScope or GClientSelected'))) -and
+    (Test-IssCode -Text $scopeRowTextBody -Pattern ([regex]::Escape('ClientScopeText'))) -and
+    (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'SyncComponentsList') -Pattern ([regex]::Escape('GComponentsList.ItemCaption[COMP_ITEM_CLIENT_SCOPE] := ClientScopeRowText'))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('GScopeUserRadio')))) -and
     (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('GScopeMachineRadio'))))
 $scopeFixedBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeFixed'
@@ -1424,25 +1429,54 @@ Add-StaticResult -Name 'static:fitlabel-no-delta' -Ok $fitOk `
     -Note 'AdjustHeight вызывается без присваивания Height (дельта сжимала подпись до полосы)'
 
 $componentsBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
-$componentsTextOk = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Сервер хранит графовые базы знаний'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Клиент — окно для работы с базами'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('«Только для меня» — клиент в вашем профиле'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('«Для всех пользователей» — в Program Files')))
+$serverDescBody = Get-IssFunctionBody -Text $issText -Name 'ServerDescriptionRowText'
+$clientDescBody = Get-IssFunctionBody -Text $issText -Name 'ClientDescriptionRowText'
+$componentsTextOk = (Test-IssCode -Text $serverDescBody -Pattern ([regex]::Escape('Сервер хранит графовые базы знаний'))) -and
+    (Test-IssCode -Text $clientDescBody -Pattern ([regex]::Escape('Клиент — окно для работы с базами'))) -and
+    (Test-IssCode -Text $clientDescBody -Pattern ([regex]::Escape('Каталог установки: '))) -and
+    (Test-IssCode -Text $scopeRowTextBody -Pattern ([regex]::Escape('Режим «только для меня»: клиент ставится в ваш профиль'))) -and
+    (Test-IssCode -Text $scopeRowTextBody -Pattern ([regex]::Escape('ClientScopeText')))
 Add-StaticResult -Name 'static:components-descriptions' -Ok $componentsTextOk `
-    -Note 'что такое сервер и клиент и чем различаются области — подписи на экране компонентов'
+    -Note 'что такое сервер и клиент, каталог установки и чем различаются области — group-строки списка'
 
-$layoutBody = Get-IssFunctionBody -Text $issText -Name 'LayoutComponentsPage'
-$fitPageBody = Get-IssFunctionBody -Text $issText -Name 'FitComponentsPage'
-$layoutOk = (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GServerHintLabel.Height'))) -and
-    (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GClientHintLabel.Height'))) -and
-    (Test-IssCode -Text $layoutBody -Pattern ([regex]::Escape('GScopeHintLabel.Height'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('FitLabel(GScopeHintLabel)'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('FitComponentsPage'))) -and
-    (Test-IssCode -Text $fitPageBody -Pattern ([regex]::Escape('LayoutComponentsPage')))
-Add-StaticResult -Name 'static:components-relayout' -Ok $layoutOk `
-    -Note 'позиции — по фактическим высотам подписей после каждой смены текста, с проверкой «поместилось» (5b9743da)'
-
+# c4b68d78: ручной раскладки нет — экран на TNewCheckListBox, список получает
+# остаток высоты от фиксированного нижнего блока и прокручивается сам. Список
+# обновляется на месте (SetCaption сохраняет чек-состояние), а запрещённые
+# операции, рассинхронизирующие FStateList, сторожатся здесь же.
+$layoutBottomBody = Get-IssFunctionBody -Text $issText -Name 'LayoutComponentsBottom'
+$syncListBody = Get-IssFunctionBody -Text $issText -Name 'SyncComponentsList'
 $readyComponents = Get-IssFunctionBody -Text $issText -Name 'CreateComponentsPage'
+$listOk = (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('LayoutComponentsPage')) -IniComments)) -and
+    (-not (Test-IssCode -Text $issText -Pattern ([regex]::Escape('FitComponentsPage')) -IniComments)) -and
+    (Test-IssCode -Text $issText -Pattern ([regex]::Escape('TNewCheckListBox'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsList.AddCheckBox'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsList.AddGroup'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsList.OnClickCheck := @ComponentsChanged'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsList.ShowLines := False'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsList.BorderStyle := bsNone'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsList.MinItemHeight := ScaleY(22)'))) -and
+    (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsList.Offset := ScaleX(4)'))) -and
+    (Test-IssCode -Text $layoutBottomBody -Pattern ([regex]::Escape('GServerAltLink.Top'))) -and
+    (Test-IssCode -Text $layoutBottomBody -Pattern ([regex]::Escape('GComponentsList.Height := Y'))) -and
+    (Test-IssCode -Text $layoutBottomBody -Pattern ([regex]::Escape('Y := GServerAltLink.Top - ScaleY(8)'))) -and
+    (Test-IssCode -Text $syncListBody -Pattern ([regex]::Escape('$018E'))) -and
+    (Test-IssCode -Text $syncListBody -Pattern ([regex]::Escape('$0197'))) -and
+    (Test-IssCode -Text $syncListBody -Pattern ([regex]::Escape('GComponentsList.ItemIndex := SavedIndex')))
+Add-StaticResult -Name 'static:components-relayout' -Ok $listOk `
+    -Note 'TNewCheckListBox вместо ручной раскладки: список получает остаток высоты, прокрутка и выделение сохраняются'
+
+# Запрещённые операции TNewCheckListBox: Items.Add/AddSubItem/SubItems и запись
+# ItemLevel/State рассинхронизируют внутренний FStateList — строка состояния
+# перестаёт соответствовать пункту. Items.Delete разрешён только для последней
+# (необязательной) строки области клиента.
+$forbiddenListApi = @('.Items.Add', 'AddSubItem', 'SubItems', '.ItemLevel :=', '.State :=')
+$listApiBad = @()
+foreach ($api in $forbiddenListApi) {
+    if (Test-IssCode -Text $issText -Pattern ([regex]::Escape($api)) -IniComments) { $listApiBad += $api }
+}
+Add-StaticResult -Name 'static:components-list-api' -Ok ($listApiBad.Count -eq 0) `
+    -Note ('запрещённые операции списка отсутствуют: ' + $(if ($listApiBad.Count -eq 0) { 'да' } else { $listApiBad -join ', ' }))
+
 $readyOk = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('not GComponentsReady'))) -and
     (Test-IssCode -Text $readyComponents -Pattern ([regex]::Escape('GComponentsReady := True')))
 Add-StaticResult -Name 'static:components-init-guard' -Ok $readyOk `
@@ -1474,9 +1508,11 @@ $readyMemoBody = Get-IssFunctionBody -Text $issText -Name 'UpdateReadyMemo'
 # больше не предлагаем выбрать вариант.
 $serverReasonBody = Get-IssFunctionBody -Text $issText -Name 'ServerUnavailableReason'
 $reasonTextBody = Get-IssFunctionBody -Text $issText -Name 'ComponentsReasonText'
+$serverDescRowBody = Get-IssFunctionBody -Text $issText -Name 'ServerDescriptionRowText'
 $uacOk = (-not (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Windows запросит права администратора')))) -and
     (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
-    (Test-IssCode -Text $updateStateBody -Pattern ([regex]::Escape('GServerHintLabel.Caption := ServerUnavailableReason'))) -and
+    (Test-IssCode -Text $serverDescRowBody -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
+    (Test-IssCode -Text $serverDescRowBody -Pattern ([regex]::Escape('Result := ServerUnavailableReason'))) -and
     (Test-IssCode -Text $serverReasonBody -Pattern ([regex]::Escape('Запуск от имени администратора'))) -and
     (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('GUserOnlyMode and GServerRequested and (not GServerSelected)'))) -and
     (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('Result := ServerUnavailableReason'))) -and
@@ -1728,13 +1764,16 @@ if (-not (Test-Path -LiteralPath $script:SetupPath)) { throw "Тестовый �
 
 $silent = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
 
-# --- 860def0d: раскладка экранов без окон ------------------------------------
+# --- 860def0d / c4b68d78: экран компонентов без окон --------------------------
 # /TESTLAYOUT=1 строит все экраны тем же кодом, что и мастер, и пишет в журнал
-# фактические позиции и высоты контролов. Проверяется то, что видел пользователь:
-# подписи не сжаты «дельтой» AdjustHeight, видимые контролы не налезают друг на
-# друга, содержимое помещается на поверхность страницы, сводка не заходит на
-# полосу оформления; на чистой машине выбраны оба компонента.
-Write-Host '=== 860def0d: раскладка экранов (TESTLAYOUT) ==='
+# фактические позиции, высоты строк списка и точный текст причины неактивности
+# «Далее». Проверяется то, что видел пользователь: подписи не сжаты «дельтой»
+# AdjustHeight, видимые контролы не налезают друг на друга, причина на экране
+# и в границах страницы; экран компонентов — список TNewCheckListBox с
+# фиксированным нижним блоком: список получает остаток высоты, не пересекается
+# с нижним блоком, статусы и описания — group-строки уровня 1 с пустым subitem,
+# начальный выбор совпадает с состоянием машины (c4b68d78).
+Write-Host '=== c4b68d78: экран компонентов (TESTLAYOUT) ==='
 
 function Get-LayoutLines {
     $log = Get-LatestLog
@@ -1749,8 +1788,14 @@ function Read-Layout {
     $surfaces = @{}
     $controls = @{}
     foreach ($line in $Lines) {
+        # Строки списка компонентов разбирает Read-List; под regex контролов они
+        # попадать не должны (list — прямоугольник, item/items — строки списка).
+        if ($line -match '^\w+ (list|items?)\b') { continue }
+        if ($line -match '^next\b') { continue }
         if ($line -match '^(?<page>\w+) surface width=(?<w>\d+) height=(?<h>\d+)$') {
-            $surfaces[$Matches['page']] = [int]$Matches['h']
+            $surfaces[$Matches['page']] = [pscustomobject]@{
+                Width = [int]$Matches['w']; Height = [int]$Matches['h']
+            }
             continue
         }
         if ($line -match '^(?<page>\w+) (?<name>\w+) left=(?<l>\d+) top=(?<t>\d+) width=(?<w>\d+) height=(?<h>\d+) visible=(?<v>[01])(?: chars=(?<c>\d+))?$') {
@@ -1769,6 +1814,37 @@ function Read-Layout {
     return [pscustomobject]@{ Surfaces = $surfaces; Controls = $controls }
 }
 
+# Список компонентов: прямоугольник, объявленное число строк и строки с
+# фактическими level/checked/enabled/height/chars (height — LB_GETITEMHEIGHT).
+function Read-List {
+    param([string[]]$Lines, [string]$Page = 'components')
+    $rect = $null
+    $count = -1
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($line in $Lines) {
+        if ($line -match ('^' + [regex]::Escape($Page) + ' list left=(?<l>\d+) top=(?<t>\d+) width=(?<w>\d+) height=(?<h>\d+)$')) {
+            $rect = [pscustomobject]@{
+                Left = [int]$Matches['l']; Top = [int]$Matches['t']
+                Width = [int]$Matches['w']; Height = [int]$Matches['h']
+            }
+            continue
+        }
+        if ($line -match ('^' + [regex]::Escape($Page) + ' items count=(?<c>\d+)$')) {
+            $count = [int]$Matches['c']
+            continue
+        }
+        if ($line -match ('^' + [regex]::Escape($Page) + ' item idx=(?<i>\d+) level=(?<lv>\d+) checked=(?<c>[01]) enabled=(?<e>[01]) height=(?<h>\d+) chars=(?<ch>\d+) sub_chars=(?<sc>\d+)$')) {
+            $items.Add([pscustomobject]@{
+                Index = [int]$Matches['i']; Level = [int]$Matches['lv']
+                Checked = ($Matches['c'] -eq '1'); Enabled = ($Matches['e'] -eq '1')
+                Height = [int]$Matches['h']; Chars = [int]$Matches['ch']
+                SubChars = [int]$Matches['sc']
+            })
+        }
+    }
+    return [pscustomobject]@{ Rect = $rect; Count = $count; Items = $items }
+}
+
 function Add-LayoutChecks {
     param(
         [string]$Suffix,
@@ -1776,7 +1852,10 @@ function Add-LayoutChecks {
         [int]$ServerSelected = 1,
         [int]$ClientSelected = 1,
         [int]$NextEnabled = 1,
-        [int]$ScopeText = 1
+        [int]$ServerEnabled = 1,
+        [int]$ItemCount = 7,
+        [string]$ReasonText = '',
+        [int]$DataNoteVisible = -1
     )
     $lines = Get-LayoutLines
     Add-Result -Name "layout:${Suffix}:dump" -Expected 1 -Actual ([int]($lines.Count -gt 0)) `
@@ -1792,35 +1871,92 @@ function Add-LayoutChecks {
             -Actual ([int](($layout.Surfaces.ContainsKey($page)) -and ($layout.Controls.ContainsKey($page)))) `
             -Note "страница $page в снимке"
     }
-    # 0. Кнопка «Далее» и причина её неактивности (ошибка 5b9743da). Пользователь
-    #    видел неактивную кнопку без объяснения и принимал это за зависание,
-    #    поэтому прогон проверяет не только состояние кнопки, но и то, что у
-    #    неактивной кнопки причина есть, она непустая, не сжата и помещается на
-    #    страницу, а у активной причины нет.
     $components = @{}
     foreach ($ctl in $layout.Controls['components']) { $components[$ctl.Name] = $ctl }
-    $next = @($lines | Where-Object { $_ -like 'next enabled=*' })[0]
+
+    # 0. Список: слева сверху, во всю ширину поверхности, высота — остаток от
+    #    нижнего блока (GList.Height := AltLink.Top - ScaleY(8)).
+    $list = Read-List -Lines $lines
+    $listOk = ($null -ne $list.Rect) -and ($null -ne $layout.Surfaces['components']) -and
+        ($list.Rect.Left -eq 0) -and ($list.Rect.Top -eq 0) -and
+        ($list.Rect.Width -eq $layout.Surfaces['components'].Width) -and ($list.Rect.Height -gt 0)
+    Add-Result -Name "layout:${Suffix}:list" -Expected 1 -Actual ([int]$listOk) `
+        -Note ('список слева сверху во всю ширину, высота — остаток нижнего блока')
+
+    # 1. Строки списка: count, уровни, чек-состояние, enabled, перенос caption.
+    #    Статусы и описания — group уровня 1 с пустым subitem (sub_chars=0),
+    #    высота строки не меньше строки текста (перенос считается списком).
+    $itemProblems = @()
+    if ($list.Count -ne $ItemCount) { $itemProblems += "count=$($list.Count) (ожидалось $ItemCount)" }
+    if ($list.Items.Count -ne $ItemCount) { $itemProblems += "строк=$($list.Items.Count)" }
+    $expectLevel = @{ 0 = 0; 1 = 1; 2 = 1; 3 = 0; 4 = 1; 5 = 1; 6 = 1 }
+    $expectChecked = @{ 0 = $ServerSelected; 1 = 0; 2 = 0; 3 = $ClientSelected; 4 = 0; 5 = 0; 6 = 0 }
+    $expectEnabled = @{ 0 = $ServerEnabled; 1 = 0; 2 = 0; 3 = 1; 4 = 0; 5 = 0; 6 = 0 }
+    foreach ($item in $list.Items) {
+        $i = $item.Index
+        if ($expectLevel.ContainsKey($i) -and ($item.Level -ne $expectLevel[$i])) {
+            $itemProblems += "idx=$i level=$($item.Level)"
+        }
+        if ($expectChecked.ContainsKey($i) -and (([int]$item.Checked) -ne $expectChecked[$i])) {
+            $itemProblems += "idx=$i checked=$([int]$item.Checked)"
+        }
+        if ($expectEnabled.ContainsKey($i) -and (([int]$item.Enabled) -ne $expectEnabled[$i])) {
+            $itemProblems += "idx=$i enabled=$([int]$item.Enabled)"
+        }
+        if ($item.SubChars -ne 0) { $itemProblems += "idx=$i sub_chars=$($item.SubChars)" }
+        if (($item.Chars -gt 0) -and ($item.Height -lt 15)) {
+            $itemProblems += "idx=$i height=$($item.Height) при chars=$($item.Chars)"
+        }
+    }
+    Add-Result -Name "layout:${Suffix}:list-items" -Expected 1 -Actual ([int]($itemProblems.Count -eq 0)) `
+        -Note ($itemProblems -join ', ')
+
+    # 2. Список не пересекается с нижним блоком: его низ не ниже верха первого
+    #    видимого элемента блока (ссылка, каталог данных, лицензия, причина).
+    $bottomTop = $null
+    foreach ($name in @('serverAltLink', 'dataNote', 'license', 'reason')) {
+        $ctl = $components[$name]
+        if ($ctl -and $ctl.Visible -and ($ctl.Height -gt 0)) {
+            if (($null -eq $bottomTop) -or ($ctl.Top -lt $bottomTop)) { $bottomTop = $ctl.Top }
+        }
+    }
+    $clearOk = ($null -ne $list.Rect) -and ($null -ne $bottomTop) -and
+        (($list.Rect.Top + $list.Rect.Height) -le $bottomTop)
+    Add-Result -Name "layout:${Suffix}:list-clear" -Expected 1 -Actual ([int]$clearOk) `
+        -Note ('низ списка ' + $(if ($list.Rect) { $list.Rect.Top + $list.Rect.Height } else { '?' }) +
+            ' ≤ верх нижнего блока ' + $(if ($null -ne $bottomTop) { $bottomTop } else { '?' }))
+
+    # 3. Кнопка «Далее», причина её неактивности и её ТОЧНЫЙ текст (T6). Неактивная
+    #    кнопка обязана быть объяснена: причина есть, непустая, не сжата,
+    #    помещается на страницу и совпадает с ожидаемой дословно.
+    $next = @($lines | Where-Object { $_ -like 'next *' })[0]
     $reasonChars = -1
     if ($next -match 'reason_chars=(?<c>\d+)') { $reasonChars = [int]$Matches['c'] }
     $nextActual = -1
     if ($next -match 'enabled=(?<v>[01])') { $nextActual = [int]$Matches['v'] }
+    $reasonDisplay = ''
+    if ($next -match 'reason=(?<t>.*)$') { $reasonDisplay = $Matches['t'] }
     Add-Result -Name "layout:${Suffix}:next-enabled" -Expected $NextEnabled -Actual $nextActual -Note $next
     $reason = $components['reason']
     if ($NextEnabled -eq 0) {
         $fitsPage = $reason -and $layout.Surfaces.ContainsKey('components') -and
-            (($reason.Top + $reason.Height) -le $layout.Surfaces['components'])
+            (($reason.Top + $reason.Height) -le $layout.Surfaces['components'].Height)
         $reasonOk = ($reasonChars -gt 0) -and ($null -ne $reason) -and $reason.Visible -and
             ($reason.Chars -gt 0) -and ($reason.Chars -eq $reasonChars) -and
             ($reason.Height -ge 15) -and $fitsPage
         Add-Result -Name "layout:${Suffix}:reason-visible" -Expected 1 -Actual ([int]$reasonOk) `
             -Note ('причина неактивной «Далее» на экране и в границах страницы: chars=' + $reasonChars)
+        $textOk = ($ReasonText -ne '') -and ($reasonDisplay -eq $ReasonText)
+        Add-Result -Name "layout:${Suffix}:reason-text" -Expected 1 -Actual ([int]$textOk) `
+            -Note ('ожидалось: ' + $ReasonText + '; получено: ' + $reasonDisplay)
     }
     else {
-        $reasonOk = ($reasonChars -eq 0) -and (($null -eq $reason) -or ($reason.Chars -eq 0))
+        $reasonOk = ($reasonChars -eq 0) -and ($reasonDisplay -eq '') -and
+            (($null -eq $reason) -or ($reason.Chars -eq 0))
         Add-Result -Name "layout:${Suffix}:reason-empty" -Expected 1 -Actual ([int]$reasonOk) `
             -Note ('активная «Далее» причины не показывает: chars=' + $reasonChars)
     }
-    # 1. Подпись с непустым текстом не сжата: высота не меньше строки. Высота 0
+    # 4. Подпись с непустым текстом не сжата: высота не меньше строки. Высота 0
     #    допустима только для пустой подписи (chars=0).
     $bad = @()
     foreach ($page in $layout.Controls.Keys) {
@@ -1833,7 +1969,7 @@ function Add-LayoutChecks {
     }
     Add-Result -Name "layout:${Suffix}:no-squeezed" -Expected 1 -Actual ([int]($bad.Count -eq 0)) `
         -Note ($bad -join ', ')
-    # 2. Видимые контролы с текстом не налезают друг на друга.
+    # 5. Видимые контролы с текстом не налезают друг на друга.
     $overlaps = @()
     foreach ($page in $layout.Controls.Keys) {
         $items = @($layout.Controls[$page] | Where-Object { $_.Visible -and $_.Height -gt 0 })
@@ -1848,7 +1984,7 @@ function Add-LayoutChecks {
     }
     Add-Result -Name "layout:${Suffix}:no-overlap" -Expected 1 -Actual ([int]($overlaps.Count -eq 0)) `
         -Note ($overlaps -join ', ')
-    # 3. Содержимое не выходит за поверхность страницы.
+    # 6. Содержимое не выходит за поверхность страницы.
     $overflows = @()
     foreach ($page in $layout.Controls.Keys) {
         if (-not $layout.Surfaces.ContainsKey($page)) { continue }
@@ -1856,30 +1992,46 @@ function Add-LayoutChecks {
         foreach ($ctl in @($layout.Controls[$page] | Where-Object { $_.Visible -and $_.Height -gt 0 })) {
             if (($ctl.Top + $ctl.Height) -gt $bottom) { $bottom = $ctl.Top + $ctl.Height }
         }
-        if ($bottom -gt $layout.Surfaces[$page]) {
-            $overflows += "$page bottom=$bottom > $($layout.Surfaces[$page])"
+        if ($bottom -gt $layout.Surfaces[$page].Height) {
+            $overflows += "$page bottom=$bottom > $($layout.Surfaces[$page].Height)"
         }
     }
     Add-Result -Name "layout:${Suffix}:content-fits" -Expected 1 -Actual ([int]($overflows.Count -eq 0)) `
         -Note ($overflows -join ', ')
-    # 4. Описания компонентов и области клиента действительно на экране. В
-    #    режиме обновления область выводится фиксированным текстом (scopeFixed),
-    #    отдельного пояснения режима нет — это не пропажа, а дедупликация
-    #    (ошибка 5b9743da). В тесном состоянии (5b9743da: «только для меня» +
-    #    старый клиент) пояснение режима уступает место причине неактивности
-    #    «Далее» — там оно дублирует подсказку сервера, поэтому ScopeText=0.
-    $scopeShown = (($components.ContainsKey('scopeFixed')) -and $components['scopeFixed'].Visible -and
-        ($components['scopeFixed'].Height -ge 15)) -or
-        (($components.ContainsKey('scopeHint')) -and $components['scopeHint'].Visible -and
-        ($components['scopeHint'].Height -ge 15))
-    $descriptions = $components.ContainsKey('serverHint') -and $components['serverHint'].Visible -and
-        ($components['serverHint'].Height -ge 15) -and
-        $components.ContainsKey('clientHint') -and $components['clientHint'].Visible -and
-        ($components['clientHint'].Height -ge 15) -and
-        (($ScopeText -eq 0) -or $scopeShown)
-    Add-Result -Name "layout:${Suffix}:descriptions" -Expected 1 -Actual ([int]$descriptions) `
-        -Note ('сервер, клиент и (если нужен) текст области клиента — видимые подписи с переносом; scope=' + $ScopeText)
-    # 5. Сводка и кнопки итогового экрана: от левого края FinishedLabel.
+    # 7. Статусы и описания действительно на экране: у сервера и клиента
+    #    непустые group-строки с переносом; необязательная строка области
+    #    клиента, когда она нужна, тоже непустая.
+    $descProblems = @()
+    foreach ($i in @(1, 2, 4, 5)) {
+        $item = @($list.Items | Where-Object { $_.Index -eq $i })[0]
+        if (-not $item) { $descProblems += "idx=$i нет строки"; continue }
+        if (($item.Chars -le 0) -or ($item.Height -lt 15)) {
+            $descProblems += "idx=$i chars=$($item.Chars) height=$($item.Height)"
+        }
+    }
+    if ($ItemCount -eq 7) {
+        $scope = @($list.Items | Where-Object { $_.Index -eq 6 })[0]
+        if (-not $scope -or ($scope.Chars -le 0) -or ($scope.Height -lt 15)) {
+            $descProblems += 'idx=6 строка области клиента пуста'
+        }
+    }
+    Add-Result -Name "layout:${Suffix}:descriptions" -Expected 1 -Actual ([int]($descProblems.Count -eq 0)) `
+        -Note ($descProblems -join ', ')
+    # 8. Нижний блок: лицензия видна ровно при запросе лицензии, каталог данных —
+    #    когда сервер выбран или установлен, причина всегда на экране.
+    $licenseState = @($lines | Where-Object { $_ -like 'state *' })[0]
+    $licensePrompt = [int]($licenseState -match 'license_prompt=1')
+    $licenseCtl = $components['license']
+    $licenseOk = ($licenseCtl -and ([int]$licenseCtl.Visible -eq $licensePrompt))
+    Add-Result -Name "layout:${Suffix}:license-visible" -Expected 1 -Actual ([int]$licenseOk) `
+        -Note ('лицензия видна ровно при license_prompt: ' + $licensePrompt)
+    $dataNote = $components['dataNote']
+    $expectedDataNote = $DataNoteVisible
+    if ($expectedDataNote -lt 0) { $expectedDataNote = $ServerSelected }
+    $dataNoteOk = ($null -ne $dataNote) -and ([int]$dataNote.Visible -eq $expectedDataNote)
+    Add-Result -Name "layout:${Suffix}:datanote" -Expected 1 -Actual ([int]$dataNoteOk) `
+        -Note ('каталог данных: ожидалось ' + $expectedDataNote + ', видим=' + $(if ($dataNote) { [int]$dataNote.Visible } else { '?' }))
+    # 9. Сводка и кнопки итогового экрана: от левого края FinishedLabel.
     $finished = @{}
     foreach ($ctl in $layout.Controls['finished']) { $finished[$ctl.Name] = $ctl }
     $anchored = $finished.ContainsKey('label') -and $finished.ContainsKey('memo') -and
@@ -1891,44 +2043,50 @@ function Add-LayoutChecks {
 }
 
 Reset-State
-$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1'))
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTADMINMODE=1'))
 Add-Result -Name 'layout:exit' -Expected 0 -Actual $code -Note 'снимок раскладки без установки'
-# На чистой машине выбраны оба компонента, но «Далее» неактивна до принятия
-# лицензии MIT — причина при этом обязана быть на экране (5b9743da).
-Add-LayoutChecks -Suffix 'clean' -NextEnabled 0
+# Реальный первый экран административного запуска: оба компонента отмечены,
+# «Далее» неактивна до принятия лицензии MIT; причина обязана быть на экране.
+Add-LayoutChecks -Suffix 'clean' -NextEnabled 0 `
+    -ReasonText 'Далее недоступна: Примите условия лицензии MIT, чтобы продолжить.' `
+    -Note ' (административный первый экран)'
 
 # Длинное состояние клиента (найден старый NSIS-клиент) — проверка на реальном
 # сообщении, которое раньше выходило за край и обрезалось. Лицензия не принята,
 # поэтому «Далее» неактивна по той же причине.
 Reset-State
-$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTLEGACY=machine:0.14.1'))
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTADMINMODE=1',
+    '/TESTLEGACY=machine:0.14.1'))
 Add-Result -Name 'layout:legacy-exit' -Expected 0 -Actual $code -Note 'снимок с найденным старым клиентом'
-Add-LayoutChecks -Suffix 'legacy' -NextEnabled 0
+Add-LayoutChecks -Suffix 'legacy' -NextEnabled 0 `
+    -ReasonText 'Далее недоступна: Примите условия лицензии MIT, чтобы продолжить.'
 
-# Точное состояние из ошибки 5b9743da (машина пользователя): запуск «только для
-# меня», найден старый NSIS-клиент 0.14.1 «для всех», лицензия ещё не принята.
-# Здесь причина неактивности «Далее» уезжала за нижний край (на снимке HEAD:
-# top=337 при поверхности 309 — не видна), а в журнале не было ни строки о
-# кнопке: неактивная «Далее» выглядела зависшей. После исправления причина на
-# экране, «Далее» в журнале, а лишняя подсказка режима уступает место.
+# Состояние из ошибки 5b9743da (машина пользователя): запуск «только для меня»,
+# найден старый NSIS-клиент 0.14.1 «для всех», лицензия ещё не принята. Раньше
+# причина неактивности «Далее» уезжала за нижний край — теперь она в нижнем блоке
+# и видна, сервер выключен, а строка области клиента показывает режим.
 Reset-State
 $code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTUSERONLYMODE=1',
     '/TESTLEGACY=machine:0.14.1'))
 Add-Result -Name 'layout:user-legacy-exit' -Expected 0 -Actual $code `
     -Note 'снимок: «только для меня» + старый клиент 0.14.1 (состояние из ошибки)'
-Add-LayoutChecks -Suffix 'user-legacy' -ServerSelected 0 -ClientSelected 1 -NextEnabled 0 -ScopeText 0
+Add-LayoutChecks -Suffix 'user-legacy' -ServerSelected 0 -ClientSelected 1 `
+    -ServerEnabled 0 -NextEnabled 0 `
+    -ReasonText 'Далее недоступна: Примите условия лицензии MIT, чтобы продолжить.' `
+    -Note ' (сервер выключен, лицензия не принята)'
 
-# Ошибка 5b9743da: повторный запуск в режиме «только для меня» поверх уже
-# установленного клиента — это сценарий «Переустановить клиент ETN». «Далее»
-# обязана быть активной и не показывать причины, а содержимое — помещаться на
-# страницу (текст области клиента и подсказка режима не дублируются).
+# Повторный запуск в режиме «только для меня» поверх уже установленного клиента —
+# сценарий «Переустановить клиент ETN»: «Далее» активна и причины не показывает,
+# строка области клиента объясняет, куда ставится клиент.
 Reset-State
 New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $appDir 'ETN.exe'), '')
 $code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTUSERONLYMODE=1'))
 Add-Result -Name 'layout:client-user-exit' -Expected 0 -Actual $code `
     -Note 'снимок: клиент «только для меня» уже установлен'
-Add-LayoutChecks -Suffix 'client-user' -ServerSelected 0 -ClientSelected 1 -NextEnabled 1
+Add-LayoutChecks -Suffix 'client-user' -ServerSelected 0 -ClientSelected 1 `
+    -ServerEnabled 0 -NextEnabled 1 `
+    -Note ' (клиент уже установлен, лицензия не нужна)'
 
 # Клиент установлен «для всех пользователей», установщик запущен «только для
 # меня»: заменить машинную копию без прав администратора нельзя, выбор снят,
@@ -1941,7 +2099,46 @@ Write-InstallJson (New-InstallJson -Mode 'client' -ClientScope '"machine"')
 $code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTUSERONLYMODE=1'))
 Add-Result -Name 'layout:client-machine-exit' -Expected 0 -Actual $code `
     -Note 'снимок: клиент «для всех» в режиме «только для меня»'
-Add-LayoutChecks -Suffix 'client-machine' -ServerSelected 0 -ClientSelected 0 -NextEnabled 0
+Add-LayoutChecks -Suffix 'client-machine' -ServerSelected 0 -ClientSelected 0 `
+    -ServerEnabled 0 -NextEnabled 0 `
+    -ReasonText 'Далее недоступна: Клиент установлен для всех пользователей: нужны права администратора.'
+
+# Административный запуск поверх клиента «только для меня»: копия в профиле
+# остаётся, рядом ставится машинная; каталог данных скрыт (сервера нет), строка
+# области клиента говорит об этом прямо (2dd215f7, замечание верификатора п.1).
+Reset-State
+New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $appDir 'ETN.exe'), '')
+Write-InstallJson (New-InstallJson -Mode 'client' -ClientScope '"user"')
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTADMINMODE=1'))
+Add-Result -Name 'layout:admin-user-copy-exit' -Expected 0 -Actual $code `
+    -Note 'снимок: административный режим поверх клиента «только для меня»'
+Add-LayoutChecks -Suffix 'admin-user-copy' -ServerSelected 0 -ClientSelected 1 `
+    -ServerEnabled 1 -NextEnabled 1 `
+    -Note ' (клиент уже установлен в профиле, лицензия не нужна)'
+
+# Понижение версии: установлена более новая — «Далее» неактивна, причина называет
+# версию дословно; лицензия не запрашивается.
+Reset-State
+New-ServerFiles -Version '99.0.0'
+Write-InstallJson (New-InstallJson -ProductVersion '99.0.0')
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTADMINMODE=1'))
+Add-Result -Name 'layout:downgrade-exit' -Expected 0 -Actual $code `
+    -Note 'снимок: установлена более новая версия'
+Add-LayoutChecks -Suffix 'downgrade' -ServerSelected 0 -ClientSelected 0 `
+    -ServerEnabled 1 -NextEnabled 0 -DataNoteVisible 1 `
+    -ReasonText 'Далее недоступна: Установлена более новая версия 99.0.0 — понижение версии не поддерживается. Доступна только отмена.'
+
+# Уведомление после возврата на экран (ошибка закрытия клиента): причина
+# показывает его дословно и помещается в нижний блок даже при длинном тексте.
+Reset-State
+$noticeText = 'Установка не начата: клиент не закрылся и будет закрыт принудительно.'
+$code = Invoke-Setup -Arguments ($silent + @('/TESTLAYOUT=1', '/TESTADMINMODE=1',
+    ('"/TESTNOTICE=' + $noticeText + '"')))
+Add-Result -Name 'layout:notice-exit' -Expected 0 -Actual $code `
+    -Note 'снимок: уведомление после возврата на экран'
+Add-LayoutChecks -Suffix 'notice' -NextEnabled 0 `
+    -ReasonText ('Далее недоступна: ' + $noticeText)
 
 
 # --- 1. /VERYSILENT без /SERVERONLY -----------------------------------------
