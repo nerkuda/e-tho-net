@@ -3909,10 +3909,13 @@ Add-Result -Name 'update-ok:no-init' -Expected 1 -Actual ([int]$noInit) `
 
 # --- A1. a1ea1d40: бюджет health-check — фактическое время, не сумма Sleep ---
 # Ответ подставного сервера задержан на 2 с, бюджет 3000 мс, шаг 500 мс.
-# Старая арифметика (Elapsed прирастал только на Sleep) делала 6 попыток:
-# 6 × (2 + 0,5) ≈ 15 с только на первый опрос. Фактический бюджет — 2 попытки
-# (второй запрос заканчивается уже за бюджетом) ≈ 4,5 с + health прежней
-# версии после отката ≈ 2 с. Порог 12 с отсекает старую сумму пауз с запасом.
+# Старая арифметика (Elapsed прирастал только на Sleep) спала 6 раз и успевала
+# сделать 7 опросов: 7 × 2 с ответа + 6 × 0,5 с паузы ≈ 17 с только на первый
+# опрос; плюс health прежней версии после отката (2 с) и накладные расходы —
+# ~23 с. Фактический бюджет — 2 опроса (второй заканчивается уже за бюджетом)
+# ≈ 4,5 с + health прежней версии ≈ 2 с — 10–12 с с накладными. Порог 18 с
+# разделяет режимы с запасом в обе стороны; основной различитель — число
+# запросов (3 против 8).
 $null = New-UpdateFixture
 $null = New-BackupTestDatabase -Path (Join-Path $dataDir '_system.db') -Values @('alpha')
 $srv = Start-FakeHealthServer -Mode 'wrong-version' -DbPath (Join-Path $dataDir '_system.db') `
@@ -3928,13 +3931,13 @@ try {
 $budgetSeconds = [math]::Round($budgetWatch.Elapsed.TotalSeconds, 1)
 Add-Result -Name 'update-health-budget:code' -Expected 10 -Actual $code
 Add-Result -Name 'update-health-budget:actual-time' -Expected 1 `
-    -Actual ([int]($budgetSeconds -lt 12)) `
-    -Note ('установка ' + $budgetSeconds + ' с; сумма Sleep дала бы ~15 с только на первый опрос')
+    -Actual ([int]($budgetSeconds -lt 18)) `
+    -Note ('установка ' + $budgetSeconds + ' с; старая логика дала бы ~23 с')
 $budgetRequests = @((Get-FakeHealthRequests -Server $srv) -split "`n" |
     Where-Object { $_.Trim() -ne '' }).Count
 Add-Result -Name 'update-health-budget:requests' -Expected 1 `
     -Actual ([int]($budgetRequests -lt 6)) `
-    -Note ('запросов к health: ' + $budgetRequests + '; старая сумма пауз сделала бы 7')
+    -Note ('запросов к health: ' + $budgetRequests + '; старая логика сделала бы 8 (7 опросов + health прежней версии)')
 
 # --- A2. 1dddac77: своя служба жива, TCP-таблица недоступна -----------------
 # На build 28000 таблица слушателей не работает: без спецветки эксклюзивный
