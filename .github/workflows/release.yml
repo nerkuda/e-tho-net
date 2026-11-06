@@ -264,6 +264,11 @@ jobs:
     uses: ./.github/workflows/docker-image.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
+      # Код образа — коммит релиза, а не тег: при prerelease через
+      # workflow_dispatch тега ещё нет (его создаёт publish), и checkout по
+      # tag падал бы (ошибка dd38a306). github.sha — тот же коммит, на который
+      # publish ставит target_commitish.
+      source_ref: ${{ github.sha }}
 
   publish:
     needs: [version, windows-installer, linux-client, linux-server, docker-image]

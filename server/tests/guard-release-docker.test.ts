@@ -8,18 +8,25 @@
  *   * `.github/workflows/docker-image.yml` — переиспользуемая сборка:
  *     триггер `workflow_call` (вызов из релиза) и `workflow_dispatch`
  *     (доопубликовать образ для уже вышедшего тега), обязательный вход `tag`,
- *     checkout по тегу, пуш `ghcr.io/<repo>/etn-server:<tag>` из
- *     `server/Dockerfile`, права `contents: read` + `packages: write`.
+ *     необязательный вход `source_ref` у `workflow_call` — коммит кода
+ *     образа, пуш `ghcr.io/<repo>/etn-server:<tag>` из `server/Dockerfile`,
+ *     права `contents: read` + `packages: write`. Источник кода — явный вход:
+ *     `ref: ${{ inputs.source_ref || inputs.tag }}`. Различать вызов из
+ *     релиза по `github.event_name` нельзя: внутри reusable workflow это
+ *     событие ВЫЗЫВАЮЩЕГО workflow (`workflow_dispatch`/`push`), а не
+ *     `workflow_call` (ошибка dd38a306, итерация 2). Поэтому релиз передаёт
+ *     `source_ref: github.sha`, а ручной `workflow_dispatch` его не передаёт,
+ *     и `||` уводит checkout на `inputs.tag`.
  *     Настройки сверяются внутри своего шага (`checkout`, `login`,
  *     `build-push`): перенос `file:`/`push:`/`tags:` в чужой шаг сторож
  *     ловит. `if:` и `continue-on-error:` у джобы и у шага сборки запрещены —
  *     иначе обязательную сборку можно отключить при зелёном прогоне;
  *   * `.github/workflows/release.yml` — джоба `docker-image` зависит от
  *     `version` (упавшая валидация версии/тега не оставляет образ-сироту),
- *     вызывает этот workflow и передаёт тег; джоба `publish` перечисляет
- *     `docker-image` в `needs`, поэтому релиз без успешной публикации образа
- *     не выходит. Джоба `docker-image` не отключается (`if:`,
- *     `continue-on-error:` запрещены).
+ *     вызывает этот workflow и передаёт `tag` и `source_ref: github.sha`;
+ *     джоба `publish` перечисляет `docker-image` в `needs`, поэтому релиз
+ *     без успешной публикации образа не выходит. Джоба `docker-image` не
+ *     отключается (`if:`, `continue-on-error:` запрещены).
  *
  * Сторож статический: читает YAML как текст, без новых зависимостей.
  * Полноценный разбор не нужен — проверяются именованные ключи на своих
@@ -121,14 +128,19 @@ function triggersOf(text: string): Set<string> {
   return names;
 }
 
-/** Блок входа `tag` у триггера на отступе 6 (под `inputs:`). */
-function inputTagBlock(workflow: string, trigger: string): string[] | null {
+/** Блок входа `<name>` у триггера на отступе 6 (под `inputs:`). */
+function inputBlock(workflow: string, trigger: string, name: string): string[] | null {
   const lines = stripComments(workflow).split('\n');
   const triggerBlock = findBlock(lines, trigger, 2);
   if (!triggerBlock) return null;
   const inputs = findBlock(triggerBlock, 'inputs', 4);
   if (!inputs) return null;
-  return findBlock(inputs, 'tag', 6);
+  return findBlock(inputs, name, 6);
+}
+
+/** Блок входа `tag` у триггера. */
+function inputTagBlock(workflow: string, trigger: string): string[] | null {
+  return inputBlock(workflow, trigger, 'tag');
 }
 
 /** Экранирование строки для использования в регулярном выражении. */
@@ -190,6 +202,32 @@ function stepKey(step: readonly string[], key: string): boolean {
   return step.some((line) => new RegExp(`^\\s*(?:-\\s+)?${escapeRe(key)}:`).test(line));
 }
 
+/** Значение `key: <value>` в блоке шага (заголовок `- ...` или продолжение). */
+function stepValue(step: readonly string[], key: string): string | null {
+  const pattern = new RegExp(`^\\s*(?:-\\s+)?${escapeRe(key)}:\\s*(.+?)\\s*$`);
+  for (const line of step) {
+    const match = pattern.exec(line);
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
+/**
+ * Разобрать checkout-ref как выражение с запасным значением
+ * `<основной> || <запасной>`. Пробелы внутри выражения не значимы.
+ * `null` — выражение не такой формы.
+ */
+function parseRefFallback(
+  ref: string,
+): { primary: string; fallback: string } | null {
+  const compact = ref.replace(/\s+/g, '');
+  const body = /^\$\{\{(.+)\}\}$/.exec(compact)?.[1];
+  if (!body) return null;
+  const parts = /^(.+?)\|\|(.+)$/.exec(body);
+  if (!parts) return null;
+  return { primary: parts[1] ?? '', fallback: parts[2] ?? '' };
+}
+
 describe('guard: Docker-образ сервера — обязательная часть релиза', () => {
   it(`${DOCKER_WORKFLOW}: workflow_call и workflow_dispatch с обязательным входом tag`, () => {
     const text = readWorkflow(DOCKER_WORKFLOW, 'переиспользуемая сборка образа');
@@ -247,13 +285,10 @@ describe('guard: Docker-образ сервера — обязательная �
     const checkout = stepUsing(job, 'actions/checkout@v7');
     assert.ok(
       checkout !== null,
-      `${DOCKER_WORKFLOW}: нет шага actions/checkout@v7 — код по тегу не скачивается.`,
+      `${DOCKER_WORKFLOW}: нет шага actions/checkout@v7 — код для образа не скачивается.`,
     );
-    assert.ok(
-      checkout.some((line) => /^\s*ref:\s*\$\{\{\s*inputs\.tag\s*\}\}\s*$/.test(line)),
-      `${DOCKER_WORKFLOW}: в шаге checkout нет ref: \${{ inputs.tag }} — ` +
-        'образ собирается не из того кода.',
-    );
+    // Источник кода (после какого ref идёт checkout) проверяется отдельным
+    // тестом ниже: он зависит от триггера, а не от факта пуша образа.
 
     const login = stepUsing(job, 'docker/login-action@v4');
     assert.ok(
@@ -319,7 +354,78 @@ describe('guard: Docker-образ сервера — обязательная �
     assert.match(
       text,
       /^\s*contents:\s*read\s*$/m,
-      `${DOCKER_WORKFLOW}: нет права contents: read — checkout по тегу запрещён.`,
+      `${DOCKER_WORKFLOW}: нет права contents: read — чтение репозитория для checkout запрещено.`,
+    );
+  });
+
+  it(`${DOCKER_WORKFLOW}: источник кода — вход source_ref, иначе tag`, () => {
+    const text = stripComments(readWorkflow(DOCKER_WORKFLOW, 'переиспользуемая сборка образа'));
+    const job = singleJob(text);
+    const checkout = stepUsing(job, 'actions/checkout@v7');
+    assert.ok(
+      checkout !== null,
+      `${DOCKER_WORKFLOW}: нет шага actions/checkout@v7 — код для образа не скачивается.`,
+    );
+
+    const ref = stepValue(checkout, 'ref');
+    assert.ok(
+      ref !== null,
+      `${DOCKER_WORKFLOW}: в шаге checkout нет ref: — код берётся по умолчанию (последний ` +
+        'коммит ветки), а не из явного входа.',
+    );
+
+    const parsed = parseRefFallback(ref);
+    assert.ok(
+      parsed !== null,
+      `${DOCKER_WORKFLOW}: ref checkout должен быть выражением ` +
+        '${{ inputs.source_ref || inputs.tag }}, ' +
+        `сейчас: "${ref}". github.event_name внутри reusable workflow — событие ` +
+        'ВЫЗЫВАЮЩЕГО workflow, а не workflow_call: различать вызов из релиза по нему ' +
+        'нельзя, и prerelease до создания тега снова упадёт на checkout по inputs.tag.',
+    );
+
+    // release.yml передаёт source_ref = github.sha (коммит релиза): тег создаст
+    // publish позже, и github.sha — target_commitish будущего тега.
+    assert.equal(
+      parsed.primary,
+      'inputs.source_ref',
+      `${DOCKER_WORKFLOW}: checkout должен брать вход source_ref (коммит кода образа), ` +
+        `сейчас: "${parsed.primary}". Ручной workflow_dispatch source_ref не передаёт — ` +
+        'запасное значение уводит checkout на tag.',
+    );
+    assert.equal(
+      parsed.fallback,
+      'inputs.tag',
+      `${DOCKER_WORKFLOW}: запасное значение checkout — inputs.tag ` +
+        `(доопубликование образа существующего тега), сейчас: "${parsed.fallback}".`,
+    );
+
+    // Вход source_ref объявлен у workflow_call, необязательный, пустой по
+    // умолчанию: без него (workflow_dispatch) inputs.source_ref — пустая строка,
+    // и `||` уводит checkout на tag.
+    const sourceRef = inputBlock(text, 'workflow_call', 'source_ref');
+    assert.ok(
+      sourceRef !== null,
+      `${DOCKER_WORKFLOW}: у workflow_call нет входа source_ref — release.yml не сможет ` +
+        'передать коммит релиза, и checkout останется на теге, которого при prerelease ' +
+        'ещё нет (ошибка dd38a306).',
+    );
+    assert.match(
+      sourceRef.join('\n'),
+      /^\s+required:\s*false\s*$/m,
+      `${DOCKER_WORKFLOW}: вход source_ref должен быть необязательным (required: false): ` +
+        'ручной запуск релиза его передаёт, а другие вызовы не обязаны.',
+    );
+    assert.match(
+      sourceRef.join('\n'),
+      /^\s+type:\s*string\s*$/m,
+      `${DOCKER_WORKFLOW}: вход source_ref должен быть строкой (type: string).`,
+    );
+    assert.match(
+      sourceRef.join('\n'),
+      /^\s+default:\s*(''|"")\s*$/m,
+      `${DOCKER_WORKFLOW}: у входа source_ref должен быть пустой default (''): без него ` +
+        'вызов без source_ref не сможет уйти на inputs.tag.',
     );
   });
 
@@ -366,6 +472,16 @@ describe('guard: Docker-образ сервера — обязательная �
       `${RELEASE_WORKFLOW}: docker-image не передаёт тег релиза ` +
         '(with: tag: ${{ inputs.tag || github.ref_name }}) — ' +
         'ручной запуск и пуш тега собирали бы разные образы.',
+    );
+    // Источник кода образа — коммит релиза, а не тег: при prerelease через
+    // workflow_dispatch тега ещё нет (его создаёт publish), и checkout по tag
+    // падает (ошибка dd38a306).
+    assert.ok(
+      withBlock !== null &&
+        withBlock.some((line) => /^\s*source_ref:\s*\$\{\{\s*github\.sha\s*\}\}\s*$/.test(line)),
+      `${RELEASE_WORKFLOW}: docker-image не передаёт source_ref: github.sha — reusable ` +
+        'workflow не знает коммит релиза и откатится на inputs.tag: prerelease до ' +
+        'создания тега упадёт на checkout (ошибка dd38a306).',
     );
 
     const permissions = findBlock(job, 'permissions', 4);

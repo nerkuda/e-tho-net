@@ -6,11 +6,20 @@
 #
 # Workflow переиспользуемый (`workflow_call`) и запускается вручную
 # (`workflow_dispatch`) — так можно доопубликовать образ для уже вышедшего
-# тега, не пересобирая остальные ассеты. Вход `tag` — единственный источник
-# и кода (checkout по тегу), и тега образа. Тег `latest` намеренно не
-# ставится: образ адресуется только версией.
+# тега, не пересобирая остальные ассеты. Вход `tag` — тег образа.
 #
-# Права: `contents: read` — чтение репозитория по тегу; `packages: write` —
+# Источник кода — явный вход (ошибка dd38a306). `release.yml` передаёт
+# `source_ref: github.sha` — коммит релиза: при prerelease через
+# `workflow_dispatch` тега в этот момент ещё нет, его создаёт джоба
+# `publish` (и создаёт на `target_commitish: github.sha`, так что образ и
+# тег указывают на один коммит). Ручной запуск (`workflow_dispatch`) вход
+# `source_ref` не передаёт, и checkout идёт по `inputs.tag` —
+# доопубликование образа уже вышедшего тега. Различать эти случаи по
+# `github.event_name` нельзя: внутри reusable workflow это событие
+# ВЫЗЫВАЮЩЕГО workflow (`workflow_dispatch`/`push`), а не `workflow_call`.
+# Тег `latest` намеренно не ставится: образ адресуется только версией.
+#
+# Права: `contents: read` — чтение репозитория для checkout; `packages: write` —
 # пуш в GHCR от имени `github.actor` с `GITHUB_TOKEN` (вызывающая джоба
 # обязана передать те же права, иначе reusable workflow получит урезанный
 # набор).
@@ -24,6 +33,13 @@ on:
         description: 'Тег релиза с префиксом v (vX.Y.Z или vX.Y.Z-rc.1)'
         required: true
         type: string
+      source_ref:
+        # Коммит кода образа (релиз передаёт github.sha). Пусто — checkout
+        # идёт по tag: ручной workflow_dispatch этот вход не передаёт.
+        description: 'Коммит/ref кода для образа; пусто — берётся tag'
+        required: false
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       tag:
@@ -41,7 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          # release передаёт source_ref = github.sha (тег создаст publish);
+          # ручной dispatch source_ref не передаёт — checkout по tag.
+          ref: ${{ inputs.source_ref || inputs.tag }}
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
