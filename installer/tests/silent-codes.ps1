@@ -1038,6 +1038,14 @@ $nextBody = Get-IssFunctionBody -Text $issText -Name 'NextButtonClick'
 Add-StaticResult -Name 'static:port-suggestion' `
     -Ok (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('SuggestFreePort'))) `
     -Note 'подсказка свободного порта при занятом'
+$precheckBody = Get-IssFunctionBody -Text $issText -Name 'CheckServerEnvironment'
+$portBusyOk = (Test-IssCode -Text $precheckBody -Pattern ([regex]::Escape('GPortBusy := True'))) -and
+    (Test-IssCode -Text $precheckBody -Pattern ([regex]::Escape('GPortBusy := False'))) -and
+    (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('if GPortBusy then'))) -and
+    (-not (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape("Pos('занят'")))) -and
+    (Test-MessageTextInBody -Body $nextBody -Key 'EtnPortFreeSuggestion' -Text 'Рядом свободен порт')
+Add-StaticResult -Name 'static:port-busy-flag' -Ok $portBusyOk `
+    -Note 'подсказка свободного порта — по флагу CheckServerEnvironment, не по тексту причины (4dc117f5)'
 Add-StaticResult -Name 'static:ready-no-long-ops' `
     -Ok ((Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('wpReady'))) -and
          (-not ($nextBody -match [regex]::Escape('CloseRunningClient'))) -and

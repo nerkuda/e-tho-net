@@ -570,6 +570,32 @@ EtnNoticeNeedsAdmin=Для установки компонентов, требу
 EtnParamsInstalledNote=Сервер уже установлен: %1 → %2, режим: %3. При обновлении порт, доступ по локальной сети и каталог данных не меняются.
 EtnParamsUpdateNote=Служба ETN останавливается на время замены файлов, базы данных копируются в %1\backups, затем служба запускается снова.
 
+; Предпроверки окружения, экран параметров, администратор и silent-режим.
+EtnPortInvalid=некорректный порт "%1": допустимо число от %2 до %3
+EtnPortBusy=порт %1 занят другим приложением: укажите свободный порт в «Параметры сервера»
+EtnPortCheckFailed=не удалось проверить занятость порта %1: проверьте порт вручную
+EtnPortFreeSuggestion=Рядом свободен порт %1 — укажите его и нажмите «Далее»
+EtnDataDirOccupied=путь каталога данных занят файлом: %1 — освободите путь и повторите установку
+EtnDataDirNotWritable=каталог данных недоступен для записи: %1 (нужны права администратора)
+EtnDataDirNotWritablePlain=каталог данных недоступен для записи: %1
+EtnProgramDirNotWritable=каталог программы недоступен для записи: %1
+EtnNoSpaceData=недостаточно свободного места для каталога данных %1: свободно %2, нужно не менее %3
+EtnNoSpaceProgram=недостаточно свободного места для каталога программы %1: свободно %2, нужно не менее %3
+EtnLoginRequired=Логин обязателен и не должен содержать кавычек и переводов строк.
+EtnDisplayNameInvalid=Отображаемое имя не должно содержать кавычек и переводов строк.
+EtnSilentClientForbidden=/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена
+EtnSilentNotElevated=процесс не элевирован: нужны права администратора
+EtnSilentNoInstallRecord=нет %1 — сервер не устанавливался установщиком
+EtnSilentInstallJsonBroken=install.json повреждён: нет schema=1, product_version или mode
+EtnSilentAppMode=режим "%1": в 0.15.1 самообновление поддерживается только для службы; приложение обновляется вручную
+EtnSilentServerFilesMissing=файлы сервера не найдены в %1
+EtnSilentServiceNotRegistered=служба %1 не зарегистрирована
+EtnSilentDataDirMismatch=install.json указывает каталог данных %1, в 0.15.1 он фиксирован: %2
+EtnPreconditionDowngrade=понижение версии запрещено: установлена %1, установщик %2
+EtnPrivilegedRequiresVerysilent=/PRIVILEGEDPHASE допустим только с /VERYSILENT
+EtnPrivilegedNotElevated=привилегированная фаза запущена без прав администратора
+EtnPrivilegedNoComponents=не выбран ни один компонент: файл параметров пуст или повреждён
+
 ; Этапы прогресса (StatusLabel) и экраны ошибки/сводки.
 EtnStageBackup=Резервная копия баз данных…
 EtnStageSnapshot=Снимок отката…
@@ -974,6 +1000,10 @@ var
   GServerMode: String;
   GServerHost: String;
   GServerPort: String;
+  { Порт занят чужим приложением (ServerPortStatus = 1). Флаг ставит
+    CheckServerEnvironment на каждом вызове: по нему экран параметров
+    подсказывает свободный порт, не разбирая текст причины (задача 4dc117f5). }
+  GPortBusy: Boolean;
   GServerFirewall: Boolean;
   { netsh не создал правило брандмауэра: установка продолжается, но на
     финальном экране GUI показывается предупреждение (в silent — только
@@ -5929,31 +5959,30 @@ var
   ElevatedWrite: Boolean;
 begin
   Result := '';
+  GPortBusy := False;
   if not PortValid(GServerPort) then
   begin
-    Result := 'некорректный порт "' + GServerPort + '": допустимо число от ' +
-      IntToStr(MIN_PORT) + ' до ' + IntToStr(MAX_PORT);
+    Result := FmtMessage(CustomMessage('EtnPortInvalid'), [GServerPort,
+      IntToStr(MIN_PORT), IntToStr(MAX_PORT)]);
     Exit;
   end;
   Status := ServerPortStatus(GServerPort);
   if Status = 1 then
   begin
-    Result := 'порт ' + GServerPort + ' занят другим приложением: укажите ' +
-      'свободный порт в «Параметры сервера»';
+    GPortBusy := True;
+    Result := FmtMessage(CustomMessage('EtnPortBusy'), [GServerPort]);
     Exit;
   end;
   if Status = 2 then
   begin
-    Result := 'не удалось проверить занятость порта ' + GServerPort +
-      ': проверьте порт вручную';
+    Result := FmtMessage(CustomMessage('EtnPortCheckFailed'), [GServerPort]);
     Exit;
   end;
   { Каталог данных фиксирован; путь, занятый файлом, не станет каталогом ни
     под каким пользователем — это ошибка и для GUI. }
   if FileExists(GDataDir) and (not DirExists(GDataDir)) then
   begin
-    Result := 'путь каталога данных занят файлом: ' + GDataDir +
-      ' — освободите путь и повторите установку';
+    Result := FmtMessage(CustomMessage('EtnDataDirOccupied'), [GDataDir]);
     Exit;
   end;
   ElevatedWrite := (not ForGui) or GIsElevated;
@@ -5961,13 +5990,12 @@ begin
   begin
     if not DirWritable(GDataDir) then
     begin
-      Result := 'каталог данных недоступен для записи: ' + GDataDir +
-        ' (нужны права администратора)';
+      Result := FmtMessage(CustomMessage('EtnDataDirNotWritable'), [GDataDir]);
       Exit;
     end;
     if not DirWritable(GServerDir) then
     begin
-      Result := 'каталог программы недоступен для записи: ' + GServerDir;
+      Result := FmtMessage(CustomMessage('EtnProgramDirNotWritable'), [GServerDir]);
       Exit;
     end;
   end;
@@ -5975,16 +6003,14 @@ begin
     каталога данных и диск каталога программы (при разных дисках они разные). }
   if GServerSelected and (not FreeSpaceEnough(GDataDir, FreeBytes)) then
   begin
-    Result := 'недостаточно свободного места для каталога данных ' + GDataDir +
-      ': свободно ' + FormatMegabytes(FreeBytes) + ', нужно не менее ' +
-      FormatMegabytes(MinFreeSpaceBytes);
+    Result := FmtMessage(CustomMessage('EtnNoSpaceData'), [GDataDir,
+      FormatMegabytes(FreeBytes), FormatMegabytes(MinFreeSpaceBytes)]);
     Exit;
   end;
   if ElevatedWrite and (not FreeSpaceEnough(GServerDir, FreeBytes)) then
   begin
-    Result := 'недостаточно свободного места для каталога программы ' + GServerDir +
-      ': свободно ' + FormatMegabytes(FreeBytes) + ', нужно не менее ' +
-      FormatMegabytes(MinFreeSpaceBytes);
+    Result := FmtMessage(CustomMessage('EtnNoSpaceProgram'), [GServerDir,
+      FormatMegabytes(FreeBytes), FormatMegabytes(MinFreeSpaceBytes)]);
     Exit;
   end;
 end;
@@ -6180,32 +6206,32 @@ begin
   end;
 #endif
   if ParamExists('SERVERONLY') = False then
-    FailPrecondition('/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена');
+    FailPrecondition(CustomMessage('EtnSilentClientForbidden'));
   if not GIsElevated then
-    FailPrecondition('процесс не элевирован: нужны права администратора');
+    FailPrecondition(CustomMessage('EtnSilentNotElevated'));
   { Административный режим установки даёт элевированный процесс или /ALLUSERS:
     silent-прогон службы идёт с /ALLUSERS и уже элевирован, поэтому Inno не
     перезапускает мастер (ошибка aa5af30c). }
   if not GInstallJsonPresent then
-    FailPrecondition('нет ' + GInstallJsonPath + ' — сервер не устанавливался установщиком');
+    FailPrecondition(FmtMessage(CustomMessage('EtnSilentNoInstallRecord'), [GInstallJsonPath]));
   if not GInstallJsonValid then
-    FailPrecondition('install.json повреждён: нет schema=1, product_version или mode');
+    FailPrecondition(CustomMessage('EtnSilentInstallJsonBroken'));
   if GInstalledMode <> 'service' then
-    FailPrecondition('режим "' + GInstalledMode +
-      '": в 0.15.1 самообновление поддерживается только для службы; приложение обновляется вручную');
+    FailPrecondition(FmtMessage(CustomMessage('EtnSilentAppMode'), [GInstalledMode]));
   if not GServerFilesPresent then
-    FailPrecondition('файлы сервера не найдены в ' + GServerDir + '\server');
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnSilentServerFilesMissing'), [GServerDir + '\server']));
   if not ServiceRegistered then
-    FailPrecondition('служба ' + SERVICE_NAME + ' не зарегистрирована');
+    FailPrecondition(FmtMessage(CustomMessage('EtnSilentServiceNotRegistered'), [SERVICE_NAME]));
   DataDirFromJson := GInstalledDataDir;
   if (DataDirFromJson <> '') and (CompareText(DataDirFromJson, GDataDir) <> 0) then
-    FailPrecondition('install.json указывает каталог данных ' + DataDirFromJson +
-      ', в 0.15.1 он фиксирован: ' + GDataDir);
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnSilentDataDirMismatch'), [DataDirFromJson, GDataDir]));
   if GBlockedDowngrade then
-    FailPrecondition('понижение версии запрещено: установлена ' + GInstalledVersion +
-      ', установщик ' + GProductVersion);
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnPreconditionDowngrade'), [GInstalledVersion, GProductVersion]));
   if not SilentDataDirWritable then
-    FailPrecondition('каталог данных недоступен для записи: ' + GDataDir);
+    FailPrecondition(FmtMessage(CustomMessage('EtnDataDirNotWritablePlain'), [GDataDir]));
 
   GServerSelected := True;
   GClientSelected := False;
@@ -6235,21 +6261,21 @@ var
 begin
   LogLine('INFO', 'Привилегированная фаза: проверка предусловий');
   if not GSilent then
-    FailPrecondition('/PRIVILEGEDPHASE допустим только с /VERYSILENT');
+    FailPrecondition(CustomMessage('EtnPrivilegedRequiresVerysilent'));
   if not GIsElevated then
-    FailPrecondition('привилегированная фаза запущена без прав администратора');
+    FailPrecondition(CustomMessage('EtnPrivilegedNotElevated'));
   { Административный режим обеспечивает элевированный процесс (или /ALLUSERS);
     скриптового перезапуска нет (ошибка aa5af30c). }
   if (not GServerSelected) and (not GClientSelected) then
-    FailPrecondition('не выбран ни один компонент: файл параметров пуст или повреждён');
+    FailPrecondition(CustomMessage('EtnPrivilegedNoComponents'));
   if GBlockedDowngrade then
-    FailPrecondition('понижение версии запрещено: установлена ' + ServerVersionText +
-      ', установщик ' + GProductVersion);
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnPreconditionDowngrade'), [ServerVersionText, GProductVersion]));
   { Каталог программы нужен и клиенту «для всех»: файлы клиента ставятся
     в каталог программы. }
   if (GClientSelected and (not GClientScopeUser)) and (not GServerSelected) and
      (not DirWritable(GServerDir)) then
-    FailPrecondition('каталог программы недоступен для записи: ' + GServerDir);
+    FailPrecondition(FmtMessage(CustomMessage('EtnProgramDirNotWritable'), [GServerDir]));
   if GServerSelected then
   begin
     Reason := CheckServerEnvironment(False);
@@ -6400,8 +6426,10 @@ begin
       Result := FmtMessage(CustomMessage('EtnBackupLine'), [Backup]) + ' ' +
         CustomMessage('EtnBackupOldSuffix') + Suffix
     else
-      Result := FmtMessage(CustomMessage('EtnBackupLine'), [CustomMessage(
-        'EtnBackupNotCreated')]) + Suffix;
+    begin
+      Backup := CustomMessage('EtnBackupNotCreated');
+      Result := FmtMessage(CustomMessage('EtnBackupLine'), [Backup]) + Suffix;
+    end;
   end;
 end;
 
@@ -8267,11 +8295,11 @@ begin
         фокус на поле порта. Для занятого порта — подсказка свободного
         значения (поле не меняется без решения пользователя). }
       FreePort := '';
-      if Pos('занят', Reason) > 0 then
+      if GPortBusy then
         FreePort := SuggestFreePort(GServerPort);
       if FreePort <> '' then
-        Reason := Reason + '. Рядом свободен порт ' + FreePort +
-          ' — укажите его и нажмите «Далее»';
+        Reason := Reason + '. ' +
+          FmtMessage(CustomMessage('EtnPortFreeSuggestion'), [FreePort]);
       if GPortErrorLabel <> nil then
       begin
         GPortErrorLabel.Caption := Reason;
@@ -8295,14 +8323,14 @@ begin
     if not ValidAdminLogin(GAdminLogin) then
     begin
       if GAdminErrorLabel <> nil then
-        GAdminErrorLabel.Caption := 'Логин обязателен и не должен содержать кавычек и переводов строк.';
+        GAdminErrorLabel.Caption := CustomMessage('EtnLoginRequired');
       Result := False;
       Exit;
     end;
     if (GAdminDisplayName <> '') and (not ValidDisplayName(GAdminDisplayName)) then
     begin
       if GAdminErrorLabel <> nil then
-        GAdminErrorLabel.Caption := 'Отображаемое имя не должно содержать кавычек и переводов строк.';
+        GAdminErrorLabel.Caption := CustomMessage('EtnDisplayNameInvalid');
       Result := False;
       Exit;
     end;
