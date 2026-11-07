@@ -1031,11 +1031,14 @@ Add-StaticResult -Name 'static:legacy-uninstall-args' `
          (Test-IssCode -Text $legacyArgsBody -Pattern ([regex]::Escape("Pos('/S', UpperCase(Rest)) = 0"))) -and
          (Test-IssCode -Text $legacyArgsBody -Pattern ([regex]::Escape("Rest := Trim(Rest + ' /S')"))) -and
          (Test-IssCode -Text $legacyArgsBody -Pattern ([regex]::Escape("Result := Rest + ' _?='"))) -and
-         (-not ($legacyArgsBody -match [regex]::Escape('" _?=')))) `
-    -Note 'деинсталлятор старого клиента: /S и _?=<каталог> последним параметром без кавычек (NSIS 3.2.2)'
+         (-not ($legacyArgsBody -match [regex]::Escape('" _?='))) -and
+         (-not ($legacyArgsBody -match '/VERYSILENT|/SUPPRESSMSGBOXES|/NORESTART'))) `
+    -Note 'деинсталлятор старого клиента: /S и _?=<каталог> последним без кавычек; Inno-флаги /VERYSILENT и др. запрещены (грабли 25343551)'
 $legacyRunBody = Get-IssFunctionBody -Text $issText -Name 'RunLegacyUninstaller'
 Add-StaticResult -Name 'static:legacy-uninstall-waits' `
     -Ok ((Test-IssCode -Text $legacyRunBody -Pattern ([regex]::Escape('ewWaitUntilTerminated'))) -and
+         (Test-IssCode -Text $legacyRunBody -Pattern ([regex]::Escape("while (Err = '') and (WaitedMs < LEGACY_GONE_WAIT_MS)"))) -and
+         (Test-IssCode -Text $legacyRunBody -Pattern ([regex]::Escape('Sleep(LEGACY_GONE_STEP_MS)'))) -and
          (Test-IssCode -Text $legacyRunBody -Pattern ([regex]::Escape('LEGACY_GONE_WAIT_MS'))) -and
          (Test-IssCode -Text $legacyRunBody -Pattern ([regex]::Escape('RegKeyExists(GLegacyRoot, GLegacyKey)')))) `
     -Note 'установка ждёт деинсталлятор и исчезновение записи Uninstall (10 с, шаг 500 мс)'
@@ -1049,6 +1052,12 @@ Add-StaticResult -Name 'static:legacy-search-roots' `
     -Note 'явные корни: HKCU, HKCU+WOW6432Node, HKLM64, HKLM32; HKLM (дубль HKLM64) не используется'
 $legacyDetectBody = Get-IssFunctionBody -Text $issText -Name 'DetectLegacyClient'
 $legacyRemoveBody = Get-IssFunctionBody -Text $issText -Name 'RemoveLegacyBeforeInstall'
+# Запрещённые Inno-флаги проверяются и во всём пути удаления, а не только в
+# UninstallerArgs: деинсталлятору NSIS нужны /S + _?= (грабли 25343551).
+$legacyRemovalBodies = $legacyArgsBody + "`n" + $legacyRunBody + "`n" + $legacyRemoveBody
+Add-StaticResult -Name 'static:legacy-removal-no-inno-flags' `
+    -Ok (-not ($legacyRemovalBodies -match '/VERYSILENT|/SUPPRESSMSGBOXES|/NORESTART')) `
+    -Note 'в пути удаления старого клиента нет Inno-флагов /VERYSILENT/…: только /S и _?= (грабли 25343551)'
 Add-StaticResult -Name 'static:legacy-testmode-fuse' `
     -Ok ((Test-IssCode -Text $legacyDetectBody -Pattern ([regex]::Escape('if GTestMode then Exit'))) -and
          (Test-IssCode -Text $legacyRemoveBody -Pattern ([regex]::Escape('if GTestMode then Exit'))) -and
