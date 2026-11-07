@@ -3777,7 +3777,7 @@ $rollbackBody = Get-IssFunctionBody -Text $issText -Name 'RollbackAfterFailure'
 $rollbackHealthReason = (Test-MessageTextInBody -Body $rollbackBody `
         -Key 'EtnRollbackPrevNotResponding' -Text 'Прежняя версия не отвечает') -and
     (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('GHealthReason'))) -and
-    (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('ServiceStartManually')))
+    (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('EtnServiceStartManually')))
 Add-StaticResult -Name 'static:rollback-health-reason' -Ok $rollbackHealthReason `
     -Note 'неудача health прежней версии дописывается в GFailureReason, а не только WARN'
 Add-StaticResult -Name 'static:rollback-messages' `
@@ -4288,7 +4288,7 @@ Add-Result -Name 'update-db-error:reason' -Expected 1 `
 
 # --- F. Неудачный откат: код 10, путь к архиву и health в причине ------------
 # a1ea1d40: неудача health прежней версии после отката не маскируется —
-# дописывается в GFailureReason вместе с подсказкой ServiceStartManually.
+# дописывается в GFailureReason вместе с подсказкой EtnServiceStartManually.
 # Причина доступна только через reason-файл, поэтому запуск привилегированной
 # фазы с /PARAMS (как в тесте ремонта).
 $null = New-UpdateFixture
@@ -4320,7 +4320,7 @@ Add-Result -Name 'update-rollback-fail:health-reason' -Expected 1 `
         ($reasonRollbackText -match 'Прежняя версия не отвечает') -and
         ($reasonRollbackText -match 'health: HTTP-ошибка') -and
         ($reasonRollbackText -match 'etn-service\.exe start'))) `
-    -Note 'неудача health прежней версии (диагностика + ServiceStartManually) — в причине'
+    -Note 'неудача health прежней версии (диагностика + EtnServiceStartManually) — в причине'
 
 # --- G. Бэкап не удался: код 10, файлы не заменены, служба поднята ----------
 $null = New-UpdateFixture

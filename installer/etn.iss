@@ -447,12 +447,12 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 [CustomMessages]
 ; Новые пользовательские строки задачи 3acd9c3c попадают сразу сюда.
 ; Массовый перенос старых литералов в [CustomMessages] — задача 4dc117f5.
-BackupToolMissing=Инструмент резервного копирования баз данных не найден в поставке установщика.
-BackupToolNotStarted=Инструмент резервного копирования баз данных не запустился — проверьте node.exe поставки и журнал установки.
+EtnBackupToolMissing=Инструмент резервного копирования баз данных не найден в поставке установщика.
+EtnBackupToolNotStarted=Инструмент резервного копирования баз данных не запустился — проверьте node.exe поставки и журнал установки.
 ; 34f8e315: служба возвращена после отмены обновления, но не отвечает.
-ServiceStartManually=служба не запущена; запустите вручную (etn-service.exe start), журнал: %1
+EtnServiceStartManually=служба не запущена; запустите вручную (etn-service.exe start), журнал: %1
 ; 34f8e315: ручное снятие службы при отмене удаления — команды WinSW, без sc.
-UninstallServiceManual=Остановите и удалите службу ETN вручную: etn-service.exe stop, дождитесь status=Stopped, затем etn-service.exe uninstall — и повторите удаление. Файлы не удалены.
+EtnUninstallServiceManual=Остановите и удалите службу ETN вручную: etn-service.exe stop, дождитесь status=Stopped, затем etn-service.exe uninstall — и повторите удаление. Файлы не удалены.
 
 ; --- Задача 4dc117f5: UI-строки вынесены из [Code]. Конвенция:
 ; --- Etn<Область><Смысл>, PascalCase, только [A-Za-z0-9_], без точек;
@@ -4989,7 +4989,7 @@ begin
   try
     ExtractTemporaryFile(DB_TOOL_FILENAME);
   except
-    Reason := CustomMessage('BackupToolMissing');
+    Reason := CustomMessage('EtnBackupToolMissing');
     LogLine('ERROR', 'Бэкап БД: не удалось извлечь ' + DB_TOOL_FILENAME +
       ' из установщика: ' + GetExceptionMessage);
     Exit;
@@ -4997,7 +4997,7 @@ begin
   GDatabaseToolPath := ExpandConstant('{tmp}') + '\' + DB_TOOL_FILENAME;
   Result := FileExists(GDatabaseToolPath);
   if not Result then
-    Reason := CustomMessage('BackupToolMissing');
+    Reason := CustomMessage('EtnBackupToolMissing');
 end;
 
 { Значение из отчёта инструмента: строки key=value, разделитель — первый '='.
@@ -5160,7 +5160,7 @@ begin
     '" --data-dir "' + GDataDir + '"';
   if not RunDatabaseTool(Arguments, GServerDir + '\server', Code) then
   begin
-    GBackupReason := CustomMessage('BackupToolNotStarted');
+    GBackupReason := CustomMessage('EtnBackupToolNotStarted');
     Exit;
   end;
   ApplyDatabaseToolReport(ReportPath, Code, 'Бэкап БД');
@@ -5549,7 +5549,7 @@ begin
       это в причине, а не только WARN в журнале (a1ea1d40). }
     GFailureReason := GFailureReason + '. ' + FmtMessage(
       CustomMessage('EtnRollbackPrevNotResponding'), [
-        GHealthReason, FmtMessage(CustomMessage('ServiceStartManually'), [GLogPath])]);
+        GHealthReason, FmtMessage(CustomMessage('EtnServiceStartManually'), [GLogPath])]);
   end;
 end;
 
@@ -5654,7 +5654,7 @@ begin
         LogLine('WARN', 'Не удалось вернуть службу после неудачного бэкапа')
       else if not PreviousVersionResponsive then
         Reason := Reason + '; ' + FmtMessage(
-          CustomMessage('ServiceStartManually'), [GLogPath]);
+          CustomMessage('EtnServiceStartManually'), [GLogPath]);
       Result := EXIT_FAILED;
       Exit;
     end;
@@ -5666,7 +5666,7 @@ begin
       LogLine('WARN', 'Не удалось вернуть службу после неудачного снимка')
     else if not PreviousVersionResponsive then
       Reason := Reason + '; ' + FmtMessage(
-        CustomMessage('ServiceStartManually'), [GLogPath]);
+        CustomMessage('EtnServiceStartManually'), [GLogPath]);
     Result := EXIT_FAILED;
     Exit;
   end;
@@ -8881,7 +8881,7 @@ begin
     begin
       Log('ОШИБКА: удаление отменено — ' + Reason);
       SuppressibleMsgBox(
-        FmtMessage(CustomMessage('EtnUninstallCancelled'), [Reason, CustomMessage('UninstallServiceManual')]),
+        FmtMessage(CustomMessage('EtnUninstallCancelled'), [Reason, CustomMessage('EtnUninstallServiceManual')]),
         mbError, MB_OK, IDOK);
       Abort;
     end
