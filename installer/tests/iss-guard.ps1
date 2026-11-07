@@ -31,7 +31,10 @@
                              только под указанной директивой (продуктовая
                              ветка против TestMode-модели);
       Get-IssIfdefBody     — строки внутри `#ifdef <имя>` (проверка, что хук
-                             действительно под директивой, а не в комментарии).
+                             действительно под директивой, а не в комментарии);
+      Get-IssCustomMessage / Get-IssCustomMessageNames — значение сообщения
+                             [CustomMessages] по имени и список имён (включая
+                             дубликаты) — сторож выноса UI-строк.
 
     Самопроверка — Test-IssGuardSelfTest: возвращает объект
     { Ok = [bool]; Message = [string] } по встроенным образцам; вызывается
@@ -217,6 +220,88 @@ function Get-IssFunctionBodyWithoutIfdef {
     return ($result -join "`n")
 }
 
+# --- [CustomMessages] -------------------------------------------------------
+# Сообщения установщика читаются из ini-секции [CustomMessages]: только строки
+# «Имя=Значение», ';' в начале строки — комментарий, имя без точек (точка в
+# Inno — языковой префикс) проверяется отдельным сторожем. Продолжение строки
+# обратным слэшем в конце склеивается без разделителя — так же, как это делает
+# компилятор Inno. Значения здесь нужны сторожам, которые проверяют, что текст
+# прежнего литерала переехал в сообщение, а не потерялся.
+function Get-IssCustomMessageMap {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $map = [ordered]@{}
+    $inSection = $false
+    $pending = $null
+    $pendingValue = ''
+    foreach ($line in ($Text -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[([^\]]+)\]$') {
+            if ($null -ne $pending) { $map[$pending] = $pendingValue; $pending = $null }
+            $inSection = ($Matches[1] -ieq 'CustomMessages')
+            continue
+        }
+        if (-not $inSection) { continue }
+        if ($trimmed -eq '' -or $trimmed.StartsWith(';')) { continue }
+        $isContinuation = ($null -ne $pending) -and $pendingValue.EndsWith('\')
+        if ($isContinuation) {
+            $pendingValue = $pendingValue.Substring(0, $pendingValue.Length - 1) + $trimmed
+            continue
+        }
+        if ($null -ne $pending) { $map[$pending] = $pendingValue; $pending = $null }
+        $eq = $line.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $name = $line.Substring(0, $eq).Trim()
+        $value = $line.Substring($eq + 1)
+        if ($value.EndsWith('\')) {
+            $pending = $name
+            $pendingValue = $value
+        }
+        else {
+            $map[$name] = $value
+        }
+    }
+    if ($null -ne $pending) { $map[$pending] = $pendingValue }
+    return $map
+}
+
+function Get-IssCustomMessage {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    $map = Get-IssCustomMessageMap -Text $Text
+    if (-not $map.Contains($Name)) { return $null }
+    return [string]$map[$Name]
+}
+
+function Get-IssCustomMessageNames {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    # Имена собираются списком, без словаря: дубликат имени — ошибка компиляции
+    # Inno, и сторож должен её увидеть, а не схлопнуть в одно значение.
+    $names = New-Object System.Collections.Generic.List[string]
+    $inSection = $false
+    $continues = $false
+    foreach ($line in ($Text -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[([^\]]+)\]$') {
+            $inSection = ($Matches[1] -ieq 'CustomMessages')
+            $continues = $false
+            continue
+        }
+        if (-not $inSection) { continue }
+        if ($trimmed -eq '' -or $trimmed.StartsWith(';')) { continue }
+        if ($continues) {
+            $continues = $trimmed.EndsWith('\')
+            continue
+        }
+        $eq = $line.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $names.Add($line.Substring(0, $eq).Trim())
+        $continues = $line.Substring($eq + 1).EndsWith('\')
+    }
+    return @($names)
+}
+
 function Test-IssGuardSelfTest {
     $failures = New-Object System.Collections.Generic.List[string]
     $pattern = [regex]::Escape('function ValidDisplayName')
@@ -275,6 +360,27 @@ function Test-IssGuardSelfTest {
     $funcOther = Get-IssFunctionBodyWithoutIfdef -Text $funcOtherIfdef -Name 'F' -Ifdef 'TestMode'
     if (($funcOther -notmatch 'ALWAYS') -or ($funcOther -notmatch 'OTHER')) {
         $failures.Add('тело функции без #ifdef: чужая директива не должна вырезать код')
+    }
+
+    # [CustomMessages]: значение ищется только в своей секции, комментарии и
+    # строки других секций не подмешиваются, '\' в конце строки склеивает.
+    $msgSample = "[CustomMessages]`r`n; комментарий`r`nEtnA=Первый`r`nEtnB=Второй %1`r`n[Setup]`r`nNotMessage=Не сообщение"
+    if ((Get-IssCustomMessage -Text $msgSample -Name 'EtnA') -ne 'Первый') {
+        $failures.Add('[CustomMessages]: EtnA должен быть найден')
+    }
+    if ($null -ne (Get-IssCustomMessage -Text $msgSample -Name 'NotMessage')) {
+        $failures.Add('[CustomMessages]: строка из [Setup] — не сообщение')
+    }
+    if ($null -ne (Get-IssCustomMessage -Text $msgSample -Name 'EtnMissing')) {
+        $failures.Add('[CustomMessages]: отсутствующее имя — $null')
+    }
+    $msgNames = Get-IssCustomMessageNames -Text $msgSample
+    if (($msgNames -join ',') -ne 'EtnA,EtnB') {
+        $failures.Add('[CustomMessages]: имена — EtnA,EtnB без строк другой секции')
+    }
+    $msgCont = "[CustomMessages]`r`nEtnC=Первая часть \" + "`r`n" + 'вторая часть'
+    if ((Get-IssCustomMessage -Text $msgCont -Name 'EtnC') -ne 'Первая часть вторая часть') {
+        $failures.Add('[CustomMessages]: продолжение строки склеивается')
     }
 
     return [pscustomobject]@{

@@ -206,8 +206,6 @@ $staticChecks = @(
     @{ Name = 'static:env-host'; Text = "SetEnvironmentVariableW('ETN_HOST'"; Note = '' },
     @{ Name = 'static:icacls'; Text = 'icacls.exe'; Note = 'ACL каталога ключа' },
     @{ Name = 'static:key-file'; Text = 'primary-key.txt'; Note = 'защищённый временный файл' },
-    @{ Name = 'static:key-confirm'; Text = 'Я сохранил ключ'; Note = 'подтверждение' },
-    @{ Name = 'static:key-warning'; Text = 'Ключ показывается один раз'; Note = 'предупреждение' },
     @{ Name = 'static:key-close-warning'; Text = 'SuppressibleMsgBox('; Note = 'закрытие без подтверждения' },
     @{ Name = 'static:display-name-validation'; Text = 'function ValidDisplayName'; Note = 'display_name из /PARAMS проверяется (дефект 6)' },
     @{ Name = 'static:init-once'; Text = 'etn init не вызывается'; Note = 'повторная инициализация запрещена' }
@@ -217,6 +215,17 @@ foreach ($check in $staticChecks) {
     # комментария ('; function ValidDisplayName') реализацией не считается.
     $present = Test-IssCode -Text $issText -Pattern ([regex]::Escape($check.Text))
     Add-Check -Name $check.Name -Ok $present -Note $check.Note
+}
+# 4dc117f5: текст переехал в [CustomMessages] — в теле экрана ключа обязан
+# остаться вызов, а прежний текст — в значении сообщения (контракт перенесён).
+$keyPageBody = Get-IssFunctionBody -Text $issText -Name 'CreateKeyPage'
+foreach ($pair in @(
+        @{ Name = 'static:key-confirm'; Key = 'EtnKeySavedCheckbox'; Text = 'Я сохранил ключ' },
+        @{ Name = 'static:key-warning'; Key = 'EtnKeyPageNote'; Text = 'Ключ показывается один раз' })) {
+    $msgValue = Get-IssCustomMessage -Text $issText -Name $pair.Key
+    $ok = (Test-IssCode -Text $keyPageBody -Pattern ([regex]::Escape("CustomMessage('$($pair.Key)')"))) -and
+        ($null -ne $msgValue) -and $msgValue.Contains($pair.Text)
+    Add-Check -Name $pair.Name -Ok $ok -Note $pair.Key
 }
 # Хелпер самопроверяется в каждой точке использования: закомментированный код
 # не считается, рабочий — считается.

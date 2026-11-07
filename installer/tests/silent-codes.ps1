@@ -650,6 +650,26 @@ New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
 # закомментированной строке. Тот же хелпер использует init-key.ps1.
 . (Join-Path $PSScriptRoot 'iss-guard.ps1')
 
+# --- 4dc117f5: контракт «текст в теле функции» после выноса в [CustomMessages]
+# Текст UI-строки переехал в сообщение; проверка не ослаблена, а перенесена:
+# в теле функции обязан остаться вызов ключа, а в значении сообщения — прежний
+# текст (дословно, как его видел пользователь).
+function Test-MessageCall {
+    param([string]$Body, [string]$Key)
+    return Test-IssCode -Text $Body -Pattern ([regex]::Escape("CustomMessage('$Key')"))
+}
+
+function Test-MessageContains {
+    param([string]$Key, [string]$Text)
+    $value = Get-IssCustomMessage -Text $issText -Name $Key
+    return ($null -ne $value) -and $value.Contains($Text)
+}
+
+function Test-MessageTextInBody {
+    param([string]$Body, [string]$Key, [string]$Text)
+    return (Test-MessageCall -Body $Body -Key $Key) -and (Test-MessageContains -Key $Key -Text $Text)
+}
+
 function Add-StaticResult {
     param([string]$Name, [bool]$Ok, [string]$Note = '')
     $script:results.Add([pscustomobject]@{ Scenario = $Name; Expected = 1; Actual = [int]$Ok; Ok = $Ok; Note = $Note })
@@ -721,7 +741,7 @@ $staticChecks = @(
     @{ Name = 'static:firewall-add'; Pattern = [regex]::Escape('advfirewall firewall add rule'); Note = 'правило брандмауэра создаётся' },
     @{ Name = 'static:firewall-delete'; Pattern = [regex]::Escape('advfirewall firewall delete rule'); Note = 'правило удаляется' },
     @{ Name = 'static:firewall-profiles'; Pattern = [regex]::Escape("FIREWALL_PROFILES = 'domain,private'"); Note = 'публичные сети не открываются' },
-    @{ Name = 'static:firewall-checkbox'; Pattern = [regex]::Escape('Разрешить подключения с других компьютеров'); Note = 'чекбокс согласия' },
+    @{ Name = 'static:firewall-checkbox'; Pattern = [regex]::Escape("CustomMessage('EtnLanCheckbox')"); Note = 'чекбокс согласия — текст в [CustomMessages]' },
     @{ Name = 'static:firewall-uninstall'; Pattern = [regex]::Escape('CurUninstallStepChanged'); Note = 'правило удаляется при удалении программы' },
     @{ Name = 'static:display-name-validation'; Pattern = [regex]::Escape('function ValidDisplayName'); Note = 'display_name из /PARAMS проверяется (дефект 6)' },
     @{ Name = 'static:reason-file'; Pattern = [regex]::Escape('reason_file='); Note = 'причина отказа предусловия — родителю' },
@@ -735,6 +755,28 @@ $staticChecks = @(
 foreach ($check in $staticChecks) {
     Add-StaticResult -Name $check.Name -Ok (Test-IssCode -Text $issText -Pattern $check.Pattern) -Note $check.Note
 }
+
+# 4dc117f5: каждый CustomMessage('X') обязан быть определён — иначе Inno
+# бросает исключение в рантайме (до компиляции сторож дешевле); дубликат имени
+# в [CustomMessages] — ошибка компиляции.
+$customCallNames = New-Object System.Collections.Generic.List[string]
+foreach ($strippedLine in (Get-IssStrippedLines -Text $issText)) {
+    foreach ($m in [regex]::Matches($strippedLine, "CustomMessage\('([A-Za-z0-9_]+)'\)")) {
+        $callName = $m.Groups[1].Value
+        if (-not $customCallNames.Contains($callName)) { $customCallNames.Add($callName) }
+    }
+}
+$undefinedMessages = @($customCallNames | Where-Object {
+        $null -eq (Get-IssCustomMessage -Text $issText -Name $_)
+    })
+Add-StaticResult -Name 'static:custommessage-defined' -Ok ($undefinedMessages.Count -eq 0) `
+    -Note ('вызовов: ' + $customCallNames.Count +
+        $(if ($undefinedMessages.Count) { '; не определены: ' + ($undefinedMessages -join ', ') } else { '' }))
+$customNames = @(Get-IssCustomMessageNames -Text $issText)
+$duplicateMessages = @($customNames | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+Add-StaticResult -Name 'static:custommessage-unique' -Ok ($duplicateMessages.Count -eq 0) `
+    -Note ('сообщений: ' + $customNames.Count +
+        $(if ($duplicateMessages.Count) { '; дубликаты: ' + ($duplicateMessages -join ', ') } else { '' }))
 
 # e375123f: шаблон службы обязан задавать ETN_DEPLOYMENT=windows-service —
 # без него сервер, запущенный службой, определяет себя как standalone и
@@ -889,7 +931,7 @@ Add-StaticResult -Name 'static:backup-hook-ifdef' -Ok $backupHookIfdef `
 # закомментированной копии (дефект B2 приёмки 9b310991).
 $componentsBody = Get-IssFunctionBody -Text $issText -Name 'CreateComponentsPage'
 $licenseUi = (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('GLicenseCheck'))) -and
-    (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('Я принимаю условия лицензии MIT'))) -and
+    (Test-MessageTextInBody -Body $componentsBody -Key 'EtnLicenseAccept' -Text 'Я принимаю условия лицензии MIT') -and
     (Test-IssCode -Text $componentsBody -Pattern ([regex]::Escape('GLicenseLink')))
 Add-StaticResult -Name 'static:license-checkbox' -Ok $licenseUi `
     -Note 'лицензия MIT: чекбокс согласия и ссылка на текст на экране компонентов'
@@ -954,8 +996,9 @@ foreach ($part in $errorParts) { if (-not (Test-IssCode -Text $errorBody -Patter
 Add-StaticResult -Name 'static:error-page-content' -Ok $errorOk `
     -Note 'экран ошибки: причина, журнал, бэкап и следующий шаг'
 $errorPageBody = Get-IssFunctionBody -Text $issText -Name 'CreateErrorPage'
-$errorButtons = (Test-IssCode -Text $errorPageBody -Pattern ([regex]::Escape('Открыть журнал'))) -and
-    (Test-IssCode -Text $errorPageBody -Pattern ([regex]::Escape('Повторить установку'))) -and
+$errorButtons = (Test-MessageTextInBody -Body $errorPageBody -Key 'EtnButtonOpenLog' -Text 'Открыть журнал') -and
+    (Test-MessageTextInBody -Body $errorPageBody -Key 'EtnButtonRetry' -Text 'Повторить установку') -and
+    (Test-MessageTextInBody -Body $errorPageBody -Key 'EtnErrorPageTitle' -Text 'Установка не завершена') -and
     (Test-IssCode -Text $errorPageBody -Pattern ([regex]::Escape('GErrorPage := CreateCustomPage')))
 Add-StaticResult -Name 'static:error-page-buttons' -Ok $errorButtons `
     -Note 'экран ошибки: журнал, папка данных, повтор установки'
@@ -973,9 +1016,9 @@ Add-StaticResult -Name 'static:summary-lan-firewall' -Ok $summaryLan `
     -Note 'LAN-адрес только при открытом брандмауэре, предупреждение netsh — в сводке'
 $finishedBody = Get-IssFunctionBody -Text $issText -Name 'CreateFinishedControls'
 $finishedOk = (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('WizardForm.FinishedPage'))) -and
-    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('Запустить клиент'))) -and
-    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('Открыть папку данных'))) -and
-    (Test-IssCode -Text $finishedBody -Pattern ([regex]::Escape('Открыть журнал')))
+    (Test-MessageTextInBody -Body $finishedBody -Key 'EtnButtonRunClient' -Text 'Запустить клиент') -and
+    (Test-MessageTextInBody -Body $finishedBody -Key 'EtnButtonOpenDataDir' -Text 'Открыть папку данных') -and
+    (Test-MessageTextInBody -Body $finishedBody -Key 'EtnButtonOpenLog' -Text 'Открыть журнал')
 Add-StaticResult -Name 'static:summary-page' -Ok $finishedOk `
     -Note 'сводка на странице завершения: memo и кнопки действий'
 $pageChangedBody = Get-IssFunctionBody -Text $issText -Name 'CurPageChanged'
@@ -1005,7 +1048,7 @@ $prepareBody = Get-IssFunctionBody -Text $issText -Name 'PrepareToInstall'
 Add-StaticResult -Name 'static:prepare-long-ops' `
     -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('CloseRunningClient(True, Reason)'))) -and
          (Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('RemoveLegacyBeforeInstall(GIsElevated, Reason)'))) -and
-         (Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('Изменения не выполнялись')))) `
+         (Test-MessageTextInBody -Body $prepareBody -Key 'EtnNoChangesLogTail' -Text 'Изменения не выполнялись')) `
     -Note 'закрытие клиента и удаление старого клиента — на странице «Подготовка к установке», ошибка строкой (5b9743da)'
 Add-StaticResult -Name 'static:prepare-no-script-elevation' `
     -Ok ((Test-IssCode -Text $prepareBody -Pattern ([regex]::Escape('if not InPrivilegedContext then Exit'))) -and
@@ -1230,7 +1273,7 @@ Add-StaticResult -Name 'static:mode-by-process-rights' -Ok $modeByRightsOk `
 
 $serverReasonBody = Get-IssFunctionBody -Text $issText -Name 'ServerUnavailableReason'
 $serverReason = 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).'
-$serverReasonOk = (Test-IssCode -Text $serverReasonBody -Pattern ([regex]::Escape($serverReason))) -and
+$serverReasonOk = (Test-MessageTextInBody -Body $serverReasonBody -Key 'EtnServerNeedsAdmin' -Text $serverReason) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'SyncComponentsList') -Pattern ([regex]::Escape('ServerDescriptionRowText'))) -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'ComponentsReasonText') -Pattern ([regex]::Escape('ServerUnavailableReason')))
 Add-StaticResult -Name 'static:server-needs-admin-launch' -Ok $serverReasonOk `
@@ -1508,10 +1551,8 @@ Add-StaticResult -Name 'static:components-init-guard' -Ok $readyOk `
     -Note 'программная установка Checked не снимает выбор клиента (OnClick до готовности экрана)'
 
 $adminBody = Get-IssFunctionBody -Text $issText -Name 'CreateAdminPage'
-$adminFlat = $adminBody -replace '\r?\n\s*', ' '
-$adminSubtitleRx = 'Первый пользователь станет администратором ETN\. Задайте его логин и ' +
-    ''' \+ ''отображаемое имя, а после установки сервера получите ключ для входа\.'
-$adminOk = ($adminFlat -match $adminSubtitleRx) -and
+$adminOk = (Test-MessageTextInBody -Body $adminBody -Key 'EtnAdminPageIntro' `
+        -Text 'Первый пользователь станет администратором ETN. Задайте его логин и отображаемое имя, а после установки сервера получите ключ для входа.') -and
     (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('GAdminHintLabel.WordWrap := True'))) -and
     (Test-IssCode -Text $adminBody -Pattern ([regex]::Escape('FitLabel(GAdminHintLabel)')))
 Add-StaticResult -Name 'static:admin-texts' -Ok $adminOk `
@@ -1538,7 +1579,7 @@ $uacOk = (-not (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('Win
     (Test-IssCode -Text $readyMemoBody -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
     (Test-IssCode -Text $serverDescRowBody -Pattern ([regex]::Escape('if GUserOnlyMode then'))) -and
     (Test-IssCode -Text $serverDescRowBody -Pattern ([regex]::Escape('Result := ServerUnavailableReason'))) -and
-    (Test-IssCode -Text $serverReasonBody -Pattern ([regex]::Escape('Запуск от имени администратора'))) -and
+    (Test-MessageContains -Key 'EtnServerNeedsAdmin' -Text 'Запуск от имени администратора') -and
     (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('GUserOnlyMode and GServerRequested and (not GServerSelected)'))) -and
     (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('Result := ServerUnavailableReason'))) -and
     (Test-IssCode -Text $nextBody -Pattern ([regex]::Escape('GUserOnlyMode')))

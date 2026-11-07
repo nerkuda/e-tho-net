@@ -454,6 +454,80 @@ ServiceStartManually=служба не запущена; запустите вр
 ; 34f8e315: ручное снятие службы при отмене удаления — команды WinSW, без sc.
 UninstallServiceManual=Остановите и удалите службу ETN вручную: etn-service.exe stop, дождитесь status=Stopped, затем etn-service.exe uninstall — и повторите удаление. Файлы не удалены.
 
+; --- Задача 4dc117f5: UI-строки вынесены из [Code]. Конвенция:
+; --- Etn<Область><Смысл>, PascalCase, только [A-Za-z0-9_], без точек;
+; --- %n — перенос строки, %1..%9 — подстановка FmtMessage.
+; --- Журнальные строки (LogLine/LogDefer/Log) остаются литералами в [Code].
+
+; Экран компонентов (первый экран).
+EtnComponentsTitle=ETN — установка
+EtnComponentsWelcome=Добро пожаловать в ETN: сервер хранит графовые базы знаний на этом компьютере, клиент — окно для работы с ними.
+EtnComponentsServerOptionsLink=<a href="server-options">Другие варианты установки сервера (удалённый сервер, Docker)</a>
+EtnDataDirFixed=Каталог данных: %1 (фиксирован)
+EtnLicenseAccept=Я принимаю условия лицензии MIT
+EtnLicenseLink=<a href="license">Текст лицензии</a>
+EtnServerNeedsAdmin=Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnNextUnavailablePrefix=Далее недоступна:
+EtnShortcutComment=ETN — графовые базы знаний
+
+; Подписи компонентов в списке.
+EtnServerCheckInstall=Установить сервер ETN
+EtnServerCheckUpdate=Обновить сервер ETN: %1 → %2
+EtnServerCheckReinstall=Переустановить сервер ETN %1
+EtnServerCheckRepair=Восстановить сервер ETN
+EtnServerCheckAdopt=Установить сервер ETN и подключить существующие данные
+EtnServerCheckNewer=Сервер ETN (установлена более новая версия)
+EtnClientCheckInstall=Установить клиент ETN
+EtnClientCheckReinstall=Переустановить клиент ETN
+
+; Экран администратора.
+EtnAdminPageTitle=Администратор сервера
+EtnAdminPageIntro=Первый пользователь станет администратором ETN. Задайте его логин и отображаемое имя, а после установки сервера получите ключ для входа.
+EtnAdminLoginLabel=Логин администратора:
+EtnAdminDisplayLabel=Отображаемое имя (необязательно):
+EtnAdminLoginNote=Логин используется один раз — при первичной инициализации сервера. Если сервер уже инициализирован, логин не меняется.
+
+; Экран параметров сервера.
+EtnParamsPageTitle=Параметры сервера
+EtnParamsPageIntro=Порт сервера и доступ с других компьютеров. Каталог данных фиксирован и переживает обновление.
+EtnPortLabel=Порт сервера (по умолчанию 4321):
+EtnPortNote=Порт должен быть свободен: занятость проверяется до установки.
+EtnLanCheckbox=Разрешить подключения с других компьютеров в локальной сети
+EtnDataDirParams=Каталог данных: %1 (в 0.15.1 фиксирован, не меняется при обновлении и удалении программы)
+EtnFirewallOnNote=Будет создано правило брандмауэра Windows для порта %1 сервера (профили «домен» и «частная сеть»). Сервер будет доступен с других компьютеров локальной сети.
+EtnFirewallOffNote=Сервер будет доступен только с этого компьютера (127.0.0.1). Подключения с других компьютеров локальной сети работать не будут.
+
+; Экран первичного API-ключа.
+EtnKeyPageTitle=Первичный API-ключ
+EtnKeyPageIntro=Сохраните ключ: он показывается один раз и восстановить его нельзя.
+EtnKeyCopyButton=Скопировать
+EtnKeyCopied=Скопировано в буфер обмена
+EtnKeyCopyFailed=Не удалось скопировать — выделите ключ и нажмите Ctrl+C
+EtnKeyPageNote=Ключ показывается один раз. Восстановить нельзя — только выпустить новый. Сохраните его в надёжном месте.
+EtnKeyFromPreviousRun=Ключ получен при предыдущем запуске установщика (после сбоя) и сохранён в защищённом файле.
+EtnKeySavedCheckbox=Я сохранил ключ
+EtnKeyNotSavedPrompt=Ключ не сохранён. Восстановить его нельзя — только выпустить новый. Временный файл с ключом будет удалён. Закрыть установщик?
+
+; Экран ошибки и итоговая сводка.
+EtnErrorPageTitle=Установка не завершена
+EtnErrorPageIntro=Установка ETN прервана. Ниже — причина, журнал, резервная копия и следующий шаг.
+EtnButtonOpenLog=Открыть журнал
+EtnButtonOpenDataDir=Открыть папку данных
+EtnButtonRetry=Повторить установку
+EtnButtonRunClient=Запустить клиент
+
+; Диалоги и общие фразы.
+EtnReadyMemoUserOnly=Режим «только для меня»: права администратора не требуются.
+EtnOpenFailed=Не удалось открыть: %1%n%nПуть можно скопировать из поля на экране.
+EtnLicenseOpenFailed=Не удалось открыть текст лицензии. Он находится в файле LICENSE рядом с установщиком.
+EtnLicenseTempOpenFailed=Не удалось открыть текст лицензии во временном каталоге: %1
+EtnRetryInstallFailed=Не удалось запустить установщик заново: %1%nЗапустите его вручную.
+EtnCloseClientPrompt=Клиент ETN запущен. Чтобы заменить файлы, его нужно закрыть — несохранённые данные могут быть потеряны.%n%nЗакрыть клиент и продолжить установку?
+EtnDowngradeBlocked=На этом компьютере установлена более новая версия ETN %1.%nУстановщик %2 не может её понизить: установка невозможна, доступна только отмена.
+EtnInstallNotStarted=Установка не начата: %1
+EtnNoChangesLogTail=Изменения не выполнялись. Журнал: %1
+EtnUninstallCancelled=Удаление программы отменено: %1. %2
+
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
 ; --- компонентов; в установку не копируется (dontcopy).
@@ -507,8 +581,8 @@ Source: "{#ClientPayload}\*"; DestDir: "{#ClientUserDir}"; Flags: ignoreversion 
 ; «Запустить клиент». Это единственный путь для административного режима, где
 ; автозапуск клиента запрещён (профиль SMAA, 2dd215f7).
 #ifdef HaveClientPayload
-Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientMachine
-Name: "{#ShortcutUserMenuDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientUser
+Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "{cm:EtnShortcutComment}"; Check: InstallClientMachine
+Name: "{#ShortcutUserMenuDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Comment: "{cm:EtnShortcutComment}"; Check: InstallClientUser
 Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Check: InstallClientMachine
 Name: "{#ShortcutUserDesktopDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Check: InstallClientUser
 #endif
@@ -2149,8 +2223,7 @@ begin
     ExtractTemporaryFile('LICENSE');
   except
     LogLine('ERROR', 'Не удалось извлечь текст лицензии LICENSE из установщика');
-    SuppressibleMsgBox('Не удалось открыть текст лицензии. Он находится в файле ' +
-      'LICENSE рядом с установщиком.', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox(CustomMessage('EtnLicenseOpenFailed'), mbError, MB_OK, IDOK);
     Exit;
   end;
   if not ShellExec('open', ExpandConstant('{tmp}\LICENSE'), '', '',
@@ -2158,8 +2231,9 @@ begin
   begin
     { Win32-код отказа — в журнал: диагностика проблем оболочки (2dd215f7). }
     LogLine('ERROR', 'ShellExec(open, LICENSE) не удался: ' + ShellErrorText(Code));
-    SuppressibleMsgBox('Не удалось открыть текст лицензии во временном каталоге: ' +
-      ExpandConstant('{tmp}\LICENSE'), mbError, MB_OK, IDOK);
+    SuppressibleMsgBox(
+      FmtMessage(CustomMessage('EtnLicenseTempOpenFailed'), [ExpandConstant('{tmp}\LICENSE')]),
+      mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -2614,9 +2688,7 @@ begin
   LogLine('INFO', 'Клиент ETN: запущено процессов ETN.exe — ' + Pids);
   if Interactive and (not GSilent) then
   begin
-    if SuppressibleMsgBox('Клиент ETN запущен. Чтобы заменить файлы, его нужно ' +
-        'закрыть — несохранённые данные могут быть потеряны.' + #13#10#13#10 +
-        'Закрыть клиент и продолжить установку?',
+    if SuppressibleMsgBox(CustomMessage('EtnCloseClientPrompt'),
         mbConfirmation, MB_YESNO, IDYES) <> IDYES then
     begin
       LogLine('WARN', 'Клиент ETN: пользователь отказался закрывать клиент');
@@ -2740,8 +2812,8 @@ var
 begin
   if Path = '' then Exit;
   if not ShellExec('open', Path, '', '', SW_SHOWNORMAL, ewNoWait, Code) then
-    SuppressibleMsgBox('Не удалось открыть: ' + Path + #13#10 +
-      'Путь можно скопировать из поля на экране.', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox(FmtMessage(CustomMessage('EtnOpenFailed'), [Path]),
+      mbError, MB_OK, IDOK);
 end;
 
 procedure OpenServerOptions(Sender: TObject; const Link: String;
@@ -6245,8 +6317,8 @@ begin
     SW_SHOWNORMAL, ewNoWait, Code) then
   begin
     LogLine('ERROR', 'Повторный запуск установщика не удался: ' + ShellErrorText(Code));
-    SuppressibleMsgBox('Не удалось запустить установщик заново: ' +
-      ExpandConstant('{srcexe}') + #13#10 + 'Запустите его вручную.',
+    SuppressibleMsgBox(
+      FmtMessage(CustomMessage('EtnRetryInstallFailed'), [ExpandConstant('{srcexe}')]),
       mbError, MB_OK, IDOK);
     Exit;
   end;
@@ -6346,9 +6418,8 @@ end;
   установка сорвалась после init (восстановить его нельзя). }
 procedure CreateErrorPage;
 begin
-  GErrorPage := CreateCustomPage(GKeyPage.ID, 'Установка не завершена',
-    'Установка ETN прервана. Ниже — причина, журнал, резервная копия и ' +
-    'следующий шаг.');
+  GErrorPage := CreateCustomPage(GKeyPage.ID,
+    CustomMessage('EtnErrorPageTitle'), CustomMessage('EtnErrorPageIntro'));
 
   GErrorMemo := TNewMemo.Create(GErrorPage);
   GErrorMemo.Parent := GErrorPage.Surface;
@@ -6367,7 +6438,7 @@ begin
   GErrorOpenLogButton.Left := 0;
   GErrorOpenLogButton.Top := GErrorMemo.Top + GErrorMemo.Height + ScaleY(8);
   GErrorOpenLogButton.Width := ScaleX(130);
-  GErrorOpenLogButton.Caption := 'Открыть журнал';
+  GErrorOpenLogButton.Caption := CustomMessage('EtnButtonOpenLog');
   GErrorOpenLogButton.OnClick := @OpenLogClick;
 
   GErrorOpenDataButton := TNewButton.Create(GErrorPage);
@@ -6375,7 +6446,7 @@ begin
   GErrorOpenDataButton.Left := GErrorOpenLogButton.Width + ScaleX(8);
   GErrorOpenDataButton.Top := GErrorOpenLogButton.Top;
   GErrorOpenDataButton.Width := ScaleX(150);
-  GErrorOpenDataButton.Caption := 'Открыть папку данных';
+  GErrorOpenDataButton.Caption := CustomMessage('EtnButtonOpenDataDir');
   GErrorOpenDataButton.OnClick := @OpenDataDirClick;
 
   GErrorRetryButton := TNewButton.Create(GErrorPage);
@@ -6384,7 +6455,7 @@ begin
     ScaleX(8);
   GErrorRetryButton.Top := GErrorOpenLogButton.Top;
   GErrorRetryButton.Width := ScaleX(170);
-  GErrorRetryButton.Caption := 'Повторить установку';
+  GErrorRetryButton.Caption := CustomMessage('EtnButtonRetry');
   GErrorRetryButton.OnClick := @RetryInstallClick;
 end;
 
@@ -6403,7 +6474,7 @@ begin
   GSummaryRunButton.Parent := WizardForm.FinishedPage;
   GSummaryRunButton.Left := WizardForm.FinishedLabel.Left;
   GSummaryRunButton.Width := ScaleX(130);
-  GSummaryRunButton.Caption := 'Запустить клиент';
+  GSummaryRunButton.Caption := CustomMessage('EtnButtonRunClient');
   GSummaryRunButton.OnClick := @RunClientClick;
 
   GSummaryDataButton := TNewButton.Create(WizardForm);
@@ -6412,14 +6483,14 @@ begin
     ScaleX(8);
   GSummaryDataButton.Top := 0;
   GSummaryDataButton.Width := ScaleX(150);
-  GSummaryDataButton.Caption := 'Открыть папку данных';
+  GSummaryDataButton.Caption := CustomMessage('EtnButtonOpenDataDir');
   GSummaryDataButton.OnClick := @OpenDataDirClick;
 
   GSummaryLogButton := TNewButton.Create(WizardForm);
   GSummaryLogButton.Parent := WizardForm.FinishedPage;
   GSummaryLogButton.Left := WizardForm.FinishedLabel.Left;
   GSummaryLogButton.Width := ScaleX(130);
-  GSummaryLogButton.Caption := 'Открыть журнал';
+  GSummaryLogButton.Caption := CustomMessage('EtnButtonOpenLog');
   GSummaryLogButton.OnClick := @OpenLogClick;
 
   { Нижняя строка кнопок — у нижнего края страницы, верхняя — над ней. }
@@ -6451,25 +6522,25 @@ end;
 function ServerCheckCaption: String;
 begin
   if GServerState = 'not-installed' then
-    Result := 'Установить сервер ETN'
+    Result := CustomMessage('EtnServerCheckInstall')
   else if GServerState = 'update-available' then
-    Result := 'Обновить сервер ETN: ' + GInstalledVersion + ' → ' + GProductVersion
+    Result := FmtMessage(CustomMessage('EtnServerCheckUpdate'), [GInstalledVersion, GProductVersion])
   else if GServerState = 'installed' then
-    Result := 'Переустановить сервер ETN ' + GProductVersion
+    Result := FmtMessage(CustomMessage('EtnServerCheckReinstall'), [GProductVersion])
   else if GServerState = 'repair' then
-    Result := 'Восстановить сервер ETN'
+    Result := CustomMessage('EtnServerCheckRepair')
   else if GServerState = 'adopt' then
-    Result := 'Установить сервер ETN и подключить существующие данные'
+    Result := CustomMessage('EtnServerCheckAdopt')
   else
-    Result := 'Сервер ETN (установлена более новая версия)';
+    Result := CustomMessage('EtnServerCheckNewer');
 end;
 
 function ClientCheckCaption: String;
 begin
   if GClientState = 'installed' then
-    Result := 'Переустановить клиент ETN'
+    Result := CustomMessage('EtnClientCheckReinstall')
   else
-    Result := 'Установить клиент ETN';
+    Result := CustomMessage('EtnClientCheckInstall');
 end;
 
 { Единая точка чтения выбора: обработчики OnClick чекбоксов (компоненты,
@@ -6502,7 +6573,7 @@ end;
   процессом, без respawn. }
 function ServerUnavailableReason: String;
 begin
-  Result := 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).';
+  Result := CustomMessage('EtnServerNeedsAdmin');
 end;
 
 { Причина неактивности «Далее» — одна функция для экрана и журнала (ошибка
@@ -6659,7 +6730,7 @@ function ComponentsReasonLabelText: String;
 begin
   Result := ComponentsReasonText;
   if Result <> '' then
-    Result := 'Далее недоступна: ' + Result;
+    Result := CustomMessage('EtnNextUnavailablePrefix') + ' ' + Result;
 end;
 
 { Нижний блок закреплён от низа поверхности страницы: причина — в самом низу,
@@ -6764,9 +6835,8 @@ begin
     welcome/license отключены в [Setup]). Раскладку задаёт LayoutComponentsBottom:
     список занимает остаток высоты и прокручивается сам, нижний блок закреплён
     от низа поверхности (задача c4b68d78). }
-  GComponentsPage := CreateCustomPage(wpWelcome, 'ETN — установка',
-    'Добро пожаловать в ETN: сервер хранит графовые базы знаний на этом ' +
-    'компьютере, клиент — окно для работы с ними.');
+  GComponentsPage := CreateCustomPage(wpWelcome,
+    CustomMessage('EtnComponentsTitle'), CustomMessage('EtnComponentsWelcome'));
 
   { Список компонентов: два checkbox уровня 0 и group-строки статуса/описания
     уровня 1. TNewCheckListBox переносит caption по словам, поэтому длинные
@@ -6817,8 +6887,7 @@ begin
   GServerAltLink.Parent := GComponentsPage.Surface;
   GServerAltLink.Left := 0;
   GServerAltLink.Width := GComponentsPage.SurfaceWidth;
-  GServerAltLink.Caption := '<a href="server-options">Другие варианты установки ' +
-    'сервера (удалённый сервер, Docker)</a>';
+  GServerAltLink.Caption := CustomMessage('EtnComponentsServerOptionsLink');
   GServerAltLink.OnLinkClick := @OpenServerOptions;
 
   { Каталог данных сервера — в нижнем блоке; видимость задаёт
@@ -6830,7 +6899,7 @@ begin
   GDataNoteLabel.WordWrap := True;
   GDataNoteLabel.Width := GComponentsPage.SurfaceWidth;
   GDataNoteLabel.Font.Color := clGray;
-  GDataNoteLabel.Caption := 'Каталог данных: ' + GDataDir + ' (фиксирован)';
+  GDataNoteLabel.Caption := FmtMessage(CustomMessage('EtnDataDirFixed'), [GDataDir]);
   FitLabel(GDataNoteLabel);
 
   { Лицензия MIT — только первая установка (нет ни сервера, ни клиента). }
@@ -6838,7 +6907,7 @@ begin
   GLicenseCheck.Parent := GComponentsPage.Surface;
   GLicenseCheck.Left := 0;
   GLicenseCheck.Width := GComponentsPage.SurfaceWidth - ScaleX(120);
-  GLicenseCheck.Caption := 'Я принимаю условия лицензии MIT';
+  GLicenseCheck.Caption := CustomMessage('EtnLicenseAccept');
   GLicenseCheck.Checked := False;
   GLicenseCheck.OnClick := @ComponentsChanged;
   GLicenseCheck.Visible := LicensePromptNeeded;
@@ -6847,7 +6916,7 @@ begin
   GLicenseLink.Parent := GComponentsPage.Surface;
   GLicenseLink.Left := GComponentsPage.SurfaceWidth - ScaleX(110);
   GLicenseLink.Width := ScaleX(110);
-  GLicenseLink.Caption := '<a href="license">Текст лицензии</a>';
+  GLicenseLink.Caption := CustomMessage('EtnLicenseLink');
   GLicenseLink.OnLinkClick := @OpenLocalLicense;
   GLicenseLink.Visible := LicensePromptNeeded;
 
@@ -6877,17 +6946,16 @@ end;
   --------------------------------------------------------------------------- }
 procedure CreateAdminPage;
 begin
-  GAdminPage := CreateCustomPage(GComponentsPage.ID, 'Администратор сервера',
-    { Формулировка пользователя (ошибка 860def0d, п.3). }
-    'Первый пользователь станет администратором ETN. Задайте его логин и ' +
-    'отображаемое имя, а после установки сервера получите ключ для входа.');
+  GAdminPage := CreateCustomPage(GComponentsPage.ID,
+    { Формулировка пользователя (ошибка 860def0d, п.3) — дословно в сообщении. }
+    CustomMessage('EtnAdminPageTitle'), CustomMessage('EtnAdminPageIntro'));
 
   GAdminLoginLabel := TNewStaticText.Create(GAdminPage);
   GAdminLoginLabel.Parent := GAdminPage.Surface;
   GAdminLoginLabel.Left := 0;
   GAdminLoginLabel.Top := 0;
   GAdminLoginLabel.Width := GAdminPage.SurfaceWidth;
-  GAdminLoginLabel.Caption := 'Логин администратора:';
+  GAdminLoginLabel.Caption := CustomMessage('EtnAdminLoginLabel');
 
   GAdminLoginEdit := TNewEdit.Create(GAdminPage);
   GAdminLoginEdit.Parent := GAdminPage.Surface;
@@ -6901,7 +6969,7 @@ begin
   GAdminDisplayLabel.Left := 0;
   GAdminDisplayLabel.Top := GAdminLoginEdit.Top + GAdminLoginEdit.Height + 12;
   GAdminDisplayLabel.Width := GAdminPage.SurfaceWidth;
-  GAdminDisplayLabel.Caption := 'Отображаемое имя (необязательно):';
+  GAdminDisplayLabel.Caption := CustomMessage('EtnAdminDisplayLabel');
 
   GAdminDisplayEdit := TNewEdit.Create(GAdminPage);
   GAdminDisplayEdit.Parent := GAdminPage.Surface;
@@ -6917,8 +6985,7 @@ begin
   GAdminHintLabel.AutoSize := False;
   GAdminHintLabel.WordWrap := True;
   GAdminHintLabel.Width := GAdminPage.SurfaceWidth;
-  GAdminHintLabel.Caption := 'Логин используется один раз — при первичной инициализации ' +
-    'сервера. Если сервер уже инициализирован, логин не меняется.';
+  GAdminHintLabel.Caption := CustomMessage('EtnAdminLoginNote');
   { Перенос обязателен: без него длинная подпись уходила за правый край и
     обрезалась (ошибка 860def0d, п.1). }
   FitLabel(GAdminHintLabel);
@@ -6991,12 +7058,10 @@ begin
   if GFirewallNoteLabel <> nil then
   begin
     if GServerFirewall then
-      GFirewallNoteLabel.Caption := 'Будет создано правило брандмауэра Windows для порта ' +
-        'сервера (профили «домен» и «частная сеть»). Сервер будет доступен с других ' +
-        'компьютеров локальной сети.'
+      GFirewallNoteLabel.Caption :=
+        FmtMessage(CustomMessage('EtnFirewallOnNote'), [GServerPort])
     else
-      GFirewallNoteLabel.Caption := 'Сервер будет доступен только с этого компьютера ' +
-        '(127.0.0.1). Подключения с других компьютеров локальной сети работать не будут.';
+      GFirewallNoteLabel.Caption := CustomMessage('EtnFirewallOffNote');
     FitLabel(GFirewallNoteLabel);
   end;
   LayoutServerParamsPage;
@@ -7036,16 +7101,15 @@ end;
 
 procedure CreateServerParamsPage;
 begin
-  GServerParamsPage := CreateCustomPage(GAdminPage.ID, 'Параметры сервера',
-    'Порт сервера и доступ с других компьютеров. Каталог данных фиксирован ' +
-    'и переживает обновление.');
+  GServerParamsPage := CreateCustomPage(GAdminPage.ID,
+    CustomMessage('EtnParamsPageTitle'), CustomMessage('EtnParamsPageIntro'));
 
   GPortLabel := TNewStaticText.Create(GServerParamsPage);
   GPortLabel.Parent := GServerParamsPage.Surface;
   GPortLabel.Left := 0;
   GPortLabel.Top := 0;
   GPortLabel.Width := GServerParamsPage.SurfaceWidth;
-  GPortLabel.Caption := 'Порт сервера (по умолчанию 4321):';
+  GPortLabel.Caption := CustomMessage('EtnPortLabel');
 
   GPortEdit := TNewEdit.Create(GServerParamsPage);
   GPortEdit.Parent := GServerParamsPage.Surface;
@@ -7061,7 +7125,7 @@ begin
   GPortHintLabel.AutoSize := False;
   GPortHintLabel.WordWrap := True;
   GPortHintLabel.Width := GServerParamsPage.SurfaceWidth - GPortEdit.Width - 12;
-  GPortHintLabel.Caption := 'Порт должен быть свободен: занятость проверяется до установки.';
+  GPortHintLabel.Caption := CustomMessage('EtnPortNote');
   FitLabel(GPortHintLabel);
 
   GFirewallCheck := TNewCheckBox.Create(GServerParamsPage);
@@ -7069,7 +7133,7 @@ begin
   GFirewallCheck.Left := 0;
   GFirewallCheck.Top := GPortEdit.Top + GPortEdit.Height + ScaleY(16);
   GFirewallCheck.Width := GServerParamsPage.SurfaceWidth;
-  GFirewallCheck.Caption := 'Разрешить подключения с других компьютеров в локальной сети';
+  GFirewallCheck.Caption := CustomMessage('EtnLanCheckbox');
   GFirewallCheck.Checked := GServerFirewall;
   GFirewallCheck.OnClick := @FirewallCheckClick;
 
@@ -7092,8 +7156,7 @@ begin
   GDataDirInfoLabel.AutoSize := False;
   GDataDirInfoLabel.WordWrap := True;
   GDataDirInfoLabel.Width := GServerParamsPage.SurfaceWidth;
-  GDataDirInfoLabel.Caption := 'Каталог данных: ' + GDataDir +
-    ' (в 0.15.1 фиксирован, не меняется при обновлении и удалении программы)';
+  GDataDirInfoLabel.Caption := FmtMessage(CustomMessage('EtnDataDirParams'), [GDataDir]);
   FitLabel(GDataDirInfoLabel);
 
   GServerParamsNoteLabel := TNewStaticText.Create(GServerParamsPage);
@@ -7129,9 +7192,9 @@ begin
   if (GPendingKey = '') or (not FileExists(KeyFilePath)) then Exit;
   if Exec(ExpandConstant('{cmd}'), '/c clip < "' + KeyFilePath + '"', '',
     SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
-    GKeyCopiedLabel.Caption := 'Скопировано в буфер обмена'
+    GKeyCopiedLabel.Caption := CustomMessage('EtnKeyCopied')
   else
-    GKeyCopiedLabel.Caption := 'Не удалось скопировать — выделите ключ и нажмите Ctrl+C';
+    GKeyCopiedLabel.Caption := CustomMessage('EtnKeyCopyFailed');
 end;
 
 procedure UpdateKeyPageState(Sender: TObject);
@@ -7170,8 +7233,8 @@ end;
   берётся из защищённого файла (в журнал не пишется). }
 procedure CreateKeyPage;
 begin
-  GKeyPage := CreateCustomPage(wpInstalling, 'Первичный API-ключ',
-    'Сохраните ключ: он показывается один раз и восстановить его нельзя.');
+  GKeyPage := CreateCustomPage(wpInstalling,
+    CustomMessage('EtnKeyPageTitle'), CustomMessage('EtnKeyPageIntro'));
 
   GKeyValueEdit := TNewEdit.Create(GKeyPage);
   GKeyValueEdit.Parent := GKeyPage.Surface;
@@ -7188,7 +7251,7 @@ begin
   GKeyCopyButton.Left := 0;
   GKeyCopyButton.Top := GKeyValueEdit.Top + GKeyValueEdit.Height + 8;
   GKeyCopyButton.Width := ScaleX(140);
-  GKeyCopyButton.Caption := 'Скопировать';
+  GKeyCopyButton.Caption := CustomMessage('EtnKeyCopyButton');
   GKeyCopyButton.OnClick := @CopyKeyClick;
 
   GKeyCopiedLabel := TNewStaticText.Create(GKeyPage);
@@ -7205,8 +7268,7 @@ begin
   GKeyWarningLabel.AutoSize := False;
   GKeyWarningLabel.WordWrap := True;
   GKeyWarningLabel.Width := GKeyPage.SurfaceWidth;
-  GKeyWarningLabel.Caption := 'Ключ показывается один раз. Восстановить нельзя — только ' +
-    'выпустить новый. Сохраните его в надёжном месте.';
+  GKeyWarningLabel.Caption := CustomMessage('EtnKeyPageNote');
   FitLabel(GKeyWarningLabel);
 
   GKeyPreviousLabel := TNewStaticText.Create(GKeyPage);
@@ -7216,8 +7278,7 @@ begin
   GKeyPreviousLabel.AutoSize := False;
   GKeyPreviousLabel.WordWrap := True;
   GKeyPreviousLabel.Width := GKeyPage.SurfaceWidth;
-  GKeyPreviousLabel.Caption := 'Ключ получен при предыдущем запуске установщика ' +
-    '(после сбоя) и сохранён в защищённом файле.';
+  GKeyPreviousLabel.Caption := CustomMessage('EtnKeyFromPreviousRun');
   GKeyPreviousLabel.Visible := False;
   FitLabel(GKeyPreviousLabel);
 
@@ -7226,7 +7287,7 @@ begin
   GKeyConfirmCheck.Left := 0;
   GKeyConfirmCheck.Top := GKeyPreviousLabel.Top + GKeyPreviousLabel.Height + 14;
   GKeyConfirmCheck.Width := GKeyPage.SurfaceWidth;
-  GKeyConfirmCheck.Caption := 'Я сохранил ключ';
+  GKeyConfirmCheck.Caption := CustomMessage('EtnKeySavedCheckbox');
   GKeyConfirmCheck.Checked := False;
   GKeyConfirmCheck.OnClick := @UpdateKeyPageState;
   LayoutKeyPage;
@@ -7976,9 +8037,8 @@ begin
       GDowngradeWarned := True;
       LogLine('WARN', 'Понижение версии запрещено: установлена ' +
         ServerVersionText + ', установщик ' + GProductVersion);
-      SuppressibleMsgBox('На этом компьютере установлена более новая версия ETN ' +
-        ServerVersionText + '.' + #13#10 + 'Установщик ' + GProductVersion +
-        ' не может её понизить: установка невозможна, доступна только отмена.',
+      SuppressibleMsgBox(
+        FmtMessage(CustomMessage('EtnDowngradeBlocked'), [ServerVersionText, GProductVersion]),
         mbError, MB_OK, IDOK);
     end;
   end;
@@ -8090,8 +8150,7 @@ begin
     сказано на экране компонентов (ошибка aa5af30c). }
   S := '';
   if GUserOnlyMode then
-    S := 'Режим «только для меня»: права администратора не требуются.' +
-      NewLine + NewLine;
+    S := CustomMessage('EtnReadyMemoUserOnly') + NewLine + NewLine;
   Result := S + MemoDirInfo + MemoComponentsInfo + MemoGroupInfo + MemoTasksInfo;
 end;
 
@@ -8251,8 +8310,7 @@ begin
   begin
     { Закрытие без подтверждения: предупредить и удалить временный файл.
       Отказ — остаться на экране ключа. }
-    if SuppressibleMsgBox('Ключ не сохранён. Восстановить его нельзя — только ' +
-        'выпустить новый. Временный файл с ключом будет удалён. Закрыть установщик?',
+    if SuppressibleMsgBox(CustomMessage('EtnKeyNotSavedPrompt'),
         mbConfirmation, MB_YESNO, IDNO) <> IDYES then
     begin
       Cancel := False;
@@ -8298,9 +8356,10 @@ begin
     Reason := '';
     if not CloseRunningClient(True, Reason) then
     begin
-      GComponentsNotice := 'Установка не начата: ' + Reason;
+      GComponentsNotice := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
       LogLine('ERROR', GComponentsNotice);
-      Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+      Result := GComponentsNotice + '. ' +
+        FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]);
       Exit;
     end;
   end;
@@ -8309,9 +8368,10 @@ begin
   Reason := '';
   if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
   begin
-    GComponentsNotice := 'Установка не начата: ' + Reason;
+    GComponentsNotice := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
     LogLine('ERROR', GComponentsNotice);
-    Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+    Result := GComponentsNotice + '. ' +
+      FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]);
     Exit;
   end;
   if not NeedElevation then Exit;
@@ -8324,8 +8384,8 @@ begin
   if Reason <> '' then
   begin
     LogLine('ERROR', 'Установка не начата: ' + Reason);
-    Result := 'Установка не начата: ' + Reason + '. Изменения не выполнялись. ' +
-      'Журнал: ' + GLogPath;
+    Result := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]) + '. ' +
+      FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]);
   end;
 end;
 
@@ -8675,8 +8735,9 @@ begin
     if not RemoveServiceOnUninstall(Reason) then
     begin
       Log('ОШИБКА: удаление отменено — ' + Reason);
-      SuppressibleMsgBox('Удаление программы отменено: ' + Reason + '. ' +
-        CustomMessage('UninstallServiceManual'), mbError, MB_OK, IDOK);
+      SuppressibleMsgBox(
+        FmtMessage(CustomMessage('EtnUninstallCancelled'), [Reason, CustomMessage('UninstallServiceManual')]),
+        mbError, MB_OK, IDOK);
       Abort;
     end
     else
