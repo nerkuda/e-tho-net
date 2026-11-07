@@ -3767,7 +3767,8 @@ $probeBudget = (Test-IssCode -Text $probeHealthBody -Pattern ([regex]::Escape('S
 Add-StaticResult -Name 'static:health-actual-budget' -Ok $probeBudget `
     -Note 'бюджет ProbeHealth по ServiceNowSeconds; Sleep не уходит за остаток'
 $rollbackBody = Get-IssFunctionBody -Text $issText -Name 'RollbackAfterFailure'
-$rollbackHealthReason = (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Прежняя версия не отвечает'))) -and
+$rollbackHealthReason = (Test-MessageTextInBody -Body $rollbackBody `
+        -Key 'EtnRollbackPrevNotResponding' -Text 'Прежняя версия не отвечает') -and
     (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('GHealthReason'))) -and
     (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('ServiceStartManually')))
 Add-StaticResult -Name 'static:rollback-health-reason' -Ok $rollbackHealthReason `
@@ -3775,8 +3776,11 @@ Add-StaticResult -Name 'static:rollback-health-reason' -Ok $rollbackHealthReason
 Add-StaticResult -Name 'static:rollback-messages' `
     -Ok ((Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Откат выполнен'))) -and
         (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('Откат не выполнен'))) -and
-        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('архив: ')))) `
-    -Note 'журнал: «Откат выполнен» / «Откат не выполнен, архив: …»'
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('архив: '))) -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape("CustomMessage('EtnRollbackFailed')"))) -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape("CustomMessage('EtnRollbackDoneNoDb')"))) -and
+        (Test-MessageContains -Key 'EtnRollbackDoneDb' -Text 'Откат выполнен')) `
+    -Note 'журнал: «Откат выполнен» / «Откат не выполнен, архив: …»; причины отката — в [CustomMessages]'
 $rollbackRootBody = Get-IssFunctionBody -Text $issText -Name 'RollbackRoot'
 Add-StaticResult -Name 'static:rollback-dir' `
     -Ok (Test-IssCode -Text $rollbackRootBody -Pattern ([regex]::Escape('\.install\rollback'))) `
@@ -3823,14 +3827,17 @@ Add-StaticResult -Name 'static:failure-reason-gui' `
     -Note 'код 10: reason-файл перезаписан после откатa, причина — GFailureReason'
 # Замечание приёмки: прямое указание потери данных при откате (ed2e42df).
 Add-StaticResult -Name 'static:rollback-data-loss-text' `
-    -Ok ((Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('потеряны'))) -and
-        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('восстановить невозможно')))) `
+    -Ok ((Test-MessageContains -Key 'EtnRollbackDataLost' -Text 'потеряны') -and
+        (Test-MessageContains -Key 'EtnRollbackNoDbChanges' -Text 'восстановить невозможно') -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape("CustomMessage('EtnRollbackDataLost')"))) -and
+        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape("CustomMessage('EtnRollbackNoDbChanges')")))) `
     -Note 'сообщение отката прямо называет потерю записей после остановки службы'
 # Замечание приёмки: сообщение о неудачном бэкапе содержит причину, объём и журнал.
 Add-StaticResult -Name 'static:backup-failure-details' `
     -Ok ((Test-IssCode -Text $orderBody -Pattern ([regex]::Escape('GBackupReason'))) -and
         (Test-IssCode -Text $orderBody -Pattern ([regex]::Escape('DatabaseBackupSizeBytes'))) -and
-        (Test-IssCode -Text $orderBody -Pattern ([regex]::Escape('журнал: ')))) `
+        (Test-MessageTextInBody -Body $orderBody -Key 'EtnPrepareBackupFailed' -Text 'журнал: ') -and
+        (Test-MessageContains -Key 'EtnPrepareBackupFailed' -Text 'требуется свободного места')) `
     -Note 'причина + требуемый объём + путь к журналу (bc7cc846)'
 # Замечание приёмки: экран не выдаёт старый архив за резервную копию отката.
 $errorMemoBody = Get-IssFunctionBody -Text $issText -Name 'ErrorMemoText'
@@ -3950,8 +3957,8 @@ $pRestoreDb = $rollbackBody.IndexOf('RestoreDatabaseFromArchive')
 Add-StaticResult -Name 'static:service-rollback-stop-guard' `
     -Ok (($pRollbackStop -ge 0) -and ($pRestoreFiles -gt $pRollbackStop) -and
         ($pRestoreDb -gt $pRollbackStop) -and
-        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('файлы новой версии и '))) -and
-        (Test-IssCode -Text $rollbackBody -Pattern ([regex]::Escape('БД не восстановлены')))) `
+        (Test-MessageTextInBody -Body $rollbackBody -Key 'EtnRollbackStopFailed' -Text 'файлы новой версии и ') -and
+        (Test-MessageContains -Key 'EtnRollbackStopFailed' -Text 'БД не восстановлены')) `
     -Note ('откат: StopServiceForUpdate → RestoreInstallFiles (' + $pRollbackStop +
         ' < ' + $pRestoreFiles + '); при отказе файлы/БД не трогаются')
 # Снятие службы подтверждается через status: uninstall 1072 возвращает 0, но

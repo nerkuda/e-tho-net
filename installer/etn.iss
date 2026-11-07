@@ -596,6 +596,101 @@ EtnPrivilegedRequiresVerysilent=/PRIVILEGEDPHASE допустим только �
 EtnPrivilegedNotElevated=привилегированная фаза запущена без прав администратора
 EtnPrivilegedNoComponents=не выбран ни один компонент: файл параметров пуст или повреждён
 
+; Причины службы, бэкапа, отката, закрытия клиента и удаления.
+EtnShellUacCancelled=код 1223: запрос UAC отклонён (ERROR_CANCELLED)
+EtnShellElevationRequired=код 740: требуются права администратора (ERROR_ELEVATION_REQUIRED)
+EtnShellAccessDenied=код 5: отказано в доступе (ERROR_ACCESS_DENIED)
+EtnShellCodeUnknown=код не сообщён
+EtnShellWin32Code=Win32-код %1
+EtnLegacyUninstallerNotFound=деинсталлятор не найден: %1
+EtnLegacyUninstallerNotStarted=деинсталлятор не запустился
+EtnLegacyUninstallerCode=деинсталлятор вернул код %1
+EtnLegacyUninstallRecordStayed=запись Uninstall не исчезла за %1 мс
+EtnLegacyRemoveFailed=не удалось удалить старый клиент ETN %1 его деинсталлятором. Удалите его вручную в «Программы и компоненты» и повторите установку.
+EtnClientCloseRefused=клиент ETN не закрыт: пользователь отказался закрыть запущенный клиент
+EtnClientCloseForceFailed=клиент ETN не закрыт: процессы ETN.exe не завершились даже после принудительного закрытия
+EtnServiceStatusAccessDenied=отказано в доступе (5)
+EtnServiceStatusDisabled=служба отключена (1058)
+EtnServiceStatusMissing=служба не найдена (1060)
+EtnServiceStatusMarkedForDelete=служба помечена на удаление (1072)
+EtnServiceStatusCode=etn-service.exe status вернул код %1
+EtnServiceStatusTestFailed=etn-service.exe status не выполнен (тестовый режим)
+EtnServiceStatusUnknown=неизвестный вывод etn-service.exe status: %1
+EtnServiceExeMissing=нет %1 — состояние службы не определить
+EtnServiceStatusNotStarted=не удалось запустить etn-service.exe status
+EtnServiceStatusEmpty=etn-service.exe status вернул пустой вывод
+EtnServiceCodeAccessDenied=отказано в доступе (5) — нужны права администратора
+EtnServiceCodeDisabled=служба отключена (1058): включите её или удалите
+EtnServiceCodeTransition=служба в переходном состоянии (1061)
+EtnServiceCodeNotActive=служба уже остановлена (1062)
+EtnServiceCodeAlreadyRunning=служба уже запущена (1056)
+EtnServiceCodeExists=служба уже существует (1073)
+EtnServiceCodeGeneric=код %1
+EtnServiceCommandReturned=команда %1 вернула %2
+EtnServiceExeNotFound=нет %1
+EtnServiceTestStopFailed=stop не выполнен (хук)
+EtnServiceTestStopAfterStartFailed=stop не выполнен после start (хук)
+EtnServiceTestStartFailed=start не выполнен (хук)
+EtnServiceTestInstallFailed=install не выполнен (хук)
+EtnServiceTestUninstallFailed=uninstall не выполнен (хук)
+EtnServiceNotStarted=не удалось запустить etn-service.exe
+EtnServiceStopFailed=не удалось остановить службу %1: %2
+EtnServiceScmMissing=служба %1 зарегистрирована в реестре, но SCM её не видит (status=NonExistent) — несогласованное состояние
+EtnServiceStateUnknown=не удалось определить состояние службы %1: %2
+EtnServiceNotStoppedInTime=служба %1 не остановилась за %2 мс
+EtnServiceReasonInLog=причина в журнале
+EtnServiceImagePathMissing=<нет ImagePath>
+EtnServiceOtherPath=служба %1 зарегистрирована с другим путём: %2 (ожидается %3) — чужая или устаревшая служба; удалите её вручную и повторите установку
+EtnServiceStartDisabled=служба %1 отключена (Start=4): включите её (Start=2) или удалите и повторите установку
+EtnServiceDeleteFlag=служба %1 помечена на удаление (DeleteFlag=1): перезагрузите машину или удалите ключ службы и повторите установку
+EtnServiceScmMissingRemove=служба %1 зарегистрирована в реестре, но SCM её не видит (status=NonExistent) — несогласованное состояние; перезагрузите машину или удалите ключ службы
+EtnServiceRemovalNotConfirmed=не удалось подтвердить снятие службы %1: %2
+EtnServiceStillRunningAfterUninstall=служба %1 всё ещё работает после uninstall
+EtnServiceStayedInScm=служба %1 осталась в SCM после uninstall (status=%2)
+EtnServiceStatusNotNonexistent=не NonExistent
+EtnServiceConfigMissing=конфигурация службы не найдена: %1
+EtnServiceInstallFailed=служба %1 не зарегистрирована: etn-service.exe install вернул ошибку: %2 (конфигурация: %3)
+EtnServiceAlreadyRegisteredUnusable=служба %1 уже зарегистрирована, но не может быть использована: %2
+EtnServiceNotStoppedUninstall=служба %1 не остановлена: %2
+EtnServiceUninstallFailed=не удалось снять службу %1 (etn-service.exe uninstall вернул ошибку): %2
+EtnServiceRemovalIncomplete=удаление службы %1 не завершено: %2
+EtnHealthCurlFailed=%1: curl.exe не запустился
+EtnHealthHttpError=%1: HTTP-ошибка (ответ не 2xx)
+EtnHealthRefused=%1: соединение отклонено
+EtnHealthTimeout=%1: таймаут
+EtnHealthNetwork=%1: сетевой сбой (curl %2)
+EtnHealthEmpty=%1: пустой ответ
+EtnHealthStatusBad=health: status=%1 вместо ok
+EtnHealthDbBad=health: db=%1 вместо ok
+EtnHealthVersionBad=health: версия %1 вместо %2
+EtnHealthTestMode=тестовый режим: %1
+EtnHealthServiceMissing=служба не найдена (%1)
+EtnValueMissing=<нет>
+EtnBackupCodeError=код %1
+EtnBackupDirNotCreated=каталог архивов не создан: %1 (нет прав или свободного места)
+EtnRollbackStopFailed=. Откат не выполнен: служба %1 не остановилась (%2), файлы новой версии и БД не восстановлены; снимок: %3; архив: %4; журнал: %5.
+EtnRollbackDoneNoDb=. Откат выполнен: файлы возвращены из %1, архив БД не создавался — база оставлена как есть.
+EtnRollbackDoneDb=. Откат выполнен: файлы возвращены из %1, база восстановлена из %2.
+EtnRollbackFilesNotRestored=файлы не восстановлены
+EtnRollbackDbNotRestored=БД не восстановлена
+EtnRollbackBackupNotCreated=не создавался
+EtnRollbackNoDbChanges=Изменения, сделанные в базу после остановки службы, восстановить невозможно.
+EtnRollbackDataLost=Данные, записанные после создания архива (неудачный запуск), потеряны.
+EtnRollbackFailed=. Откат не выполнен (%1). Архив: %2. Снимок: %3. Журнал: %4. Данные, записанные после остановки службы, могут быть потеряны: восстановите базу из архива вручную (инструкция в журнале).
+EtnRollbackPrevNotResponding=Прежняя версия не отвечает на health-check: %1; %2
+EtnPrepareToolUnavailable=инструмент резервного копирования баз данных недоступен: %1 — обновление отменено, служба не останавливалась
+EtnPrepareBackupFailed=резервная копия баз данных не создана: %1; требуется свободного места: %2 (%3\backups); журнал: %4 — обновление отменено, файлы не заменялись
+EtnPrepareSnapshotFailed=снимок отката не создан: %1 — обновление отменено, файлы не заменялись (причина в журнале)
+EtnFailDataDirsNotPrepared=каталог данных не подготовлен: %1
+EtnFailServiceConfigNotPrepared=конфигурация службы не подготовлена: %1
+EtnFailInitNotDone=инициализация сервера не выполнена (etn init) — подробности в журнале
+EtnFailServiceNotStarted=служба %1 не запущена после замены файлов: %2
+EtnFailHealth=health-check не пройден: %1
+EtnFailNoAdmin=сервер не инициализирован: нет первого администратора (нужен ручной режим etn init --username)
+EtnFailInstallJsonNotWritten=install.json не записан: %1
+EtnHeadingFinished=Установка ETN завершена
+EtnHeadingFailed=Установка ETN не завершена
+
 ; Этапы прогресса (StatusLabel) и экраны ошибки/сводки.
 EtnStageBackup=Резервная копия баз данных…
 EtnStageSnapshot=Снимок отката…
@@ -2281,15 +2376,15 @@ end;
 function ShellErrorText(const Code: Integer): String;
 begin
   if Code = ERROR_CANCELLED then
-    Result := 'код 1223: запрос UAC отклонён (ERROR_CANCELLED)'
+    Result := CustomMessage('EtnShellUacCancelled')
   else if Code = ERROR_ELEVATION_REQUIRED then
-    Result := 'код 740: требуются права администратора (ERROR_ELEVATION_REQUIRED)'
+    Result := CustomMessage('EtnShellElevationRequired')
   else if Code = ERROR_ACCESS_DENIED then
-    Result := 'код 5: отказано в доступе (ERROR_ACCESS_DENIED)'
+    Result := CustomMessage('EtnShellAccessDenied')
   else if Code = 0 then
-    Result := 'код не сообщён'
+    Result := CustomMessage('EtnShellCodeUnknown')
   else
-    Result := 'Win32-код ' + IntToStr(Code);
+    Result := FmtMessage(CustomMessage('EtnShellWin32Code'), [IntToStr(Code)]);
 end;
 
 { Лицензия запрашивается только при первой установке: на машине нет ни
@@ -2394,15 +2489,15 @@ begin
   Args := UninstallerArgs(GLegacyUninstallCmd, Exe);
   Err := '';
   if (Exe = '') or (not FileExists(Exe)) then
-    Err := 'деинсталлятор не найден: ' + Exe
+    Err := FmtMessage(CustomMessage('EtnLegacyUninstallerNotFound'), [Exe])
   else
   begin
     LogLine('INFO', 'Старый клиент ETN ' + GLegacyClientVersion +
       ': запуск деинсталлятора ' + Exe + ' ' + Args);
     if not Exec(Exe, Args, ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, Code) then
-      Err := 'деинсталлятор не запустился'
+      Err := CustomMessage('EtnLegacyUninstallerNotStarted')
     else if Code <> 0 then
-      Err := 'деинсталлятор вернул код ' + IntToStr(Code);
+      Err := FmtMessage(CustomMessage('EtnLegacyUninstallerCode'), [IntToStr(Code)]);
     { Запись Uninstall может исчезнуть с задержкой: ждём до 10 с, шаг 500 мс. }
     WaitedMs := 0;
     while (Err = '') and (WaitedMs < LEGACY_GONE_WAIT_MS) and
@@ -2412,7 +2507,8 @@ begin
       WaitedMs := WaitedMs + LEGACY_GONE_STEP_MS;
     end;
     if (Err = '') and RegKeyExists(GLegacyRoot, GLegacyKey) then
-      Err := 'запись Uninstall не исчезла за ' + IntToStr(LEGACY_GONE_WAIT_MS) + ' мс';
+      Err := FmtMessage(CustomMessage('EtnLegacyUninstallRecordStayed'), [
+          IntToStr(LEGACY_GONE_WAIT_MS)]);
   end;
   Result := (Err = '');
   if not Result then
@@ -2453,9 +2549,7 @@ begin
   if Result then
     GLegacyClientFound := False
   else
-    Reason := 'не удалось удалить старый клиент ETN ' + GLegacyClientVersion +
-      ' его деинсталлятором. Удалите его вручную в «Программы и компоненты» ' +
-      'и повторите установку.';
+    Reason := FmtMessage(CustomMessage('EtnLegacyRemoveFailed'), [GLegacyClientVersion]);
 end;
 
 { ---------------------------------------------------------------------------
@@ -2781,7 +2875,7 @@ begin
         mbConfirmation, MB_YESNO, IDYES) <> IDYES then
     begin
       LogLine('WARN', 'Клиент ETN: пользователь отказался закрывать клиент');
-      Reason := 'клиент ETN не закрыт: пользователь отказался закрыть запущенный клиент';
+      Reason := CustomMessage('EtnClientCloseRefused');
       GClientCloseRefused := True;
       Result := False;
       Exit;
@@ -2804,8 +2898,7 @@ begin
     LogLine('INFO', 'Клиент ETN: принудительно закрыт за ' + IntToStr(WaitedMs) + ' мс');
     Exit;
   end;
-  Reason := 'клиент ETN не закрыт: процессы ETN.exe не завершились даже после ' +
-    'принудительного закрытия';
+  Reason := CustomMessage('EtnClientCloseForceFailed');
   LogLine('ERROR', Reason);
   Result := False;
 end;
@@ -3737,16 +3830,16 @@ var
 begin
   Line := LastNonEmptyLine(Output);
   if Code = ERROR_ACCESS_DENIED then
-    Result := 'отказано в доступе (5)'
+    Result := CustomMessage('EtnServiceStatusAccessDenied')
   else if Code = ERROR_SERVICE_DISABLED then
-    Result := 'служба отключена (1058)'
+    Result := CustomMessage('EtnServiceStatusDisabled')
   else if Code = ERROR_SERVICE_DOES_NOT_EXIST then
-    Result := 'служба не найдена (1060)'
+    Result := CustomMessage('EtnServiceStatusMissing')
   else if (Code = ERROR_SERVICE_MARKED_FOR_DELETE) or (Pos('1072', Line) > 0) then
-    Result := 'служба помечена на удаление (1072)'
+    Result := CustomMessage('EtnServiceStatusMarkedForDelete')
   else
   begin
-    Result := 'etn-service.exe status вернул код ' + IntToStr(Code);
+    Result := FmtMessage(CustomMessage('EtnServiceStatusCode'), [IntToStr(Code)]);
     if Line <> '' then Result := Result + ': ' + Line;
   end;
 end;
@@ -3767,13 +3860,13 @@ begin
 #ifdef TestMode
   if GTestServiceStatus = 'fail' then
   begin
-    Detail := 'etn-service.exe status не выполнен (тестовый режим)';
+    Detail := CustomMessage('EtnServiceStatusTestFailed');
     Result := SERVICE_STATE_UNKNOWN;
     Exit;
   end;
   if GTestServiceStatus = 'garbage' then
   begin
-    Detail := 'неизвестный вывод etn-service.exe status: TestMode';
+    Detail := FmtMessage(CustomMessage('EtnServiceStatusUnknown'), ['TestMode']);
     Result := SERVICE_STATE_UNKNOWN;
     Exit;
   end;
@@ -3785,7 +3878,7 @@ begin
   if (GTestService <> '') and (GTestServiceRealFile = '1') and
      (not FileExists(ServiceExePath)) then
   begin
-    Detail := 'нет ' + ServiceExePath + ' — состояние службы не определить';
+    Detail := FmtMessage(CustomMessage('EtnServiceExeMissing'), [ServiceExePath]);
     Result := SERVICE_STATE_UNKNOWN;
     Exit;
   end;
@@ -3812,7 +3905,7 @@ begin
 #endif
   if not FileExists(ServiceExePath) then
   begin
-    Detail := 'нет ' + ServiceExePath + ' — состояние службы не определить';
+    Detail := FmtMessage(CustomMessage('EtnServiceExeMissing'), [ServiceExePath]);
     Result := SERVICE_STATE_UNKNOWN;
     Exit;
   end;
@@ -3823,7 +3916,7 @@ begin
   if not Exec(ExpandConstant('{cmd}'), Args, ExtractFileDir(ServiceExePath), SW_HIDE,
     ewWaitUntilTerminated, Code) then
   begin
-    Detail := 'не удалось запустить etn-service.exe status';
+    Detail := CustomMessage('EtnServiceStatusNotStarted');
     Result := SERVICE_STATE_UNKNOWN;
     Exit;
   end;
@@ -3845,9 +3938,9 @@ begin
   else
   begin
     if Line = '' then
-      Detail := 'etn-service.exe status вернул пустой вывод'
+      Detail := CustomMessage('EtnServiceStatusEmpty')
     else
-      Detail := 'неизвестный вывод etn-service.exe status: ' + Line;
+      Detail := FmtMessage(CustomMessage('EtnServiceStatusUnknown'), [Line]);
     Result := SERVICE_STATE_UNKNOWN;
   end;
 end;
@@ -3890,25 +3983,25 @@ begin
   if Code = 0 then
     Result := ''
   else if Code = ERROR_ACCESS_DENIED then
-    Result := 'отказано в доступе (5) — нужны права администратора'
+    Result := CustomMessage('EtnServiceCodeAccessDenied')
   else if Code = ERROR_SERVICE_DISABLED then
-    Result := 'служба отключена (1058): включите её или удалите'
+    Result := CustomMessage('EtnServiceCodeDisabled')
   else if Code = ERROR_SERVICE_DOES_NOT_EXIST then
-    Result := 'служба не найдена (1060)'
+    Result := CustomMessage('EtnServiceStatusMissing')
   else if Code = ERROR_SERVICE_MARKED_FOR_DELETE then
-    Result := 'служба помечена на удаление (1072)'
+    Result := CustomMessage('EtnServiceStatusMarkedForDelete')
   else if Code = ERROR_SERVICE_CANNOT_ACCEPT_CTRL then
-    Result := 'служба в переходном состоянии (1061)'
+    Result := CustomMessage('EtnServiceCodeTransition')
   else if Code = ERROR_SERVICE_NOT_ACTIVE then
-    Result := 'служба уже остановлена (1062)'
+    Result := CustomMessage('EtnServiceCodeNotActive')
   else if Code = ERROR_SERVICE_ALREADY_RUNNING then
-    Result := 'служба уже запущена (1056)'
+    Result := CustomMessage('EtnServiceCodeAlreadyRunning')
   else if Code = ERROR_SERVICE_EXISTS then
-    Result := 'служба уже существует (1073)'
+    Result := CustomMessage('EtnServiceCodeExists')
   else
-    Result := 'код ' + IntToStr(Code);
+    Result := FmtMessage(CustomMessage('EtnServiceCodeGeneric'), [IntToStr(Code)]);
   if (Result <> '') and (Pos('(', Result) = 0) then
-    Result := 'команда ' + Verb + ' вернула ' + Result;
+    Result := FmtMessage(CustomMessage('EtnServiceCommandReturned'), [Verb, Result]);
 end;
 
 { Разбор кода возврата команды WinSW — общий для продуктовой ветки и модели
@@ -3989,7 +4082,7 @@ begin
   if (GTestService <> '') and (GTestServiceRealFile = '1') and
      (not FileExists(ServiceExePath)) then
   begin
-    GLastServiceError := 'нет ' + ServiceExePath;
+    GLastServiceError := FmtMessage(CustomMessage('EtnServiceExeNotFound'), [ServiceExePath]);
     LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
       ' не выполнена');
     Exit;
@@ -3998,32 +4091,32 @@ begin
   begin
     if (Verb = 'stop') and (GTestServiceStop = 'fail') then
     begin
-      GLastServiceError := 'stop не выполнен (хук)';
+      GLastServiceError := CustomMessage('EtnServiceTestStopFailed');
       LogLine('WARN', 'Служба (тестовый режим): stop не выполнен (хук)');
       Exit;
     end;
     if (Verb = 'stop') and (GTestServiceStop = 'fail-after-start') and
        GTestServiceStartedFlag then
     begin
-      GLastServiceError := 'stop не выполнен после start (хук)';
+      GLastServiceError := CustomMessage('EtnServiceTestStopAfterStartFailed');
       LogLine('WARN', 'Служба (тестовый режим): stop после start не выполнен (хук)');
       Exit;
     end;
     if (Verb = 'start') and (GTestServiceStart = 'fail') then
     begin
-      GLastServiceError := 'start не выполнен (хук)';
+      GLastServiceError := CustomMessage('EtnServiceTestStartFailed');
       LogLine('WARN', 'Служба (тестовый режим): start не выполнен (хук)');
       Exit;
     end;
     if (Verb = 'install') and (GTestServiceInstall = 'fail') then
     begin
-      GLastServiceError := 'install не выполнен (хук)';
+      GLastServiceError := CustomMessage('EtnServiceTestInstallFailed');
       LogLine('WARN', 'Служба (тестовый режим): install не выполнен (хук)');
       Exit;
     end;
     if (Verb = 'uninstall') and (GTestServiceUninstall = 'fail') then
     begin
-      GLastServiceError := 'uninstall не выполнен (хук)';
+      GLastServiceError := CustomMessage('EtnServiceTestUninstallFailed');
       LogLine('WARN', 'Служба (тестовый режим): uninstall не выполнен (хук)');
       Exit;
     end;
@@ -4105,7 +4198,7 @@ begin
 #endif
   if not FileExists(ServiceExePath) then
   begin
-    GLastServiceError := 'нет ' + ServiceExePath;
+    GLastServiceError := FmtMessage(CustomMessage('EtnServiceExeNotFound'), [ServiceExePath]);
     LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
       ' не выполнена');
     Exit;
@@ -4115,7 +4208,7 @@ begin
   if not Exec(ServiceExePath, Verb, ExtractFileDir(ServiceExePath), SW_HIDE,
     ewWaitUntilTerminated, Code) then
   begin
-    GLastServiceError := 'не удалось запустить etn-service.exe';
+    GLastServiceError := CustomMessage('EtnServiceNotStarted');
     LogLine('WARN', 'Служба: не удалось запустить ' + ServiceExePath +
       ' ' + Verb);
     Exit;
@@ -4145,8 +4238,9 @@ begin
     begin
       if not RunServiceCommand('stop') then
       begin
-        Reason := 'не удалось остановить службу ' + SERVICE_NAME + ': ' +
-          IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError);
+        Reason := FmtMessage(CustomMessage('EtnServiceStopFailed'), [
+            SERVICE_NAME, IfStr(GLastServiceError = '',
+            CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]);
         Exit;
       end;
       RetryStop := GLastServiceCode = ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
@@ -4165,20 +4259,19 @@ begin
         Result := True;
         Exit;
       end;
-      Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована в реестре, но SCM ' +
-        'её не видит (status=NonExistent) — несогласованное состояние';
+      Reason := FmtMessage(CustomMessage('EtnServiceScmMissing'), [SERVICE_NAME]);
       Exit;
     end;
     if Status = SERVICE_STATE_UNKNOWN then
     begin
-      Reason := 'не удалось определить состояние службы ' + SERVICE_NAME + ': ' +
-        IfStr(Detail = '', 'причина в журнале', Detail);
+      Reason := FmtMessage(CustomMessage('EtnServiceStateUnknown'), [
+          SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
       Exit;
     end;
     Sleep(SERVICE_STOP_STEP_MS);
   end;
-  Reason := 'служба ' + SERVICE_NAME + ' не остановилась за ' +
-    IntToStr(ServiceStopWaitMs) + ' мс';
+  Reason := FmtMessage(CustomMessage('EtnServiceNotStoppedInTime'), [
+      SERVICE_NAME, IntToStr(ServiceStopWaitMs)]);
 end;
 
 { ImagePath службы из реестра (в тестовом режиме — хук /TESTSERVICEIMAGE;
@@ -4265,40 +4358,35 @@ begin
   if not ServiceRegistered then Exit;
   if not ServiceImagePathMatches then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована с другим путём: ' +
-      IfStr(ServiceImagePath = '', '<нет ImagePath>', ServiceImagePath) +
-      ' (ожидается ' + ServiceExePath + ') — чужая или устаревшая служба; ' +
-      'удалите её вручную и повторите установку';
+    Reason := FmtMessage(CustomMessage('EtnServiceOtherPath'), [
+        SERVICE_NAME, IfStr(ServiceImagePath = '',
+        CustomMessage('EtnServiceImagePathMissing'), ServiceImagePath), ServiceExePath]);
     Result := False;
     Exit;
   end;
   if ServiceStartDisabled then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' отключена (Start=4): включите её ' +
-      '(Start=2) или удалите и повторите установку';
+    Reason := FmtMessage(CustomMessage('EtnServiceStartDisabled'), [SERVICE_NAME]);
     Result := False;
     Exit;
   end;
   if ServiceDeleteFlagSet then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' помечена на удаление (DeleteFlag=1): ' +
-      'перезагрузите машину или удалите ключ службы и повторите установку';
+    Reason := FmtMessage(CustomMessage('EtnServiceDeleteFlag'), [SERVICE_NAME]);
     Result := False;
     Exit;
   end;
   Status := ServiceStatusOutput(Detail);
   if Status = SERVICE_STATE_MISSING then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована в реестре, но SCM ' +
-      'её не видит (status=NonExistent) — несогласованное состояние; ' +
-      'перезагрузите машину или удалите ключ службы';
+    Reason := FmtMessage(CustomMessage('EtnServiceScmMissingRemove'), [SERVICE_NAME]);
     Result := False;
     Exit;
   end;
   if Status = SERVICE_STATE_UNKNOWN then
   begin
-    Reason := 'не удалось определить состояние службы ' + SERVICE_NAME + ': ' +
-      IfStr(Detail = '', 'причина в журнале', Detail);
+    Reason := FmtMessage(CustomMessage('EtnServiceStateUnknown'), [
+        SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
     Result := False;
   end;
 end;
@@ -4335,15 +4423,14 @@ begin
         '(status=NonExistent) — останавливать нечего');
       Exit;
     end;
-    Reason := 'служба ' + SERVICE_NAME + ' зарегистрирована в реестре, но SCM ' +
-      'её не видит (status=NonExistent) — несогласованное состояние';
+    Reason := FmtMessage(CustomMessage('EtnServiceScmMissing'), [SERVICE_NAME]);
     Result := False;
     Exit;
   end;
   if Status = SERVICE_STATE_UNKNOWN then
   begin
-    Reason := 'не удалось определить состояние службы ' + SERVICE_NAME + ': ' +
-      IfStr(Detail = '', 'причина в журнале', Detail);
+    Reason := FmtMessage(CustomMessage('EtnServiceStateUnknown'), [
+        SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
     Result := False;
     Exit;
   end;
@@ -4351,8 +4438,9 @@ begin
   StartTick := ServiceNowSeconds;
   if not RunServiceCommand('stop') then
   begin
-    Reason := 'не удалось остановить службу ' + SERVICE_NAME + ': ' +
-      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError);
+    Reason := FmtMessage(CustomMessage('EtnServiceStopFailed'), [
+        SERVICE_NAME, IfStr(GLastServiceError = '',
+        CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]);
     Result := False;
     Exit;
   end;
@@ -4385,17 +4473,18 @@ begin
     end;
     if Status = SERVICE_STATE_UNKNOWN then
     begin
-      Reason := 'не удалось подтвердить снятие службы ' + SERVICE_NAME + ': ' +
-        IfStr(Detail = '', 'причина в журнале', Detail);
+      Reason := FmtMessage(CustomMessage('EtnServiceRemovalNotConfirmed'), [
+          SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
       Exit;
     end;
     Sleep(SERVICE_STOP_STEP_MS);
   end;
   if Status = SERVICE_STATE_STARTED then
-    Reason := 'служба ' + SERVICE_NAME + ' всё ещё работает после uninstall'
+    Reason := FmtMessage(CustomMessage('EtnServiceStillRunningAfterUninstall'), [SERVICE_NAME])
   else
-    Reason := 'служба ' + SERVICE_NAME + ' осталась в SCM после uninstall ' +
-      '(status=' + Pick(Status = SERVICE_STATE_STOPPED, 'Stopped', 'не NonExistent') + ')';
+    Reason := FmtMessage(CustomMessage('EtnServiceStayedInScm'), [
+        SERVICE_NAME, Pick(Status = SERVICE_STATE_STOPPED, 'Stopped',
+        CustomMessage('EtnServiceStatusNotNonexistent'))]);
 end;
 
 { Запуск службы после замены файлов: start вызывается всегда для
@@ -4451,7 +4540,7 @@ begin
   Config := ServiceDir + '\service\etn-service.xml';
   if not FileExists(Config) then
   begin
-    Reason := 'конфигурация службы не найдена: ' + Config;
+    Reason := FmtMessage(CustomMessage('EtnServiceConfigMissing'), [Config]);
     Result := False;
     Exit;
   end;
@@ -4472,10 +4561,9 @@ begin
     ' install (конфигурация: ' + Config + ')');
   if not RunServiceCommand('install') then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' не зарегистрирована: ' +
-      'etn-service.exe install вернул ошибку: ' +
-      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError) +
-      ' (конфигурация: ' + Config + ')';
+    Reason := FmtMessage(CustomMessage('EtnServiceInstallFailed'), [
+        SERVICE_NAME, IfStr(GLastServiceError = '',
+        CustomMessage('EtnServiceReasonInLog'), GLastServiceError), Config]);
     Result := False;
     Exit;
   end;
@@ -4484,8 +4572,8 @@ begin
   if (GLastServiceCode = ERROR_SERVICE_EXISTS) and
      (not CheckServiceIdentity(Reason)) then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' уже зарегистрирована, но ' +
-      'не может быть использована: ' + Reason;
+    Reason := FmtMessage(CustomMessage('EtnServiceAlreadyRegisteredUnusable'), [
+        SERVICE_NAME, Reason]);
     LogLine('ERROR', Reason);
     Result := False;
     Exit;
@@ -4524,22 +4612,22 @@ begin
   end;
   if not StopServiceForUpdate(Reason, True) then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' не остановлена: ' + Reason;
+    Reason := FmtMessage(CustomMessage('EtnServiceNotStoppedUninstall'), [SERVICE_NAME, Reason]);
     Result := False;
     Exit;
   end;
   StartTick := ServiceNowSeconds;
   if not RunServiceCommand('uninstall') then
   begin
-    Reason := 'не удалось снять службу ' + SERVICE_NAME +
-      ' (etn-service.exe uninstall вернул ошибку): ' +
-      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError);
+    Reason := FmtMessage(CustomMessage('EtnServiceUninstallFailed'), [
+        SERVICE_NAME, IfStr(GLastServiceError = '',
+        CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]);
     Result := False;
     Exit;
   end;
   if not WaitServiceRemoved(StartTick, Reason) then
   begin
-    Reason := 'удаление службы ' + SERVICE_NAME + ' не завершено: ' + Reason;
+    Reason := FmtMessage(CustomMessage('EtnServiceRemovalIncomplete'), [SERVICE_NAME, Reason]);
     Result := False;
     Exit;
   end;
@@ -4596,24 +4684,24 @@ begin
   if not Exec('curl.exe', '-fsS --max-time 5 -o "' + BodyFile + '" "' + Url + '"',
     '', SW_HIDE, ewWaitUntilTerminated, Code) then
   begin
-    Detail := What + ': curl.exe не запустился';
+    Detail := FmtMessage(CustomMessage('EtnHealthCurlFailed'), [What]);
     Exit;
   end;
   if Code <> 0 then
   begin
     if Code = 22 then
-      Detail := What + ': HTTP-ошибка (ответ не 2xx)'
+      Detail := FmtMessage(CustomMessage('EtnHealthHttpError'), [What])
     else if Code = 7 then
-      Detail := What + ': соединение отклонено'
+      Detail := FmtMessage(CustomMessage('EtnHealthRefused'), [What])
     else if Code = 28 then
-      Detail := What + ': таймаут'
+      Detail := FmtMessage(CustomMessage('EtnHealthTimeout'), [What])
     else
-      Detail := What + ': сетевой сбой (curl ' + IntToStr(Code) + ')';
+      Detail := FmtMessage(CustomMessage('EtnHealthNetwork'), [What, IntToStr(Code)]);
     Exit;
   end;
   if not FileExists(BodyFile) then
   begin
-    Detail := What + ': пустой ответ';
+    Detail := FmtMessage(CustomMessage('EtnHealthEmpty'), [What]);
     Exit;
   end;
   Result := True;
@@ -4637,13 +4725,14 @@ begin
   Db := LowerCase(JsonGetRaw(Body, 'db'));
   if Status <> 'ok' then
   begin
-    Detail := 'health: status=' + IfStr(Status = '', '<нет>', Status) +
-      ' вместо ok';
+    Detail := FmtMessage(CustomMessage('EtnHealthStatusBad'), [
+        IfStr(Status = '', CustomMessage('EtnValueMissing'), Status)]);
     Exit;
   end;
   if Db <> 'ok' then
   begin
-    Detail := 'health: db=' + IfStr(Db = '', '<нет>', Db) + ' вместо ok';
+    Detail := FmtMessage(CustomMessage('EtnHealthDbBad'), [
+        IfStr(Db = '', CustomMessage('EtnValueMissing'), Db)]);
     Exit;
   end;
   if not RequireTargetVersion then
@@ -4654,8 +4743,8 @@ begin
   Ver := JsonGetRaw(Body, 'version');
   if Ver <> GProductVersion then
   begin
-    Detail := 'health: версия ' + IfStr(Ver = '', '<нет>', Ver) +
-      ' вместо ' + GProductVersion;
+    Detail := FmtMessage(CustomMessage('EtnHealthVersionBad'), [
+        IfStr(Ver = '', CustomMessage('EtnValueMissing'), Ver), GProductVersion]);
     Exit;
   end;
   Result := True;
@@ -4675,14 +4764,15 @@ begin
   if GTestHealth <> '' then
   begin
     Result := LowerCase(GTestHealth) = 'ok';
-    if not Result then GHealthReason := 'тестовый режим: ' + GTestHealth;
+    if not Result then
+      GHealthReason := FmtMessage(CustomMessage('EtnHealthTestMode'), [GTestHealth]);
     LogLine('INFO', 'Health-check (тестовый режим): ' + GTestHealth);
     Exit;
   end;
 #endif
   if not FileExists(ServiceExePath) then
   begin
-    GHealthReason := 'служба не найдена (' + ServiceExePath + ')';
+    GHealthReason := FmtMessage(CustomMessage('EtnHealthServiceMissing'), [ServiceExePath]);
     LogLine('ERROR', 'Health-check не выполнен: ' + GHealthReason);
     Exit;
   end;
@@ -4982,7 +5072,7 @@ begin
   else
   begin
     if Reason = '' then
-      Reason := 'код ' + IntToStr(Code);
+      Reason := FmtMessage(CustomMessage('EtnBackupCodeError'), [IntToStr(Code)]);
     GBackupReason := Reason;
     LogLine('ERROR', Operation + ': ' + Reason + ' (код ' + IntToStr(Code) + ')');
   end;
@@ -5059,8 +5149,7 @@ begin
   BackupsDir := GDataDir + '\backups';
   if not ForceDirectories(BackupsDir) then
   begin
-    GBackupReason := 'каталог архивов не создан: ' + BackupsDir +
-      ' (нет прав или свободного места)';
+    GBackupReason := FmtMessage(CustomMessage('EtnBackupDirNotCreated'), [BackupsDir]);
     LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архивов ' + BackupsDir +
       ' (нет прав или места) — обновление отменяется');
     Exit;
@@ -5402,11 +5491,10 @@ begin
       'восстановлены; снимок: ' + GLastRollbackDir + '; архив: ' +
       IfStr(GLastBackupDir = '', 'не создавался', GLastBackupDir) +
       '; журнал: ' + GLogPath);
-    GFailureReason := GFailureReason + '. Откат не выполнен: служба ' +
-      SERVICE_NAME + ' не остановилась (' + Reason + '), файлы новой версии и ' +
-      'БД не восстановлены; снимок: ' + GLastRollbackDir + '; архив: ' +
-      IfStr(GLastBackupDir = '', 'не создавался', GLastBackupDir) +
-      '; журнал: ' + GLogPath + '.';
+    GFailureReason := GFailureReason + FmtMessage(CustomMessage('EtnRollbackStopFailed'), [
+        SERVICE_NAME, Reason, GLastRollbackDir,
+       IfStr(GLastBackupDir = '', CustomMessage('EtnRollbackBackupNotCreated'), GLastBackupDir),
+       GLogPath]);
     Result := False;
     Exit;
   end;
@@ -5414,30 +5502,27 @@ begin
   DbOk := RestoreDatabaseFromArchive;
   Archive := GLastBackupDir;
   Detail := '';
-  if not FilesOk then Detail := 'файлы не восстановлены';
+  if not FilesOk then Detail := CustomMessage('EtnRollbackFilesNotRestored');
   if not DbOk then
   begin
     if Detail <> '' then Detail := Detail + ', ';
-    Detail := Detail + 'БД не восстановлена';
+    Detail := Detail + CustomMessage('EtnRollbackDbNotRestored');
   end;
   if FilesOk and DbOk then
   begin
     LogLine('INFO', 'Откат выполнен: файлы возвращены из ' + GLastRollbackDir +
       IfStr(Archive = '', '; архив БД не создавался — база оставлена как есть',
         '; БД восстановлена из ' + Archive));
-    GFailureReason := GFailureReason + '. Откат выполнен: файлы возвращены из ' +
-      GLastRollbackDir +
-      IfStr(Archive = '', ', архив БД не создавался — база оставлена как есть',
-        ', база восстановлена из ' + Archive) + '.';
+    GFailureReason := GFailureReason +
+      IfStr(Archive = '',
+        FmtMessage(CustomMessage('EtnRollbackDoneNoDb'), [GLastRollbackDir]),
+        FmtMessage(CustomMessage('EtnRollbackDoneDb'), [GLastRollbackDir, Archive]));
     { Окно потерь (сценарий ed2e42df): архив создаётся после остановки службы
       и до замены файлов, поэтому записи неудачного запуска не сохраняются. }
     if Archive = '' then
-      GFailureReason := GFailureReason +
-        ' Изменения, сделанные в базу после остановки службы, восстановить невозможно.'
+      GFailureReason := GFailureReason + ' ' + CustomMessage('EtnRollbackNoDbChanges')
     else
-      GFailureReason := GFailureReason +
-        ' Данные, записанные после создания архива (неудачный запуск), ' +
-        'потеряны.';
+      GFailureReason := GFailureReason + ' ' + CustomMessage('EtnRollbackDataLost');
     Result := True;
   end
   else
@@ -5445,11 +5530,9 @@ begin
     LogLine('ERROR', 'Откат не выполнен: ' + Detail + '; архив: ' +
       IfStr(Archive = '', 'не создавался', Archive) + '; снимок: ' +
       GLastRollbackDir + '; журнал: ' + GLogPath);
-    GFailureReason := GFailureReason + '. Откат не выполнен (' + Detail +
-      '). Архив: ' + IfStr(Archive = '', 'не создавался', Archive) +
-      '. Снимок: ' + GLastRollbackDir + '. Журнал: ' + GLogPath +
-      '. Данные, записанные после остановки службы, могут быть потеряны: ' +
-      'восстановите базу из архива вручную (инструкция в журнале).';
+    GFailureReason := GFailureReason + FmtMessage(CustomMessage('EtnRollbackFailed'), [
+        Detail, IfStr(Archive = '', CustomMessage('EtnRollbackBackupNotCreated'), Archive),
+       GLastRollbackDir, GLogPath]);
   end;
   if not StartServiceIfNeeded then
     LogLine('WARN', 'Откат: служба не запустилась');
@@ -5464,9 +5547,9 @@ begin
     { Причина отказа не должна маскировать неработающую прежнюю версию: файлы
       могли вернуться, но сервер не поднялся — администратор обязан увидеть
       это в причине, а не только WARN в журнале (a1ea1d40). }
-    GFailureReason := GFailureReason + '. Прежняя версия не отвечает на ' +
-      'health-check: ' + GHealthReason + '; ' + FmtMessage(
-      CustomMessage('ServiceStartManually'), [GLogPath]);
+    GFailureReason := GFailureReason + '. ' + FmtMessage(
+      CustomMessage('EtnRollbackPrevNotResponding'), [
+        GHealthReason, FmtMessage(CustomMessage('ServiceStartManually'), [GLogPath])]);
   end;
 end;
 
@@ -5544,8 +5627,7 @@ begin
     поставке, сервер продолжает работать, а обновление не начинается. }
   if NeedBackup and (not EnsureDatabaseTool(ToolReason)) then
   begin
-    Reason := 'инструмент резервного копирования баз данных недоступен: ' +
-      ToolReason + ' — обновление отменено, служба не останавливалась';
+    Reason := FmtMessage(CustomMessage('EtnPrepareToolUnavailable'), [ToolReason]);
     LogLine('ERROR', Reason);
     Result := EXIT_FAILED;
     Exit;
@@ -5562,11 +5644,9 @@ begin
     if not CreateDatabaseBackup(True) then
     begin
       { Сценарий bc7cc846: причина, требуемый объём и путь к журналу. }
-      Reason := 'резервная копия баз данных не создана: ' +
-        IfStr(GBackupReason = '', 'причина в журнале', GBackupReason) +
-        '; требуется свободного места: ' + FormatSizeBytes(DatabaseBackupSizeBytes) +
-        ' (' + GDataDir + '\backups); журнал: ' + GLogPath +
-        ' — обновление отменено, файлы не заменялись';
+      Reason := FmtMessage(CustomMessage('EtnPrepareBackupFailed'), [
+          IfStr(GBackupReason = '', CustomMessage('EtnServiceReasonInLog'), GBackupReason),
+         FormatSizeBytes(DatabaseBackupSizeBytes), GDataDir, GLogPath]);
       { Служба уже остановлена — возвращаем её: сервер обязан работать на
         прежней версии (сценарий bc7cc846). start не ждёт готовности, поэтому
         подтверждаем ответ прежней версии health-check-ом. }
@@ -5581,8 +5661,7 @@ begin
   end;
   if not CreateRollbackSnapshot then
   begin
-    Reason := 'снимок отката не создан: ' + RollbackRoot +
-      ' — обновление отменено, файлы не заменялись (причина в журнале)';
+    Reason := FmtMessage(CustomMessage('EtnPrepareSnapshotFailed'), [RollbackRoot]);
     if not StartServiceIfNeeded then
       LogLine('WARN', 'Не удалось вернуть службу после неудачного снимка')
     else if not PreviousVersionResponsive then
@@ -8179,13 +8258,13 @@ begin
       WizardForm.FinishedLabel.Visible := False;
       if GExitCode = EXIT_OK then
       begin
-        WizardForm.FinishedHeadingLabel.Caption := 'Установка ETN завершена';
+        WizardForm.FinishedHeadingLabel.Caption := CustomMessage('EtnHeadingFinished');
         if GSummaryMemo <> nil then
           GSummaryMemo.Lines.Text := SummaryText;
       end
       else
       begin
-        WizardForm.FinishedHeadingLabel.Caption := 'Установка ETN не завершена';
+        WizardForm.FinishedHeadingLabel.Caption := CustomMessage('EtnHeadingFailed');
         if GSummaryMemo <> nil then
           GSummaryMemo.Lines.Text := ErrorMemoText;
       end;
@@ -8481,14 +8560,16 @@ begin
         Reason := '';
         if not CloseRunningClient(False, Reason) then
         begin
-          FailText := 'Установка не начата: ' + Reason;
+          FailText := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
           LogLine('ERROR', FailText + ' (код ' + IntToStr(EXIT_PRECONDITION) + ')');
           if GFailureReason = '' then GFailureReason := Reason;
           WriteReasonFile(Reason);
           GExitCode := EXIT_PRECONDITION;
           if not GSilent then
-            SuppressibleMsgBox(FailText + '.' + #13#10#13#10 +
-              'Изменения не выполнялись. Журнал: ' + GLogPath, mbError, MB_OK, IDOK);
+            SuppressibleMsgBox(
+              FailText + '.' + #13#10#13#10 +
+              FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]),
+              mbError, MB_OK, IDOK);
           ExitProcess(EXIT_PRECONDITION);
         end;
       end;
@@ -8499,14 +8580,16 @@ begin
       Code := PrepareServerUpdate(Reason);
       if Code <> EXIT_OK then
       begin
-        FailText := 'Установка не начата: ' + Reason;
+        FailText := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
         LogLine('ERROR', FailText + ' (код ' + IntToStr(Code) + ')');
         if GFailureReason = '' then GFailureReason := Reason;
         WriteReasonFile(Reason);
         GExitCode := Code;
         if not GSilent then
-          SuppressibleMsgBox(FailText + '.' + #13#10#13#10 + 'Изменения не выполнялись. ' +
-            'Журнал: ' + GLogPath, mbError, MB_OK, IDOK);
+          SuppressibleMsgBox(
+            FailText + '.' + #13#10#13#10 +
+            FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]),
+            mbError, MB_OK, IDOK);
         ExitProcess(Code);
       end;
       if GServerSelected then
@@ -8532,15 +8615,15 @@ begin
       begin
         SetInstallStage(CustomMessage('EtnStageDataDirs'));
         if not EnsureServerDirs then
-          FailInstall('каталог данных не подготовлен: ' + GDataDir);
+          FailInstall(FmtMessage(CustomMessage('EtnFailDataDirsNotPrepared'), [GDataDir]));
         { Подстановка шаблона службы до регистрации/запуска: пока в
           etn-service.xml плейсхолдеры, службу запускать нельзя (ADR db60302a). }
         if GExitCode = EXIT_OK then
         begin
           SetInstallStage(CustomMessage('EtnStageServiceConfig'));
           if not InstallServiceConfig then
-            FailInstall('конфигурация службы не подготовлена: ' + ServiceDir +
-              '\service\etn-service.xml');
+            FailInstall(FmtMessage(CustomMessage('EtnFailServiceConfigNotPrepared'), [
+                ServiceDir + '\service\etn-service.xml']));
         end;
         { Регистрация службы — после записи etn-service.xml (WinSW читает
           конфигурацию из файла рядом с exe) и до запуска. Режим app службу
@@ -8568,8 +8651,7 @@ begin
         SetInstallStage(CustomMessage('EtnStageInit'));
         EnsureFirstUser;
         if GExitCode <> EXIT_OK then
-          FailInstall('инициализация сервера не выполнена (etn init) — ' +
-            'подробности в журнале');
+          FailInstall(CustomMessage('EtnFailInitNotDone'));
       end;
 #ifdef TestMode
       if (GTestFailAfterInit = '1') and GInitAttempted and (GPendingKey <> '') then
@@ -8585,9 +8667,10 @@ begin
           Сбой команды start после замены файлов — код 10 (сбой выполнения).
           После отката прежняя версия поднимается. }
         if not StartServiceIfNeeded then
-          FailInstallWithCode(EXIT_FAILED, 'служба ' + SERVICE_NAME +
-            ' не запущена после замены файлов: ' +
-            IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError))
+          FailInstallWithCode(EXIT_FAILED, FmtMessage(
+            CustomMessage('EtnFailServiceNotStarted'), [
+              SERVICE_NAME, IfStr(GLastServiceError = '',
+              CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]))
         else if not HealthCheckApplicable then
           { Режим app: сервер не служба, его запускает пользователь. Опрос
             health гарантированно истёк бы и увёл обновление в откат. }
@@ -8600,7 +8683,7 @@ begin
             /api/v1/health — 200, status=ok, db=ok, version = целевая из тела
             ответа; повтор до 60 с фактического времени. }
           if not ProbeHealth(True) then
-            FailInstall('health-check не пройден: ' + GHealthReason);
+            FailInstall(FmtMessage(CustomMessage('EtnFailHealth'), [GHealthReason]));
         end;
       end;
       { Silent: init не вызывался; без администратора сервер не работает —
@@ -8608,8 +8691,7 @@ begin
       if (GExitCode = EXIT_OK) and IsSilentServerOnly then
       begin
         if not SilentAdminPresent then
-          FailInstall('сервер не инициализирован: нет первого администратора ' +
-            '(нужен ручной режим etn init --username)');
+          FailInstall(CustomMessage('EtnFailNoAdmin'));
       end;
       { Сбой после замены файлов — возвращаем прежнюю версию: файлы из снимка,
         БД из архива, запуск и повторная проверка. Код уже 10, install.json
@@ -8628,7 +8710,7 @@ begin
       SetInstallStage(CustomMessage('EtnStageParams'));
       if not WriteInstallJson then
       begin
-        FailInstall('install.json не записан: ' + GInstallJsonPath);
+        FailInstall(FmtMessage(CustomMessage('EtnFailInstallJsonNotWritten'), [GInstallJsonPath]));
         { Запись о новой версии не легла на диск — возвращаем прежнюю версию:
           иначе файлы новые, а install.json говорит о прежней. }
         if GDoPrivilegedWork then
