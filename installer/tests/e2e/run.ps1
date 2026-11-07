@@ -45,7 +45,14 @@
     «живыми» (сняты с запущенной ВМ, где WinRM отвечает): resume возвращает
     память вместе с работающей службой. Для S3–S6 на стенде подготовлен
     `etn-0.15.1-installed-v2` (0.15.1 + WinRM Start=auto/DelayedAutostart=0),
-    он задаётся через -InstalledSnapshot; по умолчанию — etn-0.15.1-installed.
+    он и есть значение по умолчанию -InstalledSnapshot (снапшот без этой
+    настройки после resume поднимает WinRM не всегда).
+
+    В отчёте счёт «проверок» и «замеров» разделён: длительности (timings) не
+    проверки и не влияют на итог. У каждого сценария есть поимённый список
+    checks_detail; сбой сбора журналов виден полем logs_error (путь logs при
+    этом пуст, а не выдаётся за собранные журналы). Ненулевой код возврата —
+    провал проверки (1) или неудача возврата ВМ в исходный снапшот (2).
 
     Секреты ВМ читаются из etn-vms.env только в момент прогона (guest.ps1),
     в отчёт и журнал не попадают.
@@ -55,7 +62,8 @@
 
 .PARAMETER InstalledSnapshot
     Снапшот установленного сервера 0.15.1 для S3–S6 (должен быть «живым»:
-    resume обязан поднимать WinRM). По умолчанию — etn-0.15.1-installed.
+    resume обязан поднимать WinRM). По умолчанию — etn-0.15.1-installed-v2
+    (рабочий: WinRM Start=auto/DelayedAutostart=0).
 
 .PARAMETER KeepVmRunning
     Не выключать ВМ после возврата в исходный снапшот (для отладки; в отчёте
@@ -74,7 +82,7 @@
 param(
     [string]$Vm = 'ETN-Win11',
     [string]$BaseSnapshot = 'base-e2e-live',
-    [string]$InstalledSnapshot = 'etn-0.15.1-installed',
+    [string]$InstalledSnapshot = 'etn-0.15.1-installed-v2',
     [string]$OriginalSnapshot = 'base-clean-v2',
     [string]$SecretsPath = 'C:\Users\User\.zcode\secrets\etn-vms.env',
     [string]$SetupCurrent = 'ETN-Setup-0.15.3.exe',
@@ -115,6 +123,7 @@ foreach ($name in $setups.Keys) {
 }
 
 $results = New-E2EResultList
+$timings = New-E2ETimingList
 $scenarioReports = New-Object System.Collections.Generic.List[object]
 $reportWritten = $false
 $context = $null
@@ -278,9 +287,22 @@ function Invoke-SilentInstall {
     }
 }
 
-<# Скопировать установщики в гостя и сверить SHA-256. #>
+<#
+    Скопировать установщики в гостя и сверить SHA-256.
+    Копируются только установщики, нужные сценарию (-Keys): S1/S2/S4/S6 —
+    текущий, S3 — промежуточный и старый. Все три (~450 МБ) не копируются:
+    лишняя передача замедляла каждый сценарий и давала VERR_TIMEOUT.
+    Каждый файл копируется до трёх попыток с паузой 5 с: у guestcontrol
+    copyto бывает транзиентный VERR_TIMEOUT (проверено на стенде).
+#>
 function Copy-SetupsToGuest {
-    param($Context = $script:context)
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Keys,
+        $Context = $script:context
+    )
+    foreach ($key in $Keys) {
+        if (-not $setups.Contains($key)) { throw "Неизвестный установщик '$key' (допустимо: $($setups.Keys -join ', '))." }
+    }
     $null = Invoke-GuestElevatedCommand -Context $Context `
         -Command 'if not exist C:\e2e mkdir C:\e2e & if not exist C:\e2e\logs mkdir C:\e2e\logs & exit /b 0'
     # guestcontrol copyto, а не общая папка \\VBOXSVR\release: после restore
@@ -291,15 +313,33 @@ function Copy-SetupsToGuest {
     [System.IO.File]::WriteAllText($passwordFile, $plain)
     $plain = $null
     try {
-        foreach ($name in $setups.Keys) {
-            $fileName = $setups[$name]
+        $copyAttempts = 3
+        foreach ($key in $Keys) {
+            $fileName = $setups[$key]
             $hostPath = Join-Path $ReleaseDir $fileName
-            Copy-HostFileToGuest -Vm $Context.Vm -Source $hostPath `
-                -Destination "C:\e2e\$fileName" -UserName $Context.UserName -PasswordFile $passwordFile
             $hostHash = (Get-FileHash -LiteralPath $hostPath -Algorithm SHA256).Hash
-            $guestHash = Get-GuestFileHash -Context $Context -Path "C:\e2e\$fileName"
-            if ($hostHash -ne $guestHash) {
-                throw "SHA-256 $fileName в госте не совпал с хостом: $guestHash"
+            $copied = $false
+            $lastError = ''
+            for ($attempt = 1; $attempt -le $copyAttempts -and -not $copied; $attempt++) {
+                try {
+                    Copy-HostFileToGuest -Vm $Context.Vm -Source $hostPath `
+                        -Destination "C:\e2e\$fileName" -UserName $Context.UserName -PasswordFile $passwordFile
+                    $guestHash = Get-GuestFileHash -Context $Context -Path "C:\e2e\$fileName"
+                    if ($hostHash -ne $guestHash) {
+                        throw "SHA-256 $fileName в госте не совпал с хостом: $guestHash"
+                    }
+                    $copied = $true
+                } catch {
+                    $lastError = $_.Exception.Message
+                    if ($attempt -lt $copyAttempts) {
+                        Write-Warning ("Копирование {0}, попытка {1} из {2}: {3} — повтор" -f `
+                                $fileName, $attempt, $copyAttempts, $lastError)
+                        Start-Sleep -Seconds 5
+                    }
+                }
+            }
+            if (-not $copied) {
+                throw "Не удалось скопировать $fileName за $copyAttempts попытки: $lastError"
             }
         }
     } finally {
@@ -309,7 +349,10 @@ function Copy-SetupsToGuest {
 
 <# Восстановить снапшот, поднять ВМ headless, дождаться GA и WinRM. #>
 function Initialize-ScenarioVm {
-    param([Parameter(Mandatory = $true)][string]$Snapshot)
+    param(
+        [Parameter(Mandatory = $true)][string]$Snapshot,
+        [string[]]$SetupKeys = @()
+    )
     Write-Step "ВМ: восстановление снапшота $Snapshot"
     if (-not (Test-VmSnapshot -Vm $Vm -Name $Snapshot)) {
         throw "Снапшот $Snapshot у ВМ $Vm не найден."
@@ -325,7 +368,9 @@ function Initialize-ScenarioVm {
     # единственный элевированный канал. Поэтому неготовность WinRM — ошибка
     # стенда, а не сценария: сценарий помечается провалом с причиной.
     $null = Wait-GuestReady -Context $script:context -TimeoutSec $BootTimeoutSec
-    $null = Copy-SetupsToGuest -Context $script:context
+    if ($SetupKeys.Count -gt 0) {
+        $null = Copy-SetupsToGuest -Context $script:context -Keys $SetupKeys
+    }
 }
 <#
     Дождаться фактического завершения удаления.
@@ -578,10 +623,10 @@ function Invoke-UpdateToCurrent {
 
 <# --- S1: silent-матрица 20 ------------------------------------------------ #>
 function Invoke-ScenarioS1 {
-    param($Results)
+    param($Results, $Timings)
     $scenario = 'S1'
     $started = Get-Date
-    Initialize-ScenarioVm -Snapshot $BaseSnapshot
+    Initialize-ScenarioVm -Snapshot $BaseSnapshot -SetupKeys @('current')
 
     $run1 = Invoke-SilentInstall -Context $script:context -SetupFileName $setups['current'] `
         -InstallerArgs '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
@@ -604,8 +649,8 @@ function Invoke-ScenarioS1 {
     $log3 = Get-GuestInstallLog -Context $script:context
     Add-LogCheck -Results $Results -Scenario $scenario -Name 's1:not-elevated-reason' -Log $log3 `
         -Needle 'Предусловие не выполнено: процесс не элевирован'
-    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's1:not-elevated-duration' -Ok $true `
-        -Expected 'не дольше 120 с' -Actual ([math]::Round($watch.Elapsed.TotalSeconds, 1))
+    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's1:not-elevated-duration' `
+        -Value ([math]::Round($watch.Elapsed.TotalSeconds, 1)) -Note 'не дольше 120 с'
 
     Add-PathCheck -Results $Results -Scenario $scenario -Name 's1:no-program-files' `
         -Path 'C:\Program Files\ETN' -ExpectedPresent $false
@@ -615,16 +660,16 @@ function Invoke-ScenarioS1 {
     Add-E2ECheck -Results $Results -Scenario $scenario -Name 's1:no-service' `
         -Ok ($service -eq 'Missing') -Expected 'Missing' -Actual $service
 
-    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's1:total-duration' -Ok $true `
-        -Expected '3 запуска' -Actual ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's1:total-duration' `
+        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note '3 запуска'
 }
 
 <# --- S2: занятый порт ----------------------------------------------------- #>
 function Invoke-ScenarioS2 {
-    param($Results)
+    param($Results, $Timings)
     $scenario = 'S2'
     $started = Get-Date
-    Initialize-ScenarioVm -Snapshot $BaseSnapshot
+    Initialize-ScenarioVm -Snapshot $BaseSnapshot -SetupKeys @('current')
 
     # Фикстура установленного сервера: файлы, install.json, ключ службы.
     $fixture = Invoke-GuestElevated -Context $script:context -ScriptBlock {
@@ -711,16 +756,16 @@ function Invoke-ScenarioS2 {
         -Ok ($service -eq 'Missing') -Expected 'Missing' -Actual $service `
         -Note 'ключ реестра — часть фикстуры, SCM-службы нет'
 
-    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's2:total-duration' -Ok $true `
-        -Expected '1 запуск' -Actual ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's2:total-duration' `
+        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note '1 запуск'
 }
 
 <# --- S3: понижение версии ------------------------------------------------- #>
 function Invoke-ScenarioS3 {
-    param($Results)
+    param($Results, $Timings)
     $scenario = 'S3'
     $started = Get-Date
-    Initialize-ScenarioVm -Snapshot $InstalledSnapshot
+    Initialize-ScenarioVm -Snapshot $InstalledSnapshot -SetupKeys @('intermediate', 'old')
 
     $json = Get-GuestInstallJson -Context $script:context
     $version = [string](Get-JsonField $json 'product_version')
@@ -785,16 +830,16 @@ function Invoke-ScenarioS3 {
             -Actual $(if (([string](Get-JsonField $jsonBeforeDown 'Text')) -eq ([string](Get-JsonField $jsonAfterDown 'Text'))) { 'совпадает' } else { 'изменилось' })
     }
 
-    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's3:total-duration' -Ok $true `
-        -Expected 'запуски по обстоятельствам' -Actual ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's3:total-duration' `
+        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'запуски по обстоятельствам'
 }
 
 <# --- S4: обновление 0.15.1 → 0.15.3 -------------------------------------- #>
 function Invoke-ScenarioS4 {
-    param($Results)
+    param($Results, $Timings)
     $scenario = 'S4'
     $started = Get-Date
-    Initialize-ScenarioVm -Snapshot $InstalledSnapshot
+    Initialize-ScenarioVm -Snapshot $InstalledSnapshot -SetupKeys @('current')
 
     $init = Initialize-GuestServer -Context $script:context
     Add-E2ECheck -Results $Results -Scenario $scenario -Name 's4:init' `
@@ -809,19 +854,19 @@ function Invoke-ScenarioS4 {
         -Expected 'служба отвечает' -Actual 'проверено перед обновлением'
 
     $update = Invoke-UpdateToCurrent -Scenario $scenario -Results $Results -AddCoreChecks
-    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's4:total-duration' -Ok $true `
-        -Expected 'обновление' -Actual ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's4:total-duration' `
+        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'обновление'
     return $update
 }
 
 <# --- S5: удаление --------------------------------------------------------- #>
 function Invoke-ScenarioS5 {
-    param($Results, [bool]$UpdatedStateReady)
+    param($Results, $Timings, [bool]$UpdatedStateReady)
     $scenario = 'S5'
     $started = Get-Date
     if (-not $UpdatedStateReady) {
         Write-Host 'S5: состояние после S4 отсутствует — готовлю его тем же обновлением.'
-        $null = Initialize-ScenarioVm -Snapshot $InstalledSnapshot
+        $null = Initialize-ScenarioVm -Snapshot $InstalledSnapshot -SetupKeys @('current')
         $init = Initialize-GuestServer -Context $script:context
         if (-not [bool](Get-JsonField $init 'Ok')) {
             Add-E2ECheck -Results $Results -Scenario $scenario -Name 's5:prepare-init' -Ok $false `
@@ -904,8 +949,8 @@ function Invoke-ScenarioS5 {
         Add-E2ECheck -Results $Results -Scenario $scenario -Name 's5:uninstall' -Ok $false -Deferred `
             -Expected 'удаление без интерактивной сессии' -Actual ("механизм $method, код " + (Get-JsonField $run 'Code')) `
             -Note 'отложено до GUI-захода: удаление требует интерактивной сессии (грабля service-real-uninstall)'
-        Add-E2ECheck -Results $Results -Scenario $scenario -Name 's5:total-duration' -Ok $true -Deferred `
-            -Expected 'deferred' -Actual ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+        Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's5:total-duration' `
+            -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'deferred'
         return
     }
 
@@ -944,16 +989,16 @@ function Invoke-ScenarioS5 {
         -Actual $(if ($ruleAfter) { 'правило осталось' } else { 'правила нет' }) `
         -Note $(if ($ruleBefore) { 'до удаления правило было' } else { 'до удаления правила не было' })
 
-    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's5:total-duration' -Ok $true `
-        -Expected 'удаление' -Actual ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's5:total-duration' `
+        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'удаление'
 }
 
 <# --- S6: служба ----------------------------------------------------------- #>
 function Invoke-ScenarioS6 {
-    param($Results)
+    param($Results, $Timings)
     $scenario = 'S6'
     $started = Get-Date
-    Initialize-ScenarioVm -Snapshot $InstalledSnapshot
+    Initialize-ScenarioVm -Snapshot $InstalledSnapshot -SetupKeys @('current')
 
     $init = Initialize-GuestServer -Context $script:context
     Add-E2ECheck -Results $Results -Scenario $scenario -Name 's6:init' `
@@ -1027,8 +1072,8 @@ function Invoke-ScenarioS6 {
     Add-E2ECheck -Results $Results -Scenario $scenario -Name 's6:repair-health' `
         -Ok ($repairHealth -eq '0.15.3') -Expected '0.15.3' -Actual $repairHealth
 
-    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's6:total-duration' -Ok $true `
-        -Expected 'служба+ремонт' -Actual ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's6:total-duration' `
+        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'служба+ремонт'
 }
 
 # --- Основной прогон -------------------------------------------------------
@@ -1066,11 +1111,11 @@ try {
         $checksBefore = $results.Count
         try {
             switch ($name) {
-                'S1' { Invoke-ScenarioS1 -Results $results }
-                'S2' { Invoke-ScenarioS2 -Results $results }
-                'S3' { Invoke-ScenarioS3 -Results $results }
+                'S1' { Invoke-ScenarioS1 -Results $results -Timings $timings }
+                'S2' { Invoke-ScenarioS2 -Results $results -Timings $timings }
+                'S3' { Invoke-ScenarioS3 -Results $results -Timings $timings }
                 'S4' {
-                    $update = @(Invoke-ScenarioS4 -Results $results) |
+                    $update = @(Invoke-ScenarioS4 -Results $results -Timings $timings) |
                         Where-Object { $_.PSObject.Properties['Run'] } |
                         Select-Object -Last 1
                     if ($null -eq $update) {
@@ -1082,22 +1127,35 @@ try {
                     }
                 }
                 'S5' {
-                    Invoke-ScenarioS5 -Results $results -UpdatedStateReady $updatedStateReady
+                    Invoke-ScenarioS5 -Results $results -Timings $timings -UpdatedStateReady $updatedStateReady
                     $updatedStateReady = $false
                 }
-                'S6' { Invoke-ScenarioS6 -Results $results }
+                'S6' { Invoke-ScenarioS6 -Results $results -Timings $timings }
             }
         } catch {
             Add-E2ECheck -Results $results -Scenario $name -Name 'scenario:error' -Ok $false `
                 -Expected 'сценарий выполнен' -Actual 'исключение' -Note $_.Exception.Message
         }
         $logDir = ''
+        $logsError = ''
         try {
             $logDir = Save-GuestInstallerLogs -Context $context -Scenario $name -HostRoot (Join-Path $OutDir 'logs')
         } catch {
-            Write-Warning "Журналы сценария ${name} не собраны: $($_.Exception.Message)"
+            $logsError = $_.Exception.Message
+            Write-Warning "Журналы сценария ${name} не собраны: $logsError"
+        }
+        $logFileCount = 0
+        if ($logDir -and (Test-Path -LiteralPath $logDir)) {
+            $logFileCount = @(Get-ChildItem -LiteralPath $logDir -File -Force).Count
+            if ($logFileCount -eq 0 -and -not $logsError) { $logsError = 'в каталоге журналов нет файлов' }
+        }
+        if ($logsError) {
+            # Сбой сбора журналов виден и в консоли, и в отчёте (logs_error),
+            # а не притворяется пустым logs.
+            Write-Warning "Журналы сценария ${name}: $logsError"
         }
         $summary = Get-E2ESummary -Results $results -Scenario $name
+        $summaryTimings = @($timings | Where-Object { $_.scenario -eq $name }).Count
         $scenarioReports.Add([pscustomobject]@{
                 name         = $name
                 snapshot     = $snapshot
@@ -1108,9 +1166,13 @@ try {
                 deferred     = $summary.deferred
                 ok           = $summary.ok
                 logs         = $logDir
+                logs_files   = $logFileCount
+                logs_error   = $logsError
+                timings_count = $summaryTimings
                 new_checks   = ($results.Count - $checksBefore)
             })
-        Write-Host ("Итог {0}: проверок {1}, провалов {2}, отложено {3}" -f $name, $summary.checks, $summary.failed, $summary.deferred)
+        Write-Host ("Итог {0}: проверок {1}, провалов {2}, отложено {3}, замеров {4}" -f `
+                $name, $summary.checks, $summary.failed, $summary.deferred, $summaryTimings)
     }
 } finally {
     if ($context) { Close-GuestSession -Context $context }
@@ -1141,13 +1203,26 @@ try {
         }
         requested        = $requested
         duration_sec     = $totalDuration
+        logs_failed      = @($scenarioReports | Where-Object { $_.logs_error }).Count
     }
-    Write-E2EReport -Results $results -Scenarios $scenarioReports.ToArray() -Path $reportPath -Extra $extra
+    Write-E2EReport -Results $results -Timings $timings -Scenarios $scenarioReports.ToArray() `
+        -Path $reportPath -Extra $extra
     $reportWritten = $true
 
     $failed = @($results | Where-Object { (-not $_.ok) -and (-not $_.deferred) }).Count
     $deferred = @($results | Where-Object { $_.deferred }).Count
+    $timingsCount = $timings.Count
+    $logsFailed = [int]$extra['logs_failed']
+    $logsOk = @($requested).Count - $logsFailed
     Write-Host ''
-    Write-Host ("Итог E2E: проверок {0}, провалов {1}, отложено {2}, ВМ {3}" -f $results.Count, $failed, $deferred, $finalVmState)
+    $summaryFormat = 'Итог E2E: проверок {0}, провалов {1}, отложено {2}, замеров {3}, ' +
+        'журналы без ошибок {4}/{5}, ВМ {6}'
+    Write-Host ($summaryFormat -f $results.Count, $failed, $deferred,
+        $timingsCount, $logsOk, @($requested).Count, $finalVmState)
     if ($failed -gt 0) { exit 1 }
+    if ($restoreError) {
+        # Не вернули ВМ в исходное состояние — прогон не считается штатным.
+        Write-Warning "Возврат ВМ в $OriginalSnapshot не выполнен: $restoreError"
+        exit 2
+    }
 }

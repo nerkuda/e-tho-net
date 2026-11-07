@@ -210,6 +210,11 @@ function Invoke-GuestLimitedProcess {
         }
     } finally {
         Remove-Item -LiteralPath $passwordFile -Force -ErrorAction SilentlyContinue
+        # После guestcontrol run WinRM-сессия остаётся в нерабочем состоянии:
+        # следующий Invoke-Command висит до OperationTimeout (проверено на
+        # стенде — сбор журналов S1 висел до WinRmTimeoutSec). Поэтому сессия
+        # закрывается, а следующие элевированные вызовы откроют её заново.
+        Close-GuestSession -Context $Context
     }
 }
 
@@ -425,53 +430,134 @@ function Get-GuestTreeHash {
 <#
     Копировать журналы установщика из гостя на хост ДО восстановления снапшота.
     Собираются: install-*.log приложения, Setup Log*.txt Inno, reason-файлы.
+
+    Сбор ограничен по времени: WinRM-вызовы идут в отдельной сессии с коротким
+    OperationTimeout, между шагами проверяется бюджет попытки; попыток —
+    $Attempts. Зависший вызов не держит прогон до WinRmTimeoutSec основной
+    сессии (1800 с). Берутся только файлы не старше $LogMaxAgeMinutes: в
+    образе ВМ остаются журналы прежних запусков, их нельзя выдавать за свежие.
+    Если журналы не собраны — исключение: оркестратор фиксирует его полем
+    logs_error, а не пустым logs.
 #>
 function Save-GuestInstallerLogs {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Scenario,
         [Parameter(Mandatory = $true)][string]$HostRoot,
+        [int]$TimeoutSec = 150,
+        [int]$Attempts = 2,
+        [int]$LogMaxAgeMinutes = 120,
         $Context = (Get-GuestContext)
     )
-    $guestDir = "C:\e2e\logs\$Scenario"
-    $null = Invoke-GuestElevatedCommand -Context $Context -Command (
-        "if not exist `"$guestDir`" mkdir `"$guestDir`" & " +
-        "copy /Y `"C:\ProgramData\ETN\logs\*.log`" `"$guestDir\`" >nul 2>&1 & " +
-        'copy /Y "%TEMP%\install-*.log" "' + $guestDir + '\" >nul 2>&1 & ' +
-        'copy /Y "%TEMP%\Setup Log*.txt" "' + $guestDir + '\" >nul 2>&1 & ' +
-        "copy /Y `"C:\Windows\Temp\install-*.log`" `"$guestDir\`" >nul 2>&1 & " +
-        "copy /Y `"C:\Windows\Temp\Setup Log*.txt`" `"$guestDir\`" >nul 2>&1 & " +
-        "if exist `"C:\ProgramData\ETN\.install\reason*.txt`" copy /Y `"C:\ProgramData\ETN\.install\reason*.txt`" `"$guestDir\`" >nul 2>&1 & " +
-        'exit /b 0'
-    )
     $hostDir = Join-Path $HostRoot $Scenario
+    # Старые файлы того же сценария не должны выдаваться за свежие журналы.
+    if (Test-Path -LiteralPath $hostDir) {
+        Remove-Item -LiteralPath $hostDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     New-Item -ItemType Directory -Path $hostDir -Force | Out-Null
-    & {   # Архив собирается в госте: guestcontrol copyfrom не раскрывает маски.
-        $zipGuest = "C:\e2e\logs\$Scenario.zip"
-        $null = Invoke-GuestElevated -Context $Context -ScriptBlock {
-            param($Dir, $Zip)
-            if (-not (Test-Path -LiteralPath $Dir)) { return }
-            $items = @(Get-ChildItem -LiteralPath $Dir -File -Force)
-            if ($items.Count -eq 0) { return }
-            Compress-Archive -Path (Join-Path $Dir '*') -DestinationPath $Zip -Force
-        } -ArgumentList @($guestDir, $zipGuest)
-        $passwordFile = Join-Path $env:TEMP ('etn-e2e-pw-' + [guid]::NewGuid().ToString('N') + '.txt')
-        $plain = $Context.Credential.GetNetworkCredential().Password
-        [System.IO.File]::WriteAllText($passwordFile, $plain)
-        $plain = $null
-        $zipHost = Join-Path $hostDir "$Scenario-logs.zip"
+    $lastError = ''
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        # Отдельная сессия с коротким таймаутом: зависший WinRM-вызов
+        # обрывается за TimeoutSec, а не за 1800 с.
+        $logContext = $Context.PSObject.Copy()
+        $logContext.WinRmTimeoutSec = [Math]::Min($TimeoutSec, 120)
+        $logContext.Session = $null
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
         try {
-            if (Test-GuestPath -Path $zipGuest -Context $Context) {
-                Copy-GuestFileToHost -Vm $Context.Vm -Source $zipGuest -Destination $zipHost `
-                    -UserName $Context.UserName -PasswordFile $passwordFile
+            $guestDir = "C:\e2e\logs\$Scenario"
+            $zipGuest = "C:\e2e\logs\$Scenario.zip"
+            # Копирование — средствами PowerShell в гостевой сессии, не cmd:
+            # `& cmd.exe /c <строка с кавычками>` PowerShell экранирует \" и
+            # cmd разбирает команду неверно (проверено: код 0, файлов нет).
+            # Источники — те же, что у Get-GuestInstallLog, плюс временный
+            # каталог профиля: отказы precheck пишут install-*.log туда.
+            $copiedCount = Invoke-GuestElevated -Context $logContext -ScriptBlock {
+                param($Dir, $UserName, $MaxAgeMinutes)
+                if (Test-Path -LiteralPath $Dir) {
+                    Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+                $cutoff = (Get-Date).AddMinutes(-$MaxAgeMinutes)
+                $sources = @(
+                    (Join-Path $env:ProgramData 'ETN\logs'),
+                    $env:TEMP,
+                    'C:\Windows\Temp'
+                )
+                if ($UserName) { $sources += (Join-Path 'C:\Users' (Join-Path $UserName 'AppData\Local\Temp')) }
+                if ($env:USERPROFILE) { $sources += (Join-Path $env:USERPROFILE 'AppData\Local\Temp') }
+                foreach ($source in ($sources | Where-Object { $_ } | Select-Object -Unique)) {
+                    if (-not (Test-Path -LiteralPath $source)) { continue }
+                    foreach ($pattern in @('install-*.log', 'Setup Log*.txt')) {
+                        # Только журналы текущего прогона: в образе ВМ лежат
+                        # старые файлы снапшота, их нельзя выдавать за свежие.
+                        Get-ChildItem -LiteralPath $source -Filter $pattern -File -ErrorAction SilentlyContinue |
+                            Where-Object { $_.LastWriteTime -gt $cutoff } |
+                            ForEach-Object {
+                                Copy-Item -LiteralPath $_.FullName -Destination $Dir -Force -ErrorAction SilentlyContinue
+                            }
+                    }
+                }
+                # Журнал деинсталлятора Inno лежит рядом с установщиками (S5).
+                Get-ChildItem -LiteralPath 'C:\e2e' -Filter 'unins-*.log' -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -gt $cutoff } |
+                    ForEach-Object {
+                        Copy-Item -LiteralPath $_.FullName -Destination $Dir -Force -ErrorAction SilentlyContinue
+                    }
+                $reasonDir = Join-Path $env:ProgramData 'ETN\.install'
+                if (Test-Path -LiteralPath $reasonDir) {
+                    Get-ChildItem -LiteralPath $reasonDir -Filter 'reason*.txt' -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.LastWriteTime -gt $cutoff } |
+                        ForEach-Object {
+                            Copy-Item -LiteralPath $_.FullName -Destination $Dir -Force -ErrorAction SilentlyContinue
+                        }
+                }
+                return @(Get-ChildItem -LiteralPath $Dir -File -Force).Count
+            } -ArgumentList @($guestDir, $logContext.UserName, $LogMaxAgeMinutes)
+            if ([int]$copiedCount -le 0) {
+                throw "в гостевом каталоге $guestDir нет журналов"
+            }
+
+            # Архив собирается в госте: guestcontrol copyfrom не раскрывает маски.
+            $null = Invoke-GuestElevated -Context $logContext -ScriptBlock {
+                param($Dir, $Zip)
+                if (Test-Path -LiteralPath $Zip) { Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue }
+                if (-not (Test-Path -LiteralPath $Dir)) { return }
+                $items = @(Get-ChildItem -LiteralPath $Dir -File -Force)
+                if ($items.Count -eq 0) { return }
+                Compress-Archive -Path (Join-Path $Dir '*') -DestinationPath $Zip -Force
+            } -ArgumentList @($guestDir, $zipGuest)
+            if ($watch.Elapsed.TotalSeconds -gt $TimeoutSec) {
+                throw "сбор журналов дольше $TimeoutSec с"
+            }
+
+            $passwordFile = Join-Path $env:TEMP ('etn-e2e-pw-' + [guid]::NewGuid().ToString('N') + '.txt')
+            $plain = $logContext.Credential.GetNetworkCredential().Password
+            [System.IO.File]::WriteAllText($passwordFile, $plain)
+            $plain = $null
+            $zipHost = Join-Path $hostDir "$Scenario-logs.zip"
+            try {
+                if (-not (Test-GuestPath -Path $zipGuest -Context $logContext)) {
+                    throw "в гостевом каталоге $guestDir нет журналов"
+                }
+                Copy-GuestFileToHost -Vm $logContext.Vm -Source $zipGuest -Destination $zipHost `
+                    -UserName $logContext.UserName -PasswordFile $passwordFile
                 Expand-Archive -LiteralPath $zipHost -DestinationPath $hostDir -Force
                 Remove-Item -LiteralPath $zipHost -Force -ErrorAction SilentlyContinue
+            } finally {
+                Remove-Item -LiteralPath $passwordFile -Force -ErrorAction SilentlyContinue
             }
+
+            $files = @(Get-ChildItem -LiteralPath $hostDir -File -Force)
+            if ($files.Count -eq 0) { throw 'после распаковки на хосте нет журналов' }
+            return $hostDir
         } catch {
-            Write-Warning "Журналы сценария $Scenario скопированы не полностью: $($_.Exception.Message)"
+            $lastError = $_.Exception.Message
+            Write-Warning ("Попытка {0} из {1}: журналы сценария {2} не собраны: {3}" -f `
+                    $attempt, $Attempts, $Scenario, $lastError)
+            if ($attempt -lt $Attempts) { Start-Sleep -Seconds 3 }
         } finally {
-            Remove-Item -LiteralPath $passwordFile -Force -ErrorAction SilentlyContinue
+            Close-GuestSession -Context $logContext
         }
     }
-    return $hostDir
+    throw "Журналы сценария ${Scenario} не собраны за $Attempts попыток: $lastError"
 }
