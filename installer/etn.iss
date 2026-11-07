@@ -570,6 +570,43 @@ EtnNoticeNeedsAdmin=Для установки компонентов, требу
 EtnParamsInstalledNote=Сервер уже установлен: %1 → %2, режим: %3. При обновлении порт, доступ по локальной сети и каталог данных не меняются.
 EtnParamsUpdateNote=Служба ETN останавливается на время замены файлов, базы данных копируются в %1\backups, затем служба запускается снова.
 
+; Этапы прогресса (StatusLabel) и экраны ошибки/сводки.
+EtnStageBackup=Резервная копия баз данных…
+EtnStageSnapshot=Снимок отката…
+EtnStageRollback=Откат обновления…
+EtnStageStopService=Остановка службы ETN…
+EtnStageServerFiles=Замена файлов сервера ETN…
+EtnStageClientFiles=Замена файлов клиента ETN…
+EtnStageDataDirs=Подготовка каталогов данных…
+EtnStageServiceConfig=Настройка службы…
+EtnStageServiceRegister=Регистрация службы ETN…
+EtnStageFirewall=Правило брандмауэра…
+EtnStageInit=Инициализация сервера…
+EtnStageServiceStart=Запуск службы ETN…
+EtnStageHealth=Проверка работоспособности…
+EtnStageParams=Запись параметров установки…
+EtnFailureReasonMissing=причина не записана — смотрите журнал установки
+EtnErrorMemoTitle=Установка ETN %1 не завершена.
+EtnReasonPrefix=Причина: %1.
+EtnLogLine=Журнал установки: %1
+EtnLogNotCreated=(журнал не создан)
+EtnLogNotCreatedShort=(не создан)
+EtnBackupLine=Резервная копия баз данных: %1
+EtnBackupNotCreated=не создавалась
+EtnBackupOldSuffix=(архив прошлого обновления — для автоматического отката не используется)
+EtnErrorNextStep=Следующий шаг: устраните причину и запустите установщик снова — параметры и данные сохранятся. Если установка не запускается, приложите журнал установки к обращению в поддержку.
+EtnSummaryTitle=Установка ETN %1 завершена.
+EtnSummaryServerInstalled=Сервер ETN установлен.
+EtnSummaryLocalAddress=Адрес на этом компьютере: http://127.0.0.1:%1
+EtnSummaryLanAddress=Адрес в локальной сети: http://%1:%2 (если на компьютере есть VPN или несколько сетей, адрес может отличаться — проверьте его в «Параметрах сети»)
+EtnSummaryLanUnknown=Адрес в локальной сети: определить не удалось (порт %1 открыт брандмауэром)
+EtnSummaryFirewallWarning=Внимание: правило брандмауэра Windows не создано — подключения с других компьютеров могут блокироваться. Причина указана в журнале.
+EtnSummaryLanDisabled=Подключения с других компьютеров отключены (только этот компьютер).
+EtnSummaryDataDir=Каталог данных: %1
+EtnSummaryClient=Клиент ETN: %1
+EtnSummaryClientMachine=Клиент установлен для всех пользователей. Запустите его из меню «Пуск» или с рабочего стола: подключение к локальному серверу уже предзаполнено в ярлыке.
+EtnSummaryKeyReminder=Ключ администратора показывался на предыдущем экране: сохраните его в надёжном месте — восстановить ключ нельзя, только выпустить новый.
+
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
 ; --- компонентов; в установку не копируется (dontcopy).
@@ -4983,7 +5020,7 @@ begin
     Result := True;
     Exit;
   end;
-  SetInstallStage('Резервная копия баз данных…');
+  SetInstallStage(CustomMessage('EtnStageBackup'));
   if not EnsureDatabaseTool(Reason) then
   begin
     GBackupReason := Reason;
@@ -5145,7 +5182,7 @@ begin
     Result := True;
     Exit;
   end;
-  SetInstallStage('Снимок отката…');
+  SetInstallStage(CustomMessage('EtnStageSnapshot'));
   if not ForceDirectories(RollbackRoot) then
   begin
     LogLine('ERROR', 'Снимок отката: не удалось создать каталог ' + RollbackRoot);
@@ -5322,7 +5359,7 @@ begin
       'ремонт без замены файлов)');
     Exit;
   end;
-  SetInstallStage('Откат обновления…');
+  SetInstallStage(CustomMessage('EtnStageRollback'));
   LogLine('WARN', 'Откат: начинается (' + GFailureReason + ')');
   { Служба могла успеть запуститься на новой версии (health-check не прошёл):
     перед возвратом файлов её нужно остановить снова. Если остановить не
@@ -5483,7 +5520,7 @@ begin
     Result := EXIT_FAILED;
     Exit;
   end;
-  SetInstallStage('Остановка службы ETN…');
+  SetInstallStage(CustomMessage('EtnStageStopService'));
   if not StopServiceForUpdate(Reason, False) then
   begin
     Result := EXIT_PRECONDITION;
@@ -6230,7 +6267,7 @@ begin
   if GFailureReason <> '' then
     Result := GFailureReason
   else
-    Result := 'причина не записана — смотрите журнал установки';
+    Result := CustomMessage('EtnFailureReasonMissing');
 end;
 
 { Свободный порт рядом с занятым: подсказка на экране параметров. Поле не
@@ -6350,21 +6387,21 @@ end;
 { Архив для экрана ошибки/сводки. Показывается только архив этого запуска;
   архив прошлых обновлений помечается явно: он не отражает состояние базы и
   для автоматического отката не используется (замечание приёмки bb063ac3). }
-function BackupPathForMessage(const Prefix, Suffix: String): String;
+function BackupPathForMessage(const Suffix: String): String;
 var
   Backup: String;
 begin
   if GLastBackupDir <> '' then
-    Result := Prefix + GLastBackupDir + Suffix
+    Result := FmtMessage(CustomMessage('EtnBackupLine'), [GLastBackupDir]) + Suffix
   else
   begin
     Backup := LatestBackupDir;
     if Backup <> '' then
-      Result := Prefix + Backup +
-        ' (архив прошлого обновления — для автоматического отката не используется)' +
-        Suffix
+      Result := FmtMessage(CustomMessage('EtnBackupLine'), [Backup]) + ' ' +
+        CustomMessage('EtnBackupOldSuffix') + Suffix
     else
-      Result := Prefix + 'не создавалась' + Suffix;
+      Result := FmtMessage(CustomMessage('EtnBackupLine'), [CustomMessage(
+        'EtnBackupNotCreated')]) + Suffix;
   end;
 end;
 
@@ -6372,14 +6409,12 @@ function ErrorMemoText: String;
 var
   S: String;
 begin
-  S := 'Установка ETN ' + GProductVersion + ' не завершена.' + #13#10#13#10 +
-    'Причина: ' + FailureReasonText + '.' + #13#10#13#10 +
-    'Журнал установки: ' + IfStr(GLogPath = '', '(журнал не создан)', GLogPath) + #13#10;
-  S := S + BackupPathForMessage('Резервная копия баз данных: ', #13#10);
-  S := S + #13#10 +
-    'Следующий шаг: устраните причину и запустите установщик снова — ' +
-    'параметры и данные сохранятся. Если установка не запускается, приложите ' +
-    'журнал установки к обращению в поддержку.';
+  S := FmtMessage(CustomMessage('EtnErrorMemoTitle'), [GProductVersion]) + #13#10#13#10 +
+    FmtMessage(CustomMessage('EtnReasonPrefix'), [FailureReasonText]) + #13#10#13#10 +
+    FmtMessage(CustomMessage('EtnLogLine'), [IfStr(GLogPath = '',
+      CustomMessage('EtnLogNotCreated'), GLogPath)]) + #13#10;
+  S := S + BackupPathForMessage(#13#10);
+  S := S + #13#10 + CustomMessage('EtnErrorNextStep');
   Result := S;
 end;
 
@@ -6387,28 +6422,24 @@ function SummaryText: String;
 var
   S, Exe, Ipv4: String;
 begin
-  S := 'Установка ETN ' + GProductVersion + ' завершена.' + #13#10#13#10;
+  S := FmtMessage(CustomMessage('EtnSummaryTitle'), [GProductVersion]) + #13#10#13#10;
   if GServerSelected then
   begin
-    S := S + 'Сервер ETN установлен.' + #13#10;
-    S := S + 'Адрес на этом компьютере: http://127.0.0.1:' + GServerPort + #13#10;
+    S := S + CustomMessage('EtnSummaryServerInstalled') + #13#10;
+    S := S + FmtMessage(CustomMessage('EtnSummaryLocalAddress'), [GServerPort]) + #13#10;
     if GServerFirewall then
     begin
       Ipv4 := DetectLanIp;
       if Ipv4 <> '' then
-        S := S + 'Адрес в локальной сети: http://' + Ipv4 + ':' + GServerPort +
-          ' (если на компьютере есть VPN или несколько сетей, адрес может ' +
-          'отличаться — проверьте его в «Параметрах сети»)' + #13#10
+        S := S + FmtMessage(CustomMessage('EtnSummaryLanAddress'), [Ipv4, GServerPort]) + #13#10
       else
-        S := S + 'Адрес в локальной сети: определить не удалось (порт ' +
-          GServerPort + ' открыт брандмауэром)' + #13#10;
+        S := S + FmtMessage(CustomMessage('EtnSummaryLanUnknown'), [GServerPort]) + #13#10;
       if GFirewallWarning then
-        S := S + 'Внимание: правило брандмауэра Windows не создано — подключения ' +
-          'с других компьютеров могут блокироваться. Причина указана в журнале.' + #13#10;
+        S := S + CustomMessage('EtnSummaryFirewallWarning') + #13#10;
     end
     else
-      S := S + 'Подключения с других компьютеров отключены (только этот компьютер).' + #13#10;
-    S := S + 'Каталог данных: ' + GDataDir + #13#10;
+      S := S + CustomMessage('EtnSummaryLanDisabled') + #13#10;
+    S := S + FmtMessage(CustomMessage('EtnSummaryDataDir'), [GDataDir]) + #13#10;
   end;
   { Клиент упоминается в сводке только когда он выбран: иначе найденный в
     каталоге программы файл мог бы оказаться старым NSIS-клиентом, который
@@ -6417,21 +6448,18 @@ begin
   begin
     Exe := ClientExePath;
     if Exe <> '' then
-      S := S + 'Клиент ETN: ' + Exe + #13#10;
+      S := S + FmtMessage(CustomMessage('EtnSummaryClient'), [Exe]) + #13#10;
     if GAdminMachineScope then
-      S := S + 'Клиент установлен для всех пользователей. Запустите его из ' +
-        'меню «Пуск» или с рабочего стола: подключение к локальному серверу ' +
-        'уже предзаполнено в ярлыке.' + #13#10;
+      S := S + CustomMessage('EtnSummaryClientMachine') + #13#10;
   end;
   { Архив этого запуска; если его нет, а в backups что-то есть — архив
     прошлого обновления с явной пометкой (не для отката). }
   if (GLastBackupDir <> '') or (LatestBackupDir <> '') then
-    S := S + BackupPathForMessage('Резервная копия баз данных: ', #13#10);
-  S := S + 'Журнал установки: ' + IfStr(GLogPath = '', '(не создан)', GLogPath) + #13#10;
+    S := S + BackupPathForMessage(#13#10);
+  S := S + FmtMessage(CustomMessage('EtnLogLine'), [IfStr(GLogPath = '',
+    CustomMessage('EtnLogNotCreatedShort'), GLogPath)]) + #13#10;
   if GKeyWasShown then
-    S := S + #13#10 + 'Ключ администратора показывался на предыдущем экране: ' +
-      'сохраните его в надёжном месте — восстановить ключ нельзя, только ' +
-      'выпустить новый.';
+    S := S + #13#10 + CustomMessage('EtnSummaryKeyReminder');
   Result := S;
 end;
 
@@ -8454,9 +8482,9 @@ begin
         ExitProcess(Code);
       end;
       if GServerSelected then
-        SetInstallStage('Замена файлов сервера ETN…')
+        SetInstallStage(CustomMessage('EtnStageServerFiles'))
       else if GClientSelected then
-        SetInstallStage('Замена файлов клиента ETN…');
+        SetInstallStage(CustomMessage('EtnStageClientFiles'));
     end;
     Exit;
   end;
@@ -8474,14 +8502,14 @@ begin
         службы (WinSW каталог журнала не создаёт) — 9b310991. }
       if GServerSelected then
       begin
-        SetInstallStage('Подготовка каталогов данных…');
+        SetInstallStage(CustomMessage('EtnStageDataDirs'));
         if not EnsureServerDirs then
           FailInstall('каталог данных не подготовлен: ' + GDataDir);
         { Подстановка шаблона службы до регистрации/запуска: пока в
           etn-service.xml плейсхолдеры, службу запускать нельзя (ADR db60302a). }
         if GExitCode = EXIT_OK then
         begin
-          SetInstallStage('Настройка службы…');
+          SetInstallStage(CustomMessage('EtnStageServiceConfig'));
           if not InstallServiceConfig then
             FailInstall('конфигурация службы не подготовлена: ' + ServiceDir +
               '\service\etn-service.xml');
@@ -8492,7 +8520,7 @@ begin
           сбой выполнения, а не предусловие (34f8e315). }
         if GExitCode = EXIT_OK then
         begin
-          SetInstallStage('Регистрация службы ETN…');
+          SetInstallStage(CustomMessage('EtnStageServiceRegister'));
           if not RegisterServiceIfNeeded(Reason) then
             FailInstallWithCode(EXIT_FAILED, Reason);
         end;
@@ -8501,7 +8529,7 @@ begin
           итоговую сводку), причина в журнале. }
         if GExitCode = EXIT_OK then
         begin
-          SetInstallStage('Правило брандмауэра…');
+          SetInstallStage(CustomMessage('EtnStageFirewall'));
           ApplyFirewallRule;
         end;
       end;
@@ -8509,7 +8537,7 @@ begin
         стартует. Вызывается один раз: критерий hasFirstUser (686c5d76). }
       if (GServerSelected) and (GExitCode = EXIT_OK) then
       begin
-        SetInstallStage('Инициализация сервера…');
+        SetInstallStage(CustomMessage('EtnStageInit'));
         EnsureFirstUser;
         if GExitCode <> EXIT_OK then
           FailInstall('инициализация сервера не выполнена (etn init) — ' +
@@ -8524,7 +8552,7 @@ begin
 #endif
       if GExitCode = EXIT_OK then
       begin
-        SetInstallStage('Запуск службы ETN…');
+        SetInstallStage(CustomMessage('EtnStageServiceStart'));
         { start не ждёт RUNNING: готовность подтверждает health-check.
           Сбой команды start после замены файлов — код 10 (сбой выполнения).
           После отката прежняя версия поднимается. }
@@ -8539,7 +8567,7 @@ begin
             'запускается пользователем')
         else
         begin
-          SetInstallStage('Проверка работоспособности…');
+          SetInstallStage(CustomMessage('EtnStageHealth'));
           { Расширенный health-check (0a79d9de, a1ea1d40): один GET
             /api/v1/health — 200, status=ok, db=ok, version = целевая из тела
             ответа; повтор до 60 с фактического времени. }
@@ -8569,7 +8597,7 @@ begin
     end;
     if (GExitCode = EXIT_OK) and NeedInstallRecord then
     begin
-      SetInstallStage('Запись параметров установки…');
+      SetInstallStage(CustomMessage('EtnStageParams'));
       if not WriteInstallJson then
       begin
         FailInstall('install.json не записан: ' + GInstallJsonPath);

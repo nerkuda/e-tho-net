@@ -964,35 +964,37 @@ Add-StaticResult -Name 'static:stage-statuslabel' `
 $stepBody = Get-IssFunctionBody -Text $issText -Name 'CurStepChanged'
 $updateBody = Get-IssFunctionBody -Text $issText -Name 'PrepareServerUpdate'
 $stageNames = @(
-    'Замена файлов сервера ETN',
-    'Подготовка каталогов данных',
-    'Настройка службы',
-    'Регистрация службы ETN',
-    'Правило брандмауэра',
-    'Инициализация сервера',
-    'Запуск службы ETN',
-    'Проверка работоспособности',
-    'Запись параметров установки'
+    @{ Name = 'Замена файлов сервера ETN'; Key = 'EtnStageServerFiles' },
+    @{ Name = 'Подготовка каталогов данных'; Key = 'EtnStageDataDirs' },
+    @{ Name = 'Настройка службы'; Key = 'EtnStageServiceConfig' },
+    @{ Name = 'Регистрация службы ETN'; Key = 'EtnStageServiceRegister' },
+    @{ Name = 'Правило брандмауэра'; Key = 'EtnStageFirewall' },
+    @{ Name = 'Инициализация сервера'; Key = 'EtnStageInit' },
+    @{ Name = 'Запуск службы ETN'; Key = 'EtnStageServiceStart' },
+    @{ Name = 'Проверка работоспособности'; Key = 'EtnStageHealth' },
+    @{ Name = 'Запись параметров установки'; Key = 'EtnStageParams' }
 )
-foreach ($stageName in $stageNames) {
-    Add-StaticResult -Name ('static:stage:' + $stageName) `
-        -Ok (Test-IssCode -Text $stepBody -Pattern ([regex]::Escape($stageName))) `
+foreach ($stage in $stageNames) {
+    Add-StaticResult -Name ('static:stage:' + $stage.Name) `
+        -Ok (Test-MessageTextInBody -Body $stepBody -Key $stage.Key -Text $stage.Name) `
         -Note 'этап прогресса в CurStepChanged'
 }
 # Остановка службы перенесена в фазы обновления (bb063ac3): подпись этапа и
 # сам вызов живут в PrepareServerUpdate, который ssInstall вызывает до копирования.
 Add-StaticResult -Name 'static:stage:Остановка службы ETN' `
-    -Ok (Test-IssCode -Text $updateBody -Pattern ([regex]::Escape('Остановка службы ETN'))) `
+    -Ok (Test-MessageTextInBody -Body $updateBody -Key 'EtnStageStopService' -Text 'Остановка службы ETN') `
     -Note 'этап остановки службы в PrepareServerUpdate'
 $backupStageBody = Get-IssFunctionBody -Text $issText -Name 'CreateDatabaseBackup'
 Add-StaticResult -Name 'static:stage:backup' `
-    -Ok (Test-IssCode -Text $backupStageBody -Pattern ([regex]::Escape('Резервная копия баз данных'))) `
+    -Ok (Test-MessageTextInBody -Body $backupStageBody -Key 'EtnStageBackup' -Text 'Резервная копия баз данных') `
     -Note 'этап бэкапа в CreateDatabaseBackup (вызовет bb063ac3)'
 
 $errorBody = Get-IssFunctionBody -Text $issText -Name 'ErrorMemoText'
-$errorParts = @('FailureReasonText', 'Журнал установки', 'Резервная копия баз данных', 'Следующий шаг')
-$errorOk = $true
-foreach ($part in $errorParts) { if (-not (Test-IssCode -Text $errorBody -Pattern ([regex]::Escape($part)))) { $errorOk = $false } }
+$errorOk = (Test-IssCode -Text $errorBody -Pattern ([regex]::Escape('FailureReasonText'))) -and
+    (Test-MessageTextInBody -Body $errorBody -Key 'EtnLogLine' -Text 'Журнал установки') -and
+    (Test-IssCode -Text $errorBody -Pattern ([regex]::Escape('BackupPathForMessage('))) -and
+    (Test-MessageContains -Key 'EtnBackupLine' -Text 'Резервная копия баз данных') -and
+    (Test-MessageTextInBody -Body $errorBody -Key 'EtnErrorNextStep' -Text 'Следующий шаг')
 Add-StaticResult -Name 'static:error-page-content' -Ok $errorOk `
     -Note 'экран ошибки: причина, журнал, бэкап и следующий шаг'
 $errorPageBody = Get-IssFunctionBody -Text $issText -Name 'CreateErrorPage'
@@ -1004,10 +1006,12 @@ Add-StaticResult -Name 'static:error-page-buttons' -Ok $errorButtons `
     -Note 'экран ошибки: журнал, папка данных, повтор установки'
 
 $summaryBody = Get-IssFunctionBody -Text $issText -Name 'SummaryText'
-$summaryParts = @('http://127.0.0.1:', 'Адрес в локальной сети', 'DetectLanIp',
-    'Каталог данных', 'Журнал установки', 'GKeyWasShown')
-$summaryOk = $true
-foreach ($part in $summaryParts) { if (-not (Test-IssCode -Text $summaryBody -Pattern ([regex]::Escape($part)))) { $summaryOk = $false } }
+$summaryOk = (Test-MessageTextInBody -Body $summaryBody -Key 'EtnSummaryLocalAddress' -Text 'http://127.0.0.1:') -and
+    (Test-MessageTextInBody -Body $summaryBody -Key 'EtnSummaryLanAddress' -Text 'Адрес в локальной сети') -and
+    (Test-IssCode -Text $summaryBody -Pattern ([regex]::Escape('DetectLanIp'))) -and
+    (Test-MessageTextInBody -Body $summaryBody -Key 'EtnSummaryDataDir' -Text 'Каталог данных') -and
+    (Test-MessageTextInBody -Body $summaryBody -Key 'EtnLogLine' -Text 'Журнал установки') -and
+    (Test-IssCode -Text $summaryBody -Pattern ([regex]::Escape('GKeyWasShown')))
 Add-StaticResult -Name 'static:summary-content' -Ok $summaryOk `
     -Note 'сводка: локальный и LAN-адрес, каталог данных, журнал, напоминание о ключе'
 $summaryLan = (Test-IssCode -Text $summaryBody -Pattern ([regex]::Escape('if GServerFirewall then'))) -and
