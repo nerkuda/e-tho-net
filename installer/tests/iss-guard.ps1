@@ -34,7 +34,10 @@
                              действительно под директивой, а не в комментарии);
       Get-IssCustomMessage / Get-IssCustomMessageNames — значение сообщения
                              [CustomMessages] по имени и список имён (включая
-                             дубликаты) — сторож выноса UI-строк.
+                             дубликаты) — сторож выноса UI-строк;
+      Get-IssUiLiterals    — кириллические литералы [Code], не являющиеся
+                             журнальными и не входящие в allowlist: сторож
+                             «UI-строки только в [CustomMessages]».
 
     Самопроверка — Test-IssGuardSelfTest: возвращает объект
     { Ok = [bool]; Message = [string] } по встроенным образцам; вызывается
@@ -302,6 +305,62 @@ function Get-IssCustomMessageNames {
     return @($names)
 }
 
+function Get-IssUiLiterals {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
+    )
+    # 4dc117f5: в [Code] UI-строк быть не должно. Журнальные операторы
+    # (LogLine/LogDefer/LogOrDefer/Log) и метки операций инструмента БД
+    # (ApplyDatabaseToolReport) остаются в коде по решению пользователя;
+    # остальные кириллические литералы — нарушения, кроме allowlist.
+    $allowed = @('%.1f ГБ', '%.1f МБ', ' КБ', ' МБ', ' --connect-name="Локальный сервер"')
+    $codeMatch = [regex]::Match($Text, '(?ms)^\[Code\]\s*(.*)$')
+    if (-not $codeMatch.Success) { return @() }
+    # Get-IssStrippedLines вырезает комментарии только в секции [Code], поэтому
+    # передаём фиктивный заголовок и отбрасываем его строку.
+    $stripped = @(Get-IssStrippedLines -Text ("[Code]`n" + $codeMatch.Groups[1].Value))
+    $bodyLines = if ($stripped.Count -gt 1) { $stripped[1..($stripped.Count - 1)] } else { @() }
+    $joined = $bodyLines -join "`n"
+    $statements = New-Object System.Collections.Generic.List[string]
+    $sb = New-Object System.Text.StringBuilder
+    $inString = $false
+    $depth = 0
+    for ($i = 0; $i -lt $joined.Length; $i++) {
+        $c = $joined[$i]
+        [void]$sb.Append($c)
+        if ($c -eq "'") {
+            # Удвоенная кавычка внутри строки — не конец литерала.
+            if ($inString -and (($i + 1) -lt $joined.Length) -and ($joined[$i + 1] -eq "'")) {
+                [void]$sb.Append("'")
+                $i++
+                continue
+            }
+            $inString = -not $inString
+            continue
+        }
+        if ($inString) { continue }
+        if ($c -eq '(') { $depth++ }
+        elseif ($c -eq ')') { if ($depth -gt 0) { $depth-- } }
+        elseif (($c -eq ';') -and ($depth -eq 0)) {
+            $statements.Add($sb.ToString())
+            [void]$sb.Clear()
+        }
+    }
+    if ($sb.ToString().Trim() -ne '') { $statements.Add($sb.ToString()) }
+    $found = New-Object System.Collections.Generic.List[string]
+    foreach ($statement in $statements) {
+        if ($statement -match '\b(LogLine|LogDefer|LogOrDefer|Log)\s*\(') { continue }
+        if ($statement -match '\bApplyDatabaseToolReport\s*\(') { continue }
+        foreach ($m in [regex]::Matches($statement, "'((?:[^']|'')*)'")) {
+            $value = $m.Groups[1].Value -replace "''", "'"
+            if ($value -notmatch '[А-Яа-яЁё]') { continue }
+            if ($allowed -contains $value) { continue }
+            if (-not $found.Contains($value)) { $found.Add($value) }
+        }
+    }
+    return @($found)
+}
+
 function Test-IssGuardSelfTest {
     $failures = New-Object System.Collections.Generic.List[string]
     $pattern = [regex]::Escape('function ValidDisplayName')
@@ -381,6 +440,17 @@ function Test-IssGuardSelfTest {
     $msgCont = "[CustomMessages]`r`nEtnC=Первая часть \" + "`r`n" + 'вторая часть'
     if ((Get-IssCustomMessage -Text $msgCont -Name 'EtnC') -ne 'Первая часть вторая часть') {
         $failures.Add('[CustomMessages]: продолжение строки склеивается')
+    }
+
+    # 4dc117f5: сторож UI-литералов — журнал и allowlist проходят, UI-строка нет.
+    $uiSample = "[Code]`r`nbegin`r`n  LogLine('INFO', 'журнал');`r`n  Result := 'подпись';`r`n  X := '%.1f ГБ';`r`n  ApplyDatabaseToolReport(P, C, 'Бэкап БД');`r`nend;"
+    $uiBad = @(Get-IssUiLiterals -Text $uiSample)
+    if (($uiBad.Count -ne 1) -or ($uiBad[0] -ne 'подпись')) {
+        $failures.Add('UI-литералы: ожидалась только «подпись», найдено: ' + ($uiBad -join ', '))
+    }
+    $uiCommented = "[Code]`r`n// Result := 'скрытая';`r`n{ Result := 'в блоке'; }"
+    if (@(Get-IssUiLiterals -Text $uiCommented).Count -ne 0) {
+        $failures.Add('UI-литералы: закомментированные строки не считаются')
     }
 
     return [pscustomobject]@{

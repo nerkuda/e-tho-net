@@ -777,6 +777,13 @@ $duplicateMessages = @($customNames | Group-Object | Where-Object { $_.Count -gt
 Add-StaticResult -Name 'static:custommessage-unique' -Ok ($duplicateMessages.Count -eq 0) `
     -Note ('сообщений: ' + $customNames.Count +
         $(if ($duplicateMessages.Count) { '; дубликаты: ' + ($duplicateMessages -join ', ') } else { '' }))
+# 4dc117f5: финальный сторож — в [Code] не осталось UI-литералов. Журнальные
+# операторы (Log*) и метки операций инструмента БД остаются в коде по решению
+# пользователя; допускаются только технические форматы из allowlist.
+$uiLeft = @(Get-IssUiLiterals -Text $issText)
+Add-StaticResult -Name 'static:no-ui-literals' -Ok ($uiLeft.Count -eq 0) `
+    -Note ('UI-литералы в [Code]: ' +
+        $(if ($uiLeft.Count) { $uiLeft -join ' | ' } else { 'нет' }))
 
 # e375123f: шаблон службы обязан задавать ETN_DEPLOYMENT=windows-service —
 # без него сервер, запущенный службой, определяет себя как standalone и
