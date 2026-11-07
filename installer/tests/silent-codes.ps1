@@ -997,9 +997,19 @@ Add-StaticResult -Name 'static:stage:backup' `
     -Note 'этап бэкапа в CreateDatabaseBackup (вызовет bb063ac3)'
 
 $errorBody = Get-IssFunctionBody -Text $issText -Name 'ErrorMemoText'
+$backupPathBody = Get-IssFunctionBody -Text $issText -Name 'BackupPathForMessage'
+# Три ветки BackupPathForMessage (свежий архив, архив прошлых обновлений, архив
+# не создан) обязаны рендерить EtnBackupLine через FmtMessage, а не собирать
+# подпись из переменной напрямую.
+$backupLineCalls = [regex]::Matches($backupPathBody,
+    "FmtMessage\s*\(\s*CustomMessage\s*\(\s*'EtnBackupLine'\s*\)")
+$backupLineOk = ($backupLineCalls.Count -ge 3)
+Add-StaticResult -Name 'static:error-page-backup-line' -Ok $backupLineOk `
+    -Note ('вызовы EtnBackupLine в BackupPathForMessage: ' + $backupLineCalls.Count + ' из 3')
 $errorOk = (Test-IssCode -Text $errorBody -Pattern ([regex]::Escape('FailureReasonText'))) -and
     (Test-MessageTextInBody -Body $errorBody -Key 'EtnLogLine' -Text 'Журнал установки') -and
     (Test-IssCode -Text $errorBody -Pattern ([regex]::Escape('BackupPathForMessage('))) -and
+    $backupLineOk -and
     (Test-MessageContains -Key 'EtnBackupLine' -Text 'Резервная копия баз данных') -and
     (Test-MessageTextInBody -Body $errorBody -Key 'EtnErrorNextStep' -Text 'Следующий шаг')
 Add-StaticResult -Name 'static:error-page-content' -Ok $errorOk `

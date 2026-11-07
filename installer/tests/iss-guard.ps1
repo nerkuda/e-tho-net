@@ -349,13 +349,58 @@ function Get-IssUiLiterals {
     if ($sb.ToString().Trim() -ne '') { $statements.Add($sb.ToString()) }
     $found = New-Object System.Collections.Generic.List[string]
     foreach ($statement in $statements) {
-        if ($statement -match '\b(LogLine|LogDefer|LogOrDefer|Log)\s*\(') { continue }
-        if ($statement -match '\bApplyDatabaseToolReport\s*\(') { continue }
-        foreach ($m in [regex]::Matches($statement, "'((?:[^']|'')*)'")) {
-            $value = $m.Groups[1].Value -replace "''", "'"
-            if ($value -notmatch '[А-Яа-яЁё]') { continue }
-            if ($allowed -contains $value) { continue }
-            if (-not $found.Contains($value)) { $found.Add($value) }
+        # Исключаются только строковые аргументы журнальных вызовов и метки
+        # ApplyDatabaseToolReport, а не всё утверждение целиком: иначе UI-строка
+        # в том же операторе рядом с журналом проходит незамеченной.
+        $journalDepths = New-Object System.Collections.Generic.List[int]
+        $inString = $false
+        $stringStart = -1
+        $depth = 0
+        for ($i = 0; $i -lt $statement.Length; $i++) {
+            $c = $statement[$i]
+            if ($inString) {
+                if ($c -eq "'") {
+                    # Удвоенная кавычка внутри строки — не конец литерала.
+                    if ((($i + 1) -lt $statement.Length) -and ($statement[$i + 1] -eq "'")) {
+                        $i++
+                        continue
+                    }
+                    $inString = $false
+                    if ($journalDepths.Count -eq 0) {
+                        $value = $statement.Substring($stringStart + 1, $i - $stringStart - 1) -replace "''", "'"
+                        if (($value -match '[А-Яа-яЁё]') -and ($allowed -notcontains $value) -and
+                            (-not $found.Contains($value))) {
+                            $found.Add($value)
+                        }
+                    }
+                }
+                continue
+            }
+            if ($c -eq "'") {
+                $inString = $true
+                $stringStart = $i
+                continue
+            }
+            if ($c -eq '(') {
+                $depth++
+                $j = $i - 1
+                while ($j -ge 0 -and [char]::IsWhiteSpace($statement[$j])) { $j-- }
+                $nameEnd = $j
+                while ($j -ge 0 -and ($statement[$j] -match '[A-Za-z0-9_]')) { $j-- }
+                if ($nameEnd -gt $j) {
+                    $name = $statement.Substring($j + 1, $nameEnd - $j)
+                    if ($name -imatch '^(LogLine|LogDefer|LogOrDefer|Log|ApplyDatabaseToolReport)$') {
+                        $journalDepths.Add($depth)
+                    }
+                }
+            }
+            elseif ($c -eq ')') {
+                if (($journalDepths.Count -gt 0) -and
+                    ($journalDepths[$journalDepths.Count - 1] -eq $depth)) {
+                    $journalDepths.RemoveAt($journalDepths.Count - 1)
+                }
+                if ($depth -gt 0) { $depth-- }
+            }
         }
     }
     return @($found)
@@ -451,6 +496,24 @@ function Test-IssGuardSelfTest {
     $uiCommented = "[Code]`r`n// Result := 'скрытая';`r`n{ Result := 'в блоке'; }"
     if (@(Get-IssUiLiterals -Text $uiCommented).Count -ne 0) {
         $failures.Add('UI-литералы: закомментированные строки не считаются')
+    }
+    # 4dc117f5: журнальный вызов в том же операторе не должен скрывать соседний
+    # UI-литерал — исключаются только аргументы самого вызова.
+    $uiInline = "[Code]`r`nbegin`r`n  if True then LogLine('INFO', 'журнал') else Result := 'подпись';`r`nend;"
+    $uiInlineBad = @(Get-IssUiLiterals -Text $uiInline)
+    if (($uiInlineBad.Count -ne 1) -or ($uiInlineBad[0] -ne 'подпись')) {
+        $failures.Add('UI-литералы: строка вне аргументов LogLine должна находиться, найдено: ' +
+            ($uiInlineBad -join ', '))
+    }
+    $uiPrefix = "[Code]`r`nbegin`r`n  X := 'префикс' + LogLine('INFO', 'журнал');`r`nend;"
+    $uiPrefixBad = @(Get-IssUiLiterals -Text $uiPrefix)
+    if (($uiPrefixBad.Count -ne 1) -or ($uiPrefixBad[0] -ne 'префикс')) {
+        $failures.Add('UI-литералы: строка после LogLine в выражении должна находиться, найдено: ' +
+            ($uiPrefixBad -join ', '))
+    }
+    $uiNested = "[Code]`r`nbegin`r`n  LogLine('INFO', FmtMessage('в журнале', [X]));`r`nend;"
+    if (@(Get-IssUiLiterals -Text $uiNested).Count -ne 0) {
+        $failures.Add('UI-литералы: вложенные аргументы журнального вызова не считаются')
     }
 
     return [pscustomobject]@{
