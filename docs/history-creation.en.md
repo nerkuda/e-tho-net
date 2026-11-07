@@ -370,6 +370,8 @@ where I am now, having traveled such a path. As of **November 2026**:
   riding a bicycle. "Everyone has their own quirks" (as the saying goes).
 - *is it worth it?* — Yes!
 
+![demo-gif](images/ETN-Вторая%20память.gif)
+
 ## Try it
 
 If you are also interested in knowledge management systems, you can try

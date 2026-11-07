@@ -10,7 +10,7 @@ information — your own server, your own data, no subscriptions and no clouds.
 
 ![CI](https://github.com/nerkuda/e-tho-net/actions/workflows/ci.yml/badge.svg) ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
-![demo-gif](docs/images/ETN-1.gif)
+![demo-gif](docs/images/ETN-Вторая%20память.gif)
 
 
 ## Key features
@@ -74,6 +74,8 @@ information — your own server, your own data, no subscriptions and no clouds.
   Opencode, ZCode and others) through the built-in MCP server — they get your
   knowledge, can search and navigate it, append and link thoughts,
   understand and preserve context.
+
+![demo-gif](docs/images/ETN-Основные%20экраны.gif)
 
 ## Quick start
 
