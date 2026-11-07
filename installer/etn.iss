@@ -683,20 +683,6 @@ var
   { Хук задачи ce3ab836: прямой прогон бэкапа БД без фаз установки
     (/TESTBACKUP=1|skip); объявлен всегда, сбрасывается в InitializeSetup. }
   GTestBackup: String;
-  { Хук задачи 112642a4: подмена найденного старого NSIS-клиента
-    (/TESTLEGACY=<версия>|machine:<версия>); в обычной сборке кода нет. }
-  GTestLegacy: String;
-  { Хук 112642a4 (дефект приёмки): подставной деинсталлятор старого клиента.
-    /TESTLEGACYCMD=<exe + аргументы> — вместо реестра и настоящего NSIS-
-    деинсталлятора запускается эта команда; /TESTLEGACYSTUCK=<мс> — запись
-    Uninstall считается неудалённой указанное время после запуска;
-    /TESTLEGACYWAIT=<мс> — бюджет ожидания её исчезновения;
-    /TESTLEGACYARGS=1 — вывести вычисленные аргументы деинсталлятора
-    (проверка _?= на пути с пробелами). }
-  GTestLegacyCmd: String;
-  GTestLegacyStuck: String;
-  GTestLegacyWait: String;
-  GTestLegacyArgs: String;
   { Хуки задачи 98ad5eec: модель запущенного клиента без реальных процессов и
     реальная проверка с фильтром по каталогу. /TESTCLIENTPIDS=<pid,...> —
     процессы считаются запущенными; /TESTCLIENTGONE=<мс> — через сколько
@@ -944,10 +930,15 @@ var
   GLanIp: String;
   GLanIpChecked: Boolean;
 
-  { Старый клиент, установленный NSIS-установщиком electron-builder. }
+  { Старый клиент, установленный NSIS-установщиком electron-builder: найденная
+    запись (команда деинсталляции, корень и полный путь ключа — по ним потом
+    проверяется, что запись исчезла). }
   GLegacyClientFound: Boolean;
   GLegacyClientVersion: String;
   GLegacyClientMachine: Boolean;
+  GLegacyUninstallCmd: String;
+  GLegacyRoot: Integer;
+  GLegacyKey: String;
 
   { Экраны администратора и ключа }
   GAdminPage: TWizardPage;
@@ -1986,7 +1977,24 @@ end;
 
 function ClientStateText: String;
 begin
-  if GClientState = 'installed' then
+  { Старый NSIS-клиент проверяется первым: его файлы тоже дают
+    GClientState = 'installed', и ветка «перед установкой он будет удалён»
+    иначе недостижима (дефект 124203d0). }
+  if GLegacyClientFound and GClientSelected then
+  begin
+    { Компактно: длинный текст выталкивал нижние подписи за поверхность
+      страницы (ошибка 860def0d, п.1). В режиме «только для меня» машинный
+      старый клиент не удаляется — не обещаем этого (2dd215f7). }
+    Result := 'найден клиент ETN ' + GLegacyClientVersion +
+      ' от старого установщика (NSIS' +
+      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + ')';
+    if GUserOnlyMode and GLegacyClientMachine then
+      Result := Result + ' — для его удаления нужны права администратора; ' +
+        'новый клиент поставится в ваш профиль'
+    else
+      Result := Result + ' — перед установкой он будет удалён';
+  end
+  else if GClientState = 'installed' then
   begin
     if GClientSelected then
     begin
@@ -2013,20 +2021,6 @@ begin
       else
         Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
     end;
-  end
-  else if GLegacyClientFound and GClientSelected then
-  begin
-    { Компактно: длинный текст выталкивал нижние подписи за поверхность
-      страницы (ошибка 860def0d, п.1). В режиме «только для меня» машинный
-      старый клиент не удаляется — не обещаем этого (2dd215f7). }
-    Result := 'найден клиент ETN ' + GLegacyClientVersion +
-      ' от старого установщика (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + ')';
-    if GUserOnlyMode and GLegacyClientMachine then
-      Result := Result + ' — для его удаления нужны права администратора; ' +
-        'новый клиент поставится в ваш профиль'
-    else
-      Result := Result + ' — перед установкой он будет удалён';
   end
   else if GLegacyClientFound then
     Result := 'найден клиент ETN ' + GLegacyClientVersion +
@@ -2169,401 +2163,136 @@ begin
   end;
 end;
 
-{ ---------------------------------------------------------------------------
-  Старый клиент NSIS (electron-builder): обнаружение и удаление (112642a4).
-  --------------------------------------------------------------------------- }
-{ Признак записи electron-builder/NSIS: DisplayName начинается с «ETN » и
-  UninstallString указывает на «Uninstall ETN.exe». Запись самого Inno
-  (суффикс _is1) исключается: её удаляет штатный деинсталлятор. }
-function IsLegacyClientKey(const SubKeyName, DisplayName,
-  UninstallCmd: String): Boolean;
-begin
-  Result := False;
-  if Pos('_is1', SubKeyName) > 0 then Exit;
-  if Pos('ETN', DisplayName) <> 1 then Exit;
-  if Pos('Uninstall ETN.exe', UninstallCmd) <= 0 then Exit;
-  Result := True;
-end;
-
-function FindLegacyClientInRoot(const Root: Integer; const UninstallKey: String;
-  var Version, UninstallCmd, SubKeyName: String): Boolean;
+{ Старый клиент NSIS (electron-builder 0.14.x): обнаружение и удаление (112642a4).
+  В тестовой сборке поиск и удаление не выполняются: GTestMode — предохранитель
+  машины разработчика, а не тестовый хук. }
+{ Первый подходящий ключ в корне заполняет GLegacy* и считается найденным. }
+function FindLegacyInRoot(const Root: Integer;
+  const UninstallKey: String): Boolean;
 var
   Names: TArrayOfString;
   I: Integer;
-  Key, DisplayName, Cmd, Ver: String;
+  Key, DisplayName, Cmd: String;
 begin
   Result := False;
-  SubKeyName := '';
   if not RegGetSubkeyNames(Root, UninstallKey, Names) then Exit;
   for I := 0 to GetArrayLength(Names) - 1 do
   begin
     Key := UninstallKey + '\' + Names[I];
-    DisplayName := '';
-    Cmd := '';
     if not RegQueryStringValue(Root, Key, 'DisplayName', DisplayName) then Continue;
     if not RegQueryStringValue(Root, Key, 'UninstallString', Cmd) then Continue;
-    if not IsLegacyClientKey(Names[I], DisplayName, Cmd) then
-      Continue;
-    Ver := '';
-    RegQueryStringValue(Root, Key, 'DisplayVersion', Ver);
-    Version := Ver;
-    UninstallCmd := Cmd;
-    SubKeyName := Names[I];
+    { Запись electron-builder: «ETN …» + «Uninstall ETN.exe»; Inno (_is1) не трогаем. }
+    if (Pos('_is1', Names[I]) > 0) or (Pos('ETN', DisplayName) <> 1) or
+      (Pos('Uninstall ETN.exe', Cmd) <= 0) then Continue;
+    RegQueryStringValue(Root, Key, 'DisplayVersion', GLegacyClientVersion);
+    GLegacyUninstallCmd := Cmd;
+    GLegacyRoot := Root;
+    GLegacyKey := Key;
+    GLegacyClientMachine := (Root = HKLM64) or (Root = HKLM32);
     Result := True;
     Exit;
   end;
 end;
 
-{ Ищет старый клиент: сначала запись текущего пользователя (HKCU), затем
-  машинную (HKLM64/HKLM). IsMachine=True — запись «для всех пользователей».
-  Root и SubKeyName — где именно найдена запись: по ним удаление убеждается,
-  что после деинсталлятора она действительно исчезла (112642a4). }
-function FindLegacyClientEx(var Version, UninstallCmd: String;
-  var IsMachine: Boolean; var Root: Integer; var SubKeyName: String): Boolean;
+{ Явные корни: HKCU, HKCU+WOW6432Node, HKLM64, HKLM32 (HKLM дублировал HKLM64). }
+function FindLegacyClient: Boolean;
 begin
-  Version := '';
-  UninstallCmd := '';
-  IsMachine := False;
-  Root := 0;
-  SubKeyName := '';
-  Result := FindLegacyClientInRoot(HKCU, UNINSTALL_KEY, Version, UninstallCmd,
-    SubKeyName);
-  if Result then
-  begin
-    Root := HKCU;
-    Exit;
-  end;
-  Result := FindLegacyClientInRoot(HKLM64, UNINSTALL_KEY, Version, UninstallCmd,
-    SubKeyName);
-  if Result then
-  begin
-    Root := HKLM64;
-    IsMachine := True;
-    Exit;
-  end;
-  Result := FindLegacyClientInRoot(HKLM, UNINSTALL_KEY, Version, UninstallCmd,
-    SubKeyName);
-  if Result then
-  begin
-    Root := HKLM;
-    IsMachine := True;
-  end;
+  GLegacyClientVersion := '';
+  GLegacyUninstallCmd := '';
+  GLegacyRoot := 0;
+  GLegacyKey := '';
+  GLegacyClientMachine := False;
+  Result := FindLegacyInRoot(HKCU, UNINSTALL_KEY);
+  if not Result then Result := FindLegacyInRoot(HKCU, UNINSTALL_KEY_WOW);
+  if not Result then Result := FindLegacyInRoot(HKLM64, UNINSTALL_KEY);
+  if not Result then Result := FindLegacyInRoot(HKLM32, UNINSTALL_KEY);
 end;
 
-function FindLegacyClient(var Version, UninstallCmd: String;
-  var IsMachine: Boolean): Boolean;
-var
-  Root: Integer;
-  SubKeyName: String;
-begin
-  Result := FindLegacyClientEx(Version, UninstallCmd, IsMachine, Root, SubKeyName);
-end;
-
-{ Путь к exe из командной строки деинсталлятора: строка в кавычках или до
-  первого пробела. }
-function UninstallerExe(const Cmd: String): String;
+{ Аргументы NSIS-деинсталлятора: исходные (/currentuser|/allusers) сохраняются,
+  добавляется /S, _?=<каталог> — последним и без кавычек. Без _?= NSIS копирует
+  себя в %TEMP% и возвращает управление сразу (грабли 25343551). }
+function UninstallerArgs(const Cmd: String; var Exe: String): String;
 var
   P: Integer;
-begin
-  Result := Trim(Cmd);
-  if (Result <> '') and (Result[1] = '"') then
-  begin
-    P := Pos('"', Copy(Result, 2, Length(Result)));
-    if P > 0 then
-      Result := Copy(Result, 2, P - 1)
-    else
-      Result := Copy(Result, 2, Length(Result));
-  end
-  else
-  begin
-    P := Pos(' ', Result);
-    if P > 0 then Result := Copy(Result, 1, P - 1);
-  end;
-end;
-
-{ Аргументы деинсталлятора без пути: сохраняются (/currentuser, /allusers),
-  добавляется /S — тихий режим NSIS — и _?=<каталог деинсталлятора>.
-  Без _?= NSIS-деинсталлятор копирует себя в %TEMP%, запускает копию и сразу
-  возвращает управление: установщик продолжил бы копирование файлов, пока
-  удаление ещё идёт, и фоновый деинсталлятор снёс бы только что скопированное
-  (дефект приёмки 112642a4). _?= обязан быть последним параметром и не
-  заключается в кавычки — даже если путь содержит пробелы (документация NSIS,
-  раздел 3.2.2). }
-function UninstallerArgs(const Cmd: String): String;
-var
-  Exe: String;
   Rest: String;
 begin
-  Exe := UninstallerExe(Cmd);
-  Rest := Trim(Cmd);
-  if (Rest <> '') and (Rest[1] = '"') then
-    Rest := Trim(Copy(Rest, Length(Exe) + 3, Length(Rest)))
-  else
-    Rest := Trim(Copy(Rest, Length(Exe) + 1, Length(Rest)));
-  if Pos('/S', UpperCase(Rest)) = 0 then
-    Rest := Trim(Rest + ' /S');
+  P := Pos('Uninstall ETN.exe', Cmd);
+  Exe := RemoveQuotes(Trim(Copy(Cmd, 1, P + Length('Uninstall ETN.exe'))));
+  Rest := Trim(Copy(Cmd, P + Length('Uninstall ETN.exe') + 1, Length(Cmd)));
+  if Pos('/S', UpperCase(Rest)) = 0 then Rest := Trim(Rest + ' /S');
   Result := Rest + ' _?=' + ExtractFileDir(Exe);
 end;
 
-{ Запись Uninstall удаляемого клиента ещё существует? В тестовом режиме
-  (/TESTLEGACYSTUCK=<мс>) запись считается существующей, пока не истекло
-  заданное время ожидания: ElapsedMs — сколько уже прошло по шагам опроса.
-  Так цикл ожидания проверяется без настоящего NSIS-деинсталлятора. }
-function LegacyRecordGone(const Root: Integer; const SubKeyName: String;
-  const ElapsedMs: Integer): Boolean;
-begin
-  Result := True;
-#ifdef TestMode
-  if GTestMode and (GTestLegacyCmd <> '') then
-  begin
-    Result := ElapsedMs >= StrToIntDef(GTestLegacyStuck, 0);
-    Exit;
-  end;
-#endif
-  if Root = 0 then Exit;
-  Result := not RegKeyExists(Root, UNINSTALL_KEY + '\' + SubKeyName);
-end;
-
-function LegacyGoneWaitMs: Integer;
-begin
-  Result := LEGACY_GONE_WAIT_MS;
-#ifdef TestMode
-  if GTestMode and (GTestLegacyWait <> '') then
-    Result := StrToIntDef(GTestLegacyWait, Result);
-#endif
-end;
-
-{ Ждёт исчезновения записи Uninstall после деинсталлятора: даже с _?= старая
-  версия могла вернуть управление раньше фактического конца удаления.
-  Возвращает True, когда записи нет (или удалять было нечего). }
-function WaitLegacyRecordGone(const Root: Integer; const SubKeyName: String;
-  const WaitMs: Integer; var WaitedMs: Integer): Boolean;
-begin
-  WaitedMs := 0;
-  if LegacyRecordGone(Root, SubKeyName, WaitedMs) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  while WaitedMs < WaitMs do
-  begin
-    Sleep(LEGACY_GONE_STEP_MS);
-    WaitedMs := WaitedMs + LEGACY_GONE_STEP_MS;
-    if LegacyRecordGone(Root, SubKeyName, WaitedMs) then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-  Result := LegacyRecordGone(Root, SubKeyName, WaitedMs);
-end;
-
-function RunLegacyUninstaller(const Cmd, Version: String; const Root: Integer;
-  const SubKeyName: String): Boolean;
+function RunLegacyUninstaller: Boolean;
 var
-  Exe, Args: String;
+  Exe, Args, Err: String;
   Code, WaitedMs: Integer;
 begin
-  Result := False;
-  Exe := UninstallerExe(Cmd);
+  Args := UninstallerArgs(GLegacyUninstallCmd, Exe);
+  Err := '';
   if (Exe = '') or (not FileExists(Exe)) then
+    Err := 'деинсталлятор не найден: ' + Exe
+  else
   begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version + ': деинсталлятор не найден: ' + Exe);
-    Exit;
+    LogLine('INFO', 'Старый клиент ETN ' + GLegacyClientVersion +
+      ': запуск деинсталлятора ' + Exe + ' ' + Args);
+    if not Exec(Exe, Args, ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, Code) then
+      Err := 'деинсталлятор не запустился'
+    else if Code <> 0 then
+      Err := 'деинсталлятор вернул код ' + IntToStr(Code);
+    { Запись Uninstall может исчезнуть с задержкой: ждём до 10 с, шаг 500 мс. }
+    WaitedMs := 0;
+    while (Err = '') and (WaitedMs < LEGACY_GONE_WAIT_MS) and
+      RegKeyExists(GLegacyRoot, GLegacyKey) do
+    begin
+      Sleep(LEGACY_GONE_STEP_MS);
+      WaitedMs := WaitedMs + LEGACY_GONE_STEP_MS;
+    end;
+    if (Err = '') and RegKeyExists(GLegacyRoot, GLegacyKey) then
+      Err := 'запись Uninstall не исчезла за ' + IntToStr(LEGACY_GONE_WAIT_MS) + ' мс';
   end;
-  Args := UninstallerArgs(Cmd);
-  LogLine('INFO', 'Старый клиент ETN ' + Version + ': запуск деинсталлятора ' +
-    Exe + ' ' + Args);
-  { ewWaitUntilTerminated + _?=: деинсталлятор работает из своего каталога и
-    не возвращает управление до фактического конца удаления. }
-  if not Exec(Exe, Args, ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, Code) then
-  begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version + ': деинсталлятор не запустился');
-    Exit;
-  end;
-  if Code <> 0 then
-  begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version +
-      ': деинсталлятор вернул код ' + IntToStr(Code));
-    Exit;
-  end;
-  if not WaitLegacyRecordGone(Root, SubKeyName, LegacyGoneWaitMs, WaitedMs) then
-  begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version +
-      ': запись Uninstall не исчезла за ' + IntToStr(LegacyGoneWaitMs) +
-      ' мс после деинсталлятора');
-    Exit;
-  end;
-  LogLine('INFO', 'Старый клиент ETN ' + Version + ' удалён (ожидание записи ' +
-    IntToStr(WaitedMs) + ' мс)');
-  Result := True;
+  Result := (Err = '');
+  if not Result then
+    LogLine('ERROR', 'Старый клиент ETN ' + GLegacyClientVersion + ': ' + Err);
 end;
 
-#ifdef TestMode
-{ Подставной деинсталлятор (дефект приёмки 112642a4): та же последовательность
-  «запустить и дождаться, проверить код, дождаться исчезновения записи», но
-  команда задана хуком /TESTLEGACYCMD — на машине разработчика настоящий
-  NSIS-клиент не удаляется. }
-function RunLegacyTestRemoval(var Reason: String): Boolean;
-var
-  Exe, Args: String;
-  Code, WaitedMs: Integer;
-begin
-  Result := False;
-  Reason := '';
-  Exe := UninstallerExe(GTestLegacyCmd);
-  Args := Trim(Copy(GTestLegacyCmd, Length(Exe) + 1, Length(GTestLegacyCmd)));
-  LogLine('INFO', 'TESTLEGACYCMD: подставной деинсталлятор запущен: ' + Exe + ' ' + Args);
-  if not Exec(Exe, Args, '', SW_HIDE, ewWaitUntilTerminated, Code) then
-  begin
-    Reason := 'не удалось удалить старый клиент ETN: подставной деинсталлятор ' +
-      'не запустился (' + Exe + ').';
-    LogLine('ERROR', 'TESTLEGACYCMD result=fail reason=start');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLEGACYCMD: подставной деинсталлятор завершился, код ' +
-    IntToStr(Code));
-  if Code <> 0 then
-  begin
-    Reason := 'не удалось удалить старый клиент ETN его деинсталлятором (код ' +
-      IntToStr(Code) + '). Удалите его вручную в «Программы и компоненты» ' +
-      'и повторите установку.';
-    LogLine('ERROR', 'TESTLEGACYCMD result=fail exit_code=' + IntToStr(Code));
-    Exit;
-  end;
-  if not WaitLegacyRecordGone(0, 'TEST', LegacyGoneWaitMs, WaitedMs) then
-  begin
-    Reason := 'старый клиент ETN не удалён: запись установки не исчезла за ' +
-      IntToStr(LegacyGoneWaitMs) + ' мс после деинсталлятора. Удалите его ' +
-      'вручную в «Программы и компоненты» и повторите установку.';
-    LogLine('ERROR', 'TESTLEGACYCMD result=fail wait_ms=' + IntToStr(WaitedMs) +
-      ' exit_code=' + IntToStr(Code));
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLEGACYCMD result=ok wait_ms=' + IntToStr(WaitedMs) +
-    ' exit_code=' + IntToStr(Code));
-  Result := True;
-end;
-#endif
-
-{ Удаляет найденные старые клиенты в доступной области (IncludeMachine —
-  только в элевированном процессе). Возвращает True, если удалять было нечего
-  или удаление прошло успешно. }
-function RemoveLegacyClients(const IncludeMachine: Boolean;
-  var FailReason: String): Boolean;
-var
-  Version, Cmd, SubKeyName: String;
-  IsMachine: Boolean;
-  Root: Integer;
-begin
-  Result := True;
-  FailReason := '';
-  if not FindLegacyClientEx(Version, Cmd, IsMachine, Root, SubKeyName) then Exit;
-  if IsMachine and (not IncludeMachine) then
-  begin
-    FailReason := 'старый клиент ETN ' + Version +
-      ' установлен для всех пользователей: для его удаления нужны права ' +
-      'администратора. Выберите установку клиента «Для всех пользователей» ' +
-      'или удалите старую версию вручную в «Программы и компоненты».';
-    Result := False;
-    Exit;
-  end;
-  if not RunLegacyUninstaller(Cmd, Version, Root, SubKeyName) then
-  begin
-    FailReason := 'не удалось удалить старый клиент ETN ' + Version +
-      ' его деинсталлятором. Удалите его вручную в «Программы и компоненты» ' +
-      'и повторите установку.';
-    Result := False;
-  end;
-end;
-
-{ Состояние старого клиента для экрана компонентов: запись установщика
-  electron-builder (NSIS) ищется до первого показа экрана. Silent и
-  привилегированная фаза ничего не показывают — им состояние не нужно. }
+{ Состояние старого клиента для экрана компонентов: поиск до первого показа. }
 procedure DetectLegacyClient;
-var
-  Cmd: String;
 begin
   GLegacyClientFound := False;
-  GLegacyClientVersion := '';
-  GLegacyClientMachine := False;
-#ifdef TestMode
-  if GTestMode then
-  begin
-    if GTestLegacy <> '' then
-    begin
-      GLegacyClientFound := True;
-      if Pos('machine:', LowerCase(GTestLegacy)) = 1 then
-      begin
-        GLegacyClientMachine := True;
-        GLegacyClientVersion := Copy(GTestLegacy, 9, Length(GTestLegacy));
-      end
-      else
-        GLegacyClientVersion := GTestLegacy;
-      LogLine('WARN', 'TESTLEGACY=' + GTestLegacy +
-        ': старый клиент NSIS подменён (тестовый режим)');
-    end;
-    Exit;
-  end;
-#endif
+  if GTestMode then Exit;
   if GSilent or GPrivilegedPhase then Exit;
-  Cmd := '';
-  if FindLegacyClient(GLegacyClientVersion, Cmd, GLegacyClientMachine) then
-  begin
-    GLegacyClientFound := True;
-    LogLine('INFO', 'Найден старый клиент ETN ' + GLegacyClientVersion +
-      ' (NSIS, ' + Pick(GLegacyClientMachine, 'для всех пользователей',
-      'для текущего пользователя') + ') — будет удалён перед установкой');
-  end;
+  GLegacyClientFound := FindLegacyClient;
+  if not GLegacyClientFound then Exit;
+  LogLine('INFO', 'Найден старый клиент ETN ' + GLegacyClientVersion + ' (NSIS, ' +
+    Pick(GLegacyClientMachine, 'для всех пользователей', 'для текущего пользователя') +
+    ') — будет удалён перед установкой');
 end;
 
-{ Удаление старого клиента перед установкой нового (только при выбранном
-  клиенте). В неэлевированном процессе удаляется запись текущего пользователя;
-  машинную запись снимает административный режим установки — в GUI проверка
-  идёт на экране готовности. Возвращает False только когда удаление обязательно
-  и не удалось. }
+{ Удаление перед копированием файлов: только при выбранном клиенте; машинная
+  запись без прав — WARN и продолжение; ошибка — False с причиной. }
 function RemoveLegacyBeforeInstall(const Elevated: Boolean;
   var Reason: String): Boolean;
-var
-  Version, Cmd: String;
-  IsMachine: Boolean;
 begin
   Result := True;
   Reason := '';
-  { Старый клиент удаляется только когда клиент выбран: установка одного
-    сервера чужой клиент не трогает. Проверка стоит до тестовой ветки, чтобы
-    /TESTLEGACYCMD повторял реальный маршрут. }
   if not GClientSelected then Exit;
-  { Тестовая сборка не должна запускать деинсталлятор настоящего клиента на
-    машине разработчика: удаление выполняется только через подставную команду
-    /TESTLEGACYCMD; без неё удаление не выполняется. }
-#ifdef TestMode
-  if GTestMode then
+  if GTestMode then Exit;
+  if not FindLegacyClient then Exit;
+  if GLegacyClientMachine and (not Elevated) then
   begin
-    if GTestLegacyCmd <> '' then
-      Result := RunLegacyTestRemoval(Reason);
+    LogLine('WARN', 'Старый клиент ETN ' + GLegacyClientVersion + ' установлен ' +
+      'для всех пользователей: удаление требует прав администратора — запустите ' +
+      'установщик от имени администратора');
     Exit;
   end;
-#endif
-  if not FindLegacyClient(Version, Cmd, IsMachine) then Exit;
-  if IsMachine and (not Elevated) then
-  begin
-    { Машинный клиент старого установщика без прав не удалить: скриптовой
-      элевации больше нет (2dd215f7), привилегированной фазы в GUI нет. В
-      режиме «только для меня» это не ошибка — новый клиент ставится в профиль,
-      старый остаётся; на экране компонентов обещания удаления нет. }
-    LogLine('WARN', 'Старый клиент ETN ' + Version + ' установлен для всех ' +
-      'пользователей: удаление требует прав администратора — запустите ' +
-      'установщик от имени администратора (правый клик → Запуск от имени ' +
-      'администратора)');
-    Exit;
-  end;
-  if IsMachine then
-    Result := RemoveLegacyClients(True, Reason)
-  else
-    Result := RemoveLegacyClients(False, Reason);
+  Result := RunLegacyUninstaller;
   if Result then
-    GLegacyClientFound := False;
+    GLegacyClientFound := False
+  else
+    Reason := 'не удалось удалить старый клиент ETN ' + GLegacyClientVersion +
+      ' его деинсталлятором. Удалите его вручную в «Программы и компоненты» ' +
+      'и повторите установку.';
 end;
 
 { ---------------------------------------------------------------------------
@@ -7609,7 +7338,6 @@ begin
   GTestHealthStep := '';
   GTestRollback := '';
   GTestBackup := '';
-  GTestLegacy := '';
   GLastBackupDir := '';
   GDatabaseToolPath := '';
   GLastRollbackDir := '';
@@ -7633,10 +7361,9 @@ begin
   GLegacyClientFound := False;
   GLegacyClientVersion := '';
   GLegacyClientMachine := False;
-  GTestLegacyCmd := '';
-  GTestLegacyStuck := '';
-  GTestLegacyWait := '';
-  GTestLegacyArgs := '';
+  GLegacyUninstallCmd := '';
+  GLegacyRoot := 0;
+  GLegacyKey := '';
   { Хуки 98ad5eec: модель запущенного клиента и установка клиента «для меня». }
   GTestClientPids := '';
   GTestClientGone := '';
@@ -7738,11 +7465,6 @@ begin
   GTestHealthStep := ParamValue('TESTHEALTHSTEP');
   GTestRollback := LowerCase(ParamValue('TESTROLLBACK'));
   GTestBackup := ParamValue('TESTBACKUP');
-  GTestLegacy := ParamValue('TESTLEGACY');
-  GTestLegacyCmd := ParamValue('TESTLEGACYCMD');
-  GTestLegacyStuck := ParamValue('TESTLEGACYSTUCK');
-  GTestLegacyWait := ParamValue('TESTLEGACYWAIT');
-  GTestLegacyArgs := ParamValue('TESTLEGACYARGS');
   GTestClientPids := ParamValue('TESTCLIENTPIDS');
   GTestClientGone := ParamValue('TESTCLIENTGONE');
   GTestClientSoft := LowerCase(ParamValue('TESTCLIENTSOFT'));
@@ -7925,8 +7647,6 @@ begin
       ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
       ' admin_mode=' + Pick(GAdminInstallMode, '1', '0') +
       ' server_enabled=' + Pick(not GUserOnlyMode, '1', '0') +
-      ' legacy=' + IfStr(GLegacyClientVersion = '', '-', GLegacyClientVersion) +
-      ' legacy_machine=' + Pick(GLegacyClientMachine, '1', '0') +
       ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
     LogLine('INFO', 'TESTSTATE_NOTICE server_notice=' +
       IfStr(GUserOnlyMode, ServerUnavailableReason, ''));
@@ -7979,15 +7699,6 @@ begin
       ExitProcess(EXIT_OK)
     else
       ExitProcess(EXIT_PRECONDITION);
-  end;
-
-  { /TESTLEGACYARGS=1 — вычисленные аргументы деинсталлятора старого клиента:
-    проверяется _?=<каталог> на пути с пробелами без запуска деинсталлятора. }
-  if GTestLegacyArgs = '1' then
-  begin
-    LogLine('INFO', 'TESTLEGACYARGS args=' +
-      UninstallerArgs('"C:\Program Files\ETN\Uninstall ETN.exe" /currentuser'));
-    ExitProcess(EXIT_OK);
   end;
 
   { /TESTBACKUP=1|skip — прямой прогон функции бэкапа (ce3ab836): код 0 —
