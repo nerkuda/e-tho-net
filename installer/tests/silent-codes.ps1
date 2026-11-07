@@ -1129,8 +1129,8 @@ Add-StaticResult -Name 'static:legacy-status-first' `
 # без видимой причины — экран противоречил сам себе.
 $reasonTextBody = Get-IssFunctionBody -Text $issText -Name 'ComponentsReasonText'
 Add-StaticResult -Name 'static:client-scope-reason-consistent' `
-    -Ok ((Test-IssCode -Text $clientStateBody -Pattern ([regex]::Escape('нужны права'))) -and
-         (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('нужны права'))) -and
+    -Ok ((Test-MessageTextInBody -Body $clientStateBody -Key 'EtnClientStateMachineNeedsAdmin' -Text 'нужны права') -and
+         (Test-MessageTextInBody -Body $reasonTextBody -Key 'EtnReasonClientMachineNeedsAdmin' -Text 'нужны права') -and
          (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('GInstalledClientScope = ''machine'''))) -and
          (Test-IssCode -Text $reasonTextBody -Pattern ([regex]::Escape('GUserOnlyMode')))) `
     -Note 'машинный клиент в режиме «только для меня»: причина и подпись совпадают (5b9743da)'
@@ -1327,7 +1327,8 @@ Add-StaticResult -Name 'static:client-both-areas' -Ok $bothAreasOk `
 # административном режиме мастер честно говорит, что копия в профиле останется.
 $scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
 $userCopyMsgOk = (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('GUserClientCopyPresent'))) -and
-    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape('Найден клиент «только для меня»')))
+    (Test-MessageTextInBody -Body $scopeTextBody -Key 'EtnClientScopeUserCopyUpdate' -Text 'Найден клиент «только для меня»') -and
+    (Test-MessageTextInBody -Body $scopeTextBody -Key 'EtnClientScopeUserCopyInstall' -Text 'Найден клиент «только для меня»')
 Add-StaticResult -Name 'static:client-user-copy-message' -Ok $userCopyMsgOk `
     -Note 'admin-режим поверх user-копии: сказано, что она останется и рядом появится машинная'
 
@@ -1420,17 +1421,21 @@ $scopeFixedOk = Test-IssCode -Text $scopeFixedBody -Pattern ([regex]::Escape("GC
 $scopeTextBody = Get-IssFunctionBody -Text $issText -Name 'ClientScopeText'
 # Формулировка пользователя (ошибка 860def0d, n5): вариант установки и что
 # сделать, чтобы получить другой, — без термина «область установки».
-# Строки Pascal переносятся по '+', поэтому фразы проверяем по телу функции,
-# склеенному через границы строк и строковых литералов: иначе «обычным двойным
-# кликом» разорвано между строками и кавычками конкатенации.
-$scopeTextFlat = ($scopeTextBody -replace '\r?\n\s*', ' ') -replace "'\s*\+\s*'", ''
-$scopeTextOk = (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('Клиент установлен в варианте «только для меня»'))) -and
-    (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('Клиент установлен в варианте «для всех пользователей»'))) -and
-    (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('Запуск от имени администратора'))) -and
-    (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('обычным двойным кликом'))) -and
-    (-not (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('в диалоге режима')))) -and
-    (-not (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('удалите клиента и выполните установку заново')))) -and
-    (-not (Test-IssCode -Text $scopeTextFlat -Pattern ([regex]::Escape('область установки'))))
+# После задачи 4dc117f5 тексты живут в [CustomMessages]: фразы проверяем по
+# значениям сообщений экрана области, а тело функции — по вызову нужного ключа.
+$scopeMsgKeys = @('EtnClientScopeAdmin', 'EtnClientScopeUserCopyUpdate',
+    'EtnClientScopeUserCopyInstall', 'EtnClientScopeMachineNeedsAdmin',
+    'EtnClientScopeUserOnlyUpdate', 'EtnClientScopeUser', 'EtnClientScopeMachine')
+$scopeMsgFlat = (@($scopeMsgKeys | ForEach-Object { Get-IssCustomMessage -Text $issText -Name $_ }) -join ' ')
+$scopeTextOk = ($scopeMsgFlat -match [regex]::Escape('Клиент установлен в варианте «только для меня»')) -and
+    ($scopeMsgFlat -match [regex]::Escape('Клиент установлен в варианте «для всех пользователей»')) -and
+    ($scopeMsgFlat -match [regex]::Escape('Запуск от имени администратора')) -and
+    ($scopeMsgFlat -match [regex]::Escape('обычным двойным кликом')) -and
+    (-not ($scopeMsgFlat -match [regex]::Escape('в диалоге режима'))) -and
+    (-not ($scopeMsgFlat -match [regex]::Escape('удалите клиента и выполните установку заново'))) -and
+    (-not ($scopeMsgFlat -match [regex]::Escape('область установки'))) -and
+    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape("CustomMessage('EtnClientScopeUser')"))) -and
+    (Test-IssCode -Text $scopeTextBody -Pattern ([regex]::Escape("CustomMessage('EtnClientScopeMachine')")))
 Add-StaticResult -Name 'static:client-scope-fixed-text' -Ok ($scopeLabelOk -and $scopeFixedOk -and $scopeTextOk) `
     -Note 'при установленном клиенте область выводится текстом в формулировке пользователя (радиокнопок нет)'
 Add-StaticResult -Name 'static:client-launch-original-user' `
@@ -1499,10 +1504,14 @@ Add-StaticResult -Name 'static:fitlabel-no-delta' -Ok $fitOk `
 $componentsBody = Get-IssFunctionBody -Text $issText -Name 'UpdateComponentsState'
 $serverDescBody = Get-IssFunctionBody -Text $issText -Name 'ServerDescriptionRowText'
 $clientDescBody = Get-IssFunctionBody -Text $issText -Name 'ClientDescriptionRowText'
-$componentsTextOk = (Test-IssCode -Text $serverDescBody -Pattern ([regex]::Escape('Сервер хранит графовые базы знаний'))) -and
-    (Test-IssCode -Text $clientDescBody -Pattern ([regex]::Escape('Клиент — окно для работы с базами'))) -and
-    (Test-IssCode -Text $clientDescBody -Pattern ([regex]::Escape('Каталог установки: '))) -and
-    (Test-IssCode -Text $scopeRowTextBody -Pattern ([regex]::Escape('Режим «только для меня»: клиент ставится в ваш профиль'))) -and
+$componentsTextOk = (Test-MessageTextInBody -Body $serverDescBody -Key 'EtnServerDescription' `
+        -Text 'Сервер хранит графовые базы знаний') -and
+    (Test-MessageTextInBody -Body $clientDescBody -Key 'EtnClientDescription' `
+        -Text 'Клиент — окно для работы с базами') -and
+    (Test-MessageTextInBody -Body $clientDescBody -Key 'EtnClientInstallDirSuffix' `
+        -Text 'Каталог установки: ') -and
+    (Test-MessageTextInBody -Body $scopeRowTextBody -Key 'EtnClientScopeRowUserOnly' `
+        -Text 'Режим «только для меня»: клиент ставится в ваш профиль') -and
     (Test-IssCode -Text $scopeRowTextBody -Pattern ([regex]::Escape('ClientScopeText')))
 Add-StaticResult -Name 'static:components-descriptions' -Ok $componentsTextOk `
     -Note 'что такое сервер и клиент, каталог установки и чем различаются области — group-строки списка'
@@ -1559,8 +1568,10 @@ Add-StaticResult -Name 'static:admin-texts' -Ok $adminOk `
     -Note 'подзаголовок — дословно формулировка пользователя; подсказка с переносом и пересчётом'
 
 $modeBody = Get-IssFunctionBody -Text $issText -Name 'ServerModeText'
-$modeOk = (Test-IssCode -Text $modeBody -Pattern ([regex]::Escape('автоматический запуск в режиме службы Windows'))) -and
-    (Test-IssCode -Text $modeBody -Pattern ([regex]::Escape('ручной запуск сервера как обычного приложения'))) -and
+$modeOk = (Test-MessageTextInBody -Body $modeBody -Key 'EtnModeService' `
+        -Text 'автоматический запуск в режиме службы Windows') -and
+    (Test-MessageTextInBody -Body $modeBody -Key 'EtnModeApp' `
+        -Text 'ручной запуск сервера как обычного приложения') -and
     (Test-IssCode -Text (Get-IssFunctionBody -Text $issText -Name 'UpdateServerParamsState') `
         -Pattern ([regex]::Escape('ServerModeText(')))
 Add-StaticResult -Name 'static:server-mode-human' -Ok $modeOk `

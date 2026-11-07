@@ -528,6 +528,48 @@ EtnInstallNotStarted=Установка не начата: %1
 EtnNoChangesLogTail=Изменения не выполнялись. Журнал: %1
 EtnUninstallCancelled=Удаление программы отменено: %1. %2
 
+; Экран компонентов: динамические состояния и причины.
+EtnStateNotInstalled=не установлен
+EtnServerStateAdopt=найдены существующие данные (%1) — будут подключены без изменения данных
+EtnServerStateInstalled=установлен %1 — актуальная версия
+EtnServerStateUpdate=установлен %1 — доступно обновление до %2
+EtnServerStateRepair=установлен %1 — переустановка (repair)
+EtnServerStateRepairNoRecord=файлы найдены без записи установки — установка будет восстановлена (repair)
+EtnServerStateRepairPartial=установлен частично — будет восстановлен (repair)
+EtnServerStateDowngrade=установлена более новая версия %1 — понижение запрещено
+EtnLegacyMachineSuffix=, для всех пользователей
+EtnLegacyClientUserOnly=найден клиент ETN %1 от старого установщика (NSIS%2) — для его удаления нужны права администратора; новый клиент поставится в ваш профиль
+EtnLegacyClientWillRemove=найден клиент ETN %1 от старого установщика (NSIS%2) — перед установкой он будет удалён
+EtnLegacyClientServerOnly=найден клиент ETN %1 от старого установщика (NSIS%2); при установке только сервера он не затрагивается
+EtnClientStateUserToMachine=клиент установлен в варианте «только для меня» — будет добавлена копия «для всех пользователей»
+EtnClientStateReplace=клиент уже установлен — при обновлении он будет заменён
+EtnClientStateMachineNeedsAdmin=клиент установлен для всех пользователей — нужны права администратора
+EtnClientStateChooseToReplace=клиент уже установлен; выберите клиент, чтобы заменить его
+EtnClientScopeAdmin=Установщик запущен от имени администратора: клиент ставится для всех пользователей. Подключение к локальному серверу уже предзаполнено в ярлыке клиента.
+EtnClientScopeUserCopyUpdate=Найден клиент «только для меня»: он останется в профиле, обновляется копия «для всех пользователей».
+EtnClientScopeUserCopyInstall=Найден клиент «только для меня»: он останется в профиле, а рядом будет установлена копия «для всех пользователей».
+EtnClientScopeMachineNeedsAdmin=Клиент установлен для всех пользователей: его обновление требует прав администратора. Закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnClientScopeUserOnlyUpdate=Клиент установлен в варианте «только для меня» — обновление продолжится в ваш профиль. Чтобы поставить клиент «для всех пользователей», закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnClientScopeUser=Клиент установлен в варианте «только для меня». Чтобы поставить клиент «для всех пользователей», закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnClientScopeMachine=Клиент установлен в варианте «для всех пользователей». Чтобы поставить клиент «только для меня», запустите установщик обычным двойным кликом (без прав администратора).
+EtnModeService=автоматический запуск в режиме службы Windows
+EtnModeApp=ручной запуск сервера как обычного приложения
+EtnInitAlreadyDone=Сервер уже инициализирован — init не повторяется, новый ключ установщик не выдаёт (перевыпуск — в клиенте).
+EtnInitPendingKey=Найден ключ от предыдущего запуска установщика — он будет показан после установки.
+EtnReasonDowngrade=Установлена более новая версия %1 — понижение версии не поддерживается. Доступна только отмена.
+EtnReasonClientMachineNeedsAdmin=Клиент установлен для всех пользователей: нужны права администратора.
+EtnReasonSelectComponent=Выберите хотя бы один компонент.
+EtnReasonAcceptLicense=Примите условия лицензии MIT, чтобы продолжить.
+EtnServerDescription=Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним доступ по сети. Node.js входит в установку.
+EtnClientDescriptionNoServer=Сервер не выбран: при первом запуске понадобится адрес существующего сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.
+EtnClientDescription=Клиент — окно для работы с базами; нужны адрес сервера и ключ.
+EtnClientInstallDirSuffix=Каталог установки: %1.
+EtnClientScopeRowUserOnly=Режим «только для меня»: клиент ставится в ваш профиль, права администратора не нужны. Чтобы установить сервер или клиент «для всех пользователей», закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnNoticeClientMachineNeedsAdmin=Клиент установлен для всех пользователей: обновление требует прав администратора — закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnNoticeNeedsAdmin=Для установки компонентов, требующих прав администратора, закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnParamsInstalledNote=Сервер уже установлен: %1 → %2, режим: %3. При обновлении порт, доступ по локальной сети и каталог данных не меняются.
+EtnParamsUpdateNote=Служба ETN останавливается на время замены файлов, базы данных копируются в %1\backups, затем служба запускается снова.
+
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
 ; --- компонентов; в установку не копируется (dontcopy).
@@ -2027,26 +2069,25 @@ end;
 function ServerStateText: String;
 begin
   if GServerState = 'not-installed' then
-    Result := 'не установлен'
+    Result := CustomMessage('EtnStateNotInstalled')
   else if GServerState = 'adopt' then
-    Result := 'найдены существующие данные (' + GDataDir +
-      ') — будут подключены без изменения данных'
+    Result := FmtMessage(CustomMessage('EtnServerStateAdopt'), [GDataDir])
   else if GServerState = 'installed' then
-    Result := 'установлен ' + ServerVersionText + ' — актуальная версия'
+    Result := FmtMessage(CustomMessage('EtnServerStateInstalled'), [ServerVersionText])
   else if GServerState = 'update-available' then
-    Result := 'установлен ' + GInstalledVersion + ' — доступно обновление до ' + GProductVersion
+    Result := FmtMessage(CustomMessage('EtnServerStateUpdate'), [GInstalledVersion,
+      GProductVersion])
   else if GServerState = 'repair' then
   begin
     if GInstallJsonValid then
-      Result := 'установлен ' + GInstalledVersion + ' — переустановка (repair)'
+      Result := FmtMessage(CustomMessage('EtnServerStateRepair'), [GInstalledVersion])
     else if GServerFilesPresent then
-      Result := 'файлы найдены без записи установки — установка будет восстановлена (repair)'
+      Result := CustomMessage('EtnServerStateRepairNoRecord')
     else
-      Result := 'установлен частично — будет восстановлен (repair)';
+      Result := CustomMessage('EtnServerStateRepairPartial');
   end
   else
-    Result := 'установлена более новая версия ' + ServerVersionText +
-      ' — понижение запрещено';
+    Result := FmtMessage(CustomMessage('EtnServerStateDowngrade'), [ServerVersionText]);
 end;
 
 function ClientStateText: String;
@@ -2059,14 +2100,12 @@ begin
     { Компактно: длинный текст выталкивал нижние подписи за поверхность
       страницы (ошибка 860def0d, п.1). В режиме «только для меня» машинный
       старый клиент не удаляется — не обещаем этого (2dd215f7). }
-    Result := 'найден клиент ETN ' + GLegacyClientVersion +
-      ' от старого установщика (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + ')';
     if GUserOnlyMode and GLegacyClientMachine then
-      Result := Result + ' — для его удаления нужны права администратора; ' +
-        'новый клиент поставится в ваш профиль'
+      Result := FmtMessage(CustomMessage('EtnLegacyClientUserOnly'), [GLegacyClientVersion,
+        IfStr(GLegacyClientMachine, CustomMessage('EtnLegacyMachineSuffix'), '')])
     else
-      Result := Result + ' — перед установкой он будет удалён';
+      Result := FmtMessage(CustomMessage('EtnLegacyClientWillRemove'), [GLegacyClientVersion,
+        IfStr(GLegacyClientMachine, CustomMessage('EtnLegacyMachineSuffix'), '')]);
   end
   else if GClientState = 'installed' then
   begin
@@ -2077,10 +2116,9 @@ begin
         верификатора п.1) — обещать «замену» было бы неправдой. }
       if GAdminMachineScope and GUserClientCopyPresent and
          (not ClientMachineCopyPresent) then
-        Result := 'клиент установлен в варианте «только для меня» — будет ' +
-          'добавлена копия «для всех пользователей»'
+        Result := CustomMessage('EtnClientStateUserToMachine')
       else
-        Result := 'клиент уже установлен — при обновлении он будет заменён';
+        Result := CustomMessage('EtnClientStateReplace');
     end
     else
     begin
@@ -2090,19 +2128,16 @@ begin
         Подпись обязана совпадать с причиной неактивности «Далее», иначе экран
         противоречит сам себе. }
       if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-        Result := 'клиент установлен для всех пользователей — нужны права ' +
-          'администратора'
+        Result := CustomMessage('EtnClientStateMachineNeedsAdmin')
       else
-        Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
+        Result := CustomMessage('EtnClientStateChooseToReplace');
     end;
   end
   else if GLegacyClientFound then
-    Result := 'найден клиент ETN ' + GLegacyClientVersion +
-      ' от старого установщика (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') +
-      '); при установке только сервера он не затрагивается'
+    Result := FmtMessage(CustomMessage('EtnLegacyClientServerOnly'), [GLegacyClientVersion,
+      IfStr(GLegacyClientMachine, CustomMessage('EtnLegacyMachineSuffix'), '')])
   else
-    Result := 'не установлен';
+    Result := CustomMessage('EtnStateNotInstalled');
 end;
 
 { Область установки клиента при обновлении фиксирована: менять её нельзя
@@ -2118,20 +2153,16 @@ function ClientScopeText: String;
 begin
   if GAdminMachineScope then
   begin
-    Result := 'Установщик запущен от имени администратора: клиент ставится ' +
-      'для всех пользователей. Подключение к локальному серверу уже ' +
-      'предзаполнено в ярлыке клиента.';
+    Result := CustomMessage('EtnClientScopeAdmin');
     { Копия «только для меня» в профиле не заменяется (файлы user-области в
       admin-режиме не копируются): говорим прямо, иначе мастер обещает
       «замену», а на диске остаются две копии (2dd215f7, п.1). }
     if GUserClientCopyPresent then
     begin
       if ClientMachineCopyPresent then
-        Result := Result + ' Найден клиент «только для меня»: он останется в ' +
-          'профиле, обновляется копия «для всех пользователей».'
+        Result := Result + ' ' + CustomMessage('EtnClientScopeUserCopyUpdate')
       else
-        Result := Result + ' Найден клиент «только для меня»: он останется в ' +
-          'профиле, а рядом будет установлена копия «для всех пользователей».';
+        Result := Result + ' ' + CustomMessage('EtnClientScopeUserCopyInstall');
     end;
     Exit;
   end;
@@ -2141,19 +2172,14 @@ begin
     клиент «для всех» ставятся запуском установщика от имени администратора. }
   if GUserOnlyMode and (GInstalledClientScope = 'machine') then
   begin
-    Result := 'Клиент установлен для всех пользователей: его обновление ' +
-      'требует прав администратора. Закройте установщик и запустите его от ' +
-      'имени администратора (правый клик → Запуск от имени администратора).';
+    Result := CustomMessage('EtnClientScopeMachineNeedsAdmin');
     Exit;
   end;
   { Режим «только для меня»: клиент в профиле обновляется на месте; другой
     вариант — запуск установщика от имени администратора (см. выше). }
   if GUserOnlyMode then
   begin
-    Result := 'Клиент установлен в варианте «только для меня» — обновление ' +
-      'продолжится в ваш профиль. Чтобы поставить клиент «для всех ' +
-      'пользователей», закройте установщик и запустите его от имени ' +
-      'администратора (правый клик → Запуск от имени администратора).';
+    Result := CustomMessage('EtnClientScopeUserOnlyUpdate');
     Exit;
   end;
   { Остальные состояния (тестовый прогон без моделируемого режима): та же
@@ -2161,13 +2187,9 @@ begin
     меня», — сменить вариант можно повторным запуском с нужными правами.
     «Удалите клиента и установите заново» больше не советуем. }
   if GClientScopeUser then
-    Result := 'Клиент установлен в варианте «только для меня». Чтобы поставить ' +
-      'клиент «для всех пользователей», закройте установщик и запустите его ' +
-      'от имени администратора (правый клик → Запуск от имени администратора).'
+    Result := CustomMessage('EtnClientScopeUser')
   else
-    Result := 'Клиент установлен в варианте «для всех пользователей». Чтобы ' +
-      'поставить клиент «только для меня», запустите установщик обычным ' +
-      'двойным кликом (без прав администратора).';
+    Result := CustomMessage('EtnClientScopeMachine');
 end;
 
 { Понятное название режима запуска сервера (ошибка 860def0d, n6): «service» и
@@ -2176,9 +2198,9 @@ end;
 function ServerModeText(const Mode: String): String;
 begin
   if Mode = 'service' then
-    Result := 'автоматический запуск в режиме службы Windows'
+    Result := CustomMessage('EtnModeService')
   else if Mode = 'app' then
-    Result := 'ручной запуск сервера как обычного приложения'
+    Result := CustomMessage('EtnModeApp')
   else
     Result := Mode;
 end;
@@ -3228,10 +3250,9 @@ end;
 function InitStateText: String;
 begin
   if GFirstUserPresent then
-    Result := 'Сервер уже инициализирован — init не повторяется, новый ключ установщик ' +
-      'не выдаёт (перевыпуск — в клиенте).'
+    Result := CustomMessage('EtnInitAlreadyDone')
   else if GPendingKey <> '' then
-    Result := 'Найден ключ от предыдущего запуска установщика — он будет показан после установки.'
+    Result := CustomMessage('EtnInitPendingKey')
   else
     Result := '';
 end;
@@ -6585,8 +6606,7 @@ end;
 function ComponentsReasonText: String;
 begin
   if GBlockedDowngrade then
-    Result := 'Установлена более новая версия ' + ServerVersionText +
-      ' — понижение версии не поддерживается. Доступна только отмена.'
+    Result := FmtMessage(CustomMessage('EtnReasonDowngrade'), [ServerVersionText])
   else if GComponentsNotice <> '' then
     Result := GComponentsNotice
   else if GUserOnlyMode and GServerRequested and (not GServerSelected) then
@@ -6594,13 +6614,12 @@ begin
   else if (not GServerSelected) and (not GClientSelected) then
   begin
     if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-      Result := 'Клиент установлен для всех пользователей: нужны права ' +
-        'администратора.'
+      Result := CustomMessage('EtnReasonClientMachineNeedsAdmin')
     else
-      Result := 'Выберите хотя бы один компонент.';
+      Result := CustomMessage('EtnReasonSelectComponent');
   end
   else if LicensePromptNeeded and (not GLicenseAccepted) then
-    Result := 'Примите условия лицензии MIT, чтобы продолжить.'
+    Result := CustomMessage('EtnReasonAcceptLicense')
   else
     Result := '';
 end;
@@ -6624,8 +6643,7 @@ begin
   if GUserOnlyMode then
     Result := ServerUnavailableReason
   else
-    Result := 'Сервер хранит графовые базы знаний на этом компьютере и отдаёт ' +
-      'к ним доступ по сети. Node.js входит в установку.';
+    Result := CustomMessage('EtnServerDescription');
 end;
 
 { Описание клиента: что это, что понадобится при первом запуске и каталог
@@ -6634,13 +6652,12 @@ end;
 function ClientDescriptionRowText: String;
 begin
   if GClientSelected and (not GServerSelected) then
-    Result := 'Сервер не выбран: при первом запуске понадобится адрес ' +
-      'существующего сервера и ключ. Профили, серверы и ключи у каждого ' +
-      'пользователя свои.'
+    Result := CustomMessage('EtnClientDescriptionNoServer')
   else
-    Result := 'Клиент — окно для работы с базами; нужны адрес сервера и ключ.';
+    Result := CustomMessage('EtnClientDescription');
   if GClientSelected then
-    Result := Result + ' Каталог установки: ' + ClientInstallPath + '.';
+    Result := Result + ' ' +
+      FmtMessage(CustomMessage('EtnClientInstallDirSuffix'), [ClientInstallPath]);
 end;
 
 { Строка области клиента. Выбора в мастере нет: область задают фактические
@@ -6653,10 +6670,7 @@ begin
   if ClientScopeFixed or GAdminMachineScope then
     Result := ClientScopeText
   else
-    Result := 'Режим «только для меня»: клиент ставится в ваш профиль, права ' +
-      'администратора не нужны. Чтобы установить сервер или клиент «для всех ' +
-      'пользователей», закройте установщик и запустите его от имени ' +
-      'администратора (правый клик → Запуск от имени администратора).';
+    Result := CustomMessage('EtnClientScopeRowUserOnly');
 end;
 
 { Нужна ли необязательная строка области клиента: текст области показывается
@@ -7076,14 +7090,12 @@ begin
     { Обновление/ремонт: параметры берутся из install.json, поля только
       показывают значения; здесь — что именно произойдёт. Режим запуска
       называется по-человечески, а не «service»/«app» (ошибка 860def0d, n6). }
-    S := 'Сервер уже установлен: ' + IfStr(GInstalledVersion = '',
-      ServerVersionText, GInstalledVersion) + ' → ' + GProductVersion +
-      ', режим: ' + ServerModeText(IfStr(GInstalledMode = '',
-        GServerMode, GInstalledMode)) + '.' +
-      ' При обновлении порт, доступ по локальной сети и каталог данных не меняются.';
+    S := FmtMessage(CustomMessage('EtnParamsInstalledNote'), [
+      IfStr(GInstalledVersion = '', ServerVersionText, GInstalledVersion),
+      GProductVersion,
+      ServerModeText(IfStr(GInstalledMode = '', GServerMode, GInstalledMode))]);
     if GInstalledVersion <> GProductVersion then
-      S := S + ' Служба ETN останавливается на время замены файлов, базы данных ' +
-        'копируются в ' + GDataDir + '\backups, затем служба запускается снова.';
+      S := S + ' ' + FmtMessage(CustomMessage('EtnParamsUpdateNote'), [GDataDir]);
     if GServerParamsNoteLabel <> nil then
     begin
       GServerParamsNoteLabel.Caption := S;
@@ -8176,12 +8188,9 @@ begin
       { Причина уже есть в ComponentsReasonText; уведомление сохраняет её на
         экране до смены выбора и не пишет подпись в обход нижнего блока. }
       if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-        GComponentsNotice := 'Клиент установлен для всех пользователей: ' +
-          'обновление требует прав администратора — закройте установщик и ' +
-          'запустите его от имени администратора (правый клик → Запуск от ' +
-          'имени администратора).'
+        GComponentsNotice := CustomMessage('EtnNoticeClientMachineNeedsAdmin')
       else
-        GComponentsNotice := 'Выберите хотя бы один компонент.';
+        GComponentsNotice := CustomMessage('EtnReasonSelectComponent');
       UpdateComponentsState(nil);
       Result := False;
       Exit;
@@ -8192,9 +8201,7 @@ begin
     if GUserOnlyMode and
        (GServerSelected or (GClientSelected and (not GClientScopeUser))) then
     begin
-      GComponentsNotice := 'Для установки компонентов, требующих прав ' +
-        'администратора, закройте установщик и запустите его от имени ' +
-        'администратора (правый клик → Запуск от имени администратора).';
+      GComponentsNotice := CustomMessage('EtnNoticeNeedsAdmin');
       UpdateComponentsState(nil);
       LogLine('WARN', 'Экран компонентов: в режиме «только для меня» выбраны ' +
         'компоненты, требующие прав администратора');
