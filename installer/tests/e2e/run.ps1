@@ -853,6 +853,27 @@ function Invoke-ScenarioS2 {
         -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note '1 запуск'
 }
 
+<#
+    Погасить службу ETN и оставшиеся процессы node.exe из каталога ETN.
+    Нужно перед установкой 0.15.1/0.15.2: их остановка службы не гарантирует
+    завершение node.exe, и Inno с /SUPPRESSMSGBOXES откатывает замену файлов
+    (код 5, грабли 8bec9706). Для S3 это только подготовка состояния —
+    работоспособность службы проверяют S4/S6.
+#>
+function Stop-GuestEtnProcesses {
+    param($Context = $script:context)
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
+        try { $null = & 'C:\Program Files\ETN\service\etn-service.exe' stop 2>&1 } catch { }
+        Start-Sleep -Seconds 2
+        foreach ($process in @(Get-Process -Name 'node' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -and $_.Path -like 'C:\Program Files\ETN\*' })) {
+            try { $null = & taskkill.exe /PID $process.Id /F 2>&1 } catch { }
+        }
+        @(Get-Process -Name 'node' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path -like 'C:\Program Files\ETN\*' }).Count
+    }
+}
+
 <# --- S3: понижение версии ------------------------------------------------- #>
 function Invoke-ScenarioS3 {
     param($Results, $Timings)
@@ -875,12 +896,32 @@ function Invoke-ScenarioS3 {
 
     $hashBefore = Get-GuestTreeHashText -Context $script:context -Root 'C:\Program Files\ETN\server'
     $jsonBefore = Get-GuestText -Context $script:context -Path 'C:\ProgramData\ETN\install.json'
+    # Служба 0.15.1 не ждёт завершения node.exe: после resume «живого»
+    # снапшота осиротевший процесс держит better_sqlite3.node, и обновление
+    # 0.15.2 откатывается с кодом 5 (грабли 8bec9706). Обновление здесь —
+    # только постановка «более новой версии», поэтому гасим службу и процессы.
+    $null = Stop-GuestEtnProcesses -Context $script:context
 
     # Постановка: установщик 0.15.2 над 0.15.1 — ожидается 20. Фактический
     # результат фиксируется как есть; если это обновление (0), ниже — реальная
     # проверка понижения.
     $runIntermediate = Invoke-SilentInstall -Context $script:context -SetupFileName $setups['intermediate'] `
         -InstallerArgs '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY'
+    if (@(0, 20) -notcontains [int]$runIntermediate.Code) {
+        # Код 5/10 — обновление сорвалось до смены версии. Наблюдалось
+        # 2026-11-08: better_sqlite3.node держал осиротевший node.exe службы,
+        # Inno с /SUPPRESSMSGBOXES выбрал Abort и откатил изменения
+        # (грабли 8bec9706). Состояние после отката ненадёжно — повторяем
+        # постановку с восстановления снапшота.
+        Write-Warning ("S3: обновление 0.15.2 вернуло код {0}; повтор постановки после восстановления снапшота" -f `
+                $runIntermediate.Code)
+        $null = Initialize-ScenarioVm -Snapshot $InstalledSnapshot -SetupKeys @('intermediate', 'old')
+        $null = Initialize-GuestServer -Context $script:context
+        $null = Ensure-GuestServiceRunning -Context $script:context -Port $port
+        $null = Stop-GuestEtnProcesses -Context $script:context
+        $runIntermediate = Invoke-SilentInstall -Context $script:context -SetupFileName $setups['intermediate'] `
+            -InstallerArgs '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY'
+    }
     Add-E2ECheck -Results $Results -Scenario $scenario -Name 's3:0.15.2-over-0.15.1-code' -Ok $false -Deferred `
         -Expected '20 (постановка: понижение)' -Actual $runIntermediate.Code `
         -Note 'ожидание постановки неприменимо: снапшот содержит 0.15.1, установщик 0.15.2 — обновление; ниже проверено настоящее понижение'
@@ -900,7 +941,7 @@ function Invoke-ScenarioS3 {
             -Actual $(if (([string](Get-JsonField $jsonBefore 'Text')) -eq ([string](Get-JsonField $jsonAfter 'Text'))) { 'совпадает' } else { 'изменилось' })
         Add-LogCheck -Results $Results -Scenario $scenario -Name 's3:reason' -Log $runIntermediate.Log `
             -Needle 'понижение версии запрещено'
-    } else {
+    } elseif ($runIntermediate.Code -eq 0) {
         $versionNow = [string](Get-JsonField (Get-GuestInstallJson -Context $script:context) 'product_version')
         $hashBeforeDown = Get-GuestTreeHashText -Context $script:context -Root 'C:\Program Files\ETN\server'
         $jsonBeforeDown = Get-GuestText -Context $script:context -Path 'C:\ProgramData\ETN\install.json'
@@ -921,6 +962,16 @@ function Invoke-ScenarioS3 {
             -Ok (([string](Get-JsonField $jsonBeforeDown 'Text')) -eq ([string](Get-JsonField $jsonAfterDown 'Text'))) `
             -Expected 'содержимое совпадает' `
             -Actual $(if (([string](Get-JsonField $jsonBeforeDown 'Text')) -eq ([string](Get-JsonField $jsonAfterDown 'Text'))) { 'совпадает' } else { 'изменилось' })
+    } else {
+        # Постановка не удалась и после повтора (код не 0 и не 20): состояние
+        # для проверки понижения не подготовлено — честный deferred, а не
+        # красная проверка из-за чужого сбоя.
+        Add-E2ECheck -Results $Results -Scenario $scenario -Name 's3:downgrade-0.15.1-over-later-code' `
+            -Ok $false -Deferred -Expected 20 -Actual $runIntermediate.Code `
+            -Note 'постановка не удалась: промежуточный 0.15.2 вернул неожиданный код; проверка понижения отложена'
+        Add-E2ECheck -Results $Results -Scenario $scenario -Name 's3:downgrade-reason' `
+            -Ok $false -Deferred -Expected 'понижение версии запрещено' -Actual 'нет запуска' `
+            -Note 'причина понижения не проверялась: нет состояния «более новая версия»'
     }
 
     Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's3:total-duration' `
@@ -2300,36 +2351,60 @@ try {
         $scenarioStarted = Get-Date
         Write-Step "Сценарий $name (снапшот: $snapshot)"
         $checksBefore = $results.Count
-        try {
-            switch ($name) {
-                'S1' { Invoke-ScenarioS1 -Results $results -Timings $timings }
-                'S2' { Invoke-ScenarioS2 -Results $results -Timings $timings }
-                'S3' { Invoke-ScenarioS3 -Results $results -Timings $timings }
-                'S4' {
-                    $update = @(Invoke-ScenarioS4 -Results $results -Timings $timings) |
-                        Where-Object { $_.PSObject.Properties['Run'] } |
-                        Select-Object -Last 1
-                    if ($null -eq $update) {
-                        Add-E2ECheck -Results $results -Scenario 'S4' -Name 'scenario:return' -Ok $false `
-                            -Expected 'объект с Run' -Actual 'нет'
-                        $updatedStateReady = $false
-                    } else {
-                        $updatedStateReady = ($update.Run.Code -eq 0)
+        $timingsBefore = $timings.Count
+        # Транспортный обрыв WinRM посреди сценария (например, установщик
+        # остановил службу, а PSSession не переподключилась) — повторяем
+        # сценарий целиком с восстановления снапшота: каждый сценарий
+        # идемпотентен по построению, а частичные результаты неудачной
+        # попытки отбрасываются. Без этого один обрыв делает красным весь
+        # прогон (наблюдалось в S6 2026-11-08: «попытка повторного
+        # подключения не удалась»).
+        $scenarioAttempts = 2
+        for ($scenarioAttempt = 1; $scenarioAttempt -le $scenarioAttempts; $scenarioAttempt++) {
+            try {
+                switch ($name) {
+                    'S1' { Invoke-ScenarioS1 -Results $results -Timings $timings }
+                    'S2' { Invoke-ScenarioS2 -Results $results -Timings $timings }
+                    'S3' { Invoke-ScenarioS3 -Results $results -Timings $timings }
+                    'S4' {
+                        $update = @(Invoke-ScenarioS4 -Results $results -Timings $timings) |
+                            Where-Object { $_.PSObject.Properties['Run'] } |
+                            Select-Object -Last 1
+                        if ($null -eq $update) {
+                            Add-E2ECheck -Results $results -Scenario 'S4' -Name 'scenario:return' -Ok $false `
+                                -Expected 'объект с Run' -Actual 'нет'
+                            $updatedStateReady = $false
+                        } else {
+                            $updatedStateReady = ($update.Run.Code -eq 0)
+                        }
                     }
+                    'S5' {
+                        Invoke-ScenarioS5 -Results $results -Timings $timings -UpdatedStateReady $updatedStateReady
+                        $updatedStateReady = $false
+                    }
+                    'S6' { Invoke-ScenarioS6 -Results $results -Timings $timings }
+                    'G1' { Invoke-ScenarioG1 -Results $results -Timings $timings }
+                    'G2' { Invoke-ScenarioG2 -Results $results -Timings $timings }
+                    'G3' { Invoke-ScenarioG3 -Results $results -Timings $timings -UserBaseStatus $guiBaseStatus }
+                    'G4' { Invoke-ScenarioG4 -Results $results -Timings $timings -OldBaseStatus $guiBaseStatus }
                 }
-                'S5' {
-                    Invoke-ScenarioS5 -Results $results -Timings $timings -UpdatedStateReady $updatedStateReady
-                    $updatedStateReady = $false
+                break
+            } catch {
+                $message = [string]$_.Exception.Message
+                $retryable = ($scenarioAttempt -lt $scenarioAttempts) -and (Test-GuestTransportError -Message $message)
+                if (-not $retryable) {
+                    Add-E2ECheck -Results $results -Scenario $name -Name 'scenario:error' -Ok $false `
+                        -Expected 'сценарий выполнен' -Actual 'исключение' -Note $message
+                    break
                 }
-                'S6' { Invoke-ScenarioS6 -Results $results -Timings $timings }
-                'G1' { Invoke-ScenarioG1 -Results $results -Timings $timings }
-                'G2' { Invoke-ScenarioG2 -Results $results -Timings $timings }
-                'G3' { Invoke-ScenarioG3 -Results $results -Timings $timings -UserBaseStatus $guiBaseStatus }
-                'G4' { Invoke-ScenarioG4 -Results $results -Timings $timings -OldBaseStatus $guiBaseStatus }
+                Write-Warning ("Сценарий {0}: транспортный сбой WinRM ({1}); повтор сценария с восстановления снапшота (попытка {2} из {3})" -f `
+                        $name, $message, ($scenarioAttempt + 1), $scenarioAttempts)
+                while ($results.Count -gt $checksBefore) { $results.RemoveAt($results.Count - 1) }
+                while ($timings.Count -gt $timingsBefore) { $timings.RemoveAt($timings.Count - 1) }
+                $updatedStateReady = $false
+                Close-GuestSession -Context $context
+                Start-Sleep -Seconds 5
             }
-        } catch {
-            Add-E2ECheck -Results $results -Scenario $name -Name 'scenario:error' -Ok $false `
-                -Expected 'сценарий выполнен' -Actual 'исключение' -Note $_.Exception.Message
         }
         $logDir = ''
         $logsError = ''
