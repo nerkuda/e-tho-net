@@ -149,6 +149,9 @@ function Test-GuestTransportError {
     param([Parameter(Mandatory = $true)][string]$Message)
     foreach ($pattern in @(
             'Сетевое соединение с .* было потеряно',
+            'Выполняющаяся команда отключена',
+            'команда отключена, но по-прежнему выполняется',
+            'still running on the remote server',
             'HTTP \(12152\)',
             'Ошибка сервера.*HTTP 500',
             'HTTP \(500\)',
