@@ -42,6 +42,9 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test
-        # No tests yet — placeholder keeps the pipeline green.
-        run: echo "tests TBD"
+      - name: Test server
+        # Сторожа и контракты сервера: npm test workspace-а, не заглушка.
+        run: npm -w @etn/server test
+
+      - name: Test client
+        run: npm -w @etn/client test

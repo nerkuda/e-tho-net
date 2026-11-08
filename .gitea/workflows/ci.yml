@@ -61,11 +61,13 @@ jobs:
       - name: Client tests
         run: npm -w @etn/client test
 
-      # Установщик Windows (DoD П4, задача 00345091): TestMode-сборка с
-      # фиктивным payload и матрица silent-режима — installer/tests/silent-codes.ps1.
-      # Скрипт рассчитан на pwsh (в 5.1 stderr нативной команды при
-      # $ErrorActionPreference='Stop' обрывает прогон), поэтому инструменты
-      # ставятся заранее: Inno Setup 6 (ISCC) и PowerShell 7.
+      # Установщик Windows (DoD П4, задача 00345091): статические сторожа
+      # etn.iss/build.ps1 и проверки свежести payload. Матрица silent-режима
+      # снята в задаче 8789381a (этап 6): поведение покрывают E2E-сценарии
+      # installer/tests/e2e/run.ps1 на ВМ. Скрипты рассчитаны на pwsh (в 5.1
+      # stderr нативной команды при $ErrorActionPreference='Stop' обрывает
+      # прогон), поэтому инструменты ставятся заранее: Inno Setup 6 и
+      # PowerShell 7.
       - name: Ensure CI tools (Inno Setup 6, PowerShell 7)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\tests\ensure-ci-tools.ps1
 
@@ -73,8 +75,11 @@ jobs:
       # Windows исполняет run в Windows PowerShell, и строка, начинающаяся с
       # кавычки, разбирается как выражение, а не как команда («Unexpected
       # token '-NoProfile'», run 92).
-      - name: Installer silent-contract tests
-        run: '& "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File installer\tests\silent-codes.ps1'
+      - name: Installer static tests
+        run: '& "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File installer\tests\iss-static.ps1 -AssertNoHooks'
+
+      - name: Installer payload freshness
+        run: '& "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File installer\tests\payload-freshness.ps1'
 
   linux:
     name: Linux (linux-vm)

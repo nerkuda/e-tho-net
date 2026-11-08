@@ -338,6 +338,7 @@ $markdownDir = Join-Path $repoRoot 'markdown'
 foreach ($artifact in @(
         (Join-Path $serverDir 'dist\index.js'),
         (Join-Path $serverDir 'dist\cli.js'),
+        (Join-Path $serverDir 'dist\db\db-backup.js'),
         (Join-Path $sharedDir 'dist\index.js'),
         (Join-Path $markdownDir 'dist\index.js'))) {
     if (-not (Test-Path -LiteralPath $artifact)) { throw "Сборка не создала $artifact." }

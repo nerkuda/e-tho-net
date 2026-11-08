@@ -1,0 +1,121 @@
+# E2E установщика ETN в VirtualBox (задача 8789381a, этап 7).
+#
+# Раннер host-side: лейбл `win-vm-host` регистрирует пользователь на физическом
+# хосте (не в ВМ). Причина: джоба управляет VirtualBox — ВМ `ETN-Win11`, её
+# снапшоты `base-e2e-live`/`base-e2e-gui2`/`base-e2e-user2`/`base-clean-v2`,
+# гостевая учётка `e2egui` — и читает файл секретов ВМ
+# `C:\Users\User\.zcode\secrets\etn-vms.env` (guest.ps1 читает его только в
+# момент прогона, значения не логируются). Внутри ВМ (`win-vm` из ci.yml)
+# E2E не запускается: нужна вложенная виртуализация и рабочий стол гостя.
+#
+# Расписание — ночь (01:00 UTC): полный прогон идёт 55–75 минут и держит
+# VirtualBox-ВМ на том же физическом NVMe, что `win-vm` из ci.yml;
+# параллельная тяжёлая работа даёт многоминутные IO-столлы гостей
+# (ошибка 68a395b5). Штатный путь — workflow_dispatch вручную.
+#
+# Требование к host-раннеру: PowerShell 7 (`pwsh`) в PATH. Store-сборка
+# (WindowsApps) подходит, MSI в `Program Files\PowerShell\7` — тоже;
+# шаги зовут `pwsh` без фиксированного пути.
+#
+# Цепочка версий S3/S4 закреплена на 0.15.x (старая 0.15.1 → 0.15.2 →
+# текущая из server/package.json): при переходе на новую версию обновите
+# скачивание исторических установщиков и -SetupCurrent в шаге E2E.
+name: E2E installer
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 01:00 UTC — вне окон разработки; см. комментарий о 68a395b5 в шапке.
+    - cron: '0 1 * * *'
+
+# Повторный запуск не должен стартовать поверх идущего: ВМ и снапшоты одни.
+concurrency:
+  group: e2e-installer
+  cancel-in-progress: false
+
+jobs:
+  e2e-installer:
+    name: Installer E2E (VirtualBox)
+    runs-on: win-vm-host
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          npm install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm -w @etn/client run rebuild:native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # ISCC нужен статическим сторожам и сборке установщика. Тот же
+      # идемпотентный скрипт, что в ci.yml: недостающие Inno Setup 6 и
+      # PowerShell 7 ставит, установленные не трогает.
+      - name: Ensure CI tools (Inno Setup 6, PowerShell 7)
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File installer\tests\ensure-ci-tools.ps1
+
+      # Сторожа .iss/build.ps1 обязательны и в CI: -AssertNoHooks делает
+      # отсутствие тестовых хуков жёстким требованием (8789381a).
+      # pwsh берём из PATH: на host-раннере он может стоять Store-сборкой
+      # (WindowsApps), а не MSI в Program Files — фиксированный путь ломается.
+      - name: Installer static tests
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File installer\tests\iss-static.ps1 -AssertNoHooks
+
+      - name: Installer payload freshness
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File installer\tests\payload-freshness.ps1
+
+      # S3 (понижение) и S4 (обновление) требуют установщики прошлых версий;
+      # они лежат в публичных релизах проекта. Уже собранные файлы не
+      # перекачиваются — каталог release/ переиспользуется рабочим каталогом
+      # раннера.
+      - name: Historical installers (0.15.1, 0.15.2)
+        shell: pwsh
+        run: |
+          $release = Join-Path $PWD 'release'
+          New-Item -ItemType Directory -Force -Path $release | Out-Null
+          $wanted = @(
+            @{ Name = 'ETN-Setup-0.15.1.exe'; Url = 'https://github.com/nerkuda/e-tho-net/releases/download/v0.15.1/ETN-Setup-0.15.1.exe' },
+            @{ Name = 'ETN-Setup-0.15.2.exe'; Url = 'https://github.com/nerkuda/e-tho-net/releases/download/v0.15.2/ETN-Setup-0.15.2.exe' }
+          )
+          foreach ($item in $wanted) {
+            $path = Join-Path $release $item.Name
+            if (Test-Path -LiteralPath $path) {
+              Write-Host "Уже есть: $($item.Name)"
+              continue
+            }
+            Write-Host "Скачивание $($item.Name)"
+            Invoke-WebRequest -Uri $item.Url -OutFile $path -UseBasicParsing
+          }
+
+      - name: Build payload and installer
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File installer\fetch-payload.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File installer\build.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Один полный прогон: silent S1–S6 и GUI G1–G3 (G4 отменён решением
+      # пользователя 2026-11-08, в отчёте — deferred «g4:cancelled»).
+      # -InstallTimeoutSec 1500: на host-раннере под IO-нагрузкой постановка
+      # 150-МБ установщика в ВМ выходила за дефолтные 900 с (наблюдалось
+      # 2026-11-08: S3 — таймаут -1 и повтор постановки). Значение ниже
+      # OperationTimeout WinRM (1800 с), поэтому команда не рвётся по таймауту.
+      - name: Full E2E (S1-S6, G1-G3)
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File installer\tests\e2e\run.ps1 -Scenarios S1,S2,S3,S4,S5,S6,G1,G2,G3 -InstallTimeoutSec 1500 -OutDir .tmp\e2e-ci
+
+      # Отчёт — единственный артефакт прогона: поимённые проверки, журналы,
+      # состояние ВМ. Журналы гостя лежат рядом под .tmp/e2e-ci/logs.
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: .tmp/e2e-ci/e2e-report.json
+          if-no-files-found: warn

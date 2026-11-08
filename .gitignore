@@ -55,6 +55,11 @@ var/
 !.zcode/skills/
 !.zcode/skills/**
 
+# Agent workspace (OpenCode). В .opencode лежат локальные настройки OpenCode
+# (агенты, команды, скиллы, MCP-ключ etn-dev в opencode.jsonc) — личные данные,
+# не поставка. Каталог целиком, как и .zcode, на публичный github не пушится.
+.opencode/
+
 # OS
 .DS_Store
 Thumbs.db

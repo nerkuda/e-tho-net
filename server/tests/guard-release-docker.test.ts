@@ -202,10 +202,37 @@ function stepKey(step: readonly string[], key: string): boolean {
   return step.some((line) => new RegExp(`^\\s*(?:-\\s+)?${escapeRe(key)}:`).test(line));
 }
 
-/** Значение `key: <value>` в блоке шага (заголовок `- ...` или продолжение). */
-function stepValue(step: readonly string[], key: string): string | null {
-  const pattern = new RegExp(`^\\s*(?:-\\s+)?${escapeRe(key)}:\\s*(.+?)\\s*$`);
-  for (const line of step) {
+/** Блок `with:` шага: строка ключа и все строки глубже. */
+function withBlock(step: readonly string[]): string[] | null {
+  const start = step.findIndex((line) => /^\s*(?:-\s+)?with:\s*$/.test(line));
+  if (start < 0) return null;
+
+  const head = step[start] ?? '';
+  const indent = indentOf(head);
+  const body: string[] = [];
+  for (let i = start + 1; i < step.length; i += 1) {
+    const line = step[i];
+    if (line === undefined) break;
+    if (line.trim() !== '' && indentOf(line) <= indent) break;
+    body.push(line);
+  }
+  return body;
+}
+
+/**
+ * Значение `key: <value>` внутри блока `with:` шага.
+ *
+ * Читать аргументы action можно только отсюда: `name:` уровня шага — это
+ * display name («Upload ETN installer»), а не `with.name` артефакта.
+ * Прежний `stepValue` брал первое совпадение по всему шагу, и добавление
+ * подписи шага подменяло имя артефакта (сторож зеленел/краснел ложно).
+ */
+function withValue(step: readonly string[], key: string): string | null {
+  const block = withBlock(step);
+  if (!block) return null;
+
+  const pattern = new RegExp(`^\\s*${escapeRe(key)}:\\s*(.+?)\\s*$`);
+  for (const line of block) {
     const match = pattern.exec(line);
     if (match?.[1]) return match[1];
   }
@@ -367,7 +394,7 @@ describe('guard: Docker-образ сервера — обязательная �
       `${DOCKER_WORKFLOW}: нет шага actions/checkout@v7 — код для образа не скачивается.`,
     );
 
-    const ref = stepValue(checkout, 'ref');
+    const ref = withValue(checkout, 'ref');
     assert.ok(
       ref !== null,
       `${DOCKER_WORKFLOW}: в шаге checkout нет ref: — код берётся по умолчанию (последний ` +
@@ -529,7 +556,11 @@ describe('guard: Docker-образ сервера — обязательная �
  *   * `path: artifacts` и `merge-multiple: true` на месте — три файла лежат
  *     в одном каталоге, по которому считается `SHA256SUMS`;
  *   * имена всех `actions/upload-artifact` в workflow начинаются с `release-`
- *     (иначе `pattern` молча перестанет их находить);
+ *     и читаются только из `with.name` (display name шага — не имя артефакта);
+ *   * upload-шагов ровно три, их имена — точный контракт: `release-windows`,
+ *     `release-linux-client`, `release-linux-server`. Четвёртый артефакт или
+ *     переименование любого из трёх — красный прогон: `publish` скачивает
+ *     `release-*`, и лишний/пропавший файл меняет состав релиза;
  *   * md-контракт в шапке файла: перечислены пять ожидаемых ассетов релиза
  *     и зафиксировано, что `.dockerbuild` ассетом не является.
  *
@@ -544,6 +575,30 @@ function stepsUsingPrefix(job: readonly string[], prefix: string): string[][] {
   if (!steps) return [];
   const pattern = new RegExp(`^\\s*(?:-\\s+)?uses:\\s*${escapeRe(prefix)}`);
   return listItems(steps).filter((item) => item.some((line) => pattern.test(line)));
+}
+
+/**
+ * Артефакты всех шагов `actions/upload-artifact` workflow: джоба и `with.name`.
+ * `name` читается только из `with:` — display name шага артефакт не называет.
+ */
+function uploadedArtifacts(workflow: string): { job: string; name: string | null }[] {
+  const jobs = findBlock(workflow.split('\n'), 'jobs', 0);
+  assert.ok(jobs !== null, `${RELEASE_WORKFLOW}: нет блока jobs.`);
+
+  const jobNames = jobs
+    .map((line) => /^ {2}([A-Za-z0-9_.-]+):\s*$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => match[1] ?? '');
+
+  const uploaded: { job: string; name: string | null }[] = [];
+  for (const jobName of jobNames) {
+    const job = findBlock(jobs, jobName, 2);
+    if (!job) continue;
+    for (const step of stepsUsingPrefix(job, 'actions/upload-artifact@')) {
+      uploaded.push({ job: jobName, name: withValue(step, 'name') });
+    }
+  }
+  return uploaded;
 }
 
 /** Строки шага после `key:` — содержимое блочного скаляра (`files: |`). */
@@ -591,7 +646,7 @@ describe('guard: публикация релиза — только релизн
     );
 
     const download = downloads[0] ?? [];
-    const pattern = stepValue(download, 'pattern');
+    const pattern = withValue(download, 'pattern');
     assert.ok(
       pattern !== null,
       `${RELEASE_WORKFLOW}: в publish downloads-artifact без pattern — шаг скачивает ` +
@@ -609,13 +664,13 @@ describe('guard: публикация релиза — только релизн
     );
 
     assert.equal(
-      stepValue(download, 'path'),
+      withValue(download, 'path'),
       'artifacts',
       `${RELEASE_WORKFLOW}: шаг скачивания в publish должен класть артефакты в path: artifacts — ` +
         'по этому каталогу считает SHA256SUMS и публикует gh-release (files: artifacts/*).',
     );
     assert.equal(
-      stepValue(download, 'merge-multiple'),
+      withValue(download, 'merge-multiple'),
       'true',
       `${RELEASE_WORKFLOW}: у шага скачивания в publish должен остаться merge-multiple: true — ` +
         'без него файлы трёх артефактов лягут в подкаталоги, и SHA256SUMS их не найдёт.',
@@ -624,23 +679,7 @@ describe('guard: публикация релиза — только релизн
 
   it(`${RELEASE_WORKFLOW}: все upload-artifact названы release-*`, () => {
     const text = stripComments(readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер'));
-    const lines = text.split('\n');
-    const jobs = findBlock(lines, 'jobs', 0);
-    assert.ok(jobs !== null, `${RELEASE_WORKFLOW}: нет блока jobs.`);
-
-    const jobNames = jobs
-      .map((line) => /^ {2}([A-Za-z0-9_.-]+):\s*$/.exec(line))
-      .filter((match): match is RegExpExecArray => match !== null)
-      .map((match) => match[1] ?? '');
-
-    const uploaded: { job: string; name: string | null }[] = [];
-    for (const jobName of jobNames) {
-      const job = findBlock(jobs, jobName, 2);
-      if (!job) continue;
-      for (const step of stepsUsingPrefix(job, 'actions/upload-artifact@')) {
-        uploaded.push({ job: jobName, name: stepValue(step, 'name') });
-      }
-    }
+    const uploaded = uploadedArtifacts(text);
 
     assert.ok(
       uploaded.length > 0,
@@ -670,6 +709,31 @@ describe('guard: публикация релиза — только релизн
           'из трёх бинарных ассетов.',
       );
     }
+  });
+
+  it(`${RELEASE_WORKFLOW}: ровно три upload-artifact с контрактными именами`, () => {
+    const text = stripComments(readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер'));
+    const uploaded = uploadedArtifacts(text);
+
+    // Контракт состава: ровно три сборочные джобы и ровно три артефакта.
+    // Четвёртый upload попадает под pattern: release-* и уезжает в релиз
+    // лишним файлом; пропавший — оставляет релиз без ассета.
+    assert.equal(
+      uploaded.length,
+      3,
+      `${RELEASE_WORKFLOW}: ожидается ровно три шага actions/upload-artifact, ` +
+        `найдено ${uploaded.length}: ` +
+        `${uploaded.map((entry) => `${entry.name ?? '<без name>'} (${entry.job})`).join(', ') || 'ни одного'}.`,
+    );
+
+    const names = uploaded.map((entry) => entry.name ?? '').sort();
+    assert.deepEqual(
+      names,
+      ['release-linux-client', 'release-linux-server', 'release-windows'],
+      `${RELEASE_WORKFLOW}: имена артефактов — «${names.join(', ')}», ожидается точный ` +
+        'набор: release-windows, release-linux-client, release-linux-server. Имена — ' +
+        'контракт релиза (SHA256SUMS, install.sh, update-checker).',
+    );
   });
 
   it(`${RELEASE_WORKFLOW}: md-контракт — пять ассетов релиза, .dockerbuild не ассет`, () => {

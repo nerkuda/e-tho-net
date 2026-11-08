@@ -1,10 +1,12 @@
 ﻿<#
 .SYNOPSIS
-    Ставит на ВМ-раннер инструменты шага «Installer silent-contract tests».
+    Ставит на ВМ-раннер инструменты шагов «Installer static tests» и
+    «Installer payload freshness».
 
 .DESCRIPTION
-    Нужно Gitea CI (задача 00345091, подзадача П4): installer/tests/silent-codes.ps1
-    собирает TestMode-установщик через installer/build.ps1 и требует:
+    Нужно Gitea CI (задача 00345091, подзадача П4): installer/tests/iss-static.ps1
+    разбирает etn.iss/build.ps1, а installer/tests/payload-freshness.ps1
+    собирает установщик из фикстур через installer/build.ps1 и требует:
       • Inno Setup 6 (ISCC.exe) — build.ps1 ищет его в Program Files (x86),
         Program Files и %LOCALAPPDATA%\Programs;
       • PowerShell 7 (pwsh) — скрипт рассчитан на pwsh: в Windows PowerShell 5.1

@@ -23,30 +23,41 @@
 ;     server и service (данные не копируются); после успешного обновления
 ;     удаляется, при отказе остаётся точкой ручного восстановления;
 ;   * после копирования: настройка службы, запуск, расширенный health-check
-;     (GET /api/v1/health → 200, status=ok, db=ok, версия = целевая;
-;     GET /api/v1/version → version и api; бюджет 60 с, повтор каждые 2 с);
+;     (один GET /api/v1/health → 200, status=ok, db=ok, version = целевая из
+;     тела ответа; бюджет 60 с фактического времени, повтор каждые 2 с;
+;     задача a1ea1d40 — второй GET /api/v1/version установщик не вызывает);
 ;   * неудача health-check: остановка службы, возврат файлов из снимка,
 ;     восстановление БД из архива (с удалением WAL/SHM), запуск прежней
 ;     версии, повторная проверка, код 10; в журнале отдельно «Откат выполнен»
 ;     либо «Откат не выполнен, архив: <путь>»;
 ;   * install.json пишется только после успешного health-check — иначе после
 ;     отката файл врал бы о новой версии;
-;   * коды: 20 — предусловие (занятый порт, режим app, служба не остановилась,
-;     служба не перешла в RUNNING); 10 — сбой выполнения, включая неудачный
-;     бэкап и неудачный откат.
+;   * коды: 20 — предусловие до замены файлов (занятый порт, режим app,
+;     служба не остановилась, чужая/отключённая/помеченная на удаление
+;     служба); 10 — сбой выполнения (бэкап, снимок, регистрация, запуск,
+;     health, откат; файлы могли быть заменены).
 ;
 ; Задача ce3ab836 (0.15.1) — бэкап баз данных перед заменой файлов:
 ;   * CreateDatabaseBackup(Needed) — вызывающий (bb063ac3) передаёт решение:
-;     при смене версии Needed = True, при ремонте той же версии False;
-;   * архив — каталог backups\<YYYYMMDD-HHmmss> каталога данных с копиями
-;     _system.db и networks\<uuid>\data.db; без вложений и без zip;
-;   * перед копированием WAL-база чекпойнтится через node.exe и
-;     better-sqlite3 поставки; если чекпойнт не удался, копируется и файл -wal;
-;   * каждая копия проходит PRAGMA integrity_check (не ok — архив неудачный и
-;     удаляется, обновление отменяется);
-;   * хранятся три последних архива; четвёртый удаляет самый старый, ошибка
-;     удаления обновление не отменяет (только WARN); чужие файлы и каталоги
-;     в backups не трогаются.
+;     при смене версии Needed = True, при ремонте той же версии False.
+;
+; Задача 3acd9c3c (0.15.3) — бэкап и восстановление БД вынесены в CLI сервера:
+;   * SQLite/чекпойнт/копирования в Pascal больше нет: установщик извлекает
+;     самодостаточный etn-db-tool.mjs (server/dist/db/db-backup.js) во
+;     временный каталог ДО остановки службы и запускает его через
+;     {app}\node.exe с рабочим каталогом {app}\server:
+;       backup  --to <данные>\backups --report-out <tmp>\report.txt --data-dir <данные>
+;       restore --from <архив этого запуска> --force --report-out ... --data-dir ...
+;   * архив — ZIP по спецификации (сущность 2975c553):
+;     etn-backup-<версия>-<YYYYMMDD-HHMMSS>.zip внутри _system.db и
+;     networks\<uuid>\data.db; вложения не входят; ротация трёх архивов и
+;     integrity_check — в CLI (server/src/db/db-backup.ts), покрыты TS-тестами;
+;   * путь архива и причина отказа читаются из отчёта key=value (archive,
+;     error, warnings) в GLastBackupDir/GBackupReason, попадают в журнал,
+;     экран ошибки и сводку; любой ненулевой код инструмента — код 10;
+;   * откат — только из архива ЭТОГО запуска (не LatestBackupDir);
+;     восстановление staged, WAL/SHM удаляются с проверкой, занятая БД без
+;     --force — отказ до перезаписи.
 ;
 ; Задача 686c5d76 (0.15.1) — первичная инициализация и экран ключа:
 ;   * «уже инициализирован» — критерий hasFirstUser(), а не наличие
@@ -111,14 +122,17 @@
 ;     (WinSW сам его не создаёт); до подстановки службу не регистрировать;
 ;   * служба ETN регистрируется WinSW (etn-service.exe install) после записи
 ;     конфигурации и до запуска; уже зарегистрированная служба не
-;     перегистрируется (WinSW 2.12.0 вернул бы 1073), сбой регистрации —
-;     код 20 с причиной; запуск ждёт подтверждённого RUNNING, затем health;
-;     служба не перешла в RUNNING за бюджет — тоже код 20 с причиной;
+;     перегистрируется (WinSW 2.12.0 вернул бы 1073), но её личность
+;     проверяется (ImagePath, Start, DeleteFlag): чужая/отключённая/помеченная
+;     на удаление — код 20 до копирования файлов; сбой регистрации после
+;     копирования — код 10 с причиной; запуск не ждёт RUNNING — готовность
+;     подтверждает health-check;
 ;   * при удалении программы служба останавливается и снимается
 ;     (etn-service.exe uninstall) до удаления файлов; отказ отменяет удаление
 ;     с причиной; деинсталлятор не вызывает InitializeSetup — путь к службе и
 ;     журнал удаления берутся из {app}/{commonappdata} и install.json;
-;     режим app службу не регистрирует и удаление не трогает;
+;     режим app службу не регистрирует и удаление не трогает; чужую службу
+;     (другой ImagePath) не снимаем — файлы программы удалить можно;
 ;   * при обновлении порт, хост, режим и каталог данных фиксированы — берутся
 ;     из install.json, поля на экране только показывают значения;
 ;   * установка только клиента серверных каталогов и правила не создаёт.
@@ -133,11 +147,13 @@
 ;     строки, а причина неактивности уезжала за нижний край поверхности
 ;     страницы (длинные подписи состояния клиента) — состояние «кнопка мертва,
 ;     объяснения нет» было неотличимо от зависания;
-;   * раскладка экрана компонентов гарантирует, что содержимое умещается:
-;     FitComponentsPage уступает (в порядке: пояснение режима, каталог данных,
-;     описания компонентов, ссылка), но выбор, состояния и причина остаются;
-;     пояснение режима не дублируется, когда показан текст фиксированной
-;     области (он говорит то же самое);
+;   * в 0.15.2 раскладка экрана компонентов гарантировала, что содержимое
+;     умещается: FitComponentsPage уступал (в порядке: пояснение режима,
+;     каталог данных, описания компонентов, ссылка), но выбор, состояния и
+;     причина оставались; пояснение режима не дублировалось, когда показывался
+;     текст фиксированной области (он говорит то же самое); задача c4b68d78
+;     заменила эту раскладку списком TNewCheckListBox с фиксированным нижним
+;     блоком;
 ;   * причина неактивности — одна функция ComponentsReasonText: она же пишется
 ;     в журнал при каждой смене экрана вместе с состоянием кнопки;
 ;   * вход в NextButtonClick и CancelButtonClick логируется: по журналу видно,
@@ -170,10 +186,33 @@
 ;   * /ALLUSERS сохранён для тихого автообновления службы: LocalSystem уже
 ;     элевирован, Inno включает административный режим без UAC и respawn.
 ;
+; Задача c4b68d78 (0.15.3) — экран компонентов на TNewCheckListBox:
+;   * ручная пиксельная раскладка (LayoutComponentsPage/FitComponentsPage с
+;     циклом скрытия подсказок) удалена: два пункта списка — сервер и клиент
+;     (checkbox, уровень 0), под каждым строки статуса и описания (group,
+;     уровень 1); необязательная строка области клиента — тоже group;
+;   * TNewCheckListBox переносит caption по словам, но ItemSubItem — одна
+;     строка без переноса; поэтому статусы и описания — group-строки, subitem
+;     всегда пуст;
+;   * список получает остаток высоты и прокручивается сам; нижний блок
+;     (ссылка на другие варианты установки, каталог данных, лицензия, причина
+;     неактивности «Далее») закреплён от низа поверхности:
+;     GComponentsList.Height := GServerAltLink.Top - ScaleY(8);
+;   * серые статусы/подсказки — ItemEnabled := False (как прежний clGray):
+;     средство доступности считает такую строку недоступной — принятый
+;     компромисс, потому что TNewCheckListBox не умеет менять цвет строки;
+;   * причина неактивности «Далее» — по-прежнему одна функция
+;     ComponentsReasonText (экран и журнал), на экране — с префиксом
+;     «Далее недоступна: »; FitLabel и пересчёт нижнего блока — после каждой
+;     смены текста;
+;   * Items.Add/AddSubItem/SubItems и запись ItemLevel/State запрещены: они
+;     рассинхронизируют FStateList (сторож — installer/tests/iss-static.ps1);
+;     Items.Delete допустим только для последней строки области клиента.
+;
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
-; Проверка silent-контракта и предпроверок: installer/tests/silent-codes.ps1.
-; Проверка init и ключа: installer/tests/init-key.ps1.
-; Проверка подстановки шаблона и запуска поставки: installer/tests/staged-app.ps1.
+; Проверки: installer/tests/iss-static.ps1 (статика установщика),
+; installer/tests/payload-freshness.ps1 (свежесть payload),
+; installer/tests/e2e/run.ps1 (установка на виртуальной машине).
 ;
 ; Контракт silent server-only режима (постоянный комментарий задачи):
 ;   ETN-Setup-<версия>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY
@@ -186,18 +225,8 @@
 ;   /PRIVILEGEDPHASE — привилегированная работа без мастера: фаза пишет в
 ;   каталог программы и каталог данных; silent-предусловия самообновления к ней
 ;   НЕ применяются, проверяются только права, каталог программы, каталог данных
-;   и порт. GUI-установка её больше не запускает (элевация штатная, 2dd215f7);
-;   фаза остаётся для installer/tests/*.ps1.
-;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
-;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
-;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID,
-;   /TESTPORTBINDFAIL, /TESTLISTENERTABLEOFF, /TESTNOSERVICE,
-;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
-;   /TESTSERVICEWAIT, /TESTSERVICEINSTALL, /TESTSERVICEUNINSTALL,
-;   /TESTSERVICEREALFILE, /TESTUNINSTALLSERVICE, /TESTHEALTHURL,
-;   /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK, /TESTADMINMODE,
-;   /TESTUSERONLYMODE, /TESTGUIMODE — только в тестовой сборке
-;   (installer/tests/silent-codes.ps1, init-key.ps1, staged-app.ps1).
+;   и порт. GUI-установка её больше не запускает (элевация штатная, 2dd215f7).
+;   /PARAMS=<файл> — файл параметров сервера для привилегированной фазы.
 ; ============================================================================
 
 #ifndef MyAppVersion
@@ -206,8 +235,8 @@
 #endif
 
 ; Каталог подготовленного payload (поставка 8b1f5980 и 98ad5eec).
-; По умолчанию — installer/payload; тестовый прогон молчания передаёт
-; /DPayloadRoot=<installer/tests/fixtures/payload>.
+; По умолчанию — installer/payload; /DPayloadRoot=<каталог> переопределяет его
+; (payload-freshness.ps1 собирает фикстуры в отдельном каталоге).
 #ifdef PayloadRoot
   #define PayloadDir PayloadRoot
 #else
@@ -215,23 +244,15 @@
 #endif
 #define PayloadPrefix AddBackslash(PayloadDir)
 
-; Тестовый режим (только для installer/tests/silent-codes.ps1): изолированные
-; каталог программы и каталог данных + хуки /TESTELEVATED, /TESTSERVICE,
-; /TESTHEALTH. В обычной сборке эти хуки в код не попадают (#ifdef TestMode).
-#ifdef TestMode
-  #define AppDir TestAppDir
-  #define DataDir TestDataDir
-#else
-  ; Каталог программы выбирается по ФАКТИЧЕСКИМ правам процесса (ошибка
-  ; aa5af30c): запуск от имени администратора — %ProgramFiles%\ETN, обычный
-  ; запуск — %LOCALAPPDATA%\Programs\ETN. При PrivilegesRequired=lowest Inno
-  ; всегда работает в неадминистративном режиме, поэтому {autopf} указывает на
-  ; профиль даже у элевированного процесса — вычислить каталог обязана
-  ; GetDefaultAppDir. Жёсткий {commonpf} здесь недопустим: в user-режиме
-  ; экземпляр не сможет создать каталог и записать деинсталлятор (Error 5).
-  #define AppDir "{code:GetDefaultAppDir}"
-  #define DataDir "{commonappdata}\ETN"
-#endif
+; Каталог программы выбирается по ФАКТИЧЕСКИМ правам процесса (ошибка
+; aa5af30c): запуск от имени администратора — %ProgramFiles%\ETN, обычный
+; запуск — %LOCALAPPDATA%\Programs\ETN. При PrivilegesRequired=lowest Inno
+; всегда работает в неадминистративном режиме, поэтому {autopf} указывает на
+; профиль даже у элевированного процесса — вычислить каталог обязана
+; GetDefaultAppDir. Жёсткий {commonpf} здесь недопустим: в user-режиме
+; экземпляр не сможет создать каталог и записать деинсталлятор (Error 5).
+#define AppDir "{code:GetDefaultAppDir}"
+#define DataDir "{commonappdata}\ETN"
 
 ; --- Проверки наличия payload на этапе компиляции ---------------------------
 ; Секции [Files] добавляются только для реально подготовленных каталогов:
@@ -266,9 +287,7 @@
   #pragma message "ПРЕДУПРЕЖДЕНИЕ: в payload нет client\ETN.exe — файлы клиента не поставляются (задача 98ad5eec)"
 #endif
 
-; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск». В тестовой
-; сборке каталоги уводятся в песочницу теста: прогон silent-codes.ps1 не
-; должен трогать настоящий рабочий стол и меню «Пуск» пользователя.
+; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск».
 ;
 ; Пользовательская область (ошибка 0f8dd0f3, п.7 карточки 860def0d) задана
 ; ЯВНО, а не через {autodesktop}/{autoprograms}: машинная копия клиента ставится
@@ -279,42 +298,24 @@
 ; пользовательские — {userdesktop}/{userprograms}. Явный каталог клиента в
 ; профиле совпадает с ClientInstallPath — область в install.json и реальное
 ; место файлов больше не расходятся.
-#ifdef TestMode
-  #define ShortcutDesktopDir ExtractFileDir(TestAppDir) + "\shortcuts\desktop"
-  #define ShortcutMenuDir ExtractFileDir(TestAppDir) + "\shortcuts\menu"
-  #define ShortcutUserDesktopDir ShortcutDesktopDir
-  #define ShortcutUserMenuDir ShortcutMenuDir
-  #define ClientUserDir TestAppDir
-#else
-  #define ShortcutDesktopDir "{commondesktop}"
-  #define ShortcutMenuDir "{commonprograms}\ETN"
-  #define ShortcutUserDesktopDir "{userdesktop}"
-  #define ShortcutUserMenuDir "{userprograms}\ETN"
-  #define ClientUserDir "{localappdata}\Programs\ETN"
-#endif
+#define ShortcutDesktopDir "{commondesktop}"
+#define ShortcutMenuDir "{commonprograms}\ETN"
+#define ShortcutUserDesktopDir "{userdesktop}"
+#define ShortcutUserMenuDir "{userprograms}\ETN"
+#define ClientUserDir "{localappdata}\Programs\ETN"
 
 ; ============================================================================
 ; AppId — единственный источник идентификатора: из него Inno строит запись
 ; деинсталляции `{AppId}_is1`, по нему же ищется и чистится запись прежней
 ; области реестра (ошибка a7394117). Литералы в [Setup] и [Code] не дублируются.
 #define ProductAppId "6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70"
-#define TestUninstallAppId "B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E"
 #define ProductUninstallKey "{" + ProductAppId + "}_is1"
-#define TestUninstallKey "{" + TestUninstallAppId + "}_is1"
 
 [Setup]
 ; Идентификатор продукта: по нему Inno ведёт запись установки и обновление
 ; поверх прежней версии. Менять нельзя — иначе повторный запуск не увидит
 ; предыдущую установку. `{{` — литеральная скобка: AppId начинается с `{`.
-#ifdef TestUninstallable
-; Проба настоящего деинсталлятора (installer/tests/silent-codes.ps1, приёмка
-; 8b1f5980): у тестовой установки отдельный AppId, чтобы запись установки и
-; удаление не касались продуктовой установки на машине. Определяется только
-; вместе с TestMode (см. Uninstallable ниже).
-AppId={{{#TestUninstallAppId}}
-#else
 AppId={{{#ProductAppId}}
-#endif
 AppName=ETN
 AppVersion={#MyAppVersion}
 AppVerName=ETN {#MyAppVersion}
@@ -380,16 +381,6 @@ OutputDir=..\release
 OutputBaseFilename=ETN-Setup
 Compression=lzma2
 SolidCompression=yes
-#ifdef TestMode
-; Тестовая сборка по умолчанию не создаёт деинсталлятор и запись установки в
-; реестре: прогон silent-codes.ps1 не должен оставлять следов на машине.
-; /DTestUninstallable=1 (только вместе с -TestMode) включает деинсталлятор для
-; пробы настоящего удаления с моделью службы (приёмка 8b1f5980): у такой
-; сборки отдельный AppId — см. [Setup].
-#ifndef TestUninstallable
-Uninstallable=no
-#endif
-#endif
 WizardStyle=modern
 UninstallDisplayName=ETN {#MyAppVersion}
 ; Журнал Inno включён всегда (ошибка 2dd215f7): в нём лоадер печатает слой
@@ -403,6 +394,289 @@ UsePreviousTasks=no
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
+[CustomMessages]
+; Новые пользовательские строки задачи 3acd9c3c попадают сразу сюда.
+; Массовый перенос старых литералов в [CustomMessages] — задача 4dc117f5.
+EtnBackupToolMissing=Инструмент резервного копирования баз данных не найден в поставке установщика.
+EtnBackupToolNotStarted=Инструмент резервного копирования баз данных не запустился — проверьте node.exe поставки и журнал установки.
+; 34f8e315: служба возвращена после отмены обновления, но не отвечает.
+EtnServiceStartManually=служба не запущена; запустите вручную (etn-service.exe start), журнал: %1
+; 34f8e315: ручное снятие службы при отмене удаления — команды WinSW, без sc.
+EtnUninstallServiceManual=Остановите и удалите службу ETN вручную: etn-service.exe stop, дождитесь status=Stopped, затем etn-service.exe uninstall — и повторите удаление. Файлы не удалены.
+
+; --- Задача 4dc117f5: UI-строки вынесены из [Code]. Конвенция:
+; --- Etn<Область><Смысл>, PascalCase, только [A-Za-z0-9_], без точек;
+; --- %n — перенос строки, %1..%9 — подстановка FmtMessage.
+; --- Журнальные строки (LogLine/LogDefer/Log) остаются литералами в [Code].
+
+; Экран компонентов (первый экран).
+EtnComponentsTitle=ETN — установка
+EtnComponentsWelcome=Добро пожаловать в ETN: сервер хранит графовые базы знаний на этом компьютере, клиент — окно для работы с ними.
+EtnComponentsServerOptionsLink=<a href="server-options">Другие варианты установки сервера (удалённый сервер, Docker)</a>
+EtnDataDirFixed=Каталог данных: %1 (фиксирован)
+EtnLicenseAccept=Я принимаю условия лицензии MIT
+EtnLicenseLink=<a href="license">Текст лицензии</a>
+EtnServerNeedsAdmin=Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnNextUnavailablePrefix=Далее недоступна:
+EtnShortcutComment=ETN — графовые базы знаний
+
+; Подписи компонентов в списке.
+EtnServerCheckInstall=Установить сервер ETN
+EtnServerCheckUpdate=Обновить сервер ETN: %1 → %2
+EtnServerCheckReinstall=Переустановить сервер ETN %1
+EtnServerCheckRepair=Восстановить сервер ETN
+EtnServerCheckAdopt=Установить сервер ETN и подключить существующие данные
+EtnServerCheckNewer=Сервер ETN (установлена более новая версия)
+EtnClientCheckInstall=Установить клиент ETN
+EtnClientCheckReinstall=Переустановить клиент ETN
+
+; Экран администратора.
+EtnAdminPageTitle=Администратор сервера
+EtnAdminPageIntro=Первый пользователь станет администратором ETN. Задайте его логин и отображаемое имя, а после установки сервера получите ключ для входа.
+EtnAdminLoginLabel=Логин администратора:
+EtnAdminDisplayLabel=Отображаемое имя (необязательно):
+EtnAdminLoginNote=Логин используется один раз — при первичной инициализации сервера. Если сервер уже инициализирован, логин не меняется.
+
+; Экран параметров сервера.
+EtnParamsPageTitle=Параметры сервера
+EtnParamsPageIntro=Порт сервера и доступ с других компьютеров. Каталог данных фиксирован и переживает обновление.
+EtnPortLabel=Порт сервера (по умолчанию 4321):
+EtnPortNote=Порт должен быть свободен: занятость проверяется до установки.
+EtnLanCheckbox=Разрешить подключения с других компьютеров в локальной сети
+EtnDataDirParams=Каталог данных: %1 (в 0.15.1 фиксирован, не меняется при обновлении и удалении программы)
+EtnFirewallOnNote=Будет создано правило брандмауэра Windows для порта %1 сервера (профили «домен» и «частная сеть»). Сервер будет доступен с других компьютеров локальной сети.
+EtnFirewallOffNote=Сервер будет доступен только с этого компьютера (127.0.0.1). Подключения с других компьютеров локальной сети работать не будут.
+
+; Экран первичного API-ключа.
+EtnKeyPageTitle=Первичный API-ключ
+EtnKeyPageIntro=Сохраните ключ: он показывается один раз и восстановить его нельзя.
+EtnKeyCopyButton=Скопировать
+EtnKeyCopied=Скопировано в буфер обмена
+EtnKeyCopyFailed=Не удалось скопировать — выделите ключ и нажмите Ctrl+C
+EtnKeyPageNote=Ключ показывается один раз. Восстановить нельзя — только выпустить новый. Сохраните его в надёжном месте.
+EtnKeyFromPreviousRun=Ключ получен при предыдущем запуске установщика (после сбоя) и сохранён в защищённом файле.
+EtnKeySavedCheckbox=Я сохранил ключ
+EtnKeyNotSavedPrompt=Ключ не сохранён. Восстановить его нельзя — только выпустить новый. Временный файл с ключом будет удалён. Закрыть установщик?
+
+; Экран ошибки и итоговая сводка.
+EtnErrorPageTitle=Установка не завершена
+EtnErrorPageIntro=Установка ETN прервана. Ниже — причина, журнал, резервная копия и следующий шаг.
+EtnButtonOpenLog=Открыть журнал
+EtnButtonOpenDataDir=Открыть папку данных
+EtnButtonRetry=Повторить установку
+EtnButtonRunClient=Запустить клиент
+
+; Диалоги и общие фразы.
+EtnReadyMemoUserOnly=Режим «только для меня»: права администратора не требуются.
+EtnOpenFailed=Не удалось открыть: %1%n%nПуть можно скопировать из поля на экране.
+EtnLicenseOpenFailed=Не удалось открыть текст лицензии. Он находится в файле LICENSE рядом с установщиком.
+EtnLicenseTempOpenFailed=Не удалось открыть текст лицензии во временном каталоге: %1
+EtnRetryInstallFailed=Не удалось запустить установщик заново: %1%nЗапустите его вручную.
+EtnCloseClientPrompt=Клиент ETN запущен. Чтобы заменить файлы, его нужно закрыть — несохранённые данные могут быть потеряны.%n%nЗакрыть клиент и продолжить установку?
+EtnDowngradeBlocked=На этом компьютере установлена более новая версия ETN %1.%nУстановщик %2 не может её понизить: установка невозможна, доступна только отмена.
+EtnInstallNotStarted=Установка не начата: %1
+EtnNoChangesLogTail=Изменения не выполнялись. Журнал: %1
+EtnUninstallCancelled=Удаление программы отменено: %1. %2
+
+; Экран компонентов: динамические состояния и причины.
+EtnStateNotInstalled=не установлен
+EtnServerStateAdopt=найдены существующие данные (%1) — будут подключены без изменения данных
+EtnServerStateInstalled=установлен %1 — актуальная версия
+EtnServerStateUpdate=установлен %1 — доступно обновление до %2
+EtnServerStateRepair=установлен %1 — переустановка (repair)
+EtnServerStateRepairNoRecord=файлы найдены без записи установки — установка будет восстановлена (repair)
+EtnServerStateRepairPartial=установлен частично — будет восстановлен (repair)
+EtnServerStateDowngrade=установлена более новая версия %1 — понижение запрещено
+EtnLegacyMachineSuffix=, для всех пользователей
+EtnLegacyClientUserOnly=найден клиент ETN %1 от старого установщика (NSIS%2) — для его удаления нужны права администратора; новый клиент поставится в ваш профиль
+EtnLegacyClientWillRemove=найден клиент ETN %1 от старого установщика (NSIS%2) — перед установкой он будет удалён
+EtnLegacyClientServerOnly=найден клиент ETN %1 от старого установщика (NSIS%2); при установке только сервера он не затрагивается
+EtnClientStateUserToMachine=клиент установлен в варианте «только для меня» — будет добавлена копия «для всех пользователей»
+EtnClientStateReplace=клиент уже установлен — при обновлении он будет заменён
+EtnClientStateMachineNeedsAdmin=клиент установлен для всех пользователей — нужны права администратора
+EtnClientStateChooseToReplace=клиент уже установлен; выберите клиент, чтобы заменить его
+EtnClientScopeAdmin=Установщик запущен от имени администратора: клиент ставится для всех пользователей. Подключение к локальному серверу уже предзаполнено в ярлыке клиента.
+EtnClientScopeUserCopyUpdate=Найден клиент «только для меня»: он останется в профиле, обновляется копия «для всех пользователей».
+EtnClientScopeUserCopyInstall=Найден клиент «только для меня»: он останется в профиле, а рядом будет установлена копия «для всех пользователей».
+EtnClientScopeMachineNeedsAdmin=Клиент установлен для всех пользователей: его обновление требует прав администратора. Закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnClientScopeUserOnlyUpdate=Клиент установлен в варианте «только для меня» — обновление продолжится в ваш профиль. Чтобы поставить клиент «для всех пользователей», закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnClientScopeUser=Клиент установлен в варианте «только для меня». Чтобы поставить клиент «для всех пользователей», закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnClientScopeMachine=Клиент установлен в варианте «для всех пользователей». Чтобы поставить клиент «только для меня», запустите установщик обычным двойным кликом (без прав администратора).
+EtnModeService=автоматический запуск в режиме службы Windows
+EtnModeApp=ручной запуск сервера как обычного приложения
+EtnInitAlreadyDone=Сервер уже инициализирован — init не повторяется, новый ключ установщик не выдаёт (перевыпуск — в клиенте).
+EtnInitPendingKey=Найден ключ от предыдущего запуска установщика — он будет показан после установки.
+EtnReasonDowngrade=Установлена более новая версия %1 — понижение версии не поддерживается. Доступна только отмена.
+EtnReasonClientMachineNeedsAdmin=Клиент установлен для всех пользователей: нужны права администратора.
+EtnReasonSelectComponent=Выберите хотя бы один компонент.
+EtnReasonAcceptLicense=Примите условия лицензии MIT, чтобы продолжить.
+EtnServerDescription=Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним доступ по сети. Node.js входит в установку.
+EtnClientDescriptionNoServer=Сервер не выбран: при первом запуске понадобится адрес существующего сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.
+EtnClientDescription=Клиент — окно для работы с базами; нужны адрес сервера и ключ.
+EtnClientInstallDirSuffix=Каталог установки: %1.
+EtnClientScopeRowUserOnly=Режим «только для меня»: клиент ставится в ваш профиль, права администратора не нужны. Чтобы установить сервер или клиент «для всех пользователей», закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnNoticeClientMachineNeedsAdmin=Клиент установлен для всех пользователей: обновление требует прав администратора — закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnNoticeNeedsAdmin=Для установки компонентов, требующих прав администратора, закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).
+EtnParamsInstalledNote=Сервер уже установлен: %1 → %2, режим: %3. При обновлении порт, доступ по локальной сети и каталог данных не меняются.
+EtnParamsUpdateNote=Служба ETN останавливается на время замены файлов, базы данных копируются в %1\backups, затем служба запускается снова.
+
+; Предпроверки окружения, экран параметров, администратор и silent-режим.
+EtnPortInvalid=некорректный порт "%1": допустимо число от %2 до %3
+EtnPortBusy=порт %1 занят другим приложением: укажите свободный порт в «Параметры сервера»
+EtnPortCheckFailed=не удалось проверить занятость порта %1: проверьте порт вручную
+EtnPortFreeSuggestion=Рядом свободен порт %1 — укажите его и нажмите «Далее»
+EtnDataDirOccupied=путь каталога данных занят файлом: %1 — освободите путь и повторите установку
+EtnDataDirNotWritable=каталог данных недоступен для записи: %1 (нужны права администратора)
+EtnDataDirNotWritablePlain=каталог данных недоступен для записи: %1
+EtnProgramDirNotWritable=каталог программы недоступен для записи: %1
+EtnNoSpaceData=недостаточно свободного места для каталога данных %1: свободно %2, нужно не менее %3
+EtnNoSpaceProgram=недостаточно свободного места для каталога программы %1: свободно %2, нужно не менее %3
+EtnLoginRequired=Логин обязателен и не должен содержать кавычек и переводов строк.
+EtnDisplayNameInvalid=Отображаемое имя не должно содержать кавычек и переводов строк.
+EtnSilentClientForbidden=/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена
+EtnSilentNotElevated=процесс не элевирован: нужны права администратора
+EtnSilentNoInstallRecord=нет %1 — сервер не устанавливался установщиком
+EtnSilentInstallJsonBroken=install.json повреждён: нет schema=1, product_version или mode
+EtnSilentAppMode=режим "%1": в 0.15.1 самообновление поддерживается только для службы; приложение обновляется вручную
+EtnSilentServerFilesMissing=файлы сервера не найдены в %1
+EtnSilentServiceNotRegistered=служба %1 не зарегистрирована
+EtnSilentDataDirMismatch=install.json указывает каталог данных %1, в 0.15.1 он фиксирован: %2
+EtnPreconditionDowngrade=понижение версии запрещено: установлена %1, установщик %2
+EtnPrivilegedRequiresVerysilent=/PRIVILEGEDPHASE допустим только с /VERYSILENT
+EtnPrivilegedNotElevated=привилегированная фаза запущена без прав администратора
+EtnPrivilegedNoComponents=не выбран ни один компонент: файл параметров пуст или повреждён
+
+; Причины службы, бэкапа, отката, закрытия клиента и удаления.
+EtnShellUacCancelled=код 1223: запрос UAC отклонён (ERROR_CANCELLED)
+EtnShellElevationRequired=код 740: требуются права администратора (ERROR_ELEVATION_REQUIRED)
+EtnShellAccessDenied=код 5: отказано в доступе (ERROR_ACCESS_DENIED)
+EtnShellCodeUnknown=код не сообщён
+EtnShellWin32Code=Win32-код %1
+EtnLegacyUninstallerNotFound=деинсталлятор не найден: %1
+EtnLegacyUninstallerNotStarted=деинсталлятор не запустился
+EtnLegacyUninstallerCode=деинсталлятор вернул код %1
+EtnLegacyUninstallRecordStayed=запись Uninstall не исчезла за %1 мс
+EtnLegacyRemoveFailed=не удалось удалить старый клиент ETN %1 его деинсталлятором. Удалите его вручную в «Программы и компоненты» и повторите установку.
+EtnClientCloseRefused=клиент ETN не закрыт: пользователь отказался закрыть запущенный клиент
+EtnClientCloseForceFailed=клиент ETN не закрыт: процессы ETN.exe не завершились даже после принудительного закрытия
+EtnServiceStatusAccessDenied=отказано в доступе (5)
+EtnServiceStatusDisabled=служба отключена (1058)
+EtnServiceStatusMissing=служба не найдена (1060)
+EtnServiceStatusMarkedForDelete=служба помечена на удаление (1072)
+EtnServiceStatusCode=etn-service.exe status вернул код %1
+EtnServiceStatusTestFailed=etn-service.exe status не выполнен (тестовый режим)
+EtnServiceStatusUnknown=неизвестный вывод etn-service.exe status: %1
+EtnServiceExeMissing=нет %1 — состояние службы не определить
+EtnServiceStatusNotStarted=не удалось запустить etn-service.exe status
+EtnServiceStatusEmpty=etn-service.exe status вернул пустой вывод
+EtnServiceCodeAccessDenied=отказано в доступе (5) — нужны права администратора
+EtnServiceCodeDisabled=служба отключена (1058): включите её или удалите
+EtnServiceCodeTransition=служба в переходном состоянии (1061)
+EtnServiceCodeNotActive=служба уже остановлена (1062)
+EtnServiceCodeAlreadyRunning=служба уже запущена (1056)
+EtnServiceCodeExists=служба уже существует (1073)
+EtnServiceCodeGeneric=код %1
+EtnServiceCommandReturned=команда %1 вернула %2
+EtnServiceExeNotFound=нет %1
+EtnServiceTestStopFailed=stop не выполнен (хук)
+EtnServiceTestStopAfterStartFailed=stop не выполнен после start (хук)
+EtnServiceTestStartFailed=start не выполнен (хук)
+EtnServiceTestInstallFailed=install не выполнен (хук)
+EtnServiceTestUninstallFailed=uninstall не выполнен (хук)
+EtnServiceNotStarted=не удалось запустить etn-service.exe
+EtnServiceStopFailed=не удалось остановить службу %1: %2
+EtnServiceScmMissing=служба %1 зарегистрирована в реестре, но SCM её не видит (status=NonExistent) — несогласованное состояние
+EtnServiceStateUnknown=не удалось определить состояние службы %1: %2
+EtnServiceNotStoppedInTime=служба %1 не остановилась за %2 мс
+EtnServiceReasonInLog=причина в журнале
+EtnServiceImagePathMissing=<нет ImagePath>
+EtnServiceOtherPath=служба %1 зарегистрирована с другим путём: %2 (ожидается %3) — чужая или устаревшая служба; удалите её вручную и повторите установку
+EtnServiceStartDisabled=служба %1 отключена (Start=4): включите её (Start=2) или удалите и повторите установку
+EtnServiceDeleteFlag=служба %1 помечена на удаление (DeleteFlag=1): перезагрузите машину или удалите ключ службы и повторите установку
+EtnServiceScmMissingRemove=служба %1 зарегистрирована в реестре, но SCM её не видит (status=NonExistent) — несогласованное состояние; перезагрузите машину или удалите ключ службы
+EtnServiceRemovalNotConfirmed=не удалось подтвердить снятие службы %1: %2
+EtnServiceStillRunningAfterUninstall=служба %1 всё ещё работает после uninstall
+EtnServiceStayedInScm=служба %1 осталась в SCM после uninstall (status=%2)
+EtnServiceStatusNotNonexistent=не NonExistent
+EtnServiceConfigMissing=конфигурация службы не найдена: %1
+EtnServiceInstallFailed=служба %1 не зарегистрирована: etn-service.exe install вернул ошибку: %2 (конфигурация: %3)
+EtnServiceAlreadyRegisteredUnusable=служба %1 уже зарегистрирована, но не может быть использована: %2
+EtnServiceNotStoppedUninstall=служба %1 не остановлена: %2
+EtnServiceUninstallFailed=не удалось снять службу %1 (etn-service.exe uninstall вернул ошибку): %2
+EtnServiceRemovalIncomplete=удаление службы %1 не завершено: %2
+EtnHealthCurlFailed=%1: curl.exe не запустился
+EtnHealthHttpError=%1: HTTP-ошибка (ответ не 2xx)
+EtnHealthRefused=%1: соединение отклонено
+EtnHealthTimeout=%1: таймаут
+EtnHealthNetwork=%1: сетевой сбой (curl %2)
+EtnHealthEmpty=%1: пустой ответ
+EtnHealthStatusBad=health: status=%1 вместо ok
+EtnHealthDbBad=health: db=%1 вместо ok
+EtnHealthVersionBad=health: версия %1 вместо %2
+EtnHealthServiceMissing=служба не найдена (%1)
+EtnValueMissing=<нет>
+EtnBackupCodeError=код %1
+EtnBackupDirNotCreated=каталог архивов не создан: %1 (нет прав или свободного места)
+EtnRollbackStopFailed=. Откат не выполнен: служба %1 не остановилась (%2), файлы новой версии и БД не восстановлены; снимок: %3; архив: %4; журнал: %5.
+EtnRollbackDoneNoDb=. Откат выполнен: файлы возвращены из %1, архив БД не создавался — база оставлена как есть.
+EtnRollbackDoneDb=. Откат выполнен: файлы возвращены из %1, база восстановлена из %2.
+EtnRollbackFilesNotRestored=файлы не восстановлены
+EtnRollbackDbNotRestored=БД не восстановлена
+EtnRollbackBackupNotCreated=не создавался
+EtnRollbackNoDbChanges=Изменения, сделанные в базу после остановки службы, восстановить невозможно.
+EtnRollbackDataLost=Данные, записанные после создания архива (неудачный запуск), потеряны.
+EtnRollbackFailed=. Откат не выполнен (%1). Архив: %2. Снимок: %3. Журнал: %4. Данные, записанные после остановки службы, могут быть потеряны: восстановите базу из архива вручную (инструкция в журнале).
+EtnRollbackPrevNotResponding=Прежняя версия не отвечает на health-check: %1; %2
+EtnPrepareToolUnavailable=инструмент резервного копирования баз данных недоступен: %1 — обновление отменено, служба не останавливалась
+EtnPrepareBackupFailed=резервная копия баз данных не создана: %1; требуется свободного места: %2 (%3\backups); журнал: %4 — обновление отменено, файлы не заменялись
+EtnPrepareSnapshotFailed=снимок отката не создан: %1 — обновление отменено, файлы не заменялись (причина в журнале)
+EtnFailDataDirsNotPrepared=каталог данных не подготовлен: %1
+EtnFailServiceConfigNotPrepared=конфигурация службы не подготовлена: %1
+EtnFailInitNotDone=инициализация сервера не выполнена (etn init) — подробности в журнале
+EtnFailServiceNotStarted=служба %1 не запущена после замены файлов: %2
+EtnFailHealth=health-check не пройден: %1
+EtnFailNoAdmin=сервер не инициализирован: нет первого администратора (нужен ручной режим etn init --username)
+EtnFailInstallJsonNotWritten=install.json не записан: %1
+EtnHeadingFinished=Установка ETN завершена
+EtnHeadingFailed=Установка ETN не завершена
+
+; Этапы прогресса (StatusLabel) и экраны ошибки/сводки.
+EtnStageBackup=Резервная копия баз данных…
+EtnStageSnapshot=Снимок отката…
+EtnStageRollback=Откат обновления…
+EtnStageStopService=Остановка службы ETN…
+EtnStageServerFiles=Замена файлов сервера ETN…
+EtnStageClientFiles=Замена файлов клиента ETN…
+EtnStageDataDirs=Подготовка каталогов данных…
+EtnStageServiceConfig=Настройка службы…
+EtnStageServiceRegister=Регистрация службы ETN…
+EtnStageFirewall=Правило брандмауэра…
+EtnStageInit=Инициализация сервера…
+EtnStageServiceStart=Запуск службы ETN…
+EtnStageHealth=Проверка работоспособности…
+EtnStageParams=Запись параметров установки…
+EtnFailureReasonMissing=причина не записана — смотрите журнал установки
+EtnErrorMemoTitle=Установка ETN %1 не завершена.
+EtnReasonPrefix=Причина: %1.
+EtnLogLine=Журнал установки: %1
+EtnLogNotCreated=(журнал не создан)
+EtnLogNotCreatedShort=(не создан)
+EtnBackupLine=Резервная копия баз данных: %1
+EtnBackupNotCreated=не создавалась
+EtnBackupOldSuffix=(архив прошлого обновления — для автоматического отката не используется)
+EtnErrorNextStep=Следующий шаг: устраните причину и запустите установщик снова — параметры и данные сохранятся. Если установка не запускается, приложите журнал установки к обращению в поддержку.
+EtnSummaryTitle=Установка ETN %1 завершена.
+EtnSummaryServerInstalled=Сервер ETN установлен.
+EtnSummaryLocalAddress=Адрес на этом компьютере: http://127.0.0.1:%1
+EtnSummaryLanAddress=Адрес в локальной сети: http://%1:%2 (если на компьютере есть VPN или несколько сетей, адрес может отличаться — проверьте его в «Параметрах сети»)
+EtnSummaryLanUnknown=Адрес в локальной сети: определить не удалось (порт %1 открыт брандмауэром)
+EtnSummaryFirewallWarning=Внимание: правило брандмауэра Windows не создано — подключения с других компьютеров могут блокироваться. Причина указана в журнале.
+EtnSummaryLanDisabled=Подключения с других компьютеров отключены (только этот компьютер).
+EtnSummaryDataDir=Каталог данных: %1
+EtnSummaryClient=Клиент ETN: %1
+EtnSummaryClientMachine=Клиент установлен для всех пользователей. Запустите его из меню «Пуск» или с рабочего стола: подключение к локальному серверу уже предзаполнено в ярлыке.
+EtnSummaryKeyReminder=Ключ администратора показывался на предыдущем экране: сохраните его в надёжном месте — восстановить ключ нельзя, только выпустить новый.
+
 [Files]
 ; --- Лицензия (MIT): текст открывается локально со ссылки на экране
 ; --- компонентов; в установку не копируется (dontcopy).
@@ -415,6 +689,14 @@ Source: "{#ServerPayload}\package.json"; DestDir: "{app}\server"; Flags: ignorev
 Source: "{#ServerPayload}\dist\*"; DestDir: "{app}\server\dist"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallServerPayload
 Source: "{#ServerPayload}\migrations\*"; DestDir: "{app}\server\migrations"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Check: InstallServerPayload
 Source: "{#ServerPayload}\node_modules\*"; DestDir: "{app}\server\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Check: InstallServerPayload
+; --- Инструмент бэкапа/восстановления БД (задача 3acd9c3c): dontcopy — только
+; --- для ExtractTemporaryFile, в {app} отдельным файлом не копируется (код уже
+; --- едет в dist\db); извлекается во {tmp} ПОД ИМЕНЕМ .mjs до остановки
+; --- службы, чтобы обновить БД старой версии инструментом из payload.
+; --- DestName обязателен: вне пакета @etn/server Node считал бы .js CommonJS.
+; --- Без Check: извлечение не зависит от выбранных компонентов (бэкап бывает
+; --- только при обновлении сервера, но файл нужен и тестовому прогону).
+Source: "{#ServerPayload}\dist\db\db-backup.js"; DestName: "etn-db-tool.mjs"; Flags: dontcopy noencryption
 #endif
 
 #ifdef HaveNodePayload
@@ -448,8 +730,8 @@ Source: "{#ClientPayload}\*"; DestDir: "{#ClientUserDir}"; Flags: ignoreversion 
 ; «Запустить клиент». Это единственный путь для административного режима, где
 ; автозапуск клиента запрещён (профиль SMAA, 2dd215f7).
 #ifdef HaveClientPayload
-Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientMachine
-Name: "{#ShortcutUserMenuDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Comment: "ETN — графовые базы знаний"; Check: InstallClientUser
+Name: "{#ShortcutMenuDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Comment: "{cm:EtnShortcutComment}"; Check: InstallClientMachine
+Name: "{#ShortcutUserMenuDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Comment: "{cm:EtnShortcutComment}"; Check: InstallClientUser
 Name: "{#ShortcutDesktopDir}\ETN"; Filename: "{app}\client\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{app}\client"; IconFilename: "{app}\client\ETN.exe"; Check: InstallClientMachine
 Name: "{#ShortcutUserDesktopDir}\ETN"; Filename: "{#ClientUserDir}\ETN.exe"; Parameters: "{code:ClientConnectParamsConst}"; WorkingDir: "{#ClientUserDir}"; IconFilename: "{#ClientUserDir}\ETN.exe"; Check: InstallClientUser
 #endif
@@ -480,29 +762,53 @@ const
   MIN_FREE_SPACE_BYTES = 314572800;
   MIN_PORT = 1;
   MAX_PORT = 65535;
-  { Бэкап БД перед обновлением (ce3ab836): хранятся три последних архива. }
-  BACKUPS_KEEP = 3;
-  { Длина имени каталога архива: YYYYMMDD-HHmmss (15 символов). }
+  { Снимок отката (bb063ac3): имя каталога — YYYYMMDD-HHmmss (15 символов).
+    Ротация архивов БД (три последних) выполняется CLI сервера (3acd9c3c),
+    в Pascal её больше нет. }
   BACKUP_DIR_NAME_LEN = 15;
+  { Инструмент бэкапа/восстановления БД из payload: имя после
+    ExtractTemporaryFile (DestName в [Files]) и имя файла отчёта key=value. }
+  DB_TOOL_FILENAME = 'etn-db-tool.mjs';
+  DB_TOOL_REPORT_NAME = 'etn-backup-report.txt';
   { Win32-коды отказа элевации (ошибка 2dd215f7): в журнал пишется код
     ShellExec, чтобы отличить отмену UAC от отказа окружения. }
   ERROR_ACCESS_DENIED = 5;
   ERROR_ELEVATION_REQUIRED = 740;
   ERROR_CANCELLED = 1223;
-  { Остановка службы WinSW (bb063ac3): после etn-service.exe stop состояние
-    опрашивается раз в 250 мс, бюджет — 60 с (stoptimeout в шаблоне службы
-    30 с, остальное — запас на медленную остановку node.exe). }
+  { Остановка службы WinSW (34f8e315): после etn-service.exe stop состояние
+    опрашивается через etn-service.exe status раз в 500 мс; бюджет — 60 с по
+    системным часам (не суммой шагов: один вызов status — отдельный процесс
+    ~350 мс, и суммирование растянуло бы бюджет в 2–3 раза). <stoptimeout>30sec
+    в шаблоне службы — 30 с, остальное — запас на медленную остановку node.exe. }
   SERVICE_STOP_WAIT_MS = 60000;
-  { Запуск службы WinSW (8b1f5980): после etn-service.exe start ждём перехода
-    в RUNNING тем же опросом sc query. Бюджет — 60 с: Node стартует и открывает
-    порт до health-check, который идёт следующим шагом. }
-  SERVICE_START_WAIT_MS = 60000;
-  SERVICE_STOP_STEP_MS = 250;
-  { WinSW 2.12.0 при install существующей службы возвращает код
-    ERROR_SERVICE_EXISTS (1073): повторная установка не должна падать. }
+  SERVICE_STOP_STEP_MS = 500;
+  { stop на службе в переходном состоянии (StartPending/StopPending) WinSW
+    2.12.0 возвращает 1061: StartPending может перейти в Running, поэтому stop
+    повторяется с этим интервалом в пределах общего бюджета. }
+  SERVICE_STOP_RETRY_MS = 1000;
+  { Коды Win32, которые WinSW отдаёт кодом возврата. Разбор — в
+    ServiceCommandResult: 1073/1056 — успех, 1060/1072 от stop — отказ. }
   ERROR_SERVICE_EXISTS = 1073;
+  ERROR_SERVICE_ALREADY_RUNNING = 1056;
+  ERROR_SERVICE_CANNOT_ACCEPT_CTRL = 1061;
+  ERROR_SERVICE_NOT_ACTIVE = 1062;
+  ERROR_SERVICE_DISABLED = 1058;
+  ERROR_SERVICE_DOES_NOT_EXIST = 1060;
+  ERROR_SERVICE_MARKED_FOR_DELETE = 1072;
+  { Состояние службы по выводу etn-service.exe status (WinSW 2.12.0):
+    Started — любое не-Stopped состояние (Running/StartPending/StopPending),
+    Stopped — только полностью остановлена, NonExistent — службы нет. }
+  SERVICE_STATE_STOPPED = 0;
+  SERVICE_STATE_STARTED = 1;
+  SERVICE_STATE_MISSING = 2;
+  SERVICE_STATE_UNKNOWN = 3;
   { Health-check после запуска новой версии (требование 0a79d9de): бюджет
-    60 с, повтор каждые 2 с. Тело ответа разбирается, а не только код. }
+    60 с ФАКТИЧЕСКОГО времени, повтор каждые 2 с; прежние 60 с ожидания
+    RUNNING не нужны — готовность подтверждает только health-check. Тело
+    ответа разбирается, а не только код. 34f8e315 временно держал 120 с,
+    чтобы сохранить прежний суммарный бюджет; a1ea1d40 вернул 60 с по
+    требованию: health идёт после listen, миграция — только _system.db,
+    markdown-переиндексация может быть дольше — отдельный риск. }
   HEALTH_WAIT_MS = 60000;
   HEALTH_STEP_MS = 2000;
   { Ветка реестра с записями «Программы и компоненты»: по ней ищется старый
@@ -512,14 +818,9 @@ const
     запись прежней 32-битной установки могла остаться и там. }
   UNINSTALL_KEY_WOW = 'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall';
   { Имя ключа записи деинсталляции Inno: AppId из [Setup] с суффиксом _is1
-    (в реестре AppId записан с одной ведущей скобкой). У тестовой сборки с
-    деинсталлятором свой AppId — продуктовую запись она не трогает.
+    (в реестре AppId записан с одной ведущей скобкой).
     Ошибка a7394117: по этому ключу удаляется запись прежней области реестра. }
-#ifdef TestUninstallable
-  UNINSTALL_KEY_NAME = '{#TestUninstallKey}';
-#else
   UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';
-#endif
   { Ожидание исчезновения записи Uninstall после удаления старого клиента:
     деинсталлятор NSIS с _?= завершается синхронно, но старая версия могла
     проигнорировать параметр и удалять в фоне — запись исчезает с задержкой.
@@ -536,6 +837,16 @@ const
   CLIENT_CLOSE_WAIT_MS = 30000;
   CLIENT_KILL_WAIT_MS = 15000;
   CLIENT_POLL_STEP_MS = 250;
+  { Строки экрана компонентов (задача c4b68d78): два checkbox уровня 0 и
+    group-строки уровня 1 под ними. Строка области клиента (6) —
+    необязательная: удаляется и добавляется последней, индексы 0–5 стабильны. }
+  COMP_ITEM_SERVER = 0;
+  COMP_ITEM_SERVER_STATUS = 1;
+  COMP_ITEM_SERVER_DESC = 2;
+  COMP_ITEM_CLIENT = 3;
+  COMP_ITEM_CLIENT_STATUS = 4;
+  COMP_ITEM_CLIENT_DESC = 5;
+  COMP_ITEM_CLIENT_SCOPE = 6;
 
 var
   { Режим запуска }
@@ -545,8 +856,7 @@ var
   GIsElevated: Boolean;
   { Административный режим установки: установщик работает «для всех
     пользователей» (запуск от имени администратора или /ALLUSERS). Права даёт
-    элевированный процесс; Inno не перезапускает мастер (ошибка aa5af30c).
-    В TestMode моделируется /TESTADMINMODE=1. }
+    элевированный процесс; Inno не перезапускает мастер (ошибка aa5af30c). }
   GAdminInstallMode: Boolean;
   { Неадминистративный режим («только для меня»): сервер и клиент «для всех»
     недоступны, ставится только клиент в профиль пользователя (сценарий n2). }
@@ -555,142 +865,10 @@ var
     Administrator Protection элевированный процесс работает в отдельном
     профиле (SMAA), и «клиент для меня» попал бы в чужой профиль. }
   GAdminMachineScope: Boolean;
-  GTestMode: Boolean;
-  GTestHealth: String;
-  GTestElevated: String;
-  GTestService: String;
-  GTestState: String;
-  GTestSelect: String;
-  GTestRecord: String;
-  GTestParams: String;
-  GTestGui: String;
-  { /TESTLAYOUT=1 (ошибка 860def0d): снять раскладку экранов без окон — тест
-    проверяет, что подписи не обрезаны (Height не «дельта» AdjustHeight) и не
-    налезают друг на друга. }
-  GTestLayout: String;
-  { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
-  GTestInit: String;
-  GTestNodeExe: String;
-  GTestLogin: String;
-  GTestKeyState: String;
-  GTestFailAfterInit: String;
-  GTestKeyAck: String;
-  GTestKeyClose: String;
-  { Тестовые хуки задачи 9b310991 (только в тестовой сборке): подмена каталога
-    данных, порта, порога свободного места, режима брандмауэра и прогон
-    предпроверок без окон. }
-  GTestDataDir: String;
-  GTestPort: String;
-  GTestMinFree: String;
-  GTestFirewall: String;
-  GTestPrecheck: String;
-  GTestResult: String;
-  { Хук задачи ce3ab836: прямой прогон бэкапа БД без фаз установки
-    (/TESTBACKUP=1|skip); объявлен всегда, сбрасывается в InitializeSetup. }
-  GTestBackup: String;
-  { Хук задачи 112642a4: подмена найденного старого NSIS-клиента
-    (/TESTLEGACY=<версия>|machine:<версия>); в обычной сборке кода нет. }
-  GTestLegacy: String;
-  { Хук 112642a4 (дефект приёмки): подставной деинсталлятор старого клиента.
-    /TESTLEGACYCMD=<exe + аргументы> — вместо реестра и настоящего NSIS-
-    деинсталлятора запускается эта команда; /TESTLEGACYSTUCK=<мс> — запись
-    Uninstall считается неудалённой указанное время после запуска;
-    /TESTLEGACYWAIT=<мс> — бюджет ожидания её исчезновения;
-    /TESTLEGACYARGS=1 — вывести вычисленные аргументы деинсталлятора
-    (проверка _?= на пути с пробелами). }
-  GTestLegacyCmd: String;
-  GTestLegacyStuck: String;
-  GTestLegacyWait: String;
-  GTestLegacyArgs: String;
-  { Хуки задачи 98ad5eec: модель запущенного клиента без реальных процессов и
-    реальная проверка с фильтром по каталогу. /TESTCLIENTPIDS=<pid,...> —
-    процессы считаются запущенными; /TESTCLIENTGONE=<мс> — через сколько
-    «выйдут» после мягкого закрытия (по умолчанию сразу); /TESTCLIENTSOFT=none
-    — мягкое закрытие не помогает; /TESTCLIENTFORCE=fail — принудительное не
-    помогает (код 20); /TESTCLIENTWAIT=<мс> — бюджет ожидания мягкого
-    закрытия; /TESTCLIENTREAL=1 — настоящий опрос Get-Process и taskkill,
-    /TESTCLIENTPATH=<каталог> — только процессы из этого каталога (по
-    умолчанию — каталог программы тестового прогона, чтобы прогон не трогал
-    клиент пользователя). }
-  GTestClientPids: String;
-  GTestClientGone: String;
-  GTestClientSoft: String;
-  GTestClientForce: String;
-  GTestClientWait: String;
-  GTestClientReal: String;
-  GTestClientPath: String;
-  { Состояние модели: процесс ещё жив, мягкое закрытие уже запрошено и момент
-    «выхода» после него. }
-  GTestClientRunning: Boolean;
-  GTestClientSoftIssued: Boolean;
-  GTestClientGoneAt: Integer;
   { Пользователь отказался закрывать клиент (отличает отказ от технической
     неудачи: техническую неудачу можно устранить и повторить установку,
     отказ — нет). }
   GClientCloseRefused: Boolean;
-  { /TESTUSERINSTALL=1 — прогон установки клиента «только для меня» без окон:
-    снимает silent-термин для проверки копирования неэлевированной фазой
-    (silent-контракт клиент не ставит). }
-  GTestUserInstall: String;
-  { Хук ошибки 0f8dd0f3: /TESTCONNECTPARAMS=1 печатает в журнал параметры
-    подключения, которые установщик передаст клиенту при «Запустить клиент»
-    (проверка без живого клиента и без окон). }
-  GTestConnectParams: String;
-  { Хук 2dd215f7: /TESTADMINMODE=1 моделирует административный режим установки
-    без настоящей элевации (проверка «клиент только для всех»); без него
-    тестовая сборка работает как неадминистративный режим «только для меня». }
-  GTestAdminMode: String;
-  { Ошибка a7394117: /TESTINNOADMINMODE=1 моделирует административный режим
-    самого Inno (/ALLUSERS): запись деинсталляции он пишет в HKLM; без хука
-    тестовая сборка (PrivilegesRequired=lowest) пишет её в HKCU.
-    /TESTUNINSTROOT=<подключ> уводит машинную область записи в песочницу HKCU:
-    прав на настоящий HKLM в прогоне нет. Пользовательская область остаётся
-    настоящим ключом Inno — так проверяется удаление оставшейся записи. }
-  GTestInnoAdminMode: String;
-  GTestUninstallRoot: String;
-  { /TESTUSERONLYMODE=1 — явная проверка неадминистративного режима в тестовой
-    сборке: сервер недоступен, ставится только клиент «для меня». }
-  GTestUserOnlyMode: String;
-  { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
-    CIM-запроса и PID, который считается PID службы (проверка потомков). }
-  GTestServiceName: String;
-  GTestOwnServicePid: String;
-  { 1dddac77: имитация неизвестного отказа пробного bind в запасной ветке —
-    проверка перехода в статус 2 (fail-closed, код 20 с причиной). }
-  GTestPortBindFail: String;
-  { 1dddac77: имитация недоступной TCP-таблицы Windows (сборка без перечисления
-    слушателей) и отсутствия службы ETN — проверка ветки «своя служба жива,
-    таблица сломана» без реальной аномалии ОС. }
-  GTestListenerTableOff: String;
-  GTestNoService: String;
-  { Тестовые хуки bb063ac3: служба и health-check без реальной службы Windows
-    и без настоящего сервера — подмена исполняемого файла службы, её состояния
-    и команд, базового URL health-check, бюджетов ожидания и сбоя отката. }
-  GTestServiceCmd: String;
-  GTestServiceState: String;
-  GTestServiceStop: String;
-  GTestServiceStart: String;
-  GTestServiceWait: String;
-  { Хуки 8b1f5980: регистрация и снятие службы без настоящей службы Windows —
-    сбой install/uninstall, отказ уже существующей службы (1073), прямой прогон
-    снятия при удалении, а также смоделированное состояние «зарегистрирована/
-    работает», которое меняют команды install/uninstall/start/stop. }
-  GTestServiceInstall: String;
-  GTestServiceUninstall: String;
-  GTestUninstallService: String;
-  GTestServiceRegistered: Boolean;
-  GTestServiceRunning: Boolean;
-  { /TESTSERVICEREALFILE=1 — модель службы дополнительно проверяет наличие
-    etn-service.exe, как продуктовая ветка RunServiceCommand: проба настоящего
-    деинсталлятора ловит путь, вычисленный из пустого GServerDir (приёмка
-    4151edf6). /TESTSERVICESTART=pending|<pending-stuck> — смоделированный
-    START_PENDING в первых опросах состояния (2) или до таймаута. }
-  GTestServiceRealFile: String;
-  GTestServicePendingPolls: Integer;
-  GTestHealthUrl: String;
-  GTestHealthWait: String;
-  GTestHealthStep: String;
-  GTestRollback: String;
 
   { Первичная инициализация и ключ }
   GAdminLogin: String;
@@ -710,9 +888,9 @@ var
   GLogPath: String;
   GInstallJsonPath: String;
   GInstallJsonText: String;
-  { Файл параметров тестовой привилегированной фазы: пишется /TESTPARAMS и
-    читается /PRIVILEGEDPHASE. GUI-установка его не использует — режим и выбор
-    компонентов этот же процесс уже знает. }
+  { Файл параметров привилегированной фазы: путь передаётся через /PARAMS.
+    GUI-установка его не использует — режим и выбор компонентов этот же
+    процесс уже знает. }
   GParamsPath: String;
 
   { Выбор компонентов и параметры }
@@ -725,6 +903,10 @@ var
   GServerMode: String;
   GServerHost: String;
   GServerPort: String;
+  { Порт занят чужим приложением (ServerPortStatus = 1). Флаг ставит
+    CheckServerEnvironment на каждом вызове: по нему экран параметров
+    подсказывает свободный порт, не разбирая текст причины (задача 4dc117f5). }
+  GPortBusy: Boolean;
   GServerFirewall: Boolean;
   { netsh не создал правило брандмауэра: установка продолжается, но на
     финальном экране GUI показывается предупреждение (в silent — только
@@ -760,36 +942,45 @@ var
 
   { Результат }
   GExitCode: Integer;
-  { Архив БД, созданный последним вызовом CreateDatabaseBackup ('' — архива
-    нет). Вызывающему нужен путь для сообщения об отказе/откате. Откат БД
-    восстанавливает только из него: LatestBackupDir — архив прошлых
+  { Архив БД (ZIP), созданный последним вызовом CreateDatabaseBackup ('' —
+    архива нет). Вызывающему нужен путь для сообщения об отказе/откате. Откат
+    БД восстанавливает только из него: LatestBackupDir — архив прошлых
     обновлений, для автоматического отката он не годится (bb063ac3). }
   GLastBackupDir: String;
   { Причина неудачного бэкапа — для сообщения (сценарий bc7cc846: причина,
-    требуемый объём, путь к журналу). }
+    требуемый объём, путь к журналу). Текст причины берётся из отчёта
+    инструмента (key=value, ключ error). }
   GBackupReason: String;
+  { Путь к извлечённому во временный каталог etn-db-tool.mjs ('' — ещё не
+    извлекался): один инструмент на backup и restore этого запуска. }
+  GDatabaseToolPath: String;
   { Снимок отката текущего обновления (.install\rollback\<timestamp>) и
     последняя причина сбоя health-check для журнала и экрана ошибки. }
   GLastRollbackDir: String;
   GHealthReason: String;
+  { Код возврата и текст последней команды службы: 1061/1062 (переход) нужны
+    вызывающему для повтора stop, 1072 после uninstall — для подтверждения
+    через status; текст причины — в сообщение и журнал (34f8e315). }
+  GLastServiceCode: Integer;
+  GLastServiceError: String;
 
-  { Экран компонентов }
+  { Экран компонентов: список TNewCheckListBox (задача c4b68d78) и
+    фиксированный нижний блок. Два checkbox уровня 0 (сервер и клиент), под
+    каждым group-строки статуса и описания уровня 1 — TNewCheckListBox переносит
+    caption по словам, а subitem остаётся одной строкой. }
   GComponentsPage: TWizardPage;
-  GServerCheck: TNewCheckBox;
-  GServerStateLabel: TNewStaticText;
-  { Что такое сервер и что такое клиент, чем области установки клиента
-    отличаются (договорённость ТП; ошибка 860def0d, п.2). }
-  GServerHintLabel: TNewStaticText;
+  GComponentsList: TNewCheckListBox;
+  { Последняя строка списка (область клиента) сейчас существует: она
+    удаляется/добавляется, индексы 0–5 при этом не сдвигаются. }
+  GComponentsScopeRow: Boolean;
+  { Ссылка на другие варианты установки сервера — в нижнем блоке, всегда
+    видима (спека: «Другие варианты установки сервера (удалённый сервер,
+    Docker)»). }
   GServerAltLink: TNewLinkLabel;
-  GClientCheck: TNewCheckBox;
-  GClientStateLabel: TNewStaticText;
-  GClientHintLabel: TNewStaticText;
-  GScopeHintLabel: TNewStaticText;
-  { Область клиента: выбора в мастере нет (её задают фактические права
-    процесса), при обновлении показывается текст выбранной области (ea8e223a,
-    4a66b7a5; замечание приёмки 98ad5eec). }
-  GScopeFixedLabel: TNewStaticText;
+  { Каталог данных сервера — виден, когда сервер выбран или уже установлен. }
   GDataNoteLabel: TNewStaticText;
+  { Причина неактивности «Далее» — внизу экрана, с префиксом «Далее
+    недоступна: » (одна функция ComponentsReasonText — экран и журнал). }
   GReasonLabel: TNewStaticText;
   { Лицензия MIT (112642a4): чекбокс и ссылка на локальный текст; показываются
     только при первой установке (нет ни сервера, ни клиента). }
@@ -800,9 +991,8 @@ var
     закрытия клиента, ошибка удаления старого клиента): показывается вместо
     обычной причины и сбрасывается при изменении выбора. }
   GComponentsNotice: String;
-  { Экран компонентов построен и начальный выбор перенесён в контролы. До этого
-    обработчики Checked (Inno вызывает OnClick и при программной установке
-    Checked) не должны читать ещё не заполненные контролы (ошибка 860def0d). }
+  { Экран компонентов построен и начальный выбор перенесён в список. До этого
+    обработчики не должны читать ещё не заполненный список. }
   GComponentsReady: Boolean;
   GDowngradeWarned: Boolean;
 
@@ -826,10 +1016,15 @@ var
   GLanIp: String;
   GLanIpChecked: Boolean;
 
-  { Старый клиент, установленный NSIS-установщиком electron-builder. }
+  { Старый клиент, установленный NSIS-установщиком electron-builder: найденная
+    запись (команда деинсталляции, корень и полный путь ключа — по ним потом
+    проверяется, что запись исчезла). }
   GLegacyClientFound: Boolean;
   GLegacyClientVersion: String;
   GLegacyClientMachine: Boolean;
+  GLegacyUninstallCmd: String;
+  GLegacyRoot: Integer;
+  GLegacyKey: String;
 
   { Экраны администратора и ключа }
   GAdminPage: TWizardPage;
@@ -861,8 +1056,8 @@ var
   { Обновление поверх установки: порт, хост и режим фиксированы install.json. }
   GParamsLocked: Boolean;
   { Строки журнала, записанные до создания журнала (чтение файла параметров
-    тестовой привилегированной фазы идёт раньше: от него зависит выбор
-    компонентов и место журнала). Выводятся сразу после InitLog. }
+    привилегированной фазы идёт раньше: от него зависит выбор компонентов и
+    место журнала). Выводятся сразу после InitLog. }
   GDeferredLog: String;
   { Файл причины отказа предусловия: привилегированная фаза (/PRIVILEGEDPHASE)
     пишет сюда причину, а вызывающий её процесс читает и показывает в
@@ -1070,14 +1265,10 @@ end;
 
 { Журнал установщика по контракту — %ProgramData%\ETN\logs, но этот каталог
   создаётся только серверной установкой: установка только клиента серверных
-  каталогов не создаёт (9b310991). В тестовой сборке каталог теста — песочница,
-  журнал пишется туда всегда (кроме подмены /TESTDATADIR). }
+  каталогов не создаёт (9b310991). }
 function DataDirLogAllowed: Boolean;
 begin
   Result := GServerSelected or GServerOnly or (GServerState <> 'not-installed');
-#ifdef TestMode
-  if GTestDataDir = '' then Result := True;
-#endif
 end;
 
 procedure InitLog;
@@ -1358,27 +1549,15 @@ end;
   один и тот же. }
 function GetDefaultAppDir(Param: String): String;
 begin
-#ifdef TestMode
-  { В тестовой сборке каталог изолирован и задан build.ps1; функция в этой
-    ветке не участвует в выборе режима. }
-  Result := ExpandConstant('{#AppDir}');
-#else
   if IsAdmin then
     Result := ExpandConstant('{commonpf}\ETN')
   else
     Result := ExpandConstant('{localappdata}\Programs\ETN');
-#endif
 end;
 
 function MachineAppDir: String;
 begin
-#ifdef TestMode
-  { В тестовой сборке реальная машинная установка на этой машине не должна
-    влиять на состояние: каталоги изолированы. }
-  Result := '';
-#else
   Result := ExpandConstant('{commonpf}\ETN');
-#endif
 end;
 
 function ServerFilesAt(const Dir: String): Boolean;
@@ -1468,14 +1647,10 @@ end;
   диагностики, а не повод ставить вторую копию молча). *)
 function ClientInstallPath: String;
 begin
-#ifdef TestMode
-  Result := GServerDir;
-#else
   if GClientScopeUser then
     Result := UserClientDir
   else
     Result := ExpandConstant('{commonpf}') + '\ETN';
-#endif
 end;
 
 function ClientFilesPresent: Boolean;
@@ -1491,16 +1666,12 @@ end;
 
 { Запись установки Inno: раздел машины (HKLM/HKLM64) пишет сам установщик
   в административном режиме; запись HKCU относится к клиенту «только для меня»
-  и о сервере ничего не говорит. В тестовой сборке реестр не читается. }
+  и о сервере ничего не говорит. }
 function MachineInstallRecordPresent: Boolean;
 var
   Key: String;
 begin
   Result := False;
-#ifdef TestMode
-  if GTestRecord = '1' then Result := True;
-  Exit;
-#endif
   Key := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
   Result := RegKeyExists(HKLM, Key) or RegKeyExists(HKLM64, Key);
 end;
@@ -1644,15 +1815,6 @@ begin
   Result := 0;
   Base := '';
   RootName := 'HKU';
-#ifdef TestMode
-  { Песочница теста: профили моделируются поддеревом HKCU\<root>\Profiles,
-    реальные HKU в прогоне без прав администратора не читаются. }
-  if GTestUninstallRoot <> '' then
-  begin
-    Base := GTestUninstallRoot + '\Profiles';
-    RootName := 'HKCU\' + Base;
-  end;
-#endif
   if Base <> '' then
   begin
     if not RegGetSubkeyNames(HKCU, Base, Names) then Exit;
@@ -1687,10 +1849,8 @@ begin
 end;
 
 { Удаляет запись деинсталляции в машинной (HKLM) или пользовательской (HKCU)
-  области — в той, куда Inno её НЕ записал (ошибка a7394117). В тестовой
-  сборке машинная область моделируется поддеревом HKCU: прав на HKLM в прогоне
-  silent-codes.ps1 нет, а пользовательская область остаётся настоящим ключом
-  Inno. Возвращает число удалённых ключей. }
+  области — в той, куда Inno её НЕ записал (ошибка a7394117).
+  Возвращает число удалённых ключей. }
 function DeleteForeignUninstallRecord(const MachineScope: Boolean): Integer;
 var
   SubKey: String;
@@ -1699,14 +1859,6 @@ begin
   SubKey := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
   if MachineScope then
   begin
-#ifdef TestMode
-    if GTestUninstallRoot <> '' then
-    begin
-      Result := DeleteUninstallRecordAt(HKCU, 'HKCU',
-        GTestUninstallRoot + '\Machine\' + UNINSTALL_KEY_NAME);
-      Exit;
-    end;
-#endif
     { HKLM в 32- и 64-битном представлении — разные ветки реестра: прежняя
       установка могла записать запись в любую из них. }
     Result := DeleteUninstallRecordAt(HKLM64, 'HKLM64', SubKey);
@@ -1734,20 +1886,10 @@ procedure RemoveDuplicateUninstallRecord;
 var
   ForeignMachineScope: Boolean;
 begin
-#ifdef TestMode
-  { Тестовая сборка без деинсталлятора (Uninstallable=no) запись не создаёт,
-    а её AppId — продуктовый: удалять по нему запись на машине нельзя. }
-  #ifndef TestUninstallable
-  Exit;
-  #endif
-#endif
   if not GAdminInstallMode then Exit;
   { IsAdminInstallMode: Inno в административном режиме (/ALLUSERS) — запись
     HKLM, значит удаляем HKCU; иначе (элевированный GUI-запуск) — наоборот. }
   ForeignMachineScope := not IsAdminInstallMode;
-#ifdef TestMode
-  if GTestInnoAdminMode = '1' then ForeignMachineScope := False;
-#endif
   DeleteForeignUninstallRecord(ForeignMachineScope);
 end;
 
@@ -1844,31 +1986,45 @@ end;
 function ServerStateText: String;
 begin
   if GServerState = 'not-installed' then
-    Result := 'не установлен'
+    Result := CustomMessage('EtnStateNotInstalled')
   else if GServerState = 'adopt' then
-    Result := 'найдены существующие данные (' + GDataDir +
-      ') — будут подключены без изменения данных'
+    Result := FmtMessage(CustomMessage('EtnServerStateAdopt'), [GDataDir])
   else if GServerState = 'installed' then
-    Result := 'установлен ' + ServerVersionText + ' — актуальная версия'
+    Result := FmtMessage(CustomMessage('EtnServerStateInstalled'), [ServerVersionText])
   else if GServerState = 'update-available' then
-    Result := 'установлен ' + GInstalledVersion + ' — доступно обновление до ' + GProductVersion
+    Result := FmtMessage(CustomMessage('EtnServerStateUpdate'), [GInstalledVersion,
+      GProductVersion])
   else if GServerState = 'repair' then
   begin
     if GInstallJsonValid then
-      Result := 'установлен ' + GInstalledVersion + ' — переустановка (repair)'
+      Result := FmtMessage(CustomMessage('EtnServerStateRepair'), [GInstalledVersion])
     else if GServerFilesPresent then
-      Result := 'файлы найдены без записи установки — установка будет восстановлена (repair)'
+      Result := CustomMessage('EtnServerStateRepairNoRecord')
     else
-      Result := 'установлен частично — будет восстановлен (repair)';
+      Result := CustomMessage('EtnServerStateRepairPartial');
   end
   else
-    Result := 'установлена более новая версия ' + ServerVersionText +
-      ' — понижение запрещено';
+    Result := FmtMessage(CustomMessage('EtnServerStateDowngrade'), [ServerVersionText]);
 end;
 
 function ClientStateText: String;
 begin
-  if GClientState = 'installed' then
+  { Старый NSIS-клиент проверяется первым: его файлы тоже дают
+    GClientState = 'installed', и ветка «перед установкой он будет удалён»
+    иначе недостижима (дефект 124203d0). }
+  if GLegacyClientFound and GClientSelected then
+  begin
+    { Компактно: длинный текст выталкивал нижние подписи за поверхность
+      страницы (ошибка 860def0d, п.1). В режиме «только для меня» машинный
+      старый клиент не удаляется — не обещаем этого (2dd215f7). }
+    if GUserOnlyMode and GLegacyClientMachine then
+      Result := FmtMessage(CustomMessage('EtnLegacyClientUserOnly'), [GLegacyClientVersion,
+        IfStr(GLegacyClientMachine, CustomMessage('EtnLegacyMachineSuffix'), '')])
+    else
+      Result := FmtMessage(CustomMessage('EtnLegacyClientWillRemove'), [GLegacyClientVersion,
+        IfStr(GLegacyClientMachine, CustomMessage('EtnLegacyMachineSuffix'), '')]);
+  end
+  else if GClientState = 'installed' then
   begin
     if GClientSelected then
     begin
@@ -1877,10 +2033,9 @@ begin
         верификатора п.1) — обещать «замену» было бы неправдой. }
       if GAdminMachineScope and GUserClientCopyPresent and
          (not ClientMachineCopyPresent) then
-        Result := 'клиент установлен в варианте «только для меня» — будет ' +
-          'добавлена копия «для всех пользователей»'
+        Result := CustomMessage('EtnClientStateUserToMachine')
       else
-        Result := 'клиент уже установлен — при обновлении он будет заменён';
+        Result := CustomMessage('EtnClientStateReplace');
     end
     else
     begin
@@ -1890,33 +2045,16 @@ begin
         Подпись обязана совпадать с причиной неактивности «Далее», иначе экран
         противоречит сам себе. }
       if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-        Result := 'клиент установлен для всех пользователей — нужны права ' +
-          'администратора'
+        Result := CustomMessage('EtnClientStateMachineNeedsAdmin')
       else
-        Result := 'клиент уже установлен; выберите клиент, чтобы заменить его';
+        Result := CustomMessage('EtnClientStateChooseToReplace');
     end;
   end
-  else if GLegacyClientFound and GClientSelected then
-  begin
-    { Компактно: длинный текст выталкивал нижние подписи за поверхность
-      страницы (ошибка 860def0d, п.1). В режиме «только для меня» машинный
-      старый клиент не удаляется — не обещаем этого (2dd215f7). }
-    Result := 'найден клиент ETN ' + GLegacyClientVersion +
-      ' от старого установщика (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') + ')';
-    if GUserOnlyMode and GLegacyClientMachine then
-      Result := Result + ' — для его удаления нужны права администратора; ' +
-        'новый клиент поставится в ваш профиль'
-    else
-      Result := Result + ' — перед установкой он будет удалён';
-  end
   else if GLegacyClientFound then
-    Result := 'найден клиент ETN ' + GLegacyClientVersion +
-      ' от старого установщика (NSIS' +
-      IfStr(GLegacyClientMachine, ', для всех пользователей', '') +
-      '); при установке только сервера он не затрагивается'
+    Result := FmtMessage(CustomMessage('EtnLegacyClientServerOnly'), [GLegacyClientVersion,
+      IfStr(GLegacyClientMachine, CustomMessage('EtnLegacyMachineSuffix'), '')])
   else
-    Result := 'не установлен';
+    Result := CustomMessage('EtnStateNotInstalled');
 end;
 
 { Область установки клиента при обновлении фиксирована: менять её нельзя
@@ -1932,20 +2070,16 @@ function ClientScopeText: String;
 begin
   if GAdminMachineScope then
   begin
-    Result := 'Установщик запущен от имени администратора: клиент ставится ' +
-      'для всех пользователей. Подключение к локальному серверу уже ' +
-      'предзаполнено в ярлыке клиента.';
+    Result := CustomMessage('EtnClientScopeAdmin');
     { Копия «только для меня» в профиле не заменяется (файлы user-области в
       admin-режиме не копируются): говорим прямо, иначе мастер обещает
       «замену», а на диске остаются две копии (2dd215f7, п.1). }
     if GUserClientCopyPresent then
     begin
       if ClientMachineCopyPresent then
-        Result := Result + ' Найден клиент «только для меня»: он останется в ' +
-          'профиле, обновляется копия «для всех пользователей».'
+        Result := Result + ' ' + CustomMessage('EtnClientScopeUserCopyUpdate')
       else
-        Result := Result + ' Найден клиент «только для меня»: он останется в ' +
-          'профиле, а рядом будет установлена копия «для всех пользователей».';
+        Result := Result + ' ' + CustomMessage('EtnClientScopeUserCopyInstall');
     end;
     Exit;
   end;
@@ -1955,19 +2089,14 @@ begin
     клиент «для всех» ставятся запуском установщика от имени администратора. }
   if GUserOnlyMode and (GInstalledClientScope = 'machine') then
   begin
-    Result := 'Клиент установлен для всех пользователей: его обновление ' +
-      'требует прав администратора. Закройте установщик и запустите его от ' +
-      'имени администратора (правый клик → Запуск от имени администратора).';
+    Result := CustomMessage('EtnClientScopeMachineNeedsAdmin');
     Exit;
   end;
   { Режим «только для меня»: клиент в профиле обновляется на месте; другой
     вариант — запуск установщика от имени администратора (см. выше). }
   if GUserOnlyMode then
   begin
-    Result := 'Клиент установлен в варианте «только для меня» — обновление ' +
-      'продолжится в ваш профиль. Чтобы поставить клиент «для всех ' +
-      'пользователей», закройте установщик и запустите его от имени ' +
-      'администратора (правый клик → Запуск от имени администратора).';
+    Result := CustomMessage('EtnClientScopeUserOnlyUpdate');
     Exit;
   end;
   { Остальные состояния (тестовый прогон без моделируемого режима): та же
@@ -1975,13 +2104,9 @@ begin
     меня», — сменить вариант можно повторным запуском с нужными правами.
     «Удалите клиента и установите заново» больше не советуем. }
   if GClientScopeUser then
-    Result := 'Клиент установлен в варианте «только для меня». Чтобы поставить ' +
-      'клиент «для всех пользователей», закройте установщик и запустите его ' +
-      'от имени администратора (правый клик → Запуск от имени администратора).'
+    Result := CustomMessage('EtnClientScopeUser')
   else
-    Result := 'Клиент установлен в варианте «для всех пользователей». Чтобы ' +
-      'поставить клиент «только для меня», запустите установщик обычным ' +
-      'двойным кликом (без прав администратора).';
+    Result := CustomMessage('EtnClientScopeMachine');
 end;
 
 { Понятное название режима запуска сервера (ошибка 860def0d, n6): «service» и
@@ -1990,9 +2115,9 @@ end;
 function ServerModeText(const Mode: String): String;
 begin
   if Mode = 'service' then
-    Result := 'автоматический запуск в режиме службы Windows'
+    Result := CustomMessage('EtnModeService')
   else if Mode = 'app' then
-    Result := 'ручной запуск сервера как обычного приложения'
+    Result := CustomMessage('EtnModeApp')
   else
     Result := Mode;
 end;
@@ -2006,15 +2131,15 @@ end;
 function ShellErrorText(const Code: Integer): String;
 begin
   if Code = ERROR_CANCELLED then
-    Result := 'код 1223: запрос UAC отклонён (ERROR_CANCELLED)'
+    Result := CustomMessage('EtnShellUacCancelled')
   else if Code = ERROR_ELEVATION_REQUIRED then
-    Result := 'код 740: требуются права администратора (ERROR_ELEVATION_REQUIRED)'
+    Result := CustomMessage('EtnShellElevationRequired')
   else if Code = ERROR_ACCESS_DENIED then
-    Result := 'код 5: отказано в доступе (ERROR_ACCESS_DENIED)'
+    Result := CustomMessage('EtnShellAccessDenied')
   else if Code = 0 then
-    Result := 'код не сообщён'
+    Result := CustomMessage('EtnShellCodeUnknown')
   else
-    Result := 'Win32-код ' + IntToStr(Code);
+    Result := FmtMessage(CustomMessage('EtnShellWin32Code'), [IntToStr(Code)]);
 end;
 
 { Лицензия запрашивается только при первой установке: на машине нет ни
@@ -2037,8 +2162,7 @@ begin
     ExtractTemporaryFile('LICENSE');
   except
     LogLine('ERROR', 'Не удалось извлечь текст лицензии LICENSE из установщика');
-    SuppressibleMsgBox('Не удалось открыть текст лицензии. Он находится в файле ' +
-      'LICENSE рядом с установщиком.', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox(CustomMessage('EtnLicenseOpenFailed'), mbError, MB_OK, IDOK);
     Exit;
   end;
   if not ShellExec('open', ExpandConstant('{tmp}\LICENSE'), '', '',
@@ -2046,406 +2170,137 @@ begin
   begin
     { Win32-код отказа — в журнал: диагностика проблем оболочки (2dd215f7). }
     LogLine('ERROR', 'ShellExec(open, LICENSE) не удался: ' + ShellErrorText(Code));
-    SuppressibleMsgBox('Не удалось открыть текст лицензии во временном каталоге: ' +
-      ExpandConstant('{tmp}\LICENSE'), mbError, MB_OK, IDOK);
+    SuppressibleMsgBox(
+      FmtMessage(CustomMessage('EtnLicenseTempOpenFailed'), [ExpandConstant('{tmp}\LICENSE')]),
+      mbError, MB_OK, IDOK);
   end;
 end;
 
-{ ---------------------------------------------------------------------------
-  Старый клиент NSIS (electron-builder): обнаружение и удаление (112642a4).
-  --------------------------------------------------------------------------- }
-{ Признак записи electron-builder/NSIS: DisplayName начинается с «ETN » и
-  UninstallString указывает на «Uninstall ETN.exe». Запись самого Inno
-  (суффикс _is1) исключается: её удаляет штатный деинсталлятор. }
-function IsLegacyClientKey(const SubKeyName, DisplayName,
-  UninstallCmd: String): Boolean;
-begin
-  Result := False;
-  if Pos('_is1', SubKeyName) > 0 then Exit;
-  if Pos('ETN', DisplayName) <> 1 then Exit;
-  if Pos('Uninstall ETN.exe', UninstallCmd) <= 0 then Exit;
-  Result := True;
-end;
-
-function FindLegacyClientInRoot(const Root: Integer; const UninstallKey: String;
-  var Version, UninstallCmd, SubKeyName: String): Boolean;
+{ Старый клиент NSIS (electron-builder 0.14.x): обнаружение и удаление (112642a4). }
+{ Первый подходящий ключ в корне заполняет GLegacy* и считается найденным. }
+function FindLegacyInRoot(const Root: Integer;
+  const UninstallKey: String): Boolean;
 var
   Names: TArrayOfString;
   I: Integer;
-  Key, DisplayName, Cmd, Ver: String;
+  Key, DisplayName, Cmd: String;
 begin
   Result := False;
-  SubKeyName := '';
   if not RegGetSubkeyNames(Root, UninstallKey, Names) then Exit;
   for I := 0 to GetArrayLength(Names) - 1 do
   begin
     Key := UninstallKey + '\' + Names[I];
-    DisplayName := '';
-    Cmd := '';
     if not RegQueryStringValue(Root, Key, 'DisplayName', DisplayName) then Continue;
     if not RegQueryStringValue(Root, Key, 'UninstallString', Cmd) then Continue;
-    if not IsLegacyClientKey(Names[I], DisplayName, Cmd) then
-      Continue;
-    Ver := '';
-    RegQueryStringValue(Root, Key, 'DisplayVersion', Ver);
-    Version := Ver;
-    UninstallCmd := Cmd;
-    SubKeyName := Names[I];
+    { Запись electron-builder: «ETN …» + «Uninstall ETN.exe»; Inno (_is1) не трогаем. }
+    if (Pos('_is1', Names[I]) > 0) or (Pos('ETN', DisplayName) <> 1) or
+      (Pos('Uninstall ETN.exe', Cmd) <= 0) then Continue;
+    RegQueryStringValue(Root, Key, 'DisplayVersion', GLegacyClientVersion);
+    GLegacyUninstallCmd := Cmd;
+    GLegacyRoot := Root;
+    GLegacyKey := Key;
+    GLegacyClientMachine := (Root = HKLM64) or (Root = HKLM32);
     Result := True;
     Exit;
   end;
 end;
 
-{ Ищет старый клиент: сначала запись текущего пользователя (HKCU), затем
-  машинную (HKLM64/HKLM). IsMachine=True — запись «для всех пользователей».
-  Root и SubKeyName — где именно найдена запись: по ним удаление убеждается,
-  что после деинсталлятора она действительно исчезла (112642a4). }
-function FindLegacyClientEx(var Version, UninstallCmd: String;
-  var IsMachine: Boolean; var Root: Integer; var SubKeyName: String): Boolean;
+{ Явные корни: HKCU, HKCU+WOW6432Node, HKLM64, HKLM32 (HKLM дублировал HKLM64). }
+function FindLegacyClient: Boolean;
 begin
-  Version := '';
-  UninstallCmd := '';
-  IsMachine := False;
-  Root := 0;
-  SubKeyName := '';
-  Result := FindLegacyClientInRoot(HKCU, UNINSTALL_KEY, Version, UninstallCmd,
-    SubKeyName);
-  if Result then
-  begin
-    Root := HKCU;
-    Exit;
-  end;
-  Result := FindLegacyClientInRoot(HKLM64, UNINSTALL_KEY, Version, UninstallCmd,
-    SubKeyName);
-  if Result then
-  begin
-    Root := HKLM64;
-    IsMachine := True;
-    Exit;
-  end;
-  Result := FindLegacyClientInRoot(HKLM, UNINSTALL_KEY, Version, UninstallCmd,
-    SubKeyName);
-  if Result then
-  begin
-    Root := HKLM;
-    IsMachine := True;
-  end;
+  GLegacyClientVersion := '';
+  GLegacyUninstallCmd := '';
+  GLegacyRoot := 0;
+  GLegacyKey := '';
+  GLegacyClientMachine := False;
+  Result := FindLegacyInRoot(HKCU, UNINSTALL_KEY);
+  if not Result then Result := FindLegacyInRoot(HKCU, UNINSTALL_KEY_WOW);
+  if not Result then Result := FindLegacyInRoot(HKLM64, UNINSTALL_KEY);
+  if not Result then Result := FindLegacyInRoot(HKLM32, UNINSTALL_KEY);
 end;
 
-function FindLegacyClient(var Version, UninstallCmd: String;
-  var IsMachine: Boolean): Boolean;
-var
-  Root: Integer;
-  SubKeyName: String;
-begin
-  Result := FindLegacyClientEx(Version, UninstallCmd, IsMachine, Root, SubKeyName);
-end;
-
-{ Путь к exe из командной строки деинсталлятора: строка в кавычках или до
-  первого пробела. }
-function UninstallerExe(const Cmd: String): String;
+{ Аргументы NSIS-деинсталлятора: исходные (/currentuser|/allusers) сохраняются,
+  добавляется /S, _?=<каталог> — последним и без кавычек. Без _?= NSIS копирует
+  себя в %TEMP% и возвращает управление сразу (грабли 25343551). }
+function UninstallerArgs(const Cmd: String; var Exe: String): String;
 var
   P: Integer;
-begin
-  Result := Trim(Cmd);
-  if (Result <> '') and (Result[1] = '"') then
-  begin
-    P := Pos('"', Copy(Result, 2, Length(Result)));
-    if P > 0 then
-      Result := Copy(Result, 2, P - 1)
-    else
-      Result := Copy(Result, 2, Length(Result));
-  end
-  else
-  begin
-    P := Pos(' ', Result);
-    if P > 0 then Result := Copy(Result, 1, P - 1);
-  end;
-end;
-
-{ Аргументы деинсталлятора без пути: сохраняются (/currentuser, /allusers),
-  добавляется /S — тихий режим NSIS — и _?=<каталог деинсталлятора>.
-  Без _?= NSIS-деинсталлятор копирует себя в %TEMP%, запускает копию и сразу
-  возвращает управление: установщик продолжил бы копирование файлов, пока
-  удаление ещё идёт, и фоновый деинсталлятор снёс бы только что скопированное
-  (дефект приёмки 112642a4). _?= обязан быть последним параметром и не
-  заключается в кавычки — даже если путь содержит пробелы (документация NSIS,
-  раздел 3.2.2). }
-function UninstallerArgs(const Cmd: String): String;
-var
-  Exe: String;
   Rest: String;
 begin
-  Exe := UninstallerExe(Cmd);
-  Rest := Trim(Cmd);
-  if (Rest <> '') and (Rest[1] = '"') then
-    Rest := Trim(Copy(Rest, Length(Exe) + 3, Length(Rest)))
-  else
-    Rest := Trim(Copy(Rest, Length(Exe) + 1, Length(Rest)));
-  if Pos('/S', UpperCase(Rest)) = 0 then
-    Rest := Trim(Rest + ' /S');
+  P := Pos('Uninstall ETN.exe', Cmd);
+  Exe := RemoveQuotes(Trim(Copy(Cmd, 1, P + Length('Uninstall ETN.exe'))));
+  Rest := Trim(Copy(Cmd, P + Length('Uninstall ETN.exe') + 1, Length(Cmd)));
+  if Pos('/S', UpperCase(Rest)) = 0 then Rest := Trim(Rest + ' /S');
   Result := Rest + ' _?=' + ExtractFileDir(Exe);
 end;
 
-{ Запись Uninstall удаляемого клиента ещё существует? В тестовом режиме
-  (/TESTLEGACYSTUCK=<мс>) запись считается существующей, пока не истекло
-  заданное время ожидания: ElapsedMs — сколько уже прошло по шагам опроса.
-  Так цикл ожидания проверяется без настоящего NSIS-деинсталлятора. }
-function LegacyRecordGone(const Root: Integer; const SubKeyName: String;
-  const ElapsedMs: Integer): Boolean;
-begin
-  Result := True;
-#ifdef TestMode
-  if GTestMode and (GTestLegacyCmd <> '') then
-  begin
-    Result := ElapsedMs >= StrToIntDef(GTestLegacyStuck, 0);
-    Exit;
-  end;
-#endif
-  if Root = 0 then Exit;
-  Result := not RegKeyExists(Root, UNINSTALL_KEY + '\' + SubKeyName);
-end;
-
-function LegacyGoneWaitMs: Integer;
-begin
-  Result := LEGACY_GONE_WAIT_MS;
-#ifdef TestMode
-  if GTestMode and (GTestLegacyWait <> '') then
-    Result := StrToIntDef(GTestLegacyWait, Result);
-#endif
-end;
-
-{ Ждёт исчезновения записи Uninstall после деинсталлятора: даже с _?= старая
-  версия могла вернуть управление раньше фактического конца удаления.
-  Возвращает True, когда записи нет (или удалять было нечего). }
-function WaitLegacyRecordGone(const Root: Integer; const SubKeyName: String;
-  const WaitMs: Integer; var WaitedMs: Integer): Boolean;
-begin
-  WaitedMs := 0;
-  if LegacyRecordGone(Root, SubKeyName, WaitedMs) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  while WaitedMs < WaitMs do
-  begin
-    Sleep(LEGACY_GONE_STEP_MS);
-    WaitedMs := WaitedMs + LEGACY_GONE_STEP_MS;
-    if LegacyRecordGone(Root, SubKeyName, WaitedMs) then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-  Result := LegacyRecordGone(Root, SubKeyName, WaitedMs);
-end;
-
-function RunLegacyUninstaller(const Cmd, Version: String; const Root: Integer;
-  const SubKeyName: String): Boolean;
+function RunLegacyUninstaller: Boolean;
 var
-  Exe, Args: String;
+  Exe, Args, Err: String;
   Code, WaitedMs: Integer;
 begin
-  Result := False;
-  Exe := UninstallerExe(Cmd);
+  Args := UninstallerArgs(GLegacyUninstallCmd, Exe);
+  Err := '';
   if (Exe = '') or (not FileExists(Exe)) then
+    Err := FmtMessage(CustomMessage('EtnLegacyUninstallerNotFound'), [Exe])
+  else
   begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version + ': деинсталлятор не найден: ' + Exe);
-    Exit;
+    LogLine('INFO', 'Старый клиент ETN ' + GLegacyClientVersion +
+      ': запуск деинсталлятора ' + Exe + ' ' + Args);
+    if not Exec(Exe, Args, ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, Code) then
+      Err := CustomMessage('EtnLegacyUninstallerNotStarted')
+    else if Code <> 0 then
+      Err := FmtMessage(CustomMessage('EtnLegacyUninstallerCode'), [IntToStr(Code)]);
+    { Запись Uninstall может исчезнуть с задержкой: ждём до 10 с, шаг 500 мс. }
+    WaitedMs := 0;
+    while (Err = '') and (WaitedMs < LEGACY_GONE_WAIT_MS) and
+      RegKeyExists(GLegacyRoot, GLegacyKey) do
+    begin
+      Sleep(LEGACY_GONE_STEP_MS);
+      WaitedMs := WaitedMs + LEGACY_GONE_STEP_MS;
+    end;
+    if (Err = '') and RegKeyExists(GLegacyRoot, GLegacyKey) then
+      Err := FmtMessage(CustomMessage('EtnLegacyUninstallRecordStayed'), [
+          IntToStr(LEGACY_GONE_WAIT_MS)]);
   end;
-  Args := UninstallerArgs(Cmd);
-  LogLine('INFO', 'Старый клиент ETN ' + Version + ': запуск деинсталлятора ' +
-    Exe + ' ' + Args);
-  { ewWaitUntilTerminated + _?=: деинсталлятор работает из своего каталога и
-    не возвращает управление до фактического конца удаления. }
-  if not Exec(Exe, Args, ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, Code) then
-  begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version + ': деинсталлятор не запустился');
-    Exit;
-  end;
-  if Code <> 0 then
-  begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version +
-      ': деинсталлятор вернул код ' + IntToStr(Code));
-    Exit;
-  end;
-  if not WaitLegacyRecordGone(Root, SubKeyName, LegacyGoneWaitMs, WaitedMs) then
-  begin
-    LogLine('ERROR', 'Старый клиент ETN ' + Version +
-      ': запись Uninstall не исчезла за ' + IntToStr(LegacyGoneWaitMs) +
-      ' мс после деинсталлятора');
-    Exit;
-  end;
-  LogLine('INFO', 'Старый клиент ETN ' + Version + ' удалён (ожидание записи ' +
-    IntToStr(WaitedMs) + ' мс)');
-  Result := True;
+  Result := (Err = '');
+  if not Result then
+    LogLine('ERROR', 'Старый клиент ETN ' + GLegacyClientVersion + ': ' + Err);
 end;
 
-#ifdef TestMode
-{ Подставной деинсталлятор (дефект приёмки 112642a4): та же последовательность
-  «запустить и дождаться, проверить код, дождаться исчезновения записи», но
-  команда задана хуком /TESTLEGACYCMD — на машине разработчика настоящий
-  NSIS-клиент не удаляется. }
-function RunLegacyTestRemoval(var Reason: String): Boolean;
-var
-  Exe, Args: String;
-  Code, WaitedMs: Integer;
-begin
-  Result := False;
-  Reason := '';
-  Exe := UninstallerExe(GTestLegacyCmd);
-  Args := Trim(Copy(GTestLegacyCmd, Length(Exe) + 1, Length(GTestLegacyCmd)));
-  LogLine('INFO', 'TESTLEGACYCMD: подставной деинсталлятор запущен: ' + Exe + ' ' + Args);
-  if not Exec(Exe, Args, '', SW_HIDE, ewWaitUntilTerminated, Code) then
-  begin
-    Reason := 'не удалось удалить старый клиент ETN: подставной деинсталлятор ' +
-      'не запустился (' + Exe + ').';
-    LogLine('ERROR', 'TESTLEGACYCMD result=fail reason=start');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLEGACYCMD: подставной деинсталлятор завершился, код ' +
-    IntToStr(Code));
-  if Code <> 0 then
-  begin
-    Reason := 'не удалось удалить старый клиент ETN его деинсталлятором (код ' +
-      IntToStr(Code) + '). Удалите его вручную в «Программы и компоненты» ' +
-      'и повторите установку.';
-    LogLine('ERROR', 'TESTLEGACYCMD result=fail exit_code=' + IntToStr(Code));
-    Exit;
-  end;
-  if not WaitLegacyRecordGone(0, 'TEST', LegacyGoneWaitMs, WaitedMs) then
-  begin
-    Reason := 'старый клиент ETN не удалён: запись установки не исчезла за ' +
-      IntToStr(LegacyGoneWaitMs) + ' мс после деинсталлятора. Удалите его ' +
-      'вручную в «Программы и компоненты» и повторите установку.';
-    LogLine('ERROR', 'TESTLEGACYCMD result=fail wait_ms=' + IntToStr(WaitedMs) +
-      ' exit_code=' + IntToStr(Code));
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLEGACYCMD result=ok wait_ms=' + IntToStr(WaitedMs) +
-    ' exit_code=' + IntToStr(Code));
-  Result := True;
-end;
-#endif
-
-{ Удаляет найденные старые клиенты в доступной области (IncludeMachine —
-  только в элевированном процессе). Возвращает True, если удалять было нечего
-  или удаление прошло успешно. }
-function RemoveLegacyClients(const IncludeMachine: Boolean;
-  var FailReason: String): Boolean;
-var
-  Version, Cmd, SubKeyName: String;
-  IsMachine: Boolean;
-  Root: Integer;
-begin
-  Result := True;
-  FailReason := '';
-  if not FindLegacyClientEx(Version, Cmd, IsMachine, Root, SubKeyName) then Exit;
-  if IsMachine and (not IncludeMachine) then
-  begin
-    FailReason := 'старый клиент ETN ' + Version +
-      ' установлен для всех пользователей: для его удаления нужны права ' +
-      'администратора. Выберите установку клиента «Для всех пользователей» ' +
-      'или удалите старую версию вручную в «Программы и компоненты».';
-    Result := False;
-    Exit;
-  end;
-  if not RunLegacyUninstaller(Cmd, Version, Root, SubKeyName) then
-  begin
-    FailReason := 'не удалось удалить старый клиент ETN ' + Version +
-      ' его деинсталлятором. Удалите его вручную в «Программы и компоненты» ' +
-      'и повторите установку.';
-    Result := False;
-  end;
-end;
-
-{ Состояние старого клиента для экрана компонентов: запись установщика
-  electron-builder (NSIS) ищется до первого показа экрана. Silent и
-  привилегированная фаза ничего не показывают — им состояние не нужно. }
+{ Состояние старого клиента для экрана компонентов: поиск до первого показа. }
 procedure DetectLegacyClient;
-var
-  Cmd: String;
 begin
   GLegacyClientFound := False;
-  GLegacyClientVersion := '';
-  GLegacyClientMachine := False;
-#ifdef TestMode
-  if GTestMode then
-  begin
-    if GTestLegacy <> '' then
-    begin
-      GLegacyClientFound := True;
-      if Pos('machine:', LowerCase(GTestLegacy)) = 1 then
-      begin
-        GLegacyClientMachine := True;
-        GLegacyClientVersion := Copy(GTestLegacy, 9, Length(GTestLegacy));
-      end
-      else
-        GLegacyClientVersion := GTestLegacy;
-      LogLine('WARN', 'TESTLEGACY=' + GTestLegacy +
-        ': старый клиент NSIS подменён (тестовый режим)');
-    end;
-    Exit;
-  end;
-#endif
   if GSilent or GPrivilegedPhase then Exit;
-  Cmd := '';
-  if FindLegacyClient(GLegacyClientVersion, Cmd, GLegacyClientMachine) then
-  begin
-    GLegacyClientFound := True;
-    LogLine('INFO', 'Найден старый клиент ETN ' + GLegacyClientVersion +
-      ' (NSIS, ' + Pick(GLegacyClientMachine, 'для всех пользователей',
-      'для текущего пользователя') + ') — будет удалён перед установкой');
-  end;
+  GLegacyClientFound := FindLegacyClient;
+  if not GLegacyClientFound then Exit;
+  LogLine('INFO', 'Найден старый клиент ETN ' + GLegacyClientVersion + ' (NSIS, ' +
+    Pick(GLegacyClientMachine, 'для всех пользователей', 'для текущего пользователя') +
+    ') — будет удалён перед установкой');
 end;
 
-{ Удаление старого клиента перед установкой нового (только при выбранном
-  клиенте). В неэлевированном процессе удаляется запись текущего пользователя;
-  машинную запись снимает административный режим установки — в GUI проверка
-  идёт на экране готовности. Возвращает False только когда удаление обязательно
-  и не удалось. }
+{ Удаление перед копированием файлов: только при выбранном клиенте; машинная
+  запись без прав — WARN и продолжение; ошибка — False с причиной. }
 function RemoveLegacyBeforeInstall(const Elevated: Boolean;
   var Reason: String): Boolean;
-var
-  Version, Cmd: String;
-  IsMachine: Boolean;
 begin
   Result := True;
   Reason := '';
-  { Старый клиент удаляется только когда клиент выбран: установка одного
-    сервера чужой клиент не трогает. Проверка стоит до тестовой ветки, чтобы
-    /TESTLEGACYCMD повторял реальный маршрут. }
   if not GClientSelected then Exit;
-  { Тестовая сборка не должна запускать деинсталлятор настоящего клиента на
-    машине разработчика: удаление выполняется только через подставную команду
-    /TESTLEGACYCMD; без неё удаление не выполняется. }
-#ifdef TestMode
-  if GTestMode then
+  if not FindLegacyClient then Exit;
+  if GLegacyClientMachine and (not Elevated) then
   begin
-    if GTestLegacyCmd <> '' then
-      Result := RunLegacyTestRemoval(Reason);
+    LogLine('WARN', 'Старый клиент ETN ' + GLegacyClientVersion + ' установлен ' +
+      'для всех пользователей: удаление требует прав администратора — запустите ' +
+      'установщик от имени администратора');
     Exit;
   end;
-#endif
-  if not FindLegacyClient(Version, Cmd, IsMachine) then Exit;
-  if IsMachine and (not Elevated) then
-  begin
-    { Машинный клиент старого установщика без прав не удалить: скриптовой
-      элевации больше нет (2dd215f7), привилегированной фазы в GUI нет. В
-      режиме «только для меня» это не ошибка — новый клиент ставится в профиль,
-      старый остаётся; на экране компонентов обещания удаления нет. }
-    LogLine('WARN', 'Старый клиент ETN ' + Version + ' установлен для всех ' +
-      'пользователей: удаление требует прав администратора — запустите ' +
-      'установщик от имени администратора (правый клик → Запуск от имени ' +
-      'администратора)');
-    Exit;
-  end;
-  if IsMachine then
-    Result := RemoveLegacyClients(True, Reason)
-  else
-    Result := RemoveLegacyClients(False, Reason);
+  Result := RunLegacyUninstaller;
   if Result then
-    GLegacyClientFound := False;
+    GLegacyClientFound := False
+  else
+    Reason := FmtMessage(CustomMessage('EtnLegacyRemoveFailed'), [GLegacyClientVersion]);
 end;
 
 { ---------------------------------------------------------------------------
@@ -2496,18 +2351,12 @@ function ClientCloseRoots: String;
 var
   UserRoot, MachineRoot: String;
 begin
-#ifdef TestMode
-  { Тестовая сборка реальные каталоги продукта не трогает: фильтр — каталог
-    программы теста либо явный /TESTCLIENTPATH. }
-  Result := ClientInstallPath;
-#else
   UserRoot := ExpandConstant('{localappdata}') + '\Programs\ETN';
   MachineRoot := ExpandConstant('{commonpf}') + '\ETN';
   if GClientScopeUser then
     Result := UserRoot + #13#10 + MachineRoot
   else
     Result := MachineRoot + #13#10 + UserRoot;
-#endif
 end;
 
 { Условие PowerShell «путь процесса начинается с каталога». Завершающий '\'
@@ -2561,10 +2410,9 @@ begin
 end;
 
 { Настоящий опрос: Get-Process по имени ETN.exe, но только процессы из
-  каталогов клиента (Product: ClientPathCondition; TestMode: /TESTCLIENTPATH,
-  по умолчанию каталог программы тестового прогона) — чужой клиент не
-  трогается. PowerShell получает скрипт в двойных кавычках: внутри только
-  одинарные (грабли B3 приёмки 9b310991). }
+  каталогов клиента (ClientPathCondition) — чужой клиент не трогается.
+  PowerShell получает скрипт в двойных кавычках: внутри только одинарные
+  (грабли B3 приёмки 9b310991). }
 function RealClientPids: String;
 var
   Script, Args, OutFile, OutFileLiteral, Condition: String;
@@ -2577,13 +2425,6 @@ begin
   OutFileLiteral := OutFile;
   StringChangeEx(OutFileLiteral, '''', '''''', True);
   Condition := '';
-#ifdef TestMode
-  { Тестовая сборка может задать каталог явно (/TESTCLIENTPATH); иначе —
-    общий продуктовый фильтр по каталогам клиента (в тестовой сборке это
-    каталог программы теста). }
-  if GTestClientPath <> '' then
-    Condition := ClientRootCondition(GTestClientPath);
-#endif
   if Condition = '' then
     Condition := ClientPathCondition;
   if Condition = '' then
@@ -2609,42 +2450,18 @@ begin
   DeleteFile(OutFile);
 end;
 
-{ Процессы клиента, которые нужно закрыть. В тестовой сборке — модель:
-  реальные процессы машины не трогаются, если не задан /TESTCLIENTREAL=1. }
+{ Процессы клиента, которые нужно закрыть. }
 function ClientPidsRunning: String;
 begin
-#ifdef TestMode
-  if GTestClientPids <> '' then
-  begin
-    if GTestClientRunning then
-      Result := GTestClientPids
-    else
-      Result := '';
-    Exit;
-  end;
-  { Без /TESTCLIENTREAL=1 тестовая сборка процессы машины не опрашивает и не
-    закрывает: только модель /TESTCLIENTPIDS. }
-  if GTestClientReal <> '1' then
-  begin
-    Result := '';
-    Exit;
-  end;
-#endif
   Result := RealClientPids;
 end;
 
 function ClientCloseWaitMs: Integer;
 begin
   Result := CLIENT_CLOSE_WAIT_MS;
-#ifdef TestMode
-  if GTestClientWait <> '' then
-    Result := StrToIntDef(GTestClientWait, CLIENT_CLOSE_WAIT_MS);
-#endif
 end;
 
-{ Ожидание выхода процессов: опрос раз в 250 мс, бюджет WaitMs. В модели
-  момент выхода задаёт /TESTCLIENTGONE — время отсчитывается от мягкого
-  закрытия, реальный Sleep не нужен (прогон не длится 30 секунд). }
+{ Ожидание выхода процессов: опрос раз в 250 мс, бюджет WaitMs. }
 function WaitClientProcessesGone(const WaitMs: Integer; var WaitedMs: Integer): Boolean;
 var
   Elapsed: Integer;
@@ -2658,16 +2475,7 @@ begin
       Exit;
     end;
     if Elapsed >= WaitMs then Break;
-#ifdef TestMode
-    if GTestClientPids = '' then
-      Sleep(CLIENT_POLL_STEP_MS);
-    if (GTestClientPids <> '') and GTestClientSoftIssued and
-       (GTestClientSoft <> 'none') and
-       (Elapsed + CLIENT_POLL_STEP_MS >= GTestClientGoneAt) then
-      GTestClientRunning := False;
-#else
     Sleep(CLIENT_POLL_STEP_MS);
-#endif
     Elapsed := Elapsed + CLIENT_POLL_STEP_MS;
   until False;
   WaitedMs := Elapsed;
@@ -2707,14 +2515,6 @@ procedure SoftCloseClientPids(const Pids: String);
 var
   Rest, Pid: String;
 begin
-#ifdef TestMode
-  if GTestClientPids <> '' then
-  begin
-    GTestClientSoftIssued := True;
-    LogLine('INFO', 'Клиент ETN: мягкое закрытие (модель, PID ' + Pids + ')');
-    Exit;
-  end;
-#endif
   Rest := Pids;
   while Rest <> '' do
   begin
@@ -2728,15 +2528,6 @@ procedure ForceCloseClientPids(const Pids: String);
 var
   Rest, Pid: String;
 begin
-#ifdef TestMode
-  if GTestClientPids <> '' then
-  begin
-    LogLine('WARN', 'Клиент ETN: принудительное закрытие (модель, PID ' + Pids + ')');
-    if GTestClientForce <> 'fail' then
-      GTestClientRunning := False;
-    Exit;
-  end;
-#endif
   Rest := Pids;
   while Rest <> '' do
   begin
@@ -2767,13 +2558,11 @@ begin
   LogLine('INFO', 'Клиент ETN: запущено процессов ETN.exe — ' + Pids);
   if Interactive and (not GSilent) then
   begin
-    if SuppressibleMsgBox('Клиент ETN запущен. Чтобы заменить файлы, его нужно ' +
-        'закрыть — несохранённые данные могут быть потеряны.' + #13#10#13#10 +
-        'Закрыть клиент и продолжить установку?',
+    if SuppressibleMsgBox(CustomMessage('EtnCloseClientPrompt'),
         mbConfirmation, MB_YESNO, IDYES) <> IDYES then
     begin
       LogLine('WARN', 'Клиент ETN: пользователь отказался закрывать клиент');
-      Reason := 'клиент ETN не закрыт: пользователь отказался закрыть запущенный клиент';
+      Reason := CustomMessage('EtnClientCloseRefused');
       GClientCloseRefused := True;
       Result := False;
       Exit;
@@ -2796,8 +2585,7 @@ begin
     LogLine('INFO', 'Клиент ETN: принудительно закрыт за ' + IntToStr(WaitedMs) + ' мс');
     Exit;
   end;
-  Reason := 'клиент ETN не закрыт: процессы ETN.exe не завершились даже после ' +
-    'принудительного закрытия';
+  Reason := CustomMessage('EtnClientCloseForceFailed');
   LogLine('ERROR', Reason);
   Result := False;
 end;
@@ -2893,8 +2681,8 @@ var
 begin
   if Path = '' then Exit;
   if not ShellExec('open', Path, '', '', SW_SHOWNORMAL, ewNoWait, Code) then
-    SuppressibleMsgBox('Не удалось открыть: ' + Path + #13#10 +
-      'Путь можно скопировать из поля на экране.', mbError, MB_OK, IDOK);
+    SuppressibleMsgBox(FmtMessage(CustomMessage('EtnOpenFailed'), [Path]),
+      mbError, MB_OK, IDOK);
 end;
 
 procedure OpenServerOptions(Sender: TObject; const Link: String;
@@ -3062,13 +2850,10 @@ begin
     ' (код ' + IntToStr(Code) + '): ключ в такой каталог не пишется');
 end;
 
-{ Путь к node.exe поставки; в тестовой сборке подменяется /TESTNODEEXE. }
+{ Путь к node.exe поставки. }
 function ServerNodeExe(const ServerDir: String): String;
 begin
   Result := ServerDir + '\node\node.exe';
-#ifdef TestMode
-  if GTestNodeExe <> '' then Result := GTestNodeExe;
-#endif
 end;
 
 function ServerCliPath(const ServerDir: String): String;
@@ -3131,13 +2916,6 @@ begin
     LogLine('INFO', 'Файлы сервера не найдены: первый администратор отсутствует (первая установка)');
     Exit;
   end;
-#ifdef TestMode
-  if GTestInit <> 'real' then
-  begin
-    LogLine('INFO', 'TESTINIT не задан: проверка hasFirstUser пропущена (тестовый режим)');
-    Exit;
-  end;
-#endif
   ApplyServerEnv;
   Code := RunCliCheck(Dir);
   if Code = 0 then
@@ -3176,8 +2954,8 @@ begin
 end;
 
 { Единственная точка вызова etn init. Работает под администратором (в GUI —
-  административный режим установки; в тестах — /PRIVILEGEDPHASE): файлы
-  сервера уже скопированы, права администратора есть. Повторно init
+  административный режим установки; внутренний запуск — /PRIVILEGEDPHASE):
+  файлы сервера уже скопированы, права администратора есть. Повторно init
   не вызывается: критерий — hasFirstUser. }
 procedure EnsureFirstUser;
 var
@@ -3204,13 +2982,6 @@ begin
     LogLine('INFO', 'Silent: etn init не вызывается никогда — нужен ручной режим');
     Exit;
   end;
-#ifdef TestMode
-  if GTestInit <> 'real' then
-  begin
-    LogLine('INFO', 'TESTINIT не задан: etn init не вызывается (тестовый режим)');
-    Exit;
-  end;
-#endif
   if GAdminLogin = '' then GAdminLogin := GOriginalUser;
   if not ValidAdminLogin(GAdminLogin) then
   begin
@@ -3292,14 +3063,6 @@ function SilentAdminPresent: Boolean;
 begin
   Result := False;
   ResolveFirstUserState;
-#ifdef TestMode
-  if GTestInit <> 'real' then
-  begin
-    LogLine('INFO', 'TESTINIT не задан: проверка администратора в silent пропущена (тестовый режим)');
-    Result := True;
-    Exit;
-  end;
-#endif
   Result := GFirstUserChecked and GFirstUserPresent;
   if not Result then
     LogLine('ERROR', 'Первичная инициализация не выполнена: нет первого администратора ' +
@@ -3309,10 +3072,9 @@ end;
 function InitStateText: String;
 begin
   if GFirstUserPresent then
-    Result := 'Сервер уже инициализирован — init не повторяется, новый ключ установщик ' +
-      'не выдаёт (перевыпуск — в клиенте).'
+    Result := CustomMessage('EtnInitAlreadyDone')
   else if GPendingKey <> '' then
-    Result := 'Найден ключ от предыдущего запуска установщика — он будет показан после установки.'
+    Result := CustomMessage('EtnInitPendingKey')
   else
     Result := '';
 end;
@@ -3323,27 +3085,11 @@ end;
 function IsElevatedNow: Boolean;
 begin
   Result := IsAdmin;
-#ifdef TestMode
-  { Тестовый хук: имитация элевированного процесса в прогоне
-    installer/tests/silent-codes.ps1 (в обычной сборке кода нет). }
-  if (not Result) and (GTestElevated = '1') then
-  begin
-    LogLine('WARN', 'TESTELEVATED=1: проверка прав администратора подменена (тестовый режим)');
-    Result := True;
-  end;
-#endif
 end;
 
 function ServiceRegistered: Boolean;
 begin
-#ifdef TestMode
-  { Настоящая служба рабочей машины не читается: состояние задаёт хук
-    /TESTSERVICE=present|absent, дальше его меняют смоделированные команды
-    install/uninstall. Без хука тестовая сборка службу не видит и не трогает. }
-  Result := (GTestService <> '') and GTestServiceRegistered;
-#else
   Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME);
-#endif
 end;
 
 { Проверка записи в каталог пробным файлом. ForceDirectories для уже
@@ -3375,11 +3121,7 @@ begin
   Result := '';
   if GServerSelected then
   begin
-#ifdef TestMode
-    Dir := GDataDir + '\.install';
-#else
     Dir := ExpandConstant('{commonappdata}\ETN\.install');
-#endif
     if not ProbeWritableDir(Dir) then
     begin
       LogLine('WARN', 'Каталог параметров недоступен на запись: ' + Dir);
@@ -3409,8 +3151,7 @@ end;
 
 function ParamsFilePath: String;
 begin
-  { Тестовый контракт: /PRIVILEGEDPHASE получает путь через /PARAMS, иначе —
-    путь, сохранённый /TESTPARAMS в GParamsPath. }
+  { Привилегированная фаза получает путь через /PARAMS; иначе — GParamsPath. }
   Result := ParamValue('PARAMS');
   if Result = '' then Result := GParamsPath;
   if Result = '' then
@@ -3523,13 +3264,12 @@ function InPrivilegedContext: Boolean;
 begin
   { Привилегированная фаза — та, что пишет в каталог программы и каталог
     данных: silent (предусловие — уже элевирован), внутренняя фаза
-    /PRIVILEGEDPHASE (тесты установщика; GUI её больше не запускает), либо
+    /PRIVILEGEDPHASE (GUI её больше не запускает), либо
     элевированный процесс (запуск от имени администратора или /ALLUSERS);
     каталог программы при этом выбирает GetDefaultAppDir. Неэлевированный
     процесс пишет в профиль пользователя и привилегированной фазой не
     считается — иначе сервер попал бы и в Program Files, и в профиль.
-    GAdminInstallMode, а не IsAdminInstallMode: в тестовой сборке режим
-    моделируется хуком /TESTADMINMODE. }
+    GAdminInstallMode, а не IsAdminInstallMode. }
   Result := GWorkAllowed and
     (GSilent or GPrivilegedPhase or (GIsElevated and GAdminInstallMode));
 end;
@@ -3669,22 +3409,22 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
-  Служба ETN (WinSW) — остановка и запуск, задача bb063ac3.
+  Служба ETN (WinSW) — остановка и запуск, задачи bb063ac3 и 34f8e315.
 
   Служба останавливается до копирования файлов: иначе занятые node.exe,
-  better-sqlite3 и файлы сервера не заменить. После команды stop состояние
-  опрашивается через sc query, пока служба не окажется STOPPED: WinSW мог
-  вернуть управление раньше фактической остановки дочернего node.exe.
-  В тестовой сборке управление службой подменяется хуками — настоящая служба
-  Windows не нужна.
+  better-sqlite3 и файлы сервера не заменить. Состояние читается командой
+  `etn-service.exe status` (WinSW 2.12.0: Started/Stopped/NonExistent, exit 0);
+  после stop опрос повторяется, пока служба не окажется Stopped: WinSW вернул
+  управление раньше фактической остановки дочернего node.exe. В тестовой
+  сборке управление службой подменяется хуками — настоящая служба Windows не
+  нужна.
   --------------------------------------------------------------------------- }
 (* Каталог программы для операций со службой. В деинсталляторе Inno не вызывает
   InitializeSetup, и GServerDir остаётся пустым, поэтому путь берётся из {app}
   по месту — как в UninstallFirewallRuleWanted. Раньше путь вычислялся только
   из GServerDir, и снятие службы при удалении не работало (блокер приёмки
-  4151edf6). В установке каталог уже вычислен (GServerDir = {app}), а
-  ExpandConstant('{app}') до инициализации мастера недоступен — пробу снятия
-  (/TESTUNINSTALLSERVICE) вызывает InitializeSetup. *)
+  4151edf6). В установке каталог уже вычислен (GServerDir = {app});
+  ExpandConstant('{app}') до инициализации мастера недоступен. *)
 function ServiceDir: String;
 begin
   Result := GServerDir;
@@ -3695,263 +3435,225 @@ end;
 function ServiceExePath: String;
 begin
   Result := ServiceDir + '\service\etn-service.exe';
-#ifdef TestMode
-  if GTestServiceCmd <> '' then Result := GTestServiceCmd;
-#endif
 end;
 
-{ Вывод sc query по службе. В тестовом режиме — подмена состояния:
-  /TESTSERVICESTATE=running|stopped (статическое состояние: команды его не
-  меняют — проверка «служба не остановилась»); без этой подмены состояние ведёт
-  флаг смоделированных команд start/stop (у /TESTSERVICE=present — RUNNING, как
-  у работающей службы; stop переводит в STOPPED). Без /TESTSERVICE тестовая
-  сборка службу не видит (ServiceRegistered = False), поэтому команды и это
-  состояние не запрашиваются. }
-function ServiceStateOutput: String;
+{ Последняя непустая строка вывода команды: WinSW печатает одно слово
+  (Started/Stopped/NonExistent), но CLR или логгер могут дописать строки.
+  Сравнение — Trim/UpperCase по последней непустой. }
+function LastNonEmptyLine(const Text: String): String;
 var
-  Args, OutFile: String;
-  Code: Integer;
+  I, StartPos: Integer;
+  Line: String;
 begin
   Result := '';
-#ifdef TestMode
-  if GTestServiceState = 'running' then
-  begin
-    Result := 'STATE : 4  RUNNING';
-    Exit;
-  end;
-  if GTestServiceState = 'stopped' then
-  begin
-    Result := 'STATE : 1  STOPPED';
-    Exit;
-  end;
-  if GTestService <> '' then
-  begin
-    if GTestServiceRunning then
+  StartPos := 1;
+  for I := 1 to Length(Text) do
+    if Text[I] = #10 then
     begin
-      { Смоделированный START_PENDING: реальный SCM держит его, пока служба
-        стартует; RUNNING приходит только следующим опросом. }
-      if GTestServicePendingPolls <> 0 then
-      begin
-        if GTestServicePendingPolls > 0 then
-          GTestServicePendingPolls := GTestServicePendingPolls - 1;
-        Result := 'STATE : 2  START_PENDING';
-        Exit;
-      end;
-      Result := 'STATE : 4  RUNNING';
-    end
-    else
-      Result := 'STATE : 1  STOPPED';
+      Line := Trim(Copy(Text, StartPos, I - StartPos));
+      if Line <> '' then Result := Line;
+      StartPos := I + 1;
+    end;
+  Line := Trim(Copy(Text, StartPos, Length(Text) - StartPos + 1));
+  if Line <> '' then Result := Line;
+end;
+
+{ Причина отказа status: конкретика (1072, 5, 1058, 1060) вместо «не удалось».
+  Неизвестный код дополняется последней строкой вывода. }
+function ServiceStatusFailureText(const Code: Integer; const Output: String): String;
+var
+  Line: String;
+begin
+  Line := LastNonEmptyLine(Output);
+  if Code = ERROR_ACCESS_DENIED then
+    Result := CustomMessage('EtnServiceStatusAccessDenied')
+  else if Code = ERROR_SERVICE_DISABLED then
+    Result := CustomMessage('EtnServiceStatusDisabled')
+  else if Code = ERROR_SERVICE_DOES_NOT_EXIST then
+    Result := CustomMessage('EtnServiceStatusMissing')
+  else if (Code = ERROR_SERVICE_MARKED_FOR_DELETE) or (Pos('1072', Line) > 0) then
+    Result := CustomMessage('EtnServiceStatusMarkedForDelete')
+  else
+  begin
+    Result := FmtMessage(CustomMessage('EtnServiceStatusCode'), [IntToStr(Code)]);
+    if Line <> '' then Result := Result + ': ' + Line;
+  end;
+end;
+
+{ Состояние службы по выводу etn-service.exe status (WinSW 2.12.0):
+  Started — любое не-Stopped состояние (Running/StartPending/StopPending),
+  Stopped — служба полностью остановлена, NonExistent — службы нет.
+  Detail — причина, если состояние определить не удалось (SERVICE_STATE_UNKNOWN).
+  Ошибка или неизвестный вывод — быстрый отказ вызывающего: бюджет ожидания не
+  тратится. }
+function ServiceStatusOutput(var Detail: String): Integer;
+var
+  Args, OutFile, Line, Output: String;
+  Code: Integer;
+begin
+  Detail := '';
+  if not FileExists(ServiceExePath) then
+  begin
+    Detail := FmtMessage(CustomMessage('EtnServiceExeMissing'), [ServiceExePath]);
+    Result := SERVICE_STATE_UNKNOWN;
     Exit;
   end;
-#endif
-  OutFile := ExpandConstant('{tmp}') + '\etn-service-state.txt';
+  OutFile := ExpandConstant('{tmp}') + '\etn-service-status.txt';
   DeleteFile(OutFile);
-  Args := '/c sc query ' + SERVICE_NAME + ' > "' + OutFile + '" 2>&1';
-  if not Exec(ExpandConstant('{cmd}'), Args, '', SW_HIDE,
-    ewWaitUntilTerminated, Code) then Exit;
-  if FileExists(OutFile) then
-    Result := UpperCase(ReadTextFile(OutFile));
-end;
-
-function ServiceStoppedNow: Boolean;
-var
-  S: String;
-begin
-  S := ServiceStateOutput;
-  Result := (Pos('STOPPED', S) > 0) and (Pos('RUNNING', S) = 0) and
-    (Pos('STOP_PENDING', S) = 0) and (Pos('START_PENDING', S) = 0);
-end;
-
-{ Служба в состоянии RUNNING: START_PENDING/STOP_PENDING не считаются —
-  запуск ещё не подтверждён, health-check идти не должен. }
-function ServiceRunningNow: Boolean;
-var
-  S: String;
-begin
-  S := ServiceStateOutput;
-  Result := (Pos('RUNNING', S) > 0) and (Pos('STOPPED', S) = 0) and
-    (Pos('START_PENDING', S) = 0) and (Pos('STOP_PENDING', S) = 0);
+  { Кавычки вокруг exe обязательны: путь в Program Files содержит пробелы. }
+  Args := '/c ""' + ServiceExePath + '" status > "' + OutFile + '" 2>&1"';
+  if not Exec(ExpandConstant('{cmd}'), Args, ExtractFileDir(ServiceExePath), SW_HIDE,
+    ewWaitUntilTerminated, Code) then
+  begin
+    Detail := CustomMessage('EtnServiceStatusNotStarted');
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
+  Output := '';
+  if FileExists(OutFile) then Output := ReadTextFile(OutFile);
+  if Code <> 0 then
+  begin
+    Detail := ServiceStatusFailureText(Code, Output);
+    Result := SERVICE_STATE_UNKNOWN;
+    Exit;
+  end;
+  Line := UpperCase(Trim(LastNonEmptyLine(Output)));
+  if Line = 'STARTED' then
+    Result := SERVICE_STATE_STARTED
+  else if Line = 'STOPPED' then
+    Result := SERVICE_STATE_STOPPED
+  else if Line = 'NONEXISTENT' then
+    Result := SERVICE_STATE_MISSING
+  else
+  begin
+    if Line = '' then
+      Detail := CustomMessage('EtnServiceStatusEmpty')
+    else
+      Detail := FmtMessage(CustomMessage('EtnServiceStatusUnknown'), [Line]);
+    Result := SERVICE_STATE_UNKNOWN;
+  end;
 end;
 
 function ServiceStopWaitMs: Integer;
 begin
   Result := SERVICE_STOP_WAIT_MS;
-#ifdef TestMode
-  if GTestServiceWait <> '' then
-    Result := StrToIntDef(GTestServiceWait, Result);
-#endif
 end;
 
-function ServiceStartWaitMs: Integer;
-begin
-  Result := SERVICE_START_WAIT_MS;
-#ifdef TestMode
-  if GTestServiceWait <> '' then
-    Result := StrToIntDef(GTestServiceWait, Result);
-#endif
-end;
-
-{ Ждём реальной остановки: опрос раз в SERVICE_STOP_STEP_MS до бюджета. }
-function WaitServiceStopped: Boolean;
+{ Текущее время в секундах (сутки*86400 + часы*3600 + минуты*60 + секунды).
+  GetTickCount в Pascal Script Inno 6 недоступен, поэтому бюджет ожидания
+  считается по системным часам, а не суммой шагов опроса: один вызов status —
+  отдельный процесс ~350 мс, и суммирование растянуло бы 60 с в разы.
+  Точность — 1 с; для бюджета остановки этого достаточно. }
+function ServiceNowSeconds: Int64;
 var
-  Waited: Integer;
+  Stamp, DayStamp, TimeStamp: Int64;
 begin
-  Result := ServiceStoppedNow;
-  if Result then Exit;
-  Waited := 0;
-  while Waited < ServiceStopWaitMs do
-  begin
-    Sleep(SERVICE_STOP_STEP_MS);
-    Waited := Waited + SERVICE_STOP_STEP_MS;
-    if ServiceStoppedNow then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-  Result := ServiceStoppedNow;
+  { Разделители — #0 (по умолчанию), а не пустая строка: GetDateTimeString
+    принимает Char и на пустой строке падает во время выполнения. }
+  Stamp := StrToInt64Def(GetDateTimeString('yyyymmddhhnnss', #0, #0), 0);
+  DayStamp := Stamp div 1000000;
+  TimeStamp := Stamp mod 1000000;
+  Result := DayStamp * 86400 + (TimeStamp div 10000) * 3600 +
+    ((TimeStamp div 100) mod 100) * 60 + (TimeStamp mod 100);
 end;
 
-{ Ждём подтверждённого RUNNING после start (8b1f5980): WinSW возвращает
-  управление раньше, чем SCM переводит службу в RUNNING, а health-check по
-  ещё не слушающему серверу дал бы ложный сбой и откат. }
-function WaitServiceRunning: Boolean;
-var
-  Waited: Integer;
+{ Ждём подтверждённой остановки — объявлена после RunServiceCommand: Pascal
+  Script Inno требует, чтобы вызываемая функция была объявлена выше. }
+
+{ Причина отказа команды службы с отдельным сообщением для каждого кода
+  (1058/1060/1061/1072): администратору важно отличие «служба отключена» от
+  «помечена на удаление» и «нет прав». }
+function ServiceCodeText(const Verb: String; const Code: Integer): String;
 begin
-  Result := ServiceRunningNow;
-  if Result then Exit;
-  Waited := 0;
-  while Waited < ServiceStartWaitMs do
-  begin
-    Sleep(SERVICE_STOP_STEP_MS);
-    Waited := Waited + SERVICE_STOP_STEP_MS;
-    if ServiceRunningNow then
-    begin
-      Result := True;
-      Exit;
-    end;
-  end;
-  Result := ServiceRunningNow;
+  if Code = 0 then
+    Result := ''
+  else if Code = ERROR_ACCESS_DENIED then
+    Result := CustomMessage('EtnServiceCodeAccessDenied')
+  else if Code = ERROR_SERVICE_DISABLED then
+    Result := CustomMessage('EtnServiceCodeDisabled')
+  else if Code = ERROR_SERVICE_DOES_NOT_EXIST then
+    Result := CustomMessage('EtnServiceStatusMissing')
+  else if Code = ERROR_SERVICE_MARKED_FOR_DELETE then
+    Result := CustomMessage('EtnServiceStatusMarkedForDelete')
+  else if Code = ERROR_SERVICE_CANNOT_ACCEPT_CTRL then
+    Result := CustomMessage('EtnServiceCodeTransition')
+  else if Code = ERROR_SERVICE_NOT_ACTIVE then
+    Result := CustomMessage('EtnServiceCodeNotActive')
+  else if Code = ERROR_SERVICE_ALREADY_RUNNING then
+    Result := CustomMessage('EtnServiceCodeAlreadyRunning')
+  else if Code = ERROR_SERVICE_EXISTS then
+    Result := CustomMessage('EtnServiceCodeExists')
+  else
+    Result := FmtMessage(CustomMessage('EtnServiceCodeGeneric'), [IntToStr(Code)]);
+  if (Result <> '') and (Pos('(', Result) = 0) then
+    Result := FmtMessage(CustomMessage('EtnServiceCommandReturned'), [Verb, Result]);
 end;
 
 { Разбор кода возврата команды WinSW — общий для продуктовой ветки и модели
   службы (поведенческий тест 1073 обязан проверять тот же код, что выполняется
-  на машине). WinSW 2.12.0: install существующей службы возвращает
-  ERROR_SERVICE_EXISTS (1073). Служба уже зарегистрирована — цель достигнута,
-  повторная установка не падает. }
+  на машине). WinSW 2.12.0: install существующей службы — 1073; start уже
+  работающей — 1056; stop на остановленной/в переходе — 1062/1061; uninstall
+  отсутствующей/помеченной — 1060/1072. 1060/1072 от stop — отказ: в обновлении
+  служба не остановлена. GLastServiceCode запоминается для повтора stop (1061)
+  и подтверждения uninstall (1072), GLastServiceError — для причины. }
 function ServiceCommandResult(const Verb: String; const Code: Integer): Boolean;
 begin
   Result := False;
-  if Code <> 0 then
+  GLastServiceCode := Code;
+  GLastServiceError := '';
+  if Code = 0 then
   begin
-    if (Verb = 'install') and (Code = ERROR_SERVICE_EXISTS) then
-    begin
-      LogLine('INFO', 'Служба: install — служба уже существует (код ' +
-        IntToStr(Code) + '), регистрация не требуется');
-      Result := True;
-      Exit;
-    end;
-    LogLine('WARN', 'Служба: команда ' + Verb + ' вернула код ' +
-      IntToStr(Code));
+    LogLine('INFO', 'Служба: команда ' + Verb + ' выполнена');
+    Result := True;
     Exit;
   end;
-  LogLine('INFO', 'Служба: команда ' + Verb + ' выполнена');
-  Result := True;
+  if (Verb = 'install') and (Code = ERROR_SERVICE_EXISTS) then
+  begin
+    LogLine('INFO', 'Служба: install — служба уже существует (код ' +
+      IntToStr(Code) + '), регистрация не требуется');
+    Result := True;
+    Exit;
+  end;
+  if (Verb = 'start') and (Code = ERROR_SERVICE_ALREADY_RUNNING) then
+  begin
+    LogLine('INFO', 'Служба: start — служба уже запущена (код ' +
+      IntToStr(Code) + ')');
+    Result := True;
+    Exit;
+  end;
+  if (Verb = 'stop') and
+     ((Code = ERROR_SERVICE_NOT_ACTIVE) or (Code = ERROR_SERVICE_CANNOT_ACCEPT_CTRL)) then
+  begin
+    LogLine('INFO', 'Служба: stop — ' + ServiceCodeText(Verb, Code) +
+      ', ждём подтверждённой остановки');
+    Result := True;
+    Exit;
+  end;
+  if (Verb = 'uninstall') and
+     ((Code = ERROR_SERVICE_DOES_NOT_EXIST) or (Code = ERROR_SERVICE_MARKED_FOR_DELETE)) then
+  begin
+    LogLine('INFO', 'Служба: uninstall — ' + ServiceCodeText(Verb, Code) +
+      ', подтверждаем удаление через status');
+    Result := True;
+    Exit;
+  end;
+  GLastServiceError := Verb + ': ' + ServiceCodeText(Verb, Code);
+  LogLine('WARN', 'Служба: команда ' + Verb + ' вернула код ' +
+    IntToStr(Code) + ': ' + ServiceCodeText(Verb, Code));
 end;
 
 { Команда WinSW: install, uninstall, stop, start. Код возврата команды —
-  успех/неудача; install существующей службы (1073) — не ошибка: повторная
-  установка обязана проходить (8b1f5980, разбор — ServiceCommandResult).
-
-  В тестовой сборке настоящая служба рабочей машины не трогается никогда.
-  Хук /TESTSERVICE=present|absent включает модель: команды не выполняются, их
-  результат и состояние службы ведут флаги GTestServiceRegistered/Running
-  (install/uninstall меняют регистрацию, start/stop — состояние), а сбои
-  задаются хуками /TESTSERVICEINSTALL=fail|exists, /TESTSERVICEUNINSTALL=fail,
-  /TESTSERVICESTOP=fail, /TESTSERVICESTART=fail|pending|pending-stuck. Без
-  /TESTSERVICE команда тоже не выполняется (изоляция тестов от машины), но
-  состояние службы остаётся «не зарегистрирована». /TESTSERVICEREALFILE=1
-  добавляет проверку наличия etn-service.exe, как в продуктовой ветке: проба
-  настоящего деинсталлятора (приёмка 4151edf6) должна падать, если путь к
-  службе вычислен неверно. }
+  успех/неудача (разбор — ServiceCommandResult). }
 function RunServiceCommand(const Verb: String): Boolean;
 var
   Code: Integer;
 begin
   Result := False;
-#ifdef TestMode
-  if (GTestService <> '') and (GTestServiceRealFile = '1') and
-     (not FileExists(ServiceExePath)) then
-  begin
-    LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
-      ' не выполнена');
-    Exit;
-  end;
-  if GTestService <> '' then
-  begin
-    if (Verb = 'stop') and (GTestServiceStop = 'fail') then
-    begin
-      LogLine('WARN', 'Служба (тестовый режим): stop не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'start') and (GTestServiceStart = 'fail') then
-    begin
-      LogLine('WARN', 'Служба (тестовый режим): start не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'install') and (GTestServiceInstall = 'fail') then
-    begin
-      LogLine('WARN', 'Служба (тестовый режим): install не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'uninstall') and (GTestServiceUninstall = 'fail') then
-    begin
-      LogLine('WARN', 'Служба (тестовый режим): uninstall не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'install') and (GTestServiceInstall = 'exists') then
-    begin
-      GTestServiceRegistered := True;
-      Result := ServiceCommandResult(Verb, ERROR_SERVICE_EXISTS);
-      Exit;
-    end;
-    if Verb = 'install' then
-      GTestServiceRegistered := True
-    else if Verb = 'uninstall' then
-    begin
-      GTestServiceRegistered := False;
-      GTestServiceRunning := False;
-      GTestServicePendingPolls := 0;
-    end
-    else if Verb = 'start' then
-    begin
-      GTestServiceRunning := True;
-      if GTestServiceStart = 'pending' then
-        GTestServicePendingPolls := 2
-      else if GTestServiceStart = 'pending-stuck' then
-        GTestServicePendingPolls := -1
-      else
-        GTestServicePendingPolls := 0;
-    end
-    else if Verb = 'stop' then
-    begin
-      GTestServiceRunning := False;
-      GTestServicePendingPolls := 0;
-    end;
-    LogLine('INFO', 'Служба (тестовый режим): команда ' + Verb +
-      ' — успех (exe=' + ServiceExePath + ', config=' + ServiceDir +
-      '\service\etn-service.xml, exists=' + Pick(FileExists(ServiceExePath), '1', '0') + ')');
-    Result := True;
-    Exit;
-  end;
-  LogLine('WARN', 'Служба (тестовый режим, /TESTSERVICE не задан): команда ' +
-    Verb + ' не выполняется — тестовая сборка не трогает службы машины');
-  Result := True;
-  Exit;
-#endif
+  GLastServiceCode := 0;
+  GLastServiceError := '';
   if not FileExists(ServiceExePath) then
   begin
+    GLastServiceError := FmtMessage(CustomMessage('EtnServiceExeNotFound'), [ServiceExePath]);
     LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
       ' не выполнена');
     Exit;
@@ -3961,6 +3663,7 @@ begin
   if not Exec(ServiceExePath, Verb, ExtractFileDir(ServiceExePath), SW_HIDE,
     ewWaitUntilTerminated, Code) then
   begin
+    GLastServiceError := CustomMessage('EtnServiceNotStarted');
     LogLine('WARN', 'Служба: не удалось запустить ' + ServiceExePath +
       ' ' + Verb);
     Exit;
@@ -3968,10 +3671,165 @@ begin
   Result := ServiceCommandResult(Verb, Code);
 end;
 
-{ Остановка перед заменой файлов. False — служба осталась работать (или её
-  состояние не удалось подтвердить): обновление не начинается, код 20.
-  Причина возвращается вызывающему для журнала и сообщения. }
-function StopServiceForUpdate(var Reason: String): Boolean;
+{ Ждём подтверждённой остановки: опрос status раз в SERVICE_STOP_STEP_MS,
+  бюджет — по часам (не суммой шагов). Stop 1061 повторяется раз в
+  SERVICE_STOP_RETRY_MS: StartPending мог перейти в Running. Бюджет
+  ServiceStopWaitMs действует с момента начала остановки (StartAt). }
+function WaitServiceStopped(StartAt: Int64; AllowMissing: Boolean;
+  var Reason: String): Boolean;
+var
+  Status: Integer;
+  Detail: String;
+  NextStopAt: Int64;
+  RetryStop: Boolean;
+begin
+  Result := False;
+  Reason := '';
+  RetryStop := GLastServiceCode = ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
+  NextStopAt := ServiceNowSeconds + 1;
+  while (ServiceNowSeconds - StartAt) * 1000 < ServiceStopWaitMs do
+  begin
+    if RetryStop and (ServiceNowSeconds >= NextStopAt) then
+    begin
+      if not RunServiceCommand('stop') then
+      begin
+        Reason := FmtMessage(CustomMessage('EtnServiceStopFailed'), [
+            SERVICE_NAME, IfStr(GLastServiceError = '',
+            CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]);
+        Exit;
+      end;
+      RetryStop := GLastServiceCode = ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
+      NextStopAt := ServiceNowSeconds + 1;
+    end;
+    Status := ServiceStatusOutput(Detail);
+    if Status = SERVICE_STATE_STOPPED then
+    begin
+      Result := True;
+      Exit;
+    end;
+    if Status = SERVICE_STATE_MISSING then
+    begin
+      if AllowMissing then
+      begin
+        Result := True;
+        Exit;
+      end;
+      Reason := FmtMessage(CustomMessage('EtnServiceScmMissing'), [SERVICE_NAME]);
+      Exit;
+    end;
+    if Status = SERVICE_STATE_UNKNOWN then
+    begin
+      Reason := FmtMessage(CustomMessage('EtnServiceStateUnknown'), [
+          SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
+      Exit;
+    end;
+    Sleep(SERVICE_STOP_STEP_MS);
+  end;
+  Reason := FmtMessage(CustomMessage('EtnServiceNotStoppedInTime'), [
+      SERVICE_NAME, IntToStr(ServiceStopWaitMs)]);
+end;
+
+{ ImagePath службы из реестра. Кавычки WinSW при install добавляет, если путь
+  содержит пробелы, — сравнение без них и без регистра. }
+function ServiceImagePath: String;
+begin
+  Result := '';
+  RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME,
+    'ImagePath', Result);
+end;
+
+function NormalizeServicePath(const Path: String): String;
+begin
+  Result := Trim(Path);
+  if (Length(Result) >= 2) and (Result[1] = '"') and
+     (Result[Length(Result)] = '"') then
+    Result := Copy(Result, 2, Length(Result) - 2);
+  Result := LowerCase(Trim(Result));
+end;
+
+function ServiceImagePathMatches: Boolean;
+begin
+  Result := NormalizeServicePath(ServiceImagePath) =
+    NormalizeServicePath(ServiceExePath);
+end;
+
+function ServiceStartDisabled: Boolean;
+var
+  Value: DWORD;
+begin
+  Result := RegQueryDWordValue(HKLM,
+    'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME, 'Start', Value) and
+    (Value = 4);
+end;
+
+function ServiceDeleteFlagSet: Boolean;
+var
+  Value: DWORD;
+begin
+  Result := RegQueryDWordValue(HKLM,
+    'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME, 'DeleteFlag', Value) and
+    (Value = 1);
+end;
+
+{ Личность службы до изменений (34f8e315): ключ HKLM есть — служба обязана
+  быть нашей (ImagePath = <каталог программы>\service\etn-service.exe) и
+  работоспособной. Чужая/устаревшая служба, Start=4 (disabled), DeleteFlag=1 и
+  status NonExistent при живом ключе отсекаются ДО копирования файлов кодом 20:
+  иначе install пропускается (1073), а start падает уже после замены файлов.
+  Ошибка/неизвестный вывод status — тоже быстрый отказ с конкретной причиной. }
+function CheckServiceIdentity(var Reason: String): Boolean;
+var
+  Detail: String;
+  Status: Integer;
+begin
+  Result := True;
+  Reason := '';
+  if GServerMode = 'app' then Exit;
+  if not ServiceRegistered then Exit;
+  if not ServiceImagePathMatches then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceOtherPath'), [
+        SERVICE_NAME, IfStr(ServiceImagePath = '',
+        CustomMessage('EtnServiceImagePathMissing'), ServiceImagePath), ServiceExePath]);
+    Result := False;
+    Exit;
+  end;
+  if ServiceStartDisabled then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceStartDisabled'), [SERVICE_NAME]);
+    Result := False;
+    Exit;
+  end;
+  if ServiceDeleteFlagSet then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceDeleteFlag'), [SERVICE_NAME]);
+    Result := False;
+    Exit;
+  end;
+  Status := ServiceStatusOutput(Detail);
+  if Status = SERVICE_STATE_MISSING then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceScmMissingRemove'), [SERVICE_NAME]);
+    Result := False;
+    Exit;
+  end;
+  if Status = SERVICE_STATE_UNKNOWN then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceStateUnknown'), [
+        SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
+    Result := False;
+  end;
+end;
+
+{ Остановка службы перед заменой файлов (AllowMissing=False) и при удалении
+  программы (AllowMissing=True: status=NonExistent допустим). False — служба
+  осталась работать (или состояние не подтвердилось): вызывающий отказывает
+  кодом 20 до замены файлов. Причина возвращается для журнала и сообщения. }
+function StopServiceForUpdate(var Reason: String; AllowMissing: Boolean): Boolean;
+var
+  Detail: String;
+  Status: Integer;
+  StartTick: Int64;
 begin
   Result := True;
   Reason := '';
@@ -3981,33 +3839,88 @@ begin
       'останавливать нечего');
     Exit;
   end;
-  LogLine('INFO', 'Остановка службы ' + SERVICE_NAME);
-  if ServiceStoppedNow then
+  Status := ServiceStatusOutput(Detail);
+  if Status = SERVICE_STATE_STOPPED then
   begin
-    LogLine('INFO', 'Служба ' + SERVICE_NAME + ' уже остановлена');
+    LogLine('INFO', 'Служба ' + SERVICE_NAME + ' уже остановлена (status=Stopped)');
     Exit;
   end;
-  if not RunServiceCommand('stop') then
+  if Status = SERVICE_STATE_MISSING then
   begin
-    Reason := 'не удалось остановить службу ' + SERVICE_NAME +
-      ' (etn-service.exe stop вернул ошибку)';
+    if AllowMissing then
+    begin
+      LogLine('INFO', 'Служба ' + SERVICE_NAME + ' отсутствует в SCM ' +
+        '(status=NonExistent) — останавливать нечего');
+      Exit;
+    end;
+    Reason := FmtMessage(CustomMessage('EtnServiceScmMissing'), [SERVICE_NAME]);
     Result := False;
     Exit;
   end;
-  if not WaitServiceStopped then
+  if Status = SERVICE_STATE_UNKNOWN then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' не остановилась за ' +
-      IntToStr(ServiceStopWaitMs) + ' мс';
+    Reason := FmtMessage(CustomMessage('EtnServiceStateUnknown'), [
+        SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
+    Result := False;
+    Exit;
+  end;
+  LogLine('INFO', 'Остановка службы ' + SERVICE_NAME + ' (status=Started)');
+  StartTick := ServiceNowSeconds;
+  if not RunServiceCommand('stop') then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceStopFailed'), [
+        SERVICE_NAME, IfStr(GLastServiceError = '',
+        CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]);
+    Result := False;
+    Exit;
+  end;
+  if not WaitServiceStopped(StartTick, AllowMissing, Reason) then
+  begin
     Result := False;
     Exit;
   end;
   LogLine('INFO', 'Служба ' + SERVICE_NAME + ' остановлена');
 end;
 
-{ Запуск службы после замены файлов (и повторно — при откате) с ожиданием
-  подтверждённого RUNNING (8b1f5980). Уже запущенная служба не запускается
-  второй раз. Неудача не выдумывается: вызывающий решает, провал это или
-  повод перейти к health. }
+{ Подтверждение снятия после uninstall: exit 0 (в том числе 1072) не доказывает
+  удаление — WinSW возвращает 0, а ключ службы может остаться. Опрашиваем
+  status до NonExistent; Started/Stopped по истечении бюджета — удаление не
+  завершено. }
+function WaitServiceRemoved(StartTick: Int64; var Reason: String): Boolean;
+var
+  Detail: String;
+  Status: Integer;
+begin
+  Result := False;
+  Reason := '';
+  while (ServiceNowSeconds - StartTick) * 1000 < ServiceStopWaitMs do
+  begin
+    Status := ServiceStatusOutput(Detail);
+    if Status = SERVICE_STATE_MISSING then
+    begin
+      Result := True;
+      Exit;
+    end;
+    if Status = SERVICE_STATE_UNKNOWN then
+    begin
+      Reason := FmtMessage(CustomMessage('EtnServiceRemovalNotConfirmed'), [
+          SERVICE_NAME, IfStr(Detail = '', CustomMessage('EtnServiceReasonInLog'), Detail)]);
+      Exit;
+    end;
+    Sleep(SERVICE_STOP_STEP_MS);
+  end;
+  if Status = SERVICE_STATE_STARTED then
+    Reason := FmtMessage(CustomMessage('EtnServiceStillRunningAfterUninstall'), [SERVICE_NAME])
+  else
+    Reason := FmtMessage(CustomMessage('EtnServiceStayedInScm'), [
+        SERVICE_NAME, Pick(Status = SERVICE_STATE_STOPPED, 'Stopped',
+        CustomMessage('EtnServiceStatusNotNonexistent'))]);
+end;
+
+{ Запуск службы после замены файлов: start вызывается всегда для
+  зарегистрированной службы (она остановлена перед копированием), ожидания
+  RUNNING больше нет — готовность подтверждает health-check (34f8e315).
+  start уже работающей службы WinSW завершает кодом 1056 — это успех. }
 function StartServiceIfNeeded: Boolean;
 begin
   Result := True;
@@ -4017,25 +3930,15 @@ begin
       'запускать нечего');
     Exit;
   end;
-  if ServiceRunningNow then
-  begin
-    LogLine('INFO', 'Служба ' + SERVICE_NAME + ': уже запущена (RUNNING)');
-    Exit;
-  end;
+  LogLine('INFO', 'Служба ' + SERVICE_NAME + ': команда start');
   if not RunServiceCommand('start') then
   begin
-    LogLine('ERROR', 'Служба ' + SERVICE_NAME + ': команда start не выполнена');
+    LogLine('ERROR', 'Служба ' + SERVICE_NAME + ': команда start не выполнена: ' +
+      IfStr(GLastServiceError = '', 'причина в журнале', GLastServiceError));
     Result := False;
     Exit;
   end;
-  if not WaitServiceRunning then
-  begin
-    LogLine('ERROR', 'Служба ' + SERVICE_NAME + ': не перешла в RUNNING за ' +
-      IntToStr(ServiceStartWaitMs) + ' мс');
-    Result := False;
-    Exit;
-  end;
-  LogLine('INFO', 'Служба ' + SERVICE_NAME + ': запущена (RUNNING)');
+  LogLine('INFO', 'Служба ' + SERVICE_NAME + ': команда start принята');
 end;
 
 { Регистрация службы WinSW (8b1f5980): выполняется после подстановки
@@ -4046,10 +3949,12 @@ end;
 
   Повторная установка: уже зарегистрированную службу не перегистрируем — WinSW
   2.12.0 вернул бы ERROR_SERVICE_EXISTS (1073), а конфигурацию WinSW читает при
-  каждом старте, поэтому изменённые DATA_DIR/PORT/HOST применяются без install.
+  каждом старте. Перед этим личность службы проверяется ещё раз: 1073 — успех
+  только для СВОЕЙ службы, чужую не запускаем.
 
-  False — служба не зарегистрирована; вызывающий отказывает установке кодом 20
-  с этой причиной (карточка 8b1f5980). }
+  False — служба не зарегистрирована. Регистрация идёт после копирования
+  файлов, поэтому вызывающий отдаёт код 10 (сбой выполнения), а не 20
+  (34f8e315). }
 function RegisterServiceIfNeeded(var Reason: String): Boolean;
 var
   Config: String;
@@ -4065,12 +3970,19 @@ begin
   Config := ServiceDir + '\service\etn-service.xml';
   if not FileExists(Config) then
   begin
-    Reason := 'конфигурация службы не найдена: ' + Config;
+    Reason := FmtMessage(CustomMessage('EtnServiceConfigMissing'), [Config]);
     Result := False;
     Exit;
   end;
   if ServiceRegistered then
   begin
+    if not CheckServiceIdentity(Reason) then
+    begin
+      LogLine('ERROR', 'Служба ' + SERVICE_NAME + ' уже зарегистрирована, но ' +
+        'не может быть использована: ' + Reason);
+      Result := False;
+      Exit;
+    end;
     LogLine('INFO', 'Служба ' + SERVICE_NAME + ' уже зарегистрирована — ' +
       'install не требуется');
     Exit;
@@ -4079,8 +3991,20 @@ begin
     ' install (конфигурация: ' + Config + ')');
   if not RunServiceCommand('install') then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' не зарегистрирована: ' +
-      'etn-service.exe install вернул ошибку (конфигурация: ' + Config + ')';
+    Reason := FmtMessage(CustomMessage('EtnServiceInstallFailed'), [
+        SERVICE_NAME, IfStr(GLastServiceError = '',
+        CustomMessage('EtnServiceReasonInLog'), GLastServiceError), Config]);
+    Result := False;
+    Exit;
+  end;
+  { 1073 — служба появилась между проверкой реестра и install (гонка). Успех
+    только для СВОЕЙ службы: чужую/устаревшую не запускаем (34f8e315). }
+  if (GLastServiceCode = ERROR_SERVICE_EXISTS) and
+     (not CheckServiceIdentity(Reason)) then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceAlreadyRegisteredUnusable'), [
+        SERVICE_NAME, Reason]);
+    LogLine('ERROR', Reason);
     Result := False;
     Exit;
   end;
@@ -4090,8 +4014,16 @@ end;
 { Снятие службы при удалении программы (8b1f5980): stop + uninstall строго до
   удаления файлов (usUninstall). Служба, оставшаяся в SCM с путём в удалённый
   каталог, ломает повторную установку и висит в списке служб. False — служба
-  осталась: удаление программы отменяется, причина возвращается вызывающему. }
+  осталась: удаление программы отменяется, причина возвращается вызывающему.
+
+  Чужую/устаревшую службу (ImagePath не наш) не трогаем: предупреждение, файлы
+  программы удалить можно. status=NonExistent допустим. После uninstall
+  подтверждаем удаление через status (1072 возвращает 0, ключ может остаться);
+  оставшийся ключ при status=NonExistent — SCM завершит удаление после
+  перезагрузки. }
 function RemoveServiceOnUninstall(var Reason: String): Boolean;
+var
+  StartTick: Int64;
 begin
   Result := True;
   Reason := '';
@@ -4101,51 +4033,62 @@ begin
       'снимать нечего');
     Exit;
   end;
-  if not StopServiceForUpdate(Reason) then
+  if not ServiceImagePathMatches then
   begin
-    Reason := 'служба ' + SERVICE_NAME + ' не остановлена: ' + Reason;
+    LogLine('WARN', 'Служба ' + SERVICE_NAME + ' зарегистрирована с другим путём: ' +
+      IfStr(ServiceImagePath = '', '<нет ImagePath>', ServiceImagePath) +
+      ' — чужая или устаревшая, не снимаю; файлы программы будут удалены');
+    Exit;
+  end;
+  if not StopServiceForUpdate(Reason, True) then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceNotStoppedUninstall'), [SERVICE_NAME, Reason]);
     Result := False;
     Exit;
   end;
+  StartTick := ServiceNowSeconds;
   if not RunServiceCommand('uninstall') then
   begin
-    Reason := 'не удалось снять службу ' + SERVICE_NAME +
-      ' (etn-service.exe uninstall вернул ошибку)';
+    Reason := FmtMessage(CustomMessage('EtnServiceUninstallFailed'), [
+        SERVICE_NAME, IfStr(GLastServiceError = '',
+        CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]);
+    Result := False;
+    Exit;
+  end;
+  if not WaitServiceRemoved(StartTick, Reason) then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnServiceRemovalIncomplete'), [SERVICE_NAME, Reason]);
     Result := False;
     Exit;
   end;
   LogLine('INFO', 'Служба ' + SERVICE_NAME + ' снята (uninstall)');
+  if ServiceRegistered then
+    LogLine('WARN', 'Ключ службы ' + SERVICE_NAME + ' ещё существует при ' +
+      'status=NonExistent — SCM завершит удаление после перезагрузки; ' +
+      'файлы программы удалять можно');
 end;
 
 { ---------------------------------------------------------------------------
-  Health-check (требование 0a79d9de): GET /api/v1/health → 200, status=ok,
-  db=ok, version = целевая; GET /api/v1/version → version = целевая, api=v1.
-  Тело разбирается, а не только HTTP-код; бюджет 60 с, повтор каждые 2 с.
+  Health-check (требование 0a79d9de): один GET /api/v1/health → 200, status=ok,
+  db=ok, version = целевая из тела того же ответа. Тело разбирается, а не
+  только HTTP-код; второй GET /api/v1/version установщик не вызывает —
+  эндпоинт остаётся для клиентов и диагностики (задача a1ea1d40).
+  Бюджет — 60 с фактического времени, повтор каждые 2 с; один запрос с
+  --max-time 5 может перебрать бюджет до ~5 с — это допустимо.
   --------------------------------------------------------------------------- }
 function HealthBaseUrl: String;
 begin
   Result := 'http://127.0.0.1:' + GServerPort;
-#ifdef TestMode
-  if GTestHealthUrl <> '' then Result := GTestHealthUrl;
-#endif
 end;
 
 function HealthWaitMs: Integer;
 begin
   Result := HEALTH_WAIT_MS;
-#ifdef TestMode
-  if GTestHealthWait <> '' then
-    Result := StrToIntDef(GTestHealthWait, Result);
-#endif
 end;
 
 function HealthStepMs: Integer;
 begin
   Result := HEALTH_STEP_MS;
-#ifdef TestMode
-  if GTestHealthStep <> '' then
-    Result := StrToIntDef(GTestHealthStep, Result);
-#endif
 end;
 
 { Один GET через curl.exe с телом в файл. -f: HTTP >= 400 — код 22, тело не
@@ -4160,35 +4103,36 @@ begin
   if not Exec('curl.exe', '-fsS --max-time 5 -o "' + BodyFile + '" "' + Url + '"',
     '', SW_HIDE, ewWaitUntilTerminated, Code) then
   begin
-    Detail := What + ': curl.exe не запустился';
+    Detail := FmtMessage(CustomMessage('EtnHealthCurlFailed'), [What]);
     Exit;
   end;
   if Code <> 0 then
   begin
     if Code = 22 then
-      Detail := What + ': HTTP-ошибка (ответ не 2xx)'
+      Detail := FmtMessage(CustomMessage('EtnHealthHttpError'), [What])
     else if Code = 7 then
-      Detail := What + ': соединение отклонено'
+      Detail := FmtMessage(CustomMessage('EtnHealthRefused'), [What])
     else if Code = 28 then
-      Detail := What + ': таймаут'
+      Detail := FmtMessage(CustomMessage('EtnHealthTimeout'), [What])
     else
-      Detail := What + ': сетевой сбой (curl ' + IntToStr(Code) + ')';
+      Detail := FmtMessage(CustomMessage('EtnHealthNetwork'), [What, IntToStr(Code)]);
     Exit;
   end;
   if not FileExists(BodyFile) then
   begin
-    Detail := What + ': пустой ответ';
+    Detail := FmtMessage(CustomMessage('EtnHealthEmpty'), [What]);
     Exit;
   end;
   Result := True;
 end;
 
-{ Одна попытка расширенного health-check. RequireTargetVersion=False нужен
-  после отката: прежняя версия обязана отвечать, но её версия — не целевая. }
+{ Одна попытка расширенного health-check: единственный GET /api/v1/health,
+  version берётся из того же тела. RequireTargetVersion=False нужен после
+  отката: прежняя версия обязана отвечать, но её версия — не целевая. }
 function CheckHealthOnce(const RequireTargetVersion: Boolean;
   var Detail: String): Boolean;
 var
-  Base, Body, Status, Db, Api, Ver: String;
+  Base, Body, Status, Db, Ver: String;
 begin
   Result := False;
   Detail := '';
@@ -4200,13 +4144,14 @@ begin
   Db := LowerCase(JsonGetRaw(Body, 'db'));
   if Status <> 'ok' then
   begin
-    Detail := 'health: status=' + IfStr(Status = '', '<нет>', Status) +
-      ' вместо ok';
+    Detail := FmtMessage(CustomMessage('EtnHealthStatusBad'), [
+        IfStr(Status = '', CustomMessage('EtnValueMissing'), Status)]);
     Exit;
   end;
   if Db <> 'ok' then
   begin
-    Detail := 'health: db=' + IfStr(Db = '', '<нет>', Db) + ' вместо ok';
+    Detail := FmtMessage(CustomMessage('EtnHealthDbBad'), [
+        IfStr(Db = '', CustomMessage('EtnValueMissing'), Db)]);
     Exit;
   end;
   if not RequireTargetVersion then
@@ -4217,55 +4162,31 @@ begin
   Ver := JsonGetRaw(Body, 'version');
   if Ver <> GProductVersion then
   begin
-    Detail := 'health: версия ' + IfStr(Ver = '', '<нет>', Ver) +
-      ' вместо ' + GProductVersion;
-    Exit;
-  end;
-  if not HttpGetBody(Base + '/api/v1/version',
-    ExpandConstant('{tmp}') + '\etn-version.json', 'GET /api/v1/version', Detail) then Exit;
-  Body := ReadTextFile(ExpandConstant('{tmp}') + '\etn-version.json');
-  Ver := JsonGetRaw(Body, 'version');
-  if Ver <> GProductVersion then
-  begin
-    Detail := 'version: версия ' + IfStr(Ver = '', '<нет>', Ver) +
-      ' вместо ' + GProductVersion;
-    Exit;
-  end;
-  Api := JsonGetRaw(Body, 'api');
-  if Api <> 'v1' then
-  begin
-    Detail := 'version: api=' + IfStr(Api = '', '<нет>', Api) + ' вместо v1';
+    Detail := FmtMessage(CustomMessage('EtnHealthVersionBad'), [
+        IfStr(Ver = '', CustomMessage('EtnValueMissing'), Ver), GProductVersion]);
     Exit;
   end;
   Result := True;
 end;
 
 { Health-check: fail-closed — успех объявляется только при подтверждённом
-  запуске сервера целевой версии. Хук /TESTHEALTH=ok|fail подменяет весь
-  опрос (тестовая сборка); /TESTHEALTHURL направляет запросы на подставной
-  HTTP-сервер, чтобы разбор тела проверялся по-настоящему. }
+  запуске сервера целевой версии. }
 function ProbeHealth(const RequireTargetVersion: Boolean): Boolean;
 var
-  Elapsed: Integer;
+  StartAt, ElapsedMs, RemainingMs: Int64;
 begin
   Result := False;
   GHealthReason := '';
-#ifdef TestMode
-  if GTestHealth <> '' then
-  begin
-    Result := LowerCase(GTestHealth) = 'ok';
-    if not Result then GHealthReason := 'тестовый режим: ' + GTestHealth;
-    LogLine('INFO', 'Health-check (тестовый режим): ' + GTestHealth);
-    Exit;
-  end;
-#endif
   if not FileExists(ServiceExePath) then
   begin
-    GHealthReason := 'служба не найдена (' + ServiceExePath + ')';
+    GHealthReason := FmtMessage(CustomMessage('EtnHealthServiceMissing'), [ServiceExePath]);
     LogLine('ERROR', 'Health-check не выполнен: ' + GHealthReason);
     Exit;
   end;
-  Elapsed := 0;
+  { Бюджет — фактическое время по системным часам, а не сумма Sleep: один
+    запрос с --max-time 5 может занять до 5 с, и сумма пауз исказила бы
+    бюджет в разы. Перебор одного запроса до ~5 с допустим. }
+  StartAt := ServiceNowSeconds;
   while True do
   begin
     if CheckHealthOnce(RequireTargetVersion, GHealthReason) then
@@ -4274,9 +4195,15 @@ begin
       Result := True;
       Exit;
     end;
-    if Elapsed >= HealthWaitMs then Break;
-    Sleep(HealthStepMs);
-    Elapsed := Elapsed + HealthStepMs;
+    ElapsedMs := (ServiceNowSeconds - StartAt) * 1000;
+    { Часы могли скорректироваться назад: отрицательный остаток не должен
+      растягивать бюджет. }
+    if ElapsedMs < 0 then ElapsedMs := 0;
+    if ElapsedMs >= HealthWaitMs then Break;
+    { Sleep не уходит за бюджет: остаток меньше шага — спим остаток. }
+    RemainingMs := HealthWaitMs - ElapsedMs;
+    if RemainingMs > HealthStepMs then RemainingMs := HealthStepMs;
+    Sleep(RemainingMs);
   end;
   LogLine('ERROR', 'Health-check ' + HealthBaseUrl + ': сбой — ' + GHealthReason);
 end;
@@ -4314,9 +4241,9 @@ begin
     end;
 end;
 
-{ Имя каталога архива: YYYYMMDD-HHmmss; суффикс -N — если два архива попали
-  в одну секунду (быстрый повтор в тестах). Такой каталог тоже считается
-  своим архивом и участвует в ротации. }
+{ Имя каталога снимка отката: YYYYMMDD-HHmmss; суффикс -N — если два снимка
+  попали в одну секунду (быстрый повтор в тестах). Формат общий с прежними
+  каталогами архивов; им пользуется очистка снимков отката. }
 function IsBackupDirName(const Name: String): Boolean;
 var
   Tail: String;
@@ -4340,46 +4267,6 @@ function IsRealSubdir(const FindRec: TFindRec): Boolean;
 begin
   Result := ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
     (FindRec.Name <> '.') and (FindRec.Name <> '..');
-end;
-
-{ Есть ли хотя бы одна база сети: networks\<uuid>\data.db. }
-function HasNetworkDatabases(const DataDir: String): Boolean;
-var
-  Root: String;
-  FindRec: TFindRec;
-begin
-  Result := False;
-  Root := DataDir + '\networks';
-  if not DirExists(Root) then Exit;
-  if not FindFirst(Root + '\*', FindRec) then Exit;
-  try
-    repeat
-      if IsRealSubdir(FindRec) and
-         FileExists(Root + '\' + FindRec.Name + '\data.db') then
-      begin
-        Result := True;
-        Exit;
-      end;
-    until not FindNext(FindRec);
-  finally
-    FindClose(FindRec);
-  end;
-end;
-
-function CountBackupDirs(const BackupsDir: String): Integer;
-var
-  FindRec: TFindRec;
-begin
-  Result := 0;
-  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
-  try
-    repeat
-      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) then
-        Result := Result + 1;
-    until not FindNext(FindRec);
-  finally
-    FindClose(FindRec);
-  end;
 end;
 
 { Объём баз данных, которые копирует архив: _system.db и
@@ -4422,41 +4309,54 @@ begin
     Result := IntToStr((Bytes + 1023) div 1024) + ' КБ';
 end;
 
-{ Самый старый архив по имени (имена — нумерованные метки времени, поэтому
-  сравнение строк совпадает с хронологией). Текущий архив исключается: его
-  удалять нельзя даже при переводе часов назад. }
-function OldestBackupDirName(const BackupsDir, Exclude: String): String;
+{ Метка времени из имени ZIP-архива
+  etn-backup-<версия>-<YYYYMMDD-HHMMSS>[-N].zip ('' — имя не по шаблону).
+  Сортировать по полному имени нельзя: версия стоит раньше метки, и архив
+  новой версии оказался бы «старше» архива старой. }
+function BackupZipStamp(const Name: String): String;
 var
-  FindRec: TFindRec;
+  I, L, TailLen: Integer;
+  Tail: String;
 begin
   Result := '';
-  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
-  try
-    repeat
-      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) and
-         (CompareText(FindRec.Name, Exclude) <> 0) then
-        if (Result = '') or (CompareText(FindRec.Name, Result) < 0) then
-          Result := FindRec.Name;
-    until not FindNext(FindRec);
-  finally
-    FindClose(FindRec);
-  end;
+  L := Length(Name);
+  if (L < 20) or (CompareText(Copy(Name, L - 3, 4), '.zip') <> 0) then Exit;
+  for I := 1 to L - 15 do
+    if (Name[I] = '-') and IsAllDigits(Copy(Name, I + 1, 8)) and
+       (Name[I + 9] = '-') and IsAllDigits(Copy(Name, I + 10, 6)) then
+    begin
+      Tail := Copy(Name, I + 16, L - (I + 15));
+      TailLen := Length(Tail);
+      if (CompareText(Tail, '.zip') = 0) or
+         ((TailLen > 5) and (Tail[1] = '-') and
+          (CompareText(Copy(Tail, TailLen - 3, 4), '.zip') = 0) and
+          IsAllDigits(Copy(Tail, 2, TailLen - 5))) then
+        Result := Copy(Name, I + 1, 15);
+    end;
 end;
 
-{ Самый свежий архив по имени: нужен итоговой сводке и экрану ошибки, чтобы
-  показать реальный путь резервной копии (архив создаёт сам установщик в
-  административном режиме; каталог архивов — единственный источник пути). }
+{ Самый свежий архив по времени из имени: нужен итоговой сводке и экрану
+  ошибки, чтобы показать реальный путь резервной копии (архив создаёт CLI
+  сервера; каталог архивов — единственный источник пути). }
 function LatestBackupDirName(const BackupsDir: String): String;
 var
   FindRec: TFindRec;
+  Stamp, Best: String;
 begin
   Result := '';
-  if not FindFirst(BackupsDir + '\*', FindRec) then Exit;
+  Best := '';
+  if not FindFirst(BackupsDir + '\etn-backup-*.zip', FindRec) then Exit;
   try
     repeat
-      if IsRealSubdir(FindRec) and IsBackupDirName(FindRec.Name) then
-        if (Result = '') or (CompareText(FindRec.Name, Result) > 0) then
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+      begin
+        Stamp := BackupZipStamp(FindRec.Name);
+        if (Stamp <> '') and ((Best = '') or (Stamp > Best)) then
+        begin
+          Best := Stamp;
           Result := FindRec.Name;
+        end;
+      end;
     until not FindNext(FindRec);
   finally
     FindClose(FindRec);
@@ -4473,216 +4373,163 @@ begin
     Result := GDataDir + '\backups\' + Name;
 end;
 
-{ Ротация: пока архивов больше трёх, удаляется самый старый. Чужие файлы и
-  каталоги (имена не по формату архива) не считаются и не трогаются. Ошибка
-  удаления обновление не отменяет — только предупреждение в журнал. }
-procedure RotateBackupArchives(const BackupsDir, CurrentName: String);
-var
-  Oldest: String;
+{ Новое имя архива и ротация трёх последних — в CLI сервера (3acd9c3c,
+  server/src/db/db-backup.ts). В Pascal остаются только функции чтения
+  каталога архивов для сообщений. }
+
+{ SQLite-операции (чекпойнт WAL, integrity_check, копирование баз и ротация)
+  вынесены в CLI сервера — задача 3acd9c3c. Pascal только запускает
+  самодостаточный etn-db-tool.mjs через node.exe поставки и разбирает отчёт
+  key=value; сюда SQL-логику не возвращать. }
+
+{ Извлечь инструмент во временный каталог. Повторный вызов использует уже
+  извлечённый файл; ошибка — False с причиной в Reason. }
+function EnsureDatabaseTool(var Reason: String): Boolean;
 begin
-  while CountBackupDirs(BackupsDir) > BACKUPS_KEEP do
+  Result := False;
+  Reason := '';
+  if GDatabaseToolPath <> '' then
   begin
-    Oldest := OldestBackupDirName(BackupsDir, CurrentName);
-    if Oldest = '' then Break;
-    if DelTree(BackupsDir + '\' + Oldest, True, True, True) then
-      LogLine('INFO', 'Бэкап БД: старый архив удалён: ' + Oldest)
-    else
+    Result := True;
+    Exit;
+  end;
+  try
+    ExtractTemporaryFile(DB_TOOL_FILENAME);
+  except
+    Reason := CustomMessage('EtnBackupToolMissing');
+    LogLine('ERROR', 'Бэкап БД: не удалось извлечь ' + DB_TOOL_FILENAME +
+      ' из установщика: ' + GetExceptionMessage);
+    Exit;
+  end;
+  GDatabaseToolPath := ExpandConstant('{tmp}') + '\' + DB_TOOL_FILENAME;
+  Result := FileExists(GDatabaseToolPath);
+  if not Result then
+    Reason := CustomMessage('EtnBackupToolMissing');
+end;
+
+{ Значение из отчёта инструмента: строки key=value, разделитель — первый '='.
+  Пустое значение и отсутствие ключа дают ''. }
+function DatabaseReportValue(const ReportPath, Key: String): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+  Line, Prefix: String;
+begin
+  Result := '';
+  if not LoadStringsFromFile(ReportPath, Lines) then Exit;
+  Prefix := Key + '=';
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Lines[I];
+    { UTF-8 BOM в первой строке — отчёт пишет Node; ключи английские. }
+    if (I = 0) and (Length(Line) > 0) and (Line[1] = #$FEFF) then
+      Delete(Line, 1, 1);
+    if (Length(Line) >= Length(Prefix)) and
+       (CompareText(Copy(Line, 1, Length(Prefix)), Prefix) = 0) then
     begin
-      LogLine('WARN', 'Бэкап БД: не удалось удалить старый архив ' + Oldest +
-        ' — обновление продолжается, архив оставлен');
-      Break;
-    end;
-  end;
-end;
-
-{ Новое имя архива; суффикс -2, -3 при совпадении секунды. }
-function NewBackupArchiveName(const BackupsDir: String): String;
-var
-  Base: String;
-  N: Integer;
-begin
-  Base := GetDateTimeString('yyyymmdd-hhnnss', '-', '-');
-  Result := Base;
-  N := 2;
-  while DirExists(BackupsDir + '\' + Result) do
-  begin
-    Result := Base + '-' + IntToStr(N);
-    N := N + 1;
-  end;
-end;
-
-{ Чекпойнт WAL перед копированием: после остановки службы в -wal могут лежать
-  закоммиченные страницы. PRAGMA wal_checkpoint(TRUNCATE) переносит их в
-  основной файл, и архив остаётся самодостаточным файлом базы — без
-  дополнительных файлов журнала. busy_timeout=0: служба остановлена, ждать
-  нечего; busy=1 означает, что журнал удерживает кто-то ещё. }
-function CheckpointDatabase(const NodeExe, ServerDir, DbPath: String): Boolean;
-var
-  Script, Args: String;
-  Code: Integer;
-begin
-  Result := False;
-  if not FileExists(NodeExe) then Exit;
-  Script :=
-    'try{' +
-    'const Database=require(''better-sqlite3'');' +
-    'const db=new Database(process.argv[1]);' +
-    'db.pragma(''busy_timeout=0'');' +
-    'const j=String(db.pragma(''journal_mode'')[0].journal_mode||'''');' +
-    'if(j.toLowerCase()!==''wal''){db.close();process.exit(0)}' +
-    'const r=db.pragma(''wal_checkpoint(TRUNCATE)'');' +
-    'db.close();' +
-    'process.exit((r.length>0&&Number(r[0].busy)!==0)?1:0)' +
-    '}catch(e){console.error(String(e&&e.stack||e));process.exit(2)}';
-  Args := '-e "' + Script + '" "' + DbPath + '"';
-  if not Exec(NodeExe, Args, ServerDir, SW_HIDE, ewWaitUntilTerminated, Code) then Exit;
-  Result := Code = 0;
-  if Result then
-    LogLine('INFO', 'Бэкап БД: checkpoint WAL выполнен: ' + DbPath)
-  else
-    LogLine('WARN', 'Бэкап БД: checkpoint WAL не выполнен (код ' + IntToStr(Code) +
-      '): копируется файл журнала: ' + DbPath);
-end;
-
-{ Проверка целостности копии через PRAGMA integrity_check. node.exe и
-  node_modules берутся из установленной поставки: рабочей директорией служит
-  каталог server, поэтому require находит better-sqlite3 поставки. }
-function VerifyDatabaseIntegrity(const NodeExe, ServerDir, DbPath: String): Boolean;
-var
-  Script, Args: String;
-  Code: Integer;
-begin
-  Result := False;
-  if not FileExists(NodeExe) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: нет node.exe поставки: ' + NodeExe +
-      ' — целостность архива не проверить');
-    Exit;
-  end;
-  Script :=
-    'try{' +
-    'const Database=require(''better-sqlite3'');' +
-    'const db=new Database(process.argv[1]);' +
-    'const rows=db.pragma(''integrity_check'');' +
-    'db.close();' +
-    'const ok=rows.length===1&&String(rows[0].integrity_check)===''ok'';' +
-    'if(!ok){console.error(''integrity_check: ''+JSON.stringify(rows));process.exit(1)}' +
-    '}catch(e){console.error(String(e&&e.stack||e));process.exit(2)}';
-  Args := '-e "' + Script + '" "' + DbPath + '"';
-  if not Exec(NodeExe, Args, ServerDir, SW_HIDE, ewWaitUntilTerminated, Code) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: не удалось запустить проверку целостности: ' + NodeExe);
-    Exit;
-  end;
-  if Code <> 0 then
-  begin
-    LogLine('ERROR', 'Бэкап БД: integrity_check не пройден: ' + DbPath +
-      ' (код ' + IntToStr(Code) + ')');
-    Exit;
-  end;
-  LogLine('INFO', 'Бэкап БД: integrity_check ok: ' + DbPath);
-  Result := True;
-end;
-
-{ Копия базы в каталог архива. Если чекпойнт не удался, рядом с базой
-  копируется -wal: SQLite применит журнал при открытии, и снимок останется
-  согласованным. Файл -shm не копируется — он транзитный и создаётся SQLite
-  заново. }
-function CopyDatabaseFile(const Src, DestDir: String; const WithWal: Boolean): Boolean;
-var
-  Dest: String;
-begin
-  Result := False;
-  if not ForceDirectories(DestDir) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архива ' + DestDir);
-    Exit;
-  end;
-  Dest := DestDir + '\' + ExtractFileName(Src);
-  if not CopyFile(Src, Dest, False) then
-  begin
-    LogLine('ERROR', 'Бэкап БД: не удалось скопировать ' + Src + ' в ' + Dest);
-    Exit;
-  end;
-  if WithWal and FileExists(Src + '-wal') then
-  begin
-    if not CopyFile(Src + '-wal', Dest + '-wal', False) then
-    begin
-      LogLine('ERROR', 'Бэкап БД: не удалось скопировать журнал ' + Src + '-wal');
+      Result := Copy(Line, Length(Prefix) + 1, Length(Line) - Length(Prefix));
       Exit;
     end;
-    LogLine('INFO', 'Бэкап БД: вместе с базой скопирован WAL: ' + Src + '-wal');
   end;
-  Result := True;
 end;
 
-{ Одна база: чекпойнт (по возможности), копия, integrity_check копии. }
-function BackupDatabase(const Src, DestDir, NodeExe, ServerDir: String): Boolean;
+{ Запустить инструмент и вернуть его код; False — процесс не стартовал.
+  node.exe берётся из каталога программы (node\node.exe), рабочий каталог —
+  server: оттуда резолвятся внешние библиотеки (archiver/yauzl) и
+  package.json версии. }
+function RunDatabaseTool(const Arguments, WorkingDir: String; var Code: Integer): Boolean;
 var
-  WithWal: Boolean;
+  NodeExe: String;
 begin
-  WithWal := not CheckpointDatabase(NodeExe, ServerDir, Src);
-  if not CopyDatabaseFile(Src, DestDir, WithWal) then
+  Code := -1;
+  if GDatabaseToolPath = '' then Exit;
+  NodeExe := ServerNodeExe(GServerDir);
+  if not FileExists(NodeExe) then
   begin
-    Result := False;
+    LogLine('ERROR', 'Инструмент БД: нет node.exe поставки: ' + NodeExe);
     Exit;
   end;
-  Result := VerifyDatabaseIntegrity(NodeExe, ServerDir,
-    DestDir + '\' + ExtractFileName(Src));
+  Result := Exec(NodeExe, '"' + GDatabaseToolPath + '" ' + Arguments, WorkingDir,
+    SW_HIDE, ewWaitUntilTerminated, Code);
+  if not Result then
+    LogLine('ERROR', 'Инструмент БД: не удалось запустить ' + NodeExe);
 end;
 
-{ Копирование всех баз в архив: _system.db и networks\<uuid>\data.db.
-  Возвращает False на первой ошибке; Count — число скопированных баз. }
-function CopyDatabasesInto(const ArchiveDir: String; var Count: Integer): Boolean;
+{ Отчёт инструмента: причины и предупреждения — в журнал, пути/причины — в
+  GLastBackupDir/GBackupReason. Code — код возврата инструмента. }
+procedure ApplyDatabaseToolReport(const ReportPath: String; const Code: Integer;
+  const Operation: String);
 var
-  NodeExe, ServerDir, NetworksDir, Src, DestDir: String;
+  Reason, WarningsText, Archive: String;
+begin
+  Reason := DatabaseReportValue(ReportPath, 'error');
+  WarningsText := DatabaseReportValue(ReportPath, 'warnings');
+  Archive := DatabaseReportValue(ReportPath, 'archive');
+  if WarningsText <> '' then
+    LogLine('WARN', Operation + ': предупреждения: ' + WarningsText);
+  if Code = 0 then
+  begin
+    if Archive <> '' then
+      GLastBackupDir := Archive
+    else
+      GLastBackupDir := '';
+    if Archive = '' then
+      LogLine('WARN', Operation + ': архив не создан — баз данных нет');
+  end
+  else
+  begin
+    if Reason = '' then
+      Reason := FmtMessage(CustomMessage('EtnBackupCodeError'), [IntToStr(Code)]);
+    GBackupReason := Reason;
+    LogLine('ERROR', Operation + ': ' + Reason + ' (код ' + IntToStr(Code) + ')');
+  end;
+end;
+
+{ Отчёт во временном каталоге Inno; старый файл удаляется, чтобы причина от
+  прошлого шага не смешалась с текущей. }
+function DatabaseReportPath: String;
+begin
+  Result := ExpandConstant('{tmp}') + '\' + DB_TOOL_REPORT_NAME;
+  DeleteFile(Result);
+end;
+
+{ Есть ли что архивировать: _system.db или networks\<uuid>\data.db.
+  Проверка до вызова инструмента: на первой установке и в тестовых прогонах
+  без баз node.exe ещё не скопирован — CLI не должен запускаться зря. }
+function HasDatabaseFiles: Boolean;
+var
+  NetworksDir: String;
   FindRec: TFindRec;
 begin
   Result := False;
-  Count := 0;
-  NodeExe := ServerNodeExe(GServerDir);
-  ServerDir := GServerDir + '\server';
-  Src := GDataDir + '\_system.db';
-  if FileExists(Src) then
+  if FileExists(GDataDir + '\_system.db') then
   begin
-    if not BackupDatabase(Src, ArchiveDir, NodeExe, ServerDir) then Exit;
-    Count := Count + 1;
+    Result := True;
+    Exit;
   end;
   NetworksDir := GDataDir + '\networks';
-  if DirExists(NetworksDir) then
-  begin
-    if FindFirst(NetworksDir + '\*', FindRec) then
-    begin
-      try
-        repeat
-          if IsRealSubdir(FindRec) then
-          begin
-            Src := NetworksDir + '\' + FindRec.Name + '\data.db';
-            if FileExists(Src) then
-            begin
-              DestDir := ArchiveDir + '\networks\' + FindRec.Name;
-              if not BackupDatabase(Src, DestDir, NodeExe, ServerDir) then Exit;
-              Count := Count + 1;
-            end;
-          end;
-        until not FindNext(FindRec);
-      finally
-        FindClose(FindRec);
+  if not DirExists(NetworksDir) then Exit;
+  if not FindFirst(NetworksDir + '\*', FindRec) then Exit;
+  try
+    repeat
+      if IsRealSubdir(FindRec) and
+         FileExists(NetworksDir + '\' + FindRec.Name + '\data.db') then
+      begin
+        Result := True;
+        Exit;
       end;
-    end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
   end;
-  Result := Count > 0;
-  if not Result then
-    LogLine('ERROR', 'Бэкап БД: не найдено ни одной базы для архивации');
 end;
 
 { Точка входа бэкапа. Needed — решение вызывающего (смена версии или ремонт).
-  Возвращает True, когда архив создан и проверен либо бэкап не требуется;
-  False — архива нет, обновление обязано остановиться до замены файлов. }
+  Возвращает True, когда архив создан и проверен либо бэкап не требуется. }
 function CreateDatabaseBackup(const Needed: Boolean): Boolean;
 var
-  BackupsDir, ArchiveName, ArchiveDir: String;
-  Copied: Integer;
+  Reason, BackupsDir, ReportPath, Arguments: String;
+  Code: Integer;
 begin
   Result := False;
   GLastBackupDir := '';
@@ -4693,51 +4540,48 @@ begin
     Result := True;
     Exit;
   end;
-  if (not FileExists(GDataDir + '\_system.db')) and
-     (not HasNetworkDatabases(GDataDir)) then
+  if not HasDatabaseFiles then
   begin
     LogLine('WARN', 'Бэкап БД: в ' + GDataDir +
       ' нет баз данных — архив не создаётся, обновление продолжается');
     Result := True;
     Exit;
   end;
+  SetInstallStage(CustomMessage('EtnStageBackup'));
+  if not EnsureDatabaseTool(Reason) then
+  begin
+    GBackupReason := Reason;
+    Exit;
+  end;
   BackupsDir := GDataDir + '\backups';
-  { Этап прогресса: подпись на странице установки (112642a4). В silent
-    записывается только в журнал. }
-  SetInstallStage('Резервная копия баз данных…');
   if not ForceDirectories(BackupsDir) then
   begin
-    GBackupReason := 'каталог архивов не создан: ' + BackupsDir +
-      ' (нет прав или свободного места)';
+    GBackupReason := FmtMessage(CustomMessage('EtnBackupDirNotCreated'), [BackupsDir]);
     LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архивов ' + BackupsDir +
       ' (нет прав или места) — обновление отменяется');
     Exit;
   end;
-  ArchiveName := NewBackupArchiveName(BackupsDir);
-  ArchiveDir := BackupsDir + '\' + ArchiveName;
-  if not ForceDirectories(ArchiveDir) then
+  ReportPath := DatabaseReportPath;
+  { --to — родительский каталог: имя ZIP формирует инструмент (спека 2975c553). }
+  Arguments := 'backup --to "' + BackupsDir + '" --report-out "' + ReportPath +
+    '" --data-dir "' + GDataDir + '"';
+  if not RunDatabaseTool(Arguments, GServerDir + '\server', Code) then
   begin
-    GBackupReason := 'каталог архива не создан: ' + ArchiveDir +
-      ' (нет прав или свободного места)';
-    LogLine('ERROR', 'Бэкап БД: не удалось создать каталог архива ' + ArchiveDir +
-      ' (нет прав или места) — обновление отменяется');
+    GBackupReason := CustomMessage('EtnBackupToolNotStarted');
     Exit;
   end;
-  LogLine('INFO', 'Бэкап БД: создаётся архив ' + ArchiveDir);
-  if not CopyDatabasesInto(ArchiveDir, Copied) then
+  ApplyDatabaseToolReport(ReportPath, Code, 'Бэкап БД');
+  if Code <> 0 then Exit;
+  if GLastBackupDir = '' then
   begin
-    GBackupReason := 'копирование или проверка целостности баз не удалось: ' +
-      ArchiveDir;
-    if DelTree(ArchiveDir, True, True, True) then
-      LogLine('ERROR', 'Бэкап БД: неудачный архив удалён: ' + ArchiveDir)
-    else
-      LogLine('WARN', 'Бэкап БД: неудачный архив не удалось удалить: ' + ArchiveDir);
+    LogLine('WARN', 'Бэкап БД: в ' + GDataDir +
+      ' нет баз данных — архив не создаётся, обновление продолжается');
+    Result := True;
     Exit;
   end;
-  GLastBackupDir := ArchiveDir;
   LogLine('INFO', 'Бэкап БД: архив создан: ' + GLastBackupDir +
-    ' (баз: ' + IntToStr(Copied) + ')');
-  RotateBackupArchives(BackupsDir, ArchiveName);
+    ' (баз: ' + DatabaseReportValue(ReportPath, 'databases') +
+    ', байт: ' + DatabaseReportValue(ReportPath, 'bytes') + ')');
   Result := True;
 end;
 
@@ -4864,7 +4708,7 @@ begin
     Result := True;
     Exit;
   end;
-  SetInstallStage('Снимок отката…');
+  SetInstallStage(CustomMessage('EtnStageSnapshot'));
   if not ForceDirectories(RollbackRoot) then
   begin
     LogLine('ERROR', 'Снимок отката: не удалось создать каталог ' + RollbackRoot);
@@ -4955,13 +4799,6 @@ end;
 function RestoreInstallFiles: Boolean;
 begin
   Result := False;
-#ifdef TestMode
-  if LowerCase(GTestRollback) = 'fail' then
-  begin
-    LogLine('ERROR', 'TESTROLLBACK=fail: восстановление файлов имитирует сбой');
-    Exit;
-  end;
-#endif
   if GLastRollbackDir = '' then
   begin
     LogLine('INFO', 'Откат файлов: снимка нет');
@@ -4984,17 +4821,17 @@ begin
   Result := True;
 end;
 
-{ Восстановление БД из архива ce3ab836: _system.db и networks\<uuid>\data.db.
+{ Восстановление БД из ZIP-архива ce3ab836 через etn-db-tool restore.
   Только из архива ЭТОГО запуска (GLastBackupDir). LatestBackupDir — самый
   свежий архив прошлых обновлений: он не отражает состояние базы на момент
   остановки службы, и подставлять его в автоматический откат нельзя (потеря
-  данных, блокер приёмки bb063ac3). Журналы WAL/SHM текущих файлов удаляются
-  до копирования — иначе SQLite применил бы записи неудачного запуска поверх
-  восстановленной копии. }
-function RestoreDatabaseFromBackup: Boolean;
+  данных, блокер приёмки bb063ac3). --force допустим: служба уже остановлена
+  вызывающим (RollbackAfterFailure); инструмент всё равно проверяет ZIP и
+  integrity_check каждой базы ДО перезаписи, а WAL/SHM удаляет с проверкой. }
+function RestoreDatabaseFromArchive: Boolean;
 var
-  Archive, Src, Dest, NetworksDir: String;
-  FindRec: TFindRec;
+  Archive, ReportPath, Arguments, ReasonText: String;
+  Code: Integer;
 begin
   Result := False;
   Archive := GLastBackupDir;
@@ -5006,51 +4843,19 @@ begin
     Result := True;
     Exit;
   end;
-  Src := Archive + '\_system.db';
-  Dest := GDataDir + '\_system.db';
-  DeleteFile(Dest + '-wal');
-  DeleteFile(Dest + '-shm');
-  if FileExists(Src) then
+  if not EnsureDatabaseTool(ReasonText) then
   begin
-    if not CopyFile(Src, Dest, False) then
-    begin
-      LogLine('ERROR', 'Откат БД: не удалось вернуть ' + Src + ' в ' + Dest);
-      Exit;
-    end;
+    LogLine('ERROR', 'Откат БД: ' + ReasonText);
+    Exit;
   end;
-  NetworksDir := Archive + '\networks';
-  if DirExists(NetworksDir) and FindFirst(NetworksDir + '\*', FindRec) then
-  begin
-    try
-      repeat
-        if (FindRec.Name <> '.') and (FindRec.Name <> '..') and
-           ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) then
-        begin
-          Src := NetworksDir + '\' + FindRec.Name + '\data.db';
-          Dest := GDataDir + '\networks\' + FindRec.Name + '\data.db';
-          DeleteFile(Dest + '-wal');
-          DeleteFile(Dest + '-shm');
-          if FileExists(Src) then
-          begin
-            if not ForceDirectories(ExtractFileDir(Dest)) then
-            begin
-              LogLine('ERROR', 'Откат БД: не удалось создать ' +
-                ExtractFileDir(Dest));
-              Exit;
-            end;
-            if not CopyFile(Src, Dest, False) then
-            begin
-              LogLine('ERROR', 'Откат БД: не удалось вернуть ' + Src + ' в ' + Dest);
-              Exit;
-            end;
-          end;
-        end;
-      until not FindNext(FindRec);
-    finally
-      FindClose(FindRec);
-    end;
-  end;
-  LogLine('INFO', 'Откат БД: база восстановлена из ' + Archive);
+  ReportPath := DatabaseReportPath;
+  Arguments := 'restore --from "' + Archive + '" --force --report-out "' +
+    ReportPath + '" --data-dir "' + GDataDir + '"';
+  if not RunDatabaseTool(Arguments, GServerDir + '\server', Code) then Exit;
+  ApplyDatabaseToolReport(ReportPath, Code, 'Откат БД');
+  if Code <> 0 then Exit;
+  LogLine('INFO', 'Откат БД: база восстановлена из ' + Archive +
+    ' (баз: ' + DatabaseReportValue(ReportPath, 'databases') + ')');
   Result := True;
 end;
 
@@ -5073,39 +4878,51 @@ begin
       'ремонт без замены файлов)');
     Exit;
   end;
-  SetInstallStage('Откат обновления…');
+  SetInstallStage(CustomMessage('EtnStageRollback'));
   LogLine('WARN', 'Откат: начинается (' + GFailureReason + ')');
   { Служба могла успеть запуститься на новой версии (health-check не прошёл):
-    перед возвратом файлов её нужно остановить снова. }
-  StopServiceForUpdate(Reason);
+    перед возвратом файлов её нужно остановить снова. Если остановить не
+    удалось, откат файлов и restore --force по живой БД недопустимы: оставляем
+    снимок и архив точкой ручного восстановления (34f8e315). }
+  if not StopServiceForUpdate(Reason, False) then
+  begin
+    LogLine('ERROR', 'Откат не выполнен: служба ' + SERVICE_NAME +
+      ' не остановилась — ' + Reason + '; файлы новой версии и БД не ' +
+      'восстановлены; снимок: ' + GLastRollbackDir + '; архив: ' +
+      IfStr(GLastBackupDir = '', 'не создавался', GLastBackupDir) +
+      '; журнал: ' + GLogPath);
+    GFailureReason := GFailureReason + FmtMessage(CustomMessage('EtnRollbackStopFailed'), [
+        SERVICE_NAME, Reason, GLastRollbackDir,
+       IfStr(GLastBackupDir = '', CustomMessage('EtnRollbackBackupNotCreated'), GLastBackupDir),
+       GLogPath]);
+    Result := False;
+    Exit;
+  end;
   FilesOk := RestoreInstallFiles;
-  DbOk := RestoreDatabaseFromBackup;
+  DbOk := RestoreDatabaseFromArchive;
   Archive := GLastBackupDir;
   Detail := '';
-  if not FilesOk then Detail := 'файлы не восстановлены';
+  if not FilesOk then Detail := CustomMessage('EtnRollbackFilesNotRestored');
   if not DbOk then
   begin
     if Detail <> '' then Detail := Detail + ', ';
-    Detail := Detail + 'БД не восстановлена';
+    Detail := Detail + CustomMessage('EtnRollbackDbNotRestored');
   end;
   if FilesOk and DbOk then
   begin
     LogLine('INFO', 'Откат выполнен: файлы возвращены из ' + GLastRollbackDir +
       IfStr(Archive = '', '; архив БД не создавался — база оставлена как есть',
         '; БД восстановлена из ' + Archive));
-    GFailureReason := GFailureReason + '. Откат выполнен: файлы возвращены из ' +
-      GLastRollbackDir +
-      IfStr(Archive = '', ', архив БД не создавался — база оставлена как есть',
-        ', база восстановлена из ' + Archive) + '.';
+    GFailureReason := GFailureReason +
+      IfStr(Archive = '',
+        FmtMessage(CustomMessage('EtnRollbackDoneNoDb'), [GLastRollbackDir]),
+        FmtMessage(CustomMessage('EtnRollbackDoneDb'), [GLastRollbackDir, Archive]));
     { Окно потерь (сценарий ed2e42df): архив создаётся после остановки службы
       и до замены файлов, поэтому записи неудачного запуска не сохраняются. }
     if Archive = '' then
-      GFailureReason := GFailureReason +
-        ' Изменения, сделанные в базу после остановки службы, восстановить невозможно.'
+      GFailureReason := GFailureReason + ' ' + CustomMessage('EtnRollbackNoDbChanges')
     else
-      GFailureReason := GFailureReason +
-        ' Данные, записанные после создания архива (неудачный запуск), ' +
-        'потеряны.';
+      GFailureReason := GFailureReason + ' ' + CustomMessage('EtnRollbackDataLost');
     Result := True;
   end
   else
@@ -5113,11 +4930,9 @@ begin
     LogLine('ERROR', 'Откат не выполнен: ' + Detail + '; архив: ' +
       IfStr(Archive = '', 'не создавался', Archive) + '; снимок: ' +
       GLastRollbackDir + '; журнал: ' + GLogPath);
-    GFailureReason := GFailureReason + '. Откат не выполнен (' + Detail +
-      '). Архив: ' + IfStr(Archive = '', 'не создавался', Archive) +
-      '. Снимок: ' + GLastRollbackDir + '. Журнал: ' + GLogPath +
-      '. Данные, записанные после остановки службы, могут быть потеряны: ' +
-      'восстановите базу из архива вручную (инструкция в журнале).';
+    GFailureReason := GFailureReason + FmtMessage(CustomMessage('EtnRollbackFailed'), [
+        Detail, IfStr(Archive = '', CustomMessage('EtnRollbackBackupNotCreated'), Archive),
+       GLastRollbackDir, GLogPath]);
   end;
   if not StartServiceIfNeeded then
     LogLine('WARN', 'Откат: служба не запустилась');
@@ -5127,7 +4942,15 @@ begin
   else if ProbeHealth(False) then
     LogLine('INFO', 'Откат: прежняя версия отвечает на health-check')
   else
+  begin
     LogLine('WARN', 'Откат: прежняя версия не отвечает (' + GHealthReason + ')');
+    { Причина отказа не должна маскировать неработающую прежнюю версию: файлы
+      могли вернуться, но сервер не поднялся — администратор обязан увидеть
+      это в причине, а не только WARN в журнале (a1ea1d40). }
+    GFailureReason := GFailureReason + '. ' + FmtMessage(
+      CustomMessage('EtnRollbackPrevNotResponding'), [
+        GHealthReason, FmtMessage(CustomMessage('EtnServiceStartManually'), [GLogPath])]);
+  end;
 end;
 
 { Вызывается ли бэкап: только при смене версии (карточка bb063ac3). Ремонт
@@ -5156,14 +4979,30 @@ begin
   Result := True;
 end;
 
+{ После возврата службы на прежнюю версию (неудачный бэкап/снимок): start не
+  ждёт готовности сервера, поэтому ограниченный health-check прежней версии —
+  единственное доказательство, что сервер снова работает. False — служба не
+  отвечает; вызывающий дописывает в причину подсказку о ручном запуске. }
+function PreviousVersionResponsive: Boolean;
+begin
+  Result := True;
+  if not HealthCheckApplicable then Exit;
+  Result := ProbeHealth(False);
+  if not Result then
+    LogLine('WARN', 'Служба после отмены обновления не отвечает: ' + GHealthReason);
+end;
+
 { ---------------------------------------------------------------------------
   Фазы обновления до копирования файлов — задача bb063ac3.
-  Порядок обязателен: остановка службы → бэкап БД → снимок отката. Копирование
-  файлов выполняет Inno уже после возврата из этого вызова (ssInstall).
-  Возвращает код контракта: 0 — можно копировать, 20 — предусловие,
-  10 — сбой выполнения (файлы не тронуты).
+  Порядок обязателен: личность службы → остановка службы → бэкап БД → снимок
+  отката. Копирование файлов выполняет Inno уже после возврата из этого вызова
+  (ssInstall). Возвращает код контракта: 0 — можно копировать, 20 —
+  предусловие, 10 — сбой выполнения (файлы не тронуты).
   --------------------------------------------------------------------------- }
 function PrepareServerUpdate(var Reason: String): Integer;
+var
+  NeedBackup: Boolean;
+  ToolReason: String;
 begin
   Result := EXIT_OK;
   Reason := '';
@@ -5174,37 +5013,60 @@ begin
       'служба не останавливается, бэкап не создаётся');
     Exit;
   end;
-  SetInstallStage('Остановка службы ETN…');
-  if not StopServiceForUpdate(Reason) then
+  NeedBackup := BackupNeeded;
+  { Личность службы до любых изменений (34f8e315): чужой ImagePath, Start=4,
+    DeleteFlag=1 или status=NonExistent при живом ключе — код 20, иначе install
+    пропускается (1073), а start падает уже после замены файлов. }
+  if not CheckServiceIdentity(Reason) then
+  begin
+    LogLine('ERROR', 'Обновление отменено: ' + Reason);
+    Result := EXIT_PRECONDITION;
+    Exit;
+  end;
+  { Инструмент бэкапа распаковывается ДО остановки службы: если его нет в
+    поставке, сервер продолжает работать, а обновление не начинается. }
+  if NeedBackup and (not EnsureDatabaseTool(ToolReason)) then
+  begin
+    Reason := FmtMessage(CustomMessage('EtnPrepareToolUnavailable'), [ToolReason]);
+    LogLine('ERROR', Reason);
+    Result := EXIT_FAILED;
+    Exit;
+  end;
+  SetInstallStage(CustomMessage('EtnStageStopService'));
+  if not StopServiceForUpdate(Reason, False) then
   begin
     Result := EXIT_PRECONDITION;
     Exit;
   end;
-  if BackupNeeded then
+  if NeedBackup then
   begin
     { Подпись этапа «Резервная копия баз данных…» ставит CreateDatabaseBackup. }
     if not CreateDatabaseBackup(True) then
     begin
       { Сценарий bc7cc846: причина, требуемый объём и путь к журналу. }
-      Reason := 'резервная копия баз данных не создана: ' +
-        IfStr(GBackupReason = '', 'причина в журнале', GBackupReason) +
-        '; требуется свободного места: ' + FormatSizeBytes(DatabaseBackupSizeBytes) +
-        ' (' + GDataDir + '\backups); журнал: ' + GLogPath +
-        ' — обновление отменено, файлы не заменялись';
+      Reason := FmtMessage(CustomMessage('EtnPrepareBackupFailed'), [
+          IfStr(GBackupReason = '', CustomMessage('EtnServiceReasonInLog'), GBackupReason),
+         FormatSizeBytes(DatabaseBackupSizeBytes), GDataDir, GLogPath]);
       { Служба уже остановлена — возвращаем её: сервер обязан работать на
-        прежней версии (сценарий bc7cc846). }
+        прежней версии (сценарий bc7cc846). start не ждёт готовности, поэтому
+        подтверждаем ответ прежней версии health-check-ом. }
       if not StartServiceIfNeeded then
-        LogLine('WARN', 'Не удалось вернуть службу после неудачного бэкапа');
+        LogLine('WARN', 'Не удалось вернуть службу после неудачного бэкапа')
+      else if not PreviousVersionResponsive then
+        Reason := Reason + '; ' + FmtMessage(
+          CustomMessage('EtnServiceStartManually'), [GLogPath]);
       Result := EXIT_FAILED;
       Exit;
     end;
   end;
   if not CreateRollbackSnapshot then
   begin
-    Reason := 'снимок отката не создан: ' + RollbackRoot +
-      ' — обновление отменено, файлы не заменялись (причина в журнале)';
+    Reason := FmtMessage(CustomMessage('EtnPrepareSnapshotFailed'), [RollbackRoot]);
     if not StartServiceIfNeeded then
-      LogLine('WARN', 'Не удалось вернуть службу после неудачного снимка');
+      LogLine('WARN', 'Не удалось вернуть службу после неудачного снимка')
+    else if not PreviousVersionResponsive then
+      Reason := Reason + '; ' + FmtMessage(
+        CustomMessage('EtnServiceStartManually'), [GLogPath]);
     Result := EXIT_FAILED;
     Exit;
   end;
@@ -5380,13 +5242,7 @@ end;
   эксклюзивный bind). Если таблица работает, логика не меняется: строки есть —
   foreign/own, строк нет — netsh + эксклюзивный bind.
   Возвращает 0 — свободен (или держит служба ETN), 1 — занят, 2 — проверить
-  не удалось. Тестовые хуки (только TestMode): TESTSERVICENAME подменяет имя
-  службы, и скрипт возвращает 0/2 по факту её нахождения (поведенческая проба
-  CIM-запроса); TESTOWNSERVICEPID задаёт PID «своей» службы вместо CIM-запроса
-  (поведенческая проба сравнения владельцев и цепочки потомков);
-  TESTPORTBINDFAIL=1 имитирует неизвестный отказ пробного bind (статус 2);
-  TESTLISTENERTABLEOFF=1 — недоступную TCP-таблицу, TESTNOSERVICE=1 —
-  отсутствие службы (проверка новых веток без аномальной ОС). }
+  не удалось. }
 function ServerPortStatus(const Port: String): Integer;
 var
   Script, Args, SvcName, SvcNameLiteral, SvcProbe, OwnSeed, BindFail,
@@ -5400,22 +5256,6 @@ begin
   BindFail := '0';
   TableOff := '0';
   NoSvc := '0';
-#ifdef TestMode
-  if GTestServiceName <> '' then
-  begin
-    SvcName := GTestServiceName;
-    SvcProbe := '1';
-  end;
-  { Валидация PID: строка из параметра идёт в скрипт только если это число. }
-  if StrToIntDef(GTestOwnServicePid, 0) > 0 then
-    OwnSeed := IntToStr(StrToIntDef(GTestOwnServicePid, 0));
-  if GTestPortBindFail = '1' then
-    BindFail := '1';
-  if GTestListenerTableOff = '1' then
-    TableOff := '1';
-  if GTestNoService = '1' then
-    NoSvc := '1';
-#endif
   { Имя службы — в одинарные кавычки PowerShell; кавычки внутри имени
     удваиваются (правило PS-литерала). Двойных кавычек в скрипте нет. }
   SvcNameLiteral := SvcName;
@@ -5525,22 +5365,10 @@ begin
     Result := ExtractFileDrive(Dir) + '\';
 end;
 
-{ Порог свободного места; в тестовой сборке подменяется /TESTMINFREE.
-  Переменная объявлена всегда: пустая секция var в продуктовой сборке не
-  компилируется (Inno требует хотя бы одно объявление). }
+{ Порог свободного места. }
 function MinFreeSpaceBytes: Int64;
-var
-  TestValue: String;
 begin
   Result := MIN_FREE_SPACE_BYTES;
-#ifdef TestMode
-  TestValue := ParamValue('TESTMINFREE');
-  if TestValue <> '' then
-  begin
-    Result := StrToInt64Def(TestValue, MIN_FREE_SPACE_BYTES);
-    LogLine('WARN', 'TESTMINFREE=' + TestValue + ': порог свободного места подменён (тестовый режим)');
-  end;
-#endif
 end;
 
 function FreeSpaceEnough(const Dir: String; var FreeBytes: Int64): Boolean;
@@ -5576,31 +5404,30 @@ var
   ElevatedWrite: Boolean;
 begin
   Result := '';
+  GPortBusy := False;
   if not PortValid(GServerPort) then
   begin
-    Result := 'некорректный порт "' + GServerPort + '": допустимо число от ' +
-      IntToStr(MIN_PORT) + ' до ' + IntToStr(MAX_PORT);
+    Result := FmtMessage(CustomMessage('EtnPortInvalid'), [GServerPort,
+      IntToStr(MIN_PORT), IntToStr(MAX_PORT)]);
     Exit;
   end;
   Status := ServerPortStatus(GServerPort);
   if Status = 1 then
   begin
-    Result := 'порт ' + GServerPort + ' занят другим приложением: укажите ' +
-      'свободный порт в «Параметры сервера»';
+    GPortBusy := True;
+    Result := FmtMessage(CustomMessage('EtnPortBusy'), [GServerPort]);
     Exit;
   end;
   if Status = 2 then
   begin
-    Result := 'не удалось проверить занятость порта ' + GServerPort +
-      ': проверьте порт вручную';
+    Result := FmtMessage(CustomMessage('EtnPortCheckFailed'), [GServerPort]);
     Exit;
   end;
   { Каталог данных фиксирован; путь, занятый файлом, не станет каталогом ни
     под каким пользователем — это ошибка и для GUI. }
   if FileExists(GDataDir) and (not DirExists(GDataDir)) then
   begin
-    Result := 'путь каталога данных занят файлом: ' + GDataDir +
-      ' — освободите путь и повторите установку';
+    Result := FmtMessage(CustomMessage('EtnDataDirOccupied'), [GDataDir]);
     Exit;
   end;
   ElevatedWrite := (not ForGui) or GIsElevated;
@@ -5608,13 +5435,12 @@ begin
   begin
     if not DirWritable(GDataDir) then
     begin
-      Result := 'каталог данных недоступен для записи: ' + GDataDir +
-        ' (нужны права администратора)';
+      Result := FmtMessage(CustomMessage('EtnDataDirNotWritable'), [GDataDir]);
       Exit;
     end;
     if not DirWritable(GServerDir) then
     begin
-      Result := 'каталог программы недоступен для записи: ' + GServerDir;
+      Result := FmtMessage(CustomMessage('EtnProgramDirNotWritable'), [GServerDir]);
       Exit;
     end;
   end;
@@ -5622,16 +5448,14 @@ begin
     каталога данных и диск каталога программы (при разных дисках они разные). }
   if GServerSelected and (not FreeSpaceEnough(GDataDir, FreeBytes)) then
   begin
-    Result := 'недостаточно свободного места для каталога данных ' + GDataDir +
-      ': свободно ' + FormatMegabytes(FreeBytes) + ', нужно не менее ' +
-      FormatMegabytes(MinFreeSpaceBytes);
+    Result := FmtMessage(CustomMessage('EtnNoSpaceData'), [GDataDir,
+      FormatMegabytes(FreeBytes), FormatMegabytes(MinFreeSpaceBytes)]);
     Exit;
   end;
   if ElevatedWrite and (not FreeSpaceEnough(GServerDir, FreeBytes)) then
   begin
-    Result := 'недостаточно свободного места для каталога программы ' + GServerDir +
-      ': свободно ' + FormatMegabytes(FreeBytes) + ', нужно не менее ' +
-      FormatMegabytes(MinFreeSpaceBytes);
+    Result := FmtMessage(CustomMessage('EtnNoSpaceProgram'), [GServerDir,
+      FormatMegabytes(FreeBytes), FormatMegabytes(MinFreeSpaceBytes)]);
     Exit;
   end;
 end;
@@ -5718,19 +5542,6 @@ var
   Code: Integer;
 begin
   Result := False;
-#ifdef TestMode
-  if LowerCase(GTestFirewall) = 'fail' then
-  begin
-    LogLine('INFO', 'FIREWALL (тестовый режим, имитация сбоя netsh): ' + Args);
-    Exit;
-  end;
-  if LowerCase(GTestFirewall) <> 'real' then
-  begin
-    LogLine('INFO', 'FIREWALL (тестовый режим, без изменений): netsh ' + Args);
-    Result := True;
-    Exit;
-  end;
-#endif
   if not Exec(ExpandConstant('{sys}\netsh.exe'), Args, '', SW_HIDE,
     ewWaitUntilTerminated, Code) then
   begin
@@ -5810,49 +5621,33 @@ var
   DataDirFromJson, Reason: String;
 begin
   LogLine('INFO', 'Silent server-only: проверка предусловий');
-#ifdef TestMode
-  { /TESTUSERINSTALL=1 — установка клиента «только для меня» без окон.
-    Silent-контракт ставит только сервер (клиент запрещён), поэтому ветки
-    Files и Icons для клиента иначе не проверяются. Тест ставит только клиента:
-    серверные предусловия (install.json, служба, порт) не применяются,
-    GServerSelected снимается — серверные файлы не копируются. GSilent
-    остаётся True: мастер не создаётся, установка идёт как silent. }
-  if GTestUserInstall = '1' then
-  begin
-    GServerSelected := False;
-    GClientSelected := True;
-    GClientScopeUser := True;
-    LogLine('INFO', 'TESTUSERINSTALL=1: silent-предусловия пропущены — ставится только клиент «для меня»');
-    Exit;
-  end;
-#endif
   if ParamExists('SERVERONLY') = False then
-    FailPrecondition('/VERYSILENT без /SERVERONLY: тихая установка клиента запрещена');
+    FailPrecondition(CustomMessage('EtnSilentClientForbidden'));
   if not GIsElevated then
-    FailPrecondition('процесс не элевирован: нужны права администратора');
+    FailPrecondition(CustomMessage('EtnSilentNotElevated'));
   { Административный режим установки даёт элевированный процесс или /ALLUSERS:
     silent-прогон службы идёт с /ALLUSERS и уже элевирован, поэтому Inno не
     перезапускает мастер (ошибка aa5af30c). }
   if not GInstallJsonPresent then
-    FailPrecondition('нет ' + GInstallJsonPath + ' — сервер не устанавливался установщиком');
+    FailPrecondition(FmtMessage(CustomMessage('EtnSilentNoInstallRecord'), [GInstallJsonPath]));
   if not GInstallJsonValid then
-    FailPrecondition('install.json повреждён: нет schema=1, product_version или mode');
+    FailPrecondition(CustomMessage('EtnSilentInstallJsonBroken'));
   if GInstalledMode <> 'service' then
-    FailPrecondition('режим "' + GInstalledMode +
-      '": в 0.15.1 самообновление поддерживается только для службы; приложение обновляется вручную');
+    FailPrecondition(FmtMessage(CustomMessage('EtnSilentAppMode'), [GInstalledMode]));
   if not GServerFilesPresent then
-    FailPrecondition('файлы сервера не найдены в ' + GServerDir + '\server');
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnSilentServerFilesMissing'), [GServerDir + '\server']));
   if not ServiceRegistered then
-    FailPrecondition('служба ' + SERVICE_NAME + ' не зарегистрирована');
+    FailPrecondition(FmtMessage(CustomMessage('EtnSilentServiceNotRegistered'), [SERVICE_NAME]));
   DataDirFromJson := GInstalledDataDir;
   if (DataDirFromJson <> '') and (CompareText(DataDirFromJson, GDataDir) <> 0) then
-    FailPrecondition('install.json указывает каталог данных ' + DataDirFromJson +
-      ', в 0.15.1 он фиксирован: ' + GDataDir);
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnSilentDataDirMismatch'), [DataDirFromJson, GDataDir]));
   if GBlockedDowngrade then
-    FailPrecondition('понижение версии запрещено: установлена ' + GInstalledVersion +
-      ', установщик ' + GProductVersion);
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnPreconditionDowngrade'), [GInstalledVersion, GProductVersion]));
   if not SilentDataDirWritable then
-    FailPrecondition('каталог данных недоступен для записи: ' + GDataDir);
+    FailPrecondition(FmtMessage(CustomMessage('EtnDataDirNotWritablePlain'), [GDataDir]));
 
   GServerSelected := True;
   GClientSelected := False;
@@ -5870,9 +5665,8 @@ end;
 
 { ---------------------------------------------------------------------------
   Предусловия привилегированной фазы — внутреннего запуска с /PRIVILEGEDPHASE.
-  GUI-установка её больше не запускает (элевация штатная, 2dd215f7); фазу
-  используют тесты установщика (installer/tests/*.ps1), чтобы выполнить
-  привилегированную работу без настоящей элевации.
+  GUI-установка её больше не запускает (элевация штатная, 2dd215f7); фаза
+  выполняет привилегированную работу без настоящей элевации.
   Это НЕ silent-самообновление: install.json, файлы и служба не требуются —
   проверяются только права, каталог, данные, порт и свободное место.
   --------------------------------------------------------------------------- }
@@ -5882,21 +5676,21 @@ var
 begin
   LogLine('INFO', 'Привилегированная фаза: проверка предусловий');
   if not GSilent then
-    FailPrecondition('/PRIVILEGEDPHASE допустим только с /VERYSILENT');
+    FailPrecondition(CustomMessage('EtnPrivilegedRequiresVerysilent'));
   if not GIsElevated then
-    FailPrecondition('привилегированная фаза запущена без прав администратора');
+    FailPrecondition(CustomMessage('EtnPrivilegedNotElevated'));
   { Административный режим обеспечивает элевированный процесс (или /ALLUSERS);
     скриптового перезапуска нет (ошибка aa5af30c). }
   if (not GServerSelected) and (not GClientSelected) then
-    FailPrecondition('не выбран ни один компонент: файл параметров пуст или повреждён');
+    FailPrecondition(CustomMessage('EtnPrivilegedNoComponents'));
   if GBlockedDowngrade then
-    FailPrecondition('понижение версии запрещено: установлена ' + ServerVersionText +
-      ', установщик ' + GProductVersion);
+    FailPrecondition(FmtMessage(
+      CustomMessage('EtnPreconditionDowngrade'), [ServerVersionText, GProductVersion]));
   { Каталог программы нужен и клиенту «для всех»: файлы клиента ставятся
     в каталог программы. }
   if (GClientSelected and (not GClientScopeUser)) and (not GServerSelected) and
      (not DirWritable(GServerDir)) then
-    FailPrecondition('каталог программы недоступен для записи: ' + GServerDir);
+    FailPrecondition(FmtMessage(CustomMessage('EtnProgramDirNotWritable'), [GServerDir]));
   if GServerSelected then
   begin
     Reason := CheckServerEnvironment(False);
@@ -5914,7 +5708,7 @@ begin
   if GFailureReason <> '' then
     Result := GFailureReason
   else
-    Result := 'причина не записана — смотрите журнал установки';
+    Result := CustomMessage('EtnFailureReasonMissing');
 end;
 
 { Свободный порт рядом с занятым: подсказка на экране параметров. Поле не
@@ -6022,8 +5816,8 @@ begin
     SW_SHOWNORMAL, ewNoWait, Code) then
   begin
     LogLine('ERROR', 'Повторный запуск установщика не удался: ' + ShellErrorText(Code));
-    SuppressibleMsgBox('Не удалось запустить установщик заново: ' +
-      ExpandConstant('{srcexe}') + #13#10 + 'Запустите его вручную.',
+    SuppressibleMsgBox(
+      FmtMessage(CustomMessage('EtnRetryInstallFailed'), [ExpandConstant('{srcexe}')]),
       mbError, MB_OK, IDOK);
     Exit;
   end;
@@ -6034,21 +5828,23 @@ end;
 { Архив для экрана ошибки/сводки. Показывается только архив этого запуска;
   архив прошлых обновлений помечается явно: он не отражает состояние базы и
   для автоматического отката не используется (замечание приёмки bb063ac3). }
-function BackupPathForMessage(const Prefix, Suffix: String): String;
+function BackupPathForMessage(const Suffix: String): String;
 var
   Backup: String;
 begin
   if GLastBackupDir <> '' then
-    Result := Prefix + GLastBackupDir + Suffix
+    Result := FmtMessage(CustomMessage('EtnBackupLine'), [GLastBackupDir]) + Suffix
   else
   begin
     Backup := LatestBackupDir;
     if Backup <> '' then
-      Result := Prefix + Backup +
-        ' (архив прошлого обновления — для автоматического отката не используется)' +
-        Suffix
+      Result := FmtMessage(CustomMessage('EtnBackupLine'), [Backup]) + ' ' +
+        CustomMessage('EtnBackupOldSuffix') + Suffix
     else
-      Result := Prefix + 'не создавалась' + Suffix;
+    begin
+      Backup := CustomMessage('EtnBackupNotCreated');
+      Result := FmtMessage(CustomMessage('EtnBackupLine'), [Backup]) + Suffix;
+    end;
   end;
 end;
 
@@ -6056,14 +5852,12 @@ function ErrorMemoText: String;
 var
   S: String;
 begin
-  S := 'Установка ETN ' + GProductVersion + ' не завершена.' + #13#10#13#10 +
-    'Причина: ' + FailureReasonText + '.' + #13#10#13#10 +
-    'Журнал установки: ' + IfStr(GLogPath = '', '(журнал не создан)', GLogPath) + #13#10;
-  S := S + BackupPathForMessage('Резервная копия баз данных: ', #13#10);
-  S := S + #13#10 +
-    'Следующий шаг: устраните причину и запустите установщик снова — ' +
-    'параметры и данные сохранятся. Если установка не запускается, приложите ' +
-    'журнал установки к обращению в поддержку.';
+  S := FmtMessage(CustomMessage('EtnErrorMemoTitle'), [GProductVersion]) + #13#10#13#10 +
+    FmtMessage(CustomMessage('EtnReasonPrefix'), [FailureReasonText]) + #13#10#13#10 +
+    FmtMessage(CustomMessage('EtnLogLine'), [IfStr(GLogPath = '',
+      CustomMessage('EtnLogNotCreated'), GLogPath)]) + #13#10;
+  S := S + BackupPathForMessage(#13#10);
+  S := S + #13#10 + CustomMessage('EtnErrorNextStep');
   Result := S;
 end;
 
@@ -6071,28 +5865,24 @@ function SummaryText: String;
 var
   S, Exe, Ipv4: String;
 begin
-  S := 'Установка ETN ' + GProductVersion + ' завершена.' + #13#10#13#10;
+  S := FmtMessage(CustomMessage('EtnSummaryTitle'), [GProductVersion]) + #13#10#13#10;
   if GServerSelected then
   begin
-    S := S + 'Сервер ETN установлен.' + #13#10;
-    S := S + 'Адрес на этом компьютере: http://127.0.0.1:' + GServerPort + #13#10;
+    S := S + CustomMessage('EtnSummaryServerInstalled') + #13#10;
+    S := S + FmtMessage(CustomMessage('EtnSummaryLocalAddress'), [GServerPort]) + #13#10;
     if GServerFirewall then
     begin
       Ipv4 := DetectLanIp;
       if Ipv4 <> '' then
-        S := S + 'Адрес в локальной сети: http://' + Ipv4 + ':' + GServerPort +
-          ' (если на компьютере есть VPN или несколько сетей, адрес может ' +
-          'отличаться — проверьте его в «Параметрах сети»)' + #13#10
+        S := S + FmtMessage(CustomMessage('EtnSummaryLanAddress'), [Ipv4, GServerPort]) + #13#10
       else
-        S := S + 'Адрес в локальной сети: определить не удалось (порт ' +
-          GServerPort + ' открыт брандмауэром)' + #13#10;
+        S := S + FmtMessage(CustomMessage('EtnSummaryLanUnknown'), [GServerPort]) + #13#10;
       if GFirewallWarning then
-        S := S + 'Внимание: правило брандмауэра Windows не создано — подключения ' +
-          'с других компьютеров могут блокироваться. Причина указана в журнале.' + #13#10;
+        S := S + CustomMessage('EtnSummaryFirewallWarning') + #13#10;
     end
     else
-      S := S + 'Подключения с других компьютеров отключены (только этот компьютер).' + #13#10;
-    S := S + 'Каталог данных: ' + GDataDir + #13#10;
+      S := S + CustomMessage('EtnSummaryLanDisabled') + #13#10;
+    S := S + FmtMessage(CustomMessage('EtnSummaryDataDir'), [GDataDir]) + #13#10;
   end;
   { Клиент упоминается в сводке только когда он выбран: иначе найденный в
     каталоге программы файл мог бы оказаться старым NSIS-клиентом, который
@@ -6101,21 +5891,18 @@ begin
   begin
     Exe := ClientExePath;
     if Exe <> '' then
-      S := S + 'Клиент ETN: ' + Exe + #13#10;
+      S := S + FmtMessage(CustomMessage('EtnSummaryClient'), [Exe]) + #13#10;
     if GAdminMachineScope then
-      S := S + 'Клиент установлен для всех пользователей. Запустите его из ' +
-        'меню «Пуск» или с рабочего стола: подключение к локальному серверу ' +
-        'уже предзаполнено в ярлыке.' + #13#10;
+      S := S + CustomMessage('EtnSummaryClientMachine') + #13#10;
   end;
   { Архив этого запуска; если его нет, а в backups что-то есть — архив
     прошлого обновления с явной пометкой (не для отката). }
   if (GLastBackupDir <> '') or (LatestBackupDir <> '') then
-    S := S + BackupPathForMessage('Резервная копия баз данных: ', #13#10);
-  S := S + 'Журнал установки: ' + IfStr(GLogPath = '', '(не создан)', GLogPath) + #13#10;
+    S := S + BackupPathForMessage(#13#10);
+  S := S + FmtMessage(CustomMessage('EtnLogLine'), [IfStr(GLogPath = '',
+    CustomMessage('EtnLogNotCreatedShort'), GLogPath)]) + #13#10;
   if GKeyWasShown then
-    S := S + #13#10 + 'Ключ администратора показывался на предыдущем экране: ' +
-      'сохраните его в надёжном месте — восстановить ключ нельзя, только ' +
-      'выпустить новый.';
+    S := S + #13#10 + CustomMessage('EtnSummaryKeyReminder');
   Result := S;
 end;
 
@@ -6123,9 +5910,8 @@ end;
   установка сорвалась после init (восстановить его нельзя). }
 procedure CreateErrorPage;
 begin
-  GErrorPage := CreateCustomPage(GKeyPage.ID, 'Установка не завершена',
-    'Установка ETN прервана. Ниже — причина, журнал, резервная копия и ' +
-    'следующий шаг.');
+  GErrorPage := CreateCustomPage(GKeyPage.ID,
+    CustomMessage('EtnErrorPageTitle'), CustomMessage('EtnErrorPageIntro'));
 
   GErrorMemo := TNewMemo.Create(GErrorPage);
   GErrorMemo.Parent := GErrorPage.Surface;
@@ -6144,7 +5930,7 @@ begin
   GErrorOpenLogButton.Left := 0;
   GErrorOpenLogButton.Top := GErrorMemo.Top + GErrorMemo.Height + ScaleY(8);
   GErrorOpenLogButton.Width := ScaleX(130);
-  GErrorOpenLogButton.Caption := 'Открыть журнал';
+  GErrorOpenLogButton.Caption := CustomMessage('EtnButtonOpenLog');
   GErrorOpenLogButton.OnClick := @OpenLogClick;
 
   GErrorOpenDataButton := TNewButton.Create(GErrorPage);
@@ -6152,7 +5938,7 @@ begin
   GErrorOpenDataButton.Left := GErrorOpenLogButton.Width + ScaleX(8);
   GErrorOpenDataButton.Top := GErrorOpenLogButton.Top;
   GErrorOpenDataButton.Width := ScaleX(150);
-  GErrorOpenDataButton.Caption := 'Открыть папку данных';
+  GErrorOpenDataButton.Caption := CustomMessage('EtnButtonOpenDataDir');
   GErrorOpenDataButton.OnClick := @OpenDataDirClick;
 
   GErrorRetryButton := TNewButton.Create(GErrorPage);
@@ -6161,7 +5947,7 @@ begin
     ScaleX(8);
   GErrorRetryButton.Top := GErrorOpenLogButton.Top;
   GErrorRetryButton.Width := ScaleX(170);
-  GErrorRetryButton.Caption := 'Повторить установку';
+  GErrorRetryButton.Caption := CustomMessage('EtnButtonRetry');
   GErrorRetryButton.OnClick := @RetryInstallClick;
 end;
 
@@ -6180,7 +5966,7 @@ begin
   GSummaryRunButton.Parent := WizardForm.FinishedPage;
   GSummaryRunButton.Left := WizardForm.FinishedLabel.Left;
   GSummaryRunButton.Width := ScaleX(130);
-  GSummaryRunButton.Caption := 'Запустить клиент';
+  GSummaryRunButton.Caption := CustomMessage('EtnButtonRunClient');
   GSummaryRunButton.OnClick := @RunClientClick;
 
   GSummaryDataButton := TNewButton.Create(WizardForm);
@@ -6189,14 +5975,14 @@ begin
     ScaleX(8);
   GSummaryDataButton.Top := 0;
   GSummaryDataButton.Width := ScaleX(150);
-  GSummaryDataButton.Caption := 'Открыть папку данных';
+  GSummaryDataButton.Caption := CustomMessage('EtnButtonOpenDataDir');
   GSummaryDataButton.OnClick := @OpenDataDirClick;
 
   GSummaryLogButton := TNewButton.Create(WizardForm);
   GSummaryLogButton.Parent := WizardForm.FinishedPage;
   GSummaryLogButton.Left := WizardForm.FinishedLabel.Left;
   GSummaryLogButton.Width := ScaleX(130);
-  GSummaryLogButton.Caption := 'Открыть журнал';
+  GSummaryLogButton.Caption := CustomMessage('EtnButtonOpenLog');
   GSummaryLogButton.OnClick := @OpenLogClick;
 
   { Нижняя строка кнопок — у нижнего края страницы, верхняя — над ней. }
@@ -6228,32 +6014,31 @@ end;
 function ServerCheckCaption: String;
 begin
   if GServerState = 'not-installed' then
-    Result := 'Установить сервер ETN'
+    Result := CustomMessage('EtnServerCheckInstall')
   else if GServerState = 'update-available' then
-    Result := 'Обновить сервер ETN: ' + GInstalledVersion + ' → ' + GProductVersion
+    Result := FmtMessage(CustomMessage('EtnServerCheckUpdate'), [GInstalledVersion, GProductVersion])
   else if GServerState = 'installed' then
-    Result := 'Переустановить сервер ETN ' + GProductVersion
+    Result := FmtMessage(CustomMessage('EtnServerCheckReinstall'), [GProductVersion])
   else if GServerState = 'repair' then
-    Result := 'Восстановить сервер ETN'
+    Result := CustomMessage('EtnServerCheckRepair')
   else if GServerState = 'adopt' then
-    Result := 'Установить сервер ETN и подключить существующие данные'
+    Result := CustomMessage('EtnServerCheckAdopt')
   else
-    Result := 'Сервер ETN (установлена более новая версия)';
+    Result := CustomMessage('EtnServerCheckNewer');
 end;
 
 function ClientCheckCaption: String;
 begin
   if GClientState = 'installed' then
-    Result := 'Переустановить клиент ETN'
+    Result := CustomMessage('EtnClientCheckReinstall')
   else
-    Result := 'Установить клиент ETN';
+    Result := CustomMessage('EtnClientCheckInstall');
 end;
 
 { Единая точка чтения выбора: обработчики OnClick чекбоксов (компоненты,
-  лицензия) и тестовый хук /TESTSELECT. Радиокнопок области в мастере нет:
-  в продуктовой сборке область задают фактические права процесса
-  (GAdminMachineScope / GUserOnlyMode), при обновлении — install.json. Третий
-  аргумент — только для /TESTSELECT и сохранения текущей области. }
+  лицензия). Радиокнопок области в мастере нет: область задают фактические
+  права процесса (GAdminMachineScope / GUserOnlyMode), при обновлении —
+  install.json. Третий аргумент — сохранение текущей области. }
 procedure ApplySelection(const ServerChecked, ClientChecked,
   MachineScopeChecked: Boolean);
 begin
@@ -6272,148 +6057,6 @@ begin
     GClientScopeUser := (not MachineScopeChecked) and (not GAdminMachineScope);
 end;
 
-{ Разложить контролы экрана компонентов сверху вниз по ФАКТИЧЕСКИМ высотам.
-  Вызывается после каждой смены подписей (UpdateComponentsState): высота
-  зависит от переноса текста, а раскладка, посчитанная один раз при создании,
-  при росте подписей давала наложение и «мелькающие остатки» (ошибка
-  860def0d, п.1). Скрытые контролы места не занимают; позиция им всё равно
-  назначается — при показе они встанут на своё место.
-
-  Возвращает нижнюю границу содержимого: по ней FitComponentsPage проверяет,
-  что страница уместилась (ошибка 5b9743da). }
-function LayoutComponentsPage: Integer;
-var
-  Y: Integer;
-begin
-  Result := 0;
-  if (GComponentsPage = nil) or (GServerCheck = nil) then Exit;
-  Y := 0;
-  GServerCheck.Top := Y;
-  Y := Y + GServerCheck.Height + ScaleY(2);
-
-  if GServerStateLabel <> nil then
-  begin
-    GServerStateLabel.Top := Y;
-    Y := Y + GServerStateLabel.Height + ScaleY(4);
-  end;
-  if GServerHintLabel <> nil then
-  begin
-    GServerHintLabel.Top := Y;
-    Y := Y + GServerHintLabel.Height + ScaleY(4);
-  end;
-  if GServerAltLink <> nil then
-  begin
-    GServerAltLink.Top := Y;
-    Y := Y + GServerAltLink.Height + ScaleY(6);
-  end;
-
-  if GClientCheck <> nil then
-  begin
-    GClientCheck.Top := Y;
-    Y := Y + GClientCheck.Height + ScaleY(2);
-  end;
-  if GClientStateLabel <> nil then
-  begin
-    GClientStateLabel.Top := Y;
-    Y := Y + GClientStateLabel.Height + ScaleY(2);
-  end;
-  if GClientHintLabel <> nil then
-  begin
-    GClientHintLabel.Top := Y;
-    Y := Y + GClientHintLabel.Height + ScaleY(4);
-  end;
-
-  { Область клиента: при обновлении — поясняющий текст (ea8e223a), в
-    административном режиме — постоянное объяснение; иначе (режим «только для
-    меня») — подсказка ниже. Радиокнопок нет: область задают фактические права
-    процесса. }
-  if GScopeFixedLabel <> nil then
-  begin
-    GScopeFixedLabel.Top := Y;
-    if GScopeFixedLabel.Visible then
-      Y := Y + GScopeFixedLabel.Height + ScaleY(4);
-  end;
-  if GScopeHintLabel <> nil then
-  begin
-    GScopeHintLabel.Top := Y;
-    if GScopeHintLabel.Visible then
-      Y := Y + GScopeHintLabel.Height + ScaleY(4);
-  end;
-
-  if GDataNoteLabel <> nil then
-  begin
-    GDataNoteLabel.Top := Y;
-    Y := Y + GDataNoteLabel.Height + ScaleY(4);
-  end;
-  if (GLicenseCheck <> nil) and GLicenseCheck.Visible then
-  begin
-    GLicenseCheck.Top := Y;
-    if GLicenseLink <> nil then
-      GLicenseLink.Top := Y + ScaleY(2);
-    Y := Y + GLicenseCheck.Height + ScaleY(6);
-  end;
-  if GReasonLabel <> nil then
-  begin
-    GReasonLabel.Top := Y;
-    Y := Y + GReasonLabel.Height;
-  end;
-  Result := Y;
-end;
-
-{ Страховка раскладки экрана компонентов (ошибка 5b9743da): содержимое обязано
-  уместиться на поверхности страницы. Иначе нижние подписи («Каталог данных» и
-  причина неактивности «Далее») уезжают за край и пользователь видит окно, где
-  «Далее» неактивна, а причины нет — это читается как зависание установщика.
-
-  Порядок уступок — от наименее важного к важному: сначала пояснение режима
-  (оно дублирует текст области клиента), затем «Каталог данных» (фиксирован и
-  повторяется в итоговой сводке), затем описания компонентов, затем ссылка на
-  другие варианты. Выбор компонентов, их состояние и причина неактивности
-  «Далее» не скрываются никогда.
-
-  Базовые состояния видимости восстанавливаются перед каждой укладкой: смена
-  выбора обязана вернуть подсказки, скрытые в прошлой, более тесной, раскладке. }
-procedure FitComponentsPage;
-var
-  Step: Integer;
-begin
-  if GComponentsPage = nil then Exit;
-  if GServerHintLabel <> nil then GServerHintLabel.Visible := True;
-  if GClientHintLabel <> nil then GClientHintLabel.Visible := True;
-  if GServerAltLink <> nil then GServerAltLink.Visible := True;
-  if GDataNoteLabel <> nil then GDataNoteLabel.Visible := True;
-  if GScopeFixedLabel <> nil then
-    GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
-  { Пояснение режима не дублирует текст фиксированной области (ошибка
-    5b9743da): при обновлении клиента оба говорят одно и то же, а вместе они не
-    помещаются на страницу. Показываем подробный текст области, подсказку — только
-    когда области-текста нет. В режиме «только для меня» подсказку режима
-    заменяет подсказка сервера (она объясняет и режим, и как поставить сервер),
-    поэтому при нехватке места уступает именно пояснение режима. }
-  if GScopeHintLabel <> nil then
-    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
-      (not ClientScopeFixed);
-  for Step := 1 to 5 do
-  begin
-    if LayoutComponentsPage <= GComponentsPage.SurfaceHeight then Exit;
-    if (GScopeHintLabel <> nil) and GScopeHintLabel.Visible then
-      GScopeHintLabel.Visible := False
-    else if (GDataNoteLabel <> nil) and GDataNoteLabel.Visible then
-      GDataNoteLabel.Visible := False
-    else if (GClientHintLabel <> nil) and GClientHintLabel.Visible then
-      GClientHintLabel.Visible := False
-    else if (GServerHintLabel <> nil) and GServerHintLabel.Visible then
-      GServerHintLabel.Visible := False
-    else if (GServerAltLink <> nil) and GServerAltLink.Visible then
-      GServerAltLink.Visible := False
-    else
-      Exit;
-  end;
-  { Последняя укладка — с уже скрытыми блоками: позиции должны совпасть с
-    фактической видимостью. }
-  LayoutComponentsPage;
-end;
-
 { Причина недоступности сервера в обычном (неэлевированном) запуске — одна
   строка для экрана компонентов и журнала (ошибка aa5af30c). Права из мастера
   не запрашиваются: чтобы получить сервер, пользователь закрывает установщик и
@@ -6421,7 +6064,7 @@ end;
   процессом, без respawn. }
 function ServerUnavailableReason: String;
 begin
-  Result := 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).';
+  Result := CustomMessage('EtnServerNeedsAdmin');
 end;
 
 { Причина неактивности «Далее» — одна функция для экрана и журнала (ошибка
@@ -6433,8 +6076,7 @@ end;
 function ComponentsReasonText: String;
 begin
   if GBlockedDowngrade then
-    Result := 'Установлена более новая версия ' + ServerVersionText +
-      ' — понижение версии не поддерживается. Доступна только отмена.'
+    Result := FmtMessage(CustomMessage('EtnReasonDowngrade'), [ServerVersionText])
   else if GComponentsNotice <> '' then
     Result := GComponentsNotice
   else if GUserOnlyMode and GServerRequested and (not GServerSelected) then
@@ -6442,115 +6084,210 @@ begin
   else if (not GServerSelected) and (not GClientSelected) then
   begin
     if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-      Result := 'Клиент установлен для всех пользователей: нужны права ' +
-        'администратора.'
+      Result := CustomMessage('EtnReasonClientMachineNeedsAdmin')
     else
-      Result := 'Выберите хотя бы один компонент.';
+      Result := CustomMessage('EtnReasonSelectComponent');
   end
   else if LicensePromptNeeded and (not GLicenseAccepted) then
-    Result := 'Примите условия лицензии MIT, чтобы продолжить.'
+    Result := CustomMessage('EtnReasonAcceptLicense')
   else
     Result := '';
 end;
 
+{ ---------------------------------------------------------------------------
+  Экран компонентов: список TNewCheckListBox и фиксированный нижний блок
+  (задача c4b68d78, 0.15.3)
+  --------------------------------------------------------------------------- }
+
+{ Статус сервера: состояние машины и признак инициализации. }
+function ServerStatusRowText: String;
+begin
+  Result := ServerStateText + IfStr(InitStateText = '', '', ' ' + InitStateText);
+end;
+
+{ Описание сервера. В обычном (неэлевированном) запуске вместо описания —
+  причина недоступности сервера (ошибка aa5af30c): пользователь должен видеть,
+  что именно сделать, чтобы получить сервер. }
+function ServerDescriptionRowText: String;
+begin
+  if GUserOnlyMode then
+    Result := ServerUnavailableReason
+  else
+    Result := CustomMessage('EtnServerDescription');
+end;
+
+{ Описание клиента: что это, что понадобится при первом запуске и каталог
+  установки выбранной области (ADR 144bcdb0). Текст состояния клиента зависит
+  от выбора: обещание удалить старый NSIS-клиент — только когда клиент выбран. }
+function ClientDescriptionRowText: String;
+begin
+  if GClientSelected and (not GServerSelected) then
+    Result := CustomMessage('EtnClientDescriptionNoServer')
+  else
+    Result := CustomMessage('EtnClientDescription');
+  if GClientSelected then
+    Result := Result + ' ' +
+      FmtMessage(CustomMessage('EtnClientInstallDirSuffix'), [ClientInstallPath]);
+end;
+
+{ Строка области клиента. Выбора в мастере нет: область задают фактические
+  права процесса. При установленном клиенте — текст выбранной области
+  (ClientScopeText, ea8e223a/4a66b7a5), в административном режиме — постоянное
+  объяснение; в режиме «только для меня» — пояснение режима (п.2 ошибки
+  860def0d). Радиокнопки недостижимы в продуктовой сборке и удалены. }
+function ClientScopeRowText: String;
+begin
+  if ClientScopeFixed or GAdminMachineScope then
+    Result := ClientScopeText
+  else
+    Result := CustomMessage('EtnClientScopeRowUserOnly');
+end;
+
+{ Нужна ли необязательная строка области клиента: текст области показывается
+  при установленном клиенте и в административном режиме, пояснение режима —
+  когда клиент выбран. }
+function ClientScopeRowNeeded: Boolean;
+begin
+  Result := ClientScopeFixed or GAdminMachineScope or GClientSelected;
+end;
+
+{ Обновить строки списка на месте. TNewCheckListBox.SetCaption сохраняет
+  Checked/ItemEnabled (внутри Items[Index] := ...), но сбрасывает ItemIndex и
+  прокрутку — сохраняем и восстанавливаем их через LB_GETTOPINDEX ($018E) и
+  LB_SETTOPINDEX ($0197). Список не пересоздаётся: спека требует, чтобы он
+  сохранял прокрутку и выделение при смене выбора.
+
+  Строки статусов и описаний — group уровня 1 и серые: ItemEnabled := False.
+  Это единственный способ сделать их серыми в TNewCheckListBox; средство
+  доступности считает такую строку недоступной — принятый компромисс.
+
+  Items.Add/AddSubItem и запись ItemLevel/State запрещены: они рассинхронизируют
+  FStateList (сторож в iss-static.ps1). Items.Delete допустим только для
+  последней строки области клиента — её состояние удаляется вместе с ней. }
+procedure SyncComponentsList;
+var
+  SavedIndex, SavedTop: Integer;
+begin
+  if GComponentsList = nil then Exit;
+  SavedIndex := GComponentsList.ItemIndex;
+  SavedTop := SendMessage(GComponentsList.Handle, $018E, 0, 0);
+
+  GComponentsList.ItemCaption[COMP_ITEM_SERVER] := ServerCheckCaption;
+  GComponentsList.ItemCaption[COMP_ITEM_SERVER_STATUS] := ServerStatusRowText;
+  GComponentsList.ItemCaption[COMP_ITEM_SERVER_DESC] := ServerDescriptionRowText;
+  GComponentsList.ItemCaption[COMP_ITEM_CLIENT] := ClientCheckCaption;
+  GComponentsList.ItemCaption[COMP_ITEM_CLIENT_STATUS] := ClientStateText;
+  GComponentsList.ItemCaption[COMP_ITEM_CLIENT_DESC] := ClientDescriptionRowText;
+  { В режиме «только для меня» сервер недоступен: строка выключена, причина —
+    в описании сервера и в причине неактивности «Далее». }
+  GComponentsList.ItemEnabled[COMP_ITEM_SERVER] := not GUserOnlyMode;
+
+  if ClientScopeRowNeeded then
+  begin
+    if GComponentsScopeRow then
+      GComponentsList.ItemCaption[COMP_ITEM_CLIENT_SCOPE] := ClientScopeRowText
+    else
+    begin
+      GComponentsList.AddGroup(ClientScopeRowText, '', 1, nil);
+      GComponentsScopeRow := True;
+    end;
+    GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_SCOPE] := False;
+  end
+  else if GComponentsScopeRow then
+  begin
+    GComponentsList.Items.Delete(COMP_ITEM_CLIENT_SCOPE);
+    GComponentsScopeRow := False;
+  end;
+
+  { ItemCaption/Delete/AddGroup сбрасывают выделение и прокрутку — возвращаем
+    их; список при этом не пересоздаётся. }
+  if GComponentsList.ItemIndex <> SavedIndex then
+    GComponentsList.ItemIndex := SavedIndex;
+  SendMessage(GComponentsList.Handle, $0197, SavedTop, 0);
+  GComponentsList.Invalidate;
+end;
+
+{ Текст причины для экрана: с префиксом (спека, элемент интерфейса «Экран
+  установщика — выбор компонентов и лицензия»). В журнал по-прежнему идёт
+  ComponentsReasonText без префикса — по нему причина ищется в логе. }
+function ComponentsReasonLabelText: String;
+begin
+  Result := ComponentsReasonText;
+  if Result <> '' then
+    Result := CustomMessage('EtnNextUnavailablePrefix') + ' ' + Result;
+end;
+
+{ Нижний блок закреплён от низа поверхности страницы: причина — в самом низу,
+  выше лицензия (когда нужна), выше каталог данных (когда показывается), выше
+  ссылка на другие варианты установки. Все элементы блока видимы всегда
+  (лицензия — по правилу LicensePromptNeeded): раньше нехватка места скрывала
+  подсказки, и причина неактивности «Далее» уезжала за нижний край (ошибка
+  5b9743da). Список получает остаток высоты и прокручивается сам — высоту
+  строк он считает по переносу caption, ручная раскладка не нужна. }
+procedure LayoutComponentsBottom;
+var
+  Y: Integer;
+begin
+  if (GComponentsPage = nil) or (GComponentsList = nil) then Exit;
+  Y := GComponentsPage.SurfaceHeight;
+  if GReasonLabel <> nil then
+  begin
+    GReasonLabel.Top := Y - GReasonLabel.Height;
+    Y := GReasonLabel.Top - ScaleY(6);
+  end;
+  if (GLicenseCheck <> nil) and GLicenseCheck.Visible then
+  begin
+    GLicenseCheck.Top := Y - GLicenseCheck.Height;
+    if GLicenseLink <> nil then
+      GLicenseLink.Top := GLicenseCheck.Top + ScaleY(2);
+    Y := GLicenseCheck.Top - ScaleY(4);
+  end;
+  if (GDataNoteLabel <> nil) and GDataNoteLabel.Visible then
+  begin
+    GDataNoteLabel.Top := Y - GDataNoteLabel.Height;
+    Y := GDataNoteLabel.Top - ScaleY(4);
+  end;
+  if GServerAltLink <> nil then
+  begin
+    GServerAltLink.Top := Y - GServerAltLink.Height;
+    Y := GServerAltLink.Top - ScaleY(8);
+  end;
+  GComponentsList.Top := 0;
+  GComponentsList.Left := 0;
+  GComponentsList.Width := GComponentsPage.SurfaceWidth;
+  if Y < 0 then Y := 0;
+  GComponentsList.Height := Y;
+end;
+
+
 procedure UpdateComponentsState(Sender: TObject);
 begin
   if GSilent or (not GComponentsReady) then Exit;
-  if (GServerCheck <> nil) and (GClientCheck <> nil) then
+  if GComponentsList <> nil then
     { Радиокнопок области нет: третий аргумент сохраняет текущую область
       (install.json при обновлении) и принудительно включает машинную только
       в административном режиме. }
-    ApplySelection(GServerCheck.Checked, GClientCheck.Checked,
+    ApplySelection(GComponentsList.Checked[COMP_ITEM_SERVER],
+      GComponentsList.Checked[COMP_ITEM_CLIENT],
       (not GClientScopeUser) or GAdminMachineScope);
   if GLicenseCheck <> nil then
     GLicenseAccepted := GLicenseCheck.Checked;
-  { Область клиента: выбора в мастере нет — её задают фактические права
-    процесса; при обновлении выбранная область выводится текстом (ea8e223a,
-    4a66b7a5). }
-  if GScopeFixedLabel <> nil then
-  begin
-    GScopeFixedLabel.Visible := ClientScopeFixed or GAdminMachineScope;
-    if ClientScopeFixed or GAdminMachineScope then
-    begin
-      GScopeFixedLabel.Caption := ClientScopeText;
-      FitLabel(GScopeFixedLabel);
-    end;
-  end;
-  if GServerHintLabel <> nil then
-  begin
-    { В обычном запуске сервер недоступен не случайно: служба Windows требует
-      прав администратора, а их у процесса нет (ошибка aa5af30c). Говорим
-      ровно то, что нужно сделать; та же строка — причина в журнале и в
-      ComponentsReasonText. }
-    if GUserOnlyMode then
-      GServerHintLabel.Caption := ServerUnavailableReason
-    else
-      GServerHintLabel.Caption :=
-        'Сервер хранит графовые базы знаний на этом компьютере и отдаёт к ним ' +
-        'доступ по сети. Node.js входит в установку.';
-    FitLabel(GServerHintLabel);
-  end;
-  if GServerCheck <> nil then
-  begin
-    GServerCheck.Caption := ServerCheckCaption;
-    GServerCheck.Enabled := not GUserOnlyMode;
-  end;
-  if GClientCheck <> nil then GClientCheck.Caption := ClientCheckCaption;
-  { Текст состояния клиента зависит от выбора: обещание удалить старый
-    NSIS-клиент — только когда клиент действительно выбран (замечание приёмки
-    112642a4). }
-  if GClientStateLabel <> nil then
-  begin
-    GClientStateLabel.Caption := ClientStateText;
-    FitLabel(GClientStateLabel);
-  end;
-  if GClientHintLabel <> nil then
-  begin
-    if GClientSelected and (not GServerSelected) then
-      GClientHintLabel.Caption :=
-        'Сервер не выбран: при первом запуске понадобится адрес существующего ' +
-        'сервера и ключ. Профили, серверы и ключи у каждого пользователя свои.'
-    else
-      GClientHintLabel.Caption :=
-        'Клиент — окно для работы с базами; нужны адрес сервера и ключ.';
-    { Каталог установки виден до начала установки: область клиента меняет и
-      его, а отдельного экрана каталога нет (ADR 144bcdb0). }
-    if GClientSelected then
-      GClientHintLabel.Caption := GClientHintLabel.Caption + ' Каталог установки: ' +
-        ClientInstallPath + '.';
-    FitLabel(GClientHintLabel);
-  end;
-  { Чем «только для меня» отличается от «для всех пользователей» (п.2
-    ошибки 860def0d): в режиме «только для меня» подсказка объясняет сам режим
-    и как получить сервер; в административном режиме её роль играет
-    ClientScopeText, поэтому она скрыта. }
-  if GScopeHintLabel <> nil then
-  begin
-    if GUserOnlyMode then
-      GScopeHintLabel.Caption :=
-        'Режим «только для меня»: клиент ставится в ваш профиль, права ' +
-        'администратора не нужны. Чтобы установить сервер или клиент «для всех ' +
-        'пользователей», закройте установщик и запустите его от имени ' +
-        'администратора (правый клик → Запуск от имени администратора).'
-    else
-      GScopeHintLabel.Caption :=
-        '«Только для меня» — клиент в вашем профиле, права администратора не ' +
-        'нужны. «Для всех пользователей» — в Program Files, нужны права ' +
-        'администратора.';
-    FitLabel(GScopeHintLabel);
-    GScopeHintLabel.Visible := GClientSelected and (not GAdminMachineScope) and
-      (not ClientScopeFixed);
-  end;
+  { Ссылка на другие варианты установки видна всегда (спека). }
+  if GServerAltLink <> nil then GServerAltLink.Visible := True;
+  { Каталог данных нужен только тому, кто ставит сервер или уже его имеет:
+    в режиме «только клиент» строки нет (спека, экран 1). }
+  if GDataNoteLabel <> nil then
+    GDataNoteLabel.Visible := GServerSelected or (GServerState <> 'not-installed');
+  { Строки списка — после выбора: текст статуса и описания зависит от него. }
+  SyncComponentsList;
   if GReasonLabel <> nil then
   begin
-    GReasonLabel.Caption := ComponentsReasonText;
+    GReasonLabel.Caption := ComponentsReasonLabelText;
     FitLabel(GReasonLabel);
   end;
-  { Раскладка — после подписей и высот: иначе выросшая подпись наезжает на
-    следующие контролы (ошибка 860def0d, п.1). FitComponentsPage дополнительно
-    гарантирует, что содержимое (и в первую очередь причина неактивности
-    «Далее») поместилось на поверхность страницы (ошибка 5b9743da). }
-  FitComponentsPage;
+  { Нижний блок — после подписей: высота причины зависит от переноса текста,
+    список получает остаток высоты поверхности. }
+  LayoutComponentsBottom;
   if WizardForm <> nil then
   begin
     WizardForm.NextButton.Enabled :=
@@ -6575,110 +6312,70 @@ end;
 
 procedure CreateComponentsPage;
 begin
-  { До переноса начального выбора экран не готов: программная установка Checked
-    вызывает OnClick, и ранний обработчик снял бы выбор клиента. }
+  { До заполнения списка экран не готов: обработчик OnClickCheck не должен
+    читать ещё не созданные строки. }
   GComponentsReady := False;
   { Первый экран — приветствие и выбор компонентов (стандартные страницы
-    welcome/license отключены в [Setup]). Позиции контролов назначает
-    LayoutComponentsPage по фактическим высотам подписей (ошибка 860def0d,
-    п.1): текст зависит от состояния машины и выбора, поэтому статическая
-    раскладка при создании не годится. }
-  GComponentsPage := CreateCustomPage(wpWelcome, 'ETN — установка',
-    'Добро пожаловать в ETN: сервер хранит графовые базы знаний на этом ' +
-    'компьютере, клиент — окно для работы с ними.');
+    welcome/license отключены в [Setup]). Раскладку задаёт LayoutComponentsBottom:
+    список занимает остаток высоты и прокручивается сам, нижний блок закреплён
+    от низа поверхности (задача c4b68d78). }
+  GComponentsPage := CreateCustomPage(wpWelcome,
+    CustomMessage('EtnComponentsTitle'), CustomMessage('EtnComponentsWelcome'));
 
-  GServerCheck := TNewCheckBox.Create(GComponentsPage);
-  GServerCheck.Parent := GComponentsPage.Surface;
-  GServerCheck.Left := 0;
-  GServerCheck.Width := GComponentsPage.SurfaceWidth;
-  GServerCheck.Caption := ServerCheckCaption;
-  GServerCheck.OnClick := @ComponentsChanged;
+  { Список компонентов: два checkbox уровня 0 и group-строки статуса/описания
+    уровня 1. TNewCheckListBox переносит caption по словам, поэтому длинные
+    статусы и описания видны целиком; subitem не используется — он остаётся
+    одной строкой. Width задаётся ДО Add*: иначе Inno меряет строки по нулевой
+    ширине (высота переноса получается неверной). }
+  GComponentsList := TNewCheckListBox.Create(GComponentsPage);
+  GComponentsList.Parent := GComponentsPage.Surface;
+  GComponentsList.Left := 0;
+  GComponentsList.Top := 0;
+  GComponentsList.Width := GComponentsPage.SurfaceWidth;
+  GComponentsList.BorderStyle := bsNone;
+  GComponentsList.ShowLines := False;
+  GComponentsList.MinItemHeight := ScaleY(22);
+  GComponentsList.Offset := ScaleX(4);
+  GComponentsList.OnClickCheck := @ComponentsChanged;
+  { Начальный выбор вычислен в ApplyDefaultSelection (чистая машина — оба
+    компонента, частичная — только установленные); он передаётся в AddCheckBox.
+    Программная установка Checked событие OnClickCheck не поднимает, поэтому
+    обработчик не снимает только что выставленный выбор. }
+  GComponentsList.AddCheckBox(ServerCheckCaption, '', 0, GServerSelected,
+    not GUserOnlyMode, False, False, nil);
+  GComponentsList.AddGroup(ServerStatusRowText, '', 1, nil);
+  GComponentsList.AddGroup(ServerDescriptionRowText, '', 1, nil);
+  GComponentsList.AddCheckBox(ClientCheckCaption, '', 0, GClientSelected,
+    True, False, False, nil);
+  GComponentsList.AddGroup(ClientStateText, '', 1, nil);
+  GComponentsList.AddGroup(ClientDescriptionRowText, '', 1, nil);
+  { Необязательная последняя строка области клиента: добавляется и удаляется
+    только она, индексы 0–5 не сдвигаются. }
+  GComponentsScopeRow := ClientScopeRowNeeded;
+  if GComponentsScopeRow then
+    GComponentsList.AddGroup(ClientScopeRowText, '', 1, nil);
+  { Статусы и описания — серые, как прежний clGray: ItemEnabled := False.
+    Средство доступности считает такую строку недоступной — принятый
+    компромисс, потому что TNewCheckListBox не умеет менять цвет строки. }
+  GComponentsList.ItemEnabled[COMP_ITEM_SERVER_STATUS] := False;
+  GComponentsList.ItemEnabled[COMP_ITEM_SERVER_DESC] := False;
+  GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_STATUS] := False;
+  GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_DESC] := False;
+  if GComponentsScopeRow then
+    GComponentsList.ItemEnabled[COMP_ITEM_CLIENT_SCOPE] := False;
 
-  GServerStateLabel := TNewStaticText.Create(GComponentsPage);
-  GServerStateLabel.Parent := GComponentsPage.Surface;
-  GServerStateLabel.Left := 20;
-  GServerStateLabel.AutoSize := False;
-  GServerStateLabel.WordWrap := True;
-  GServerStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GServerStateLabel.Font.Color := clGray;
-  GServerStateLabel.Caption := ServerStateText +
-    IfStr(InitStateText = '', '', ' ' + InitStateText);
-  FitLabel(GServerStateLabel);
-
-  { Что такое сервер (договорённость ТП; ошибка 860def0d, п.2). }
-  GServerHintLabel := TNewStaticText.Create(GComponentsPage);
-  GServerHintLabel.Parent := GComponentsPage.Surface;
-  GServerHintLabel.Left := 20;
-  GServerHintLabel.AutoSize := False;
-  GServerHintLabel.WordWrap := True;
-  GServerHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GServerHintLabel.Font.Color := clGray;
-  GServerHintLabel.Caption := '';
-  FitLabel(GServerHintLabel);
-
-  { Node.js входит в поставку; другие варианты — для опытных (спека, экран 1).
-    Подпись ссылки — в одну строку: у TNewLinkLabel нет переноса, и длинный
-    текст уходил за правый край страницы (ошибка 860def0d, п.1). }
+  { Ссылка на другие варианты установки сервера — в нижнем блоке, всегда
+    видима. Подпись в одну строку: у TNewLinkLabel нет переноса, длинный текст
+    уходил бы за правый край (ошибка 860def0d, п.1). }
   GServerAltLink := TNewLinkLabel.Create(GComponentsPage);
   GServerAltLink.Parent := GComponentsPage.Surface;
-  GServerAltLink.Left := 20;
-  GServerAltLink.Width := GComponentsPage.SurfaceWidth - 20;
-  GServerAltLink.Caption := '<a href="server-options">Другие варианты установки ' +
-    'сервера (удалённый сервер, Docker)</a>';
+  GServerAltLink.Left := 0;
+  GServerAltLink.Width := GComponentsPage.SurfaceWidth;
+  GServerAltLink.Caption := CustomMessage('EtnComponentsServerOptionsLink');
   GServerAltLink.OnLinkClick := @OpenServerOptions;
 
-  GClientCheck := TNewCheckBox.Create(GComponentsPage);
-  GClientCheck.Parent := GComponentsPage.Surface;
-  GClientCheck.Left := 0;
-  GClientCheck.Width := GComponentsPage.SurfaceWidth;
-  GClientCheck.Caption := ClientCheckCaption;
-  GClientCheck.OnClick := @ComponentsChanged;
-
-  GClientStateLabel := TNewStaticText.Create(GComponentsPage);
-  GClientStateLabel.Parent := GComponentsPage.Surface;
-  GClientStateLabel.Left := 20;
-  GClientStateLabel.AutoSize := False;
-  GClientStateLabel.WordWrap := True;
-  GClientStateLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GClientStateLabel.Font.Color := clGray;
-  GClientStateLabel.Caption := ClientStateText;
-  FitLabel(GClientStateLabel);
-
-  { Что такое клиент (договорённость ТП; ошибка 860def0d, п.2). }
-  GClientHintLabel := TNewStaticText.Create(GComponentsPage);
-  GClientHintLabel.Parent := GComponentsPage.Surface;
-  GClientHintLabel.Left := 20;
-  GClientHintLabel.AutoSize := False;
-  GClientHintLabel.WordWrap := True;
-  GClientHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GClientHintLabel.Font.Color := clGray;
-  GClientHintLabel.Caption := '';
-  FitLabel(GClientHintLabel);
-
-  { Область клиента: выбора в мастере нет — её задают фактические права
-    процесса (радиокнопки убраны как недостижимые в продуктовой сборке,
-    замечание верификатора 2dd215f7 п.4). При обновлении — текст выбранной
-    области (ea8e223a). }
-  GScopeFixedLabel := TNewStaticText.Create(GComponentsPage);
-  GScopeFixedLabel.Parent := GComponentsPage.Surface;
-  GScopeFixedLabel.Left := 20;
-  GScopeFixedLabel.AutoSize := False;
-  GScopeFixedLabel.WordWrap := True;
-  GScopeFixedLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GScopeFixedLabel.Caption := '';
-  GScopeFixedLabel.Visible := False;
-  FitLabel(GScopeFixedLabel);
-
-  GScopeHintLabel := TNewStaticText.Create(GComponentsPage);
-  GScopeHintLabel.Parent := GComponentsPage.Surface;
-  GScopeHintLabel.Left := 20;
-  GScopeHintLabel.AutoSize := False;
-  GScopeHintLabel.WordWrap := True;
-  GScopeHintLabel.Width := GComponentsPage.SurfaceWidth - 20;
-  GScopeHintLabel.Font.Color := clGray;
-  GScopeHintLabel.Caption := '';
-  FitLabel(GScopeHintLabel);
-
+  { Каталог данных сервера — в нижнем блоке; видимость задаёт
+    UpdateComponentsState (сервер выбран или уже установлен). }
   GDataNoteLabel := TNewStaticText.Create(GComponentsPage);
   GDataNoteLabel.Parent := GComponentsPage.Surface;
   GDataNoteLabel.Left := 0;
@@ -6686,7 +6383,7 @@ begin
   GDataNoteLabel.WordWrap := True;
   GDataNoteLabel.Width := GComponentsPage.SurfaceWidth;
   GDataNoteLabel.Font.Color := clGray;
-  GDataNoteLabel.Caption := 'Каталог данных: ' + GDataDir + ' (фиксирован)';
+  GDataNoteLabel.Caption := FmtMessage(CustomMessage('EtnDataDirFixed'), [GDataDir]);
   FitLabel(GDataNoteLabel);
 
   { Лицензия MIT — только первая установка (нет ни сервера, ни клиента). }
@@ -6694,7 +6391,7 @@ begin
   GLicenseCheck.Parent := GComponentsPage.Surface;
   GLicenseCheck.Left := 0;
   GLicenseCheck.Width := GComponentsPage.SurfaceWidth - ScaleX(120);
-  GLicenseCheck.Caption := 'Я принимаю условия лицензии MIT';
+  GLicenseCheck.Caption := CustomMessage('EtnLicenseAccept');
   GLicenseCheck.Checked := False;
   GLicenseCheck.OnClick := @ComponentsChanged;
   GLicenseCheck.Visible := LicensePromptNeeded;
@@ -6703,10 +6400,12 @@ begin
   GLicenseLink.Parent := GComponentsPage.Surface;
   GLicenseLink.Left := GComponentsPage.SurfaceWidth - ScaleX(110);
   GLicenseLink.Width := ScaleX(110);
-  GLicenseLink.Caption := '<a href="license">Текст лицензии</a>';
+  GLicenseLink.Caption := CustomMessage('EtnLicenseLink');
   GLicenseLink.OnLinkClick := @OpenLocalLicense;
   GLicenseLink.Visible := LicensePromptNeeded;
 
+  { Причина неактивности «Далее» — внизу экрана, всегда видима: раньше она
+    уезжала за нижний край и «Далее» выглядела зависшей (ошибка 5b9743da). }
   GReasonLabel := TNewStaticText.Create(GComponentsPage);
   GReasonLabel.Parent := GComponentsPage.Surface;
   GReasonLabel.Left := 0;
@@ -6717,13 +6416,8 @@ begin
   GReasonLabel.Font.Color := clRed;
   FitLabel(GReasonLabel);
 
-  { Начальный выбор вычислен в ApplyDefaultSelection (чистая машина — оба
-    компонента, частичная — только установленные); здесь он лишь переносится
-    в контролы. Присваивание Checked в Inno вызывает OnClick, поэтому до этого
-    места экран считается неготовым: иначе первый же обработчик прочитал бы
-    ещё не заполненные чекбоксы и снял выбор клиента (найдено при 860def0d). }
-  GServerCheck.Checked := GServerSelected;
-  GClientCheck.Checked := GClientSelected;
+  { Начальный выбор уже передан в AddCheckBox; здесь заполняются тексты строк
+    и раскладывается нижний блок. }
   GLicenseAccepted := False;
   GComponentsReady := True;
   UpdateComponentsState(nil);
@@ -6736,17 +6430,16 @@ end;
   --------------------------------------------------------------------------- }
 procedure CreateAdminPage;
 begin
-  GAdminPage := CreateCustomPage(GComponentsPage.ID, 'Администратор сервера',
-    { Формулировка пользователя (ошибка 860def0d, п.3). }
-    'Первый пользователь станет администратором ETN. Задайте его логин и ' +
-    'отображаемое имя, а после установки сервера получите ключ для входа.');
+  GAdminPage := CreateCustomPage(GComponentsPage.ID,
+    { Формулировка пользователя (ошибка 860def0d, п.3) — дословно в сообщении. }
+    CustomMessage('EtnAdminPageTitle'), CustomMessage('EtnAdminPageIntro'));
 
   GAdminLoginLabel := TNewStaticText.Create(GAdminPage);
   GAdminLoginLabel.Parent := GAdminPage.Surface;
   GAdminLoginLabel.Left := 0;
   GAdminLoginLabel.Top := 0;
   GAdminLoginLabel.Width := GAdminPage.SurfaceWidth;
-  GAdminLoginLabel.Caption := 'Логин администратора:';
+  GAdminLoginLabel.Caption := CustomMessage('EtnAdminLoginLabel');
 
   GAdminLoginEdit := TNewEdit.Create(GAdminPage);
   GAdminLoginEdit.Parent := GAdminPage.Surface;
@@ -6760,7 +6453,7 @@ begin
   GAdminDisplayLabel.Left := 0;
   GAdminDisplayLabel.Top := GAdminLoginEdit.Top + GAdminLoginEdit.Height + 12;
   GAdminDisplayLabel.Width := GAdminPage.SurfaceWidth;
-  GAdminDisplayLabel.Caption := 'Отображаемое имя (необязательно):';
+  GAdminDisplayLabel.Caption := CustomMessage('EtnAdminDisplayLabel');
 
   GAdminDisplayEdit := TNewEdit.Create(GAdminPage);
   GAdminDisplayEdit.Parent := GAdminPage.Surface;
@@ -6776,8 +6469,7 @@ begin
   GAdminHintLabel.AutoSize := False;
   GAdminHintLabel.WordWrap := True;
   GAdminHintLabel.Width := GAdminPage.SurfaceWidth;
-  GAdminHintLabel.Caption := 'Логин используется один раз — при первичной инициализации ' +
-    'сервера. Если сервер уже инициализирован, логин не меняется.';
+  GAdminHintLabel.Caption := CustomMessage('EtnAdminLoginNote');
   { Перенос обязателен: без него длинная подпись уходила за правый край и
     обрезалась (ошибка 860def0d, п.1). }
   FitLabel(GAdminHintLabel);
@@ -6850,12 +6542,10 @@ begin
   if GFirewallNoteLabel <> nil then
   begin
     if GServerFirewall then
-      GFirewallNoteLabel.Caption := 'Будет создано правило брандмауэра Windows для порта ' +
-        'сервера (профили «домен» и «частная сеть»). Сервер будет доступен с других ' +
-        'компьютеров локальной сети.'
+      GFirewallNoteLabel.Caption :=
+        FmtMessage(CustomMessage('EtnFirewallOnNote'), [GServerPort])
     else
-      GFirewallNoteLabel.Caption := 'Сервер будет доступен только с этого компьютера ' +
-        '(127.0.0.1). Подключения с других компьютеров локальной сети работать не будут.';
+      GFirewallNoteLabel.Caption := CustomMessage('EtnFirewallOffNote');
     FitLabel(GFirewallNoteLabel);
   end;
   LayoutServerParamsPage;
@@ -6870,14 +6560,12 @@ begin
     { Обновление/ремонт: параметры берутся из install.json, поля только
       показывают значения; здесь — что именно произойдёт. Режим запуска
       называется по-человечески, а не «service»/«app» (ошибка 860def0d, n6). }
-    S := 'Сервер уже установлен: ' + IfStr(GInstalledVersion = '',
-      ServerVersionText, GInstalledVersion) + ' → ' + GProductVersion +
-      ', режим: ' + ServerModeText(IfStr(GInstalledMode = '',
-        GServerMode, GInstalledMode)) + '.' +
-      ' При обновлении порт, доступ по локальной сети и каталог данных не меняются.';
+    S := FmtMessage(CustomMessage('EtnParamsInstalledNote'), [
+      IfStr(GInstalledVersion = '', ServerVersionText, GInstalledVersion),
+      GProductVersion,
+      ServerModeText(IfStr(GInstalledMode = '', GServerMode, GInstalledMode))]);
     if GInstalledVersion <> GProductVersion then
-      S := S + ' Служба ETN останавливается на время замены файлов, базы данных ' +
-        'копируются в ' + GDataDir + '\backups, затем служба запускается снова.';
+      S := S + ' ' + FmtMessage(CustomMessage('EtnParamsUpdateNote'), [GDataDir]);
     if GServerParamsNoteLabel <> nil then
     begin
       GServerParamsNoteLabel.Caption := S;
@@ -6895,16 +6583,15 @@ end;
 
 procedure CreateServerParamsPage;
 begin
-  GServerParamsPage := CreateCustomPage(GAdminPage.ID, 'Параметры сервера',
-    'Порт сервера и доступ с других компьютеров. Каталог данных фиксирован ' +
-    'и переживает обновление.');
+  GServerParamsPage := CreateCustomPage(GAdminPage.ID,
+    CustomMessage('EtnParamsPageTitle'), CustomMessage('EtnParamsPageIntro'));
 
   GPortLabel := TNewStaticText.Create(GServerParamsPage);
   GPortLabel.Parent := GServerParamsPage.Surface;
   GPortLabel.Left := 0;
   GPortLabel.Top := 0;
   GPortLabel.Width := GServerParamsPage.SurfaceWidth;
-  GPortLabel.Caption := 'Порт сервера (по умолчанию 4321):';
+  GPortLabel.Caption := CustomMessage('EtnPortLabel');
 
   GPortEdit := TNewEdit.Create(GServerParamsPage);
   GPortEdit.Parent := GServerParamsPage.Surface;
@@ -6920,7 +6607,7 @@ begin
   GPortHintLabel.AutoSize := False;
   GPortHintLabel.WordWrap := True;
   GPortHintLabel.Width := GServerParamsPage.SurfaceWidth - GPortEdit.Width - 12;
-  GPortHintLabel.Caption := 'Порт должен быть свободен: занятость проверяется до установки.';
+  GPortHintLabel.Caption := CustomMessage('EtnPortNote');
   FitLabel(GPortHintLabel);
 
   GFirewallCheck := TNewCheckBox.Create(GServerParamsPage);
@@ -6928,7 +6615,7 @@ begin
   GFirewallCheck.Left := 0;
   GFirewallCheck.Top := GPortEdit.Top + GPortEdit.Height + ScaleY(16);
   GFirewallCheck.Width := GServerParamsPage.SurfaceWidth;
-  GFirewallCheck.Caption := 'Разрешить подключения с других компьютеров в локальной сети';
+  GFirewallCheck.Caption := CustomMessage('EtnLanCheckbox');
   GFirewallCheck.Checked := GServerFirewall;
   GFirewallCheck.OnClick := @FirewallCheckClick;
 
@@ -6951,8 +6638,7 @@ begin
   GDataDirInfoLabel.AutoSize := False;
   GDataDirInfoLabel.WordWrap := True;
   GDataDirInfoLabel.Width := GServerParamsPage.SurfaceWidth;
-  GDataDirInfoLabel.Caption := 'Каталог данных: ' + GDataDir +
-    ' (в 0.15.1 фиксирован, не меняется при обновлении и удалении программы)';
+  GDataDirInfoLabel.Caption := FmtMessage(CustomMessage('EtnDataDirParams'), [GDataDir]);
   FitLabel(GDataDirInfoLabel);
 
   GServerParamsNoteLabel := TNewStaticText.Create(GServerParamsPage);
@@ -6988,9 +6674,9 @@ begin
   if (GPendingKey = '') or (not FileExists(KeyFilePath)) then Exit;
   if Exec(ExpandConstant('{cmd}'), '/c clip < "' + KeyFilePath + '"', '',
     SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
-    GKeyCopiedLabel.Caption := 'Скопировано в буфер обмена'
+    GKeyCopiedLabel.Caption := CustomMessage('EtnKeyCopied')
   else
-    GKeyCopiedLabel.Caption := 'Не удалось скопировать — выделите ключ и нажмите Ctrl+C';
+    GKeyCopiedLabel.Caption := CustomMessage('EtnKeyCopyFailed');
 end;
 
 procedure UpdateKeyPageState(Sender: TObject);
@@ -7029,8 +6715,8 @@ end;
   берётся из защищённого файла (в журнал не пишется). }
 procedure CreateKeyPage;
 begin
-  GKeyPage := CreateCustomPage(wpInstalling, 'Первичный API-ключ',
-    'Сохраните ключ: он показывается один раз и восстановить его нельзя.');
+  GKeyPage := CreateCustomPage(wpInstalling,
+    CustomMessage('EtnKeyPageTitle'), CustomMessage('EtnKeyPageIntro'));
 
   GKeyValueEdit := TNewEdit.Create(GKeyPage);
   GKeyValueEdit.Parent := GKeyPage.Surface;
@@ -7047,7 +6733,7 @@ begin
   GKeyCopyButton.Left := 0;
   GKeyCopyButton.Top := GKeyValueEdit.Top + GKeyValueEdit.Height + 8;
   GKeyCopyButton.Width := ScaleX(140);
-  GKeyCopyButton.Caption := 'Скопировать';
+  GKeyCopyButton.Caption := CustomMessage('EtnKeyCopyButton');
   GKeyCopyButton.OnClick := @CopyKeyClick;
 
   GKeyCopiedLabel := TNewStaticText.Create(GKeyPage);
@@ -7064,8 +6750,7 @@ begin
   GKeyWarningLabel.AutoSize := False;
   GKeyWarningLabel.WordWrap := True;
   GKeyWarningLabel.Width := GKeyPage.SurfaceWidth;
-  GKeyWarningLabel.Caption := 'Ключ показывается один раз. Восстановить нельзя — только ' +
-    'выпустить новый. Сохраните его в надёжном месте.';
+  GKeyWarningLabel.Caption := CustomMessage('EtnKeyPageNote');
   FitLabel(GKeyWarningLabel);
 
   GKeyPreviousLabel := TNewStaticText.Create(GKeyPage);
@@ -7075,8 +6760,7 @@ begin
   GKeyPreviousLabel.AutoSize := False;
   GKeyPreviousLabel.WordWrap := True;
   GKeyPreviousLabel.Width := GKeyPage.SurfaceWidth;
-  GKeyPreviousLabel.Caption := 'Ключ получен при предыдущем запуске установщика ' +
-    '(после сбоя) и сохранён в защищённом файле.';
+  GKeyPreviousLabel.Caption := CustomMessage('EtnKeyFromPreviousRun');
   GKeyPreviousLabel.Visible := False;
   FitLabel(GKeyPreviousLabel);
 
@@ -7085,7 +6769,7 @@ begin
   GKeyConfirmCheck.Left := 0;
   GKeyConfirmCheck.Top := GKeyPreviousLabel.Top + GKeyPreviousLabel.Height + 14;
   GKeyConfirmCheck.Width := GKeyPage.SurfaceWidth;
-  GKeyConfirmCheck.Caption := 'Я сохранил ключ';
+  GKeyConfirmCheck.Caption := CustomMessage('EtnKeySavedCheckbox');
   GKeyConfirmCheck.Checked := False;
   GKeyConfirmCheck.OnClick := @UpdateKeyPageState;
   LayoutKeyPage;
@@ -7094,38 +6778,6 @@ end;
 { ---------------------------------------------------------------------------
   События установщика
   --------------------------------------------------------------------------- }
-#ifdef TestMode
-{ /TESTBACKUP=1|skip — прямой прогон CreateDatabaseBackup без фаз установки:
-  1 — смена версии (архив создаётся), skip — ремонт (архива нет). Решение
-  передаётся так же, как его передаст bb063ac3; служба и файлы не участвуют. }
-function RunBackupProbe: Boolean;
-var
-  Needed, Ok: Boolean;
-begin
-  Needed := LowerCase(GTestBackup) <> 'skip';
-  Ok := CreateDatabaseBackup(Needed);
-  LogLine('INFO', 'TESTBACKUP result=' + Pick(Ok, 'ok', 'fail') +
-    ' needed=' + Pick(Needed, '1', '0') +
-    ' archive=' + IfStr(GLastBackupDir = '', '-', GLastBackupDir));
-  Result := Ok;
-end;
-
-{ /TESTUNINSTALLSERVICE=1 — прямой прогон снятия службы при удалении
-  (8b1f5980): та же RemoveServiceOnUninstall, что вызывает uninstaller, без
-  настоящего удаления программы. 0 — служба снята (или её не было), 10 — отказ
-  с причиной в журнале и reason-файле. Порядок команд (stop → uninstall) виден
-  по строкам журнала; установщик при этом ничего не удаляет. }
-function RunUninstallServiceProbe: Boolean;
-var
-  Reason: String;
-begin
-  Result := RemoveServiceOnUninstall(Reason);
-  LogLine('INFO', 'TESTUNINSTALLSERVICE result=' + Pick(Result, 'ok', 'fail') +
-    IfStr(Reason = '', '', ' reason=' + Reason));
-  if not Result then WriteReasonFile(Reason);
-end;
-#endif
-
 function InitializeSetup: Boolean;
 var
   Reason: String;
@@ -7143,55 +6795,8 @@ begin
   GServerPort := '4321';
   GServerFirewall := True;
   GSkipCopy := False;
-  GTestMode := False;
-  GTestHealth := '';
-  GTestElevated := '';
-  GTestService := '';
-  GTestState := '';
-  GTestSelect := '';
-  GTestRecord := '';
-  GTestParams := '';
-  GTestGui := '';
-  GTestLayout := '';
-  GTestInit := '';
-  GTestNodeExe := '';
-  GTestLogin := '';
-  GTestKeyState := '';
-  GTestFailAfterInit := '';
-  GTestKeyAck := '';
-  GTestKeyClose := '';
-  { Хуки 9b310991 (только тестовая сборка; сброс — чтобы в продуктовой сборке
-    переменные не выглядели неиспользуемыми). }
-  GTestDataDir := '';
-  GTestPort := '';
-  GTestMinFree := '';
-  GTestFirewall := '';
-  GTestPrecheck := '';
-  GTestResult := '';
-  GTestServiceName := '';
-  GTestOwnServicePid := '';
-  GTestPortBindFail := '';
-  GTestListenerTableOff := '';
-  GTestNoService := '';
-  GTestServiceCmd := '';
-  GTestServiceState := '';
-  GTestServiceStop := '';
-  GTestServiceStart := '';
-  GTestServiceWait := '';
-  GTestServiceInstall := '';
-  GTestServiceUninstall := '';
-  GTestUninstallService := '';
-  GTestServiceRegistered := False;
-  GTestServiceRunning := False;
-  GTestServiceRealFile := '';
-  GTestServicePendingPolls := 0;
-  GTestHealthUrl := '';
-  GTestHealthWait := '';
-  GTestHealthStep := '';
-  GTestRollback := '';
-  GTestBackup := '';
-  GTestLegacy := '';
   GLastBackupDir := '';
+  GDatabaseToolPath := '';
   GLastRollbackDir := '';
   GHealthReason := '';
   GAdminLogin := '';
@@ -7213,27 +6818,9 @@ begin
   GLegacyClientFound := False;
   GLegacyClientVersion := '';
   GLegacyClientMachine := False;
-  GTestLegacyCmd := '';
-  GTestLegacyStuck := '';
-  GTestLegacyWait := '';
-  GTestLegacyArgs := '';
-  { Хуки 98ad5eec: модель запущенного клиента и установка клиента «для меня». }
-  GTestClientPids := '';
-  GTestClientGone := '';
-  GTestClientSoft := '';
-  GTestClientForce := '';
-  GTestClientWait := '';
-  GTestClientReal := '';
-  GTestClientPath := '';
-  GTestClientRunning := False;
-  GTestClientSoftIssued := False;
-  GTestClientGoneAt := 0;
-  GTestUserInstall := '';
-  GTestConnectParams := '';
-  GTestAdminMode := '';
-  GTestUserOnlyMode := '';
-  GTestInnoAdminMode := '';
-  GTestUninstallRoot := '';
+  GLegacyUninstallCmd := '';
+  GLegacyRoot := 0;
+  GLegacyKey := '';
   GParamsPath := '';
   GReasonFile := '';
   GDeferredLog := '';
@@ -7252,101 +6839,6 @@ begin
   GOriginalUser := GetEnv('USERNAME');
   if GOriginalUser = '' then GOriginalUser := GetUserNameString;
   GAdminLogin := GOriginalUser;
-#ifdef TestMode
-  GTestMode := True;
-  GTestHealth := ParamValue('TESTHEALTH');
-  GTestElevated := ParamValue('TESTELEVATED');
-  GTestService := ParamValue('TESTSERVICE');
-  GTestState := ParamValue('TESTSTATE');
-  GTestSelect := ParamValue('TESTSELECT');
-  GTestRecord := ParamValue('TESTRECORD');
-  GTestParams := ParamValue('TESTPARAMS');
-  GTestGui := ParamValue('TESTGUIMODE');
-  GTestLayout := ParamValue('TESTLAYOUT');
-  GTestInit := ParamValue('TESTINIT');
-  GTestNodeExe := ParamValue('TESTNODEEXE');
-  GTestLogin := ParamValue('TESTLOGIN');
-  GTestKeyState := ParamValue('TESTKEYSTATE');
-  GTestFailAfterInit := ParamValue('TESTFAILAFTERINIT');
-  GTestKeyAck := ParamValue('TESTKEYACK');
-  GTestKeyClose := ParamValue('TESTKEYCLOSE');
-  GTestDataDir := ParamValue('TESTDATADIR');
-  GTestPort := ParamValue('TESTPORT');
-  GTestMinFree := ParamValue('TESTMINFREE');
-  GTestFirewall := ParamValue('TESTFIREWALL');
-  GTestPrecheck := ParamValue('TESTPRECHECK');
-  GTestResult := ParamValue('TESTRESULT');
-  GTestServiceName := ParamValue('TESTSERVICENAME');
-  GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
-  GTestPortBindFail := ParamValue('TESTPORTBINDFAIL');
-  GTestListenerTableOff := ParamValue('TESTLISTENERTABLEOFF');
-  GTestNoService := ParamValue('TESTNOSERVICE');
-  GTestServiceCmd := ParamValue('TESTSERVICECMD');
-  GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
-  GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
-  GTestServiceStart := LowerCase(ParamValue('TESTSERVICESTART'));
-  GTestServiceWait := ParamValue('TESTSERVICEWAIT');
-  GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
-  GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
-  GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
-  GTestServicePendingPolls := 0;
-  GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
-  { Исходное состояние модели службы: present — зарегистрирована и работает
-    (обычное состояние машины; обновление сначала её остановит), absent — не
-    зарегистрирована; команды install/uninstall меняют регистрацию, start/stop —
-    состояние. /TESTSERVICESTATE задаёт статическое состояние, которое команды
-    не меняют (проверка «служба не остановилась»). }
-  GTestServiceRegistered := LowerCase(GTestService) = 'present';
-  GTestServiceRunning := GTestServiceRegistered;
-  if GTestService <> '' then
-    LogOrDefer('WARN', 'TESTSERVICE=' + GTestService + ': служба смоделирована — ' +
-      'настоящая служба машины не трогается (тестовый режим)');
-  GTestHealthUrl := ParamValue('TESTHEALTHURL');
-  GTestHealthWait := ParamValue('TESTHEALTHWAIT');
-  GTestHealthStep := ParamValue('TESTHEALTHSTEP');
-  GTestRollback := LowerCase(ParamValue('TESTROLLBACK'));
-  GTestBackup := ParamValue('TESTBACKUP');
-  GTestLegacy := ParamValue('TESTLEGACY');
-  GTestLegacyCmd := ParamValue('TESTLEGACYCMD');
-  GTestLegacyStuck := ParamValue('TESTLEGACYSTUCK');
-  GTestLegacyWait := ParamValue('TESTLEGACYWAIT');
-  GTestLegacyArgs := ParamValue('TESTLEGACYARGS');
-  GTestClientPids := ParamValue('TESTCLIENTPIDS');
-  GTestClientGone := ParamValue('TESTCLIENTGONE');
-  GTestClientSoft := LowerCase(ParamValue('TESTCLIENTSOFT'));
-  GTestClientForce := LowerCase(ParamValue('TESTCLIENTFORCE'));
-  GTestClientWait := ParamValue('TESTCLIENTWAIT');
-  GTestClientReal := ParamValue('TESTCLIENTREAL');
-  GTestClientPath := ParamValue('TESTCLIENTPATH');
-  GTestUserInstall := ParamValue('TESTUSERINSTALL');
-  GTestConnectParams := ParamValue('TESTCONNECTPARAMS');
-  GTestAdminMode := ParamValue('TESTADMINMODE');
-  GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
-  GTestInnoAdminMode := ParamValue('TESTINNOADMINMODE');
-  GTestUninstallRoot := ParamValue('TESTUNINSTROOT');
-  { /TESTGUIMODE=1 имитирует GUI-запуск в silent-прогоне: silent-термин снимается
-    ДО расчёта режима (GUserOnlyMode) и выбора компонентов — иначе контекст
-    всегда привилегированный, а режим «только для меня» не смоделировать. }
-  if GTestGui = '1' then
-    GSilent := False;
-  { /TESTUSERONLYMODE=1 моделирует выбор «только для меня»: в продуктовой
-    сборке это неадминистративный GUI-режим (silent всегда административный),
-    поэтому silent-термин снимается и здесь. }
-  if GTestUserOnlyMode = '1' then
-    GSilent := False;
-  GTestClientRunning := GTestClientPids <> '';
-  GTestClientSoftIssued := False;
-  if GTestClientGone <> '' then
-    GTestClientGoneAt := StrToIntDef(GTestClientGone, 0)
-  else
-    GTestClientGoneAt := 0;
-  if GTestClientForce = '' then
-    GTestClientForce := 'ok';
-  { Подмена каталога данных для предпроверок (путь, занятый файлом,
-    недоступный диск): журнал при этом остаётся в обычном каталоге теста. }
-  if GTestDataDir <> '' then
-    GDataDir := GTestDataDir;
-#endif
 
   if GPrivilegedPhase then
     ReadParamsFile;
@@ -7361,24 +6853,8 @@ begin
   { Режим по фактическим правам процесса (ошибка aa5af30c): обычный запуск —
     клиент «только для меня», запуск от имени администратора — сервер и клиент
     «для всех». IsAdminInstallMode остаётся в формуле для /ALLUSERS: тихое
-    автообновление службы включает административный режим Inno без respawn.
-    В TestMode привилегий нет — режимы моделируются хуками /TESTADMINMODE и
-    /TESTUSERONLYMODE, чтобы прогон не зависел от прав машины. }
-#ifdef TestMode
-  GAdminInstallMode := IsAdminInstallMode;
-  if GTestAdminMode = '1' then
-  begin
-    GAdminInstallMode := True;
-    LogOrDefer('WARN', 'TESTADMINMODE=1: административный режим смоделирован (тестовый режим)');
-  end;
-  if GTestUserOnlyMode = '1' then
-  begin
-    GAdminInstallMode := False;
-    LogOrDefer('WARN', 'TESTUSERONLYMODE=1: режим «только для меня» смоделирован (тестовый режим)');
-  end;
-#else
+    автообновление службы включает административный режим Inno без respawn. }
   GAdminInstallMode := IsAdmin or IsAdminInstallMode;
-#endif
   { Привилегированная фаза всегда административная: вызывающий запускает её с
     /ALLUSERS, и клиент «для меня» ставит не она. Silent-прогон с /ALLUSERS
     тоже административный; без /ALLUSERS он элевацию требует предусловием. }
@@ -7440,151 +6916,6 @@ begin
     ', брандмауэр ' + Pick(GServerFirewall, 'включён', 'выключен') +
     ', каталог данных ' + GDataDir);
 
-#ifdef TestMode
-  if GTestLogin <> '' then
-    GAdminLogin := GTestLogin;
-#endif
-
-#ifdef TestMode
-  { /TESTSELECT подменяет выбор компонентов через ту же ApplySelection, которой
-    пользуются обработчики OnClick экрана компонентов (проверка условия
-    элевации и содержимого файла параметров без вывода окон). }
-  if GTestSelect = 'server' then
-    ApplySelection(True, False, False)
-  else if GTestSelect = 'client-machine' then
-    ApplySelection(False, True, True)
-  else if GTestSelect = 'client-user' then
-    ApplySelection(False, True, False);
-
-  { /TESTUSERINSTALL=1 — прогон установки клиента «только для меня» без окон:
-    проверка выполняется в ValidateSilentPreconditions (silent-контракт клиент
-    не ставит, но ветку [Files]/[Icons] нужно проверить). Здесь только след в
-    журнале — GSilent не меняется, мастер не создаётся. }
-  if GTestUserInstall = '1' then
-    LogLine('INFO', 'TESTUSERINSTALL=1: установка только клиента «для меня» (тестовый режим)');
-
-  { Наблюдаемость состояний и галочек без вывода окон: тестовый прогон
-    фиксирует вычисленное состояние в журнале и завершается без изменений. }
-  if GTestState = '1' then
-  begin
-    { /TESTGUIMODE=1 уже снял silent-термин при разборе параметров — здесь
-      только след в журнале. }
-    if GTestGui = '1' then
-      LogLine('INFO', 'TESTGUIMODE=1: silent-термин контекста отключён (тестовый режим)');
-    LogLine('INFO', 'TESTSTATE server_state=' + GServerState +
-      ' client_state=' + GClientState +
-      ' server_files=' + Pick(GServerFilesPresent, '1', '0') +
-      ' data_dir=' + Pick(GDataDirPresent, '1', '0') +
-      ' record=' + Pick(GInstallerRecordPresent, '1', '0') +
-      ' files_version=' + IfStr(GFilesVersion = '', '-', GFilesVersion) +
-      ' downgrade=' + Pick(GBlockedDowngrade, '1', '0') +
-      ' default_server=' + Pick(GServerSelected, '1', '0') +
-      ' default_client=' + Pick(GClientSelected, '1', '0') +
-      ' client_scope=' + Pick(GClientScopeUser, 'user', 'machine') +
-      ' scope_fixed=' + Pick(ClientScopeFixed, '1', '0') +
-      ' user_copy=' + Pick(GUserClientCopyPresent, '1', '0') +
-      ' machine_copy=' + Pick(ClientMachineCopyPresent, '1', '0') +
-      ' need_elevation=' + Pick(NeedElevation, '1', '0') +
-      ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
-      ' admin_mode=' + Pick(GAdminInstallMode, '1', '0') +
-      ' server_enabled=' + Pick(not GUserOnlyMode, '1', '0') +
-      ' legacy=' + IfStr(GLegacyClientVersion = '', '-', GLegacyClientVersion) +
-      ' legacy_machine=' + Pick(GLegacyClientMachine, '1', '0') +
-      ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
-    LogLine('INFO', 'TESTSTATE_NOTICE server_notice=' +
-      IfStr(GUserOnlyMode, ServerUnavailableReason, ''));
-    ExitProcess(EXIT_OK);
-  end;
-
-  { Проверка файла параметров: путь, содержимое (область клиента) и удаление
-    после чтения. }
-  if GTestParams = '1' then
-  begin
-    WriteParamsFile;
-    LogLine('INFO', 'TESTPARAMS path=' + GParamsPath +
-      ' scope=' + Pick(GClientScopeUser, 'user', 'machine'));
-    ReadParamsFile;
-    if GParamsPath <> '' then DeleteFile(GParamsPath);
-    LogLine('INFO', 'TESTPARAMS deleted=' + Pick(not FileExists(GParamsPath), '1', '0'));
-    ExitProcess(EXIT_OK);
-  end;
-
-  { /TESTPORT — подмена порта для предпроверок без файла параметров. }
-  if GTestPort <> '' then
-  begin
-    GServerPort := GTestPort;
-    LogLine('WARN', 'TESTPORT=' + GTestPort + ': порт подменён (тестовый режим)');
-  end;
-
-  { /TESTCONNECTPARAMS=1 — какие параметры получит клиент при «Запустить
-    клиент» (ошибка 0f8dd0f3). Подмена порта уже применена, выбор компонентов и
-    состояние машины — тоже; прогон завершается без изменений. }
-  if GTestConnectParams = '1' then
-  begin
-    LogLine('INFO', 'TESTCONNECTPARAMS ' +
-      IfStr(ClientConnectParams = '', '(none)', ClientConnectParams));
-    ExitProcess(EXIT_OK);
-  end;
-
-  { /TESTELEVHELPER удалён вместе со скриптовой элевацией (2dd215f7):
-    режим определяют фактические права процесса; мастер не перезапускается. }
-
-  { /TESTPRECHECK=1 — прогон предпроверок без окон: та же функция, что вызывают
-    экран параметров сервера и привилегированная фаза. Результат — в журнале и
-    в файле /TESTRESULT (тест читает причину отказа). }
-  if GTestPrecheck = '1' then
-  begin
-    Reason := CheckServerEnvironment(True);
-    LogLine('INFO', 'TESTPRECHECK result=' + IfStr(Reason = '', 'ok', Reason));
-    if GTestResult <> '' then
-      SaveStringToFile(GTestResult, Utf8Encode(Reason), False);
-    if Reason = '' then
-      ExitProcess(EXIT_OK)
-    else
-      ExitProcess(EXIT_PRECONDITION);
-  end;
-
-  { /TESTLEGACYARGS=1 — вычисленные аргументы деинсталлятора старого клиента:
-    проверяется _?=<каталог> на пути с пробелами без запуска деинсталлятора. }
-  if GTestLegacyArgs = '1' then
-  begin
-    LogLine('INFO', 'TESTLEGACYARGS args=' +
-      UninstallerArgs('"C:\Program Files\ETN\Uninstall ETN.exe" /currentuser'));
-    ExitProcess(EXIT_OK);
-  end;
-
-  { /TESTBACKUP=1|skip — прямой прогон функции бэкапа (ce3ab836): код 0 —
-    архив создан и проверен (или ремонт без архива), 10 — бэкап неудачен. }
-  if GTestBackup <> '' then
-  begin
-    if RunBackupProbe then
-      ExitProcess(EXIT_OK)
-    else
-      ExitProcess(EXIT_FAILED);
-  end;
-
-  { /TESTUNINSTALLSERVICE=1 — прямой прогон снятия службы при удалении
-    (8b1f5980): 0 — служба снята (или её не было), 10 — отказ с причиной. }
-  if GTestUninstallService = '1' then
-  begin
-    if RunUninstallServiceProbe then
-      ExitProcess(EXIT_OK)
-    else
-      ExitProcess(EXIT_FAILED);
-  end;
-#endif
-
-#ifdef TestMode
-  { /TESTLAYOUT=1: только снять раскладку экранов и выйти (ошибка 860def0d).
-    Silent-предусловия не выполняются: установка не начинается. }
-  if GTestLayout = '1' then
-  begin
-    LogLine('INFO', 'TESTLAYOUT=1: снимок раскладки экранов без установки (тестовый режим)');
-    Result := True;
-    Exit;
-  end;
-#endif
-
   if GPrivilegedPhase then
   begin
     ValidatePrivilegedPhasePreconditions;
@@ -7613,133 +6944,9 @@ begin
   Result := True;
 end;
 
-#ifdef TestMode
-{ /TESTLAYOUT=1 (ошибка 860def0d): раскладка экранов без окон. Тест читает
-  строки TESTLAYOUT из журнала и проверяет, что подписи не обрезаны (Height не
-  «дельта» AdjustHeight), не налезают друг на друга и помещаются на поверхность
-  страницы. Значения реальные — их посчитал Inno при создании контролов в
-  текущем состоянии машины. }
-procedure DumpControl(const PageName, Name: String; C: TControl);
-begin
-  if C = nil then
-  begin
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name + ' missing');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name +
-    ' left=' + IntToStr(C.Left) + ' top=' + IntToStr(C.Top) +
-    ' width=' + IntToStr(C.Width) + ' height=' + IntToStr(C.Height) +
-    ' visible=' + Pick(C.Visible, '1', '0'));
-end;
-
-{ Подпись: в снимок идёт и длина текста. Тест отличает пустую подпись (высота 0
-  допустима) от сжатой «дельтой» AdjustHeight — у неё высота 0 при непустом
-  тексте и текст обрезан (ошибка 860def0d, п.1). }
-procedure DumpText(const PageName, Name: String; L: TNewStaticText);
-begin
-  if L = nil then
-  begin
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name + ' missing');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name +
-    ' left=' + IntToStr(L.Left) + ' top=' + IntToStr(L.Top) +
-    ' width=' + IntToStr(L.Width) + ' height=' + IntToStr(L.Height) +
-    ' visible=' + Pick(L.Visible, '1', '0') +
-    ' chars=' + IntToStr(Length(L.Caption)));
-end;
-
-procedure DumpPageSurface(const PageName: String; P: TWizardPage);
-begin
-  if P = nil then
-  begin
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' surface missing');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' surface width=' + IntToStr(P.SurfaceWidth) +
-    ' height=' + IntToStr(P.SurfaceHeight));
-end;
-
-procedure DumpLayout;
-begin
-  LogLine('INFO', 'TESTLAYOUT state server_selected=' + Pick(GServerSelected, '1', '0') +
-    ' client_selected=' + Pick(GClientSelected, '1', '0') +
-    ' scope_user=' + Pick(GClientScopeUser, '1', '0') +
-    ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
-  { Кнопка «Далее» и причина её неактивности (ошибка 5b9743da): прогон обязан
-    проверить, что неактивная кнопка всегда объяснена, а причина видна. }
-  if WizardForm <> nil then
-    LogLine('INFO', 'TESTLAYOUT next enabled=' +
-      Pick(WizardForm.NextButton.Enabled, '1', '0') +
-      ' reason_chars=' + IntToStr(Length(ComponentsReasonText)));
-  DumpPageSurface('components', GComponentsPage);
-  DumpControl('components', 'serverCheck', GServerCheck);
-  DumpText('components', 'serverState', GServerStateLabel);
-  DumpText('components', 'serverHint', GServerHintLabel);
-  DumpControl('components', 'serverAltLink', GServerAltLink);
-  DumpControl('components', 'clientCheck', GClientCheck);
-  DumpText('components', 'clientState', GClientStateLabel);
-  DumpText('components', 'clientHint', GClientHintLabel);
-  DumpText('components', 'scopeFixed', GScopeFixedLabel);
-  DumpText('components', 'scopeHint', GScopeHintLabel);
-  DumpText('components', 'dataNote', GDataNoteLabel);
-  DumpControl('components', 'license', GLicenseCheck);
-  DumpText('components', 'reason', GReasonLabel);
-  DumpPageSurface('admin', GAdminPage);
-  DumpText('admin', 'loginLabel', GAdminLoginLabel);
-  DumpControl('admin', 'loginEdit', GAdminLoginEdit);
-  DumpText('admin', 'displayLabel', GAdminDisplayLabel);
-  DumpControl('admin', 'displayEdit', GAdminDisplayEdit);
-  DumpText('admin', 'hint', GAdminHintLabel);
-  DumpText('admin', 'error', GAdminErrorLabel);
-  UpdateServerParamsState;
-  DumpPageSurface('params', GServerParamsPage);
-  DumpText('params', 'portLabel', GPortLabel);
-  DumpControl('params', 'portEdit', GPortEdit);
-  DumpText('params', 'portHint', GPortHintLabel);
-  DumpControl('params', 'firewallCheck', GFirewallCheck);
-  DumpText('params', 'firewallNote', GFirewallNoteLabel);
-  DumpText('params', 'dataDirInfo', GDataDirInfoLabel);
-  DumpText('params', 'paramsNote', GServerParamsNoteLabel);
-  DumpText('params', 'portError', GPortErrorLabel);
-  DumpPageSurface('credentials', GKeyPage);
-  DumpControl('credentials', 'valueEdit', GKeyValueEdit);
-  DumpControl('credentials', 'copyButton', GKeyCopyButton);
-  DumpText('credentials', 'copiedLabel', GKeyCopiedLabel);
-  DumpText('credentials', 'warning', GKeyWarningLabel);
-  DumpText('credentials', 'previous', GKeyPreviousLabel);
-  DumpControl('credentials', 'confirm', GKeyConfirmCheck);
-  { Итоговый экран (п.10): сводка и кнопки не должны налезать на левую полосу
-    оформления и друг на друга. Геометрия берётся у FinishedLabel. }
-  CreateFinishedControls;
-  LogLine('INFO', 'TESTLAYOUT finished surface width=' +
-    IntToStr(WizardForm.FinishedPage.ClientWidth) + ' height=' +
-    IntToStr(WizardForm.FinishedPage.ClientHeight));
-  DumpText('finished', 'label', WizardForm.FinishedLabel);
-  DumpControl('finished', 'memo', GSummaryMemo);
-  DumpControl('finished', 'run', GSummaryRunButton);
-  DumpControl('finished', 'data', GSummaryDataButton);
-  DumpControl('finished', 'log', GSummaryLogButton);
-end;
-#endif
 
 procedure InitializeWizard;
 begin
-#ifdef TestMode
-  { Раскладка без окон (ошибка 860def0d): строится тем же кодом, что и в GUI.
-    GSilent снимается до создания страниц — иначе UpdateComponentsState не
-    заполняет подписи и не раскладывает контролы. }
-  if GTestLayout = '1' then
-  begin
-    GSilent := False;
-    CreateComponentsPage;
-    CreateAdminPage;
-    CreateServerParamsPage;
-    CreateKeyPage;
-    DumpLayout;
-    ExitProcess(EXIT_OK);
-  end;
-#endif
   if GSilent then Exit;
   CreateComponentsPage;
   CreateAdminPage;
@@ -7791,17 +6998,9 @@ begin
   if GSilent then Exit;
   if (GComponentsPage <> nil) and (CurPageID = GComponentsPage.ID) then
   begin
-    if GServerStateLabel <> nil then
-    begin
-      GServerStateLabel.Caption := ServerStateText +
-        IfStr(InitStateText = '', '', ' ' + InitStateText);
-      FitLabel(GServerStateLabel);
-    end;
-    if GClientStateLabel <> nil then
-    begin
-      GClientStateLabel.Caption := ClientStateText;
-      FitLabel(GClientStateLabel);
-    end;
+    { Статусы и описания в списке обновляет SyncComponentsList внутри
+      UpdateComponentsState: при возврате на экран (например, после ошибки
+      закрытия клиента) они не должны оставаться старыми. }
     UpdateComponentsState(nil);
     { Понижение версии: один раз на запуск — объяснить и оставить «Отмена». }
     if GBlockedDowngrade and (not GDowngradeWarned) then
@@ -7809,9 +7008,8 @@ begin
       GDowngradeWarned := True;
       LogLine('WARN', 'Понижение версии запрещено: установлена ' +
         ServerVersionText + ', установщик ' + GProductVersion);
-      SuppressibleMsgBox('На этом компьютере установлена более новая версия ETN ' +
-        ServerVersionText + '.' + #13#10 + 'Установщик ' + GProductVersion +
-        ' не может её понизить: установка невозможна, доступна только отмена.',
+      SuppressibleMsgBox(
+        FmtMessage(CustomMessage('EtnDowngradeBlocked'), [ServerVersionText, GProductVersion]),
         mbError, MB_OK, IDOK);
     end;
   end;
@@ -7884,13 +7082,13 @@ begin
       WizardForm.FinishedLabel.Visible := False;
       if GExitCode = EXIT_OK then
       begin
-        WizardForm.FinishedHeadingLabel.Caption := 'Установка ETN завершена';
+        WizardForm.FinishedHeadingLabel.Caption := CustomMessage('EtnHeadingFinished');
         if GSummaryMemo <> nil then
           GSummaryMemo.Lines.Text := SummaryText;
       end
       else
       begin
-        WizardForm.FinishedHeadingLabel.Caption := 'Установка ETN не завершена';
+        WizardForm.FinishedHeadingLabel.Caption := CustomMessage('EtnHeadingFailed');
         if GSummaryMemo <> nil then
           GSummaryMemo.Lines.Text := ErrorMemoText;
       end;
@@ -7923,8 +7121,7 @@ begin
     сказано на экране компонентов (ошибка aa5af30c). }
   S := '';
   if GUserOnlyMode then
-    S := 'Режим «только для меня»: права администратора не требуются.' +
-      NewLine + NewLine;
+    S := CustomMessage('EtnReadyMemoUserOnly') + NewLine + NewLine;
   Result := S + MemoDirInfo + MemoComponentsInfo + MemoGroupInfo + MemoTasksInfo;
 end;
 
@@ -7947,16 +7144,13 @@ begin
     end;
     if (not GServerSelected) and (not GClientSelected) then
     begin
-      if GReasonLabel <> nil then
-      begin
-        if GUserOnlyMode and (GInstalledClientScope = 'machine') then
-          GReasonLabel.Caption := 'Клиент установлен для всех пользователей: ' +
-            'обновление требует прав администратора — закройте установщик и ' +
-            'запустите его от имени администратора (правый клик → Запуск от ' +
-            'имени администратора).'
-        else
-          GReasonLabel.Caption := 'Выберите хотя бы один компонент.';
-      end;
+      { Причина уже есть в ComponentsReasonText; уведомление сохраняет её на
+        экране до смены выбора и не пишет подпись в обход нижнего блока. }
+      if GUserOnlyMode and (GInstalledClientScope = 'machine') then
+        GComponentsNotice := CustomMessage('EtnNoticeClientMachineNeedsAdmin')
+      else
+        GComponentsNotice := CustomMessage('EtnReasonSelectComponent');
+      UpdateComponentsState(nil);
       Result := False;
       Exit;
     end;
@@ -7966,10 +7160,8 @@ begin
     if GUserOnlyMode and
        (GServerSelected or (GClientSelected and (not GClientScopeUser))) then
     begin
-      if GReasonLabel <> nil then
-        GReasonLabel.Caption := 'Для установки компонентов, требующих прав ' +
-          'администратора, закройте установщик и запустите его от имени ' +
-          'администратора (правый клик → Запуск от имени администратора).';
+      GComponentsNotice := CustomMessage('EtnNoticeNeedsAdmin');
+      UpdateComponentsState(nil);
       LogLine('WARN', 'Экран компонентов: в режиме «только для меня» выбраны ' +
         'компоненты, требующие прав администратора');
       Result := False;
@@ -7977,8 +7169,9 @@ begin
     end;
     if LicensePromptNeeded and (not GLicenseAccepted) then
     begin
-      if GReasonLabel <> nil then
-        GReasonLabel.Caption := 'Примите условия лицензии MIT, чтобы продолжить.';
+      { Причина лицензии уже в ComponentsReasonText; здесь только фокус на
+        чекбоксе, чтобы клавиатура и мышь вели к нему. }
+      UpdateComponentsState(nil);
       if (WizardForm <> nil) and (GLicenseCheck <> nil) then
         WizardForm.ActiveControl := GLicenseCheck;
       LogLine('WARN', 'Экран компонентов: не принята лицензия MIT');
@@ -8005,11 +7198,11 @@ begin
         фокус на поле порта. Для занятого порта — подсказка свободного
         значения (поле не меняется без решения пользователя). }
       FreePort := '';
-      if Pos('занят', Reason) > 0 then
+      if GPortBusy then
         FreePort := SuggestFreePort(GServerPort);
       if FreePort <> '' then
-        Reason := Reason + '. Рядом свободен порт ' + FreePort +
-          ' — укажите его и нажмите «Далее»';
+        Reason := Reason + '. ' +
+          FmtMessage(CustomMessage('EtnPortFreeSuggestion'), [FreePort]);
       if GPortErrorLabel <> nil then
       begin
         GPortErrorLabel.Caption := Reason;
@@ -8033,14 +7226,14 @@ begin
     if not ValidAdminLogin(GAdminLogin) then
     begin
       if GAdminErrorLabel <> nil then
-        GAdminErrorLabel.Caption := 'Логин обязателен и не должен содержать кавычек и переводов строк.';
+        GAdminErrorLabel.Caption := CustomMessage('EtnLoginRequired');
       Result := False;
       Exit;
     end;
     if (GAdminDisplayName <> '') and (not ValidDisplayName(GAdminDisplayName)) then
     begin
       if GAdminErrorLabel <> nil then
-        GAdminErrorLabel.Caption := 'Отображаемое имя не должно содержать кавычек и переводов строк.';
+        GAdminErrorLabel.Caption := CustomMessage('EtnDisplayNameInvalid');
       Result := False;
       Exit;
     end;
@@ -8083,8 +7276,7 @@ begin
   begin
     { Закрытие без подтверждения: предупредить и удалить временный файл.
       Отказ — остаться на экране ключа. }
-    if SuppressibleMsgBox('Ключ не сохранён. Восстановить его нельзя — только ' +
-        'выпустить новый. Временный файл с ключом будет удалён. Закрыть установщик?',
+    if SuppressibleMsgBox(CustomMessage('EtnKeyNotSavedPrompt'),
         mbConfirmation, MB_YESNO, IDNO) <> IDYES then
     begin
       Cancel := False;
@@ -8130,9 +7322,10 @@ begin
     Reason := '';
     if not CloseRunningClient(True, Reason) then
     begin
-      GComponentsNotice := 'Установка не начата: ' + Reason;
+      GComponentsNotice := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
       LogLine('ERROR', GComponentsNotice);
-      Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+      Result := GComponentsNotice + '. ' +
+        FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]);
       Exit;
     end;
   end;
@@ -8141,9 +7334,10 @@ begin
   Reason := '';
   if not RemoveLegacyBeforeInstall(GIsElevated, Reason) then
   begin
-    GComponentsNotice := 'Установка не начата: ' + Reason;
+    GComponentsNotice := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
     LogLine('ERROR', GComponentsNotice);
-    Result := GComponentsNotice + '. Изменения не выполнялись. Журнал: ' + GLogPath;
+    Result := GComponentsNotice + '. ' +
+      FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]);
     Exit;
   end;
   if not NeedElevation then Exit;
@@ -8156,8 +7350,8 @@ begin
   if Reason <> '' then
   begin
     LogLine('ERROR', 'Установка не начата: ' + Reason);
-    Result := 'Установка не начата: ' + Reason + '. Изменения не выполнялись. ' +
-      'Журнал: ' + GLogPath;
+    Result := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]) + '. ' +
+      FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]);
   end;
 end;
 
@@ -8190,14 +7384,16 @@ begin
         Reason := '';
         if not CloseRunningClient(False, Reason) then
         begin
-          FailText := 'Установка не начата: ' + Reason;
+          FailText := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
           LogLine('ERROR', FailText + ' (код ' + IntToStr(EXIT_PRECONDITION) + ')');
           if GFailureReason = '' then GFailureReason := Reason;
           WriteReasonFile(Reason);
           GExitCode := EXIT_PRECONDITION;
           if not GSilent then
-            SuppressibleMsgBox(FailText + '.' + #13#10#13#10 +
-              'Изменения не выполнялись. Журнал: ' + GLogPath, mbError, MB_OK, IDOK);
+            SuppressibleMsgBox(
+              FailText + '.' + #13#10#13#10 +
+              FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]),
+              mbError, MB_OK, IDOK);
           ExitProcess(EXIT_PRECONDITION);
         end;
       end;
@@ -8208,20 +7404,22 @@ begin
       Code := PrepareServerUpdate(Reason);
       if Code <> EXIT_OK then
       begin
-        FailText := 'Установка не начата: ' + Reason;
+        FailText := FmtMessage(CustomMessage('EtnInstallNotStarted'), [Reason]);
         LogLine('ERROR', FailText + ' (код ' + IntToStr(Code) + ')');
         if GFailureReason = '' then GFailureReason := Reason;
         WriteReasonFile(Reason);
         GExitCode := Code;
         if not GSilent then
-          SuppressibleMsgBox(FailText + '.' + #13#10#13#10 + 'Изменения не выполнялись. ' +
-            'Журнал: ' + GLogPath, mbError, MB_OK, IDOK);
+          SuppressibleMsgBox(
+            FailText + '.' + #13#10#13#10 +
+            FmtMessage(CustomMessage('EtnNoChangesLogTail'), [GLogPath]),
+            mbError, MB_OK, IDOK);
         ExitProcess(Code);
       end;
       if GServerSelected then
-        SetInstallStage('Замена файлов сервера ETN…')
+        SetInstallStage(CustomMessage('EtnStageServerFiles'))
       else if GClientSelected then
-        SetInstallStage('Замена файлов клиента ETN…');
+        SetInstallStage(CustomMessage('EtnStageClientFiles'));
     end;
     Exit;
   end;
@@ -8239,34 +7437,34 @@ begin
         службы (WinSW каталог журнала не создаёт) — 9b310991. }
       if GServerSelected then
       begin
-        SetInstallStage('Подготовка каталогов данных…');
+        SetInstallStage(CustomMessage('EtnStageDataDirs'));
         if not EnsureServerDirs then
-          FailInstall('каталог данных не подготовлен: ' + GDataDir);
+          FailInstall(FmtMessage(CustomMessage('EtnFailDataDirsNotPrepared'), [GDataDir]));
         { Подстановка шаблона службы до регистрации/запуска: пока в
           etn-service.xml плейсхолдеры, службу запускать нельзя (ADR db60302a). }
         if GExitCode = EXIT_OK then
         begin
-          SetInstallStage('Настройка службы…');
+          SetInstallStage(CustomMessage('EtnStageServiceConfig'));
           if not InstallServiceConfig then
-            FailInstall('конфигурация службы не подготовлена: ' + ServiceDir +
-              '\service\etn-service.xml');
+            FailInstall(FmtMessage(CustomMessage('EtnFailServiceConfigNotPrepared'), [
+                ServiceDir + '\service\etn-service.xml']));
         end;
         { Регистрация службы — после записи etn-service.xml (WinSW читает
           конфигурацию из файла рядом с exe) и до запуска. Режим app службу
-          не регистрирует. Сбой регистрации — код 20 с причиной: без службы
-          сервер не поднимется, а install.json о новой версии врал бы. }
+          не регистрирует. Сбой регистрации — код 10: файлы уже заменены, это
+          сбой выполнения, а не предусловие (34f8e315). }
         if GExitCode = EXIT_OK then
         begin
-          SetInstallStage('Регистрация службы ETN…');
+          SetInstallStage(CustomMessage('EtnStageServiceRegister'));
           if not RegisterServiceIfNeeded(Reason) then
-            FailInstallWithCode(EXIT_PRECONDITION, Reason);
+            FailInstallWithCode(EXIT_FAILED, Reason);
         end;
         { Правило брандмауэра — по чекбоксу; ошибка netsh не отменяет
           установку (сервер слушает 0.0.0.0, предупреждение в журнал и в
           итоговую сводку), причина в журнале. }
         if GExitCode = EXIT_OK then
         begin
-          SetInstallStage('Правило брандмауэра…');
+          SetInstallStage(CustomMessage('EtnStageFirewall'));
           ApplyFirewallRule;
         end;
       end;
@@ -8274,29 +7472,22 @@ begin
         стартует. Вызывается один раз: критерий hasFirstUser (686c5d76). }
       if (GServerSelected) and (GExitCode = EXIT_OK) then
       begin
-        SetInstallStage('Инициализация сервера…');
+        SetInstallStage(CustomMessage('EtnStageInit'));
         EnsureFirstUser;
         if GExitCode <> EXIT_OK then
-          FailInstall('инициализация сервера не выполнена (etn init) — ' +
-            'подробности в журнале');
+          FailInstall(CustomMessage('EtnFailInitNotDone'));
       end;
-#ifdef TestMode
-      if (GTestFailAfterInit = '1') and GInitAttempted and (GPendingKey <> '') then
-      begin
-        LogLine('ERROR', 'TESTFAILAFTERINIT: имитация сбоя после etn init до показа ключа');
-        ExitProcess(EXIT_FAILED);
-      end;
-#endif
       if GExitCode = EXIT_OK then
       begin
-        SetInstallStage('Запуск службы ETN…');
-        { Служба не перешла в RUNNING — предусловие: сервер не работает, и
-          объявлять установку успешной нельзя (код 20 с причиной, как у сбоя
-          регистрации). После отката прежняя версия поднимается. }
+        SetInstallStage(CustomMessage('EtnStageServiceStart'));
+        { start не ждёт RUNNING: готовность подтверждает health-check.
+          Сбой команды start после замены файлов — код 10 (сбой выполнения).
+          После отката прежняя версия поднимается. }
         if not StartServiceIfNeeded then
-          FailInstallWithCode(EXIT_PRECONDITION, 'служба ' + SERVICE_NAME +
-            ' не перешла в RUNNING после замены файлов ' +
-            '(etn-service.exe start вернул ошибку или истёк бюджет ожидания)')
+          FailInstallWithCode(EXIT_FAILED, FmtMessage(
+            CustomMessage('EtnFailServiceNotStarted'), [
+              SERVICE_NAME, IfStr(GLastServiceError = '',
+              CustomMessage('EtnServiceReasonInLog'), GLastServiceError)]))
         else if not HealthCheckApplicable then
           { Режим app: сервер не служба, его запускает пользователь. Опрос
             health гарантированно истёк бы и увёл обновление в откат. }
@@ -8304,11 +7495,12 @@ begin
             'запускается пользователем')
         else
         begin
-          SetInstallStage('Проверка работоспособности…');
-          { Расширенный health-check (0a79d9de): 200, status=ok, db=ok,
-            версия = целевая; затем GET /api/v1/version. }
+          SetInstallStage(CustomMessage('EtnStageHealth'));
+          { Расширенный health-check (0a79d9de, a1ea1d40): один GET
+            /api/v1/health — 200, status=ok, db=ok, version = целевая из тела
+            ответа; повтор до 60 с фактического времени. }
           if not ProbeHealth(True) then
-            FailInstall('health-check не пройден: ' + GHealthReason);
+            FailInstall(FmtMessage(CustomMessage('EtnFailHealth'), [GHealthReason]));
         end;
       end;
       { Silent: init не вызывался; без администратора сервер не работает —
@@ -8316,8 +7508,7 @@ begin
       if (GExitCode = EXIT_OK) and IsSilentServerOnly then
       begin
         if not SilentAdminPresent then
-          FailInstall('сервер не инициализирован: нет первого администратора ' +
-            '(нужен ручной режим etn init --username)');
+          FailInstall(CustomMessage('EtnFailNoAdmin'));
       end;
       { Сбой после замены файлов — возвращаем прежнюю версию: файлы из снимка,
         БД из архива, запуск и повторная проверка. Код уже 10, install.json
@@ -8333,10 +7524,10 @@ begin
     end;
     if (GExitCode = EXIT_OK) and NeedInstallRecord then
     begin
-      SetInstallStage('Запись параметров установки…');
+      SetInstallStage(CustomMessage('EtnStageParams'));
       if not WriteInstallJson then
       begin
-        FailInstall('install.json не записан: ' + GInstallJsonPath);
+        FailInstall(FmtMessage(CustomMessage('EtnFailInstallJsonNotWritten'), [GInstallJsonPath]));
         { Запись о новой версии не легла на диск — возвращаем прежнюю версию:
           иначе файлы новые, а install.json говорит о прежней. }
         if GDoPrivilegedWork then
@@ -8367,34 +7558,6 @@ begin
       GPendingKeyPrevious := False
     else
       GPendingKeyPrevious := GPendingKey <> '';
-#ifdef TestMode
-    { Наблюдаемость без GUI: состояние ключа в журнале (значение ключа —
-      никогда), подтверждение и закрытие экрана без подтверждения. }
-    if GTestKeyState = '1' then
-    begin
-      LogLine('INFO', 'INITSTATE checked=' + Pick(GFirstUserChecked, '1', '0') +
-        ' hasfirstuser=' + Pick(GFirstUserPresent, '1', '0') +
-        ' init_attempted=' + Pick(GInitAttempted, '1', '0') +
-        ' pending=' + Pick(GPendingKey <> '', '1', '0') +
-        ' keylen=' + IntToStr(Length(GPendingKey)) +
-        ' previous=' + Pick(GPendingKeyPrevious, '1', '0') +
-        ' exitcode=' + IntToStr(GExitCode));
-      if GTestKeyAck = '1' then
-      begin
-        DeleteFile(KeyFilePath);
-        LogLine('INFO', 'INITACK deleted=' + Pick(not FileExists(KeyFilePath), '1', '0'));
-        GPendingKey := '';
-      end;
-      if GTestKeyClose = '1' then
-      begin
-        DeleteFile(KeyFilePath);
-        LogLine('INFO', 'INITCLOSE deleted=' + Pick(not FileExists(KeyFilePath), '1', '0') +
-          ' warning=1');
-        GPendingKey := '';
-      end;
-      ExitProcess(GExitCode);
-    end;
-#endif
   end;
 end;
 
@@ -8456,27 +7619,6 @@ begin
   if FileExists(Candidate) then GLogPath := Candidate;
   LogLine('INFO', 'Удаление ETN: каталог данных ' + GDataDir + ', режим ' +
     IfStr(GServerMode = '', '—', GServerMode));
-#ifdef TestMode
-  { Проба настоящего деинсталлятора (silent-codes.ps1): InitializeSetup не
-    вызывался, поэтому хуки модели службы разбираются здесь. }
-  GTestMode := True;
-  GTestService := ParamValue('TESTSERVICE');
-  GTestServiceCmd := ParamValue('TESTSERVICECMD');
-  GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
-  GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
-  GTestServiceStart := LowerCase(ParamValue('TESTSERVICESTART'));
-  GTestServiceWait := ParamValue('TESTSERVICEWAIT');
-  GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
-  GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
-  GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
-  GTestFirewall := ParamValue('TESTFIREWALL');
-  GTestServiceRegistered := LowerCase(GTestService) = 'present';
-  GTestServiceRunning := GTestServiceRegistered;
-  GTestServicePendingPolls := 0;
-  LogLine('INFO', 'Деинсталлятор (тестовый режим): TESTSERVICE=' +
-    IfStr(GTestService = '', '—', GTestService) + ', TESTSERVICEREALFILE=' +
-    IfStr(GTestServiceRealFile = '', '—', GTestServiceRealFile));
-#endif
 end;
 
 { Удаление программы: служба ETN снимается, правило брандмауэра удаляется
@@ -8497,10 +7639,9 @@ begin
     if not RemoveServiceOnUninstall(Reason) then
     begin
       Log('ОШИБКА: удаление отменено — ' + Reason);
-      SuppressibleMsgBox('Удаление программы отменено: ' + Reason +
-        '. Остановите и удалите службу ' + SERVICE_NAME +
-        ' вручную (sc stop ' + SERVICE_NAME + ', sc delete ' + SERVICE_NAME +
-        ') и повторите удаление. Файлы не удалены.', mbError, MB_OK, IDOK);
+      SuppressibleMsgBox(
+        FmtMessage(CustomMessage('EtnUninstallCancelled'), [Reason, CustomMessage('EtnUninstallServiceManual')]),
+        mbError, MB_OK, IDOK);
       Abort;
     end
     else

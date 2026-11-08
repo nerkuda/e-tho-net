@@ -21,8 +21,7 @@
     9b310991: собранный exe падал на --key-out; расширение проверки на весь
     server/dist — задача 98ad5eec, дефект 0178253c; проверка версии и хэшей
     клиента — замечание приёмки 98ad5eec: после неудачной package:dir старый
-    клиент проходил как свежий). В -TestMode проверка пропускается: тестовая
-    поставка — фикстура, она заведомо не совпадает с репозиторием.
+    клиент проходил как свежий).
 
     Задача a1211915 (0.15.1); проверка свежести payload — 9b310991.
 
@@ -45,35 +44,15 @@
     Путь к ISCC.exe. По умолчанию ищется в Program Files (x86), Program Files,
     %LOCALAPPDATA%\Programs и PATH.
 
-.PARAMETER TestMode
-    Тестовая сборка для installer/tests/silent-codes.ps1: изолированные
-    каталоги и хуки /TESTELEVATED, /TESTSERVICE, /TESTHEALTH, без деинсталлятора.
-
 .PARAMETER CheckPayloadOnly
     Только проверить свежесть payload и выйти (код 0 — свежий, иначе —
     ошибка с перечнем причин). Компиляция exe не выполняется: нужно для
     быстрой проверки поставки на машине, где полная сборка недоступна
     (занятый dev-клиентом better_sqlite3.node, нет права симлинков).
-    С -TestMode несовместим.
-
-.PARAMETER TestUninstallMode
-    Вместе с -TestMode: собрать тестовый установщик С деинсталлятором (проба
-    настоящего удаления с моделью службы, приёмка 8b1f5980). У такой сборки
-    отдельный AppId; после прогона запись установки в HKCU удаляется.
-
-.PARAMETER TestAppDir
-    Каталог программы тестовой сборки (обязателен при -TestMode).
-
-.PARAMETER TestDataDir
-    Каталог данных тестовой сборки (обязателен при -TestMode).
 
 .EXAMPLE
     pwsh -File installer/build.ps1
 
-.EXAMPLE
-    pwsh -File installer/build.ps1 -TestMode `
-        -TestAppDir .tmp\it\app -TestDataDir .tmp\it\data `
-        -PayloadRoot installer\tests\fixtures\payload -OutputDir .tmp\it
 #>
 [CmdletBinding()]
 param(
@@ -83,11 +62,7 @@ param(
     [string]$BaseFilename = 'ETN-Setup',
     [switch]$RefreshPayload,
     [string]$IsccPath,
-    [switch]$TestMode,
-    [switch]$TestUninstallMode,
-    [switch]$CheckPayloadOnly,
-    [string]$TestAppDir,
-    [string]$TestDataDir
+    [switch]$CheckPayloadOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -269,6 +244,7 @@ function Test-PayloadFreshness {
         'server\package.json',
         'server\dist\index.js',
         'server\dist\cli.js',
+        'server\dist\db\db-backup.js',
         'server\migrations\system',
         'server\migrations\network',
         'server\node_modules\better-sqlite3\package.json',
@@ -382,6 +358,15 @@ function Test-PayloadFreshness {
             $problems.Add("в payload server\dist\cli.js нет поддержки $capability — это старая сборка")
         }
     }
+    # Инструмент бэкапа/восстановления (3acd9c3c): без него обновление не
+    # начнётся (установщик извлекает self-contained etn-db-tool.mjs). Строки
+    # взяты из справки CLI — они есть только в сборке с этими командами.
+    $dbToolText = Get-Content -LiteralPath (Join-Path $Root 'server\dist\db\db-backup.js') -Raw
+    foreach ($capability in @('backup --to', 'restore --from', '--report-out')) {
+        if (-not $dbToolText.Contains($capability)) {
+            $problems.Add("в payload server\dist\db\db-backup.js нет поддержки $capability — это старая сборка")
+        }
+    }
     # Плейсхолдеры шаблона службы: без них InstallServiceConfig не подставит
     # значения (ADR db60302a).
     $templateText = Get-Content -LiteralPath (Join-Path $Root 'service\etn-service.xml') -Raw -Encoding UTF8
@@ -404,51 +389,38 @@ $PayloadRoot = Resolve-FullPath -Path $PayloadRoot -Base $repoRoot
 if (-not $OutputDir) { $OutputDir = Join-Path $repoRoot 'release' }
 $OutputDir = Resolve-FullPath -Path $OutputDir -Base $repoRoot
 
-if ($TestUninstallMode) {
-    if (-not $TestMode) { throw '-TestUninstallMode доступен только вместе с -TestMode.' }
+# Перед сборкой продуктового установщика payload обязан быть свежим: см.
+# Test-PayloadFreshness. -RefreshPayload обновляет его сам (нужны Node 22,
+# npm install и доступ к nodejs.org/github.com для первой загрузки).
+if ($RefreshPayload) {
+    $fetchScript = Join-Path $PSScriptRoot 'fetch-payload.ps1'
+    if (-not (Test-Path -LiteralPath $fetchScript)) { throw "Нет $fetchScript." }
+    Write-Host 'Обновление payload: installer/fetch-payload.ps1'
+    $psExe = (Get-Process -Id $PID).Path
+    & $psExe -NoProfile -ExecutionPolicy Bypass -File $fetchScript -PayloadRoot $PayloadRoot
+    if ($LASTEXITCODE -ne 0) { throw "fetch-payload.ps1 завершился с кодом $LASTEXITCODE." }
 }
-if ($CheckPayloadOnly -and $TestMode) {
-    throw '-CheckPayloadOnly несовместим с -TestMode: тестовая поставка — фикстура, свежесть в ней не проверяется.'
+$freshness = Test-PayloadFreshness -Root $PayloadRoot -RepoRoot $repoRoot
+$payloadProblems = @($freshness.Problems)
+if ($payloadProblems.Count -gt 0) {
+    $details = ($payloadProblems | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
+    throw ("Payload установщика отсутствует или устарел: $PayloadRoot" + [Environment]::NewLine +
+        $details + [Environment]::NewLine +
+        'Обновите payload: pwsh -File installer/fetch-payload.ps1 ' +
+        '(или запустите build.ps1 с -RefreshPayload).')
 }
-if ($TestMode) {
-    if (-not $TestAppDir) { throw 'При -TestMode обязателен -TestAppDir.' }
-    if (-not $TestDataDir) { throw 'При -TestMode обязателен -TestDataDir.' }
-    $TestAppDir = Resolve-FullPath -Path $TestAppDir -Base $repoRoot
-    $TestDataDir = Resolve-FullPath -Path $TestDataDir -Base $repoRoot
+if ($freshness.HashCompared) {
+    Write-Host 'Payload свежий: файлы контракта, версии сервера и клиента, хэши клиента, весь server/dist, migrations и шаблон службы совпадают с репозиторием.'
 } else {
-    # Перед сборкой продуктового установщика payload обязан быть свежим: см.
-    # Test-PayloadFreshness. -RefreshPayload обновляет его сам (нужны Node 22,
-    # npm install и доступ к nodejs.org/github.com для первой загрузки).
-    if ($RefreshPayload) {
-        $fetchScript = Join-Path $PSScriptRoot 'fetch-payload.ps1'
-        if (-not (Test-Path -LiteralPath $fetchScript)) { throw "Нет $fetchScript." }
-        Write-Host 'Обновление payload: installer/fetch-payload.ps1'
-        $psExe = (Get-Process -Id $PID).Path
-        & $psExe -NoProfile -ExecutionPolicy Bypass -File $fetchScript -PayloadRoot $PayloadRoot
-        if ($LASTEXITCODE -ne 0) { throw "fetch-payload.ps1 завершился с кодом $LASTEXITCODE." }
-    }
-    $freshness = Test-PayloadFreshness -Root $PayloadRoot -RepoRoot $repoRoot
-    $payloadProblems = @($freshness.Problems)
-    if ($payloadProblems.Count -gt 0) {
-        $details = ($payloadProblems | ForEach-Object { "  - $_" }) -join [Environment]::NewLine
-        throw ("Payload установщика отсутствует или устарел: $PayloadRoot" + [Environment]::NewLine +
-            $details + [Environment]::NewLine +
-            'Обновите payload: pwsh -File installer/fetch-payload.ps1 ' +
-            '(или запустите build.ps1 с -RefreshPayload).')
-    }
-    if ($freshness.HashCompared) {
-        Write-Host 'Payload свежий: файлы контракта, версии сервера и клиента, хэши клиента, весь server/dist, migrations и шаблон службы совпадают с репозиторием.'
-    } else {
-        Write-Host ('Payload проверен частично (server/dist или migrations не сравнивались): файлы контракта и версии проверены. ' +
-            'Соберите server/dist (npm -w @etn/server run build) и обновите payload для полной проверки.')
-    }
-    if ($CheckPayloadOnly) {
-        # Проверка без компиляции: на машине, где полная сборка недоступна
-        # (занятый dev-клиентом better_sqlite3.node, нет права симлинков),
-        # можно убедиться, что payload свежий и годится для сборки.
-        Write-Host "OK: payload свежий — $PayloadRoot (компиляция пропущена: -CheckPayloadOnly)"
-        exit 0
-    }
+    Write-Host ('Payload проверен частично (server/dist или migrations не сравнивались): файлы контракта и версии проверены. ' +
+        'Соберите server/dist (npm -w @etn/server run build) и обновите payload для полной проверки.')
+}
+if ($CheckPayloadOnly) {
+    # Проверка без компиляции: на машине, где полная сборка недоступна
+    # (занятый dev-клиентом better_sqlite3.node, нет права симлинков),
+    # можно убедиться, что payload свежий и годится для сборки.
+    Write-Host "OK: payload свежий — $PayloadRoot (компиляция пропущена: -CheckPayloadOnly)"
+    exit 0
 }
 
 $iscc = Find-Iscc -Explicit $IsccPath
@@ -457,16 +429,8 @@ $issPath = Join-Path $PSScriptRoot 'etn.iss'
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
 $defines = @("/DMyAppVersion=$Version", "/DPayloadRoot=$PayloadRoot")
-if ($TestMode) {
-    $defines += '/DTestMode=1'
-    $defines += "/DTestAppDir=$TestAppDir"
-    $defines += "/DTestDataDir=$TestDataDir"
-    if ($TestUninstallMode) { $defines += '/DTestUninstallable=1' }
-}
 
 $outputName = "$BaseFilename-$Version"
-if ($TestMode) { $outputName = "$BaseFilename-test-$Version" }
-if ($TestUninstallMode) { $outputName = "$BaseFilename-unins-test-$Version" }
 
 Write-Host "ETN installer: версия $Version"
 Write-Host "  ISCC:      $iscc"

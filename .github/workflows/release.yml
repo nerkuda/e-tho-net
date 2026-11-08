@@ -20,6 +20,15 @@
 # и файл `SHA256SUMS`). Пропуск любого ассета — падение workflow, а не
 # «релиз без файла».
 #
+# Заголовок релиза — всегда `ETN X.Y.Z — <тема>` (ошибка 9d0c2d5e). Источник
+# темы, по убыванию: subject АННОТИРОВАННОГО тега (шаг 12 процедуры
+# публикации), лид-абзац секции версии `CHANGELOG.md`, вход `title` ручного
+# запуска. Subject lightweight-тега не используется никогда: такой тег создаёт
+# сама публикация при prerelease, и его `%(contents:subject)` — subject
+# коммита, на который тег указывает (`fix(ci): …` вместо темы на v0.15.2).
+# Заголовок собирает `server/scripts/release-notes.mjs`; сторож —
+# `server/tests/guard-release-title.test.ts`.
+#
 # Канал prerelease/stable. Канал выводится из тега: версия с prerelease-суффиксом
 # (`v0.15.1-rc.1`) публикуется предварительным релизом (`prerelease: true`,
 # `make_latest: false`), чистая версия (`v0.15.1`) — стабильным. Ручной запуск
@@ -60,6 +69,10 @@ on:
           - stable
           - prerelease
         default: auto
+      title:
+        description: 'Запасная тема заголовка — только если у тега нет аннотации и у секции CHANGELOG нет лида'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -330,6 +343,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
           TAG: ${{ inputs.tag || github.ref_name }}
+          TITLE_INPUT: ${{ inputs.title || '' }}
         run: |
           set -euo pipefail
           # Тег пуша уже существует; при ручном запуске его может ещё не быть —
@@ -339,11 +353,19 @@ jobs:
           else
             prev_tag="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
           fi
-          title="$(git tag -l --format='%(contents:subject)' "${TAG}")"
-          if [ -z "${title}" ]; then title="ETN ${VERSION}"; fi
-          args=(--version "${VERSION}" --out release-body.md)
+          # Заголовок — «ETN X.Y.Z — <тема>»: скрипт берёт тему из аннотации
+          # тега (только аннотированного), иначе из лида секции changelog,
+          # иначе из входа title. Subject lightweight-тега (это subject
+          # коммита) не читается — ошибка 9d0c2d5e.
+          args=(--version "${VERSION}" --tag "${TAG}" --out release-body.md --title-out release-title.txt)
+          if [ -n "${TITLE_INPUT}" ]; then args+=(--title "${TITLE_INPUT}"); fi
           if [ -n "${prev_tag}" ]; then args+=(--prev-tag "${prev_tag}"); fi
           node server/scripts/release-notes.mjs "${args[@]}"
+          title="$(cat release-title.txt)"
+          if [ -z "${title}" ]; then
+            echo "::error::заголовок релиза пуст — ожидался ETN ${VERSION} — <тема>"
+            exit 1
+          fi
           echo "name=${title}" >> "${GITHUB_OUTPUT}"
       - name: Publish release
         uses: softprops/action-gh-release@v3

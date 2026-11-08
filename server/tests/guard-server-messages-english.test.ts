@@ -20,12 +20,15 @@
  *   2. литеральные значения свойств `msg`/`message` (контракты, диагностики,
  *      предупреждения);
  *   3. литеральные аргументы вызова логгера (`logger.info/warn/error/...`);
- *   4. литеральное сообщение хелпера `fail(...)` (движок AST-фильтров);
+ *   4. литеральное сообщение хелпера `fail(...)` (движок AST-фильтров) и
+ *      `refuse(...)` (ожидаемый отказ инструмента БД);
  *   5. причина закрытия WebSocket (`socket.close(code, reason)`);
  *   6. экспортируемые константы с именем `*_MESSAGE`/`*_WARNING`/`*_TEXT`/
  *      `*_REASON`;
  *   7. любые литералы в `server/src/cli.ts` — это целиком пользовательский
- *      вывод CLI.
+ *      вывод CLI;
+ *   8. литеральные аргументы `console.log/info/warn/error/debug(...)` —
+ *      прямой вывод CLI и `etn-db-tool` установщика (в обход логгера).
  *
  * Литерал склеивается из конкатенации `+`, шаблонных фрагментов и
  * тернарников, а идентификатор резолвится в константу того же файла — иначе
@@ -195,6 +198,23 @@ function scanSource(rel: string, text: string): Violation[] {
           literalText(node.arguments[0], constStrings),
         );
       }
+      // (8) `refuse(message)` — ожидаемый отказ инструмента БД (db-backup).
+      if (callee === 'refuse') {
+        check(
+          violations,
+          'refuse-message',
+          rel,
+          source,
+          node,
+          literalText(node.arguments[0], constStrings),
+        );
+      }
+      // (9) Прямой вывод консоли: CLI и etn-db-tool установщика.
+      if (/^console\.(?:log|info|warn|error|debug)$/.test(callee)) {
+        for (const arg of node.arguments) {
+          check(violations, 'console-message', rel, source, arg, literalText(arg, constStrings));
+        }
+      }
       // (5) Причина закрытия WebSocket: `socket.close(code, reason)`.
       if (callee.endsWith('.close') || callee === 'close') {
         check(
@@ -286,6 +306,25 @@ describe('guard: сообщения серверных поверхностей 
     assert.ok(
       violations.some((v) => v.rule === 'logger-message'),
       'сканер обязан склеивать конкатенацию и резолвить константу файла',
+    );
+  });
+
+  it('мутационная проверка: русский текст в refuse(...) и console.* краснит сторож', () => {
+    const refuseViolations = scanSource(
+      'server/src/synthetic.ts',
+      "refuse('русская причина отказа');\n",
+    );
+    assert.ok(
+      refuseViolations.some((v) => v.rule === 'refuse-message'),
+      'сканер обязан поймать кириллицу в refuse(...) (etn-db-tool)',
+    );
+    const consoleViolations = scanSource(
+      'server/src/synthetic.ts',
+      "console.error('русская ошибка CLI');\n",
+    );
+    assert.ok(
+      consoleViolations.some((v) => v.rule === 'console-message'),
+      'сканер обязан поймать кириллицу в console.error(...)',
     );
   });
 });
