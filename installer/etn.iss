@@ -922,12 +922,6 @@ var
     профиле (SMAA), и «клиент для меня» попал бы в чужой профиль. }
   GAdminMachineScope: Boolean;
   GTestMode: Boolean;
-  { /TESTLAYOUT=1 (ошибка 860def0d): снять раскладку экранов без окон — тест
-    проверяет, что подписи не обрезаны (Height не «дельта» AdjustHeight) и не
-    налезают друг на друга. /TESTNOTICE=<текст> (c4b68d78) подставляет
-    уведомление после возврата на экран компонентов для проверки его причины. }
-  GTestLayout: String;
-  GTestNotice: String;
   { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
   GTestInit: String;
   GTestKeyState: String;
@@ -6933,8 +6927,6 @@ begin
   GServerFirewall := True;
   GSkipCopy := False;
   GTestMode := False;
-  GTestLayout := '';
-  GTestNotice := '';
   GTestInit := '';
   GTestKeyState := '';
   GTestFailAfterInit := '';
@@ -6987,19 +6979,12 @@ begin
   GAdminLogin := GOriginalUser;
 #ifdef TestMode
   GTestMode := True;
-  GTestLayout := ParamValue('TESTLAYOUT');
-  GTestNotice := ParamValue('TESTNOTICE');
   GTestInit := ParamValue('TESTINIT');
   GTestKeyState := ParamValue('TESTKEYSTATE');
   GTestFailAfterInit := ParamValue('TESTFAILAFTERINIT');
   GTestKeyAck := ParamValue('TESTKEYACK');
   GTestKeyClose := ParamValue('TESTKEYCLOSE');
   GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
-  { /TESTNOTICE=<текст>: уведомление после возврата на экран компонентов.
-    Проверяет, что причина неактивности «Далее» показывает уведомление и
-    помещается в нижний блок (задача c4b68d78). }
-  if GTestNotice <> '' then
-    GComponentsNotice := GTestNotice;
 #endif
 
   if GPrivilegedPhase then
@@ -7092,17 +7077,6 @@ begin
   end;
 #endif
 
-#ifdef TestMode
-  { /TESTLAYOUT=1: только снять раскладку экранов и выйти (ошибка 860def0d).
-    Silent-предусловия не выполняются: установка не начинается. }
-  if GTestLayout = '1' then
-  begin
-    LogLine('INFO', 'TESTLAYOUT=1: снимок раскладки экранов без установки (тестовый режим)');
-    Result := True;
-    Exit;
-  end;
-#endif
-
   if GPrivilegedPhase then
   begin
     ValidatePrivilegedPhasePreconditions;
@@ -7131,160 +7105,9 @@ begin
   Result := True;
 end;
 
-#ifdef TestMode
-{ /TESTLAYOUT=1 (ошибка 860def0d): раскладка экранов без окон. Тест читает
-  строки TESTLAYOUT из журнала и проверяет, что подписи не обрезаны (Height не
-  «дельта» AdjustHeight), не налезают друг на друга и помещаются на поверхность
-  страницы. Значения реальные — их посчитал Inno при создании контролов в
-  текущем состоянии машины. }
-procedure DumpControl(const PageName, Name: String; C: TControl);
-begin
-  if C = nil then
-  begin
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name + ' missing');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name +
-    ' left=' + IntToStr(C.Left) + ' top=' + IntToStr(C.Top) +
-    ' width=' + IntToStr(C.Width) + ' height=' + IntToStr(C.Height) +
-    ' visible=' + Pick(C.Visible, '1', '0'));
-end;
-
-{ Подпись: в снимок идёт и длина текста. Тест отличает пустую подпись (высота 0
-  допустима) от сжатой «дельтой» AdjustHeight — у неё высота 0 при непустом
-  тексте и текст обрезан (ошибка 860def0d, п.1). }
-procedure DumpText(const PageName, Name: String; L: TNewStaticText);
-begin
-  if L = nil then
-  begin
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name + ' missing');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' ' + Name +
-    ' left=' + IntToStr(L.Left) + ' top=' + IntToStr(L.Top) +
-    ' width=' + IntToStr(L.Width) + ' height=' + IntToStr(L.Height) +
-    ' visible=' + Pick(L.Visible, '1', '0') +
-    ' chars=' + IntToStr(Length(L.Caption)));
-end;
-
-procedure DumpPageSurface(const PageName: String; P: TWizardPage);
-begin
-  if P = nil then
-  begin
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' surface missing');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' surface width=' + IntToStr(P.SurfaceWidth) +
-    ' height=' + IntToStr(P.SurfaceHeight));
-end;
-
-{ Список компонентов (задача c4b68d78): прямоугольник, число строк и по
-  строке на элемент. Высота строки — LB_GETITEMHEIGHT ($01A1): в Pascal Script
-  нет ни ItemRect, ни ItemHeight, ни TopIndex, а SendMessage есть. chars —
-  длина caption (перенос считается самим списком), sub_chars — длина subitem
-  (обязана быть 0: статусы/описания — group-строки, а не subitem). }
-procedure DumpList(const PageName: String; L: TNewCheckListBox);
-var
-  I, ItemH: Integer;
-begin
-  if L = nil then
-  begin
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' list missing');
-    Exit;
-  end;
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' list left=' + IntToStr(L.Left) +
-    ' top=' + IntToStr(L.Top) + ' width=' + IntToStr(L.Width) +
-    ' height=' + IntToStr(L.Height));
-  LogLine('INFO', 'TESTLAYOUT ' + PageName + ' items count=' +
-    IntToStr(L.Items.Count));
-  for I := 0 to L.Items.Count - 1 do
-  begin
-    ItemH := SendMessage(L.Handle, $01A1, I, 0);
-    LogLine('INFO', 'TESTLAYOUT ' + PageName + ' item idx=' + IntToStr(I) +
-      ' level=' + IntToStr(Ord(L.ItemLevel[I])) +
-      ' checked=' + Pick(L.Checked[I], '1', '0') +
-      ' enabled=' + Pick(L.ItemEnabled[I], '1', '0') +
-      ' height=' + IntToStr(ItemH) +
-      ' chars=' + IntToStr(Length(L.ItemCaption[I])) +
-      ' sub_chars=' + IntToStr(Length(L.ItemSubItem[I])));
-  end;
-end;
-
-procedure DumpLayout;
-begin
-  LogLine('INFO', 'TESTLAYOUT state server_selected=' + Pick(GServerSelected, '1', '0') +
-    ' client_selected=' + Pick(GClientSelected, '1', '0') +
-    ' scope_user=' + Pick(GClientScopeUser, '1', '0') +
-    ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
-  { Кнопка «Далее» и причина её неактивности (ошибка 5b9743da): прогон обязан
-    проверить, что неактивная кнопка всегда объяснена, а причина видна. Текст
-    причины — точный (T6), а не только длина: тест сверяет его с ожидаемым. }
-  if WizardForm <> nil then
-    LogLine('INFO', 'TESTLAYOUT next enabled=' +
-      Pick(WizardForm.NextButton.Enabled, '1', '0') +
-      ' reason_chars=' + IntToStr(Length(ComponentsReasonLabelText)) +
-      ' reason=' + ComponentsReasonLabelText);
-  DumpPageSurface('components', GComponentsPage);
-  DumpList('components', GComponentsList);
-  DumpControl('components', 'serverAltLink', GServerAltLink);
-  DumpText('components', 'dataNote', GDataNoteLabel);
-  DumpControl('components', 'license', GLicenseCheck);
-  DumpText('components', 'reason', GReasonLabel);
-  DumpPageSurface('admin', GAdminPage);
-  DumpText('admin', 'loginLabel', GAdminLoginLabel);
-  DumpControl('admin', 'loginEdit', GAdminLoginEdit);
-  DumpText('admin', 'displayLabel', GAdminDisplayLabel);
-  DumpControl('admin', 'displayEdit', GAdminDisplayEdit);
-  DumpText('admin', 'hint', GAdminHintLabel);
-  DumpText('admin', 'error', GAdminErrorLabel);
-  UpdateServerParamsState;
-  DumpPageSurface('params', GServerParamsPage);
-  DumpText('params', 'portLabel', GPortLabel);
-  DumpControl('params', 'portEdit', GPortEdit);
-  DumpText('params', 'portHint', GPortHintLabel);
-  DumpControl('params', 'firewallCheck', GFirewallCheck);
-  DumpText('params', 'firewallNote', GFirewallNoteLabel);
-  DumpText('params', 'dataDirInfo', GDataDirInfoLabel);
-  DumpText('params', 'paramsNote', GServerParamsNoteLabel);
-  DumpText('params', 'portError', GPortErrorLabel);
-  DumpPageSurface('credentials', GKeyPage);
-  DumpControl('credentials', 'valueEdit', GKeyValueEdit);
-  DumpControl('credentials', 'copyButton', GKeyCopyButton);
-  DumpText('credentials', 'copiedLabel', GKeyCopiedLabel);
-  DumpText('credentials', 'warning', GKeyWarningLabel);
-  DumpText('credentials', 'previous', GKeyPreviousLabel);
-  DumpControl('credentials', 'confirm', GKeyConfirmCheck);
-  { Итоговый экран (п.10): сводка и кнопки не должны налезать на левую полосу
-    оформления и друг на друга. Геометрия берётся у FinishedLabel. }
-  CreateFinishedControls;
-  LogLine('INFO', 'TESTLAYOUT finished surface width=' +
-    IntToStr(WizardForm.FinishedPage.ClientWidth) + ' height=' +
-    IntToStr(WizardForm.FinishedPage.ClientHeight));
-  DumpText('finished', 'label', WizardForm.FinishedLabel);
-  DumpControl('finished', 'memo', GSummaryMemo);
-  DumpControl('finished', 'run', GSummaryRunButton);
-  DumpControl('finished', 'data', GSummaryDataButton);
-  DumpControl('finished', 'log', GSummaryLogButton);
-end;
-#endif
 
 procedure InitializeWizard;
 begin
-#ifdef TestMode
-  { Раскладка без окон (ошибка 860def0d): строится тем же кодом, что и в GUI.
-    GSilent снимается до создания страниц — иначе UpdateComponentsState не
-    заполняет подписи и не раскладывает контролы. }
-  if GTestLayout = '1' then
-  begin
-    GSilent := False;
-    CreateComponentsPage;
-    CreateAdminPage;
-    CreateServerParamsPage;
-    CreateKeyPage;
-    DumpLayout;
-    ExitProcess(EXIT_OK);
-  end;
-#endif
   if GSilent then Exit;
   CreateComponentsPage;
   CreateAdminPage;
