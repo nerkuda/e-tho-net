@@ -152,6 +152,10 @@ function Test-GuestTransportError {
             'Выполняющаяся команда отключена',
             'команда отключена, но по-прежнему выполняется',
             'still running on the remote server',
+            # ERROR_OPERATION_ABORTED (995): WSMan-оболочка закрыта/оборвана
+            # (наблюдалось 2026-11-08 в GUI-пробе под IO-столлом гостя).
+            'Операция ввода/вывода была прервана',
+            'The I/O operation has been aborted',
             'HTTP \(12152\)',
             'Ошибка сервера.*HTTP 500',
             'HTTP \(500\)',
