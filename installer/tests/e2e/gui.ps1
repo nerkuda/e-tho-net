@@ -328,6 +328,41 @@ function New-GuiPlan {
 }
 
 <#
+    Погасить оставшиеся процессы установщика ETN в гостя.
+    Нужен после неудачной пробы: таймаут или сбой плана оставляет
+    распакованный setup работать, и следующий шаг запускает второй
+    установщик параллельно (наблюдалось 2026-11-08 в G3: 0.15.3 ещё
+    копировал payload, а проверка понижения уже запустила 0.15.2).
+#>
+function Clear-GuestInstallerProcesses {
+    param($Context = (Get-GuestContext))
+    try {
+        $count = Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
+            $killed = 0
+            foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.Name -like 'ETN-Setup*' -or $_.Name -eq 'setup.exe' -or
+                        $_.Name -like 'setup.tmp'
+                    })) {
+                try {
+                    Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+                    $killed++
+                } catch {
+                    Write-Warning ("процесс установщика {0} ({1}) не остановлен: {2}" -f `
+                            $proc.Name, $proc.ProcessId, $_.Exception.Message)
+                }
+            }
+            $killed
+        }
+        if ($count -gt 0) {
+            Write-Host ("Установщик после неудачной пробы остановлен: процессов {0}" -f $count)
+        }
+    } catch {
+        Write-Warning ("Процессы установщика не остановлены ({0})" -f $_.Exception.Message)
+    }
+}
+
+<#
     Запустить пробу в интерактивной сессии и дождаться результата.
     RunLevel: Highest (административный режим установщика) или Limited
     (обычный запуск: клиент «только для меня», сервер недоступен).
@@ -453,6 +488,10 @@ function Invoke-GuestGuiProbe {
         [System.IO.File]::WriteAllText((Join-Path $dir ($safeName + '.json')), $raw,
             (New-Object System.Text.UTF8Encoding($false)))
     }
+
+    # Неудачная проба могла оставить установщик живым: следующий шаг не
+    # должен запускать второй параллельно (см. Clear-GuestInstallerProcesses).
+    if (-not $ok) { Clear-GuestInstallerProcesses -Context $Context }
 
     return [pscustomobject]@{
         Ok         = $ok

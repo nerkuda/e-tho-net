@@ -414,12 +414,17 @@ function Copy-SetupsToGuest {
        Наблюдалось 2026-11-08: копирование 150-МБ payload в GUI-сеансе
        растягивалось до 16+ минут, ожидание страницы ключа не укладывалось
        в 900 с. Гасим процессы, отключаем задачи, останавливаем службы.
-    2. Defender. Real-time включён (tamper protection не даёт его выключить:
+    2. Windows Update и обслуживание компонентов. В снапшоте висят
+       запланированные задачи WU: после resume просыпаются TiWorker,
+       mscorsvw (NGEN) и UsoSvc, грузят 3+ ядра и держат файлы. Наблюдалось
+       2026-11-08: одна копия файла node_modules висела 12 минут, а проба
+       g3prep не дождалась страницы ключа за 1500 с. Останавливаем службы
+       (wuauserv, UsoSvc, WaaSMedicSvc, BITS, DoSvc, TrustedInstaller),
+       отключаем задачи WindowsUpdate/UpdateOrchestrator/WaaSMedic.
+    3. Defender. Real-time включён (tamper protection не даёт его выключить:
        Set-MpPreference проходит, но статус остаётся True), а каталоги
-       установки и распаковки не исключены. Наблюдалось 2026-11-08: одна
-       копия файла node_modules висела 12 минут (Inno log: «Installing the
-       file» → «Successfully installed» через 12м23с). Добавляем исключения
-       для путей установки и TEMP — они действуют до restore снапшота.
+       установки и распаковки не исключены. Добавляем исключения для путей
+       установки и TEMP, отключаем задачи сканов; MpCmdRun гасим.
     Всё локально для сценария: restore возвращает состояние снапшота.
     Ошибки не валят сценарий — это оптимизация стенда, а не проверка продукта.
 #>
@@ -432,6 +437,8 @@ function Stop-GuestBackgroundActivity {
                     Where-Object {
                         $_.Name -like 'MicrosoftEdgeUpdate*' -or
                         $_.Name -like 'MicrosoftEdge_X64_*' -or
+                        $_.Name -in @('TiWorker', 'TrustedInstaller', 'mscorsvw', 'MoUsoCoreWorker',
+                            'usoclient', 'WaaSMedicAgent', 'MpCmdRun') -or
                         ($_.CommandLine -and $_.CommandLine -like '*EdgeUpdate*')
                     })) {
                 try {
@@ -443,16 +450,26 @@ function Stop-GuestBackgroundActivity {
                 }
             }
             $tasks = 0
-            foreach ($task in @(Get-ScheduledTask -TaskName 'MicrosoftEdgeUpdateTask*' -ErrorAction SilentlyContinue)) {
+            foreach ($task in @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.TaskName -like 'MicrosoftEdgeUpdateTask*' -or
+                        $_.TaskPath -like '\Microsoft\Windows\WindowsUpdate\*' -or
+                        $_.TaskPath -like '\Microsoft\Windows\UpdateOrchestrator\*' -or
+                        $_.TaskPath -like '\Microsoft\Windows\WaaSMedic\*' -or
+                        $_.TaskPath -like '\Microsoft\Windows\Defender\*'
+                    })) {
+                if ([string]$task.State -eq 'Disabled') { continue }
                 try {
                     Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop | Out-Null
                     $tasks++
                 } catch {
-                    Write-Warning ("задача {0} не отключена: {1}" -f $task.TaskName, $_.Exception.Message)
+                    Write-Warning ("задача {0}{1} не отключена: {2}" -f `
+                            $task.TaskPath, $task.TaskName, $_.Exception.Message)
                 }
             }
             $services = 0
-            foreach ($name in @('edgeupdate', 'edgeupdatem')) {
+            foreach ($name in @('edgeupdate', 'edgeupdatem', 'wuauserv', 'UsoSvc', 'WaaSMedicSvc',
+                    'BITS', 'DoSvc', 'TrustedInstaller')) {
                 $service = Get-Service -Name $name -ErrorAction SilentlyContinue
                 if ($service -and $service.Status -ne 'Stopped') {
                     try {
@@ -485,7 +502,7 @@ function Stop-GuestBackgroundActivity {
                 Processes = $processes; Tasks = $tasks; Services = $services; Exclusions = $exclusions
             }
         }
-        $summary = ("Фон гостя: Edge Update — процессов остановлено {0}, задач отключено {1}, служб остановлено {2}; " +
+        $summary = ("Фон гостя: процессов остановлено {0}, задач отключено {1}, служб остановлено {2}; " +
             "Defender — исключений добавлено {3}") -f `
                 $result.Processes, $result.Tasks, $result.Services, $result.Exclusions
         Write-Host $summary
