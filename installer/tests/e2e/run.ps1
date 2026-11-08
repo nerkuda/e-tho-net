@@ -1552,14 +1552,6 @@ public static class LegacyStub {
     }
 }
 
-<# Текстовые измерения из журнала установщика (мс): мягкое/принудительное закрытие. #>
-function Get-GuiLogTiming {
-    param([string]$LogText, [string]$Pattern)
-    $match = [regex]::Match($LogText, $Pattern)
-    if ($match.Success) { return [int]$match.Groups[1].Value }
-    return -1
-}
-
 # --- G1: чистая GUI-установка ----------------------------------------------
 
 function Invoke-ScenarioG1 {

@@ -580,19 +580,6 @@ function Get-GuiListItemText {
     return [string](Get-JsonField $items[$ItemIndex] 'text')
 }
 
-<# Элемент снимка по классу/тексту (первый подходящий). #>
-function Get-GuiControl {
-    [CmdletBinding()]
-    param($Snapshot, [string]$ClassLike = '', [string]$TextLike = '', [switch]$FromWizard)
-    $pool = if ($FromWizard) { @(Get-JsonField $Snapshot 'wizard_controls') } else { @(Get-JsonField $Snapshot 'controls') }
-    foreach ($control in $pool) {
-        if ($ClassLike -and ([string](Get-JsonField $control 'class')) -notlike $ClassLike) { continue }
-        if ($TextLike -and (-not ([string](Get-JsonField $control 'text')).Contains($TextLike))) { continue }
-        return $control
-    }
-    return $null
-}
-
 <# Поля ввода страницы в порядке сверху вниз. #>
 function Get-GuiEdits {
     [CmdletBinding()]
