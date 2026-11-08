@@ -29,15 +29,18 @@
           Если удаление невозможно без интерактивной сессии — сценарий
           честно помечается deferred, успех не имитируется.
       S6  служба на состоянии после S4: etn-service.exe status/stop/start,
-          ImagePath, Start=Automatic, env-переменные в etn-service.xml,
-          ремонт (повторная установка той же версии) не перерегистрирует
-          службу.
+          ImagePath, Start=Automatic, env-переменные, точка запуска и
+          отсутствие плейсхолдеров в etn-service.xml, ремонт (повторная
+          установка той же версии) не перерегистрирует службу.
 
     GUI-сценарии (реальный рабочий стол гостя, см. gui.ps1/probe.ps1):
       G1  чистая GUI-установка из base-e2e-gui2: мастер целиком (оба
           компонента, лицензия MIT, порт 4321, администратор, первичный ключ),
-          код 0, файлы/служба/install.json/health, ярлыки, ключ не попадает
-          в журналы и временный файл удалён после подтверждения.
+          код 0, файлы/служба/install.json/health, ярлыки и их аргументы
+          подключения, ключ не попадает в журналы. Затем сбой после etn init
+          (прерывание на экране ключа): ключ сохранён в защищённом файле,
+          повторный запуск показывает его из файла (init не повторяется),
+          подтверждение удаляет временный файл.
       G2  legacy NSIS: синтетическая запись Uninstall + подставной
           деинсталлятор (путь с пробелами). Ветка A — неэлевированный запуск:
           строка «нужны права администратора», WARN в журнале, клиент в
@@ -1177,6 +1180,17 @@ function Invoke-ScenarioS6 {
     Add-E2ECheck -Results $Results -Scenario $scenario -Name 's6:xml-deployment' `
         -Ok ($xmlText.Contains('<env name="ETN_DEPLOYMENT" value="windows-service"/>')) `
         -Expected 'ETN_DEPLOYMENT=windows-service' -Actual 'проверено'
+    # Шаблон службы (8b1f5980): после установки не должно остаться
+    # плейсхолдеров, а точка запуска обязана указывать на файлы раскладки.
+    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's6:xml-no-placeholders' `
+        -Ok (-not $xmlText.Contains('{{')) -Expected 'нет {{...}}' `
+        -Actual $(if ($xmlText.Contains('{{')) { 'есть плейсхолдеры' } else { 'нет' })
+    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's6:xml-executable' `
+        -Ok ($xmlText.Contains('<executable>%BASE%\..\node\node.exe</executable>')) `
+        -Expected 'executable = node.exe раскладки' -Actual 'проверено'
+    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's6:xml-arguments' `
+        -Ok ($xmlText.Contains('<arguments>"%BASE%\..\server\dist\index.js"</arguments>')) `
+        -Expected 'arguments = server\dist\index.js раскладки' -Actual 'проверено'
 
     $stop = Invoke-GuestElevatedCommand -Context $script:context `
         -Command '"C:\Program Files\ETN\service\etn-service.exe" stop'
@@ -1235,6 +1249,7 @@ $script:GuiTexts = [ordered]@{
     ParamsTitle            = 'Параметры сервера'
     KeyTitle               = 'Первичный API-ключ'
     KeyConfirm             = 'Я сохранил ключ'
+    KeyFromPreviousRun     = 'Ключ получен при предыдущем запуске установщика (после сбоя) и сохранён в защищённом файле.'
     FinishedHeading        = 'Установка ETN завершена'
     FailedHeading          = 'Установка ETN не завершена'
     LegacyUserOnly         = 'найден клиент ETN 0.14.2 от старого установщика (NSIS, для всех пользователей) — для его удаления нужны права администратора; новый клиент поставится в ваш профиль'
@@ -1338,13 +1353,19 @@ function Get-GuiInstallerExitCode {
     return Get-JsonField $installer 'exit_code'
 }
 
-<# Шаги полной GUI-установки: лицензия, администратор, параметры, ключ. #>
+<#
+    Шаги полной GUI-установки: лицензия, администратор, параметры, ключ.
+    CrashAtKey — прервать установщик на экране ключа (сбой после etn init):
+    ключ остаётся в защищённом файле, повторный запуск обязан показать его
+    из файла и не повторять init.
+#>
 function New-GuiFullInstallSteps {
     param(
         [string]$Set = 'gui',
         [string]$Login = 'e2e-gui-admin',
         [string]$DisplayName = 'E2E GUI',
-        [int]$InstallTimeoutSec = 900
+        [int]$InstallTimeoutSec = 900,
+        [switch]$CrashAtKey
     )
     $steps = @(
         @{ type = 'wait_window'; timeout_sec = 120 },
@@ -1374,6 +1395,10 @@ function New-GuiFullInstallSteps {
     $steps += @{ type = 'wait_page'; title = $script:GuiTexts.KeyTitle; timeout_sec = $InstallTimeoutSec }
     $steps += @{ type = 'snapshot'; name = "$Set-key" }
     $steps += @{ type = 'check_secret_absent'; secret_file = 'C:\ProgramData\ETN\.install\primary-key.txt' }
+    if ($CrashAtKey) {
+        $steps += @{ type = 'kill' }
+        return $steps
+    }
     $steps += @{ type = 'check'; text = $script:GuiTexts.KeyConfirm; state = 'on' }
     $steps += @{ type = 'snapshot'; name = "$Set-key-confirmed" }
     $steps += @{ type = 'next' }
@@ -1381,6 +1406,38 @@ function New-GuiFullInstallSteps {
     $steps += @{ type = 'snapshot'; name = "$Set-finished" }
     $steps += @{ type = 'next'; text_any = @('Готово', 'Завершить'); timeout_sec = 60 }
     $steps += @{ type = 'wait_exit'; timeout_sec = 180 }
+    return $steps
+}
+
+<#
+    Шаги повторного запуска после сбоя на экране ключа: экран компонентов
+    (лицензия уже принята и не запрашивается), экран администратора скрыт
+    (первый администратор есть), параметры из install.json, затем экран
+    ключа — ключ из защищённого файла, подтверждение удаляет файл.
+#>
+function New-GuiResumeKeySteps {
+    param([string]$Set = 'g1-resume', [int]$InstallTimeoutSec = 900)
+    $steps = @(
+        @{ type = 'wait_window'; timeout_sec = 120 },
+        @{ type = 'snapshot'; name = "$Set-components" },
+        @{ type = 'next' },
+        @{ type = 'wait_page'; title = $script:GuiTexts.ParamsTitle; timeout_sec = 60 },
+        @{ type = 'snapshot'; name = "$Set-params" },
+        @{ type = 'next' },
+        @{ type = 'wait_text'; text = 'Всё готово к установке'; timeout_sec = 60 },
+        @{ type = 'snapshot'; name = "$Set-ready" },
+        @{ type = 'next'; text_any = @('Установить'); timeout_sec = 60; async = $true },
+        @{ type = 'wait_page'; title = $script:GuiTexts.KeyTitle; timeout_sec = $InstallTimeoutSec },
+        @{ type = 'snapshot'; name = "$Set-key" },
+        @{ type = 'check_secret_absent'; secret_file = 'C:\ProgramData\ETN\.install\primary-key.txt' },
+        @{ type = 'check'; text = $script:GuiTexts.KeyConfirm; state = 'on' },
+        @{ type = 'snapshot'; name = "$Set-key-confirmed" },
+        @{ type = 'next' },
+        @{ type = 'wait_finished'; timeout_sec = 120 },
+        @{ type = 'snapshot'; name = "$Set-finished" },
+        @{ type = 'next'; text_any = @('Готово', 'Завершить'); timeout_sec = 60 },
+        @{ type = 'wait_exit'; timeout_sec = 180 }
+    )
     return $steps
 }
 
@@ -1556,10 +1613,19 @@ public static class LegacyStub {
 
 # --- G1: чистая GUI-установка ----------------------------------------------
 
+<#
+    Сценарий задачи 686c5d76 в E2E (замена init-key.ps1, этап 6 задачи 8789381a):
+    мастер доходит до экрана ключа и прерывается (сбой после etn init), ключ
+    остаётся в защищённом файле; повторный запуск показывает его из файла
+    (подсказка «получен при предыдущем запуске»), init не повторяется,
+    подтверждение удаляет временный файл. Значение ключа не печатается:
+    проверяются длина/redaction, отсутствие в журналах и факт файла.
+#>
 function Invoke-ScenarioG1 {
     param($Results, $Timings)
     $scenario = 'G1'
     $started = Get-Date
+    $keyFile = 'C:\ProgramData\ETN\.install\primary-key.txt'
     $session = Initialize-GuiScenarioVm -Snapshot $GuiBaseSnapshot -SetupKeys @('current')
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:interactive-session' `
         -Ok ([int]$session.ActiveSessions -gt 0 -and [int]$session.ExplorerCount -gt 0) `
@@ -1573,10 +1639,12 @@ function Invoke-ScenarioG1 {
     $beforeLog = Get-GuestInstallLog -Context $script:context
     $beforePath = [string](Get-JsonField $beforeLog 'Path')
 
-    $plan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" -Steps (New-GuiFullInstallSteps -Set 'g1')
-    $probe = Invoke-GuestGuiProbe -Plan $plan -Name 'g1-install' -TimeoutSec 1500 `
+    # Первый проход: установка до экрана ключа и прерывание.
+    $plan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
+        -Steps (New-GuiFullInstallSteps -Set 'g1' -CrashAtKey)
+    $probe = Invoke-GuestGuiProbe -Plan $plan -Name 'g1-install-crash' -TimeoutSec 1500 `
         -ArtifactDir (Join-Path $OutDir 'gui')
-    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g1:probe' -Probe $probe
+    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g1:probe-crash' -Probe $probe
     if (-not $probe.Ok) {
         Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 'g1:total-duration' `
             -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
@@ -1584,7 +1652,7 @@ function Invoke-ScenarioG1 {
     }
     $snapshots = @{}
     foreach ($name in @('g1-components', 'g1-components-licensed', 'g1-admin-default', 'g1-admin',
-            'g1-params', 'g1-ready', 'g1-key', 'g1-key-confirmed', 'g1-finished')) {
+            'g1-params', 'g1-ready', 'g1-key')) {
         $snapshots[$name] = Get-GuiSnapshot -ProbeResult $probe.Result -Name $name
     }
 
@@ -1653,16 +1721,75 @@ function Invoke-ScenarioG1 {
         -Expected 'ключ показан (значение скрыто)' -Actual ("chars=$keyChars, text=$keyText")
     Add-GuiNextCheck -Results $Results -Scenario $scenario -Name 'g1:key-next-disabled' `
         -Snapshot $key -Enabled $false
-    $keyConfirmed = $snapshots['g1-key-confirmed']
-    Add-GuiNextCheck -Results $Results -Scenario $scenario -Name 'g1:key-next-enabled' `
-        -Snapshot $keyConfirmed -Enabled $true
     $secretStep = Get-GuiStepResult -ProbeResult $probe.Result -Type 'check_secret_absent'
     $filesChecked = if ($secretStep) { [int](Get-JsonField (Get-JsonField $secretStep 'detail') 'files_checked') } else { 0 }
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:key-not-in-logs' `
         -Ok ([bool](Get-JsonField $secretStep 'ok') -and $filesChecked -gt 0) `
         -Expected 'ключ не найден в журналах' -Actual ("проверено файлов: $filesChecked")
 
-    $finished = $snapshots['g1-finished']
+    # Сбой после etn init: ключ уже выдан и обязан пережить прерывание
+    # (сценарий 4 init-key.ps1, теперь — честное прерывание процесса).
+    $keyExistsAfterCrash = Test-GuestPath -Context $script:context -Path $keyFile
+    $keyHash = Get-GuestFileHash -Context $script:context -Path $keyFile
+    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:key-survives-crash' `
+        -Ok ($keyExistsAfterCrash -and [bool]$keyHash) `
+        -Expected 'файл ключа есть после прерывания' `
+        -Actual $(if ($keyExistsAfterCrash) { 'есть' } else { 'нет' })
+
+    $crashLog = Get-GuestInstallLog -Context $script:context -ExcludePath $beforePath
+    $crashPath = [string](Get-JsonField $crashLog 'Path')
+    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-selection' -Log $crashLog `
+        -Needle 'Экран компонентов: сервер=да, клиент=да, область клиента=machine'
+    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-license' -Log $crashLog `
+        -Needle 'лицензия=принята'
+
+    # Второй проход: повторный запуск после сбоя.
+    $resumePlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
+        -Steps (New-GuiResumeKeySteps -Set 'g1-resume')
+    $resumeProbe = Invoke-GuestGuiProbe -Plan $resumePlan -Name 'g1-resume' -TimeoutSec 1500 `
+        -ArtifactDir (Join-Path $OutDir 'gui')
+    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g1:resume-probe' -Probe $resumeProbe
+    if (-not $resumeProbe.Ok) {
+        Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 'g1:total-duration' `
+            -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1))
+        return
+    }
+    $resumeSnapshots = @{}
+    foreach ($name in @('g1-resume-components', 'g1-resume-params', 'g1-resume-ready',
+            'g1-resume-key', 'g1-resume-key-confirmed', 'g1-resume-finished')) {
+        $resumeSnapshots[$name] = Get-GuiSnapshot -ProbeResult $resumeProbe.Result -Name $name
+    }
+    $resumeComponents = $resumeSnapshots['g1-resume-components']
+    Add-GuiPageCheck -Results $Results -Scenario $scenario -Name 'g1:resume-page-components' `
+        -Snapshot $resumeComponents -Title $script:GuiTexts.ComponentsTitle
+    Add-GuiTextCheck -Results $Results -Scenario $scenario -Name 'g1:resume-no-license' `
+        -Snapshot $resumeComponents -Text $script:GuiTexts.LicenseAccept -Absent
+    Add-GuiPageCheck -Results $Results -Scenario $scenario -Name 'g1:resume-page-params' `
+        -Snapshot $resumeSnapshots['g1-resume-params'] -Title $script:GuiTexts.ParamsTitle
+    $resumeKey = $resumeSnapshots['g1-resume-key']
+    Add-GuiPageCheck -Results $Results -Scenario $scenario -Name 'g1:resume-page-key' `
+        -Snapshot $resumeKey -Title $script:GuiTexts.KeyTitle
+    Add-GuiTextCheck -Results $Results -Scenario $scenario -Name 'g1:resume-key-from-previous-run' `
+        -Snapshot $resumeKey -Text $script:GuiTexts.KeyFromPreviousRun -Exact
+    $resumeKeyEdits = @(Get-GuiEdits -Snapshot $resumeKey)
+    $resumeKeyText = if ($resumeKeyEdits.Count -ge 1) { [string](Get-JsonField $resumeKeyEdits[0] 'text') } else { '' }
+    $resumeKeyChars = if ($resumeKeyEdits.Count -ge 1) { [int](Get-JsonField $resumeKeyEdits[0] 'chars') } else { 0 }
+    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:resume-key-present-redacted' `
+        -Ok ($resumeKeyChars -gt 20 -and $resumeKeyText.StartsWith('<redacted:')) `
+        -Expected 'ключ показан из файла (значение скрыто)' -Actual ("chars=$resumeKeyChars")
+    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:resume-key-same-length' `
+        -Ok ($resumeKeyChars -eq $keyChars) -Expected "длина $keyChars" -Actual $resumeKeyChars `
+        -Note 'тот же ключ из защищённого файла, а не новый'
+    $resumeSecretStep = Get-GuiStepResult -ProbeResult $resumeProbe.Result -Type 'check_secret_absent'
+    $resumeFilesChecked = if ($resumeSecretStep) { [int](Get-JsonField (Get-JsonField $resumeSecretStep 'detail') 'files_checked') } else { 0 }
+    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:resume-key-not-in-logs' `
+        -Ok ([bool](Get-JsonField $resumeSecretStep 'ok') -and $resumeFilesChecked -gt 0) `
+        -Expected 'ключ не найден в журналах повторного запуска' `
+        -Actual ("проверено файлов: $resumeFilesChecked")
+    Add-GuiNextCheck -Results $Results -Scenario $scenario -Name 'g1:key-next-enabled' `
+        -Snapshot $resumeSnapshots['g1-resume-key-confirmed'] -Enabled $true
+
+    $finished = $resumeSnapshots['g1-resume-finished']
     Add-GuiTextCheck -Results $Results -Scenario $scenario -Name 'g1:finished-heading' `
         -Snapshot $finished -Text $script:GuiTexts.FinishedHeading -Exact
     $summary = Get-GuiMemoText -Snapshot $finished
@@ -1672,7 +1799,7 @@ function Invoke-ScenarioG1 {
              $summary.Contains('Каталог данных: C:\ProgramData\ETN') -and
              $summary.Contains('Клиент ETN: C:\Program Files\ETN\client\ETN.exe')) `
         -Expected 'версия, адрес, данные, клиент' -Actual ("chars=$($summary.Length)")
-    $exitCode = Get-GuiInstallerExitCode -ProbeResult $probe.Result
+    $exitCode = Get-GuiInstallerExitCode -ProbeResult $resumeProbe.Result
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:exit-code' `
         -Ok ($exitCode -eq 0) -Expected 0 -Actual $exitCode
 
@@ -1695,10 +1822,19 @@ function Invoke-ScenarioG1 {
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:files-server' `
         -Ok ($missing.Count -eq 0) -Expected 'ядро сервера на месте' `
         -Actual $(if ($missing.Count -eq 0) { 'все файлы' } else { 'нет: ' + ($missing -join ', ') })
+    $clientExe = Test-GuestPath -Context $script:context -Path 'C:\Program Files\ETN\client\ETN.exe'
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:file-client' `
-        -Ok (Test-GuestPath -Context $script:context -Path 'C:\Program Files\ETN\client\ETN.exe') `
-        -Expected 'есть' `
-        -Actual $(if (Test-GuestPath -Context $script:context -Path 'C:\Program Files\ETN\client\ETN.exe') { 'есть' } else { 'нет' })
+        -Ok $clientExe -Expected 'есть' -Actual $(if ($clientExe) { 'есть' } else { 'нет' })
+    # Контракт init (перенос staged-app/init-key): настоящий etn init создал
+    # базу и каталоги данных установщика.
+    $systemDb = Test-GuestPath -Context $script:context -Path 'C:\ProgramData\ETN\_system.db'
+    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:init-system-db' `
+        -Ok $systemDb -Expected 'база первого администратора' -Actual $(if ($systemDb) { 'есть' } else { 'нет' })
+    $serviceLogDir = Test-GuestPath -Context $script:context -Path 'C:\ProgramData\ETN\logs\service'
+    $backupsDir = Test-GuestPath -Context $script:context -Path 'C:\ProgramData\ETN\backups'
+    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:data-dirs' `
+        -Ok ($serviceLogDir -and $backupsDir) -Expected 'logs\service и backups' `
+        -Actual ("logs=$(if ($serviceLogDir) { 'есть' } else { 'нет' }), backups=$(if ($backupsDir) { 'есть' } else { 'нет' })")
     $service = Get-GuestServiceState -Context $script:context -Name 'ETN'
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:service-running' `
         -Ok ($service -eq 'Running') -Expected 'Running' -Actual $service
@@ -1713,24 +1849,52 @@ function Invoke-ScenarioG1 {
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:shortcuts' `
         -Ok ($menuOk -and $desktopOk) -Expected 'меню и рабочий стол' `
         -Actual ("меню=$(if ($menuOk) { 'есть' } else { 'нет' }), рабочий стол=$(if ($desktopOk) { 'есть' } else { 'нет' })")
+    # Аргументы подключения в ярлыке (перенос staged-app/98ad5eec):
+    # цель — клиент раскладки, параметры — локальный сервер и его порт.
+    # Текст имени подключения через WScript.Shell не сверяем: в ВМ системная
+    # локаль en-US (ACP 1252), и сам WScript.Shell сохраняет кириллицу в .lnk
+    # как '?' (проверено диагностикой 2026-11-08: свежий .lnk с кириллицей
+    # читается обратно как '?'); на русской Windows имя сохраняется. Поэтому
+    # проверяется канал аргументов: адрес, порт и непустое имя.
+    $shortcutInfo = Invoke-GuestElevatedRetry -Context $script:context -ScriptBlock {
+        param($ShortcutPath)
+        if (-not (Test-Path -LiteralPath $ShortcutPath)) {
+            return [pscustomobject]@{ Exists = $false; Target = ''; Arguments = '' }
+        }
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        return [pscustomobject]@{
+            Exists    = $true
+            Target    = [string]$shortcut.TargetPath
+            Arguments = [string]$shortcut.Arguments
+        }
+    } -ArgumentList @($menuShortcut)
+    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:shortcut-connect-args' `
+        -Ok ($shortcutInfo.Exists -and
+             $shortcutInfo.Target -eq 'C:\Program Files\ETN\client\ETN.exe' -and
+             $shortcutInfo.Arguments.Contains('--connect-url="http://localhost:4321"') -and
+             $shortcutInfo.Arguments -match '--connect-name="[^"]+"') `
+        -Expected 'цель client\ETN.exe, --connect-url/непустой --connect-name' `
+        -Actual ("target=$($shortcutInfo.Target), args=$($shortcutInfo.Arguments)")
 
-    $keyFile = 'C:\ProgramData\ETN\.install\primary-key.txt'
     $keyGone = -not (Test-GuestPath -Context $script:context -Path $keyFile)
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g1:key-temp-deleted' `
         -Ok $keyGone -Expected 'файла ключа нет после подтверждения' `
         -Actual $(if ($keyGone) { 'нет' } else { 'есть' })
 
-    $log = Get-GuestInstallLog -Context $script:context -ExcludePath $beforePath
-    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-selection' -Log $log `
-        -Needle 'Экран компонентов: сервер=да, клиент=да, область клиента=machine'
-    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-license' -Log $log `
-        -Needle 'лицензия=принята'
-    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-stages' -Log $log `
+    $resumeLog = Get-GuestInstallLog -Context $script:context -ExcludePath $crashPath
+    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-stages' -Log $resumeLog `
         -Needle 'Этап: Запись параметров установки' `
         -Note 'последний этап установки; порядок этапов проверяется в S4'
+    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-no-repeat-init' -Log $resumeLog `
+        -Needle 'etn init не вызывается: первый администратор уже есть'
+    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-key-from-file' -Log $resumeLog `
+        -Needle 'Ключ в защищённом файле: есть'
+    Add-LogCheck -Results $Results -Scenario $scenario -Name 'g1:log-key-deleted' -Log $resumeLog `
+        -Needle 'Временный файл ключа удалён после подтверждения'
 
     Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 'g1:total-duration' `
-        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'GUI-установка'
+        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'прерывание + повторный запуск'
 }
 
 # --- G2: legacy NSIS -------------------------------------------------------

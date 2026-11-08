@@ -206,13 +206,13 @@
 ;     «Далее недоступна: »; FitLabel и пересчёт нижнего блока — после каждой
 ;     смены текста;
 ;   * Items.Add/AddSubItem/SubItems и запись ItemLevel/State запрещены: они
-;     рассинхронизируют FStateList (сторож — installer/tests/silent-codes.ps1);
+;     рассинхронизируют FStateList (сторож — installer/tests/iss-static.ps1);
 ;     Items.Delete допустим только для последней строки области клиента.
 ;
 ; Сборка: installer/build.ps1 (передаёт /DMyAppVersion из server/package.json).
-; Проверка silent-контракта и предпроверок: installer/tests/silent-codes.ps1.
-; Проверка init и ключа: installer/tests/init-key.ps1.
-; Проверка подстановки шаблона и запуска поставки: installer/tests/staged-app.ps1.
+; Проверки: installer/tests/iss-static.ps1 (статика установщика),
+; installer/tests/payload-freshness.ps1 (свежесть payload),
+; installer/tests/e2e/run.ps1 (установка на виртуальной машине).
 ;
 ; Контракт silent server-only режима (постоянный комментарий задачи):
 ;   ETN-Setup-<версия>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY
@@ -225,20 +225,8 @@
 ;   /PRIVILEGEDPHASE — привилегированная работа без мастера: фаза пишет в
 ;   каталог программы и каталог данных; silent-предусловия самообновления к ней
 ;   НЕ применяются, проверяются только права, каталог программы, каталог данных
-;   и порт. GUI-установка её больше не запускает (элевация штатная, 2dd215f7);
-;   фаза остаётся для installer/tests/*.ps1.
-;   /TESTSTATE, /TESTSELECT, /TESTRECORD, /TESTELEVATED, /TESTSERVICE,
-;   /TESTHEALTH, /TESTPARAMS, /TESTDATADIR, /TESTPORT, /TESTMINFREE,
-;   /TESTFIREWALL, /TESTPRECHECK, /TESTSERVICENAME, /TESTOWNSERVICEPID,
-;   /TESTPORTBINDFAIL, /TESTLISTENERTABLEOFF, /TESTNOSERVICE,
-;   /TESTSERVICECMD, /TESTSERVICESTATE, /TESTSERVICESTOP, /TESTSERVICESTART,
-;   /TESTSERVICEWAIT, /TESTSERVICEINSTALL, /TESTSERVICEUNINSTALL,
-;   /TESTSERVICEREALFILE, /TESTSERVICESTATUS, /TESTSERVICEIMAGE,
-;   /TESTSERVICESTARTTYPE, /TESTSERVICEDELETEFLAG, /TESTUNINSTALLSERVICE,
-;   /TESTHEALTHURL, /TESTHEALTHWAIT, /TESTHEALTHSTEP, /TESTROLLBACK,
-;   /TESTADMINMODE, /TESTUSERONLYMODE, /TESTGUIMODE, /TESTNOTICE — только в
-;   тестовой сборке (installer/tests/silent-codes.ps1, init-key.ps1,
-;   staged-app.ps1).
+;   и порт. GUI-установка её больше не запускает (элевация штатная, 2dd215f7).
+;   /PARAMS=<файл> — файл параметров сервера для привилегированной фазы.
 ; ============================================================================
 
 #ifndef MyAppVersion
@@ -247,8 +235,8 @@
 #endif
 
 ; Каталог подготовленного payload (поставка 8b1f5980 и 98ad5eec).
-; По умолчанию — installer/payload; тестовый прогон молчания передаёт
-; /DPayloadRoot=<installer/tests/fixtures/payload>.
+; По умолчанию — installer/payload; /DPayloadRoot=<каталог> переопределяет его
+; (payload-freshness.ps1 собирает фикстуры в отдельном каталоге).
 #ifdef PayloadRoot
   #define PayloadDir PayloadRoot
 #else
@@ -256,23 +244,15 @@
 #endif
 #define PayloadPrefix AddBackslash(PayloadDir)
 
-; Тестовый режим (только для installer/tests/silent-codes.ps1): изолированные
-; каталог программы и каталог данных + хуки /TESTELEVATED, /TESTSERVICE,
-; /TESTHEALTH. В обычной сборке эти хуки в код не попадают (#ifdef TestMode).
-#ifdef TestMode
-  #define AppDir TestAppDir
-  #define DataDir TestDataDir
-#else
-  ; Каталог программы выбирается по ФАКТИЧЕСКИМ правам процесса (ошибка
-  ; aa5af30c): запуск от имени администратора — %ProgramFiles%\ETN, обычный
-  ; запуск — %LOCALAPPDATA%\Programs\ETN. При PrivilegesRequired=lowest Inno
-  ; всегда работает в неадминистративном режиме, поэтому {autopf} указывает на
-  ; профиль даже у элевированного процесса — вычислить каталог обязана
-  ; GetDefaultAppDir. Жёсткий {commonpf} здесь недопустим: в user-режиме
-  ; экземпляр не сможет создать каталог и записать деинсталлятор (Error 5).
-  #define AppDir "{code:GetDefaultAppDir}"
-  #define DataDir "{commonappdata}\ETN"
-#endif
+; Каталог программы выбирается по ФАКТИЧЕСКИМ правам процесса (ошибка
+; aa5af30c): запуск от имени администратора — %ProgramFiles%\ETN, обычный
+; запуск — %LOCALAPPDATA%\Programs\ETN. При PrivilegesRequired=lowest Inno
+; всегда работает в неадминистративном режиме, поэтому {autopf} указывает на
+; профиль даже у элевированного процесса — вычислить каталог обязана
+; GetDefaultAppDir. Жёсткий {commonpf} здесь недопустим: в user-режиме
+; экземпляр не сможет создать каталог и записать деинсталлятор (Error 5).
+#define AppDir "{code:GetDefaultAppDir}"
+#define DataDir "{commonappdata}\ETN"
 
 ; --- Проверки наличия payload на этапе компиляции ---------------------------
 ; Секции [Files] добавляются только для реально подготовленных каталогов:
@@ -307,9 +287,7 @@
   #pragma message "ПРЕДУПРЕЖДЕНИЕ: в payload нет client\ETN.exe — файлы клиента не поставляются (задача 98ad5eec)"
 #endif
 
-; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск». В тестовой
-; сборке каталоги уводятся в песочницу теста: прогон silent-codes.ps1 не
-; должен трогать настоящий рабочий стол и меню «Пуск» пользователя.
+; Ярлыки клиента (задача 98ad5eec): рабочий стол и меню «Пуск».
 ;
 ; Пользовательская область (ошибка 0f8dd0f3, п.7 карточки 860def0d) задана
 ; ЯВНО, а не через {autodesktop}/{autoprograms}: машинная копия клиента ставится
@@ -320,42 +298,24 @@
 ; пользовательские — {userdesktop}/{userprograms}. Явный каталог клиента в
 ; профиле совпадает с ClientInstallPath — область в install.json и реальное
 ; место файлов больше не расходятся.
-#ifdef TestMode
-  #define ShortcutDesktopDir ExtractFileDir(TestAppDir) + "\shortcuts\desktop"
-  #define ShortcutMenuDir ExtractFileDir(TestAppDir) + "\shortcuts\menu"
-  #define ShortcutUserDesktopDir ShortcutDesktopDir
-  #define ShortcutUserMenuDir ShortcutMenuDir
-  #define ClientUserDir TestAppDir
-#else
-  #define ShortcutDesktopDir "{commondesktop}"
-  #define ShortcutMenuDir "{commonprograms}\ETN"
-  #define ShortcutUserDesktopDir "{userdesktop}"
-  #define ShortcutUserMenuDir "{userprograms}\ETN"
-  #define ClientUserDir "{localappdata}\Programs\ETN"
-#endif
+#define ShortcutDesktopDir "{commondesktop}"
+#define ShortcutMenuDir "{commonprograms}\ETN"
+#define ShortcutUserDesktopDir "{userdesktop}"
+#define ShortcutUserMenuDir "{userprograms}\ETN"
+#define ClientUserDir "{localappdata}\Programs\ETN"
 
 ; ============================================================================
 ; AppId — единственный источник идентификатора: из него Inno строит запись
 ; деинсталляции `{AppId}_is1`, по нему же ищется и чистится запись прежней
 ; области реестра (ошибка a7394117). Литералы в [Setup] и [Code] не дублируются.
 #define ProductAppId "6D7E1C2A-4B9A-4E7C-9F3D-2A5B8C1E4F70"
-#define TestUninstallAppId "B0C7D5E1-3A2F-4D6B-9E8C-1F0A2B3C4D5E"
 #define ProductUninstallKey "{" + ProductAppId + "}_is1"
-#define TestUninstallKey "{" + TestUninstallAppId + "}_is1"
 
 [Setup]
 ; Идентификатор продукта: по нему Inno ведёт запись установки и обновление
 ; поверх прежней версии. Менять нельзя — иначе повторный запуск не увидит
 ; предыдущую установку. `{{` — литеральная скобка: AppId начинается с `{`.
-#ifdef TestUninstallable
-; Проба настоящего деинсталлятора (installer/tests/silent-codes.ps1, приёмка
-; 8b1f5980): у тестовой установки отдельный AppId, чтобы запись установки и
-; удаление не касались продуктовой установки на машине. Определяется только
-; вместе с TestMode (см. Uninstallable ниже).
-AppId={{{#TestUninstallAppId}}
-#else
 AppId={{{#ProductAppId}}
-#endif
 AppName=ETN
 AppVersion={#MyAppVersion}
 AppVerName=ETN {#MyAppVersion}
@@ -421,16 +381,6 @@ OutputDir=..\release
 OutputBaseFilename=ETN-Setup
 Compression=lzma2
 SolidCompression=yes
-#ifdef TestMode
-; Тестовая сборка по умолчанию не создаёт деинсталлятор и запись установки в
-; реестре: прогон silent-codes.ps1 не должен оставлять следов на машине.
-; /DTestUninstallable=1 (только вместе с -TestMode) включает деинсталлятор для
-; пробы настоящего удаления с моделью службы (приёмка 8b1f5980): у такой
-; сборки отдельный AppId — см. [Setup].
-#ifndef TestUninstallable
-Uninstallable=no
-#endif
-#endif
 WizardStyle=modern
 UninstallDisplayName=ETN {#MyAppVersion}
 ; Журнал Inno включён всегда (ошибка 2dd215f7): в нём лоадер печатает слой
@@ -663,7 +613,6 @@ EtnHealthEmpty=%1: пустой ответ
 EtnHealthStatusBad=health: status=%1 вместо ok
 EtnHealthDbBad=health: db=%1 вместо ok
 EtnHealthVersionBad=health: версия %1 вместо %2
-EtnHealthTestMode=тестовый режим: %1
 EtnHealthServiceMissing=служба не найдена (%1)
 EtnValueMissing=<нет>
 EtnBackupCodeError=код %1
@@ -869,14 +818,9 @@ const
     запись прежней 32-битной установки могла остаться и там. }
   UNINSTALL_KEY_WOW = 'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall';
   { Имя ключа записи деинсталляции Inno: AppId из [Setup] с суффиксом _is1
-    (в реестре AppId записан с одной ведущей скобкой). У тестовой сборки с
-    деинсталлятором свой AppId — продуктовую запись она не трогает.
+    (в реестре AppId записан с одной ведущей скобкой).
     Ошибка a7394117: по этому ключу удаляется запись прежней области реестра. }
-#ifdef TestUninstallable
-  UNINSTALL_KEY_NAME = '{#TestUninstallKey}';
-#else
   UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';
-#endif
   { Ожидание исчезновения записи Uninstall после удаления старого клиента:
     деинсталлятор NSIS с _?= завершается синхронно, но старая версия могла
     проигнорировать параметр и удалять в фоне — запись исчезает с задержкой.
@@ -921,14 +865,10 @@ var
     Administrator Protection элевированный процесс работает в отдельном
     профиле (SMAA), и «клиент для меня» попал бы в чужой профиль. }
   GAdminMachineScope: Boolean;
-  GTestMode: Boolean;
   { Пользователь отказался закрывать клиент (отличает отказ от технической
     неудачи: техническую неудачу можно устранить и повторить установку,
     отказ — нет). }
   GClientCloseRefused: Boolean;
-  { Хук 8b1f5980: прямой прогон снятия службы при удалении без настоящего
-    удаления программы. }
-  GTestUninstallService: String;
 
   { Первичная инициализация и ключ }
   GAdminLogin: String;
@@ -1116,8 +1056,8 @@ var
   { Обновление поверх установки: порт, хост и режим фиксированы install.json. }
   GParamsLocked: Boolean;
   { Строки журнала, записанные до создания журнала (чтение файла параметров
-    тестовой привилегированной фазы идёт раньше: от него зависит выбор
-    компонентов и место журнала). Выводятся сразу после InitLog. }
+    привилегированной фазы идёт раньше: от него зависит выбор компонентов и
+    место журнала). Выводятся сразу после InitLog. }
   GDeferredLog: String;
   { Файл причины отказа предусловия: привилегированная фаза (/PRIVILEGEDPHASE)
     пишет сюда причину, а вызывающий её процесс читает и показывает в
@@ -1609,27 +1549,15 @@ end;
   один и тот же. }
 function GetDefaultAppDir(Param: String): String;
 begin
-#ifdef TestMode
-  { В тестовой сборке каталог изолирован и задан build.ps1; функция в этой
-    ветке не участвует в выборе режима. }
-  Result := ExpandConstant('{#AppDir}');
-#else
   if IsAdmin then
     Result := ExpandConstant('{commonpf}\ETN')
   else
     Result := ExpandConstant('{localappdata}\Programs\ETN');
-#endif
 end;
 
 function MachineAppDir: String;
 begin
-#ifdef TestMode
-  { В тестовой сборке реальная машинная установка на этой машине не должна
-    влиять на состояние: каталоги изолированы. }
-  Result := '';
-#else
   Result := ExpandConstant('{commonpf}\ETN');
-#endif
 end;
 
 function ServerFilesAt(const Dir: String): Boolean;
@@ -1719,14 +1647,10 @@ end;
   диагностики, а не повод ставить вторую копию молча). *)
 function ClientInstallPath: String;
 begin
-#ifdef TestMode
-  Result := GServerDir;
-#else
   if GClientScopeUser then
     Result := UserClientDir
   else
     Result := ExpandConstant('{commonpf}') + '\ETN';
-#endif
 end;
 
 function ClientFilesPresent: Boolean;
@@ -2252,9 +2176,7 @@ begin
   end;
 end;
 
-{ Старый клиент NSIS (electron-builder 0.14.x): обнаружение и удаление (112642a4).
-  В тестовой сборке поиск и удаление не выполняются: GTestMode — предохранитель
-  машины разработчика, а не тестовый хук. }
+{ Старый клиент NSIS (electron-builder 0.14.x): обнаружение и удаление (112642a4). }
 { Первый подходящий ключ в корне заполняет GLegacy* и считается найденным. }
 function FindLegacyInRoot(const Root: Integer;
   const UninstallKey: String): Boolean;
@@ -2350,7 +2272,6 @@ end;
 procedure DetectLegacyClient;
 begin
   GLegacyClientFound := False;
-  if GTestMode then Exit;
   if GSilent or GPrivilegedPhase then Exit;
   GLegacyClientFound := FindLegacyClient;
   if not GLegacyClientFound then Exit;
@@ -2367,7 +2288,6 @@ begin
   Result := True;
   Reason := '';
   if not GClientSelected then Exit;
-  if GTestMode then Exit;
   if not FindLegacyClient then Exit;
   if GLegacyClientMachine and (not Elevated) then
   begin
@@ -3034,8 +2954,8 @@ begin
 end;
 
 { Единственная точка вызова etn init. Работает под администратором (в GUI —
-  административный режим установки; в тестах — /PRIVILEGEDPHASE): файлы
-  сервера уже скопированы, права администратора есть. Повторно init
+  административный режим установки; внутренний запуск — /PRIVILEGEDPHASE):
+  файлы сервера уже скопированы, права администратора есть. Повторно init
   не вызывается: критерий — hasFirstUser. }
 procedure EnsureFirstUser;
 var
@@ -3201,11 +3121,7 @@ begin
   Result := '';
   if GServerSelected then
   begin
-#ifdef TestMode
-    Dir := GDataDir + '\.install';
-#else
     Dir := ExpandConstant('{commonappdata}\ETN\.install');
-#endif
     if not ProbeWritableDir(Dir) then
     begin
       LogLine('WARN', 'Каталог параметров недоступен на запись: ' + Dir);
@@ -3348,7 +3264,7 @@ function InPrivilegedContext: Boolean;
 begin
   { Привилегированная фаза — та, что пишет в каталог программы и каталог
     данных: silent (предусловие — уже элевирован), внутренняя фаза
-    /PRIVILEGEDPHASE (тесты установщика; GUI её больше не запускает), либо
+    /PRIVILEGEDPHASE (GUI её больше не запускает), либо
     элевированный процесс (запуск от имени администратора или /ALLUSERS);
     каталог программы при этом выбирает GetDefaultAppDir. Неэлевированный
     процесс пишет в профиль пользователя и привилегированной фазой не
@@ -3507,9 +3423,8 @@ end;
   InitializeSetup, и GServerDir остаётся пустым, поэтому путь берётся из {app}
   по месту — как в UninstallFirewallRuleWanted. Раньше путь вычислялся только
   из GServerDir, и снятие службы при удалении не работало (блокер приёмки
-  4151edf6). В установке каталог уже вычислен (GServerDir = {app}), а
-  ExpandConstant('{app}') до инициализации мастера недоступен — пробу снятия
-  (/TESTUNINSTALLSERVICE) вызывает InitializeSetup. *)
+  4151edf6). В установке каталог уже вычислен (GServerDir = {app});
+  ExpandConstant('{app}') до инициализации мастера недоступен. *)
 function ServiceDir: String;
 begin
   Result := GServerDir;
@@ -5750,9 +5665,8 @@ end;
 
 { ---------------------------------------------------------------------------
   Предусловия привилегированной фазы — внутреннего запуска с /PRIVILEGEDPHASE.
-  GUI-установка её больше не запускает (элевация штатная, 2dd215f7); фазу
-  используют тесты установщика (installer/tests/*.ps1), чтобы выполнить
-  привилегированную работу без настоящей элевации.
+  GUI-установка её больше не запускает (элевация штатная, 2dd215f7); фаза
+  выполняет привилегированную работу без настоящей элевации.
   Это НЕ silent-самообновление: install.json, файлы и служба не требуются —
   проверяются только права, каталог, данные, порт и свободное место.
   --------------------------------------------------------------------------- }
@@ -6248,7 +6162,7 @@ end;
   доступности считает такую строку недоступной — принятый компромисс.
 
   Items.Add/AddSubItem и запись ItemLevel/State запрещены: они рассинхронизируют
-  FStateList (сторож в silent-codes.ps1). Items.Delete допустим только для
+  FStateList (сторож в iss-static.ps1). Items.Delete допустим только для
   последней строки области клиента — её состояние удаляется вместе с ней. }
 procedure SyncComponentsList;
 var
@@ -6864,23 +6778,6 @@ end;
 { ---------------------------------------------------------------------------
   События установщика
   --------------------------------------------------------------------------- }
-#ifdef TestMode
-{ /TESTUNINSTALLSERVICE=1 — прямой прогон снятия службы при удалении
-  (8b1f5980): та же RemoveServiceOnUninstall, что вызывает uninstaller, без
-  настоящего удаления программы. 0 — служба снята (или её не было), 10 — отказ
-  с причиной в журнале и reason-файле. Порядок команд (stop → uninstall) виден
-  по строкам журнала; установщик при этом ничего не удаляет. }
-function RunUninstallServiceProbe: Boolean;
-var
-  Reason: String;
-begin
-  Result := RemoveServiceOnUninstall(Reason);
-  LogLine('INFO', 'TESTUNINSTALLSERVICE result=' + Pick(Result, 'ok', 'fail') +
-    IfStr(Reason = '', '', ' reason=' + Reason));
-  if not Result then WriteReasonFile(Reason);
-end;
-#endif
-
 function InitializeSetup: Boolean;
 var
   Reason: String;
@@ -6898,8 +6795,6 @@ begin
   GServerPort := '4321';
   GServerFirewall := True;
   GSkipCopy := False;
-  GTestMode := False;
-  GTestUninstallService := '';
   GLastBackupDir := '';
   GDatabaseToolPath := '';
   GLastRollbackDir := '';
@@ -6944,10 +6839,6 @@ begin
   GOriginalUser := GetEnv('USERNAME');
   if GOriginalUser = '' then GOriginalUser := GetUserNameString;
   GAdminLogin := GOriginalUser;
-#ifdef TestMode
-  GTestMode := True;
-  GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
-#endif
 
   if GPrivilegedPhase then
     ReadParamsFile;
@@ -7024,20 +6915,6 @@ begin
   LogLine('INFO', 'Параметры сервера: порт ' + GServerPort + ', хост ' + GServerHost +
     ', брандмауэр ' + Pick(GServerFirewall, 'включён', 'выключен') +
     ', каталог данных ' + GDataDir);
-
-
-#ifdef TestMode
-
-  { /TESTUNINSTALLSERVICE=1 — прямой прогон снятия службы при удалении
-    (8b1f5980): 0 — служба снята (или её не было), 10 — отказ с причиной. }
-  if GTestUninstallService = '1' then
-  begin
-    if RunUninstallServiceProbe then
-      ExitProcess(EXIT_OK)
-    else
-      ExitProcess(EXIT_FAILED);
-  end;
-#endif
 
   if GPrivilegedPhase then
   begin

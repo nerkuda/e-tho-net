@@ -77,6 +77,11 @@ Payload: `node\` → `{app}\node\`, `service\` → `{app}\service\` (WinSW 2.12.
 Silent-коды: 0 — успех, 20 — предусловие до замены файлов, 10 — сбой.
 `MsgBox` нет; журнал `%ProgramData%\ETN\logs\install-*.log`.
 
+Внутренние режимы (не для пользователя): `/PRIVILEGEDPHASE` — привилегированная
+работа без мастера (silent-предусловия самообновления к ней не применяются),
+`/PARAMS=<файл>` — файл параметров сервера для этой фазы. Тестовых
+`/TEST*`-хуков в сборке нет.
+
 ## Бэкап и восстановление БД
 
 SQLite-операции — CLI сервера (задача `3acd9c3c`). `db-backup.js` (`etn-db-tool.mjs`) извлекается в `{tmp}`; запуск —
@@ -154,17 +159,17 @@ UI-строки — только в `[CustomMessages]`: `Etn<Область><С�
 ## Тесты
 
 ```powershell
-pwsh -File installer/tests/silent-codes.ps1   # поведение и коды 0/10/20
-pwsh -File installer/tests/init-key.ps1       # etn init и экран ключа
-pwsh -File installer/tests/staged-app.ps1     # установка и запуск на payload
+pwsh -File installer/tests/iss-static.ps1 -AssertNoHooks  # статика etn.iss и build.ps1
+pwsh -File installer/tests/payload-freshness.ps1          # свежесть payload (build:*)
+pwsh -File installer/tests/e2e/run.ps1                    # установка в ВМ (S1–S6, G1–G3)
 ```
 
-`silent-codes.ps1` собирает установщик (`build.ps1 -TestMode`) на фикстуре
-`tests/fixtures/payload`: обновление, откат, служба, брандмауэр, клиент,
-удаление, статические сторожа `etn.iss`. `init-key.ps1` — инициализация,
-повторный запуск, сохранение ключа, silent-код 10. `staged-app.ps1` ставит
-сборку с настоящим payload в песочницу: раскладка, шаблон,
-`GET /api/v1/health`. Тесты — PowerShell 7 (5.1 не поддерживается).
+`iss-static.ps1` — статические сторожа `etn.iss` и `build.ps1` (контракты
+silent-режима, тексты, ярлыки, init и экран ключа, отсутствие тестовых хуков).
+`payload-freshness.ps1` собирает установщик из фикстур и проверяет отказ от
+устаревшей поставки. `e2e/run.ps1` — полный прогон в ВМ VirtualBox (silent и
+GUI): коды 0/10/20, обновление и откат, служба, первичный ключ, legacy-клиент;
+отчёт — `e2e-report.json`. Тесты — PowerShell 7 (5.1 не поддерживается).
 
 ## Лицензии
 

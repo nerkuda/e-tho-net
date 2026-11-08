@@ -4,31 +4,23 @@
 
 .DESCRIPTION
     Выделено из installer/tests/silent-codes.ps1 (задача 8789381a, этап 2):
-    проверки .iss, клиента и ярлыков (98ad5eec), UX-текстов (860def0d) и
-    свежести payload (дефект 3) не требуют запуска установщика. После удаления
-    silent-codes (этап 6) они остаются здесь и продолжают проверять исходник.
-
-    Подключение из silent-codes.ps1 (dot-source + вызов):
-
-        . (Join-Path $PSScriptRoot 'iss-static.ps1')
-        $script:StaticResults = $script:results
-        Invoke-IssStaticChecks -RepoRoot $repoRoot
+    проверки .iss, клиента и ярлыков (98ad5eec) и UX-текстов (860def0d) не
+    требуют запуска установщика. После удаления silent-codes (этап 6) они
+    остаются здесь и продолжают проверять исходник. Проверки свежести payload
+    (build:*) выделены в installer/tests/payload-freshness.ps1: они собирают
+    установщик из фикстур и требуют Inno Setup 6.
 
     Результаты пишутся в список $script:StaticResults (объекты с полями
-    Scenario/Expected/Actual/Ok/Note) — тот же формат, что у Add-StaticResult
-    в silent-codes.
+    Scenario/Expected/Actual/Ok/Note).
 
-    Самостоятельный прогон (без установщика и ВМ):
+    Самостоятельный прогон (без установщика, ВМ и Inno Setup):
 
         pwsh installer/tests/iss-static.ps1
 
-    Проверки свежести payload собирают установщик из фикстур — на машине
-    разработчика нужен Inno Setup 6 (путь ищет build.ps1).
-
 .NOTES
-    -AssertNoHooks у Invoke-IssStaticChecks (этап 5): в etn.iss не должно быть
-    /TEST*-параметров и #ifdef TestMode, в build.ps1 — -TestMode. Пока хуки
-    на месте, флаг не передаётся (проверка пропускается с пометкой).
+    -AssertNoHooks (этап 5): включён по умолчанию — в etn.iss не должно быть
+    /TEST*-параметров и #ifdef TestMode/TestUninstallable, в build.ps1 —
+    -TestMode и тестовых каталогов.
 #>
 
 $script:IssStaticDir = $PSScriptRoot
@@ -36,7 +28,7 @@ $script:IssStaticDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'iss-guard.ps1')
 
 # Общий счётчик результатов: задаёт вызывающий скрипт (или самостоятельный
-# прогон ниже). Формат совпадает с silent-codes.ps1.
+# прогон ниже).
 function Add-StaticResult {
     param([string]$Name, [bool]$Ok, [string]$Note = '')
     $target = Get-Variable -Name StaticResults -Scope Script -ValueOnly -ErrorAction SilentlyContinue
@@ -68,9 +60,9 @@ function Test-MessageTextInBody {
     return (Test-MessageCall -Body $Body -Key $Key) -and (Test-MessageContains -Key $Key -Text $Text)
 }
 
-# Текст отказа «сервер без прав администратора»: одна копия на сторож .iss
-# (static:server-needs-admin-launch) и runtime-проверку silent-codes
-# (precheck:server-reason), чтобы ожидаемая строка не разъехалась.
+# Текст отказа «сервер без прав администратора» для сторожа .iss
+# (static:server-needs-admin-launch); тот же текст проверяется в E2E
+# (GuiTexts.ServerNeedsAdmin), чтобы ожидаемые строки не разъехались.
 function Get-IssServerNeedsAdminText {
     return 'Для установки сервера закройте установщик и запустите его от имени администратора (правый клик → Запуск от имени администратора).'
 }
@@ -90,19 +82,27 @@ function Test-IssNoTestHooks {
     if ($testParam) { $problems.Add("в [Code] читается /TEST-параметр (ParamValue('TEST...)") }
 
     $ifdefLines = @(Get-IssStrippedLines -Text $issText |
-        Where-Object { $_ -match '^\s*#ifdef\s+TestMode\b' })
+        Where-Object { $_ -match '^\s*#ifdef\s+(TestMode|TestUninstallable)\b' })
     if ($ifdefLines.Count -gt 0) {
-        $problems.Add('#ifdef TestMode в etn.iss: ' + $ifdefLines.Count)
+        $problems.Add('#ifdef TestMode/TestUninstallable в etn.iss: ' + $ifdefLines.Count)
     }
 
-    if (($buildText -match '\[switch\]\$TestMode\b') -or ($buildText -match '\$TestMode\b')) {
-        $problems.Add('-TestMode в build.ps1')
+    $testVars = @(Get-IssStrippedLines -Text $issText |
+        Where-Object { $_ -match '\bGTest[A-Za-z]*\b' })
+    if ($testVars.Count -gt 0) {
+        $problems.Add('объявления/чтения GTest* в etn.iss: ' + $testVars.Count)
+    }
+
+    if (($buildText -match '\[switch\]\$TestMode\b') -or ($buildText -match '\$TestMode\b') -or
+        ($buildText -match '\$TestAppDir\b') -or ($buildText -match '\$TestDataDir\b') -or
+        ($buildText -match '\$TestUninstallMode\b')) {
+        $problems.Add('-TestMode и тестовые каталоги в build.ps1')
     }
 
     return [pscustomobject]@{
         Ok      = ($problems.Count -eq 0)
         Message = if ($problems.Count -eq 0) {
-            'хуков /TEST*, #ifdef TestMode и -TestMode нет'
+            'хуков /TEST*, #ifdef TestMode/TestUninstallable, GTest* и -TestMode нет'
         } else {
             $problems -join '; '
         }
@@ -115,7 +115,7 @@ function Invoke-IssStaticChecks {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [System.Collections.Generic.List[object]]$Results,
-        [switch]$AssertNoHooks
+        [switch]$AssertNoHooks = $true
     )
 
     if ($null -ne $Results) { $script:StaticResults = $Results }
@@ -123,9 +123,7 @@ function Invoke-IssStaticChecks {
     $repoRoot = $RepoRoot
     $installerDir = Join-Path $repoRoot 'installer'
     $issPath = Join-Path $installerDir 'etn.iss'
-    $workRoot = Join-Path $repoRoot '.tmp\installer-tests'
     $buildScript = Join-Path $installerDir 'build.ps1'
-    New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 
     Write-Host '=== Статические проверки .iss ==='
     $issText = Get-Content -LiteralPath $issPath -Raw -Encoding UTF8
@@ -200,11 +198,37 @@ function Invoke-IssStaticChecks {
         @{ Name = 'static:uninstall-scope-cleanup'; Pattern = [regex]::Escape('RemoveDuplicateUninstallRecord;'); Note = 'запись деинсталляции прежней области удаляется после установки (a7394117)' },
         @{ Name = 'static:uninstall-user-hives'; Pattern = [regex]::Escape("RegGetSubkeyNames(HKU, '', Names)"); Note = 'при /ALLUSERS запись ищется в загруженных профилях HKEY_USERS (a7394117)' },
         @{ Name = 'static:appid-single-source'; Pattern = [regex]::Escape("UNINSTALL_KEY_NAME = '{#ProductUninstallKey}';"); Note = 'имя ключа деинсталляции берётся из AppId, без второго литерала (a7394117)' },
-        @{ Name = 'static:uninstall-record-owner'; Pattern = [regex]::Escape('if not IsMachineUninstallRecord(Root, SubKey) then'); Note = 'удаляется только запись машинной установки; per-user клиент сохраняется (7dcbeb0c)' }
+        @{ Name = 'static:uninstall-record-owner'; Pattern = [regex]::Escape('if not IsMachineUninstallRecord(Root, SubKey) then'); Note = 'удаляется только запись машинной установки; per-user клиент сохраняется (7dcbeb0c)' },
+        @{ Name = 'static:init-check'; Pattern = [regex]::Escape('init --check'); Note = 'критерий hasFirstUser через CLI' },
+        @{ Name = 'static:key-out'; Pattern = [regex]::Escape('--key-out'); Note = 'ключ в защищённый файл' },
+        @{ Name = 'static:env-data-dir'; Pattern = [regex]::Escape("SetEnvironmentVariableW('ETN_DATA_DIR'"); Note = 'окружение init' },
+        @{ Name = 'static:env-port'; Pattern = [regex]::Escape("SetEnvironmentVariableW('ETN_PORT'"); Note = '' },
+        @{ Name = 'static:env-host'; Pattern = [regex]::Escape("SetEnvironmentVariableW('ETN_HOST'"); Note = '' },
+        @{ Name = 'static:icacls'; Pattern = [regex]::Escape('icacls.exe'); Note = 'ACL каталога ключа' },
+        @{ Name = 'static:key-file'; Pattern = [regex]::Escape('primary-key.txt'); Note = 'защищённый временный файл ключа' },
+        @{ Name = 'static:key-close-warning'; Pattern = [regex]::Escape("CustomMessage('EtnKeyNotSavedPrompt')"); Note = 'закрытие без подтверждения предупреждает' },
+        @{ Name = 'static:init-once'; Pattern = [regex]::Escape('etn init не вызывается'); Note = 'повторная инициализация запрещена' }
     )
     foreach ($check in $staticChecks) {
         Add-StaticResult -Name $check.Name -Ok (Test-IssCode -Text $issText -Pattern $check.Pattern) -Note $check.Note
     }
+
+    # 686c5d76: экран первичного ключа (перенос статических проверок из
+    # init-key.ps1, этап 6 задачи 8789381a). Текст переехал в [CustomMessages]:
+    # в теле экрана обязан остаться вызов, а прежний текст — в значении.
+    $keyPageBody = Get-IssFunctionBody -Text $issText -Name 'CreateKeyPage'
+    foreach ($pair in @(
+            @{ Name = 'static:key-confirm'; Key = 'EtnKeySavedCheckbox'; Text = 'Я сохранил ключ' },
+            @{ Name = 'static:key-warning'; Key = 'EtnKeyPageNote'; Text = 'Ключ показывается один раз' })) {
+        $msgValue = Get-IssCustomMessage -Text $issText -Name $pair.Key
+        $ok = (Test-IssCode -Text $keyPageBody -Pattern ([regex]::Escape("CustomMessage('$($pair.Key)')"))) -and
+            ($null -ne $msgValue) -and $msgValue.Contains($pair.Text)
+        Add-StaticResult -Name $pair.Name -Ok $ok -Note $pair.Key
+    }
+    # Значение ключа не пишется в журнал: ни одна строка кода LogLine не
+    # содержит GPendingKey (комментарии не считаются — общий сторож).
+    $keyInLog = Test-IssCode -Text $issText -Pattern 'LogLine\([^\r\n]*GPendingKey'
+    Add-StaticResult -Name 'static:key-not-logged' -Ok (-not $keyInLog) -Note 'LogLine без GPendingKey'
 
     # 4dc117f5: каждый CustomMessage('X') обязан быть определён — иначе Inno
     # бросает исключение в рантайме (до компиляции сторож дешевле); дубликат имени
@@ -627,8 +651,7 @@ function Invoke-IssStaticChecks {
     # пользовательская ветка копировала в {app}, а {app} в этом режиме —
     # {commonpf}. Каталог пользовательской области обязан быть явным и совпадать с
     # ClientInstallPath; поиск клиента и признак «клиент установлен» — тоже.
-    $explicitUserDir = ($issText -match [regex]::Escape('#define ClientUserDir "{localappdata}\Programs\ETN"')) -and
-        ($issText -match [regex]::Escape('#define ClientUserDir TestAppDir'))
+    $explicitUserDir = $issText -match [regex]::Escape('#define ClientUserDir "{localappdata}\Programs\ETN"')
     $exePathBody = Get-IssFunctionBody -Text $issText -Name 'ClientExePath'
     $filesPresentBody = Get-IssFunctionBody -Text $issText -Name 'ClientFilesPresent'
     $userDirSearchOk = ($exePathBody -match [regex]::Escape('ClientInstallPath')) -and
@@ -1076,177 +1099,6 @@ function Invoke-IssStaticChecks {
 
 
 
-    # --- Сторож свежести payload в build.ps1 (дефект 3, 98ad5eec) ----------------
-    # Продуктовая сборка (без -TestMode) обязана отказаться от устаревшей поставки
-    # до компиляции: иначе exe собирается, а падает уже на etn init --key-out.
-    # Задача 98ad5eec расширила проверку на весь server/dist и все migrations и
-    # сделала клиент обязательным — проверяются обе стороны: неполный payload и
-    # payload, разошедшийся со сборкой репозитория, не собираются; свежий —
-    # собирается (иначе сторож браковал бы верную поставку).
-    Write-Host '=== Сторож свежести payload (дефект 3, 98ad5eec) ==='
-    function Copy-Tree {
-        param([string]$Source, [string]$Destination)
-        & robocopy $Source $Destination /E /NFL /NDL /NJH /NJS /NP | Out-Null
-        if ($LASTEXITCODE -ge 8) { throw "robocopy $Source -> $Destination завершился с кодом $LASTEXITCODE." }
-    }
-
-    function New-FreshnessPayload {
-        param([string]$Path, [switch]$WithoutClient, [switch]$WithoutMigrations,
-            [string]$ClientVersion)
-        if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
-        foreach ($dir in @('node', 'service', 'server\node_modules\better-sqlite3', 'client\resources')) {
-            New-Item -ItemType Directory -Path (Join-Path $Path $dir) -Force | Out-Null
-        }
-        [System.IO.File]::WriteAllText((Join-Path $Path 'node\node.exe'), 'stub')
-        [System.IO.File]::WriteAllText((Join-Path $Path 'service\etn-service.exe'), 'stub')
-        $templateText = Get-Content -LiteralPath (Join-Path $installerDir 'service\etn-service.xml') -Raw -Encoding UTF8
-        [System.IO.File]::WriteAllText((Join-Path $Path 'service\etn-service.xml'), $templateText,
-            (New-Object System.Text.UTF8Encoding($false)))
-        $serverPkg = Get-Content -LiteralPath (Join-Path $repoRoot 'server\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        [System.IO.File]::WriteAllText((Join-Path $Path 'server\package.json'),
-            '{"name":"@etn/server","version":"' + $serverPkg.version + '"}')
-        [System.IO.File]::WriteAllText((Join-Path $Path 'server\node_modules\better-sqlite3\package.json'),
-            '{"name":"better-sqlite3","version":"11.1.2"}')
-        if (-not $WithoutMigrations) {
-            Copy-Tree -Source (Join-Path $repoRoot 'server\migrations') -Destination (Join-Path $Path 'server\migrations')
-        }
-        if (Test-Path -LiteralPath (Join-Path $repoRoot 'server\dist')) {
-            Copy-Tree -Source (Join-Path $repoRoot 'server\dist') -Destination (Join-Path $Path 'server\dist')
-        } else {
-            New-Item -ItemType Directory -Path (Join-Path $Path 'server\dist') -Force | Out-Null
-            [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\index.js'), '// stub')
-            [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\cli.js'), '// --key-out --check')
-            New-Item -ItemType Directory -Path (Join-Path $Path 'server\dist\db') -Force | Out-Null
-            [System.IO.File]::WriteAllText((Join-Path $Path 'server\dist\db\db-backup.js'),
-                '// backup --to restore --from --report-out')
-        }
-        if (-not $WithoutClient) {
-            [System.IO.File]::WriteAllText((Join-Path $Path 'client\ETN.exe'), 'stub')
-            [System.IO.File]::WriteAllText((Join-Path $Path 'client\resources\app.asar'), 'stub')
-        }
-        Write-FreshnessManifest -Path $Path -ClientVersion $ClientVersion
-    }
-
-    # Хэши дерева фикстуры — как в fetch-payload.ps1 (ключ — путь через '/'):
-    # build.ps1 сверяет client\ с картой client.hashes из паспорта поставки.
-    function Get-FixtureTreeHashes {
-        param([string]$Root)
-        $map = [ordered]@{}
-        if (-not (Test-Path -LiteralPath $Root)) { return $map }
-        Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Sort-Object FullName | ForEach-Object {
-            $relative = $_.FullName.Substring($Root.Length).TrimStart('\').Replace('\', '/')
-            $map[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        }
-        return $map
-    }
-
-    # Паспорт поставки фикстуры: client_version и хэши client\ — без него
-    # продуктовый build.ps1 отказывается от payload как от недописанного.
-    function Write-FreshnessManifest {
-        param([string]$Path, [string]$ClientVersion)
-        $clientPkg = Get-Content -LiteralPath (Join-Path $repoRoot 'client\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $ClientVersion) { $ClientVersion = [string]$clientPkg.version }
-        $hashes = Get-FixtureTreeHashes -Root (Join-Path $Path 'client')
-        $manifest = [ordered]@{
-            server_version = '0.0.0'
-            client_version = $ClientVersion
-            client         = [ordered]@{
-                version = $ClientVersion
-                files   = $hashes.Count
-                hashes  = $hashes
-            }
-        }
-        [System.IO.File]::WriteAllText((Join-Path $Path 'server-manifest.json'),
-            ($manifest | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
-    }
-
-    function Invoke-PayloadBuild {
-        param([string]$Payload, [string]$OutputName)
-        $out = & $psExeForBuild -NoProfile -ExecutionPolicy Bypass -File $buildScript `
-            -PayloadRoot $Payload -OutputDir (Join-Path $workRoot $OutputName) 2>&1 | Out-String
-        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = $out }
-    }
-
-    $psExeForBuild = (Get-Process -Id $PID).Path
-
-    # A. Клиент обязателен: без client\ETN.exe сборка отказывается.
-    $noClientPayload = Join-Path $workRoot 'payload-no-client'
-    New-FreshnessPayload -Path $noClientPayload -WithoutClient
-    $noClientBuild = Invoke-PayloadBuild -Payload $noClientPayload -OutputName 'no-client-out'
-    Add-StaticResult -Name 'build:payload-requires-client' `
-        -Ok (($noClientBuild.Code -ne 0) -and ($noClientBuild.Output -match 'client\\ETN\.exe')) `
-        -Note 'без клиента в payload продуктовый установщик не собирается'
-
-    # B. Правка server\dist после сборки ловится сравнением всего каталога.
-    $staleDistPayload = Join-Path $workRoot 'payload-stale-dist'
-    New-FreshnessPayload -Path $staleDistPayload
-    [System.IO.File]::AppendAllText((Join-Path $staleDistPayload 'server\dist\index.js'),
-        "`r`n// локальная правка после сборки`r`n")
-    $staleDistBuild = Invoke-PayloadBuild -Payload $staleDistPayload -OutputName 'stale-dist-out'
-    Add-StaticResult -Name 'build:stale-dist-detected' `
-        -Ok (($staleDistBuild.Code -ne 0) -and ($staleDistBuild.Output -match 'server\\dist')) `
-        -Note 'изменённый файл server\dist — payload устарел'
-    Add-StaticResult -Name 'build:stale-dist-message' `
-        -Ok ($staleDistBuild.Output -match 'Обновите payload') `
-        -Note 'сообщение указывает на fetch-payload.ps1'
-
-    # C. Правка migrations после сборки ловится так же.
-    $staleMigPayload = Join-Path $workRoot 'payload-stale-migrations'
-    New-FreshnessPayload -Path $staleMigPayload
-    $firstMigration = Get-ChildItem -LiteralPath (Join-Path $staleMigPayload 'server\migrations\system') `
-        -Filter '*.sql' -File | Select-Object -First 1
-    if (-not $firstMigration) { throw 'В репозитории нет миграций system\*.sql для проверки свежести.' }
-    [System.IO.File]::AppendAllText($firstMigration.FullName, "`r`n-- локальная правка`r`n")
-    $staleMigBuild = Invoke-PayloadBuild -Payload $staleMigPayload -OutputName 'stale-migrations-out'
-    Add-StaticResult -Name 'build:stale-migrations-detected' `
-        -Ok (($staleMigBuild.Code -ne 0) -and ($staleMigBuild.Output -match 'server\\migrations')) `
-        -Note 'изменённый файл migrations — payload устарел'
-
-    # D. Свежий payload проверку проходит (нет ложного отказа) и собирается.
-    $freshPayload = Join-Path $workRoot 'payload-fresh'
-    New-FreshnessPayload -Path $freshPayload
-    $freshBuild = Invoke-PayloadBuild -Payload $freshPayload -OutputName 'fresh-out'
-    Add-StaticResult -Name 'build:fresh-payload-accepted' `
-        -Ok (($freshBuild.Code -eq 0) -and ($freshBuild.Output -match 'Payload свежий')) `
-        -Note 'свежий payload: весь server/dist, migrations и клиент совпадают'
-
-    # E. Версия клиента из манифеста сверяется с client/package.json: подмена
-    # client_version — отказ. Раньше client_version писался, но не читался, и
-    # старый клиент после неудачной package:dir проходил как свежий.
-    $versionPayload = Join-Path $workRoot 'payload-client-version'
-    New-FreshnessPayload -Path $versionPayload -ClientVersion '0.0.0'
-    $versionBuild = Invoke-PayloadBuild -Payload $versionPayload -OutputName 'client-version-out'
-    $repoClientVersion = [string](Get-Content -LiteralPath (Join-Path $repoRoot 'client\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
-    Add-StaticResult -Name 'build:client-version-mismatch' `
-        -Ok (($versionBuild.Code -ne 0) -and
-             ($versionBuild.Output -match 'клиентом 0\.0\.0') -and
-             ($versionBuild.Output -match [regex]::Escape("client $repoClientVersion"))) `
-        -Note 'client_version в манифесте разошёлся с client/package.json — сборка не начинается'
-
-    # F. Хэши файлов client\ сверяются с манифестом: правка после записи паспорта
-    # (недокопия/подмена) — отказ.
-    $clientHashPayload = Join-Path $workRoot 'payload-client-hash'
-    New-FreshnessPayload -Path $clientHashPayload
-    [System.IO.File]::AppendAllText((Join-Path $clientHashPayload 'client\resources\app.asar'),
-        "`r`n// правка после записи манифеста`r`n")
-    $clientHashBuild = Invoke-PayloadBuild -Payload $clientHashPayload -OutputName 'client-hash-out'
-    Add-StaticResult -Name 'build:client-hash-mismatch' `
-        -Ok (($clientHashBuild.Code -ne 0) -and
-             ($clientHashBuild.Output -match 'client') -and
-             ($clientHashBuild.Output -match 'отличаются от манифеста')) `
-        -Note 'файл client разошёлся с client.hashes — payload устарел'
-
-    # G. Паспорта поставки нет (fetch-payload.ps1 не дошёл до конца) — отказ, а не
-    # молчаливая сборка со старым клиентом.
-    $noManifestPayload = Join-Path $workRoot 'payload-no-manifest'
-    New-FreshnessPayload -Path $noManifestPayload
-    Remove-Item -LiteralPath (Join-Path $noManifestPayload 'server-manifest.json') -Force
-    $noManifestBuild = Invoke-PayloadBuild -Payload $noManifestPayload -OutputName 'no-manifest-out'
-    Add-StaticResult -Name 'build:manifest-required' `
-        -Ok (($noManifestBuild.Code -ne 0) -and ($noManifestBuild.Output -match 'server-manifest\.json')) `
-        -Note 'без паспорта поставки сборка не начинается'
-
-
     if ($AssertNoHooks) {
         $hookGuard = Test-IssNoTestHooks -RepoRoot $repoRoot
         Add-StaticResult -Name 'static:no-test-hooks' -Ok $hookGuard.Ok -Note $hookGuard.Message
@@ -1261,7 +1113,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     $results = New-Object System.Collections.Generic.List[object]
     $script:StaticResults = $results
     Write-Host '=== Статические проверки исходников установщика ==='
-    Invoke-IssStaticChecks -RepoRoot $repoRoot -Results $results
+    Invoke-IssStaticChecks -RepoRoot $repoRoot -Results $results -AssertNoHooks
     $failed = @($results | Where-Object { -not $_.Ok })
     Write-Host ''
     Write-Host ("Статика: {0} проверок, провалов {1}" -f $results.Count, $failed.Count)

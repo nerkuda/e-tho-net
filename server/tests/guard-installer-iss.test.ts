@@ -5,8 +5,9 @@
  * `installer/tests/silent-codes.ps1` (216 статических проверок). Этот файл
  * переносит их в обычный `npm -w @etn/server test`, чтобы контракт `.iss`
  * проверялся на каждом прогоне, без установщика, ВМ и хуков TestMode.
- * PowerShell-остаток — `installer/tests/iss-static.ps1` (shape-проверки и
- * свежесть payload); рантайм проверяется E2E в ВМ (`installer/tests/e2e`).
+ * PowerShell-остаток — `installer/tests/iss-static.ps1` (shape-проверки);
+ * свежесть payload — `installer/tests/payload-freshness.ps1`; рантайм
+ * проверяется E2E в ВМ (`installer/tests/e2e`).
  *
  * Контракт (карточка 8789381a):
  *   * в `[Code]` нет `MsgBox` — только `SuppressibleMsgBox` (silent-прогон
