@@ -912,8 +912,7 @@ var
   GIsElevated: Boolean;
   { Административный режим установки: установщик работает «для всех
     пользователей» (запуск от имени администратора или /ALLUSERS). Права даёт
-    элевированный процесс; Inno не перезапускает мастер (ошибка aa5af30c).
-    В TestMode моделируется /TESTADMINMODE=1. }
+    элевированный процесс; Inno не перезапускает мастер (ошибка aa5af30c). }
   GAdminInstallMode: Boolean;
   { Неадминистративный режим («только для меня»): сервер и клиент «для всех»
     недоступны, ставится только клиент в профиль пользователя (сценарий n2). }
@@ -923,12 +922,6 @@ var
     профиле (SMAA), и «клиент для меня» попал бы в чужой профиль. }
   GAdminMachineScope: Boolean;
   GTestMode: Boolean;
-  GTestElevated: String;
-  GTestState: String;
-  GTestSelect: String;
-  GTestRecord: String;
-  GTestParams: String;
-  GTestGui: String;
   { /TESTLAYOUT=1 (ошибка 860def0d): снять раскладку экранов без окон — тест
     проверяет, что подписи не обрезаны (Height не «дельта» AdjustHeight) и не
     налезают друг на друга. /TESTNOTICE=<текст> (c4b68d78) подставляет
@@ -937,7 +930,6 @@ var
   GTestNotice: String;
   { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
   GTestInit: String;
-  GTestLogin: String;
   GTestKeyState: String;
   GTestFailAfterInit: String;
   GTestKeyAck: String;
@@ -946,25 +938,6 @@ var
     неудачи: техническую неудачу можно устранить и повторить установку,
     отказ — нет). }
   GClientCloseRefused: Boolean;
-  { /TESTUSERINSTALL=1 — прогон установки клиента «только для меня» без окон:
-    снимает silent-термин для проверки копирования неэлевированной фазой
-    (silent-контракт клиент не ставит). }
-  GTestUserInstall: String;
-  { Хук 2dd215f7: /TESTADMINMODE=1 моделирует административный режим установки
-    без настоящей элевации (проверка «клиент только для всех»); без него
-    тестовая сборка работает как неадминистративный режим «только для меня». }
-  GTestAdminMode: String;
-  { Ошибка a7394117: /TESTINNOADMINMODE=1 моделирует административный режим
-    самого Inno (/ALLUSERS): запись деинсталляции он пишет в HKLM; без хука
-    тестовая сборка (PrivilegesRequired=lowest) пишет её в HKCU.
-    /TESTUNINSTROOT=<подключ> уводит машинную область записи в песочницу HKCU:
-    прав на настоящий HKLM в прогоне нет. Пользовательская область остаётся
-    настоящим ключом Inno — так проверяется удаление оставшейся записи. }
-  GTestInnoAdminMode: String;
-  GTestUninstallRoot: String;
-  { /TESTUSERONLYMODE=1 — явная проверка неадминистративного режима в тестовой
-    сборке: сервер недоступен, ставится только клиент «для меня». }
-  GTestUserOnlyMode: String;
   { Хук 8b1f5980: прямой прогон снятия службы при удалении без настоящего
     удаления программы. }
   GTestUninstallService: String;
@@ -987,9 +960,9 @@ var
   GLogPath: String;
   GInstallJsonPath: String;
   GInstallJsonText: String;
-  { Файл параметров тестовой привилегированной фазы: пишется /TESTPARAMS и
-    читается /PRIVILEGEDPHASE. GUI-установка его не использует — режим и выбор
-    компонентов этот же процесс уже знает. }
+  { Файл параметров привилегированной фазы: путь передаётся через /PARAMS.
+    GUI-установка его не использует — режим и выбор компонентов этот же
+    процесс уже знает. }
   GParamsPath: String;
 
   { Выбор компонентов и параметры }
@@ -1781,16 +1754,12 @@ end;
 
 { Запись установки Inno: раздел машины (HKLM/HKLM64) пишет сам установщик
   в административном режиме; запись HKCU относится к клиенту «только для меня»
-  и о сервере ничего не говорит. В тестовой сборке реестр не читается. }
+  и о сервере ничего не говорит. }
 function MachineInstallRecordPresent: Boolean;
 var
   Key: String;
 begin
   Result := False;
-#ifdef TestMode
-  if GTestRecord = '1' then Result := True;
-  Exit;
-#endif
   Key := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
   Result := RegKeyExists(HKLM, Key) or RegKeyExists(HKLM64, Key);
 end;
@@ -1934,15 +1903,6 @@ begin
   Result := 0;
   Base := '';
   RootName := 'HKU';
-#ifdef TestMode
-  { Песочница теста: профили моделируются поддеревом HKCU\<root>\Profiles,
-    реальные HKU в прогоне без прав администратора не читаются. }
-  if GTestUninstallRoot <> '' then
-  begin
-    Base := GTestUninstallRoot + '\Profiles';
-    RootName := 'HKCU\' + Base;
-  end;
-#endif
   if Base <> '' then
   begin
     if not RegGetSubkeyNames(HKCU, Base, Names) then Exit;
@@ -1977,10 +1937,8 @@ begin
 end;
 
 { Удаляет запись деинсталляции в машинной (HKLM) или пользовательской (HKCU)
-  области — в той, куда Inno её НЕ записал (ошибка a7394117). В тестовой
-  сборке машинная область моделируется поддеревом HKCU: прав на HKLM в прогоне
-  silent-codes.ps1 нет, а пользовательская область остаётся настоящим ключом
-  Inno. Возвращает число удалённых ключей. }
+  области — в той, куда Inno её НЕ записал (ошибка a7394117).
+  Возвращает число удалённых ключей. }
 function DeleteForeignUninstallRecord(const MachineScope: Boolean): Integer;
 var
   SubKey: String;
@@ -1989,14 +1947,6 @@ begin
   SubKey := UNINSTALL_KEY + '\' + UNINSTALL_KEY_NAME;
   if MachineScope then
   begin
-#ifdef TestMode
-    if GTestUninstallRoot <> '' then
-    begin
-      Result := DeleteUninstallRecordAt(HKCU, 'HKCU',
-        GTestUninstallRoot + '\Machine\' + UNINSTALL_KEY_NAME);
-      Exit;
-    end;
-#endif
     { HKLM в 32- и 64-битном представлении — разные ветки реестра: прежняя
       установка могла записать запись в любую из них. }
     Result := DeleteUninstallRecordAt(HKLM64, 'HKLM64', SubKey);
@@ -2024,20 +1974,10 @@ procedure RemoveDuplicateUninstallRecord;
 var
   ForeignMachineScope: Boolean;
 begin
-#ifdef TestMode
-  { Тестовая сборка без деинсталлятора (Uninstallable=no) запись не создаёт,
-    а её AppId — продуктовый: удалять по нему запись на машине нельзя. }
-  #ifndef TestUninstallable
-  Exit;
-  #endif
-#endif
   if not GAdminInstallMode then Exit;
   { IsAdminInstallMode: Inno в административном режиме (/ALLUSERS) — запись
     HKLM, значит удаляем HKCU; иначе (элевированный GUI-запуск) — наоборот. }
   ForeignMachineScope := not IsAdminInstallMode;
-#ifdef TestMode
-  if GTestInnoAdminMode = '1' then ForeignMachineScope := False;
-#endif
   DeleteForeignUninstallRecord(ForeignMachineScope);
 end;
 
@@ -3259,15 +3199,6 @@ end;
 function IsElevatedNow: Boolean;
 begin
   Result := IsAdmin;
-#ifdef TestMode
-  { Тестовый хук: имитация элевированного процесса в прогоне
-    installer/tests/silent-codes.ps1 (в обычной сборке кода нет). }
-  if (not Result) and (GTestElevated = '1') then
-  begin
-    LogLine('WARN', 'TESTELEVATED=1: проверка прав администратора подменена (тестовый режим)');
-    Result := True;
-  end;
-#endif
 end;
 
 function ServiceRegistered: Boolean;
@@ -3338,8 +3269,7 @@ end;
 
 function ParamsFilePath: String;
 begin
-  { Тестовый контракт: /PRIVILEGEDPHASE получает путь через /PARAMS, иначе —
-    путь, сохранённый /TESTPARAMS в GParamsPath. }
+  { Привилегированная фаза получает путь через /PARAMS; иначе — GParamsPath. }
   Result := ParamValue('PARAMS');
   if Result = '' then Result := GParamsPath;
   if Result = '' then
@@ -3457,8 +3387,7 @@ begin
     каталог программы при этом выбирает GetDefaultAppDir. Неэлевированный
     процесс пишет в профиль пользователя и привилегированной фазой не
     считается — иначе сервер попал бы и в Program Files, и в профиль.
-    GAdminInstallMode, а не IsAdminInstallMode: в тестовой сборке режим
-    моделируется хуком /TESTADMINMODE. }
+    GAdminInstallMode, а не IsAdminInstallMode. }
   Result := GWorkAllowed and
     (GSilent or GPrivilegedPhase or (GIsElevated and GAdminInstallMode));
 end;
@@ -5811,22 +5740,6 @@ var
   DataDirFromJson, Reason: String;
 begin
   LogLine('INFO', 'Silent server-only: проверка предусловий');
-#ifdef TestMode
-  { /TESTUSERINSTALL=1 — установка клиента «только для меня» без окон.
-    Silent-контракт ставит только сервер (клиент запрещён), поэтому ветки
-    Files и Icons для клиента иначе не проверяются. Тест ставит только клиента:
-    серверные предусловия (install.json, служба, порт) не применяются,
-    GServerSelected снимается — серверные файлы не копируются. GSilent
-    остаётся True: мастер не создаётся, установка идёт как silent. }
-  if GTestUserInstall = '1' then
-  begin
-    GServerSelected := False;
-    GClientSelected := True;
-    GClientScopeUser := True;
-    LogLine('INFO', 'TESTUSERINSTALL=1: silent-предусловия пропущены — ставится только клиент «для меня»');
-    Exit;
-  end;
-#endif
   if ParamExists('SERVERONLY') = False then
     FailPrecondition(CustomMessage('EtnSilentClientForbidden'));
   if not GIsElevated then
@@ -6243,10 +6156,9 @@ begin
 end;
 
 { Единая точка чтения выбора: обработчики OnClick чекбоксов (компоненты,
-  лицензия) и тестовый хук /TESTSELECT. Радиокнопок области в мастере нет:
-  в продуктовой сборке область задают фактические права процесса
-  (GAdminMachineScope / GUserOnlyMode), при обновлении — install.json. Третий
-  аргумент — только для /TESTSELECT и сохранения текущей области. }
+  лицензия). Радиокнопок области в мастере нет: область задают фактические
+  права процесса (GAdminMachineScope / GUserOnlyMode), при обновлении —
+  install.json. Третий аргумент — сохранение текущей области. }
 procedure ApplySelection(const ServerChecked, ClientChecked,
   MachineScopeChecked: Boolean);
 begin
@@ -7021,16 +6933,9 @@ begin
   GServerFirewall := True;
   GSkipCopy := False;
   GTestMode := False;
-  GTestElevated := '';
-  GTestState := '';
-  GTestSelect := '';
-  GTestRecord := '';
-  GTestParams := '';
-  GTestGui := '';
   GTestLayout := '';
   GTestNotice := '';
   GTestInit := '';
-  GTestLogin := '';
   GTestKeyState := '';
   GTestFailAfterInit := '';
   GTestKeyAck := '';
@@ -7062,11 +6967,6 @@ begin
   GLegacyUninstallCmd := '';
   GLegacyRoot := 0;
   GLegacyKey := '';
-  GTestUserInstall := '';
-  GTestAdminMode := '';
-  GTestUserOnlyMode := '';
-  GTestInnoAdminMode := '';
-  GTestUninstallRoot := '';
   GParamsPath := '';
   GReasonFile := '';
   GDeferredLog := '';
@@ -7087,41 +6987,19 @@ begin
   GAdminLogin := GOriginalUser;
 #ifdef TestMode
   GTestMode := True;
-  GTestElevated := ParamValue('TESTELEVATED');
-  GTestState := ParamValue('TESTSTATE');
-  GTestSelect := ParamValue('TESTSELECT');
-  GTestRecord := ParamValue('TESTRECORD');
-  GTestParams := ParamValue('TESTPARAMS');
-  GTestGui := ParamValue('TESTGUIMODE');
   GTestLayout := ParamValue('TESTLAYOUT');
   GTestNotice := ParamValue('TESTNOTICE');
   GTestInit := ParamValue('TESTINIT');
-  GTestLogin := ParamValue('TESTLOGIN');
   GTestKeyState := ParamValue('TESTKEYSTATE');
   GTestFailAfterInit := ParamValue('TESTFAILAFTERINIT');
   GTestKeyAck := ParamValue('TESTKEYACK');
   GTestKeyClose := ParamValue('TESTKEYCLOSE');
   GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
-  GTestUserInstall := ParamValue('TESTUSERINSTALL');
-  GTestAdminMode := ParamValue('TESTADMINMODE');
-  GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
-  GTestInnoAdminMode := ParamValue('TESTINNOADMINMODE');
-  GTestUninstallRoot := ParamValue('TESTUNINSTROOT');
   { /TESTNOTICE=<текст>: уведомление после возврата на экран компонентов.
     Проверяет, что причина неактивности «Далее» показывает уведомление и
     помещается в нижний блок (задача c4b68d78). }
   if GTestNotice <> '' then
     GComponentsNotice := GTestNotice;
-  { /TESTGUIMODE=1 имитирует GUI-запуск в silent-прогоне: silent-термин снимается
-    ДО расчёта режима (GUserOnlyMode) и выбора компонентов — иначе контекст
-    всегда привилегированный, а режим «только для меня» не смоделировать. }
-  if GTestGui = '1' then
-    GSilent := False;
-  { /TESTUSERONLYMODE=1 моделирует выбор «только для меня»: в продуктовой
-    сборке это неадминистративный GUI-режим (silent всегда административный),
-    поэтому silent-термин снимается и здесь. }
-  if GTestUserOnlyMode = '1' then
-    GSilent := False;
 #endif
 
   if GPrivilegedPhase then
@@ -7137,24 +7015,8 @@ begin
   { Режим по фактическим правам процесса (ошибка aa5af30c): обычный запуск —
     клиент «только для меня», запуск от имени администратора — сервер и клиент
     «для всех». IsAdminInstallMode остаётся в формуле для /ALLUSERS: тихое
-    автообновление службы включает административный режим Inno без respawn.
-    В TestMode привилегий нет — режимы моделируются хуками /TESTADMINMODE и
-    /TESTUSERONLYMODE, чтобы прогон не зависел от прав машины. }
-#ifdef TestMode
-  GAdminInstallMode := IsAdminInstallMode;
-  if GTestAdminMode = '1' then
-  begin
-    GAdminInstallMode := True;
-    LogOrDefer('WARN', 'TESTADMINMODE=1: административный режим смоделирован (тестовый режим)');
-  end;
-  if GTestUserOnlyMode = '1' then
-  begin
-    GAdminInstallMode := False;
-    LogOrDefer('WARN', 'TESTUSERONLYMODE=1: режим «только для меня» смоделирован (тестовый режим)');
-  end;
-#else
+    автообновление службы включает административный режим Inno без respawn. }
   GAdminInstallMode := IsAdmin or IsAdminInstallMode;
-#endif
   { Привилегированная фаза всегда административная: вызывающий запускает её с
     /ALLUSERS, и клиент «для меня» ставит не она. Silent-прогон с /ALLUSERS
     тоже административный; без /ALLUSERS он элевацию требует предусловием. }
@@ -7216,73 +7078,8 @@ begin
     ', брандмауэр ' + Pick(GServerFirewall, 'включён', 'выключен') +
     ', каталог данных ' + GDataDir);
 
-#ifdef TestMode
-  if GTestLogin <> '' then
-    GAdminLogin := GTestLogin;
-#endif
 
 #ifdef TestMode
-  { /TESTSELECT подменяет выбор компонентов через ту же ApplySelection, которой
-    пользуются обработчики OnClick экрана компонентов (проверка условия
-    элевации и содержимого файла параметров без вывода окон). }
-  if GTestSelect = 'server' then
-    ApplySelection(True, False, False)
-  else if GTestSelect = 'client-machine' then
-    ApplySelection(False, True, True)
-  else if GTestSelect = 'client-user' then
-    ApplySelection(False, True, False);
-
-  { /TESTUSERINSTALL=1 — прогон установки клиента «только для меня» без окон:
-    проверка выполняется в ValidateSilentPreconditions (silent-контракт клиент
-    не ставит, но ветку [Files]/[Icons] нужно проверить). Здесь только след в
-    журнале — GSilent не меняется, мастер не создаётся. }
-  if GTestUserInstall = '1' then
-    LogLine('INFO', 'TESTUSERINSTALL=1: установка только клиента «для меня» (тестовый режим)');
-
-  { Наблюдаемость состояний и галочек без вывода окон: тестовый прогон
-    фиксирует вычисленное состояние в журнале и завершается без изменений. }
-  if GTestState = '1' then
-  begin
-    { /TESTGUIMODE=1 уже снял silent-термин при разборе параметров — здесь
-      только след в журнале. }
-    if GTestGui = '1' then
-      LogLine('INFO', 'TESTGUIMODE=1: silent-термин контекста отключён (тестовый режим)');
-    LogLine('INFO', 'TESTSTATE server_state=' + GServerState +
-      ' client_state=' + GClientState +
-      ' server_files=' + Pick(GServerFilesPresent, '1', '0') +
-      ' data_dir=' + Pick(GDataDirPresent, '1', '0') +
-      ' record=' + Pick(GInstallerRecordPresent, '1', '0') +
-      ' files_version=' + IfStr(GFilesVersion = '', '-', GFilesVersion) +
-      ' downgrade=' + Pick(GBlockedDowngrade, '1', '0') +
-      ' default_server=' + Pick(GServerSelected, '1', '0') +
-      ' default_client=' + Pick(GClientSelected, '1', '0') +
-      ' client_scope=' + Pick(GClientScopeUser, 'user', 'machine') +
-      ' scope_fixed=' + Pick(ClientScopeFixed, '1', '0') +
-      ' user_copy=' + Pick(GUserClientCopyPresent, '1', '0') +
-      ' machine_copy=' + Pick(ClientMachineCopyPresent, '1', '0') +
-      ' need_elevation=' + Pick(NeedElevation, '1', '0') +
-      ' in_privileged_context=' + Pick(InPrivilegedContext, '1', '0') +
-      ' admin_mode=' + Pick(GAdminInstallMode, '1', '0') +
-      ' server_enabled=' + Pick(not GUserOnlyMode, '1', '0') +
-      ' license_prompt=' + Pick(LicensePromptNeeded, '1', '0'));
-    LogLine('INFO', 'TESTSTATE_NOTICE server_notice=' +
-      IfStr(GUserOnlyMode, ServerUnavailableReason, ''));
-    ExitProcess(EXIT_OK);
-  end;
-
-  { Проверка файла параметров: путь, содержимое (область клиента) и удаление
-    после чтения. }
-  if GTestParams = '1' then
-  begin
-    WriteParamsFile;
-    LogLine('INFO', 'TESTPARAMS path=' + GParamsPath +
-      ' scope=' + Pick(GClientScopeUser, 'user', 'machine'));
-    ReadParamsFile;
-    if GParamsPath <> '' then DeleteFile(GParamsPath);
-    LogLine('INFO', 'TESTPARAMS deleted=' + Pick(not FileExists(GParamsPath), '1', '0'));
-    ExitProcess(EXIT_OK);
-  end;
-
 
   { /TESTUNINSTALLSERVICE=1 — прямой прогон снятия службы при удалении
     (8b1f5980): 0 — служба снята (или её не было), 10 — отказ с причиной. }
