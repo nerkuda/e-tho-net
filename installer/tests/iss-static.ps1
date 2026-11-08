@@ -817,14 +817,13 @@ function Invoke-IssStaticChecks {
     # и потому, что в привилегированной фазе {localappdata} — профиль того же
     # пользователя, а машинный клиент из Program Files тоже может работать
     # (905dec4c).
-    $realPidsProduct = Get-IssFunctionBodyWithoutIfdef -Text $issText -Name 'RealClientPids' -Ifdef 'TestMode'
+    $realPidsProduct = Get-IssFunctionBody -Text $issText -Name 'RealClientPids'
     $closeFilterOk = (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('ClientPathCondition'))) -and
         (-not (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape('ClientCloseRoot(')))) -and
         (-not (Test-IssCode -Text $realPidsProduct -Pattern ([regex]::Escape("Get-Process -Name ''ETN''|ForEach-Object{`$_.Id}"))))
     $closeRootsBody = Get-IssFunctionBody -Text $issText -Name 'ClientCloseRoots'
     $closeRootsOk = (Test-IssCode -Text $closeRootsBody -Pattern ([regex]::Escape('{localappdata}'))) -and
-        (Test-IssCode -Text $closeRootsBody -Pattern ([regex]::Escape('{commonpf}'))) -and
-        (Test-IssCode -Text $closeRootsBody -Pattern ([regex]::Escape('ClientInstallPath')))
+        (Test-IssCode -Text $closeRootsBody -Pattern ([regex]::Escape('{commonpf}')))
     $pathCondBody = Get-IssFunctionBody -Text $issText -Name 'ClientPathCondition'
     $rootCondBody = Get-IssFunctionBody -Text $issText -Name 'ClientRootCondition'
     $pathCondOk = (Test-IssCode -Text $pathCondBody -Pattern ([regex]::Escape(' -or '))) -and

@@ -939,46 +939,11 @@ var
   GTestNotice: String;
   { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
   GTestInit: String;
-  GTestNodeExe: String;
   GTestLogin: String;
   GTestKeyState: String;
   GTestFailAfterInit: String;
   GTestKeyAck: String;
   GTestKeyClose: String;
-  { Тестовые хуки задачи 9b310991 (только в тестовой сборке): подмена каталога
-    данных, порта, порога свободного места, режима брандмауэра и прогон
-    предпроверок без окон. }
-  GTestDataDir: String;
-  GTestPort: String;
-  GTestMinFree: String;
-  GTestFirewall: String;
-  GTestPrecheck: String;
-  GTestResult: String;
-  { Хук задачи ce3ab836: прямой прогон бэкапа БД без фаз установки
-    (/TESTBACKUP=1|skip); объявлен всегда, сбрасывается в InitializeSetup. }
-  GTestBackup: String;
-  { Хуки задачи 98ad5eec: модель запущенного клиента без реальных процессов и
-    реальная проверка с фильтром по каталогу. /TESTCLIENTPIDS=<pid,...> —
-    процессы считаются запущенными; /TESTCLIENTGONE=<мс> — через сколько
-    «выйдут» после мягкого закрытия (по умолчанию сразу); /TESTCLIENTSOFT=none
-    — мягкое закрытие не помогает; /TESTCLIENTFORCE=fail — принудительное не
-    помогает (код 20); /TESTCLIENTWAIT=<мс> — бюджет ожидания мягкого
-    закрытия; /TESTCLIENTREAL=1 — настоящий опрос Get-Process и taskkill,
-    /TESTCLIENTPATH=<каталог> — только процессы из этого каталога (по
-    умолчанию — каталог программы тестового прогона, чтобы прогон не трогал
-    клиент пользователя). }
-  GTestClientPids: String;
-  GTestClientGone: String;
-  GTestClientSoft: String;
-  GTestClientForce: String;
-  GTestClientWait: String;
-  GTestClientReal: String;
-  GTestClientPath: String;
-  { Состояние модели: процесс ещё жив, мягкое закрытие уже запрошено и момент
-    «выхода» после него. }
-  GTestClientRunning: Boolean;
-  GTestClientSoftIssued: Boolean;
-  GTestClientGoneAt: Integer;
   { Пользователь отказался закрывать клиент (отличает отказ от технической
     неудачи: техническую неудачу можно устранить и повторить установку,
     отказ — нет). }
@@ -987,10 +952,6 @@ var
     снимает silent-термин для проверки копирования неэлевированной фазой
     (silent-контракт клиент не ставит). }
   GTestUserInstall: String;
-  { Хук ошибки 0f8dd0f3: /TESTCONNECTPARAMS=1 печатает в журнал параметры
-    подключения, которые установщик передаст клиенту при «Запустить клиент»
-    (проверка без живого клиента и без окон). }
-  GTestConnectParams: String;
   { Хук 2dd215f7: /TESTADMINMODE=1 моделирует административный режим установки
     без настоящей элевации (проверка «клиент только для всех»); без него
     тестовая сборка работает как неадминистративный режим «только для меня». }
@@ -1006,18 +967,6 @@ var
   { /TESTUSERONLYMODE=1 — явная проверка неадминистративного режима в тестовой
     сборке: сервер недоступен, ставится только клиент «для меня». }
   GTestUserOnlyMode: String;
-  { B3: поведенческие пробы ветки «своя служба» — подмена имени службы для
-    CIM-запроса и PID, который считается PID службы (проверка потомков). }
-  GTestServiceName: String;
-  GTestOwnServicePid: String;
-  { 1dddac77: имитация неизвестного отказа пробного bind в запасной ветке —
-    проверка перехода в статус 2 (fail-closed, код 20 с причиной). }
-  GTestPortBindFail: String;
-  { 1dddac77: имитация недоступной TCP-таблицы Windows (сборка без перечисления
-    слушателей) и отсутствия службы ETN — проверка ветки «своя служба жива,
-    таблица сломана» без реальной аномалии ОС. }
-  GTestListenerTableOff: String;
-  GTestNoService: String;
   { Тестовые хуки bb063ac3: служба и health-check без реальной службы Windows
     и без настоящего сервера — подмена исполняемого файла службы, её состояния
     и команд, базового URL health-check, бюджетов ожидания и сбоя отката. }
@@ -1457,14 +1406,10 @@ end;
 
 { Журнал установщика по контракту — %ProgramData%\ETN\logs, но этот каталог
   создаётся только серверной установкой: установка только клиента серверных
-  каталогов не создаёт (9b310991). В тестовой сборке каталог теста — песочница,
-  журнал пишется туда всегда (кроме подмены /TESTDATADIR). }
+  каталогов не создаёт (9b310991). }
 function DataDirLogAllowed: Boolean;
 begin
   Result := GServerSelected or GServerOnly or (GServerState <> 'not-installed');
-#ifdef TestMode
-  if GTestDataDir = '' then Result := True;
-#endif
 end;
 
 procedure InitLog;
@@ -2600,18 +2545,12 @@ function ClientCloseRoots: String;
 var
   UserRoot, MachineRoot: String;
 begin
-#ifdef TestMode
-  { Тестовая сборка реальные каталоги продукта не трогает: фильтр — каталог
-    программы теста либо явный /TESTCLIENTPATH. }
-  Result := ClientInstallPath;
-#else
   UserRoot := ExpandConstant('{localappdata}') + '\Programs\ETN';
   MachineRoot := ExpandConstant('{commonpf}') + '\ETN';
   if GClientScopeUser then
     Result := UserRoot + #13#10 + MachineRoot
   else
     Result := MachineRoot + #13#10 + UserRoot;
-#endif
 end;
 
 { Условие PowerShell «путь процесса начинается с каталога». Завершающий '\'
@@ -2665,10 +2604,9 @@ begin
 end;
 
 { Настоящий опрос: Get-Process по имени ETN.exe, но только процессы из
-  каталогов клиента (Product: ClientPathCondition; TestMode: /TESTCLIENTPATH,
-  по умолчанию каталог программы тестового прогона) — чужой клиент не
-  трогается. PowerShell получает скрипт в двойных кавычках: внутри только
-  одинарные (грабли B3 приёмки 9b310991). }
+  каталогов клиента (ClientPathCondition) — чужой клиент не трогается.
+  PowerShell получает скрипт в двойных кавычках: внутри только одинарные
+  (грабли B3 приёмки 9b310991). }
 function RealClientPids: String;
 var
   Script, Args, OutFile, OutFileLiteral, Condition: String;
@@ -2681,13 +2619,6 @@ begin
   OutFileLiteral := OutFile;
   StringChangeEx(OutFileLiteral, '''', '''''', True);
   Condition := '';
-#ifdef TestMode
-  { Тестовая сборка может задать каталог явно (/TESTCLIENTPATH); иначе —
-    общий продуктовый фильтр по каталогам клиента (в тестовой сборке это
-    каталог программы теста). }
-  if GTestClientPath <> '' then
-    Condition := ClientRootCondition(GTestClientPath);
-#endif
   if Condition = '' then
     Condition := ClientPathCondition;
   if Condition = '' then
@@ -2713,42 +2644,18 @@ begin
   DeleteFile(OutFile);
 end;
 
-{ Процессы клиента, которые нужно закрыть. В тестовой сборке — модель:
-  реальные процессы машины не трогаются, если не задан /TESTCLIENTREAL=1. }
+{ Процессы клиента, которые нужно закрыть. }
 function ClientPidsRunning: String;
 begin
-#ifdef TestMode
-  if GTestClientPids <> '' then
-  begin
-    if GTestClientRunning then
-      Result := GTestClientPids
-    else
-      Result := '';
-    Exit;
-  end;
-  { Без /TESTCLIENTREAL=1 тестовая сборка процессы машины не опрашивает и не
-    закрывает: только модель /TESTCLIENTPIDS. }
-  if GTestClientReal <> '1' then
-  begin
-    Result := '';
-    Exit;
-  end;
-#endif
   Result := RealClientPids;
 end;
 
 function ClientCloseWaitMs: Integer;
 begin
   Result := CLIENT_CLOSE_WAIT_MS;
-#ifdef TestMode
-  if GTestClientWait <> '' then
-    Result := StrToIntDef(GTestClientWait, CLIENT_CLOSE_WAIT_MS);
-#endif
 end;
 
-{ Ожидание выхода процессов: опрос раз в 250 мс, бюджет WaitMs. В модели
-  момент выхода задаёт /TESTCLIENTGONE — время отсчитывается от мягкого
-  закрытия, реальный Sleep не нужен (прогон не длится 30 секунд). }
+{ Ожидание выхода процессов: опрос раз в 250 мс, бюджет WaitMs. }
 function WaitClientProcessesGone(const WaitMs: Integer; var WaitedMs: Integer): Boolean;
 var
   Elapsed: Integer;
@@ -2762,16 +2669,7 @@ begin
       Exit;
     end;
     if Elapsed >= WaitMs then Break;
-#ifdef TestMode
-    if GTestClientPids = '' then
-      Sleep(CLIENT_POLL_STEP_MS);
-    if (GTestClientPids <> '') and GTestClientSoftIssued and
-       (GTestClientSoft <> 'none') and
-       (Elapsed + CLIENT_POLL_STEP_MS >= GTestClientGoneAt) then
-      GTestClientRunning := False;
-#else
     Sleep(CLIENT_POLL_STEP_MS);
-#endif
     Elapsed := Elapsed + CLIENT_POLL_STEP_MS;
   until False;
   WaitedMs := Elapsed;
@@ -2811,14 +2709,6 @@ procedure SoftCloseClientPids(const Pids: String);
 var
   Rest, Pid: String;
 begin
-#ifdef TestMode
-  if GTestClientPids <> '' then
-  begin
-    GTestClientSoftIssued := True;
-    LogLine('INFO', 'Клиент ETN: мягкое закрытие (модель, PID ' + Pids + ')');
-    Exit;
-  end;
-#endif
   Rest := Pids;
   while Rest <> '' do
   begin
@@ -2832,15 +2722,6 @@ procedure ForceCloseClientPids(const Pids: String);
 var
   Rest, Pid: String;
 begin
-#ifdef TestMode
-  if GTestClientPids <> '' then
-  begin
-    LogLine('WARN', 'Клиент ETN: принудительное закрытие (модель, PID ' + Pids + ')');
-    if GTestClientForce <> 'fail' then
-      GTestClientRunning := False;
-    Exit;
-  end;
-#endif
   Rest := Pids;
   while Rest <> '' do
   begin
@@ -3163,13 +3044,10 @@ begin
     ' (код ' + IntToStr(Code) + '): ключ в такой каталог не пишется');
 end;
 
-{ Путь к node.exe поставки; в тестовой сборке подменяется /TESTNODEEXE. }
+{ Путь к node.exe поставки. }
 function ServerNodeExe(const ServerDir: String): String;
 begin
   Result := ServerDir + '\node\node.exe';
-#ifdef TestMode
-  if GTestNodeExe <> '' then Result := GTestNodeExe;
-#endif
 end;
 
 function ServerCliPath(const ServerDir: String): String;
@@ -5842,13 +5720,7 @@ end;
   эксклюзивный bind). Если таблица работает, логика не меняется: строки есть —
   foreign/own, строк нет — netsh + эксклюзивный bind.
   Возвращает 0 — свободен (или держит служба ETN), 1 — занят, 2 — проверить
-  не удалось. Тестовые хуки (только TestMode): TESTSERVICENAME подменяет имя
-  службы, и скрипт возвращает 0/2 по факту её нахождения (поведенческая проба
-  CIM-запроса); TESTOWNSERVICEPID задаёт PID «своей» службы вместо CIM-запроса
-  (поведенческая проба сравнения владельцев и цепочки потомков);
-  TESTPORTBINDFAIL=1 имитирует неизвестный отказ пробного bind (статус 2);
-  TESTLISTENERTABLEOFF=1 — недоступную TCP-таблицу, TESTNOSERVICE=1 —
-  отсутствие службы (проверка новых веток без аномальной ОС). }
+  не удалось. }
 function ServerPortStatus(const Port: String): Integer;
 var
   Script, Args, SvcName, SvcNameLiteral, SvcProbe, OwnSeed, BindFail,
@@ -5862,22 +5734,6 @@ begin
   BindFail := '0';
   TableOff := '0';
   NoSvc := '0';
-#ifdef TestMode
-  if GTestServiceName <> '' then
-  begin
-    SvcName := GTestServiceName;
-    SvcProbe := '1';
-  end;
-  { Валидация PID: строка из параметра идёт в скрипт только если это число. }
-  if StrToIntDef(GTestOwnServicePid, 0) > 0 then
-    OwnSeed := IntToStr(StrToIntDef(GTestOwnServicePid, 0));
-  if GTestPortBindFail = '1' then
-    BindFail := '1';
-  if GTestListenerTableOff = '1' then
-    TableOff := '1';
-  if GTestNoService = '1' then
-    NoSvc := '1';
-#endif
   { Имя службы — в одинарные кавычки PowerShell; кавычки внутри имени
     удваиваются (правило PS-литерала). Двойных кавычек в скрипте нет. }
   SvcNameLiteral := SvcName;
@@ -5987,22 +5843,10 @@ begin
     Result := ExtractFileDrive(Dir) + '\';
 end;
 
-{ Порог свободного места; в тестовой сборке подменяется /TESTMINFREE.
-  Переменная объявлена всегда: пустая секция var в продуктовой сборке не
-  компилируется (Inno требует хотя бы одно объявление). }
+{ Порог свободного места. }
 function MinFreeSpaceBytes: Int64;
-var
-  TestValue: String;
 begin
   Result := MIN_FREE_SPACE_BYTES;
-#ifdef TestMode
-  TestValue := ParamValue('TESTMINFREE');
-  if TestValue <> '' then
-  begin
-    Result := StrToInt64Def(TestValue, MIN_FREE_SPACE_BYTES);
-    LogLine('WARN', 'TESTMINFREE=' + TestValue + ': порог свободного места подменён (тестовый режим)');
-  end;
-#endif
 end;
 
 function FreeSpaceEnough(const Dir: String; var FreeBytes: Int64): Boolean;
@@ -6176,19 +6020,6 @@ var
   Code: Integer;
 begin
   Result := False;
-#ifdef TestMode
-  if LowerCase(GTestFirewall) = 'fail' then
-  begin
-    LogLine('INFO', 'FIREWALL (тестовый режим, имитация сбоя netsh): ' + Args);
-    Exit;
-  end;
-  if LowerCase(GTestFirewall) <> 'real' then
-  begin
-    LogLine('INFO', 'FIREWALL (тестовый режим, без изменений): netsh ' + Args);
-    Result := True;
-    Exit;
-  end;
-#endif
   if not Exec(ExpandConstant('{sys}\netsh.exe'), Args, '', SW_HIDE,
     ewWaitUntilTerminated, Code) then
   begin
@@ -7444,21 +7275,6 @@ end;
   События установщика
   --------------------------------------------------------------------------- }
 #ifdef TestMode
-{ /TESTBACKUP=1|skip — прямой прогон CreateDatabaseBackup без фаз установки:
-  1 — смена версии (архив создаётся), skip — ремонт (архива нет). Решение
-  передаётся так же, как его передаст bb063ac3; служба и файлы не участвуют. }
-function RunBackupProbe: Boolean;
-var
-  Needed, Ok: Boolean;
-begin
-  Needed := LowerCase(GTestBackup) <> 'skip';
-  Ok := CreateDatabaseBackup(Needed);
-  LogLine('INFO', 'TESTBACKUP result=' + Pick(Ok, 'ok', 'fail') +
-    ' needed=' + Pick(Needed, '1', '0') +
-    ' archive=' + IfStr(GLastBackupDir = '', '-', GLastBackupDir));
-  Result := Ok;
-end;
-
 { /TESTUNINSTALLSERVICE=1 — прямой прогон снятия службы при удалении
   (8b1f5980): та же RemoveServiceOnUninstall, что вызывает uninstaller, без
   настоящего удаления программы. 0 — служба снята (или её не было), 10 — отказ
@@ -7504,25 +7320,11 @@ begin
   GTestLayout := '';
   GTestNotice := '';
   GTestInit := '';
-  GTestNodeExe := '';
   GTestLogin := '';
   GTestKeyState := '';
   GTestFailAfterInit := '';
   GTestKeyAck := '';
   GTestKeyClose := '';
-  { Хуки 9b310991 (только тестовая сборка; сброс — чтобы в продуктовой сборке
-    переменные не выглядели неиспользуемыми). }
-  GTestDataDir := '';
-  GTestPort := '';
-  GTestMinFree := '';
-  GTestFirewall := '';
-  GTestPrecheck := '';
-  GTestResult := '';
-  GTestServiceName := '';
-  GTestOwnServicePid := '';
-  GTestPortBindFail := '';
-  GTestListenerTableOff := '';
-  GTestNoService := '';
   GTestServiceCmd := '';
   GTestServiceState := '';
   GTestServiceStop := '';
@@ -7545,7 +7347,6 @@ begin
   GTestHealthWait := '';
   GTestHealthStep := '';
   GTestRollback := '';
-  GTestBackup := '';
   GLastBackupDir := '';
   GDatabaseToolPath := '';
   GLastRollbackDir := '';
@@ -7572,19 +7373,7 @@ begin
   GLegacyUninstallCmd := '';
   GLegacyRoot := 0;
   GLegacyKey := '';
-  { Хуки 98ad5eec: модель запущенного клиента и установка клиента «для меня». }
-  GTestClientPids := '';
-  GTestClientGone := '';
-  GTestClientSoft := '';
-  GTestClientForce := '';
-  GTestClientWait := '';
-  GTestClientReal := '';
-  GTestClientPath := '';
-  GTestClientRunning := False;
-  GTestClientSoftIssued := False;
-  GTestClientGoneAt := 0;
   GTestUserInstall := '';
-  GTestConnectParams := '';
   GTestAdminMode := '';
   GTestUserOnlyMode := '';
   GTestInnoAdminMode := '';
@@ -7620,23 +7409,11 @@ begin
   GTestLayout := ParamValue('TESTLAYOUT');
   GTestNotice := ParamValue('TESTNOTICE');
   GTestInit := ParamValue('TESTINIT');
-  GTestNodeExe := ParamValue('TESTNODEEXE');
   GTestLogin := ParamValue('TESTLOGIN');
   GTestKeyState := ParamValue('TESTKEYSTATE');
   GTestFailAfterInit := ParamValue('TESTFAILAFTERINIT');
   GTestKeyAck := ParamValue('TESTKEYACK');
   GTestKeyClose := ParamValue('TESTKEYCLOSE');
-  GTestDataDir := ParamValue('TESTDATADIR');
-  GTestPort := ParamValue('TESTPORT');
-  GTestMinFree := ParamValue('TESTMINFREE');
-  GTestFirewall := ParamValue('TESTFIREWALL');
-  GTestPrecheck := ParamValue('TESTPRECHECK');
-  GTestResult := ParamValue('TESTRESULT');
-  GTestServiceName := ParamValue('TESTSERVICENAME');
-  GTestOwnServicePid := ParamValue('TESTOWNSERVICEPID');
-  GTestPortBindFail := ParamValue('TESTPORTBINDFAIL');
-  GTestListenerTableOff := ParamValue('TESTLISTENERTABLEOFF');
-  GTestNoService := ParamValue('TESTNOSERVICE');
   GTestServiceCmd := ParamValue('TESTSERVICECMD');
   GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
   GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
@@ -7672,16 +7449,7 @@ begin
   GTestHealthWait := ParamValue('TESTHEALTHWAIT');
   GTestHealthStep := ParamValue('TESTHEALTHSTEP');
   GTestRollback := LowerCase(ParamValue('TESTROLLBACK'));
-  GTestBackup := ParamValue('TESTBACKUP');
-  GTestClientPids := ParamValue('TESTCLIENTPIDS');
-  GTestClientGone := ParamValue('TESTCLIENTGONE');
-  GTestClientSoft := LowerCase(ParamValue('TESTCLIENTSOFT'));
-  GTestClientForce := LowerCase(ParamValue('TESTCLIENTFORCE'));
-  GTestClientWait := ParamValue('TESTCLIENTWAIT');
-  GTestClientReal := ParamValue('TESTCLIENTREAL');
-  GTestClientPath := ParamValue('TESTCLIENTPATH');
   GTestUserInstall := ParamValue('TESTUSERINSTALL');
-  GTestConnectParams := ParamValue('TESTCONNECTPARAMS');
   GTestAdminMode := ParamValue('TESTADMINMODE');
   GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
   GTestInnoAdminMode := ParamValue('TESTINNOADMINMODE');
@@ -7701,18 +7469,6 @@ begin
     поэтому silent-термин снимается и здесь. }
   if GTestUserOnlyMode = '1' then
     GSilent := False;
-  GTestClientRunning := GTestClientPids <> '';
-  GTestClientSoftIssued := False;
-  if GTestClientGone <> '' then
-    GTestClientGoneAt := StrToIntDef(GTestClientGone, 0)
-  else
-    GTestClientGoneAt := 0;
-  if GTestClientForce = '' then
-    GTestClientForce := 'ok';
-  { Подмена каталога данных для предпроверок (путь, занятый файлом,
-    недоступный диск): журнал при этом остаётся в обычном каталоге теста. }
-  if GTestDataDir <> '' then
-    GDataDir := GTestDataDir;
 #endif
 
   if GPrivilegedPhase then
@@ -7874,50 +7630,6 @@ begin
     ExitProcess(EXIT_OK);
   end;
 
-  { /TESTPORT — подмена порта для предпроверок без файла параметров. }
-  if GTestPort <> '' then
-  begin
-    GServerPort := GTestPort;
-    LogLine('WARN', 'TESTPORT=' + GTestPort + ': порт подменён (тестовый режим)');
-  end;
-
-  { /TESTCONNECTPARAMS=1 — какие параметры получит клиент при «Запустить
-    клиент» (ошибка 0f8dd0f3). Подмена порта уже применена, выбор компонентов и
-    состояние машины — тоже; прогон завершается без изменений. }
-  if GTestConnectParams = '1' then
-  begin
-    LogLine('INFO', 'TESTCONNECTPARAMS ' +
-      IfStr(ClientConnectParams = '', '(none)', ClientConnectParams));
-    ExitProcess(EXIT_OK);
-  end;
-
-  { /TESTELEVHELPER удалён вместе со скриптовой элевацией (2dd215f7):
-    режим определяют фактические права процесса; мастер не перезапускается. }
-
-  { /TESTPRECHECK=1 — прогон предпроверок без окон: та же функция, что вызывают
-    экран параметров сервера и привилегированная фаза. Результат — в журнале и
-    в файле /TESTRESULT (тест читает причину отказа). }
-  if GTestPrecheck = '1' then
-  begin
-    Reason := CheckServerEnvironment(True);
-    LogLine('INFO', 'TESTPRECHECK result=' + IfStr(Reason = '', 'ok', Reason));
-    if GTestResult <> '' then
-      SaveStringToFile(GTestResult, Utf8Encode(Reason), False);
-    if Reason = '' then
-      ExitProcess(EXIT_OK)
-    else
-      ExitProcess(EXIT_PRECONDITION);
-  end;
-
-  { /TESTBACKUP=1|skip — прямой прогон функции бэкапа (ce3ab836): код 0 —
-    архив создан и проверен (или ремонт без архива), 10 — бэкап неудачен. }
-  if GTestBackup <> '' then
-  begin
-    if RunBackupProbe then
-      ExitProcess(EXIT_OK)
-    else
-      ExitProcess(EXIT_FAILED);
-  end;
 
   { /TESTUNINSTALLSERVICE=1 — прямой прогон снятия службы при удалении
     (8b1f5980): 0 — служба снята (или её не было), 10 — отказ с причиной. }
@@ -8853,7 +8565,6 @@ begin
     GTestServiceStopRetries := 1
   else
     GTestServiceStopRetries := 0;
-  GTestFirewall := ParamValue('TESTFIREWALL');
   GTestServiceRegistered := LowerCase(GTestService) = 'present';
   GTestServiceRunning := GTestServiceRegistered;
   LogLine('INFO', 'Деинсталлятор (тестовый режим): TESTSERVICE=' +
