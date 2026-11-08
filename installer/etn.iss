@@ -922,12 +922,6 @@ var
     профиле (SMAA), и «клиент для меня» попал бы в чужой профиль. }
   GAdminMachineScope: Boolean;
   GTestMode: Boolean;
-  { Тестовые хуки задачи 686c5d76 (только в тестовой сборке). }
-  GTestInit: String;
-  GTestKeyState: String;
-  GTestFailAfterInit: String;
-  GTestKeyAck: String;
-  GTestKeyClose: String;
   { Пользователь отказался закрывать клиент (отличает отказ от технической
     неудачи: техническую неудачу можно устранить и повторить установку,
     отказ — нет). }
@@ -3002,13 +2996,6 @@ begin
     LogLine('INFO', 'Файлы сервера не найдены: первый администратор отсутствует (первая установка)');
     Exit;
   end;
-#ifdef TestMode
-  if GTestInit <> 'real' then
-  begin
-    LogLine('INFO', 'TESTINIT не задан: проверка hasFirstUser пропущена (тестовый режим)');
-    Exit;
-  end;
-#endif
   ApplyServerEnv;
   Code := RunCliCheck(Dir);
   if Code = 0 then
@@ -3075,13 +3062,6 @@ begin
     LogLine('INFO', 'Silent: etn init не вызывается никогда — нужен ручной режим');
     Exit;
   end;
-#ifdef TestMode
-  if GTestInit <> 'real' then
-  begin
-    LogLine('INFO', 'TESTINIT не задан: etn init не вызывается (тестовый режим)');
-    Exit;
-  end;
-#endif
   if GAdminLogin = '' then GAdminLogin := GOriginalUser;
   if not ValidAdminLogin(GAdminLogin) then
   begin
@@ -3163,14 +3143,6 @@ function SilentAdminPresent: Boolean;
 begin
   Result := False;
   ResolveFirstUserState;
-#ifdef TestMode
-  if GTestInit <> 'real' then
-  begin
-    LogLine('INFO', 'TESTINIT не задан: проверка администратора в silent пропущена (тестовый режим)');
-    Result := True;
-    Exit;
-  end;
-#endif
   Result := GFirstUserChecked and GFirstUserPresent;
   if not Result then
     LogLine('ERROR', 'Первичная инициализация не выполнена: нет первого администратора ' +
@@ -6927,11 +6899,6 @@ begin
   GServerFirewall := True;
   GSkipCopy := False;
   GTestMode := False;
-  GTestInit := '';
-  GTestKeyState := '';
-  GTestFailAfterInit := '';
-  GTestKeyAck := '';
-  GTestKeyClose := '';
   GTestUninstallService := '';
   GLastBackupDir := '';
   GDatabaseToolPath := '';
@@ -6979,11 +6946,6 @@ begin
   GAdminLogin := GOriginalUser;
 #ifdef TestMode
   GTestMode := True;
-  GTestInit := ParamValue('TESTINIT');
-  GTestKeyState := ParamValue('TESTKEYSTATE');
-  GTestFailAfterInit := ParamValue('TESTFAILAFTERINIT');
-  GTestKeyAck := ParamValue('TESTKEYACK');
-  GTestKeyClose := ParamValue('TESTKEYCLOSE');
   GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
 #endif
 
@@ -7638,13 +7600,6 @@ begin
         if GExitCode <> EXIT_OK then
           FailInstall(CustomMessage('EtnFailInitNotDone'));
       end;
-#ifdef TestMode
-      if (GTestFailAfterInit = '1') and GInitAttempted and (GPendingKey <> '') then
-      begin
-        LogLine('ERROR', 'TESTFAILAFTERINIT: имитация сбоя после etn init до показа ключа');
-        ExitProcess(EXIT_FAILED);
-      end;
-#endif
       if GExitCode = EXIT_OK then
       begin
         SetInstallStage(CustomMessage('EtnStageServiceStart'));
@@ -7726,34 +7681,6 @@ begin
       GPendingKeyPrevious := False
     else
       GPendingKeyPrevious := GPendingKey <> '';
-#ifdef TestMode
-    { Наблюдаемость без GUI: состояние ключа в журнале (значение ключа —
-      никогда), подтверждение и закрытие экрана без подтверждения. }
-    if GTestKeyState = '1' then
-    begin
-      LogLine('INFO', 'INITSTATE checked=' + Pick(GFirstUserChecked, '1', '0') +
-        ' hasfirstuser=' + Pick(GFirstUserPresent, '1', '0') +
-        ' init_attempted=' + Pick(GInitAttempted, '1', '0') +
-        ' pending=' + Pick(GPendingKey <> '', '1', '0') +
-        ' keylen=' + IntToStr(Length(GPendingKey)) +
-        ' previous=' + Pick(GPendingKeyPrevious, '1', '0') +
-        ' exitcode=' + IntToStr(GExitCode));
-      if GTestKeyAck = '1' then
-      begin
-        DeleteFile(KeyFilePath);
-        LogLine('INFO', 'INITACK deleted=' + Pick(not FileExists(KeyFilePath), '1', '0'));
-        GPendingKey := '';
-      end;
-      if GTestKeyClose = '1' then
-      begin
-        DeleteFile(KeyFilePath);
-        LogLine('INFO', 'INITCLOSE deleted=' + Pick(not FileExists(KeyFilePath), '1', '0') +
-          ' warning=1');
-        GPendingKey := '';
-      end;
-      ExitProcess(GExitCode);
-    end;
-#endif
   end;
 end;
 
