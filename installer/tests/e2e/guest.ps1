@@ -80,6 +80,12 @@ function Get-GuestContext {
 function Open-GuestSession {
     [CmdletBinding()]
     param($Context = (Get-GuestContext))
+    # Оборванная сессия остаётся в контексте со State=Broken/Closed: повторный
+    # Invoke-Command на ней падает без попытки открыть новую. Поэтому годится
+    # только Opened, остальное закрываем и открываем заново.
+    if ($Context.Session -and $Context.Session.State -ne 'Opened') {
+        Close-GuestSession -Context $Context
+    }
     if ($Context.Session) { return $Context.Session }
     $option = New-PSSessionOption -OperationTimeout ($Context.WinRmTimeoutSec * 1000) `
         -IdleTimeout ($Context.WinRmTimeoutSec * 1000) -OpenTimeout 60000
@@ -129,6 +135,60 @@ function Invoke-GuestElevated {
     $null = Open-GuestSession -Context $Context
     return Invoke-Command -Session $Context.Session -ScriptBlock $ScriptBlock `
         -ArgumentList $ArgumentList -ErrorAction Stop
+}
+
+<#
+    Транспортный сбой WinRM (соединение потеряно/сброшено), в отличие от
+    ошибки самой удалённой команды. На VirtualBox 7.2.22 такие сбои
+    наблюдались после resume «живого» снапшота и во время длинных GUI-проб
+    (2026-11-08): «Сетевое соединение … было потеряно», HTTP 12152,
+    HTTP 500 «Ошибка сервера» под нагрузкой установщика.
+#>
+function Test-GuestTransportError {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Message)
+    foreach ($pattern in @(
+            'Сетевое соединение с .* было потеряно',
+            'HTTP \(12152\)',
+            'Ошибка сервера.*HTTP 500',
+            'HTTP \(500\)',
+            'HTTP 500',
+            'The WinRM client received an HTTP server error status',
+            'Службе WS-Management не удается обработать запрос',
+            'The WS-Management service cannot process the request',
+            'WinRM не удается выполнить операцию',
+            'WinRM cannot complete the operation'
+        )) {
+        if ($Message -match $pattern) { return $true }
+    }
+    return $false
+}
+
+<#
+    Идемпотентная гостевая операция с повтором после транспортного сбоя:
+    сессия переоткрывается, WinRM дожидается готовности. Только для чтений и
+    перезаписываемых файлов — повтор «запустить процесс/установщик» запрещён.
+#>
+function Invoke-GuestElevatedRetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
+        [object[]]$ArgumentList = @(),
+        [int]$Attempts = 3,
+        $Context = (Get-GuestContext)
+    )
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            return Invoke-GuestElevated -Context $Context -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+        } catch {
+            $message = [string]$_.Exception.Message
+            if ($attempt -ge $Attempts -or -not (Test-GuestTransportError -Message $message)) { throw }
+            Write-Warning ("WinRM гостя: {0}; переоткрываю сессию (попытка {1} из {2})" -f `
+                    $message, ($attempt + 1), $Attempts)
+            Close-GuestSession -Context $Context
+            try { $null = Wait-GuestReady -Context $Context -TimeoutSec 180 } catch { Start-Sleep -Seconds 5 }
+        }
+    }
 }
 
 <#
@@ -225,7 +285,7 @@ function Test-GuestPath {
         [Parameter(Mandatory = $true)][string]$Path,
         $Context = (Get-GuestContext)
     )
-    return [bool](Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return [bool](Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
             param($GuestPath)
             Test-Path -LiteralPath $GuestPath
         } -ArgumentList @($Path))
@@ -238,7 +298,7 @@ function Get-GuestText {
         [Parameter(Mandatory = $true)][string]$Path,
         $Context = (Get-GuestContext)
     )
-    return Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($GuestPath)
         if (-not (Test-Path -LiteralPath $GuestPath)) {
             return [pscustomobject]@{ Exists = $false; Text = '' }
@@ -263,7 +323,7 @@ function Get-GuestTextShared {
         [Parameter(Mandatory = $true)][string]$Path,
         $Context = (Get-GuestContext)
     )
-    return Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($GuestPath)
         if (-not (Test-Path -LiteralPath $GuestPath)) {
             return [pscustomobject]@{ Exists = $false; Text = '' }
@@ -290,7 +350,7 @@ function Set-GuestText {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
         $Context = (Get-GuestContext)
     )
-    $null = Invoke-GuestElevated -Context $Context -ScriptBlock {
+    $null = Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($GuestPath, $Content)
         $dir = Split-Path -Parent $GuestPath
         if ($dir) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -305,7 +365,7 @@ function Get-GuestFileHash {
         [Parameter(Mandatory = $true)][string]$Path,
         $Context = (Get-GuestContext)
     )
-    return Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($GuestPath)
         if (-not (Test-Path -LiteralPath $GuestPath)) { return $null }
         (Get-FileHash -LiteralPath $GuestPath -Algorithm SHA256).Hash
@@ -319,7 +379,7 @@ function Get-GuestFileSize {
         [Parameter(Mandatory = $true)][string]$Path,
         $Context = (Get-GuestContext)
     )
-    return [long](Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return [long](Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
             param($GuestPath)
             if (-not (Test-Path -LiteralPath $GuestPath)) { return -1 }
             (Get-Item -LiteralPath $GuestPath).Length
@@ -334,7 +394,7 @@ function Get-GuestRegistryValue {
         [Parameter(Mandatory = $true)][string]$Name,
         $Context = (Get-GuestContext)
     )
-    return Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($KeyPath, $ValueName)
         try {
             $item = Get-ItemProperty -LiteralPath $KeyPath -Name $ValueName -ErrorAction Stop
@@ -352,7 +412,7 @@ function Get-GuestServiceState {
         [Parameter(Mandatory = $true)][string]$Name,
         $Context = (Get-GuestContext)
     )
-    return Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($ServiceName)
         $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
         if ($null -eq $service) { return 'Missing' }
@@ -367,7 +427,7 @@ function Get-GuestHealth {
         [Parameter(Mandatory = $true)][string]$Url,
         $Context = (Get-GuestContext)
     )
-    return Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($HealthUrl)
         try {
             $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
@@ -392,7 +452,7 @@ function Wait-GuestPort {
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        $listening = [bool](Invoke-GuestElevated -Context $Context -ScriptBlock {
+        $listening = [bool](Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
                 param($PortNumber)
                 @(Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue).Count -gt 0
             } -ArgumentList @($Port))
@@ -413,7 +473,7 @@ function Get-GuestTreeHash {
         [Parameter(Mandatory = $true)][string]$Root,
         $Context = (Get-GuestContext)
     )
-    return Invoke-GuestElevated -Context $Context -ScriptBlock {
+    return Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
         param($RootPath)
         if (-not (Test-Path -LiteralPath $RootPath)) { return @() }
         return @(Get-ChildItem -LiteralPath $RootPath -Recurse -File -Force |
@@ -485,6 +545,10 @@ function Save-GuestInstallerLogs {
                 )
                 if ($UserName) { $sources += (Join-Path 'C:\Users' (Join-Path $UserName 'AppData\Local\Temp')) }
                 if ($env:USERPROFILE) { $sources += (Join-Path $env:USERPROFILE 'AppData\Local\Temp') }
+                # Клиент «только для меня» пишет журнал в %TEMP% своей учётки:
+                # собираются профили всех пользователей гостя.
+                $sources += @(Get-ChildItem -LiteralPath 'C:\Users' -Directory -ErrorAction SilentlyContinue |
+                    ForEach-Object { Join-Path $_.FullName 'AppData\Local\Temp' })
                 foreach ($source in ($sources | Where-Object { $_ } | Select-Object -Unique)) {
                     if (-not (Test-Path -LiteralPath $source)) { continue }
                     foreach ($pattern in @('install-*.log', 'Setup Log*.txt')) {
