@@ -52,21 +52,16 @@
           не закрыт» после отказа закрыть клиента. Проверяются: причина
           видима и внутри страницы, длинная строка области клиента не сжата,
           высоты строк списка >= текста, контролы не пересекаются.
-      G4  закрытие запущенного клиента: мягкое закрытие при обновлении
-          (файлы заменены, клиент остановлен) и ветка «клиент не
-          закрывается» — принудительное завершение после таймаута; замеры
-          из журнала установщика. База base-e2e-gui-old (0.15.1 с клиентом)
-          используется при наличии; иначе — установка 0.15.3 на состояние
-          «только клиент» (элевированно, сервер снят флажком): логика
-          закрытия от версии не зависит, ветка 0.15.1 честно откладывается.
-          Ремонт с уже установленным сервером не используется: его снимок
-          отката в GUI-сессии идёт 20+ минут (замер 2026-11-08) и не
-          укладывается в таймауты.
+      G4  закрытие запущенного клиента — сценарий отменён решением
+          пользователя 2026-11-08: в ВМ клиент зависает даже в ручных
+          прогонах, suspend-состояние не доходит до диалога, ожидание
+          съедает ~25 минут набора. Имя G4 сохранено (в отчёте — честная
+          запись deferred «g4:cancelled»), автоматического покрытия нет:
+          закрытие клиента проверяется вручную при приёмке релиза.
 
     GUI-базы — аддитивные «живые» снапшоты: base-e2e-gui (AutoLogon +
-    интерактивная сессия на base-e2e-live), base-e2e-user (стандартная
-    учётка e2egui, для ветки «только для меня») и base-e2e-gui-old
-    (из -InstalledSnapshot, если там есть клиент). Исходные снапшоты стенда
+    интерактивная сессия на base-e2e-live) и base-e2e-user (стандартная
+    учётка e2egui, для ветки «только для меня»). Исходные снапшоты стенда
     не меняются и не удаляются.
 
     Повторяемость: перед каждым сценарием ВМ выключается, восстанавливается
@@ -95,7 +90,8 @@
     в отчёт и журнал не попадают.
 
 .PARAMETER Scenarios
-    Подмножество S1..S6 и/или G1..G4. По умолчанию — все десять.
+    Подмножество S1..S6 и/или G1..G4. По умолчанию — S1..S6. G4 отменён
+    (решение пользователя 2026-11-08) и всегда пишет deferred «g4:cancelled».
 
 .PARAMETER GuiBaseSnapshot
     Живой снапшот с AutoLogon и интерактивной сессией для GUI-сценариев.
@@ -104,10 +100,6 @@
 .PARAMETER GuiUserSnapshot
     Живой снапшот со стандартной учёткой e2egui (ветка «только для меня» в
     G3). Создаётся аддитивно при запуске G3; недоступность — честный deferred.
-
-.PARAMETER GuiOldSnapshot
-    Живой снапшот установленной 0.15.1 для G4 (клиент должен быть на месте).
-    Создаётся аддитивно из -InstalledSnapshot при запуске G4.
 
 .PARAMETER InstalledSnapshot
     Снапшот установленного сервера 0.15.1 для S3–S6 (должен быть «живым»:
@@ -122,7 +114,7 @@
     pwsh -File installer/tests/e2e/run.ps1 -Scenarios S1,S2
 
 .EXAMPLE
-    pwsh -File installer/tests/e2e/run.ps1 -Scenarios G1,G2,G3,G4 -OutDir .tmp/e2e-gui
+    pwsh -File installer/tests/e2e/run.ps1 -Scenarios G1,G2,G3 -OutDir .tmp/e2e-gui
 
 .EXAMPLE
     pwsh -File installer/tests/e2e/run.ps1 -InstalledSnapshot etn-0.15.1-installed-v2
@@ -140,7 +132,6 @@ param(
     # пользователя (создаётся автоматически, аддитивно; см. gui.ps1).
     [string]$GuiBaseSnapshot = 'base-e2e-gui',
     [string]$GuiUserSnapshot = 'base-e2e-user',
-    [string]$GuiOldSnapshot = 'base-e2e-gui-old',
     [string]$SecretsPath = 'C:\Users\User\.zcode\secrets\etn-vms.env',
     [string]$SetupCurrent = 'ETN-Setup-0.15.3.exe',
     [string]$SetupIntermediate = 'ETN-Setup-0.15.2.exe',
@@ -1351,25 +1342,15 @@ function New-GuiFullInstallSteps {
         [string]$Set = 'gui',
         [string]$Login = 'e2e-gui-admin',
         [string]$DisplayName = 'E2E GUI',
-        [int]$InstallTimeoutSec = 900,
-        [switch]$ClientPrompt,
-        [switch]$SelectServer
+        [int]$InstallTimeoutSec = 900
     )
     $steps = @(
         @{ type = 'wait_window'; timeout_sec = 120 },
         @{ type = 'snapshot'; name = "$Set-components" }
     )
-    if ($SelectServer) {
-        # В состоянии «только клиент» сервер по умолчанию не выбран (в списке
-        # «Сервер не выбран: при первом запуске понадобится адрес…»): включаем
-        # его, иначе мастер переустановит только клиент.
-        $steps += @{ type = 'toggle_item'; index = 0 }
-        $steps += @{ type = 'snapshot'; name = "$Set-components-server" }
-    }
     $steps += @(
         # Лицензия запоминается после первой установки: на повторном запуске
-        # строки нет, и строгий check сломал бы план (G4 ставит сервер поверх
-        # «только клиент»).
+        # строки нет, и строгий check сломал бы план.
         @{ type = 'check_optional'; text = $script:GuiTexts.LicenseAccept; state = 'on' },
         @{ type = 'snapshot'; name = "$Set-components-licensed" },
         @{ type = 'next' },
@@ -1384,14 +1365,10 @@ function New-GuiFullInstallSteps {
         @{ type = 'next' },
         @{ type = 'wait_text'; text = 'Всё готово к установке'; timeout_sec = 60 },
         @{ type = 'snapshot'; name = "$Set-ready" },
-        # PrepareToInstall открывает модальный диалог закрытия клиента —
-        # синхронный клик «Установить» висел бы до ответа.
+        # PrepareToInstall может открыть модальный диалог закрытия клиента,
+        # если клиент запущен, — синхронный клик «Установить» висел бы до ответа.
         @{ type = 'next'; text_any = @('Установить'); timeout_sec = 60; async = $true }
     )
-    if ($ClientPrompt) {
-        $steps += @{ type = 'dialog_button'; text_any = @('Да', 'Yes'); timeout_sec = 60 }
-        $steps += @{ type = 'snapshot'; name = "$Set-prompt-answer" }
-    }
     $steps += @{ type = 'wait_page'; title = $script:GuiTexts.KeyTitle; timeout_sec = $InstallTimeoutSec }
     $steps += @{ type = 'snapshot'; name = "$Set-key" }
     $steps += @{ type = 'check_secret_absent'; secret_file = 'C:\ProgramData\ETN\.install\primary-key.txt' }
@@ -1412,34 +1389,6 @@ function New-GuiClientInstallSteps {
         @{ type = 'wait_window'; timeout_sec = 120 },
         @{ type = 'snapshot'; name = "$Set-components" },
         @{ type = 'check'; text = $script:GuiTexts.LicenseAccept; state = 'on' },
-        @{ type = 'next' },
-        @{ type = 'wait_text'; text = 'Всё готово к установке'; timeout_sec = 60 },
-        @{ type = 'snapshot'; name = "$Set-ready" },
-        @{ type = 'next'; text_any = @('Установить'); timeout_sec = 60 },
-        @{ type = 'wait_finished'; timeout_sec = $InstallTimeoutSec },
-        @{ type = 'snapshot'; name = "$Set-finished" },
-        @{ type = 'next'; text_any = @('Готово', 'Завершить'); timeout_sec = 60 },
-        @{ type = 'wait_exit'; timeout_sec = 180 }
-    )
-}
-
-<#
-    Шаги установки только клиента «для всех пользователей» (элевированный
-    запуск): снять флажок сервера на экране компонентов. Нужно G4: ремонт с
-    уже установленным сервером в GUI-сессии копирует снимок отката (10 800
-    файлов, ~650 МБ) с обновлением прогресса на каждый файл — в ВМ это
-    20+ минут и не укладывается в таймауты (замер 2026-11-08). Установка
-    поверх «только клиент» снимка не требует: файлов сервера ещё нет.
-#>
-function New-GuiClientMachineInstallSteps {
-    param([string]$Set = 'gui-client-machine', [int]$InstallTimeoutSec = 900)
-    return @(
-        @{ type = 'wait_window'; timeout_sec = 120 },
-        @{ type = 'snapshot'; name = "$Set-components" },
-        @{ type = 'check'; text = $script:GuiTexts.LicenseAccept; state = 'on' },
-        # Строка 0 списка — «Установить сервер ETN».
-        @{ type = 'toggle_item'; index = 0 },
-        @{ type = 'snapshot'; name = "$Set-components-client" },
         @{ type = 'next' },
         @{ type = 'wait_text'; text = 'Всё готово к установке'; timeout_sec = 60 },
         @{ type = 'snapshot'; name = "$Set-ready" },
@@ -2103,190 +2052,29 @@ function Invoke-ScenarioG3 {
         -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note '4 состояния'
 }
 
-# --- G4: закрытие запущенного клиента --------------------------------------
+# --- G4: закрытие запущенного клиента (сценарий отменён) -------------------
+#
+# Прежняя реализация проверяла два состояния: мягкое закрытие (диалог
+# «клиент запущен», выбор «Да») и блокировку установки занятыми файлами
+# (suspend_process → модальный диалог «Закрыть принудительно/Отмена»).
+# В ВМ сценарий недостоверен: клиент зависает даже в ручных прогонах,
+# suspend-состояние не доходит до диалога, ожидание съедает 25 минут
+# прогона. Решение пользователя 2026-11-08 — автоматическое покрытие
+# закрытия клиента снять, проверять вручную при приёмке релиза.
+# Покрытие client-close:* в silent-codes (31 проверка) опирается на
+# /TEST*-хуки, которые снимаются; G4 был его автоматической заменой на
+# уровне GUI, и без G4 замены нет.
 
 function Invoke-ScenarioG4 {
-    param($Results, $Timings, [pscustomobject]$OldBaseStatus)
+    param($Results)
     $scenario = 'G4'
-    $started = Get-Date
-    $useOldBase = ($OldBaseStatus -and [bool](Get-JsonField $OldBaseStatus 'old_base'))
-    $deferredReported = $false
-
-    if ($useOldBase) {
-        $null = Initialize-GuiScenarioVm -Snapshot $GuiOldSnapshot -SetupKeys @('current')
-        $null = Ensure-GuestServiceRunning -Context $script:context -Port '4321'
-        $clientPresent = Test-GuestPath -Context $script:context -Path 'C:\Program Files\ETN\client\ETN.exe'
-        if ($clientPresent) {
-            Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4:old-base-client' `
-                -Ok $true -Expected 'клиент 0.15.1 установлен' -Actual 'есть'
-        } else {
-            # База 0.15.1 без клиента — честная деградация: ветка «обновление
-            # установленного клиента» откладывается, вместо неё ремонт той же
-            # версии на base-e2e-gui (логика закрытия клиента от версии не
-            # зависит).
-            Add-E2ECheck -Results $Results -Scenario $scenario -Name 'g4:old-base-client' -Ok $false `
-                -Deferred -Expected 'клиент 0.15.1 в снапшоте базы' -Actual 'нет' `
-                -Note 'ветка 0.15.1 отложена: в $GuiOldSnapshot клиента нет; проверяется ремонт 0.15.3'
-            $useOldBase = $false
-            $deferredReported = $true
-        }
-    }
-    if (-not $useOldBase) {
-        if (-not $deferredReported) {
-            # Базы старого клиента нет вовсе (например, в снапшоте установлен
-            # только сервер) — ветка откладывается с указанием причины.
-            $reason = if ($OldBaseStatus) { [string](Get-JsonField $OldBaseStatus 'old_error') } else { 'база не готовилась' }
-            Add-E2ECheck -Results $Results -Scenario $scenario -Name 'g4:old-base-client' -Ok $false `
-                -Deferred -Expected 'снапшот base-e2e-gui-old с клиентом 0.15.1' -Actual 'недоступен' `
-                -Note ('ветка 0.15.1 отложена: ' + $reason + '; проверяется ремонт 0.15.3')
-        }
-        # Фолбэк: ставим только клиент (элевированно) и проверяем закрытие
-        # клиента на установке сервера поверх него. Логика закрытия от версии
-        # не зависит, а снимок отката не создаётся: файлов сервера ещё нет.
-        $null = Initialize-GuiScenarioVm -Snapshot $GuiBaseSnapshot -SetupKeys @('current')
-        $prepPlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" -Steps (New-GuiClientMachineInstallSteps -Set 'g4prep')
-        $prepProbe = Invoke-GuestGuiProbe -Plan $prepPlan -Name 'g4-prep-client' -TimeoutSec 1200 `
-            -ArtifactDir (Join-Path $OutDir 'gui')
-        Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g4:prep-probe' -Probe $prepProbe
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4:prep-exit' `
-            -Ok ((Get-GuiInstallerExitCode -ProbeResult $prepProbe.Result) -eq 0) `
-            -Expected 0 -Actual (Get-GuiInstallerExitCode -ProbeResult $prepProbe.Result)
-        $prepClient = Test-GuestPath -Context $script:context -Path 'C:\Program Files\ETN\client\ETN.exe'
-        $prepServer = Test-GuestPath -Context $script:context -Path 'C:\Program Files\ETN\service\etn-service.exe'
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4:prep-client-only' `
-            -Ok ($prepClient -and (-not $prepServer)) -Expected 'клиент есть, сервера нет' `
-            -Actual ("клиент={0}, сервер={1}" -f $prepClient, $prepServer)
-    }
-    $clientPath = 'C:\Program Files\ETN\client\ETN.exe'
-    # Доказательство замены файлов: mtime ненадёжен (Inno ставит время исходника,
-    # при ремонте той же версии оно не меняется). Поэтому портим безвредный
-    # файл payload (локаль sw.pak клиент не загружает) и проверяем, что
-    # установщик вернул его содержимое.
-    $probeFile = 'C:\Program Files\ETN\client\locales\sw.pak'
-    $probeHashBefore = [string](Get-GuestFileHash -Context $script:context -Path $probeFile)
-
-    # Ветка 1: мягкое закрытие.
-    $launchPlan = New-GuiPlan -Steps @(
-        @{ type = 'launch'; exe = $clientPath; settle_ms = 5000 }
-    )
-    $launchProbe = Invoke-GuestGuiProbe -Plan $launchPlan -Name 'g4-client-launch' -TimeoutSec 180
-    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g4:client-launch' -Probe $launchProbe
-    $running = [bool](Invoke-GuestElevatedRetry -Context $script:context -ScriptBlock {
-            @(Get-Process -Name 'ETN' -ErrorAction SilentlyContinue).Count -gt 0
-        })
-    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4:client-running' `
-        -Ok $running -Expected $true -Actual $running
-    # Клиент уже запущен и держит свои загруженные файлы; безвредный sw.pak
-    # портим, чтобы после ремонта доказать замену файлов сравнением хэша.
-    $null = Invoke-GuestElevatedRetry -Context $script:context -ScriptBlock {
-        param($Path)
-        [System.IO.File]::WriteAllText($Path, 'e2e-corrupted')
-    } -ArgumentList @($probeFile)
-    $beforeSoftLog = Get-GuestInstallLog -Context $script:context
-    $beforeSoftPath = [string](Get-JsonField $beforeSoftLog 'Path')
-    $softPlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
-        -Steps (New-GuiFullInstallSteps -Set 'g4soft' -ClientPrompt -SelectServer)
-    $softProbe = Invoke-GuestGuiProbe -Plan $softPlan -Name 'g4-soft-close' -TimeoutSec 1500 `
-        -ArtifactDir (Join-Path $OutDir 'gui')
-    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g4soft:probe' -Probe $softProbe
-    if ($softProbe.Ok) {
-        $softExit = Get-GuiInstallerExitCode -ProbeResult $softProbe.Result
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4soft:exit-code' `
-            -Ok ($softExit -eq 0) -Expected 0 -Actual $softExit
-        $promptStep = Get-GuiStepResult -ProbeResult $softProbe.Result -Type 'dialog_button'
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4soft:prompt-shown' `
-            -Ok ([bool](Get-JsonField $promptStep 'ok')) -Expected 'диалог закрытия клиента' `
-            -Actual $(if ($promptStep) { [string](Get-JsonField (Get-JsonField $promptStep 'detail') 'button') } else { 'нет шага' })
-        $log = Get-GuestInstallLog -Context $script:context -ExcludePath $beforeSoftPath
-        Add-LogCheck -Results $Results -Scenario $scenario -Name 'g4soft:log-detected' -Log $log `
-            -Needle 'Клиент ETN: запущено процессов ETN.exe'
-        Add-LogCheck -Results $Results -Scenario $scenario -Name 'g4soft:log-soft' -Log $log `
-            -Needle 'Клиент ETN: закрыт мягко за'
-        $softMs = Get-GuiLogTiming -LogText ([string](Get-JsonField $log 'Text')) `
-            -Pattern 'закрыт мягко за (\d+) мс'
-        Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 'g4soft:soft-close-ms' -Value $softMs `
-            -Note 'ожидание мягкого закрытия клиента'
-        $json = Get-GuestInstallJson -Context $script:context
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4soft:install-json' `
-            -Ok ([string](Get-JsonField $json 'product_version') -eq '0.15.3') `
-            -Expected '0.15.3' -Actual ([string](Get-JsonField $json 'product_version'))
-        $health = Wait-GuestHealthVersion -Context $script:context -Port '4321' -Expected '0.15.3' -TimeoutSec 120
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4soft:health' `
-            -Ok ($health -eq '0.15.3') -Expected '0.15.3' -Actual $health
-        $probeHashAfter = [string](Get-GuestFileHash -Context $script:context -Path $probeFile)
-        $replaced = ($probeHashAfter -ne '') -and ($probeHashBefore -ne '') -and
-            ($probeHashAfter -eq $probeHashBefore)
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4soft:files-replaced' `
-            -Ok $replaced -Expected 'испорченный файл клиента восстановлен установщиком' `
-            -Actual ("before=$probeHashBefore, after=$probeHashAfter")
-        $etnLeft = @(Invoke-GuestElevatedRetry -Context $script:context -ScriptBlock {
-                @(Get-Process -Name 'ETN' -ErrorAction SilentlyContinue).Count
-            })
-        $etnCount = if ($etnLeft.Count -gt 0) { [int]$etnLeft[0] } else { 0 }
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4soft:client-gone' `
-            -Ok ($etnCount -eq 0) -Expected 0 -Actual $etnCount
-    }
-
-    # Ветка 2: клиент не закрывается — принудительное завершение после таймаута.
-    # Состояние снова «только клиент»: после мягкой установки файлы сервера
-    # есть, и ремонт в GUI создал бы снимок отката (10 800 файлов, 20+ минут
-    # в ВМ). Восстанавливаем базу и ставим клиент заново.
-    $null = Initialize-GuiScenarioVm -Snapshot $GuiBaseSnapshot -SetupKeys @('current')
-    $blockedPrepPlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
-        -Steps (New-GuiClientMachineInstallSteps -Set 'g4blocked-prep')
-    $blockedPrepProbe = Invoke-GuestGuiProbe -Plan $blockedPrepPlan -Name 'g4-blocked-prep-client' `
-        -TimeoutSec 1200 -ArtifactDir (Join-Path $OutDir 'gui')
-    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g4blocked:prep-probe' -Probe $blockedPrepProbe
-    Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4blocked:prep-exit' `
-        -Ok ((Get-GuiInstallerExitCode -ProbeResult $blockedPrepProbe.Result) -eq 0) `
-        -Expected 0 -Actual (Get-GuiInstallerExitCode -ProbeResult $blockedPrepProbe.Result)
-    $launchPlan2 = New-GuiPlan -Steps @(
-        @{ type = 'launch'; exe = $clientPath; settle_ms = 5000 },
-        @{ type = 'suspend_process'; name_filter = 'ETN'; path_prefix = 'C:\Program Files\ETN' }
-    )
-    $launchProbe2 = Invoke-GuestGuiProbe -Plan $launchPlan2 -Name 'g4-client-suspend' -TimeoutSec 180
-    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g4blocked:suspend' -Probe $launchProbe2
-    $beforeBlockedLog = Get-GuestInstallLog -Context $script:context
-    $beforeBlockedPath = [string](Get-JsonField $beforeBlockedLog 'Path')
-    $backupBefore = Get-GuestBackupInfo -Context $script:context
-    $blockedPlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
-        -Steps (New-GuiFullInstallSteps -Set 'g4blocked' -ClientPrompt -SelectServer)
-    $blockedProbe = Invoke-GuestGuiProbe -Plan $blockedPlan -Name 'g4-force-close' -TimeoutSec 1500 `
-        -ArtifactDir (Join-Path $OutDir 'gui')
-    Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g4blocked:probe' -Probe $blockedProbe
-    if ($blockedProbe.Ok) {
-        $blockedExit = Get-GuiInstallerExitCode -ProbeResult $blockedProbe.Result
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4blocked:exit-code' `
-            -Ok ($blockedExit -eq 0) -Expected 0 -Actual $blockedExit
-        $log = Get-GuestInstallLog -Context $script:context -ExcludePath $beforeBlockedPath
-        Add-LogCheck -Results $Results -Scenario $scenario -Name 'g4blocked:log-soft-attempt' -Log $log `
-            -Needle 'Клиент ETN: мягкое закрытие (taskkill без /F)'
-        Add-LogCheck -Results $Results -Scenario $scenario -Name 'g4blocked:log-force' -Log $log `
-            -Needle 'не закрылся — принудительное закрытие (taskkill /F)'
-        Add-LogCheck -Results $Results -Scenario $scenario -Name 'g4blocked:log-forced-done' -Log $log `
-            -Needle 'Клиент ETN: принудительно закрыт за'
-        $forceMs = Get-GuiLogTiming -LogText ([string](Get-JsonField $log 'Text')) `
-            -Pattern 'принудительно закрыт за (\d+) мс'
-        Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 'g4blocked:force-close-ms' -Value $forceMs `
-            -Note 'принудительное закрытие после таймаута'
-        $etnLeft2 = @(Invoke-GuestElevatedRetry -Context $script:context -ScriptBlock {
-                @(Get-Process -Name 'ETN' -ErrorAction SilentlyContinue).Count
-            })
-        $etnCount2 = if ($etnLeft2.Count -gt 0) { [int]$etnLeft2[0] } else { 0 }
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4blocked:client-gone' `
-            -Ok ($etnCount2 -eq 0) -Expected 0 -Actual $etnCount2
-        $backupAfter = Get-GuestBackupInfo -Context $script:context
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4blocked:no-backup' `
-            -Ok ([int](Get-JsonField $backupAfter 'Count') -eq [int](Get-JsonField $backupBefore 'Count')) `
-            -Expected ('архивов не больше, чем ' + [int](Get-JsonField $backupBefore 'Count')) `
-            -Actual ([int](Get-JsonField $backupAfter 'Count'))
-        $health2 = Wait-GuestHealthVersion -Context $script:context -Port '4321' -Expected '0.15.3' -TimeoutSec 120
-        Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g4blocked:health' `
-            -Ok ($health2 -eq '0.15.3') -Expected '0.15.3' -Actual $health2
-    }
-
-    Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 'g4:total-duration' `
-        -Value ([math]::Round(((Get-Date) - $started).TotalSeconds, 1)) -Note 'мягкое и принудительное закрытие'
+    # Решение пользователя 2026-11-08: сценарий отменён. ВМ недостоверна для
+    # манипуляций с процессами — клиент зависает и в ручных прогонах, а
+    # ожидание таймаутов съедает время полного набора. Закрытие клиента —
+    # пользовательский экран, проверяется вручную при приёмке релиза.
+    Add-E2ECheck -Results $Results -Scenario $scenario -Name 'g4:cancelled' -Ok $false -Deferred `
+        -Expected 'сценарий закрытия клиента' -Actual 'отменён пользователем 2026-11-08' `
+        -Note 'ВМ недостоверна для манипуляций с процессами (зависает даже вручную); автоматическое покрытие закрытия клиента снято, проверяется вручную при приёмке релиза'
 }
 
 # --- Основной прогон -------------------------------------------------------
@@ -2310,26 +2098,20 @@ try {
     $context = New-GuestContext -Vm $Vm -SecretsPath $SecretsPath
     $updatedStateReady = $false
     $guiBaseStatus = $null
-    $useGuiOldBase = $false
     $guiRequested = @($requested | Where-Object { $_ -like 'G*' })
     if ($guiRequested.Count -gt 0) {
         Write-Step 'Подготовка GUI-баз (живые снапшоты, аддитивно)'
         try {
             $guiBaseStatus = Ensure-GuiBaseSnapshots -Vm $Vm -Context $context `
                 -BaseSnapshot $BaseSnapshot -GuiBase $GuiBaseSnapshot -GuiUser $GuiUserSnapshot `
-                -GuiOld $GuiOldSnapshot -InstalledSnapshot $InstalledSnapshot `
                 -BootTimeoutSec $BootTimeoutSec `
-                -WithUserBase:($guiRequested -contains 'G3') `
-                -WithOldBase:($guiRequested -contains 'G4')
-            $useGuiOldBase = [bool](Get-JsonField $guiBaseStatus 'old_base')
-            Write-Host ("GUI-базы: создано [{0}], user_base={1}, old_base={2}" -f `
-                    (@($guiBaseStatus.created) -join ', '), $guiBaseStatus.user_base, $guiBaseStatus.old_base)
+                -WithUserBase:($guiRequested -contains 'G3')
+            Write-Host ("GUI-базы: создано [{0}], user_base={1}" -f `
+                    (@($guiBaseStatus.created) -join ', '), $guiBaseStatus.user_base)
             if ($guiBaseStatus.user_error) { Write-Warning "base-e2e-user: $($guiBaseStatus.user_error)" }
-            if ($guiBaseStatus.old_error) { Write-Warning "base-e2e-gui-old: $($guiBaseStatus.old_error)" }
         } catch {
             $guiBaseStatus = [pscustomobject]@{
                 created = @(); user_base = $false; user_error = $_.Exception.Message
-                old_base = $false; old_error = $_.Exception.Message
             }
             Write-Warning "GUI-базы не подготовлены: $($_.Exception.Message). GUI-сценарии упадут честно."
         }
@@ -2346,7 +2128,7 @@ try {
             'G1' { $GuiBaseSnapshot }
             'G2' { $GuiBaseSnapshot }
             'G3' { $GuiBaseSnapshot }
-            'G4' { $(if ($useGuiOldBase) { $GuiOldSnapshot } else { $GuiBaseSnapshot }) }
+            'G4' { $GuiBaseSnapshot }
         }
         $scenarioStarted = Get-Date
         Write-Step "Сценарий $name (снапшот: $snapshot)"
@@ -2386,7 +2168,7 @@ try {
                     'G1' { Invoke-ScenarioG1 -Results $results -Timings $timings }
                     'G2' { Invoke-ScenarioG2 -Results $results -Timings $timings }
                     'G3' { Invoke-ScenarioG3 -Results $results -Timings $timings -UserBaseStatus $guiBaseStatus }
-                    'G4' { Invoke-ScenarioG4 -Results $results -Timings $timings -OldBaseStatus $guiBaseStatus }
+                    'G4' { Invoke-ScenarioG4 -Results $results }
                 }
                 break
             } catch {

@@ -478,13 +478,11 @@ function Ensure-GuiBaseSnapshots {
         [string]$BaseSnapshot = 'base-e2e-live',
         [string]$GuiBase = 'base-e2e-gui',
         [string]$GuiUser = 'base-e2e-user',
-        [string]$GuiOld = '',
         [string]$InstalledSnapshot = '',
         [int]$BootTimeoutSec = 300,
-        [switch]$WithUserBase,
-        [switch]$WithOldBase
+        [switch]$WithUserBase
     )
-    $status = [ordered]@{ created = @(); user_base = $false; user_error = ''; old_base = $false; old_error = '' }
+    $status = [ordered]@{ created = @(); user_base = $false; user_error = '' }
     if (-not (Test-VmSnapshot -Vm $Vm -Name $GuiBase)) {
         Write-Step "GUI-база: создаётся $GuiBase из $BaseSnapshot"
         Close-GuestSession -Context $Context
@@ -519,38 +517,6 @@ function Ensure-GuiBaseSnapshots {
             } catch {
                 $status.user_error = $_.Exception.Message
                 Write-Warning "GUI-база $GuiUser не создана: $($status.user_error)"
-            }
-        }
-    }
-    if ($WithOldBase -and $GuiOld -and $InstalledSnapshot) {
-        if (Test-VmSnapshot -Vm $Vm -Name $GuiOld) {
-            $status.old_base = $true
-        } else {
-            try {
-                Write-Step "GUI-база: проверяется клиент в $InstalledSnapshot для $GuiOld"
-                Close-GuestSession -Context $Context
-                Restore-VmSnapshot -Vm $Vm -Name $InstalledSnapshot
-                Start-VmHeadless -Vm $Vm
-                $null = Wait-VmGuestAdditions -Vm $Vm -TimeoutSec $BootTimeoutSec
-                $null = Wait-GuestReady -Context $Context -TimeoutSec $BootTimeoutSec
-                # Снапшот «старого клиента» нужен только если в базе есть
-                # установленный клиент: иначе он неотличим от самой базы, а
-                # G4 всё равно уйдёт на ремонт 0.15.3. Не создаём пустую базу
-                # и не тратим перезагрузку — сообщаем причину отложенной ветки.
-                $clientPresent = [bool](Invoke-GuestElevated -Context $Context -ScriptBlock {
-                        return (Test-Path -LiteralPath 'C:\Program Files\ETN\client\ETN.exe')
-                    })
-                if (-not $clientPresent) {
-                    $status.old_error = "в $InstalledSnapshot установлен только сервер: клиента 0.15.1 нет"
-                    Write-Warning "GUI-база $GuiOld не создана: $($status.old_error)"
-                } else {
-                    $null = Initialize-GuestGuiBase -Vm $Vm -Context $Context -SnapshotName $GuiOld
-                    $status.created += $GuiOld
-                    $status.old_base = $true
-                }
-            } catch {
-                $status.old_error = $_.Exception.Message
-                Write-Warning "GUI-база $GuiOld не создана: $($status.old_error)"
             }
         }
     }
