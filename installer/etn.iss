@@ -923,9 +923,7 @@ var
     профиле (SMAA), и «клиент для меня» попал бы в чужой профиль. }
   GAdminMachineScope: Boolean;
   GTestMode: Boolean;
-  GTestHealth: String;
   GTestElevated: String;
-  GTestService: String;
   GTestState: String;
   GTestSelect: String;
   GTestRecord: String;
@@ -967,49 +965,9 @@ var
   { /TESTUSERONLYMODE=1 — явная проверка неадминистративного режима в тестовой
     сборке: сервер недоступен, ставится только клиент «для меня». }
   GTestUserOnlyMode: String;
-  { Тестовые хуки bb063ac3: служба и health-check без реальной службы Windows
-    и без настоящего сервера — подмена исполняемого файла службы, её состояния
-    и команд, базового URL health-check, бюджетов ожидания и сбоя отката. }
-  GTestServiceCmd: String;
-  GTestServiceState: String;
-  GTestServiceStop: String;
-  GTestServiceStart: String;
-  GTestServiceWait: String;
-  { Хуки 8b1f5980: регистрация и снятие службы без настоящей службы Windows —
-    сбой install/uninstall, отказ уже существующей службы (1073), прямой прогон
-    снятия при удалении, а также смоделированное состояние «зарегистрирована/
-    работает», которое меняют команды install/uninstall/start/stop. }
-  GTestServiceInstall: String;
-  GTestServiceUninstall: String;
+  { Хук 8b1f5980: прямой прогон снятия службы при удалении без настоящего
+    удаления программы. }
   GTestUninstallService: String;
-  GTestServiceRegistered: Boolean;
-  GTestServiceRunning: Boolean;
-  { /TESTSERVICEREALFILE=1 — модель службы дополнительно проверяет наличие
-    etn-service.exe, как продуктовая ветка RunServiceCommand: проба настоящего
-    деинсталлятора ловит путь, вычисленный из пустого GServerDir (приёмка
-    4151edf6). /TESTSERVICESTATUS=fail|garbage|nonexistent — подмена вывода
-    etn-service.exe status (ошибка, неизвестный вывод, NonExistent при живом
-    ключе). /TESTSERVICEIMAGE, /TESTSERVICESTARTTYPE, /TESTSERVICEDELETEFLAG —
-    подмена реестровой личности службы. /TESTSERVICESTOP=1061|1062 — код
-    перехода/«уже остановлена»; 1061 повторяется, затем stop успешен.
-    /TESTSERVICESTOP=fail-after-start — отказ останова после start (проверка
-    отката при неудачной остановке). }
-  GTestServiceRealFile: String;
-  GTestServiceStatus: String;
-  GTestServiceImage: String;
-  GTestServiceStartType: String;
-  GTestServiceDeleteFlag: String;
-  { Состояние модели службы: команда start уже выполнялась (для
-    TESTSERVICESTOP=fail-after-start) и служба снята из SCM (status после
-    uninstall — NonExistent, ключ может остаться при 1072). }
-  GTestServiceStartedFlag: Boolean;
-  GTestServiceUninstalled: Boolean;
-  { Сколько раз stop вернуть 1061 до успеха (TESTSERVICESTOP=1061). }
-  GTestServiceStopRetries: Integer;
-  GTestHealthUrl: String;
-  GTestHealthWait: String;
-  GTestHealthStep: String;
-  GTestRollback: String;
 
   { Первичная инициализация и ключ }
   GAdminLogin: String;
@@ -3314,14 +3272,7 @@ end;
 
 function ServiceRegistered: Boolean;
 begin
-#ifdef TestMode
-  { Настоящая служба рабочей машины не читается: состояние задаёт хук
-    /TESTSERVICE=present|absent, дальше его меняют смоделированные команды
-    install/uninstall. Без хука тестовая сборка службу не видит и не трогает. }
-  Result := (GTestService <> '') and GTestServiceRegistered;
-#else
   Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME);
-#endif
 end;
 
 { Проверка записи в каталог пробным файлом. ForceDirectories для уже
@@ -3674,9 +3625,6 @@ end;
 function ServiceExePath: String;
 begin
   Result := ServiceDir + '\service\etn-service.exe';
-#ifdef TestMode
-  if GTestServiceCmd <> '' then Result := GTestServiceCmd;
-#endif
 end;
 
 { Последняя непустая строка вывода команды: WinSW печатает одно слово
@@ -3727,60 +3675,13 @@ end;
   Stopped — служба полностью остановлена, NonExistent — службы нет.
   Detail — причина, если состояние определить не удалось (SERVICE_STATE_UNKNOWN).
   Ошибка или неизвестный вывод — быстрый отказ вызывающего: бюджет ожидания не
-  тратится. В тестовом режиме вывод подменяется хуками; без /TESTSERVICE
-  тестовая сборка службу не видит и состояние не запрашивает. }
+  тратится. }
 function ServiceStatusOutput(var Detail: String): Integer;
 var
   Args, OutFile, Line, Output: String;
   Code: Integer;
 begin
   Detail := '';
-#ifdef TestMode
-  if GTestServiceStatus = 'fail' then
-  begin
-    Detail := CustomMessage('EtnServiceStatusTestFailed');
-    Result := SERVICE_STATE_UNKNOWN;
-    Exit;
-  end;
-  if GTestServiceStatus = 'garbage' then
-  begin
-    Detail := FmtMessage(CustomMessage('EtnServiceStatusUnknown'), ['TestMode']);
-    Result := SERVICE_STATE_UNKNOWN;
-    Exit;
-  end;
-  if GTestServiceStatus = 'nonexistent' then
-  begin
-    Result := SERVICE_STATE_MISSING;
-    Exit;
-  end;
-  if (GTestService <> '') and (GTestServiceRealFile = '1') and
-     (not FileExists(ServiceExePath)) then
-  begin
-    Detail := FmtMessage(CustomMessage('EtnServiceExeMissing'), [ServiceExePath]);
-    Result := SERVICE_STATE_UNKNOWN;
-    Exit;
-  end;
-  if GTestServiceState = 'running' then
-  begin
-    Result := SERVICE_STATE_STARTED;
-    Exit;
-  end;
-  if GTestServiceState = 'stopped' then
-  begin
-    Result := SERVICE_STATE_STOPPED;
-    Exit;
-  end;
-  if GTestServiceUninstalled then
-  begin
-    Result := SERVICE_STATE_MISSING;
-    Exit;
-  end;
-  if (GTestService <> '') and GTestServiceRunning then
-    Result := SERVICE_STATE_STARTED
-  else
-    Result := SERVICE_STATE_STOPPED;
-  Exit;
-#endif
   if not FileExists(ServiceExePath) then
   begin
     Detail := FmtMessage(CustomMessage('EtnServiceExeMissing'), [ServiceExePath]);
@@ -3826,10 +3727,6 @@ end;
 function ServiceStopWaitMs: Integer;
 begin
   Result := SERVICE_STOP_WAIT_MS;
-#ifdef TestMode
-  if GTestServiceWait <> '' then
-    Result := StrToIntDef(GTestServiceWait, Result);
-#endif
 end;
 
 { Текущее время в секундах (сутки*86400 + часы*3600 + минуты*60 + секунды).
@@ -3936,19 +3833,7 @@ begin
 end;
 
 { Команда WinSW: install, uninstall, stop, start. Код возврата команды —
-  успех/неудача (разбор — ServiceCommandResult).
-
-  В тестовой сборке настоящая служба рабочей машины не трогается никогда.
-  Хук /TESTSERVICE=present|absent включает модель: команды не выполняются, их
-  результат и состояние службы ведут флаги GTestServiceRegistered/Running
-  (install/uninstall меняют регистрацию, start/stop — состояние), а сбои
-  задаются хуками /TESTSERVICEINSTALL=fail|exists,
-  /TESTSERVICEUNINSTALL=fail|1072, /TESTSERVICESTOP=fail|fail-after-start|1061|1062,
-  /TESTSERVICESTART=fail|1056|1061. Без /TESTSERVICE команда тоже не выполняется
-  (изоляция тестов от машины), но состояние службы остаётся «не
-  зарегистрирована». /TESTSERVICEREALFILE=1 добавляет проверку наличия
-  etn-service.exe, как в продуктовой ветке: проба настоящего деинсталлятора
-  (приёмка 4151edf6) должна падать, если путь к службе вычислен неверно. }
+  успех/неудача (разбор — ServiceCommandResult). }
 function RunServiceCommand(const Verb: String): Boolean;
 var
   Code: Integer;
@@ -3956,124 +3841,6 @@ begin
   Result := False;
   GLastServiceCode := 0;
   GLastServiceError := '';
-#ifdef TestMode
-  if (GTestService <> '') and (GTestServiceRealFile = '1') and
-     (not FileExists(ServiceExePath)) then
-  begin
-    GLastServiceError := FmtMessage(CustomMessage('EtnServiceExeNotFound'), [ServiceExePath]);
-    LogLine('ERROR', 'Служба: нет ' + ServiceExePath + ' — команда ' + Verb +
-      ' не выполнена');
-    Exit;
-  end;
-  if GTestService <> '' then
-  begin
-    if (Verb = 'stop') and (GTestServiceStop = 'fail') then
-    begin
-      GLastServiceError := CustomMessage('EtnServiceTestStopFailed');
-      LogLine('WARN', 'Служба (тестовый режим): stop не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'stop') and (GTestServiceStop = 'fail-after-start') and
-       GTestServiceStartedFlag then
-    begin
-      GLastServiceError := CustomMessage('EtnServiceTestStopAfterStartFailed');
-      LogLine('WARN', 'Служба (тестовый режим): stop после start не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'start') and (GTestServiceStart = 'fail') then
-    begin
-      GLastServiceError := CustomMessage('EtnServiceTestStartFailed');
-      LogLine('WARN', 'Служба (тестовый режим): start не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'install') and (GTestServiceInstall = 'fail') then
-    begin
-      GLastServiceError := CustomMessage('EtnServiceTestInstallFailed');
-      LogLine('WARN', 'Служба (тестовый режим): install не выполнен (хук)');
-      Exit;
-    end;
-    if (Verb = 'uninstall') and (GTestServiceUninstall = 'fail') then
-    begin
-      GLastServiceError := CustomMessage('EtnServiceTestUninstallFailed');
-      LogLine('WARN', 'Служба (тестовый режим): uninstall не выполнен (хук)');
-      Exit;
-    end;
-
-    if (Verb = 'install') and (GTestServiceInstall = 'exists') then
-    begin
-      GTestServiceRegistered := True;
-      Code := ERROR_SERVICE_EXISTS;
-    end
-    else if (Verb = 'install') then
-    begin
-      GTestServiceRegistered := True;
-      GTestServiceUninstalled := False;
-      Code := 0;
-    end
-    else if Verb = 'uninstall' then
-    begin
-      GTestServiceRunning := False;
-      GTestServiceStartedFlag := False;
-      GTestServiceUninstalled := True;
-      if GTestServiceUninstall = '1072' then
-      begin
-        { 1072: SCM-запись снята, ключ реестра может остаться — ServiceRegistered
-          остаётся True, status обязан вернуть NonExistent. }
-        GTestServiceRegistered := True;
-        Code := ERROR_SERVICE_MARKED_FOR_DELETE;
-      end
-      else
-      begin
-        GTestServiceRegistered := False;
-        Code := 0;
-      end;
-    end
-    else if Verb = 'start' then
-    begin
-      GTestServiceRunning := True;
-      GTestServiceStartedFlag := True;
-      GTestServiceUninstalled := False;
-      if GTestServiceStart = '1056' then Code := ERROR_SERVICE_ALREADY_RUNNING
-      else if GTestServiceStart = '1061' then Code := ERROR_SERVICE_CANNOT_ACCEPT_CTRL
-      else Code := 0;
-    end
-    else if Verb = 'stop' then
-    begin
-      if (GTestServiceStop = '1061') and (GTestServiceStopRetries > 0) then
-      begin
-        { StartPending: первый stop возвращает 1061, служба ещё Started; повтор —
-          успех (проверка повтора в WaitServiceStopped). }
-        GTestServiceStopRetries := GTestServiceStopRetries - 1;
-        Code := ERROR_SERVICE_CANNOT_ACCEPT_CTRL;
-      end
-      else if GTestServiceStop = '1062' then
-      begin
-        GTestServiceRunning := False;
-        GTestServiceStartedFlag := False;
-        Code := ERROR_SERVICE_NOT_ACTIVE;
-      end
-      else
-      begin
-        GTestServiceRunning := False;
-        GTestServiceStartedFlag := False;
-        Code := 0;
-      end;
-    end
-    else
-      Code := 0;
-
-    Result := ServiceCommandResult(Verb, Code);
-    if Result then
-      LogLine('INFO', 'Служба (тестовый режим): команда ' + Verb +
-        ' — успех (exe=' + ServiceExePath + ', config=' + ServiceDir +
-        '\service\etn-service.xml, exists=' + Pick(FileExists(ServiceExePath), '1', '0') + ')');
-    Exit;
-  end;
-  LogLine('WARN', 'Служба (тестовый режим, /TESTSERVICE не задан): команда ' +
-    Verb + ' не выполняется — тестовая сборка не трогает службы машины');
-  Result := True;
-  Exit;
-#endif
   if not FileExists(ServiceExePath) then
   begin
     GLastServiceError := FmtMessage(CustomMessage('EtnServiceExeNotFound'), [ServiceExePath]);
@@ -4152,22 +3919,11 @@ begin
       SERVICE_NAME, IntToStr(ServiceStopWaitMs)]);
 end;
 
-{ ImagePath службы из реестра (в тестовом режиме — хук /TESTSERVICEIMAGE;
-  без хука считается путём этой установки). Кавычки WinSW при install
-  добавляет, если путь содержит пробелы, — сравнение без них и без регистра. }
+{ ImagePath службы из реестра. Кавычки WinSW при install добавляет, если путь
+  содержит пробелы, — сравнение без них и без регистра. }
 function ServiceImagePath: String;
 begin
   Result := '';
-#ifdef TestMode
-  if GTestService <> '' then
-  begin
-    if GTestServiceImage <> '' then
-      Result := GTestServiceImage
-    else
-      Result := ServiceExePath;
-    Exit;
-  end;
-#endif
   RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME,
     'ImagePath', Result);
 end;
@@ -4191,13 +3947,6 @@ function ServiceStartDisabled: Boolean;
 var
   Value: DWORD;
 begin
-#ifdef TestMode
-  if GTestService <> '' then
-  begin
-    Result := GTestServiceStartType = '4';
-    Exit;
-  end;
-#endif
   Result := RegQueryDWordValue(HKLM,
     'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME, 'Start', Value) and
     (Value = 4);
@@ -4207,13 +3956,6 @@ function ServiceDeleteFlagSet: Boolean;
 var
   Value: DWORD;
 begin
-#ifdef TestMode
-  if GTestService <> '' then
-  begin
-    Result := GTestServiceDeleteFlag = '1';
-    Exit;
-  end;
-#endif
   Result := RegQueryDWordValue(HKLM,
     'SYSTEM\CurrentControlSet\Services\' + SERVICE_NAME, 'DeleteFlag', Value) and
     (Value = 1);
@@ -4527,27 +4269,16 @@ end;
 function HealthBaseUrl: String;
 begin
   Result := 'http://127.0.0.1:' + GServerPort;
-#ifdef TestMode
-  if GTestHealthUrl <> '' then Result := GTestHealthUrl;
-#endif
 end;
 
 function HealthWaitMs: Integer;
 begin
   Result := HEALTH_WAIT_MS;
-#ifdef TestMode
-  if GTestHealthWait <> '' then
-    Result := StrToIntDef(GTestHealthWait, Result);
-#endif
 end;
 
 function HealthStepMs: Integer;
 begin
   Result := HEALTH_STEP_MS;
-#ifdef TestMode
-  if GTestHealthStep <> '' then
-    Result := StrToIntDef(GTestHealthStep, Result);
-#endif
 end;
 
 { Один GET через curl.exe с телом в файл. -f: HTTP >= 400 — код 22, тело не
@@ -4629,25 +4360,13 @@ begin
 end;
 
 { Health-check: fail-closed — успех объявляется только при подтверждённом
-  запуске сервера целевой версии. Хук /TESTHEALTH=ok|fail подменяет весь
-  опрос (тестовая сборка); /TESTHEALTHURL направляет запросы на подставной
-  HTTP-сервер, чтобы разбор тела проверялся по-настоящему. }
+  запуске сервера целевой версии. }
 function ProbeHealth(const RequireTargetVersion: Boolean): Boolean;
 var
   StartAt, ElapsedMs, RemainingMs: Int64;
 begin
   Result := False;
   GHealthReason := '';
-#ifdef TestMode
-  if GTestHealth <> '' then
-  begin
-    Result := LowerCase(GTestHealth) = 'ok';
-    if not Result then
-      GHealthReason := FmtMessage(CustomMessage('EtnHealthTestMode'), [GTestHealth]);
-    LogLine('INFO', 'Health-check (тестовый режим): ' + GTestHealth);
-    Exit;
-  end;
-#endif
   if not FileExists(ServiceExePath) then
   begin
     GHealthReason := FmtMessage(CustomMessage('EtnHealthServiceMissing'), [ServiceExePath]);
@@ -5270,13 +4989,6 @@ end;
 function RestoreInstallFiles: Boolean;
 begin
   Result := False;
-#ifdef TestMode
-  if LowerCase(GTestRollback) = 'fail' then
-  begin
-    LogLine('ERROR', 'TESTROLLBACK=fail: восстановление файлов имитирует сбой');
-    Exit;
-  end;
-#endif
   if GLastRollbackDir = '' then
   begin
     LogLine('INFO', 'Откат файлов: снимка нет');
@@ -7309,9 +7021,7 @@ begin
   GServerFirewall := True;
   GSkipCopy := False;
   GTestMode := False;
-  GTestHealth := '';
   GTestElevated := '';
-  GTestService := '';
   GTestState := '';
   GTestSelect := '';
   GTestRecord := '';
@@ -7325,28 +7035,7 @@ begin
   GTestFailAfterInit := '';
   GTestKeyAck := '';
   GTestKeyClose := '';
-  GTestServiceCmd := '';
-  GTestServiceState := '';
-  GTestServiceStop := '';
-  GTestServiceStart := '';
-  GTestServiceWait := '';
-  GTestServiceInstall := '';
-  GTestServiceUninstall := '';
   GTestUninstallService := '';
-  GTestServiceRegistered := False;
-  GTestServiceRunning := False;
-  GTestServiceRealFile := '';
-  GTestServiceStatus := '';
-  GTestServiceImage := '';
-  GTestServiceStartType := '';
-  GTestServiceDeleteFlag := '';
-  GTestServiceStartedFlag := False;
-  GTestServiceUninstalled := False;
-  GTestServiceStopRetries := 0;
-  GTestHealthUrl := '';
-  GTestHealthWait := '';
-  GTestHealthStep := '';
-  GTestRollback := '';
   GLastBackupDir := '';
   GDatabaseToolPath := '';
   GLastRollbackDir := '';
@@ -7398,9 +7087,7 @@ begin
   GAdminLogin := GOriginalUser;
 #ifdef TestMode
   GTestMode := True;
-  GTestHealth := ParamValue('TESTHEALTH');
   GTestElevated := ParamValue('TESTELEVATED');
-  GTestService := ParamValue('TESTSERVICE');
   GTestState := ParamValue('TESTSTATE');
   GTestSelect := ParamValue('TESTSELECT');
   GTestRecord := ParamValue('TESTRECORD');
@@ -7414,41 +7101,7 @@ begin
   GTestFailAfterInit := ParamValue('TESTFAILAFTERINIT');
   GTestKeyAck := ParamValue('TESTKEYACK');
   GTestKeyClose := ParamValue('TESTKEYCLOSE');
-  GTestServiceCmd := ParamValue('TESTSERVICECMD');
-  GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
-  GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
-  GTestServiceStart := LowerCase(ParamValue('TESTSERVICESTART'));
-  GTestServiceWait := ParamValue('TESTSERVICEWAIT');
-  GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
-  GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
-  GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
-  GTestServiceStatus := LowerCase(ParamValue('TESTSERVICESTATUS'));
-  GTestServiceImage := ParamValue('TESTSERVICEIMAGE');
-  GTestServiceStartType := ParamValue('TESTSERVICESTARTTYPE');
-  GTestServiceDeleteFlag := ParamValue('TESTSERVICEDELETEFLAG');
-  GTestServiceStartedFlag := False;
-  GTestServiceUninstalled := False;
-  { /TESTSERVICESTOP=1061 — первый stop возвращает 1061 (StartPending),
-    повтор — успех: ровно один смоделированный переход. }
-  if GTestServiceStop = '1061' then
-    GTestServiceStopRetries := 1
-  else
-    GTestServiceStopRetries := 0;
   GTestUninstallService := ParamValue('TESTUNINSTALLSERVICE');
-  { Исходное состояние модели службы: present — зарегистрирована и работает
-    (обычное состояние машины; обновление сначала её остановит), absent — не
-    зарегистрирована; команды install/uninstall меняют регистрацию, start/stop —
-    состояние. /TESTSERVICESTATE задаёт статическое состояние, которое команды
-    не меняют (проверка «служба не остановилась»). }
-  GTestServiceRegistered := LowerCase(GTestService) = 'present';
-  GTestServiceRunning := GTestServiceRegistered;
-  if GTestService <> '' then
-    LogOrDefer('WARN', 'TESTSERVICE=' + GTestService + ': служба смоделирована — ' +
-      'настоящая служба машины не трогается (тестовый режим)');
-  GTestHealthUrl := ParamValue('TESTHEALTHURL');
-  GTestHealthWait := ParamValue('TESTHEALTHWAIT');
-  GTestHealthStep := ParamValue('TESTHEALTHSTEP');
-  GTestRollback := LowerCase(ParamValue('TESTROLLBACK'));
   GTestUserInstall := ParamValue('TESTUSERINSTALL');
   GTestAdminMode := ParamValue('TESTADMINMODE');
   GTestUserOnlyMode := ParamValue('TESTUSERONLYMODE');
@@ -8542,35 +8195,6 @@ begin
   if FileExists(Candidate) then GLogPath := Candidate;
   LogLine('INFO', 'Удаление ETN: каталог данных ' + GDataDir + ', режим ' +
     IfStr(GServerMode = '', '—', GServerMode));
-#ifdef TestMode
-  { Проба настоящего деинсталлятора (silent-codes.ps1): InitializeSetup не
-    вызывался, поэтому хуки модели службы разбираются здесь. }
-  GTestMode := True;
-  GTestService := ParamValue('TESTSERVICE');
-  GTestServiceCmd := ParamValue('TESTSERVICECMD');
-  GTestServiceState := LowerCase(ParamValue('TESTSERVICESTATE'));
-  GTestServiceStop := LowerCase(ParamValue('TESTSERVICESTOP'));
-  GTestServiceStart := LowerCase(ParamValue('TESTSERVICESTART'));
-  GTestServiceWait := ParamValue('TESTSERVICEWAIT');
-  GTestServiceInstall := LowerCase(ParamValue('TESTSERVICEINSTALL'));
-  GTestServiceUninstall := LowerCase(ParamValue('TESTSERVICEUNINSTALL'));
-  GTestServiceRealFile := ParamValue('TESTSERVICEREALFILE');
-  GTestServiceStatus := LowerCase(ParamValue('TESTSERVICESTATUS'));
-  GTestServiceImage := ParamValue('TESTSERVICEIMAGE');
-  GTestServiceStartType := ParamValue('TESTSERVICESTARTTYPE');
-  GTestServiceDeleteFlag := ParamValue('TESTSERVICEDELETEFLAG');
-  GTestServiceStartedFlag := False;
-  GTestServiceUninstalled := False;
-  if GTestServiceStop = '1061' then
-    GTestServiceStopRetries := 1
-  else
-    GTestServiceStopRetries := 0;
-  GTestServiceRegistered := LowerCase(GTestService) = 'present';
-  GTestServiceRunning := GTestServiceRegistered;
-  LogLine('INFO', 'Деинсталлятор (тестовый режим): TESTSERVICE=' +
-    IfStr(GTestService = '', '—', GTestService) + ', TESTSERVICEREALFILE=' +
-    IfStr(GTestServiceRealFile = '', '—', GTestServiceRealFile));
-#endif
 end;
 
 { Удаление программы: служба ETN снимается, правило брандмауэра удаляется
