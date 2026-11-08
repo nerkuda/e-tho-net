@@ -34,7 +34,7 @@
 param(
     [string]$Vm = 'ETN-Win11',
     [string]$BaseSnapshot = 'base-e2e-live',
-    [string]$GuiBaseSnapshot = 'base-e2e-gui',
+    [string]$GuiBaseSnapshot = 'base-e2e-gui2',
     [string]$OriginalSnapshot = 'base-clean-v2',
     [string]$SecretsPath = 'C:\Users\User\.zcode\secrets\etn-vms.env',
     [string]$OutDir = '',

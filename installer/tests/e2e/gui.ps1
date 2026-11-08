@@ -245,7 +245,7 @@ function Restart-GuestForGui {
 
 <#
     Подготовить базу GUI-прогонов: AutoLogon, перезагрузка, проверка сессии,
-    аддитивный живой снапшот (по умолчанию base-e2e-gui). Исходный снапшот
+    аддитивный живой снапшот (по умолчанию base-e2e-gui2). Исходный снапшот
     стенда не меняется: снапшот создаётся от текущего состояния аддитивно.
 #>
 function Initialize-GuestGuiBase {
@@ -253,7 +253,7 @@ function Initialize-GuestGuiBase {
     param(
         [Parameter(Mandatory = $true)][string]$Vm,
         [Parameter(Mandatory = $true)]$Context,
-        [string]$SnapshotName = 'base-e2e-gui',
+        [string]$SnapshotName = 'base-e2e-gui2',
         [string]$AutoLogonUserName = '',
         [string]$AutoLogonPassword = '',
         [string]$TaskUser = '',
@@ -476,8 +476,8 @@ function Ensure-GuiBaseSnapshots {
         [Parameter(Mandatory = $true)][string]$Vm,
         [Parameter(Mandatory = $true)]$Context,
         [string]$BaseSnapshot = 'base-e2e-live',
-        [string]$GuiBase = 'base-e2e-gui',
-        [string]$GuiUser = 'base-e2e-user',
+        [string]$GuiBase = 'base-e2e-gui2',
+        [string]$GuiUser = 'base-e2e-user2',
         [string]$InstalledSnapshot = '',
         [int]$BootTimeoutSec = 300,
         [switch]$WithUserBase
