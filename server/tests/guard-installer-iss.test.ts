@@ -31,7 +31,9 @@
  *   * служба управляется `etn-service.exe stop|status|install|uninstall`,
  *     `sc query` в `.iss` нет;
  *   * SQLite-логики в Pascal нет: архивы и `integrity_check` — в CLI
- *     `etn-db-tool.mjs` (`server/dist/db/db-backup.js`).
+ *     `etn-db-tool.mjs` (`server/dist/db/db-backup.js`);
+ *   * тестовых сборок нет: в `etn.iss` нет `/TEST*` и `#ifdef TestMode`,
+ *     в `installer/build.ps1` нет `-TestMode` (этап 6 задачи 8789381a).
  *
  * Сторож статический: читает `installer/etn.iss` текстом (fs) и вырезает
  * комментарии Pascal. Поведение проверяют E2E-сценарии в ВМ — здесь только
@@ -49,6 +51,8 @@ const REPO_ROOT = path.resolve(SERVER_ROOT, '..');
 
 const ISS = 'installer/etn.iss';
 const ISS_ABS = path.join(REPO_ROOT, ISS);
+const BUILD = 'installer/build.ps1';
+const BUILD_ABS = path.join(REPO_ROOT, BUILD);
 
 /** Прочитать исходник установщика с понятной ошибкой, если он пропал. */
 function readIss(): string {
@@ -58,6 +62,16 @@ function readIss(): string {
       'Если файл переехал, обнови путь в сторожа.',
   );
   return fs.readFileSync(ISS_ABS, 'utf8');
+}
+
+/** Прочитать сборщик установщика: флаги `build.ps1` — часть контракта. */
+function readBuild(): string {
+  assert.ok(
+    fs.existsSync(BUILD_ABS),
+    `Нет файла ${BUILD} — сторож контракта установщика не может проверить флаги сборки. ` +
+      'Если файл переехал, обнови путь в сторожа.',
+  );
+  return fs.readFileSync(BUILD_ABS, 'utf8');
 }
 
 /** Секция `[Code]`: строки после заголовка и до следующей секции. */
@@ -615,6 +629,33 @@ describe('guard: исходник установщика — высокоцен�
       readIss(),
       /Source: "\{#ServerPayload\}\\dist\\db\\db-backup\.js"; DestName: "etn-db-tool\.mjs"/,
       `${ISS}: [Files] должен извлекать server\\dist\\db\\db-backup.js как etn-db-tool.mjs.`,
+    );
+  });
+
+  it(`${ISS}: тестовых хуков нет — /TEST*, #ifdef TestMode (8789381a, этап 6)`, () => {
+    // Полный текст, а не только [Code]: тестовые блоки могли стоять и в
+    // секциях [Files]/[Run]. Комментарии вырезаны, чтобы историческая
+    // запись «хуки удалены» не считалась нарушением.
+    const iss = stripPascalComments(readIss());
+    for (const forbidden of [
+      '/TEST',
+      '#ifdef TestMode',
+      '#ifdef TestUninstallable',
+      'TestUninstallAppId',
+    ]) {
+      assert.equal(
+        iss.includes(forbidden),
+        false,
+        `${ISS}: найден тестовый хук «${forbidden}» — тестовых сборок нет, ` +
+          'поведение проверяют E2E-сценарии (8789381a, этап 6).',
+      );
+    }
+
+    const build = readBuild();
+    assert.equal(
+      build.toLowerCase().includes('-testmode'),
+      false,
+      `${BUILD}: флаг -TestMode удалён вместе с #ifdef TestMode (8789381a, этап 6).`,
     );
   });
 });

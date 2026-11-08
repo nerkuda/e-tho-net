@@ -14,7 +14,7 @@ pwsh -File installer/build.ps1            # release/ETN-Setup-<версия>.exe
 закрыт — иначе EBUSY на `better_sqlite3.node` (грабли `9239db37`); нужны права
 на симлинки (грабли `e978947a`).
 `build.ps1` не собирает exe из устаревшей поставки; флаги `-RefreshPayload`,
-`-CheckPayloadOnly`, `-TestMode`.
+`-CheckPayloadOnly`.
 
 Payload: `node\` → `{app}\node\`, `service\` → `{app}\service\` (WinSW 2.12.0 и
 шаблон), `server\` → `{app}\server\` (`dist`, `migrations`, `node_modules`),

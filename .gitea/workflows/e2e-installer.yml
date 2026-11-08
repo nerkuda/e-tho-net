@@ -50,6 +50,13 @@ jobs:
           npm -w @etn/client run rebuild:native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # ISCC нужен статическим сторожам и сборке установщика. Тот же
+      # идемпотентный скрипт, что в ci.yml: недостающие Inno Setup 6 и
+      # PowerShell 7 ставит, установленные не трогает.
+      - name: Ensure CI tools (Inno Setup 6, PowerShell 7)
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File installer\tests\ensure-ci-tools.ps1
+
       # Сторожа .iss/build.ps1 обязательны и в CI: -AssertNoHooks делает
       # отсутствие тестовых хуков жёстким требованием (8789381a).
       # pwsh берём из PATH: на host-раннере он может стоять Store-сборкой
