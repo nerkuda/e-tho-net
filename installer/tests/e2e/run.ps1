@@ -406,6 +406,67 @@ function Copy-SetupsToGuest {
     }
 }
 
+<#
+    Погасить фоновые обновляторы гостя на время сценария.
+    В базовых снапшотах Edge ждёт обновления 156 → 157: при каждом старте из
+    снапшота задачи MicrosoftEdgeUpdateTaskMachine{CORE,UA} запускают
+    установку, которая конкурирует за диск с установщиком ETN. Наблюдалось
+    2026-11-08: копирование 150-МБ payload в GUI-сеансе растягивалось до
+    16+ минут (Inno log всё ещё копировал node_modules), ожидание страницы
+    ключа не укладывалось в 900 с. Гасим процессы Edge Update, отключаем его
+    задачи и останавливаем службы сразу после Wait-GuestReady: при следующем
+    restore снапшота состояние гостя возвращается, поэтому правки локальны.
+    Ошибки не валят сценарий — это оптимизация стенда, а не проверка продукта.
+#>
+function Stop-GuestBackgroundUpdaters {
+    param($Context = $script:context)
+    try {
+        $result = Invoke-GuestElevatedRetry -Context $Context -ScriptBlock {
+            $processes = 0
+            foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.Name -like 'MicrosoftEdgeUpdate*' -or
+                        $_.Name -like 'MicrosoftEdge_X64_*' -or
+                        ($_.CommandLine -and $_.CommandLine -like '*EdgeUpdate*')
+                    })) {
+                try {
+                    Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+                    $processes++
+                } catch {
+                    Write-Warning ("процесс {0} ({1}) не остановлен: {2}" -f `
+                            $proc.Name, $proc.ProcessId, $_.Exception.Message)
+                }
+            }
+            $tasks = 0
+            foreach ($task in @(Get-ScheduledTask -TaskName 'MicrosoftEdgeUpdateTask*' -ErrorAction SilentlyContinue)) {
+                try {
+                    Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop | Out-Null
+                    $tasks++
+                } catch {
+                    Write-Warning ("задача {0} не отключена: {1}" -f $task.TaskName, $_.Exception.Message)
+                }
+            }
+            $services = 0
+            foreach ($name in @('edgeupdate', 'edgeupdatem')) {
+                $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+                if ($service -and $service.Status -ne 'Stopped') {
+                    try {
+                        Stop-Service -Name $name -Force -ErrorAction Stop
+                        $services++
+                    } catch {
+                        Write-Warning ("служба {0} не остановлена: {1}" -f $name, $_.Exception.Message)
+                    }
+                }
+            }
+            [pscustomobject]@{ Processes = $processes; Tasks = $tasks; Services = $services }
+        }
+        Write-Host ("Фон гостя: Edge Update — процессов остановлено {0}, задач отключено {1}, служб остановлено {2}" -f `
+                $result.Processes, $result.Tasks, $result.Services)
+    } catch {
+        Write-Warning ("Фоновые обновляторы гостя не погашены ({0}); продолжаю сценарий" -f $_.Exception.Message)
+    }
+}
+
 <# Восстановить снапшот, поднять ВМ headless, дождаться GA и WinRM. #>
 function Initialize-ScenarioVm {
     param(
@@ -443,6 +504,9 @@ function Initialize-ScenarioVm {
             Close-GuestSession -Context $script:context
         }
     }
+    # Фон Edge Update гасим до копирования установщиков и payload: иначе
+    # обновление конкурирует за диск и растягивает и копирование, и установку.
+    Stop-GuestBackgroundUpdaters -Context $script:context
     if ($SetupKeys.Count -gt 0) {
         $null = Copy-SetupsToGuest -Context $script:context -Keys $SetupKeys
     }
@@ -1641,8 +1705,11 @@ function Invoke-ScenarioG1 {
 
     # Первый проход: установка до экрана ключа и прерывание.
     $plan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
-        -Steps (New-GuiFullInstallSteps -Set 'g1' -CrashAtKey)
-    $probe = Invoke-GuestGuiProbe -Plan $plan -Name 'g1-install-crash' -TimeoutSec 1500 `
+        -Steps (New-GuiFullInstallSteps -Set 'g1' -CrashAtKey -InstallTimeoutSec $InstallTimeoutSec)
+    # Лимит пробы больше ожидания установки: страница ключа появляется после
+    # копирования 150-МБ payload, а под IO-нагрузкой это дольше дефолтных 900 с.
+    $probe = Invoke-GuestGuiProbe -Plan $plan -Name 'g1-install-crash' `
+        -TimeoutSec ($InstallTimeoutSec + 300) `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g1:probe-crash' -Probe $probe
     if (-not $probe.Ok) {
@@ -1745,8 +1812,9 @@ function Invoke-ScenarioG1 {
 
     # Второй проход: повторный запуск после сбоя.
     $resumePlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
-        -Steps (New-GuiResumeKeySteps -Set 'g1-resume')
-    $resumeProbe = Invoke-GuestGuiProbe -Plan $resumePlan -Name 'g1-resume' -TimeoutSec 1500 `
+        -Steps (New-GuiResumeKeySteps -Set 'g1-resume' -InstallTimeoutSec $InstallTimeoutSec)
+    $resumeProbe = Invoke-GuestGuiProbe -Plan $resumePlan -Name 'g1-resume' `
+        -TimeoutSec ($InstallTimeoutSec + 300) `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g1:resume-probe' -Probe $resumeProbe
     if (-not $resumeProbe.Ok) {
@@ -1915,8 +1983,10 @@ function Invoke-ScenarioG2 {
         -Actual ([string](Get-JsonField $fixture 'Record'))
     $beforeLogA = Get-GuestInstallLog -Context $script:context
     $beforePathA = [string](Get-JsonField $beforeLogA 'Path')
-    $planA = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" -Steps (New-GuiClientInstallSteps -Set 'g2a')
-    $probeA = Invoke-GuestGuiProbe -Plan $planA -Name 'g2a-install' -RunLevel Limited -TimeoutSec 900 `
+    $planA = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
+        -Steps (New-GuiClientInstallSteps -Set 'g2a' -InstallTimeoutSec $InstallTimeoutSec)
+    $probeA = Invoke-GuestGuiProbe -Plan $planA -Name 'g2a-install' -RunLevel Limited `
+        -TimeoutSec ($InstallTimeoutSec + 300) `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g2a:probe' -Probe $probeA
     if ($probeA.Ok) {
@@ -1955,8 +2025,10 @@ function Invoke-ScenarioG2 {
         -Actual ([string](Get-JsonField $fixtureB 'Record'))
     $beforeLogB = Get-GuestInstallLog -Context $script:context
     $beforePathB = [string](Get-JsonField $beforeLogB 'Path')
-    $planB = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" -Steps (New-GuiFullInstallSteps -Set 'g2b')
-    $probeB = Invoke-GuestGuiProbe -Plan $planB -Name 'g2b-install' -TimeoutSec 1500 `
+    $planB = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
+        -Steps (New-GuiFullInstallSteps -Set 'g2b' -InstallTimeoutSec $InstallTimeoutSec)
+    $probeB = Invoke-GuestGuiProbe -Plan $planB -Name 'g2b-install' `
+        -TimeoutSec ($InstallTimeoutSec + 300) `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g2b:probe' -Probe $probeB
     if ($probeB.Ok) {
@@ -2022,7 +2094,7 @@ function Invoke-ScenarioG3 {
         @{ type = 'snapshot'; name = 'g3-clean' },
         @{ type = 'kill' }
     )
-    $cleanProbe = Invoke-GuestGuiProbe -Plan $cleanPlan -Name 'g3-clean' -TimeoutSec 300 `
+    $cleanProbe = Invoke-GuestGuiProbe -Plan $cleanPlan -Name 'g3-clean' -TimeoutSec 420 `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g3clean:probe' -Probe $cleanProbe
     if ($cleanProbe.Ok) {
@@ -2052,8 +2124,10 @@ function Invoke-ScenarioG3 {
     }
 
     # Подготовка состояния для понижения и уведомления: установленные 0.15.3.
-    $prepPlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" -Steps (New-GuiFullInstallSteps -Set 'g3prep')
-    $prepProbe = Invoke-GuestGuiProbe -Plan $prepPlan -Name 'g3-prep-install' -TimeoutSec 1500 `
+    $prepPlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
+        -Steps (New-GuiFullInstallSteps -Set 'g3prep' -InstallTimeoutSec $InstallTimeoutSec)
+    $prepProbe = Invoke-GuestGuiProbe -Plan $prepPlan -Name 'g3-prep-install' `
+        -TimeoutSec ($InstallTimeoutSec + 300) `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g3prep:probe' -Probe $prepProbe
     Add-GuiCheck -Results $Results -Scenario $scenario -Name 'g3prep:exit-code' `
@@ -2072,7 +2146,7 @@ function Invoke-ScenarioG3 {
         @{ type = 'snapshot'; name = 'g3-downgrade' },
         @{ type = 'kill' }
     )
-    $downProbe = Invoke-GuestGuiProbe -Plan $downPlan -Name 'g3-downgrade' -TimeoutSec 300 `
+    $downProbe = Invoke-GuestGuiProbe -Plan $downPlan -Name 'g3-downgrade' -TimeoutSec 420 `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g3down:probe' -Probe $downProbe
     if ($downProbe.Ok) {
@@ -2104,7 +2178,7 @@ function Invoke-ScenarioG3 {
         @{ type = 'launch'; exe = 'C:\Program Files\ETN\client\ETN.exe'; settle_ms = 4000 },
         @{ type = 'note'; text = 'client-launched' }
     )
-    $launchProbe = Invoke-GuestGuiProbe -Plan $launchPlan -Name 'g3-client-launch' -TimeoutSec 180
+    $launchProbe = Invoke-GuestGuiProbe -Plan $launchPlan -Name 'g3-client-launch' -TimeoutSec 240
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g3notice:client-launch' -Probe $launchProbe
     $clientRunning = [bool](Invoke-GuestElevatedRetry -Context $script:context -ScriptBlock {
             @(Get-Process -Name 'ETN' -ErrorAction SilentlyContinue).Count -gt 0
@@ -2116,7 +2190,7 @@ function Invoke-ScenarioG3 {
     $beforeNoticePath = [string](Get-JsonField $beforeNoticeLog 'Path')
     $jsonBeforeNotice = Get-GuestText -Context $script:context -Path 'C:\ProgramData\ETN\install.json'
     $noticePlan = New-GuiPlan -Exe "C:\e2e\$($setups['current'])" `
-        -Steps (New-GuiUpdateSteps -Set 'g3notice' -ClientPrompt -RefuseClose)
+        -Steps (New-GuiUpdateSteps -Set 'g3notice' -ClientPrompt -RefuseClose -InstallTimeoutSec $InstallTimeoutSec)
     $noticeProbe = Invoke-GuestGuiProbe -Plan $noticePlan -Name 'g3-notice' -TimeoutSec 600 `
         -ArtifactDir (Join-Path $OutDir 'gui')
     Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g3notice:probe' -Probe $noticeProbe
@@ -2158,7 +2232,7 @@ function Invoke-ScenarioG3 {
             @{ type = 'kill' }
         )
         $userProbe = Invoke-GuestGuiProbe -Plan $userPlan -Name 'g3-useronly' -RunLevel Limited `
-            -TaskUser 'e2egui' -TimeoutSec 300 -ArtifactDir (Join-Path $OutDir 'gui')
+            -TaskUser 'e2egui' -TimeoutSec 600 -ArtifactDir (Join-Path $OutDir 'gui')
         Add-GuiProbeCheck -Results $Results -Scenario $scenario -Name 'g3user:probe' -Probe $userProbe
         if ($userProbe.Ok) {
             $userSnapshot = Get-GuiSnapshot -ProbeResult $userProbe.Result -Name 'g3-user'
