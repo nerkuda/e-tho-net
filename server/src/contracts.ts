@@ -1663,7 +1663,6 @@ export const NetworksStructure = defineContract(
   z.object({
     network_id: NetworkId,
     include_examples: z.boolean().optional(),
-    include_conventions: z.boolean().optional(),
   }),
   {},
 );

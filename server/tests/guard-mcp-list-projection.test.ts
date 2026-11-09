@@ -113,7 +113,7 @@ interface Fixture {
   trashedId: string;
   versionTypeId: string;
   sectionTypeId: string;
-  /** Маркер `conventions` сети — проверяет включение по `include_conventions`. */
+  /** Маркер `conventions` сети — проверяет, что правила возвращаются всегда. */
   conventionsMarker: string;
 }
 
@@ -459,6 +459,9 @@ function responseBytes(result: ClientCallToolResult): number {
  * этого теста держит короткие комментарии; их отдельно проверяет
  * describe «худые перечни MCP» ниже.
  *
+ * 0.15.4 (ошибка bb862b8d): `conventions` возвращаются всегда (спека
+ * f13c1f0f) — на этой фикстуре networks.structure=1595 Б (было 1562).
+ *
  * Пороги — «факт × ~1,4», чтобы правка с ожидаемым ростом данных не краснила
  * зря, а утечка визуальных/сервисных полей или возврат пустых контейнеров
  * (рост на десятки процентов) роняла сторож. Ориентир критериев приёмки
@@ -659,7 +662,7 @@ describe('guard: худые перечни MCP — инструкции/structur
     properties: Array<{ structural?: boolean }>;
   }
 
-  it('instructions — только корневые + превью ≤ 300; structure — ≤ 600, без structural-свойств, conventions по флагу; subgraph — permanent ≤ 600', async () => {
+  it('instructions — только корневые + превью ≤ 300; structure — ≤ 600, без structural-свойств, conventions всегда; subgraph — permanent ≤ 600', async () => {
     const ctx = await buildMcpContext();
     try {
       const fixture = seedFixture(ctx);
@@ -696,7 +699,7 @@ describe('guard: худые перечни MCP — инструкции/structur
           name: 'etn.networks.structure',
           arguments: { network_id: ctx.networkId },
         });
-        const structure = toolJson<{ conventions?: string; sections: StructureRow[] }>(structureRaw);
+        const structure = toolJson<{ conventions: string | null; sections: StructureRow[] }>(structureRaw);
         const subgraphRaw = await client.callTool({
           name: 'etn.thoughts.subgraph',
           arguments: {
@@ -751,8 +754,8 @@ describe('guard: худые перечни MCP — инструкции/structur
           'keywords должен находить под-инструкцию',
         );
 
-        // --- structure: превью ≤ 600, без structural, conventions по флагу --
-        assert.equal('conventions' in structure, false, 'conventions не включается по умолчанию');
+        // --- structure: превью ≤ 600, без structural, conventions всегда ----
+        assert.equal(structure.conventions, fixture.conventionsMarker, 'conventions — всегда');
         assert.ok(longSectionRow !== undefined, 'длинный раздел в перечне');
         assert.equal(
           longSectionRow!.permanent!.body_md.length,
@@ -764,16 +767,6 @@ describe('guard: худые перечни MCP — инструкции/structur
             assert.equal(prop.structural, undefined, 'structural-свойство не должно возвращаться');
           }
         }
-
-        const structureWithConventions = (await call(client, 'etn.networks.structure', {
-          network_id: ctx.networkId,
-          include_conventions: true,
-        })) as { conventions?: string };
-        assert.equal(
-          structureWithConventions.conventions,
-          fixture.conventionsMarker,
-          'include_conventions: true возвращает conventions сети',
-        );
 
         // --- subgraph: permanent ≤ 600 --------------------------------------
         assert.ok(longNodeComments !== undefined, 'комментарии узла подграфа присутствуют');

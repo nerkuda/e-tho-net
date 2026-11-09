@@ -1439,23 +1439,14 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         // is absent, so `has_structure` is false. The full dictionary is
         // echoed back so an agent sees the current role configuration.
         assert.deepEqual(data.type_roles, {});
-        // 0.8.3 (требование «networks.structure отдаёт худой перечень
-        // разделов», задача 2ea88bba): `conventions` вынесены в опциональный
-        // параметр `include_conventions` — по умолчанию не включаются.
-        assert.equal(data.conventions, undefined);
+        // `conventions` — всегда (спека f13c1f0f, ошибка bb862b8d): у этой
+        // сети правил нет, поэтому `null`, а не отсутствие ключа. Ветка
+        // `has_structure: false` возвращает его так же, как ветка со структурой.
+        assert.equal(data.conventions, null);
         // `examples` is intentionally omitted unless `include_examples: true`.
         assert.equal(data.examples, undefined);
         assert.deepEqual(data.sections, []);
         assert.deepEqual(data.thought_types, []);
-
-        // Явный запрос возвращает `conventions` (null для сети без него).
-        const withConventions = await handle.client.callTool({
-          name: 'etn.networks.structure',
-          arguments: { network_id: ctx.networkId, include_conventions: true },
-        });
-        assert.equal(withConventions.isError, undefined, toolText(withConventions));
-        const dataWithConventions = toolJson<{ conventions: string | null }>(withConventions);
-        assert.equal(dataWithConventions.conventions, null);
       } finally {
         await handle.close();
       }
@@ -1488,15 +1479,16 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
           conventions?: string | null;
           examples?: unknown;
         }>(withoutExamples);
-        // 0.8.3: `conventions` по умолчанию не включаются (задача 2ea88bba).
-        assert.equal(dataDefault.conventions, undefined);
+        // `conventions` — всегда (спека f13c1f0f, ошибка bb862b8d): правила
+        // сети приходят без отдельного флага.
+        assert.equal(dataDefault.conventions, 'Пиши хронологию с датой в ISO-8601.');
         // Default call does not carry `examples` — it can be long and most
         // orientation flows do not need it.
         assert.equal(dataDefault.examples, undefined);
 
         const withExamples = await handle.client.callTool({
           name: 'etn.networks.structure',
-          arguments: { network_id: ctx.networkId, include_examples: true, include_conventions: true },
+          arguments: { network_id: ctx.networkId, include_examples: true },
         });
         assert.equal(withExamples.isError, undefined, toolText(withExamples));
         const dataWithExamples = toolJson<{
@@ -1607,9 +1599,9 @@ describe('MCP tools (F4)', { skip: !nativeAvailable() }, () => {
         assert.equal(data.has_structure, true);
         assert.equal(data.type_roles.table_of_contents, sectionType.id);
         assert.equal(data.node_section_type.id, sectionType.id);
-        // 0.8.3 (задача 2ea88bba): `conventions` по умолчанию не включаются —
-        // запрашиваются явно `include_conventions: true`. `examples` — так же.
-        assert.equal(data.conventions, undefined);
+        // `conventions` — всегда (спека f13c1f0f, ошибка bb862b8d), в обеих
+        // ветках. `examples` — только по явному `include_examples: true`.
+        assert.equal(data.conventions, 'Именуй разделы существительными в единственном числе.');
         assert.equal(data.examples, undefined);
 
         // Inactive "Скрытый" is excluded; only the two active section nodes remain.

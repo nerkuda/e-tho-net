@@ -46,12 +46,14 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
   // (there is no `etn.networks.get`, and the ZCode MCP client does not expose
   // resources to the agent at all), so `conventions`/`examples` were
   // write-only from the agent's point of view. `etn.networks.structure` is
-  // already the tool an agent calls first when orienting in a network. Both
-  // `conventions` and `examples` stay OUT of the default payload — they are
-  // long, and most orientation flows don't need them; each is returned only
-  // when the caller opts in (`include_conventions` / `include_examples`).
-  // Требование «networks.structure отдаёт худой перечень разделов» (0.8.3)
-  // перевело `conventions` из always-on в опциональный параметр.
+  // already the tool an agent calls first when orienting in a network, so it
+  // carries `conventions` ALWAYS (спека f13c1f0f: правила нужны агенту перед
+  // каждым create/update, другого пути чтения нет) — строкой или `null`,
+  // включая ветку `has_structure: false`. Ошибка bb862b8d (0.15.4): до правки
+  // поле включалось только по `include_conventions` (требование cca482ba,
+  // 0.8.3) — правила сети были невидимы агенту. `examples` остаётся
+  // опциональным (`include_examples: true`): объёмное поле, в ориентировке
+  // нужно редко.
   //
   // The response also carries the full `type_roles` dictionary and a
   // conditional `instructions_ref` hint when the network has set the
@@ -62,12 +64,13 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
     {
       title: 'Network structure',
       description:
-        'Read the structure declared via `type_roles.table_of_contents`: active thoughts of that type ' +
+        "Returns the network's `conventions` (write rules for this network) ALWAYS — " +
+        'a string, or `null` when not set — so an agent knows them before any create/update. ' +
+        'Structure comes from `type_roles.table_of_contents`: active thoughts of that type ' +
         'with permanent-comment previews (600 chars, `truncated`+`comment_id` → `etn.comments.get`), ' +
         'property values (the structural link properties "Parents"/"Children" are summarized by `counters` ' +
         'and not repeated), neighbour counters (`deletion_blocks` too), `thought_types`. ' +
-        '`include_conventions: true` adds ' +
-        '`conventions` (off by default); `include_examples: true` adds `examples`. Carries `type_roles`, ' +
+        '`include_examples: true` adds `examples`. Carries `type_roles`, ' +
         '`first_day_of_week` (ISO 1=Mon…7=Sun — the `$weekStart`/`$weekEnd` setting, parity ' +
         'with `GET /networks/:id`) and ' +
         '`instructions_ref` when the `instructions` role is set. ' +
@@ -87,11 +90,8 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
         assertNetworkAccess(rt, args.network_id);
         const examplesField =
           args.include_examples === true ? { examples: network.examples } : {};
-        // Требование «networks.structure отдаёт худой перечень разделов»:
-        // `conventions` вынесены в опциональный параметр — по умолчанию не
-        // включаются (полный вход в сеть — явным запросом).
-        const conventionsField =
-          args.include_conventions === true ? { conventions: network.conventions } : {};
+        // `conventions` — всегда (спека f13c1f0f, ошибка bb862b8d): строка
+        // правил или `null`, независимо от `has_structure`.
         const sectionTypeId =
           typeof network.type_roles.table_of_contents === 'string'
             ? network.type_roles.table_of_contents
@@ -117,7 +117,7 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
             // Настройка сети (задача 8eaeba9a): доступна и в «худом» ответе —
             // управляет семантикой `$weekStart`/`$weekEnd` в отборах.
             first_day_of_week: network.first_day_of_week,
-            ...conventionsField,
+            conventions: network.conventions,
             ...instructionsField,
             ...examplesField,
             sections: [],
@@ -206,7 +206,7 @@ export function registerNetworksReadTools(mcp: McpServer, rt: McpRuntime): void 
           type_roles: network.type_roles,
           first_day_of_week: network.first_day_of_week,
           node_section_type: sectionType,
-          ...conventionsField,
+          conventions: network.conventions,
           ...instructionsField,
           ...examplesField,
           sections,
