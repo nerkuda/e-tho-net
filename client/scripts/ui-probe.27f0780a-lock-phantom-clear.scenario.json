@@ -70,14 +70,9 @@
       "expect": 0
     },
     {
-      "name": "settle-after-phantom",
-      "probe": "(async () => { await new Promise((r) => setTimeout(r, 400)); return 'ok'; })()",
-      "expect": "ok"
-    },
-    {
       "name": "phantom-badge-before-clear",
-      "probe": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge') !== null",
-      "expect": true
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge') !== null",
+      "timeout": 20000
     },
     {
       "name": "open-net-menu",

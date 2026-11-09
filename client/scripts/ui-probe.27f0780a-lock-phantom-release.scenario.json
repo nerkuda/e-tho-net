@@ -1,6 +1,6 @@
 {
   "name": "27f0780a-lock-phantom-release",
-  "description": "GUI-контрольная точка ошибки 27f0780a (путь сохранения): замочек 🔒 обязан исчезать после сохранения комментария, даже если id захвата в кэше разошёлся с id, который держит редактор. Фантом создаётся тем же production-путём: собственный захват снимается через мост (событие edit.released подавлено стендом через --mute-ws-event), затем берётся захват с другим id; редактор продолжает «держать» мёртвый id. Сохранение освобождает мёртвый id (NOT_FOUND), строка кэша с чужим id обязана вытесниться сверкой с сервером. Проверки: DOM-проба .cloud-lock-badge.own и серверный GET /locks через API стенда. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.27f0780a-lock-phantom-release.scenario.json --mute-ws-event edit.released --out .tmp/etn-27f0780a-release/out",
+  "description": "GUI-контрольная точка ошибки 27f0780a (путь сохранения): замочек 🔒 обязан исчезать после сохранения комментария, даже если id захвата в кэше разошёлся с id, который держит редактор. Фантом создаётся тем же production-путём: собственный захват снимается через мост (событие edit.released подавлено стендом через --mute-ws-event), затем берётся захват с другим id; редактор продолжает «держать» мёртвый id. Что строка с новым id дошла до кэша, сценарий ждёт по условию (шаг other-lock-applied-to-cache: бейдж перерисован после второй блокировки), фиксированных пауз нет. Сохранение освобождает мёртвый id (NOT_FOUND), строка кэша с чужим id обязана вытесниться сверкой с сервером. Проверки: DOM-проба .cloud-lock-badge.own и серверный GET /locks через API стенда. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.27f0780a-lock-phantom-release.scenario.json --mute-ws-event edit.released --out .tmp/etn-27f0780a-release/out",
   "timeout": 180000,
   "steps": [
     {
@@ -71,18 +71,18 @@
     },
     {
       "name": "acquire-other-id-via-bridge",
-      "probe": "(async () => { const lock = await window.etn.locks.acquire('{{networkId}}', 'thought', '{{thoughtId}}'); window.__otherLockId = lock.id; return lock.id !== window.__deadLockId ? 'new-id' : 'same-id'; })()",
+      "probe": "(async () => { window.__badgeBeforeOtherAcquire = document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge'); const lock = await window.etn.locks.acquire('{{networkId}}', 'thought', '{{thoughtId}}'); window.__otherLockId = lock.id; return lock.id !== window.__deadLockId ? 'new-id' : 'same-id'; })()",
       "expect": "new-id"
+    },
+    {
+      "name": "other-lock-applied-to-cache",
+      "waitFor": "(() => { const badge = document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge'); return badge !== null && badge !== window.__badgeBeforeOtherAcquire; })()",
+      "timeout": 20000
     },
     {
       "name": "other-id-released-via-bridge",
       "probe": "(async () => { await window.etn.locks.release('{{networkId}}', window.__otherLockId); return 'released'; })()",
       "expect": "released"
-    },
-    {
-      "name": "settle-after-phantom",
-      "probe": "(async () => { await new Promise((r) => setTimeout(r, 400)); return 'ok'; })()",
-      "expect": "ok"
     },
     {
       "name": "server-empty-with-phantom-cache",

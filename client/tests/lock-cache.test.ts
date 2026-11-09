@@ -286,6 +286,83 @@ describe('lock-cache: события с чужим lock_id — сверка с �
     assert.equal(getLock('thought', 'th-1')?.id, 'lock-live', 'живой захват не теряется');
   });
 
+  it('серия событий между сверками — один GET /locks на всю серию', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    const list = installList([]); // сервер пуст: первая же сверка вытесняет фантом
+    __setForTests([row({ id: 'lock-dead', entity_id: 'th-1', user_id: 'me' })]);
+    initLockCache();
+
+    // Каждое событие приходит, когда предыдущая сверка уже завершилась
+    // (reconcile не в полёте) — после первой строки сущности в кэше нет.
+    for (let i = 1; i <= 4; i += 1) {
+      await feed(i % 2 === 1 ? 'edit.released' : 'edit.cleared', i, {
+        entity_type: 'thought',
+        entity_id: 'th-1',
+        lock_id: `lock-ghost-${i}`,
+        user_id: 'someone',
+        client_id: null,
+        reason: 'manual',
+      });
+    }
+
+    assert.equal(getLock('thought', 'th-1'), undefined, 'фантом вытеснен и не вернулся');
+    assert.equal(list.calls(), 1, 'серия после сверки не порождает повторных GET');
+  });
+
+  it('серия событий во время сверки — ровно одна догоняющая сверка (reconcileAgain)', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    let releaseFirst: ((rows: LockRow[]) => void) | null = null;
+    let call = 0;
+    const list = installList(() => {
+      call += 1;
+      if (call === 1) {
+        return new Promise<LockRow[]>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return Promise.resolve([]);
+    });
+    __setForTests([row({ id: 'lock-dead', entity_id: 'th-1', user_id: 'me' })]);
+    initLockCache();
+
+    // Первое событие стартует сверку и «висит» на ответе сервера.
+    await feed('edit.released', 1, {
+      entity_type: 'thought',
+      entity_id: 'th-1',
+      lock_id: 'lock-ghost-1',
+      user_id: 'someone',
+      client_id: null,
+    });
+    assert.equal(list.calls(), 1);
+    assert.notEqual(getLock('thought', 'th-1'), undefined, 'кэш ещё не заменён снимком');
+
+    // Остальные события серии приходят в полёте: новых GET не начинают.
+    for (let i = 2; i <= 5; i += 1) {
+      await feed(i % 2 === 0 ? 'edit.cleared' : 'edit.released', i, {
+        entity_type: 'thought',
+        entity_id: 'th-1',
+        lock_id: `lock-ghost-${i}`,
+        user_id: 'someone',
+        client_id: null,
+        reason: 'manual',
+      });
+    }
+    assert.equal(list.calls(), 1, 'во время сверки второй GET не стартует');
+
+    assert.notEqual(releaseFirst, null);
+    releaseFirst!([]);
+    await flush();
+
+    assert.equal(list.calls(), 2, 'после завершения — одна догоняющая сверка на всю серию');
+    assert.equal(getLock('thought', 'th-1'), undefined, 'догоняющая сверка вытеснила фантом');
+  });
+
   it('синтетическая pending-строка (LOCKED) не переживает edit.cleared', async () => {
     const { store } = await import('../src/renderer/state.js');
     __resetForTests();
