@@ -1719,6 +1719,39 @@ function assertNameAvailable(ndb: NetworkDb, name: string, exceptId: string | nu
 }
 
 /**
+ * Свободно ли новое имя для ПЕРЕИМЕНОВАНИЯ существующего свойства:
+ * физическая строка рабочего слоя (надгробие `deleted = 1` тоже занимает
+ * `UNIQUE (name_key, layer_id)`) и видимый реестр `properties_v`. Общая
+ * политика MCP-синхронизации пары ({@link syncLinkPropertyName}) и
+ * REST-переименования свойства-связи (ошибка a43e32a2): коллизия —
+ * `DUPLICATE` с `conflict_property_id`, а не ошибка UNIQUE (500).
+ */
+function assertRenameAvailable(
+  ndb: NetworkDb,
+  name: string,
+  propertyId: string,
+  field?: string,
+): void {
+  const physical = ndb
+    .prepare(
+      'SELECT id FROM properties WHERE layer_id = ? AND name_key = type_name_key(?) AND id <> ? LIMIT 1',
+    )
+    .get(ndb.layerId, name, propertyId) as { id: string } | undefined;
+  const visible =
+    physical ??
+    (ndb
+      .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?) AND id <> ? LIMIT 1')
+      .get(name, propertyId) as { id: string } | undefined);
+  if (visible !== undefined) {
+    throw new EtnError('DUPLICATE', `property "${name}" already exists in this network`, {
+      name,
+      ...(field === undefined ? {} : { field }),
+      conflict_property_id: visible.id,
+    });
+  }
+}
+
+/**
  * Create a registry property (name must be free, case-insensitively). The row
  * lands in the connection's layer; a same-`name_key` tombstone of this layer
  * is woken by the upsert below.
@@ -1992,23 +2025,7 @@ export function syncLinkPropertyName(
   const nextName = linkPropertyDisplayName(ndb, linkTypeId, linkPropertyDirection(pair.config));
   if (typeNameKey(nextName) === typeNameKey(pair.name)) return;
 
-  const physical = ndb
-    .prepare(
-      'SELECT id FROM properties WHERE layer_id = ? AND name_key = type_name_key(?) AND id <> ? LIMIT 1',
-    )
-    .get(ndb.layerId, nextName, pair.id) as { id: string } | undefined;
-  const visible =
-    physical ??
-    (ndb
-      .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?) AND id <> ? LIMIT 1')
-      .get(nextName, pair.id) as { id: string } | undefined);
-  if (visible !== undefined) {
-    throw new EtnError('DUPLICATE', `property "${nextName}" already exists in this network`, {
-      name: nextName,
-      field,
-      conflict_property_id: visible.id,
-    });
-  }
+  assertRenameAvailable(ndb, nextName, pair.id, field);
   // Правка через доменный путь: имя свойства-связи вычисляется из типа,
   // строка получает materializeShadow в рабочем слое (13-layers.md §5).
   updateNetworkProperty(ndb, pair.id, { name: nextName }, actorUserId);
@@ -2136,7 +2153,7 @@ export function updateNetworkProperty(
 
   return ndb.transaction(() => {
     if (nextName !== undefined && nextName !== current.name) {
-      assertNameAvailable(ndb, nextName, id);
+      assertRenameAvailable(ndb, nextName, id);
     }
     if (nextType !== undefined && nextType !== current.value_type) {
       migratePropertyValues(ndb, id, current.value_type, nextType);
@@ -2160,6 +2177,12 @@ export function updateNetworkProperty(
           linkTypeIdForUpdate,
           linkPropertyDirection(validatedConfig),
         );
+        // Ошибка a43e32a2: проверка выше видела имя ДО переименования
+        // типа связи. Новое имя проверяем заново, иначе коллизия упирается
+        // в `UNIQUE (name_key, layer_id)` и отдаёт 500 вместо DUPLICATE.
+        if (typeNameKey(nextName) !== typeNameKey(current.name)) {
+          assertRenameAvailable(ndb, nextName, id);
+        }
       }
     }
     const sets: string[] = [];
