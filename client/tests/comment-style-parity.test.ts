@@ -26,8 +26,9 @@
  * Межблочное пространство просмотра — ТОЛЬКО пустые строки исходника (ошибка
  * a3c19b1b, регресс ad6e62ef): правка показывает исходник построчно, поэтому
  * блоки без пустой строки стоят вплотную, а разделённые пустой строкой — на её
- * строковый ритм. Автоматический зазор «любому блоку с соседом» (свой
- * `:has(+ *)` и `--wa-content-spacing` прозы Web Awesome) убран; маркер
+ * строковый ритм. Автоматический зазор «любому блоку с соседом» (`:has(+ *)`,
+ * соседний комбинатор `+`/`~` и `--wa-content-spacing` прозы Web Awesome)
+ * убран; маркер
  * `.md-blank-line` из рендерера несёт ровно N строковых ритмов `--md-block-gap`.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
@@ -56,7 +57,11 @@ const PAIRS: Array<{ view: string; editor: string; what: string }> = [
     editor: '.cm-editor .md-widget.md-hr .md-hr-line',
     what: 'горизонтальная линейка',
   },
-  { view: '.comment-view code', editor: '.cm-editor .cm-line .cm-md-inline-code', what: 'inline-код' },
+  {
+    view: '.comment-view code',
+    editor: '.cm-editor .cm-line .cm-md-inline-code',
+    what: 'inline-код',
+  },
 ];
 
 /** Список селекторов каждого правила верхнего уровня собранного CSS. */
@@ -132,30 +137,73 @@ function genericWidgetPadRule(css: string): CssRule | undefined {
   );
 }
 
-/** Вертикальное поле правила ненулевое (второе значение `margin-block` — низ). */
-function hasNonzeroBlockMargin(body: string): boolean {
-  const nonzero = (value: string): boolean => {
-    const parts = value.trim().split(/\s+/);
-    const end = parts.length >= 2 ? parts[1]! : parts[0]!;
-    return !/^0(?:px)?$/.test(end);
-  };
-  for (const m of body.matchAll(/margin-block-end:\s*([^;]+)/g)) {
-    if (nonzero(m[1]!)) return true;
-  }
-  for (const m of body.matchAll(/margin-block:\s*([^;]+)/g)) {
-    if (nonzero(m[1]!)) return true;
+/** Нулевое CSS-значение поля: `0`, `0px`, `0em`, `0%`, `0.0`. */
+function isZeroLength(value: string): boolean {
+  return /^0(?:\.0+)?(?:[a-z%]+)?$/i.test(value.trim());
+}
+
+/** Вертикальные компоненты shorthand `margin`/`padding` ненулевые. */
+function shorthandHasNonzeroVertical(value: string): boolean {
+  const parts = value.trim().split(/\s+/);
+  const top = parts[0] ?? '';
+  // margin/padding: top [right] [bottom] [left]; при 1–2 значениях низ = верх.
+  const bottom = parts.length >= 3 ? (parts[2] ?? '') : top;
+  return !isZeroLength(top) || !isZeroLength(bottom);
+}
+
+/**
+ * Тело правила задаёт ненулевое ВЕРТИКАЛЬНОЕ поле (margin/padding) — источник
+ * межблочного зазора. Горизонтальные свойства (`*-inline*`) и нулевые значения
+ * не в счёт.
+ */
+function hasNonzeroBlockSpacing(body: string): boolean {
+  const re =
+    /(?:^|[;{\s])(margin|padding)(?:-(block|block-start|block-end|top|bottom))?\s*:\s*([^;]+)/g;
+  for (const m of body.matchAll(re)) {
+    const axis = m[2];
+    const value = (m[3] ?? '').trim();
+    if (axis === undefined) {
+      if (shorthandHasNonzeroVertical(value)) return true;
+      continue;
+    }
+    if (axis === 'block') {
+      // `margin-block: start end` — зазор даёт любое ненулевое значение.
+      if (value.split(/\s+/).some((part) => !isZeroLength(part))) return true;
+      continue;
+    }
+    if (!isZeroLength(value)) return true;
   }
   return false;
 }
 
+/** Селектор без аргументов функциональных псевдоклассов и значений атрибутов. */
+function stripFunctionalPseudoArgs(selector: string): string {
+  return selector.replace(/:[\w-]+\((?:[^()]|\([^()]*\))*\)/g, '').replace(/\[[^\]]*\]/g, '');
+}
+
 /**
- * Правила, добавляющие блоку вертикальное поле «у которого есть сосед»
- * (`:has(+ *)`). Именно так просмотр добавлял собственный межблочный зазор,
- * которого нет в правке (ошибка a3c19b1b, регресс ad6e62ef).
+ * Селектор задаёт автоматический межблочный зазор одной из двух форм: «блоку с
+ * соседом» (`:has(+ …)`) либо соседнему блоку через комбинатор `+`/`~` в хосте
+ * просмотра (`.comment-view`, `.diary-body`). Оба вида — дефект класса a3c19b1b:
+ * зазор появляется там, где в исходнике нет пустой строки. Легитимные парные
+ * правила заголовков/цитаты/линейки/картинки/виджетов задают зазор самому
+ * элементу (без комбинатора) и под запрет не попадают.
+ */
+function selectorHasAutoBlockGap(selector: string): boolean {
+  if (/:has\(\s*[+~]/.test(selector)) return true;
+  const bare = stripFunctionalPseudoArgs(selector);
+  if (!/[+~]/.test(bare)) return false;
+  return /\.(?:comment-view|diary-body)\b/.test(bare);
+}
+
+/**
+ * Правила просмотра, которые добавляют блоку вертикальное поле за соседство
+ * (ошибка a3c19b1b, регресс ad6e62ef): `:has(+ *)` и sibling-форма `p + ul` —
+ * один и тот же дефект, которого нет в правке.
  */
 function rulesWithAutoBlockGap(css: string): CssRule[] {
   return parseRules(css).filter(
-    (r) => r.selectors.some((s) => /:has\(\s*\+\s*\*/.test(s)) && hasNonzeroBlockMargin(r.body),
+    (r) => r.selectors.some((s) => selectorHasAutoBlockGap(s)) && hasNonzeroBlockSpacing(r.body),
   );
 }
 
@@ -474,7 +522,9 @@ describe('ссылки: автолинк голых URL выглядит как 
     for (const tag of ['tags.link', 'tags.url']) {
       assert.match(
         theme,
-        new RegExp(`\\{\\s*tag:\\s*${tag.replace('.', '\\.')},\\s*color:\\s*'var\\(--accent\\)'\\s*\\}`),
+        new RegExp(
+          `\\{\\s*tag:\\s*${tag.replace('.', '\\.')},\\s*color:\\s*'var\\(--accent\\)'\\s*\\}`,
+        ),
         `${tag} в теме CodeMirror обязан быть var(--accent) — как .comment-view a`,
       );
     }
