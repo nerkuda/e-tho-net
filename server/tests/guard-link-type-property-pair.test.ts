@@ -41,6 +41,7 @@ import {
   connectMcpClient,
   nativeAvailable,
   toolJson,
+  toolText,
 } from './mcp-helpers.js';
 
 /** Корень исходников сервера (`server/src`). */
@@ -127,6 +128,26 @@ describe('guard-link-type-property-pair (0.15.4, ошибка 117a999a)', () => 
               link_types: [{ id: created.link_types[0]!.id, name_forward: 'сторож-а-новый' }],
             },
           });
+
+          // Вторая пара ДРУГОЙ стороной: имя = `name_reverse`, свободно —
+          // отказ обязан прийти от guard-а «у типа уже есть свойство-связь»,
+          // а не от коллизии имён (иначе инвариант держится случайно).
+          const secondPair = await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [
+                {
+                  ref: 'p2',
+                  name: 'сторож-а-обр',
+                  value_type: 'link',
+                  config: { link_type_id: created.link_types[0]!.id, direction: 'in' },
+                },
+              ],
+            },
+          });
+          assert.equal(secondPair.isError, true, 'вторая пара запрещена guard-ом');
+          assert.ok(toolText(secondPair).includes('DUPLICATE'), toolText(secondPair));
 
           const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
           const types = ndb

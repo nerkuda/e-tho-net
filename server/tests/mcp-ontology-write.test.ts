@@ -2020,4 +2020,72 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
     }
   });
 
+  it('properties[] с direction:"in" не создаёт вторую пару — срабатывает guard, не коллизия имени (117a999a)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        // Имена сторон РАЗНЫЕ: имя второй пары (name_reverse) свободно, поэтому
+        // единственная причина отказа — guard «у типа уже есть свойство-связь»
+        // в createNetworkProperty, а не конфликт имён.
+        const created = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { ref: 'lt', name_forward: 'гард-вперёд', name_reverse: 'гард-назад' },
+              ],
+            },
+          }),
+        );
+        const linkTypeId = created.link_types[0]!.id;
+        const pairId = created.link_types[0]!.property_id!;
+
+        const attempt = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            properties: [
+              {
+                ref: 'dup',
+                name: 'гард-назад',
+                value_type: 'link',
+                config: { link_type_id: linkTypeId, direction: 'in' },
+              },
+            ],
+          },
+        });
+        assert.equal(attempt.isError, true, 'вторая пара через properties[] запрещена');
+        const text = toolText(attempt);
+        assert.ok(text.includes('DUPLICATE'), text);
+        assert.ok(text.includes(pairId), `details.conflict_property_id: ${text}`);
+
+        // Инвариант: живая пара по link_type_id ровно одна, свойства со стороной
+        // name_reverse не появилось.
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const pairs = (
+          ndb
+            .prepare(
+              `SELECT COUNT(*) AS c FROM properties_v
+                WHERE value_type = 'link'
+                  AND (json_extract(config, '$.structural') IS NULL
+                       OR json_extract(config, '$.structural') = 0)
+                  AND json_extract(config, '$.link_type_id') = ?`,
+            )
+            .get(linkTypeId) as { c: number }
+        ).c;
+        assert.equal(pairs, 1, 'у типа ровно одна живая пара');
+        const reverse = ndb
+          .prepare("SELECT id FROM properties_v WHERE name_key = type_name_key('гард-назад')")
+          .get();
+        assert.equal(reverse, undefined, 'свойство со стороной name_reverse не создано');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
 });
