@@ -27,6 +27,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
+import type { RealtimeEvent } from '@etn/shared';
+
 import {
   buildMcpContext,
   callOp,
@@ -1810,6 +1812,18 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
         const linkTypeId = created.link_types[0]!.id;
         const propertyId = created.link_types[0]!.property_id!;
 
+        // Ошибка 117a999a: переименование типа переносит имя пары — это
+        // отдельная сущность реестра, подписчики `property-registry.*`
+        // должны получить событие (и только при фактической смене имени).
+        const registryUpdates: Array<{ id: string; name: string | undefined }> = [];
+        const unsubscribe = ctx.pubsub.subscribe(
+          ctx.networkId,
+          (event: RealtimeEvent<'property-registry.updated'>) => {
+            registryUpdates.push({ id: event.data.id, name: event.data.changes.name });
+          },
+          { type: 'property-registry.updated' },
+        );
+
         const renamed = toolJson<OntologyWriteResult>(
           await handle.client.callTool({
             name: 'etn.ontology.write',
@@ -1821,6 +1835,40 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
         );
         assert.equal(renamed.link_types[0]?.action, 'updated');
         assert.equal(renamed.link_types[0]?.property_id, propertyId, 'пара та же');
+        assert.deepEqual(
+          registryUpdates,
+          [{ id: propertyId, name: 'имя-новое' }],
+          'событие реестра несёт id пары и новое имя',
+        );
+
+        // Правка типа, где имя пары не меняется (то же имя + описание),
+        // событий реестра не порождает — только фактическое переименование.
+        const sameNameUpdate = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { id: linkTypeId, name_forward: 'имя-новое', description: 'правка без переименования' },
+              ],
+            },
+          }),
+        );
+        assert.equal(sameNameUpdate.link_types[0]?.action, 'updated');
+        assert.equal(registryUpdates.length, 1, 'то же имя — не переименование');
+        // Идемпотентная перезапись того же имени тоже молчит.
+        const sameName = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [{ id: linkTypeId, name_forward: 'имя-новое' }],
+            },
+          }),
+        );
+        assert.equal(sameName.link_types[0]?.action, 'unchanged');
+        unsubscribe();
+        assert.equal(registryUpdates.length, 1, 'без смены имени событий реестра нет');
 
         const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
         const storedName = (): { name: string; name_key: string } =>

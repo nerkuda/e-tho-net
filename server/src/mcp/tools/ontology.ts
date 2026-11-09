@@ -12,7 +12,11 @@ import type {
   OntologyWriteParams,
   OntologyWriteResult,
 } from '@etn/shared';
-import { getNetworkProperty, getTypeProperty } from '../../domain/property-service.js';
+import {
+  getLinkPropertyByLinkTypeId,
+  getNetworkProperty,
+  getTypeProperty,
+} from '../../domain/property-service.js';
 import { OntologyWrite } from '../../contracts.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { getLinkType } from '../../domain/link-type-service.js';
@@ -82,6 +86,18 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
             const view = getThoughtTypeView(ndb, item.id);
             if (view !== null) deletedViewSnapshots.set(item.id, toEffectiveTypeView(view));
           }
+          // Ошибка 117a999a: переименование типа связи переносит имя его
+          // парного свойства (`syncLinkPropertyName`), но это отдельная
+          // сущность реестра — подписчики `property-registry.*` должны узнать
+          // об этом. Имена пар снимаем ДО записи: событие уходит только при
+          // фактической смене имени, а не на идемпотентной перезаписи.
+          const pairNamesBefore = new Map<string, string>();
+          for (const item of args.link_types ?? []) {
+            if (item.id === undefined || item.id === null) continue;
+            if (item.name_forward === undefined && item.name_reverse === undefined) continue;
+            const pair = getLinkPropertyByLinkTypeId(ndb, item.id);
+            if (pair !== null) pairNamesBefore.set(pair.id, pair.name);
+          }
           const written = writeOntology(ndb, writeInput, rt.deps.auth.userId);
 
           // Real-time + activity log: по одной записи на изменённую сущность.
@@ -89,6 +105,8 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
           // обёрткой после коммита.
           const events: AnyWriteEvent[] = [];
           const activity: WriteActivityEntry[] = [];
+          /** Парные свойства, переименованные вслед за типом связи. */
+          let linkPropertiesRenamed = 0;
           for (const item of written.thought_types) {
             if (item.action === 'unchanged') continue;
             // After create/update — read back the type for the snapshot.
@@ -130,6 +148,20 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
                 type: 'link-type.updated',
                 data: { id: item.id, version: item.version, changes: {} },
               });
+              // Имя пары следует за типом: если оно реально изменилось —
+              // отдельное событие реестра и запись в журнале активности.
+              if (item.property_id !== null) {
+                const pair = getNetworkProperty(ndb, item.property_id);
+                const nameBefore = pairNamesBefore.get(item.property_id);
+                if (pair !== null && nameBefore !== undefined && nameBefore !== pair.name) {
+                  events.push({
+                    type: 'property-registry.updated',
+                    data: { id: pair.id, changes: { name: pair.name } },
+                  });
+                  activity.push({ kind: 'property', action: 'updated', property: pair });
+                  linkPropertiesRenamed += 1;
+                }
+              }
             }
           }
           for (const item of written.properties) {
@@ -255,6 +287,9 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
                 link_properties_created: written.link_types.filter(
                   (item) => item.action === 'created' && item.property_id !== null,
                 ).length,
+                // Переименования пар вслед за типом (ошибка 117a999a): только
+                // фактическая смена имени, идемпотентная перезапись не в счёт.
+                link_properties_renamed: linkPropertiesRenamed,
                 properties_count: written.properties.length,
                 type_properties_count: written.type_properties.length,
                 type_views_count: written.type_views.length,
