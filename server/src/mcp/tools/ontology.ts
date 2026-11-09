@@ -43,7 +43,10 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
       description:
         'Idempotent upsert of the network ontology in one transaction across five sections: `thought_types[]` / ' +
         '`link_types[]` / `properties[]` / `type_properties[]` / `type_views[]`; upsert by `id` XOR ' +
-        'name, local `ref`s work only inside the batch. One write budget + one ' +
+        'name, local `ref`s work only inside the batch. Creating a link type in `link_types[]` also creates ' +
+        'its paired link property in the same transaction (otherwise such a type is not editable in the GUI); ' +
+        'the property id is returned as `property_id`. A name clash with an existing property, or a second ' +
+        'link property for the same type, is `DUPLICATE`. One write budget + one ' +
         '`audit_log` row per call; real-time events — one per changed entity. An unknown ' +
         'top-level key → `VALIDATION_ERROR` (`details.fields`). Section details, `value_type` ' +
         'conversion, the unified link property ↔ link_type lifecycle and parent-change rules — ' +
@@ -108,6 +111,20 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
             if (item.action === 'created') {
               events.push({ type: 'link-type.created', data: { type: linkType } });
               activity.push({ kind: 'link-type', action: 'created', type: linkType });
+              // Ошибка 117a999a: создание типа секцией `link_types[]` создаёт
+              // парное свойство-связь — отдельная изменённая сущность, клиенты
+              // должны узнать о ней тем же сообщением (карта и редактор
+              // свойств читают реестр).
+              if (item.property_id !== null) {
+                const pairProperty = getNetworkProperty(ndb, item.property_id);
+                if (pairProperty !== null) {
+                  events.push({
+                    type: 'property-registry.created',
+                    data: { property: pairProperty },
+                  });
+                  activity.push({ kind: 'property', action: 'created', property: pairProperty });
+                }
+              }
             } else {
               events.push({
                 type: 'link-type.updated',
@@ -233,6 +250,11 @@ export function registerOntologyTools(mcp: McpServer, rt: McpRuntime): void {
               details: {
                 thought_types_count: written.thought_types.length,
                 link_types_count: written.link_types.length,
+                // Парные свойства-связи, созданные автосозданием из link_types[]
+                // (ошибка 117a999a), — отдельный счётчик: в properties[] их нет.
+                link_properties_created: written.link_types.filter(
+                  (item) => item.action === 'created' && item.property_id !== null,
+                ).length,
                 properties_count: written.properties.length,
                 type_properties_count: written.type_properties.length,
                 type_views_count: written.type_views.length,

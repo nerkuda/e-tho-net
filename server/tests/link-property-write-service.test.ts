@@ -113,14 +113,17 @@ describe(
         const lt = createLinkType(ndb, { name_forward: 'применяется к', name_reverse: 'регулируется из' }, USER);
         const req = createThoughtType(ndb, { name: 'ТребованиеS' }, USER);
         const comp = createThoughtType(ndb, { name: 'КомпонентS' }, USER);
+        // 0.8.1 / ошибка 117a999a: у типа связи одно свойство-связь, стороны
+        // пары задаются привязками `side` (второе свойство — DUPLICATE).
+        const config = { link_type_id: lt.id, direction: 'out' as const };
         createTypeProperty(
           ndb, 'thought_type', req.id,
-          { key: 'применяется к', value_type: 'link', config: { link_type_id: lt.id, direction: 'out' } },
+          { key: 'применяется к', value_type: 'link', config, side: 'source' },
           USER,
         );
         createTypeProperty(
           ndb, 'thought_type', comp.id,
-          { key: 'регулируется из', value_type: 'link', config: { link_type_id: lt.id, direction: 'in' } },
+          { key: 'применяется к', value_type: 'link', config, side: 'target' },
           USER,
         );
         const r = createThought(ndb, { title: 'Требование S1', type_id: req.id }, USER);

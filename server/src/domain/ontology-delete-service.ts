@@ -33,7 +33,11 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getRootTypeId } from './type-hierarchy.js';
-import { deleteTypeProperty } from './property-service.js';
+import {
+  deleteNetworkProperty,
+  deleteTypeProperty,
+  getLinkPropertyByLinkTypeId,
+} from './property-service.js';
 import { deleteThoughtTypeWithViews } from './thought-type-delete-service.js';
 import { deleteLinkType } from './link-type-service.js';
 import { deleteThoughtTypeView } from './thought-type-views-service.js';
@@ -158,9 +162,50 @@ export function deleteOntologyEntity(
         usage.type_views_count = deleted.views.length;
         break;
       }
-      case 'link_type':
+      case 'link_type': {
+        // 0.8.1 / ошибка 117a999a: тип связи живёт в паре со своим
+        // свойством-связью. Удаляем пару вместе с типом, но только если
+        // свойство свободно: привязки к типам (кроме привязок самого типа,
+        // которые снимает deleteLinkType) и сохранённые значения — отказ с
+        // подсказкой. Живые рёбра типа — существующая семантика deleteLinkType:
+        // без `force` отказ, с `force` обнуление `type_id`.
+        const pair = getLinkPropertyByLinkTypeId(ndb, params.id);
+        if (pair !== null) {
+          const foreignBindings = (
+            ndb
+              .prepare(
+                `SELECT COUNT(*) AS c FROM type_properties_v
+                  WHERE property_id = ?
+                    AND NOT (owner_type = 'link_type' AND owner_id = ?)`,
+              )
+              .get(pair.id, params.id) as { c: number }
+          ).c;
+          const storedValues = (
+            ndb
+              .prepare('SELECT COUNT(*) AS c FROM property_values_v WHERE property_id = ?')
+              .get(pair.id) as { c: number }
+          ).c;
+          if (foreignBindings > 0 || storedValues > 0) {
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              'the link type has a paired link property that is bound to types or holds values; unbind it or delete the property first',
+              {
+                entity: 'link_type',
+                id: params.id,
+                property_id: pair.id,
+                type_properties_count: foreignBindings,
+                property_values_count: storedValues,
+              },
+            );
+          }
+        }
         deleteLinkType(ndb, params.id, undefined, { force, actorUserId });
+        // Пара удаляется после типа: deleteNetworkProperty не найдёт тип и не
+        // станет повторно каскадить рёбра, а сам снесёт строку реестра слоевым
+        // удалением. Порядок сохраняет атомарность (одна транзакция).
+        if (pair !== null) deleteNetworkProperty(ndb, pair.id);
         break;
+      }
       case 'property': {
         // Каскад property_values + type_properties.
         if (force) {

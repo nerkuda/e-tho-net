@@ -1545,7 +1545,7 @@ export interface GuideTopic {
 export const GUIDE_TOPICS: readonly GuideTopic[] = [
   {
     topic: 'ontology.write',
-    when: 'section details of the batch, value_type conversion, the link property ↔ link_type lifecycle, parent change',
+    when: 'section details of the batch, value_type conversion, the link property ↔ link_type lifecycle (including the auto-created pair for link_types[]), parent change',
     body_md: [
       '# ontology.write — ontology batch write',
       '',
@@ -1573,7 +1573,15 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       'A `value_type` change uses the same domain conversion as `PATCH /properties/{id}`;',
       'the response carries `converted_values`/`dropped_values`. Link property ↔ link_type — one',
       'lifecycle: `properties[]` with `value_type="link"` and a `name_forward`/`name_reverse` pair',
-      'creates the linked link_type automatically. An explicit `parent_link_type_id` also works on a patch of an',
+      'creates the linked link_type automatically. The reverse direction is automatic too: creating',
+      'a link type in `link_types[]` creates its paired link property in the same transaction (the',
+      'property name is `name_forward`; its id comes back as `property_id`). A clash with an',
+      'existing property name (a tombstone of the layer counts), or a second link property for a',
+      'type that already has one, is `DUPLICATE`; the whole batch is rolled back. The auto-created',
+      'property carries no type bindings — attach it with `type_properties[]` (a `property` name',
+      'resolves inside the same batch, since bindings are resolved after all sections are written).',
+      'Renaming a link type here renames its paired property; a name clash is `DUPLICATE`.',
+      'An explicit `parent_link_type_id` also works on a patch of an',
       'EXISTING link property: it changes `parent_id` of the linked link_type (with the guard',
       '`reparent_blocked_by_layer`), `null` — attach under the root link type, an omitted parent',
       'key does not touch the parent (semantics as for a type `parent`). Ignored for structural properties.',

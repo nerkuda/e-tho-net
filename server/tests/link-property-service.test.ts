@@ -605,17 +605,17 @@ describe(
         );
         const req = createThoughtType(ndb, { name: 'ТребованиеU' }, USER);
         const comp = createThoughtType(ndb, { name: 'КомпонентU' }, USER);
+        // В 0.8.1 у типа связи ровно ОДНО свойство-связь (ошибка 117a999a:
+        // второе свойство на тот же тип — DUPLICATE); стороны пары задаются
+        // привязками `side`, а не отдельными строками реестра.
         // Сначала явная target-привязка на comp.id: в 0.8.1 на одну сторону —
         // ровно одна привязка пары (link_type, side).
+        const config = { link_type_id: lt.id, direction: 'out' as const };
         createTypeProperty(
           ndb,
           'thought_type',
           comp.id,
-          {
-            key: 'регулируется из',
-            value_type: 'link',
-            config: { link_type_id: lt.id, direction: 'in' },
-          },
+          { key: 'применяется к', value_type: 'link', config, side: 'target' },
           USER,
         );
         // Source-привязка с allowed_target_type_ids=[comp.id] — зеркало
@@ -628,17 +628,15 @@ describe(
           {
             key: 'применяется к',
             value_type: 'link',
-            config: { link_type_id: lt.id, direction: 'out', allowed_target_type_ids: [comp.id] },
+            config: { ...config, allowed_target_type_ids: [comp.id] },
+            side: 'source',
           },
           USER,
         );
 
         const compEffective = listEffectiveTypeProperties(ndb, 'thought_type', comp.id);
         const samePair = compEffective.filter(
-          (p) =>
-            p.value_type === 'link' &&
-            p.config?.link_type_id === lt.id &&
-            p.config?.direction === 'in',
+          (p) => p.value_type === 'link' && p.config?.link_type_id === lt.id && p.side === 'target',
         );
         // Пара адресует ровно одно свойство: ни дубликата, ни синтетического зеркала.
         assert.equal(samePair.length, 1);

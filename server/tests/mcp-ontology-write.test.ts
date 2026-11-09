@@ -24,6 +24,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import {
@@ -37,9 +38,10 @@ import {
   toolText,
 } from './mcp-helpers.js';
 import { openNetworkDb } from '../src/db/network-db.js';
+import { createLinkType } from '../src/domain/link-type-service.js';
 import { createThoughtType } from '../src/domain/thought-type-service.js';
 import { createThought } from '../src/domain/thought-service.js';
-import { listEffectiveTypeProperties } from '../src/domain/property-service.js';
+import { createTypeProperty, listEffectiveTypeProperties } from '../src/domain/property-service.js';
 
 interface OntologyWriteResult {
   thought_types: Array<{
@@ -53,6 +55,8 @@ interface OntologyWriteResult {
     id: string;
     version: number;
     action: 'created' | 'updated' | 'unchanged';
+    /** Парное свойство-связь типа (0.15.4, ошибка 117a999a). */
+    property_id: string | null;
   }>;
   properties: Array<{
     ref: string | null;
@@ -1142,6 +1146,16 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
         const data = toolJson<OntologyDeleteResult>(del);
         assert.equal(data.deleted, true);
         assert.ok((data.affected_counts.links_count ?? 0) >= 1, 'связь типа должна уйти каскадом');
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const pairLeft = (
+          ndb
+            .prepare(
+              `SELECT COUNT(*) AS c FROM properties
+                WHERE deleted = 0 AND json_extract(config, '$.link_type_id') = ?`,
+            )
+            .get(linkTypeId) as { c: number }
+        ).c;
+        assert.equal(pairLeft, 0, 'парное свойство удалено вместе с типом (117a999a)');
       } finally {
         await handle.close();
       }
@@ -1615,4 +1629,395 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
       await closeMcpContext(ctx);
     }
   });
+  // -------------------------------------------------------------------------
+  // 0.15.4 (ошибка 117a999a): тип связи из `link_types[]` живёт в паре со
+  // своим свойством-связью — без пары GUI не даёт править тип.
+  // -------------------------------------------------------------------------
+
+  it('link_types[] автосоздаёт парное свойство-связь и возвращает property_id (117a999a)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { ref: 'a', name_forward: 'пара-а', name_reverse: 'пара-а-обр' },
+                { ref: 'b', name_forward: 'пара-б', name_reverse: 'пара-б-обр' },
+              ],
+            },
+          }),
+        );
+        assert.equal(created.link_types.length, 2);
+        const propertyIds = created.link_types.map((t) => t.property_id);
+        assert.ok(
+          propertyIds.every((id) => typeof id === 'string' && id !== ''),
+          'каждый созданный тип возвращает property_id',
+        );
+        assert.equal(new Set(propertyIds).size, 2, 'N типов — N разных пар');
+
+        interface PairRow {
+          id: string;
+          name: string;
+          description: string | null;
+          config: string;
+        }
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const pairsOf = (linkTypeId: string): PairRow[] =>
+          ndb
+            .prepare(
+              `SELECT id, name, description, config FROM properties_v
+                WHERE value_type = 'link'
+                  AND json_extract(config, '$.link_type_id') = ?`,
+            )
+            .all(linkTypeId) as PairRow[];
+
+        for (const [index, item] of created.link_types.entries()) {
+          const rows = pairsOf(item.id);
+          assert.equal(rows.length, 1, 'ровно одна пара на тип');
+          assert.equal(rows[0]!.id, item.property_id);
+          assert.equal(rows[0]!.name, index === 0 ? 'пара-а' : 'пара-б', 'имя = name_forward');
+          assert.equal(rows[0]!.description, null, 'неявное свойство без описания');
+          assert.deepEqual(JSON.parse(rows[0]!.config), { link_type_id: item.id });
+        }
+
+        // Идемпотентность: повтор по id не создаёт вторую пару.
+        const repeat = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                {
+                  id: created.link_types[0]!.id,
+                  name_forward: 'пара-а',
+                  name_reverse: 'пара-а-обр',
+                },
+              ],
+            },
+          }),
+        );
+        assert.equal(repeat.link_types[0]?.action, 'unchanged');
+        assert.equal(repeat.link_types[0]?.property_id, created.link_types[0]!.property_id);
+        assert.equal(pairsOf(created.link_types[0]!.id).length, 1, 'повтор не плодит пару');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('конфликт имени пары — DUPLICATE с откатом батча, надгробие тоже конфликт (117a999a)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const pre = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [{ ref: 'p', name: 'занято-пара', value_type: 'text' }],
+            },
+          }),
+        );
+        const conflictId = pre.properties[0]!.id;
+        const attempt = () =>
+          handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { ref: 'lt', name_forward: 'занято-пара', name_reverse: 'занято-пара-обр' },
+              ],
+            },
+          });
+
+        const first = await attempt();
+        assert.equal(first.isError, true, 'конфликт имени должен отвергаться');
+        const firstText = toolText(first);
+        assert.ok(firstText.includes('DUPLICATE'), firstText);
+        assert.ok(firstText.includes('link_types[0]'), `details.field: ${firstText}`);
+        assert.ok(firstText.includes(conflictId), `details.conflict_property_id: ${firstText}`);
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const liveTypes = (): number =>
+          (
+            ndb
+              .prepare("SELECT COUNT(*) AS c FROM link_types_v WHERE name_forward = 'занято-пара'")
+              .get() as { c: number }
+          ).c;
+        assert.equal(liveTypes(), 0, 'батч откатился, тип не создан');
+
+        // Надгробие свойства того же имени в слое — тоже конфликт: оно даст
+        // нарушение UNIQUE(name_key, layer_id) при вставке пары. В базовом
+        // слое delete физический (deleteRowLayered), поэтому надгробие
+        // ставим сырой строкой — так же, как его оставил бы рабочий слой.
+        const tombstoneId = randomUUID();
+        const nowIso = new Date().toISOString();
+        ndb
+          .prepare(
+            `INSERT INTO properties (id, layer_id, deleted, base_version, name, name_key,
+                                      value_type, config, description, created_at, updated_at,
+                                      created_by, updated_by, created_at_ms, updated_at_ms)
+             VALUES (?, ?, 1, 0, 'занято-труп', type_name_key('занято-труп'),
+                     'text', NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(tombstoneId, ndb.layerId, nowIso, nowIso, ctx.adminId, ctx.adminId, Date.now(), Date.now());
+
+        const second = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [
+              { ref: 'lt2', name_forward: 'занято-труп', name_reverse: 'занято-труп-обр' },
+            ],
+          },
+        });
+        assert.equal(second.isError, true, 'надгробие того же имени — конфликт');
+        const secondText = toolText(second);
+        assert.ok(secondText.includes('DUPLICATE'), secondText);
+        assert.ok(secondText.includes(tombstoneId), `details.conflict_property_id: ${secondText}`);
+        assert.equal(liveTypes(), 0, 'откат и во втором случае');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('переименование типа через link_types[] синхронизирует пару, коллизия — DUPLICATE (117a999a)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { ref: 'lt', name_forward: 'имя-старое', name_reverse: 'имя-старое-обр' },
+              ],
+            },
+          }),
+        );
+        const linkTypeId = created.link_types[0]!.id;
+        const propertyId = created.link_types[0]!.property_id!;
+
+        const renamed = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [{ id: linkTypeId, name_forward: 'имя-новое' }],
+            },
+          }),
+        );
+        assert.equal(renamed.link_types[0]?.action, 'updated');
+        assert.equal(renamed.link_types[0]?.property_id, propertyId, 'пара та же');
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const storedName = (): { name: string; name_key: string } =>
+          ndb.prepare('SELECT name, name_key FROM properties_v WHERE id = ?').get(propertyId) as {
+            name: string;
+            name_key: string;
+          };
+        assert.equal(storedName().name, 'имя-новое', 'имя пары следует за типом (38eaa15c)');
+        assert.equal(storedName().name_key, 'имя-новое');
+
+        // Коллизия нового имени — DUPLICATE, имя пары не меняется (откат).
+        const clashProp = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [{ ref: 'p', name: 'занято-имя', value_type: 'text' }],
+            },
+          }),
+        );
+        const clash = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            link_types: [{ id: linkTypeId, name_forward: 'занято-имя' }],
+          },
+        });
+        assert.equal(clash.isError, true, 'коллизия имени — DUPLICATE');
+        const clashText = toolText(clash);
+        assert.ok(clashText.includes('DUPLICATE'), clashText);
+        assert.ok(clashText.includes(clashProp.properties[0]!.id), clashText);
+        assert.equal(storedName().name, 'имя-новое', 'откат не тронул имя пары');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('ontology.delete { kind: link_type } удаляет пару, но отказывает при её привязках (117a999a)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const written = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { ref: 'busy', name_forward: 'связ-занят', name_reverse: 'связ-занят-обр' },
+                { ref: 'free', name_forward: 'связ-свободен', name_reverse: 'связ-свободен-обр' },
+              ],
+            },
+          }),
+        );
+        const busy = written.link_types.find((t) => t.ref === 'busy')!;
+        const free = written.link_types.find((t) => t.ref === 'free')!;
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+
+        // Привязка пары к типу мысли — «чужая» для типа связи: удалять нельзя.
+        const holder = createThoughtType(ndb, { name: 'Держатель-пары' }, ctx.adminId);
+        createTypeProperty(
+          ndb,
+          'thought_type',
+          holder.id,
+          {
+            key: 'связ-занят',
+            value_type: 'link',
+            config: { link_type_id: busy.id },
+            side: 'source',
+          },
+          ctx.adminId,
+        );
+
+        const refused = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'link_type', id: busy.id, force: true },
+          true,
+        );
+        assert.equal(refused.isError, true, 'привязки пары блокируют удаление типа');
+        const refusedText = toolText(refused);
+        assert.ok(refusedText.includes('VALIDATION_ERROR'), refusedText);
+        assert.ok(refusedText.includes(busy.property_id!), `details.property_id: ${refusedText}`);
+
+        // Свободная пара уходит вместе с типом (атомарно).
+        const del = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'link_type', id: free.id, force: true },
+          true,
+        );
+        assert.equal(del.isError, undefined, toolText(del));
+        assert.equal(toolJson<OntologyDeleteResult>(del).deleted, true);
+
+        const livePairs = (linkTypeId: string): number =>
+          (
+            ndb
+              .prepare(
+                `SELECT COUNT(*) AS c FROM properties
+                  WHERE deleted = 0 AND json_extract(config, '$.link_type_id') = ?`,
+              )
+              .get(linkTypeId) as { c: number }
+          ).c;
+        assert.equal(livePairs(free.id), 0, 'пара удалена вместе с типом');
+        assert.equal(livePairs(busy.id), 1, 'пара занятого типа осталась');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('properties[] не создаёт второе свойство-связь, но чинит голый тип (117a999a)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const created = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              link_types: [
+                { ref: 'lt', name_forward: 'уже-пара', name_reverse: 'уже-пара-обр' },
+              ],
+            },
+          }),
+        );
+        const linkTypeId = created.link_types[0]!.id;
+        const pairId = created.link_types[0]!.property_id!;
+
+        const dup = await handle.client.callTool({
+          name: 'etn.ontology.write',
+          arguments: {
+            network_id: ctx.networkId,
+            properties: [
+              {
+                ref: 'dup',
+                name: 'Дубль-пары',
+                value_type: 'link',
+                config: { link_type_id: linkTypeId },
+              },
+            ],
+          },
+        });
+        assert.equal(dup.isError, true, 'второе свойство на тот же тип запрещено');
+        const dupText = toolText(dup);
+        assert.ok(dupText.includes('DUPLICATE'), dupText);
+        assert.ok(dupText.includes(pairId), `details.conflict_property_id: ${dupText}`);
+
+        // Общий `createLinkType` пару НЕ создаёт (иначе ломается properties[]-
+        // путь), а `properties[]` легально достраивает её голому типу.
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const bare = createLinkType(
+          ndb,
+          { name_forward: 'голый-тип', name_reverse: 'голый-тип-обр' },
+          ctx.adminId,
+        );
+        const pairsOf = (id: string): number =>
+          (
+            ndb
+              .prepare(
+                `SELECT COUNT(*) AS c FROM properties
+                  WHERE deleted = 0 AND json_extract(config, '$.link_type_id') = ?`,
+              )
+              .get(id) as { c: number }
+          ).c;
+        assert.equal(pairsOf(bare.id), 0, 'createLinkType пару не создаёт');
+
+        const repaired = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              properties: [
+                {
+                  ref: 'fix',
+                  name: 'Голое-свойство',
+                  value_type: 'link',
+                  config: { link_type_id: bare.id },
+                },
+              ],
+            },
+          }),
+        );
+        assert.equal(repaired.properties[0]?.action, 'created');
+        assert.equal(pairsOf(bare.id), 1, 'голый тип вылечен');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
 });

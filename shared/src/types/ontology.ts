@@ -240,6 +240,13 @@ export interface OntologyWriteLinkTypeResult {
   id: string;
   version: number;
   action: OntologyWriteLinkTypeAction;
+  /**
+   * Id парного свойства-связи реестра (`value_type = 'link'`,
+   * `config.link_type_id = id`), ошибка 117a999a. Создание типа секцией
+   * `link_types[]` создаёт свойство автоматически; `null` — у типа свойства
+   * нет (голый тип, созданный до исправления и ещё не вылеченный миграцией).
+   */
+  property_id: string | null;
 }
 
 /** Результат одного элемента `properties[]`. */

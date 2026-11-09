@@ -66,6 +66,7 @@ import {
 import type { Logger } from '../logger.js';
 import { parseManifest } from './etnx-format.js';
 import { normaliseInstant } from './dates.js';
+import { ensureLinkPropertyForLinkType } from './property-service.js';
 import { normalizeTitle } from './thought-service.js';
 
 // ---------------------------------------------------------------------------
@@ -1607,6 +1608,20 @@ export function applyManifest(
           now,
         );
         if (inserted === prop.id) summary.properties_created += 1;
+      }
+
+      // 3a. Парное свойство-связь каждому типу без свойства (ошибка 117a999a).
+      // Архив мог быть снят до исправления, когда MCP создавал «голый» тип.
+      // Идемпотентно: тип, у которого пара есть (в том числе пришедшая из
+      // манифеста), пропускается. Импорт не имеет права падать на конфликте
+      // имени — суффиксная политика, как у миграции 053.
+      const rootLinkTypeId = rootTypeId(ndb, 'link_types_v');
+      for (const t of manifest.link_types) {
+        const survivingId = linkTypeIdRemap.get(t.id) ?? t.id;
+        if (survivingId === rootLinkTypeId) continue;
+        ensureLinkPropertyForLinkType(ndb, survivingId, opts.actorUserId, {
+          on_name_conflict: 'suffix',
+        });
       }
 
       // 4. Property bindings (type_properties) -------------------------------

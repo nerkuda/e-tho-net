@@ -118,7 +118,13 @@ import { importFromBuffer, planImportFromBuffer, readImportSource } from '../../
 import { listTrash, purgeTrash } from '../../domain/trash-service.js';
 import { exportToEtnxFile, exportToMarkdown, getExportJobContent, startExportJob } from '../../domain/export-service.js';
 import { clampReadMetricsParams, getColdReads, getTopReads } from '../../domain/read-metrics-service.js';
-import { clearThoughtRefUsages, crossResolvePropertyValue, getNetworkProperty, removeLinkPropertyValue } from '../../domain/property-service.js';
+import {
+  clearThoughtRefUsages,
+  crossResolvePropertyValue,
+  getLinkPropertyByLinkTypeId,
+  getNetworkProperty,
+  removeLinkPropertyValue,
+} from '../../domain/property-service.js';
 import { deleteOntologyEntity } from '../../domain/ontology-delete-service.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
 import { getLinkType } from '../../domain/link-type-service.js';
@@ -1817,12 +1823,16 @@ const HANDLERS: Record<string, OpHandler> = {
         let snapshot: unknown = null;
         let cascadedViews: ReturnType<typeof listOwnEffectiveTypeViews> = [];
         let removedView: ReturnType<typeof toEffectiveTypeView> | null = null;
+        /** Парное свойство-связь удаляемого типа (ошибка 117a999a): снимок до
+         *  удаления, чтобы отправить `property-registry.deleted`. */
+        let removedLinkPropertyId: string | null = null;
         try {
           if (a.kind === 'thought_type') {
             snapshot = getThoughtType(ndb, a.id);
             cascadedViews = listOwnEffectiveTypeViews(ndb, a.id);
           } else if (a.kind === 'link_type') {
             snapshot = getLinkType(ndb, a.id);
+            removedLinkPropertyId = getLinkPropertyByLinkTypeId(ndb, a.id)?.id ?? null;
           } else if (a.kind === 'property') {
             snapshot = getNetworkProperty(ndb, a.id);
           } else if (a.kind === 'type_view') {
@@ -1855,6 +1865,14 @@ const HANDLERS: Record<string, OpHandler> = {
             }
           } else if (a.kind === 'link_type') {
             events.push({ type: 'link-type.deleted', data: { id: a.id } });
+            // Пара удалена вместе с типом (ошибка 117a999a) — отдельное
+            // событие на изменённую строку реестра.
+            if (removedLinkPropertyId !== null) {
+              events.push({
+                type: 'property-registry.deleted',
+                data: { id: removedLinkPropertyId },
+              });
+            }
           } else if (a.kind === 'property') {
             events.push({ type: 'property-registry.deleted', data: { id: a.id } });
           }

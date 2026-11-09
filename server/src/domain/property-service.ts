@@ -418,6 +418,32 @@ export function linkPropertyLinkTypeId(config: PropertyConfig | null): string | 
 }
 
 /**
+ * Живое парное свойство-связь типа (0.8.1, требование 09f692ff; ошибка
+ * 117a999a): строка реестра с `config.link_type_id = linkTypeId` вне
+ * структурных. `null` — у типа свойства нет (голый тип).
+ *
+ * Инвариант «один тип связи = ровно одно свойство-связь»: пишется через
+ * {@link ensureLinkPropertyForLinkType}, читается здесь. Смотрит на слой
+ * (`properties_v`), а не на физическую таблицу.
+ */
+export function getLinkPropertyByLinkTypeId(
+  ndb: NetworkDb,
+  linkTypeId: string,
+): NetworkProperty | null {
+  const row = ndb
+    .prepare(
+      `SELECT id FROM properties_v
+        WHERE value_type = 'link'
+          AND (json_extract(config, '$.structural') IS NULL
+               OR json_extract(config, '$.structural') = 0)
+          AND json_extract(config, '$.link_type_id') = ?
+        LIMIT 1`,
+    )
+    .get(linkTypeId) as { id: string } | undefined;
+  return row === undefined ? null : getNetworkProperty(ndb, row.id);
+}
+
+/**
  * Имя свойства-связи, вычисленное из типа связи по направлению (требование
  * 38eaa15c): у источника (`out`) — `name_forward`, у цели (`in`) — `name_reverse`.
  * Имя НЕ хранится в определении свойства и не переопределяется на уровне типа.
@@ -1744,6 +1770,24 @@ export function createNetworkProperty(
       config = { ...(config ?? {}), link_type_id: linkType.id };
     }
     config = validateLinkConfig(ndb, config, 'config');
+    // Инвариант 0.8.1 / ошибка 117a999a: у типа связи может быть только одно
+    // парное свойство-связь. Вторая строка на тот же `link_type_id` раздвоила
+    // бы редактор типа в GUI. Легальная починка голого типа (пары ещё нет)
+    // проходит.
+    if (!isStructuralLinkProperty(config)) {
+      const existingPair = getLinkPropertyByLinkTypeId(ndb, config.link_type_id as string);
+      if (existingPair !== null) {
+        throw new EtnError(
+          'DUPLICATE',
+          'the link type already has a link property; edit that property instead of creating a second one',
+          {
+            link_type_id: config.link_type_id,
+            property_id: existingPair.id,
+            conflict_property_id: existingPair.id,
+          },
+        );
+      }
+    }
     name = isStructuralLinkProperty(config)
       ? validateKey(input.name)
       : linkPropertyDisplayName(
@@ -1795,6 +1839,179 @@ export function createNetworkProperty(
   // The conflict arm wakes a same-name tombstone of this layer keeping its
   // ORIGINAL id — re-read by name, never by the fresh uuid.
   return getNetworkPropertyByName(ndb, name)!;
+}
+
+/** Политика при занятом имени автосоздаваемого свойства-связи (0.8.1). */
+export type LinkPropertyNameConflictPolicy = 'error' | 'suffix';
+
+/** Опции {@link ensureLinkPropertyForLinkType}. */
+export interface EnsureLinkPropertyOptions {
+  /**
+   * `error` — `DUPLICATE` (MCP `link_types[]`: конфликт имени должен быть
+   * виден вызывающему); `suffix` — числовой суффикс (`.etnx`-импорт:
+   * падать на исторических данных нельзя).
+   */
+  on_name_conflict?: LinkPropertyNameConflictPolicy;
+  /** `details.field` для `DUPLICATE` (например, `link_types[0]`). */
+  field?: string;
+}
+
+/** Результат {@link ensureLinkPropertyForLinkType}. */
+export interface EnsuredLinkProperty {
+  property: NetworkProperty;
+  /** `true` — строка реестра создана этим вызовом. */
+  created: boolean;
+}
+
+/**
+ * Занятость имени свойства в текущем слое: физическая строка слоя (включая
+ * надгробие — она даст UNIQUE-нарушение при вставке) либо видимая строка
+ * слоя (имя должно оставаться однозначным в `properties_v`).
+ */
+function findPropertyNameConflict(ndb: NetworkDb, name: string): { id: string } | undefined {
+  const physical = ndb
+    .prepare(
+      'SELECT id FROM properties WHERE layer_id = ? AND name_key = type_name_key(?) LIMIT 1',
+    )
+    .get(ndb.layerId, name) as { id: string } | undefined;
+  if (physical !== undefined) return physical;
+  return ndb
+    .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?) LIMIT 1')
+    .get(name) as { id: string } | undefined;
+}
+
+/**
+ * Имя автосоздаваемого свойства-связи: `name_forward` типа, при занятости —
+ * числовой суффикс (политика `suffix`, ошибка 117a999a).
+ */
+function pickLinkPropertyName(
+  ndb: NetworkDb,
+  base: string,
+  policy: LinkPropertyNameConflictPolicy,
+  field: string | undefined,
+): string {
+  const conflict = findPropertyNameConflict(ndb, base);
+  if (conflict === undefined) return base;
+  if (policy === 'error') {
+    throw new EtnError('DUPLICATE', `property "${base}" already exists in this network`, {
+      name: base,
+      field,
+      conflict_property_id: conflict.id,
+    });
+  }
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${base} ${n}`;
+    if (findPropertyNameConflict(ndb, candidate) === undefined) return candidate;
+  }
+  throw new EtnError('INTERNAL', `cannot pick a free property name for "${base}"`, { name: base });
+}
+
+/**
+ * Обеспечить типу связи парное свойство-связь (0.8.1, требование 09f692ff;
+ * ошибка 117a999a): идемпотентно возвращает существующее либо создаёт
+ * строку реестра с `config.link_type_id` без привязок к типам мысли.
+ *
+ * Вызывается путями, которые создают тип САМИ и не имеют отдельной секции
+ * свойств: MCP `etn.ontology.write` (`link_types[]`) и `.etnx`-импорт.
+ * Общий `createLinkType` намеренно не создаёт свойство — иначе сломается
+ * обратный путь `properties[]` (там тип создаётся из свойства).
+ */
+export function ensureLinkPropertyForLinkType(
+  ndb: NetworkDb,
+  linkTypeId: string,
+  actorUserId: string,
+  opts: EnsureLinkPropertyOptions = {},
+): EnsuredLinkProperty {
+  const linkType = getLinkType(ndb, linkTypeId);
+  if (linkType === null) {
+    throw new EtnError('NOT_FOUND', `link type ${linkTypeId} not found`, {
+      entity: 'link_type',
+      id: linkTypeId,
+    });
+  }
+  if (linkType.is_root) {
+    throw new EtnError('VALIDATION_ERROR', 'a root link type has no link property', {
+      entity: 'link_type',
+      id: linkTypeId,
+      field: opts.field,
+    });
+  }
+  const existing = getLinkPropertyByLinkTypeId(ndb, linkTypeId);
+  if (existing !== null) return { property: existing, created: false };
+
+  const name = pickLinkPropertyName(
+    ndb,
+    linkType.name_forward,
+    opts.on_name_conflict ?? 'error',
+    opts.field,
+  );
+  const id = randomUUID();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  ndb
+    .prepare(
+      `INSERT INTO properties (id, layer_id, deleted, base_version, name, name_key,
+                               value_type, config, description,
+                               created_at, updated_at, created_by, updated_by,
+                               created_at_ms, updated_at_ms)
+       VALUES (?, ?, 0, 0, ?, type_name_key(?), 'link', ?, NULL, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      ndb.layerId,
+      name,
+      name,
+      JSON.stringify({ link_type_id: linkTypeId }),
+      now,
+      now,
+      actorUserId,
+      actorUserId,
+      nowMs,
+      nowMs,
+    );
+  return { property: getNetworkProperty(ndb, id)!, created: true };
+}
+
+/**
+ * Синхронизировать имя парного свойства после переименования типа связи
+ * (требование 38eaa15c: имя свойства вычисляется из типа по направлению).
+ * Ошибка 117a999a: правка типа через MCP `link_types[]` оставляла в реестре
+ * старое имя, и свойство переставало резолвиться по новому имени.
+ *
+ * Коллизия нового имени (включая надгробие слоя) — `DUPLICATE`: молча
+ * раздваивать имя нельзя, `properties_v` должен оставаться однозначным.
+ */
+export function syncLinkPropertyName(
+  ndb: NetworkDb,
+  linkTypeId: string,
+  actorUserId: string,
+  field?: string,
+): void {
+  const pair = getLinkPropertyByLinkTypeId(ndb, linkTypeId);
+  if (pair === null) return;
+  const nextName = linkPropertyDisplayName(ndb, linkTypeId, linkPropertyDirection(pair.config));
+  if (typeNameKey(nextName) === typeNameKey(pair.name)) return;
+
+  const physical = ndb
+    .prepare(
+      'SELECT id FROM properties WHERE layer_id = ? AND name_key = type_name_key(?) AND id <> ? LIMIT 1',
+    )
+    .get(ndb.layerId, nextName, pair.id) as { id: string } | undefined;
+  const visible =
+    physical ??
+    (ndb
+      .prepare('SELECT id FROM properties_v WHERE name_key = type_name_key(?) AND id <> ? LIMIT 1')
+      .get(nextName, pair.id) as { id: string } | undefined);
+  if (visible !== undefined) {
+    throw new EtnError('DUPLICATE', `property "${nextName}" already exists in this network`, {
+      name: nextName,
+      field,
+      conflict_property_id: visible.id,
+    });
+  }
+  // Правка через доменный путь: имя свойства-связи вычисляется из типа,
+  // строка получает materializeShadow в рабочем слое (13-layers.md §5).
+  updateNetworkProperty(ndb, pair.id, { name: nextName }, actorUserId);
 }
 
 /**
