@@ -15,6 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
 import type { AnyRealtimeEvent, PropertyRegistryUpdatedData } from '@etn/shared';
@@ -512,16 +513,73 @@ describe(
         });
         assert.equal(clash.statusCode, 409, clash.body);
         const clashErr = clash.json() as {
-          error: { code: string; details: { conflict_property_id: string } };
+          error: {
+            code: string;
+            details: { conflict_property_id: string; property_id: string };
+          };
         };
         assert.equal(clashErr.error.code, 'DUPLICATE');
         assert.equal(clashErr.error.details.conflict_property_id, occupiedId);
+        assert.equal(
+          clashErr.error.details.property_id,
+          occupiedId,
+          'маршрут дублирует конфликт в details.property_id',
+        );
         const afterClash = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${nid}/properties/${prop.id}`,
           headers: h,
         });
         assert.equal((afterClash.json().data as { name: string }).name, 'новое-вперёд');
+
+        // Коллизия с НАДГРОБИЕМ слоя: физическая строка `deleted = 1`
+        // занимает `UNIQUE (name_key, layer_id)`, хотя `properties_v` её не
+        // показывает. Регресс физической проверки в `assertRenameAvailable`
+        // ловится здесь: без неё UPDATE упирается в UNIQUE и даёт 500.
+        const tombstoneId = randomUUID();
+        const nowIso = new Date().toISOString();
+        ctx.ndb
+          .prepare(
+            `INSERT INTO properties
+               (id, layer_id, deleted, name, name_key, value_type, created_at, updated_at)
+             VALUES (?, ?, 1, ?, type_name_key(?), 'text', ?, ?)`,
+          )
+          .run(
+            tombstoneId,
+            ctx.ndb.layerId,
+            'надгробие-пары',
+            'надгробие-пары',
+            nowIso,
+            nowIso,
+          );
+
+        const tombClash = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${prop.id}`,
+          headers: h,
+          payload: { name_forward: 'надгробие-пары' },
+        });
+        assert.equal(tombClash.statusCode, 409, tombClash.body);
+        const tombErr = tombClash.json() as {
+          error: {
+            code: string;
+            details: { conflict_property_id: string; property_id: string };
+          };
+        };
+        assert.equal(tombErr.error.code, 'DUPLICATE');
+        assert.equal(tombErr.error.details.conflict_property_id, tombstoneId);
+        assert.equal(tombErr.error.details.property_id, tombstoneId);
+        const tombRow = ctx.ndb
+          .prepare('SELECT deleted, name FROM properties WHERE id = ? AND layer_id = ?')
+          .get(tombstoneId, ctx.ndb.layerId) as { deleted: number; name: string };
+        assert.equal(tombRow.deleted, 1, 'надгробие не «пробуждено»');
+        assert.equal(tombRow.name, 'надгробие-пары');
+        const afterTomb = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/properties/${prop.id}`,
+          headers: h,
+        });
+        assert.equal((afterTomb.json().data as { name: string }).name, 'новое-вперёд');
       } finally {
         unsubscribe();
         await closeRestContext(ctx);
