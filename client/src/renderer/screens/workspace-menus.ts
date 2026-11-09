@@ -33,6 +33,7 @@ import { button, div, el, errText } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { countVisibleProperties } from '../lib/pure.js';
 import { etn } from '../lib/etn.js';
+import { refresh as refreshLockCache } from '../lib/lock-cache.js';
 import { notice } from '../lib/notice.js';
 import { MENU_SEPARATOR, menuAction, showMenuAt, type MenuItem } from '../lib/menu.js';
 import { store } from '../state.js';
@@ -212,6 +213,7 @@ async function membersDialog(): Promise<void> {
               await refreshLockCounts();
               await refresh();
             },
+            refreshLocks: () => refreshLockCache(),
           }),
         'link-btn',
       );
@@ -344,6 +346,12 @@ export interface ClearMemberLocksDeps {
   onCleared: (message: string) => void;
   /** User-facing error message when the call fails. */
   onError: (message: string) => void;
+  /**
+   * Re-reads the lock cache from the server after a confirmed reset (ошибка
+   * 27f0780a). The realtime `edit.cleared` fan-out may be lost (обрыв, рестарт
+   * сервера) — без сверки строка кэша осталась бы фантомным 🔒.
+   */
+  refreshLocks: () => Promise<unknown>;
   /** Refreshes the dialog after a successful reset (counts + roster). */
   refresh: () => Promise<void>;
 }
@@ -371,6 +379,14 @@ export async function clearMemberLocks(
   try {
     const result = await deps.clear(networkId, userId);
     deps.onCleared(t('workspaceMenus.unsetBlokirovok', result.cleared));
+    // Серверная правда важнее доставки realtime: если `edit.cleared` не дошёл,
+    // строка кэша осталась бы фантомным 🔒 (ошибка 27f0780a). Сверяемся с
+    // сервером после подтверждённого сброса; сбой сверки не отменяет сброс.
+    try {
+      await deps.refreshLocks();
+    } catch {
+      // Best-effort: следующий refresh/реконнект доберёт серверную правду.
+    }
     // The realtime bus will fan-out `edit.cleared` for every row, but the
     // local badge needs an immediate refresh — pull the fresh count once
     // and let the realtime subscriber pick up the rest.

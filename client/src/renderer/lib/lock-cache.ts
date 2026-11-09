@@ -68,6 +68,9 @@ const listeners = new Set<() => void>();
 
 let realtimeWired = false;
 let lastBroadcastSeq = 0;
+/** Отписки, снятые тестовым сбросом (иначе слушатели копятся между тестами). */
+let realtimeUnsubscribe: (() => void) | null = null;
+let storeUnsubscribe: (() => void) | null = null;
 
 /** Subscribes to cache transitions; returns an unsubscribe function. */
 export function subscribeLockCache(listener: () => void): () => void {
@@ -219,30 +222,71 @@ function handleAcquired(data: EditAcquiredData): void {
  * `releaseHeld` after a confirmed release: the server has already dropped the
  * row, and waiting for the broadcast would leave a phantom 🔒 on a dead lock
  * (ошибка 0702efb6).
+ *
+ * Returns `true` when a row was actually dropped: the caller may need to
+ * reconcile with the server when its own lock id is not in the cache any more
+ * (ошибка 27f0780a).
  */
-export function dropLockById(lockId: string): void {
+export function dropLockById(lockId: string): boolean {
   for (const [key, row] of cache.entries()) {
     if (row.id === lockId) {
       dropByKey(key);
-      return;
+      return true;
+    }
+  }
+  return false;
+}
+
+let reconcileInFlight = false;
+let reconcileAgain = false;
+
+/**
+ * Re-read the cache from the server after an event proves the picture is
+ * stale. The event names a lock id the cache does not know, but a row with a
+ * different id for the same entity may be a live capture acquired in between:
+ * guessing here would either leave a phantom 🔒 or hide a real lock (ошибка
+ * 27f0780a). The server is the source of truth, so re-read it.
+ *
+ * Coalesced: a burst of events (`server_start` / `ws_disconnect` clear one row
+ * per lock) must not turn into a burst of `GET /locks`.
+ */
+async function reconcileWithServer(): Promise<void> {
+  if (reconcileInFlight) {
+    reconcileAgain = true;
+    return;
+  }
+  reconcileInFlight = true;
+  try {
+    await refresh();
+  } finally {
+    reconcileInFlight = false;
+    if (reconcileAgain) {
+      reconcileAgain = false;
+      void reconcileWithServer();
     }
   }
 }
 
+/**
+ * Apply `edit.released` / `edit.cleared`. The row is dropped by the event's
+ * `lock_id`; when the cache holds another id for that entity, the event still
+ * proves the picture is out of date — reconcile with the server instead of
+ * silently keeping the row (фантомный 🔒, ошибка 27f0780a).
+ */
+function applyReleaseEvent(entityType: string, entityId: string, lockId: string): void {
+  if (dropLockById(lockId)) return;
+  if (getLock(entityType, entityId) !== undefined) void reconcileWithServer();
+}
+
 /** Handle `edit.released` — drop the row by its lock_id (if still present). */
 function handleReleased(data: EditReleasedData): void {
-  dropLockById(data.lock_id);
+  applyReleaseEvent(data.entity_type, data.entity_id, data.lock_id);
 }
 
 /** Handle `edit.cleared` — drop the row; expose the reason for the editor toast. */
 export type ClearedEvent = EditClearedData;
 function handleCleared(data: EditClearedData): LockClearedReason {
-  for (const [key, row] of cache.entries()) {
-    if (row.id === data.lock_id) {
-      dropByKey(key);
-      return data.reason;
-    }
-  }
+  applyReleaseEvent(data.entity_type, data.entity_id, data.lock_id);
   return data.reason;
 }
 
@@ -267,7 +311,7 @@ export function initLockCache(): void {
 
   // Слой (G6): мягкие захваты `edit.*` намеренно игнорируются таблицей
   // запросов (эфемерные, без ключа) и приходят через `onRoutedRealtimeEvent`.
-  onRoutedRealtimeEvent((evt) => {
+  realtimeUnsubscribe = onRoutedRealtimeEvent((evt) => {
     if (evt.network_id !== store.state.networkId) return;
     if (evt.type === 'edit.acquired') handleAcquired(evt.data);
     else if (evt.type === 'edit.released') handleReleased(evt.data);
@@ -278,7 +322,7 @@ export function initLockCache(): void {
 
   // Network switch — drop everything; the new network's locks arrive through
   // the cold-start `refresh()` triggered by the editor / canvas.
-  store.subscribe(() => {
+  storeUnsubscribe = store.subscribe(() => {
     const next = store.state.networkId;
     if (next === null && cache.size > 0) clearAll();
   });
@@ -325,6 +369,12 @@ export function __resetForTests(): void {
   realtimeWired = false;
   lastBroadcastSeq = 0;
   listeners.clear();
+  realtimeUnsubscribe?.();
+  realtimeUnsubscribe = null;
+  storeUnsubscribe?.();
+  storeUnsubscribe = null;
+  reconcileInFlight = false;
+  reconcileAgain = false;
 }
 
 /** Monotonic sequence of broadcasts — useful for memoisation in tests. */

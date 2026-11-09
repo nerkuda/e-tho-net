@@ -25,6 +25,7 @@ interface Calls {
   clearedMessages: string[];
   errorMessages: string[];
   refreshes: number;
+  lockRefreshes: number;
 }
 
 /** Builds a recording dependency set around the given `clear` result. */
@@ -32,6 +33,7 @@ function makeDeps(options: {
   confirmResult?: boolean;
   clearResult?: { cleared: number };
   clearError?: Error;
+  refreshLocksError?: Error;
 }): { deps: ClearMemberLocksDeps; calls: Calls } {
   const calls: Calls = {
     confirmations: 0,
@@ -39,6 +41,7 @@ function makeDeps(options: {
     clearedMessages: [],
     errorMessages: [],
     refreshes: 0,
+    lockRefreshes: 0,
   };
   const deps: ClearMemberLocksDeps = {
     confirm: async () => {
@@ -59,6 +62,10 @@ function makeDeps(options: {
     refresh: async () => {
       calls.refreshes += 1;
     },
+    refreshLocks: async () => {
+      calls.lockRefreshes += 1;
+      if (options.refreshLocksError !== undefined) throw options.refreshLocksError;
+    },
   };
   return { deps, calls };
 }
@@ -72,6 +79,7 @@ describe('clearMemberLocks — «Снять все блокировки» (ba1a5
     assert.equal(calls.clearedMessages.length, 0, 'no result message');
     assert.equal(calls.errorMessages.length, 0, 'no error message');
     assert.equal(calls.refreshes, 0, 'no refresh');
+    assert.equal(calls.lockRefreshes, 0, 'no lock-cache refresh without a reset');
   });
 
   it('reports the cleared count after a successful reset', async () => {
@@ -81,6 +89,7 @@ describe('clearMemberLocks — «Снять все блокировки» (ba1a5
     assert.deepEqual(calls.clearedMessages, ['Снято блокировок: 2.']);
     assert.equal(calls.errorMessages.length, 0);
     assert.equal(calls.refreshes, 1, 'the dialog must refresh after a reset');
+    assert.equal(calls.lockRefreshes, 1, 'cache must be reconciled with the server after clear');
   });
 
   it('reports zero when the participant held no locks (the reported case)', async () => {
@@ -88,6 +97,18 @@ describe('clearMemberLocks — «Снять все блокировки» (ba1a5
     await clearMemberLocks('net-1', 'u-2', 'Анна', deps);
     assert.deepEqual(calls.clearedMessages, ['Снято блокировок: 0.']);
     assert.equal(calls.refreshes, 1);
+    assert.equal(calls.lockRefreshes, 1, 'clear of 0 still reconciles the phantom row');
+  });
+
+  it('a failed cache reconciliation does not turn a successful reset into an error', async () => {
+    const { deps, calls } = makeDeps({
+      clearResult: { cleared: 1 },
+      refreshLocksError: new Error('network down'),
+    });
+    await clearMemberLocks('net-1', 'u-2', 'Анна', deps);
+    assert.deepEqual(calls.clearedMessages, ['Снято блокировок: 1.']);
+    assert.equal(calls.errorMessages.length, 0, 'the reset itself succeeded');
+    assert.equal(calls.refreshes, 1, 'the dialog still refreshes');
   });
 
   it('surfaces a readable error message when the call fails', async () => {
@@ -96,5 +117,6 @@ describe('clearMemberLocks — «Снять все блокировки» (ba1a5
     assert.equal(calls.clearedMessages.length, 0, 'no success message on failure');
     assert.deepEqual(calls.errorMessages, ['Не удалось снять блокировки: нет прав доступа']);
     assert.equal(calls.refreshes, 0, 'no refresh after a failure');
+    assert.equal(calls.lockRefreshes, 0, 'no cache reconciliation after a failure');
   });
 });

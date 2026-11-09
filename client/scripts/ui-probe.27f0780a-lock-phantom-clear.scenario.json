@@ -1,0 +1,133 @@
+{
+  "name": "27f0780a-lock-phantom-clear",
+  "description": "GUI-контрольная точка ошибки 27f0780a (путь «Снять блокировки»): фантомный замочек 🔒 обязан исчезать после «Снять блокировки», даже когда сервер уже пуст и событие edit.cleared не дошло. Фантом создаётся production-путём: собственный захват снимается через мост при подавленном стендом edit.released; кэш клиента сохраняет строку, сервер пуст. Диалог «Участники мыслесети» → «Снять блокировки» (сброс 0) обязан сверить кэш с сервером. Проверки: DOM-проба .cloud-lock-badge и серверный GET /locks через API стенда. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.27f0780a-lock-phantom-clear.scenario.json --mute-ws-event edit.released --out .tmp/etn-27f0780a-clear/out",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-thought-cloud",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null",
+      "timeout": 30000
+    },
+    { "name": "open-thought", "click": ".cloud[data-id=\"{{thoughtId}}\"]" },
+    {
+      "name": "thought-opened",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'",
+      "timeout": 30000
+    },
+    {
+      "name": "comment-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('{{seedComment}}') === true",
+      "timeout": 30000
+    },
+    { "name": "enter-comment-edit", "click": ".ui-comment [data-action=\"edit\"]" },
+    {
+      "name": "comment-edit-mode",
+      "waitFor": "document.querySelector(\".ui-comment[data-mode='edit']\") !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "lock-acquired-on-server",
+      "api": {
+        "name": "lock-acquired-on-server",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/locks",
+        "expression": "({ count: data.length, own: data.some((r)=>r.entity_type==='thought' && r.entity_id==='{{thoughtId}}') })"
+      },
+      "expect": { "count": 1, "own": true }
+    },
+    {
+      "name": "own-badge-visible",
+      "probe": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge.own') !== null",
+      "expect": true
+    },
+    {
+      "name": "release-own-lock-via-bridge",
+      "probe": "(async () => { const et = window.etn; const rows = await et.locks.list('{{networkId}}'); const mine = rows.find((r) => r.entity_type === 'thought' && r.entity_id === '{{thoughtId}}'); if (!mine) return 'no-lock'; await et.locks.release('{{networkId}}', mine.id); return 'released'; })()",
+      "expect": "released"
+    },
+    {
+      "name": "server-empty-after-release",
+      "api": {
+        "name": "server-empty-after-release",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/locks",
+        "expression": "data.length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "settle-after-phantom",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 400)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "phantom-badge-before-clear",
+      "probe": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge') !== null",
+      "expect": true
+    },
+    {
+      "name": "open-net-menu",
+      "probe": "(() => { const btns = [...document.querySelectorAll('button')]; const b = btns.find((x) => x.title === 'Меню мыслесети') || btns.find((x) => x.title === 'Thought network menu') || btns.find((x) => ((x.textContent || '').includes('Мыслесеть'))) ; if (!b) return 'no-button: ' + JSON.stringify(btns.map((x) => ({ t: x.title, c: (x.textContent || '').trim().slice(0, 20) })).filter((x) => x.t || x.c).slice(0, 20)); b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "net-menu-visible",
+      "waitFor": "document.querySelector('.menu .menu-item') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "open-members-dialog",
+      "probe": "(() => { const items = [...document.querySelectorAll('.menu .menu-item')]; const item = items.find((x) => (x.textContent || '').includes('Участники мыслесети')) || items.find((x) => (x.textContent || '').includes('Thought network members')); if (!item) return 'no-item: ' + JSON.stringify(items.map((x) => (x.textContent || '').trim()).filter((x) => x !== '' && x !== '—')); item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "members-dialog-visible",
+      "waitFor": "document.querySelector('.dialog-box .admin-table-wrap .table-list') !== null",
+      "timeout": 20000
+    },
+    {
+      "name": "click-clear-member-locks",
+      "probe": "(() => { const btns = [...document.querySelectorAll('.dialog-box button')]; const btn = btns.find((x) => { const t = (x.textContent || '').trim(); return t.startsWith('Снять блокировки') || t.startsWith('Clear locks'); }); if (!btn) return 'no-button: ' + JSON.stringify(btns.map((x) => ({ c: x.className, t: (x.textContent || '').trim().slice(0, 40) }))); btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "confirm-dialog-visible",
+      "waitFor": "[...document.querySelectorAll('.dialog-footer button')].some((b) => ['Подтвердить', 'Confirm'].includes((b.textContent || '').trim()))",
+      "timeout": 20000
+    },
+    {
+      "name": "confirm-clear",
+      "probe": "(() => { const btn = [...document.querySelectorAll('.dialog-footer button')].find((b) => ['Подтвердить', 'Confirm'].includes((b.textContent || '').trim())); if (!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "badge-gone-after-clear",
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"] .cloud-lock-badge') === null",
+      "timeout": 20000
+    },
+    {
+      "name": "server-still-empty",
+      "api": {
+        "name": "server-still-empty",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/locks",
+        "expression": "data.length"
+      },
+      "expect": 0
+    }
+  ]
+}
