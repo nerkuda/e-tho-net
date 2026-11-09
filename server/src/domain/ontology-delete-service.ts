@@ -166,8 +166,10 @@ export function deleteOntologyEntity(
         // 0.8.1 / ошибка 117a999a: тип связи живёт в паре со своим
         // свойством-связью. Удаляем пару вместе с типом, но только если
         // свойство свободно: привязки к типам (кроме привязок самого типа,
-        // которые снимает deleteLinkType) и сохранённые значения — отказ с
-        // подсказкой. Живые рёбра типа — существующая семантика deleteLinkType:
+        // которые снимает deleteLinkType) — отказ с подсказкой. Счётчика
+        // `property_values` у пары нет: значения link-свойства живут
+        // рёбрами, а не в таблице значений (их судьбу решает deleteLinkType).
+        // Живые рёбра типа — существующая семантика deleteLinkType:
         // без `force` отказ, с `force` обнуление `type_id`.
         const pair = getLinkPropertyByLinkTypeId(ndb, params.id);
         if (pair !== null) {
@@ -180,21 +182,15 @@ export function deleteOntologyEntity(
               )
               .get(pair.id, params.id) as { c: number }
           ).c;
-          const storedValues = (
-            ndb
-              .prepare('SELECT COUNT(*) AS c FROM property_values_v WHERE property_id = ?')
-              .get(pair.id) as { c: number }
-          ).c;
-          if (foreignBindings > 0 || storedValues > 0) {
+          if (foreignBindings > 0) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              'the link type has a paired link property that is bound to types or holds values; unbind it or delete the property first',
+              'the link type has a paired link property bound to types; unbind it or delete the property first',
               {
                 entity: 'link_type',
                 id: params.id,
                 property_id: pair.id,
                 type_properties_count: foreignBindings,
-                property_values_count: storedValues,
               },
             );
           }

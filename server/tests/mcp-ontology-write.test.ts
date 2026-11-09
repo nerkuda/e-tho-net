@@ -1955,6 +1955,11 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
         const refusedText = toolText(refused);
         assert.ok(refusedText.includes('VALIDATION_ERROR'), refusedText);
         assert.ok(refusedText.includes(busy.property_id!), `details.property_id: ${refusedText}`);
+        // Ошибка 117a999a: у link-свойства значения живут рёбрами, а не в
+        // `property_values`, поэтому счётчик значений только вводит в
+        // заблуждение (всегда 0) — в деталях отказа его быть не должно.
+        assert.ok(refusedText.includes('type_properties_count'), refusedText);
+        assert.ok(!refusedText.includes('property_values_count'), refusedText);
 
         // Свободная пара уходит вместе с типом (атомарно).
         const del = await callOp(
