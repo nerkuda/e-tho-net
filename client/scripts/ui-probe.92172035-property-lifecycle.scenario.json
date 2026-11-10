@@ -63,7 +63,7 @@
     },
     {
       "name": "open-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "outside-row-visible",
@@ -262,7 +262,7 @@
     },
     {
       "name": "refresh-properties-tab",
-      "eval": "(() => { const tabs=[...document.querySelectorAll('.editor-tab')]; const other=tabs.find((b)=>b.textContent.includes('Комментарий')); if(other) other.click(); const props=tabs.find((b)=>b.textContent.includes('Свойства')); if(props) props.click(); return 'ok'; })()"
+      "eval": "(() => { /* Порядок вкладок мысли фиксирован (TABS_THOUGHT, editor.ts): 0 — комментарий, 1 — свойства. Подписи локализованы (ADR daab6ac4), поэтому переключаемся по позиции. */ const tabs=[...document.querySelectorAll('.editor-tab')]; if(tabs[0]) tabs[0].click(); if(tabs[1]) tabs[1].click(); return 'ok'; })()"
     },
     {
       "name": "row-back-outside-after-type-editor",
@@ -446,7 +446,7 @@
     },
     {
       "name": "refresh-after-mixed-seed",
-      "eval": "(() => { const tabs=[...document.querySelectorAll('.editor-tab')]; const other=tabs.find((b)=>b.textContent.includes('Комментарий')); if(other) other.click(); const own=tabs.find((b)=>b.textContent.includes('Свойства')); if(own) own.click(); return 'ok'; })()"
+      "eval": "(() => { /* Порядок вкладок мысли фиксирован (TABS_THOUGHT, editor.ts): 0 — комментарий, 1 — свойства. Подписи локализованы (ADR daab6ac4), поэтому переключаемся по позиции. */ const tabs=[...document.querySelectorAll('.editor-tab')]; if(tabs[0]) tabs[0].click(); if(tabs[1]) tabs[1].click(); return 'ok'; })()"
     },
     {
       "name": "mixed-rows-visible",

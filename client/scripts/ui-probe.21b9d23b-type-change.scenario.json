@@ -60,7 +60,7 @@
     {
       "name": "open-properties-tab",
       "expect": "ok",
-      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "probe": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "outside-rows-initial",

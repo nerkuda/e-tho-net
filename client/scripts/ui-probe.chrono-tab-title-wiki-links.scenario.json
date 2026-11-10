@@ -62,7 +62,7 @@
       "name": "open-chrono-tab",
       "eval": {
         "name": "openChronoTab",
-        "expression": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((t) => (t.textContent || '').includes('Дневник')); if (!tab) throw new Error('вкладка «Дневник» не найдена'); tab.click(); return true; })()"
+        "expression": "(() => { /* Дневник — индекс 4 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[4]; if (!tab) throw new Error('вкладка «Дневник» не найдена'); tab.click(); return true; })()"
       }
     },
 

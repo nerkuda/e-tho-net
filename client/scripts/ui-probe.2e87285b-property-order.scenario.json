@@ -63,7 +63,7 @@
     },
     {
       "name": "open-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "seed-order-properties",
@@ -72,7 +72,7 @@
     },
     {
       "name": "switch-tab-and-back",
-      "eval": "(() => { const tabs=[...document.querySelectorAll('.editor-tab')]; const other=tabs.find((b)=>b.textContent.includes('Комментарий')); if(other) other.click(); const own=tabs.find((b)=>b.textContent.includes('Свойства')); if(own) own.click(); return 'ok'; })()"
+      "eval": "(() => { /* Порядок вкладок мысли фиксирован (TABS_THOUGHT, editor.ts): 0 — комментарий, 1 — свойства. Подписи локализованы (ADR daab6ac4), поэтому переключаемся по позиции. */ const tabs=[...document.querySelectorAll('.editor-tab')]; if(tabs[0]) tabs[0].click(); if(tabs[1]) tabs[1].click(); return 'ok'; })()"
     },
     {
       "name": "three-outside-rows",
@@ -269,7 +269,7 @@
     },
     {
       "name": "open-properties-second",
-      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "probe": "(() => { /* Свойства — индекс 1 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -287,7 +287,7 @@
     },
     {
       "name": "open-properties-again",
-      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "probe": "(() => { /* Свойства — индекс 1 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {

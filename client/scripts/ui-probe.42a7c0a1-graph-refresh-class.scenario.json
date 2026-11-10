@@ -49,7 +49,7 @@
     },
     {
       "name": "open-graph-tab",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Граф — индекс 5 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[5]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "graph-ready",
@@ -223,7 +223,7 @@
     },
     {
       "name": "switch-to-properties",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Свойства'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Свойства — индекс 1 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[1]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "graph-detached",
@@ -252,7 +252,7 @@
     },
     {
       "name": "return-to-graph",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Граф — индекс 5 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[5]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "hidden-add-applied",

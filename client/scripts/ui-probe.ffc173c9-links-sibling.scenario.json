@@ -60,7 +60,7 @@
     },
     {
       "name": "open-links-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tabs .editor-tab')].find((e)=>(e.textContent||'').trim().startsWith('Упоминания')); tab?.click(); return tab ? 'ok' : 'no-tab'; })()"
+      "eval": "(() => { /* Упоминания — индекс 3 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab=[...document.querySelectorAll('.editor-tabs .editor-tab')][3]; tab?.click(); return tab ? 'ok' : 'no-tab'; })()"
     },
     {
       "name": "links-tab-ready",
