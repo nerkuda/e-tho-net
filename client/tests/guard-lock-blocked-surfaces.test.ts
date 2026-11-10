@@ -108,9 +108,7 @@ describe('guard: чужой захват переводит поверхност
       'function openLinkSettings(link: Link): void {',
       'export const editorInternals',
     );
-    requireAll('настройки связи', link, [
-      "lock: { entityType: 'link', entityId: link.id },",
-    ]);
+    requireAll('настройки связи', link, ["lock: { entityType: 'link', entityId: link.id },"]);
   });
 
   it('диалог оформления следует за кэшем захватов в обе стороны', () => {
@@ -146,8 +144,12 @@ describe('guard: чужой захват переводит поверхност
       'commitButtons: [saveBtn, applyBtn],',
       'unblockEditingSurface(box);',
       'revalidateName();',
-      'if (applyBtn !== null) applyBtn.disabled = blocked || clash;',
-      'if (saveBtn !== null) saveBtn.disabled = blocked || clash;',
+      // Ошибка 8695a68c добавила к условию идущую запись (`applying`): кнопки
+      // записи гаснут и на время apply, поэтому проверяется сама связка
+      // «условие от захвата/дубликата/записи → disabled», а не прежняя строка.
+      'const off = blockedMessage !== null || clash || applying;',
+      'if (applyBtn !== null) applyBtn.disabled = off;',
+      'if (saveBtn !== null) saveBtn.disabled = off;',
       'if (blockedMessage !== null && dialogRoot !== null) {',
     ]);
   });
@@ -164,6 +166,9 @@ describe('guard: чужой захват переводит поверхност
       'commitButtons: [applyBtn],',
       'unblockEditingSurface(body);',
       'revalidateName();',
+      // Ошибка 8695a68c: к «чужому захвату» добавлена идущая запись — кнопка
+      // записи гаснет и на время apply.
+      'const blocked = blockedMessage !== null || applying;',
       'if (applyBtn !== null) applyBtn.disabled = blocked;',
     ]);
   });

@@ -995,6 +995,15 @@ export function showThoughtTypeEditor(
   let allTypes: ThoughtType[] = [];
   let applyBtn: HTMLButtonElement | null = null;
   let saveBtn: HTMLButtonElement | null = null;
+  /** «Отмена» — тоже гаснет на время записи (ошибка 8695a68c). */
+  let cancelBtn: HTMLButtonElement | null = null;
+  /**
+   * Идёт запись черновика (ошибка 8695a68c): «Применить и закрыть» и «Записать»
+   * не запускают второй параллельный apply — двойной клик давал два PATCH с одной
+   * версией (риск 409 и двойной записи), а кнопки футера на это время отключены
+   * (08-ui-spec.md, панель кнопок: на busy — все disabled).
+   */
+  let applying = false;
   /** Отписка от кэша захватов: снятие чужого захвата возвращает редактирование. */
   let unbindLock: () => void = () => undefined;
   if (type !== null) {
@@ -1245,10 +1254,24 @@ export function showThoughtTypeEditor(
       errorLine.clear();
     }
     // Чужой захват сильнее проверки имени (ошибка 4f18d9f5): асинхронная
-    // догрузка каталога не должна снова включать кнопки записи.
-    const blocked = blockedMessage !== null;
-    if (applyBtn !== null) applyBtn.disabled = blocked || clash;
-    if (saveBtn !== null) saveBtn.disabled = blocked || clash;
+    // догрузка каталога не должна снова включать кнопки записи. То же и с идущей
+    // записью (ошибка 8695a68c): пока apply не вернулся, кнопки остаются
+    // отключёнными, даже если проверка имени их «разрешает».
+    const off = blockedMessage !== null || clash || applying;
+    if (applyBtn !== null) applyBtn.disabled = off;
+    if (saveBtn !== null) saveBtn.disabled = off;
+  }
+
+  /**
+   * Переключает состояние «идёт запись» (ошибка 8695a68c). Включение гасит все
+   * кнопки футера — включая «Отмену», как в панели кнопок настроек
+   * (08-ui-spec.md: на busy — все disabled); выключение возвращает их к обычному
+   * виду, поэтому после ошибки запись можно повторить.
+   */
+  function setApplying(value: boolean): void {
+    applying = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+    revalidateName();
   }
 
   // Fresh catalogue for the live duplicate check (the server re-checks anyway).
@@ -1291,6 +1314,9 @@ export function showThoughtTypeEditor(
    * on both paths, showing the error.
    */
   async function apply(mode: 'close' | 'stay', close: () => void): Promise<void> {
+    // Повторный клик по кнопкам записи во время уже идущего apply игнорируется
+    // (ошибка 8695a68c): иначе уходили два параллельных PATCH с одной версией.
+    if (applying) return;
     // Строка ошибки в панели кнопок общая для диалога: перед новой попыткой
     // гасим прошлое сообщение (иначе оно «залипает» и видно на всех вкладках).
     errorLine.clear();
@@ -1309,6 +1335,7 @@ export function showThoughtTypeEditor(
     // них строятся факты локального уведомления открытого редактора. При
     // создании типа уведомлять нечего — его ещё никто не показывает.
     let savedTypeFields: object | null = null;
+    setApplying(true);
     try {
       if (current === null) {
         // New type: one create carries every staged field at once. The
@@ -1425,6 +1452,10 @@ export function showThoughtTypeEditor(
       if (mode === 'close') close();
     } catch (err) {
       errorLine.show(errText(err));
+    } finally {
+      // Запись закончилась (успешно или с ошибкой) — кнопки футера снова
+      // активны: после ошибки запись можно повторить (ошибка 8695a68c).
+      setApplying(false);
     }
   }
 
@@ -1518,7 +1549,12 @@ export function showThoughtTypeEditor(
         save: (close) => void apply('close', close),
       },
       buttons: [
-        { label: t('actions.cancel') },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+        },
         // «Записать» — запись без закрытия: диалог остаётся открытым, а его
         // содержимое обновляется (отборы нового типа становятся доступны,
         // «Метаданные» показывают id/даты) — ошибка 51732f9b.

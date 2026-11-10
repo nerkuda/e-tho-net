@@ -974,6 +974,15 @@ export function openPropertyManagerEditor(
   const DUP_NAME_MSG = t('propertyManager.propertyTakimNameAlreadyHas');
   let allProperties: RegistryRow[] = [];
   let applyBtn: HTMLButtonElement | null = null;
+  /** «Отмена» — тоже гаснет на время записи (ошибка 8695a68c). */
+  let cancelBtn: HTMLButtonElement | null = null;
+  /**
+   * Идёт запись свойства (ошибка 8695a68c): повторный клик по «Применить и
+   * закрыть» не запускает второй apply (двойное создание/два PATCH), а кнопки
+   * футера на это время отключены (08-ui-spec.md, панель кнопок: на busy — все
+   * disabled). Правило то же, что у редактора типа.
+   */
+  let applying = false;
   if (property !== null) {
     void acquireOrShowBlocked('property', property.id).then((outcome) => {
       editLock = lockHandleFromOutcome('property', property.id, outcome);
@@ -1655,8 +1664,9 @@ export function openPropertyManagerEditor(
 
   function revalidateName(): void {
     // Чужой захват сильнее проверки имени (ошибка 4f18d9f5): асинхронная
-    // догрузка реестра не должна снова включать «Применить и закрыть».
-    const blocked = blockedMessage !== null;
+    // догрузка реестра не должна снова включать «Применить и закрыть». То же и с
+    // идущей записью (ошибка 8695a68c): пока apply не вернулся, кнопка отключена.
+    const blocked = blockedMessage !== null || applying;
     if (nameClash(draft.name) !== null) {
       errorLine.show(DUP_NAME_MSG);
       if (applyBtn !== null) applyBtn.disabled = true;
@@ -1664,6 +1674,17 @@ export function openPropertyManagerEditor(
       if (errorLine.textContent === DUP_NAME_MSG) errorLine.clear();
       if (applyBtn !== null) applyBtn.disabled = blocked;
     }
+  }
+  /**
+   * Переключает состояние «идёт запись» (ошибка 8695a68c). Включение гасит все
+   * кнопки футера — включая «Отмену», как в панели кнопок настроек
+   * (08-ui-spec.md: на busy — все disabled); выключение возвращает их к обычному
+   * виду, поэтому после ошибки запись можно повторить.
+   */
+  function setApplying(value: boolean): void {
+    applying = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+    revalidateName();
   }
   function nameClash(name: string): RegistryRow | null {
     const key = name.trim().toLowerCase();
@@ -1685,6 +1706,10 @@ export function openPropertyManagerEditor(
 
   // ---- Применение -------------------------------------------------------
   async function apply(close: () => void): Promise<void> {
+    // Повторный клик по «Применить и закрыть» во время уже идущего apply
+    // игнорируется (ошибка 8695a68c): иначе уходили бы два параллельных PATCH
+    // или двойное создание свойства.
+    if (applying) return;
     // Базовые проверки.
     if (draft.valueType === 'link') {
       if (draft.nameForward.trim() === '' || draft.nameReverse.trim() === '') {
@@ -1701,6 +1726,7 @@ export function openPropertyManagerEditor(
       return;
     }
 
+    setApplying(true);
     try {
       if (current === null) {
         const input: NetworkPropertyInput = {
@@ -1816,6 +1842,10 @@ export function openPropertyManagerEditor(
       close();
     } catch (err) {
       errorLine.show(errText(err));
+    } finally {
+      // Запись закончилась (успешно или с ошибкой) — кнопки футера снова
+      // активны: после ошибки запись можно повторить (ошибка 8695a68c).
+      setApplying(false);
     }
   }
 
@@ -1946,7 +1976,12 @@ export function openPropertyManagerEditor(
       save: (close) => void apply(close),
     },
     buttons: [
-      { label: t('actions.cancel') },
+      {
+        label: t('actions.cancel'),
+        ref: (btn) => {
+          cancelBtn = btn;
+        },
+      },
       {
         label: t('actions.applyClose'),
         primary: true,
