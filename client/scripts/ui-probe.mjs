@@ -31,6 +31,8 @@ import path from 'node:path';
 import {
   ScenarioError,
   parseScenario,
+  resolveStepTexts,
+  stepHasTexts,
 } from './ui-probe-scenario.mjs';
 import { decodePng, runRegionChecks } from './ui-probe-image.mjs';
 import {
@@ -214,8 +216,11 @@ function parseArgs(argv) {
  */
 function substituteVars(value, vars) {
   if (typeof value === 'string') {
-    return value.replace(/\{\{([^{}]+)\}\}/g, (_match, raw) => {
+    return value.replace(/\{\{([^{}]+)\}\}/g, (match, raw) => {
       const key = raw.trim();
+      // `{{text:<ключ>}}` — подстановка словаря ожиданий сценария, а не --var:
+      // её разрешает раннер по фактическому языку интерфейса перед шагом.
+      if (key.startsWith('text:')) return match;
       if (!Object.prototype.hasOwnProperty.call(vars, key)) {
         throw new UsageError(`в сценарии нет значения переменной {{${key}}} (задайте --var ${key}=…)`);
       }
@@ -407,6 +412,17 @@ async function warmupPage(cdp, timeout, coldStart) {
   }
   await waitFrames(cdp, 2);
   return Date.now() - started;
+}
+
+/**
+ * Фактический язык интерфейса (`<html lang>`): по нему раннер выбирает тексты
+ * словаря ожиданий `texts`. Читается ПЕРЕД КАЖДЫМ шагом со словарём — язык
+ * меняется на лету (профиль → сеть → сервер, ADR daab6ac4), и зашивать его на
+ * старте прогона нельзя.
+ */
+async function readUiLanguage(cdp) {
+  const value = await evaluate(cdp, 'document.documentElement.lang || ""');
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 /**
@@ -1016,6 +1032,11 @@ function renderTextReport(report) {
   } else {
     lines.push('прогрев: отключён (--no-warmup)');
   }
+  // Язык, по которому выбраны тексты словаря ожиданий: видно, на каком языке
+  // шёл прогон и какие подстановки получились (число шагов со словарём).
+  if (typeof report.uiLang === 'string') {
+    lines.push(`язык ожиданий: ${report.uiLang} (шагов со словарём: ${report.textSteps ?? 0})`);
+  }
   for (const entry of report.steps) lines.push(formatStep(entry));
   if (report.shots.length > 0) {
     lines.push(`PNG (доказательства, не для модели): ${report.shots.join(', ')}`);
@@ -1037,11 +1058,21 @@ async function runScenario(cdp, scenario, outDir, base, context) {
     shots: [],
   };
   const startedAt = Date.now();
-  for (const step of scenario.steps) {
+  for (const rawStep of scenario.steps) {
     const started = Date.now();
-    const entry = { index: step.index, kind: step.kind, name: step.name, status: 'ok', ms: 0 };
-    if (step.expect !== undefined) entry.expect = step.expect;
+    const entry = { index: rawStep.index, kind: rawStep.kind, name: rawStep.name, status: 'ok', ms: 0 };
     try {
+      let step = rawStep;
+      // Тексты ожиданий выбираются по фактическому языку интерфейса (стенд
+      // может быть поднят на en или ru — решение заказчика 2026-11-10).
+      if (scenario.texts !== undefined && stepHasTexts(rawStep)) {
+        const lang = await readUiLanguage(cdp);
+        step = resolveStepTexts(rawStep, scenario.texts, lang);
+        report.uiLang = lang;
+        report.textSteps = (report.textSteps ?? 0) + 1;
+        entry.uiLang = lang;
+      }
+      if (step.expect !== undefined) entry.expect = step.expect;
       // Every step — including `waitFor` by frames — is bounded by the step
       // deadline, so a stalled frame supply cannot hang the run.
       await withTimeout(

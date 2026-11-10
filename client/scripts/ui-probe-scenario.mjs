@@ -82,6 +82,14 @@
  *
  * В строковых полях поддерживаются подстановки `{{имя}}` — значения задаются
  * раннеру через `--var имя=значение` (стенд подставляет id засеянных сущностей).
+ *
+ * Язык интерфейса в сценарии не зашивается. Подписи, которые сценарий ищет или
+ * ожидает (пункты меню, заголовки групп, подсказки, тосты), описываются
+ * словарём ожиданий `texts`: `"texts": { "<ключ>": { "ru": "…", "en": "…" } }`,
+ * а в шагах ставится подстановка `{{text:<ключ>}}`. Значение выбирает раннер по
+ * ФАКТИЧЕСКОМУ языку интерфейса (`document.documentElement.lang`) в момент
+ * выполнения шага: точное совпадение тега, иначе его базовая часть
+ * (`en-US` → `en`). Языка нет в словаре — ошибка шага, а не тихий пропуск.
  */
 
 /** Мс на шаг, если ни шаг, ни сценарий не задали свой предел. */
@@ -686,7 +694,7 @@ function validateStep(raw, index, defaultTimeout) {
 export function validateScenario(value) {
   if (!isPlainObject(value)) fail('сценарий должен быть JSON-объектом');
   for (const extra of Object.keys(value)) {
-    if (!['name', 'description', 'steps', 'timeout', 'serverLog'].includes(extra)) {
+    if (!['name', 'description', 'steps', 'timeout', 'serverLog', 'texts'].includes(extra)) {
       fail(`неизвестное поле сценария «${extra}»`);
     }
   }
@@ -696,7 +704,139 @@ export function validateScenario(value) {
     fail('поле «steps» — непустой массив шагов');
   }
   const steps = value.steps.map((step, index) => validateStep(step, index, timeout));
-  return { name, steps, timeout };
+  const scenario = { name, steps, timeout };
+  const used = collectTextKeys(steps);
+  if (value.texts === undefined) {
+    if (used.size > 0) {
+      fail(
+        `сценарий использует {{text:…}} (${[...used].join(', ')}), ` +
+          'но словаря ожиданий «texts» нет',
+      );
+    }
+    return scenario;
+  }
+  scenario.texts = normalizeTexts(value.texts);
+  // Словарь и подстановки сверяются на разборе: опечатка в ключе не должна
+  // доходить до живого прогона, а «мёртвый» ключ — копиться как долг.
+  for (const key of used) {
+    if (!Object.prototype.hasOwnProperty.call(scenario.texts, key)) {
+      fail(`подстановка {{text:${key}}}: ключа нет в словаре ожиданий «texts»`);
+    }
+  }
+  for (const key of Object.keys(scenario.texts)) {
+    if (!used.has(key)) {
+      fail(
+        `словарь ожиданий: ключ «${key}» нигде не используется — удалите его или исправьте подстановку`,
+      );
+    }
+  }
+  return scenario;
+}
+
+/** Языковой тег словаря ожиданий: `ru`, `en`, `zh`, `en-US`. */
+const LANGUAGE_TAG = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+
+/** Ключ словаря ожиданий в подстановке `{{text:<ключ>}}`. */
+const TEXT_KEY = /^[A-Za-z0-9_.-]+$/;
+
+/** Подстановка словаря ожиданий `{{text:<ключ>}}`. */
+const TEXT_PLACEHOLDER = /\{\{text:([^{}]+)\}\}/g;
+
+/**
+ * Провалидировать словарь ожиданий `texts`: ключ → набор текстов по языкам.
+ * Значения — готовые строки интерфейса (из каталога локализации клиента) для
+ * каждого языка, на котором сценарий обязан быть зелёным.
+ */
+export function normalizeTexts(raw) {
+  if (!isPlainObject(raw) || Object.keys(raw).length === 0) {
+    fail('texts: ожидается непустой объект { <ключ>: { <язык>: <текст> } }');
+  }
+  const texts = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!TEXT_KEY.test(key)) {
+      fail(`texts.${key}: ключ — латиница, цифры, «_», «.», «-» (он же идёт в {{text:<ключ>}})`);
+    }
+    if (!isPlainObject(value) || Object.keys(value).length === 0) {
+      fail(`texts.${key}: ожидается объект с текстами по языкам`);
+    }
+    const entry = {};
+    for (const [lang, text] of Object.entries(value)) {
+      if (!LANGUAGE_TAG.test(lang)) {
+        fail(`texts.${key}.${lang}: ожидается языковой тег (ru, en, en-US)`);
+      }
+      if (typeof text !== 'string' || text === '')
+        fail(`texts.${key}.${lang}: ожидается непустая строка`);
+      entry[lang] = text;
+    }
+    texts[key] = entry;
+  }
+  return texts;
+}
+
+/** Собрать ключи `{{text:<ключ>}}` из строк (шагов или любого их поля). */
+export function collectTextKeys(steps) {
+  const keys = new Set();
+  const visit = (node) => {
+    if (typeof node === 'string') {
+      for (const match of node.matchAll(TEXT_PLACEHOLDER)) keys.add(match[1].trim());
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (node !== null && typeof node === 'object') {
+      for (const item of Object.values(node)) visit(item);
+    }
+  };
+  visit(steps);
+  return keys;
+}
+
+/**
+ * Текст из словаря для конкретного языка: точный тег, иначе его базовая часть
+ * (`en-US` → `en`). Языка нет — ошибка: подставлять чужой текст молча нельзя,
+ * иначе ожидание разойдётся с интерфейсом и прогон упадёт «не тем» шагом.
+ */
+export function pickText(texts, key, lang) {
+  const entry = texts[key];
+  if (entry === undefined) throw new ScenarioError(`словарь ожиданий: ключа «${key}» нет`);
+  const tag = typeof lang === 'string' ? lang.trim() : '';
+  if (tag === '') {
+    throw new ScenarioError(`словарь ожиданий: язык интерфейса не определён (ключ «${key}»)`);
+  }
+  if (Object.prototype.hasOwnProperty.call(entry, tag)) return entry[tag];
+  const base = tag.split('-')[0].toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(entry, base)) return entry[base];
+  throw new ScenarioError(
+    `словарь ожиданий: у ключа «${key}» нет текста для языка «${tag}» (есть: ${Object.keys(entry).join(', ')})`,
+  );
+}
+
+/**
+ * Подставить тексты словаря в шаг по языку интерфейса `lang`. Возвращает КОПИЮ
+ * шага: нормализованный сценарий неизменен, а в отчёт попадает подставленное
+ * ожидание (по нему видно, на каком языке шёл прогон).
+ */
+export function resolveStepTexts(step, texts, lang) {
+  const visit = (node) => {
+    if (typeof node === 'string') {
+      return node.replace(TEXT_PLACEHOLDER, (_match, raw) => pickText(texts, raw.trim(), lang));
+    }
+    if (Array.isArray(node)) return node.map(visit);
+    if (node !== null && typeof node === 'object') {
+      const out = {};
+      for (const [key, item] of Object.entries(node)) out[key] = visit(item);
+      return out;
+    }
+    return node;
+  };
+  return visit(step);
+}
+
+/** Есть ли в шаге подстановки словаря ожиданий. */
+export function stepHasTexts(step) {
+  return collectTextKeys([step]).size > 0;
 }
 
 /** Разобрать текст JSON-сценария; ошибка JSON заворачивается в {@link ScenarioError}. */

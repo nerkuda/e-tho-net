@@ -64,6 +64,15 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
       --seed-name <s>    Имя пробной сети (по умолчанию «GUI-стенд»).
       --seed-title <s>   Заголовок пробной мысли (по умолчанию «Проба стенда»).
       --seed-comment <s> Начальный текст постоянного комментария мысли.
+      --server-language <tag>
+                         Явно задать язык сервера для прогона (ru, en, zh…):
+                         стенд ставит его через PUT /admin/settings/language ДО
+                         запуска клиента и проверяет, что сервер его принял.
+                         Без флага язык не трогается (текущее поведение стенда:
+                         дефолт сервера — en, ADR daab6ac4). Сценарии выбирают
+                         тексты ожиданий по фактическому языку интерфейса, поэтому
+                         один и тот же сценарий обязан быть зелёным на любом
+                         заданном языке (решение заказчика 2026-11-10).
       --delay-seed-ms <ms>
                          Поднять перед сервером замедляющий прокси: запросы к
                          засеянной сети идут с задержкой <ms> (проверка гонки
@@ -194,6 +203,7 @@ export function parseArgs(argv) {
     seedName: 'GUI-стенд',
     seedTitle: 'Проба стенда',
     seedComment: 'стартовый текст',
+    serverLanguage: null,
     delaySeedMs: 0,
     delaySeedPath: '',
     delaySeedRules: [],
@@ -280,6 +290,15 @@ export function parseArgs(argv) {
         opts.seedComment = need(argv[i + 1], arg);
         i += 1;
         break;
+      case '--server-language': {
+        const tag = need(argv[i + 1], arg);
+        if (!/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(tag)) {
+          throw new Error('--server-language: ожидается языковой тег (ru, en, zh, en-US)');
+        }
+        opts.serverLanguage = tag;
+        i += 1;
+        break;
+      }
       case '--delay-seed-ms':
         opts.delaySeedMs = ms(need(argv[i + 1], arg), arg);
         i += 1;
@@ -465,6 +484,25 @@ async function rest(base, key, method, apiPath, body) {
   }
   if (parsed !== null && typeof parsed === 'object' && 'data' in parsed) return parsed.data;
   return parsed;
+}
+
+/**
+ * Явно задать язык сервера стенда (`--server-language`): `PUT
+ * /admin/settings/language` ключом стенда ДО запуска клиента. Ответ сервера
+ * сверяется с заказанным тегом — «сервер проигнорировал язык» не должен давать
+ * молчаливый прогон не на том языке (сценарии выбирают тексты ожиданий по
+ * фактическому языку интерфейса, решение заказчика 2026-11-10).
+ * @returns {Promise<string>} принятый сервером тег.
+ */
+export async function applyServerLanguage(base, key, tag) {
+  const applied = await rest(base, key, 'PUT', '/admin/settings/language', { language: tag });
+  const value = applied !== null && typeof applied === 'object' ? applied.language : applied;
+  if (value !== tag) {
+    throw new Error(
+      `--server-language ${tag}: сервер сообщил язык «${value === undefined ? '—' : String(value)}»`,
+    );
+  }
+  return tag;
 }
 
 /** Извлечь API-key из вывода `etn init`. */
@@ -716,6 +754,14 @@ async function main(argv) {
       throw new Error(`сервер не поднялся на порту ${serverPort}\n${server.getLog().slice(-1000)}`);
     }
     process.stdout.write(`ui-probe-stand: сервер готов (${apiBase})\n`);
+
+    // --- 2а. Язык сервера (--server-language) ------------------------------
+    // Ставится ДО запуска клиента: клиент читает язык при подключении, поэтому
+    // «язык после старта» дал бы прогон не на заказанном языке.
+    if (opts.serverLanguage !== null) {
+      const accepted = await applyServerLanguage(apiBase, apiKey, opts.serverLanguage);
+      process.stdout.write(`ui-probe-stand: язык сервера — ${accepted}\n`);
+    }
 
     // --- 3. Сид пробной сети ----------------------------------------------
     let seed = null;

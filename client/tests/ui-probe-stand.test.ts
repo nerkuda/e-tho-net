@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  applyServerLanguage,
   buildProbeArgs,
   parseArgs,
   parseDelaySeedRule,
@@ -59,6 +60,61 @@ test('parseArgs: --fail-seed-status — статус подмены, тольк�
     () => parseArgs(['--fail-seed-path', 'p', '--fail-seed-status', '302']),
     /400\.\.599/,
   );
+});
+
+test('parseArgs: --server-language задаёт язык стенда и проверяет тег', () => {
+  assert.equal(parseArgs([]).serverLanguage, null, 'без флага язык сервера не трогаем');
+  assert.equal(parseArgs(['--server-language', 'ru']).serverLanguage, 'ru');
+  assert.equal(parseArgs(['--server-language', 'en-US']).serverLanguage, 'en-US');
+  assert.throws(
+    () => parseArgs(['--server-language', 'русский']),
+    /языковой тег/,
+    'не тег — ошибка разбора, а не молчаливый пропуск',
+  );
+  assert.throws(() => parseArgs(['--server-language']), /требует значения/);
+});
+
+test('applyServerLanguage: ставит язык через REST и сверяет ответ сервера', async () => {
+  const requests: Array<{ method: string; url: string; language: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      const parsed = body === '' ? null : (JSON.parse(body) as { language?: unknown });
+      requests.push({ method: req.method ?? '', url: req.url ?? '', language: parsed?.language });
+      const language = parsed?.language ?? 'en';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      // Сервер отвечает тем, что принял: сверка ответа — часть флага.
+      res.end(JSON.stringify({ data: { language } }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  try {
+    assert.equal(await applyServerLanguage(`http://127.0.0.1:${port}/api/v1`, 'etn_x', 'ru'), 'ru');
+    assert.deepEqual(requests, [
+      { method: 'PUT', url: '/api/v1/admin/settings/language', language: 'ru' },
+    ]);
+    // Сервер не принял язык — прогон не должен молча идти на прежнем.
+    const stubborn = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: { language: 'en' } }));
+    });
+    await new Promise<void>((resolve) => stubborn.listen(0, '127.0.0.1', resolve));
+    const stubbornPort = (stubborn.address() as net.AddressInfo).port;
+    try {
+      await assert.rejects(
+        () => applyServerLanguage(`http://127.0.0.1:${stubbornPort}/api/v1`, 'etn_x', 'ru'),
+        /сервер сообщил язык «en»/,
+      );
+    } finally {
+      await new Promise<void>((resolve) => stubborn.close(() => resolve()));
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('parseArgs: сценарий, порты, флаги, сид', () => {

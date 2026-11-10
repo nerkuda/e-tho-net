@@ -16,7 +16,10 @@ import {
   ScenarioError,
   normalizeModifiers,
   parseScenario,
+  pickText,
   resolveKey,
+  resolveStepTexts,
+  stepHasTexts,
   stepKind,
   validateScenario,
 } from '../scripts/ui-probe-scenario.mjs';
@@ -577,5 +580,102 @@ test('expectFrom: ожидание — снимок ранее выполнен�
   assert.throws(
     () => validateScenario(scenarioFrom([{ probe: { expression: '1' }, expectFrom: '1:probe' }])),
     ScenarioError,
+  );
+});
+
+test('texts: словарь ожиданий разбирается, а подстановки сверяются с ним', () => {
+  const scenario = parseScenario(
+    JSON.stringify({
+      name: 'lang',
+      texts: { menuClear: { ru: 'Очистить', en: 'Clear' } },
+      steps: [
+        {
+          name: 'menu',
+          probe: "document.querySelector('.menu')?.textContent",
+          expect: '{{text:menuClear}}',
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(scenario.texts, { menuClear: { ru: 'Очистить', en: 'Clear' } });
+  assert.equal(
+    scenario.steps[0]?.expect,
+    '{{text:menuClear}}',
+    'подстановка живёт в шаге до прогона',
+  );
+
+  // Ключа нет в словаре — опечатка не должна доходить до живого клиента.
+  assert.throws(
+    () =>
+      validateScenario({
+        texts: { menuClear: { ru: 'Очистить', en: 'Clear' } },
+        steps: [{ probe: '1', expect: '{{text:menuClaer}}' }],
+      }),
+    /ключа нет в словаре/,
+  );
+  // Подстановка без словаря — тоже ошибка разбора, а не пустая строка.
+  assert.throws(
+    () => validateScenario(scenarioFrom([{ probe: '1', expect: '{{text:menuClear}}' }])),
+    /словаря ожиданий «texts» нет/,
+  );
+  // «Мёртвый» ключ словаря — долг, который копится: он запрещён.
+  assert.throws(
+    () =>
+      validateScenario({
+        texts: { unused: { ru: 'а', en: 'a' } },
+        steps: [{ probe: '1', expect: '1' }],
+      }),
+    /нигде не используется/,
+  );
+  // Ключ и языковой тег обязаны быть валидными, текст — непустым.
+  assert.throws(
+    () => validateScenario({ texts: { 'menu clear': { ru: 'а' } }, steps: [{ probe: '1' }] }),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario({ texts: { key: { 'ru-RU-x': 'а' } }, steps: [{ probe: '1' }] }),
+    ScenarioError,
+  );
+  assert.throws(
+    () => validateScenario({ texts: { key: { en: '' } }, steps: [{ probe: '1' }] }),
+    ScenarioError,
+  );
+});
+
+test('pickText/resolveStepTexts: текст выбирается по фактическому языку интерфейса', () => {
+  const texts = { clear: { ru: 'Очистить', en: 'Clear' }, menu: { ru: 'Меню', en: 'Menu' } };
+  assert.equal(pickText(texts, 'clear', 'ru'), 'Очистить');
+  assert.equal(pickText(texts, 'clear', 'en'), 'Clear');
+  // Региональный тег откатывается к базовому языку.
+  assert.equal(pickText(texts, 'clear', 'en-US'), 'Clear');
+  // Языка нет и базового нет — ошибка, а не чужой текст.
+  assert.throws(() => pickText(texts, 'clear', 'zh'), /нет текста для языка «zh»/);
+  assert.equal(pickText({ clear: { ru: 'Очистить' } }, 'clear', 'ru-RU'), 'Очистить');
+  assert.throws(() => pickText(texts, 'clear', ''), /язык интерфейса не определён/);
+
+  const step = {
+    index: 0,
+    kind: 'probe' as const,
+    name: 'menu',
+    timeout: 1000,
+    expect: '{{text:clear}}',
+    probe: { name: 'p', expression: "document.querySelector('.menu-item')?.textContent" },
+    waitFor: {
+      expression: "document.querySelector('.x')?.textContent === '{{text:menu}}'",
+      frames: 0,
+    },
+  };
+  assert.equal(stepHasTexts(step), true);
+  const resolved = resolveStepTexts(step, texts, 'en');
+  assert.equal(resolved.expect, 'Clear');
+  assert.equal(resolved.waitFor?.expression, "document.querySelector('.x')?.textContent === 'Menu'");
+  // Исходный шаг не меняется: нормализованный сценарий остаётся неизменным, а в
+  // отчёт попадает подставленное ожидание.
+  assert.equal(step.expect, '{{text:clear}}');
+  assert.equal(step.waitFor.expression, "document.querySelector('.x')?.textContent === '{{text:menu}}'");
+  // Шаг без подстановок словарём не считается.
+  assert.equal(
+    stepHasTexts({ ...step, expect: 'literal', waitFor: { expression: '1', frames: 0 } }),
+    false,
   );
 });
