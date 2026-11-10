@@ -523,19 +523,34 @@ function watchWidgetMutations(box: ShimElement): () => number {
   return () => mutations;
 }
 
-/** Счётчик присваиваний `innerHTML` виджету (пересборка содержимого). */
-function watchWidgetInnerHtml(box: ShimElement): () => number {
-  let writes = 0;
+/**
+ * Журнал присваиваний `innerHTML` виджету — независимое свидетельство
+ * пересборки содержимого. Читать `box.innerHTML` для этого НЕЛЬЗЯ: геттер
+ * подменён здесь же и отдаёт ровно то, что положил сеттер, поэтому
+ * `box.innerHTML === html` тавтологичен (замечание верификатора к `4df5e284`).
+ * Пересборка в браузере — это `innerHTML = …`, то есть всегда присваивание;
+ * мемо-путь обновления до сеттера не доходит.
+ */
+interface InnerHtmlLog {
+  /** Сколько присваиваний дошло до сеттера (пересборка — одно и больше). */
+  count(): number;
+  /** Что именно присваивали, по порядку (для сверки с ожидаемым `html`). */
+  written(): readonly string[];
+}
+
+/** Подменяет `innerHTML` виджета сеттером-журналом. */
+function watchWidgetInnerHtml(box: ShimElement): InnerHtmlLog {
+  const written: string[] = [];
   let value = box.innerHTML;
   Object.defineProperty(box, 'innerHTML', {
     configurable: true,
     get: () => value,
     set: (next: string) => {
-      writes += 1;
+      written.push(String(next));
       value = next;
     },
   });
-  return () => writes;
+  return { count: () => written.length, written: () => written };
 }
 
 const MERMAID_BLOCK = '```mermaid\ngraph TD\n  A-->B\n```';
@@ -571,37 +586,115 @@ test('HtmlWidget: печать выше блока не пересобирает
     );
     assert.equal(shifted.updateDOM(box, {}), true, `#${index}: updateDOM обновляет DOM на месте`);
 
-    assert.equal(htmlWrites(), 0, `#${index}: innerHTML не переназначался`);
+    assert.equal(htmlWrites.count(), 0, `#${index}: innerHTML не переназначался`);
     assert.equal(mutations(), 0, `#${index}: ни одной childList-мутации`);
     assert.equal(box.dataset.mdFrom, String(shifted.from), `#${index}: data-md-from актуален`);
     assert.equal(box.dataset.mdTo, String(shifted.to), `#${index}: data-md-to актуален`);
   });
 });
 
-test('HtmlWidget: мемо per-DOM — два живых виджета обновляются независимо (4df5e284)', () => {
+test('HtmlWidget: мемо per-DOM — виджеты с РАЗНЫМ html помнят каждый своё (4df5e284)', () => {
   installDocumentShim();
-  // «Несколько живых полей одновременно»: у каждого DOM своя запись мемо;
-  // ссылка на «последний отрисованный HTML» сломала бы второй виджет.
-  const identical = `${TABLE_BLOCK}\n\n${TABLE_BLOCK}\n\nпара`;
-  const widgets = htmlWidgets(buildState(identical, identical.length));
-  assert.equal(widgets.length, 2, 'две одинаковые таблицы');
-  const boxes = widgets.map((widget) => widget.toDOM());
-  const writes = boxes.map((box) => watchWidgetInnerHtml(box));
+  // «Несколько живых полей одновременно»: у каждого DOM своя запись мемо, и
+  // «последний отрисованный HTML» в модульной переменной ломает соседа.
+  // Проверка обязана это ловить, поэтому html у виджетов РАЗНЫЙ: с одинаковым
+  // содержимым (две одинаковые таблицы) подмена `WeakMap` на «последний
+  // отрисованный» проходит незамеченной — замечание верификатора.
+  const baseDoc = `${MERMAID_BLOCK}\n\n${TABLE_BLOCK}\n\nпара`;
+  /** Свежие DOM двух виджетов документа и журналы их `innerHTML`. */
+  const freshBoxes = (
+    doc: string,
+  ): { widgets: HtmlWidgetLike[]; boxes: ShimElement[]; logs: InnerHtmlLog[] } => {
+    const widgets = htmlWidgets(buildState(doc, doc.length));
+    assert.equal(widgets.length, 2, 'в документе два HTML-виджета');
+    const boxes = widgets.map((widget) => widget.toDOM());
+    return { widgets, boxes, logs: boxes.map((box) => watchWidgetInnerHtml(box)) };
+  };
 
-  const shifted = htmlWidgets(
-    buildState(`${TYPED_ABOVE}${identical}`, identical.length + TYPED_ABOVE.length),
-  );
-  boxes.forEach((box, index) => {
-    assert.equal(shifted[index]!.updateDOM(box, {}), true, `#${index}: DOM обновлён на месте`);
-  });
+  // 1. Внешняя правка сдвигает ОБА виджета, содержимое прежнее — ни один не
+  //    пересобирается (сдвиг идёт первым по позиции, потом второй).
+  {
+    const { widgets, boxes, logs } = freshBoxes(baseDoc);
+    assert.notEqual(widgets[0]!.html, widgets[1]!.html, 'у соседей разный HTML');
+    const shiftedDoc = `${TYPED_ABOVE}${baseDoc}`;
+    const shifted = htmlWidgets(buildState(shiftedDoc, shiftedDoc.length));
+    assert.equal(shifted.length, 2, 'после сдвига те же два виджета');
+    boxes.forEach((box, index) => {
+      assert.equal(shifted[index]!.html, widgets[index]!.html, `#${index}: содержимое прежнее`);
+      assert.equal(
+        widgets[index]!.eq(shifted[index]!),
+        false,
+        `#${index}: сдвиг — триггер updateDOM`,
+      );
+      assert.equal(shifted[index]!.updateDOM(box, {}), true, `#${index}: обновление на месте`);
+    });
+    assert.deepEqual(
+      logs.map((log) => log.count()),
+      [0, 0],
+      'сдвиг обоих не пересобирает ни один (у каждого своя запись мемо)',
+    );
+    assert.equal(boxes[0]!.dataset.mdFrom, String(shifted[0]!.from), 'первый: data-md-from');
+    assert.equal(boxes[1]!.dataset.mdFrom, String(shifted[1]!.from), 'второй: data-md-from');
+  }
 
-  assert.deepEqual(
-    writes.map((count) => count()),
-    [0, 0],
-    'ни одна таблица не пересобрана',
-  );
-  assert.equal(boxes[0]!.dataset.mdFrom, String(shifted[0]!.from), 'первый: data-md-from');
-  assert.equal(boxes[1]!.dataset.mdFrom, String(shifted[1]!.from), 'второй: data-md-from');
+  // 2. Правка меняет ТОЛЬКО диаграмму (та же длина исходника) — пересобрана
+  //    диаграмма, таблица рядом (её смещения сдвинуты, HTML тот же) — нет.
+  {
+    const { widgets, boxes, logs } = freshBoxes(baseDoc);
+    const editedDoc = `${TYPED_ABOVE}${baseDoc.replace('A-->B', 'A-->C')}`;
+    const edited = htmlWidgets(buildState(editedDoc, editedDoc.length));
+    assert.equal(edited.length, 2);
+    assert.notEqual(edited[0]!.html, widgets[0]!.html, 'диаграмма изменилась');
+    assert.equal(edited[1]!.html, widgets[1]!.html, 'таблица не изменилась');
+    // Порядок важен: сперва обновляется ИЗМЕНЁННЫЙ виджет, потом сосед —
+    // «последний отрисованный» на этом порядке пересобрал бы и соседа.
+    assert.equal(edited[0]!.updateDOM(boxes[0]!, {}), true, 'диаграмма: обновление на месте');
+    assert.equal(edited[1]!.updateDOM(boxes[1]!, {}), true, 'таблица: обновление на месте');
+    assert.deepEqual(
+      logs.map((log) => log.count()),
+      [1, 0],
+      'пересобрана только диаграмма',
+    );
+    assert.deepEqual(logs[0]!.written(), [edited[0]!.html], 'в диаграмму записан её новый HTML');
+    assert.equal(
+      boxes[1]!.dataset.mdFrom,
+      String(edited[1]!.from),
+      'таблица: свежие смещения без пересборки',
+    );
+
+    // Повтор с теми же инстансами: мемо своего DOM держит и новое содержимое.
+    assert.equal(edited[0]!.updateDOM(boxes[0]!, {}), true);
+    assert.equal(edited[1]!.updateDOM(boxes[1]!, {}), true);
+    assert.deepEqual(
+      logs.map((log) => log.count()),
+      [1, 0],
+      'повтор содержимое не трогает',
+    );
+  }
+
+  // 3. Обратное направление: правка меняет ТОЛЬКО таблицу — пересобрана она,
+  //    диаграмма рядом остаётся прежней.
+  {
+    const { widgets, boxes, logs } = freshBoxes(baseDoc);
+    const editedDoc = `${TYPED_ABOVE}${baseDoc.replace('| 1 | 2 |', '| 1 | 3 |')}`;
+    const edited = htmlWidgets(buildState(editedDoc, editedDoc.length));
+    assert.equal(edited.length, 2);
+    assert.equal(edited[0]!.html, widgets[0]!.html, 'диаграмма не изменилась');
+    assert.notEqual(edited[1]!.html, widgets[1]!.html, 'таблица изменилась');
+    assert.equal(edited[1]!.updateDOM(boxes[1]!, {}), true, 'таблица: обновление на месте');
+    assert.equal(edited[0]!.updateDOM(boxes[0]!, {}), true, 'диаграмма: обновление на месте');
+    assert.deepEqual(
+      logs.map((log) => log.count()),
+      [0, 1],
+      'пересобрана только таблица',
+    );
+    assert.deepEqual(logs[1]!.written(), [edited[1]!.html], 'в таблицу записан её новый HTML');
+    assert.equal(
+      boxes[0]!.dataset.mdFrom,
+      String(edited[0]!.from),
+      'диаграмма: свежие смещения без пересборки',
+    );
+  }
 });
 
 test('HtmlWidget: смена содержимого при живом виджете пересобирает его ровно один раз (4df5e284)', () => {
@@ -616,17 +709,26 @@ test('HtmlWidget: смена содержимого при живом видже
   const edited = doc.replace('A-->B', 'A-->C');
   const updated = htmlWidgets(buildState(edited, edited.length))[0]!;
   assert.equal(widget.eq(updated), false, 'смена HTML отличает виджеты');
+  assert.notEqual(updated.html, widget.html, 'HTML действительно новый (иначе проверка вакуумна)');
   assert.equal(updated.updateDOM(box, {}), true, 'DOM пригоден к обновлению на месте');
 
-  assert.equal(htmlWrites(), 1, 'содержимое пересобрано ровно один раз');
-  assert.equal(box.innerHTML, updated.html, 'в DOM — новый HTML');
+  // Содержимое пересобрано ровно один раз ИМЕННО новым HTML: доказательство —
+  // журнал сеттера (`written`), а не чтение `box.innerHTML`, чей геттер подменён
+  // здесь же и вернул бы любое записанное значение (замечание верификатора).
+  assert.equal(htmlWrites.count(), 1, 'содержимое пересобрано ровно один раз');
+  assert.deepEqual(htmlWrites.written(), [updated.html], 'присвоен новый HTML диаграммы');
+  assert.ok(
+    htmlWrites.written()[0]!.includes('A--&gt;C'),
+    'в присвоенном HTML — новый исходник диаграммы (A--&gt;C)',
+  );
   assert.equal(mutations(), 0, 'дети не переставлялись вручную');
   assert.equal(box.dataset.mdFrom, String(updated.from), 'data-md-from актуален');
   assert.equal(box.dataset.mdTo, String(updated.to), 'data-md-to актуален');
 
   // Повторное обновление тем же HTML пересборки не даёт (мемо).
   assert.equal(updated.updateDOM(box, {}), true);
-  assert.equal(htmlWrites(), 1, 'повторный updateDOM содержимое не трогает');
+  assert.equal(htmlWrites.count(), 1, 'повторный updateDOM содержимое не трогает');
+  assert.deepEqual(htmlWrites.written(), [updated.html], 'журнал присваиваний не вырос');
 });
 
 /** Первый виджет состояния, подходящий под предикат (для остальных классов). */
@@ -710,7 +812,7 @@ test('HtmlWidget в цитате внутри списка: сдвиг выше 
   assert.equal(shifted[0]!.html, widgets[0]!.html, 'HTML содержимого не изменился');
   assert.equal(widgets[0]!.eq(shifted[0]!), false, 'смещения отличают виджеты');
   assert.equal(shifted[0]!.updateDOM(box, {}), true, 'DOM обновлён на месте');
-  assert.equal(htmlWrites(), 0, 'innerHTML не переназначался');
+  assert.equal(htmlWrites.count(), 0, 'innerHTML не переназначался');
   assert.equal(mutations(), 0, 'ни одной childList-мутации');
   assert.equal(box.dataset.mdFrom, String(shifted[0]!.from), 'data-md-from актуален');
   assert.equal(box.dataset.mdTo, String(shifted[0]!.to), 'data-md-to актуален');
