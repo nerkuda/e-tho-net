@@ -2736,9 +2736,19 @@ async function openAttachDialog(opts: {
     /**
      * Идёт выбор строки: «Выбрать»/Enter/двойной клик по строке запускают
      * асинхронную проверку перенимаемых привязок, и второй выбор за время
-     * первой проверки не нужен (ошибка ef89c5c8).
+     * первой проверки не нужен (ошибка ef89c5c8). На время проверки кнопки
+     * футера disabled — правило панели кнопок «на busy все disabled».
      */
     let selecting = false;
+    let selectBtn: HTMLButtonElement | null = null;
+    let createBtn: HTMLButtonElement | null = null;
+    let cancelBtn: HTMLButtonElement | null = null;
+    const setBusy = (value: boolean): void => {
+      selecting = value;
+      if (selectBtn !== null) selectBtn.disabled = value;
+      if (createBtn !== null) createBtn.disabled = value;
+      if (cancelBtn !== null) cancelBtn.disabled = value;
+    };
 
     /** Строки каталога по текущему снимку каталога типов связей. */
     const list = buildPropertyList({
@@ -2761,27 +2771,35 @@ async function openAttachDialog(opts: {
      *  возврат черновика привязки — выбранное имя задаёт сторону. */
     async function choose(row: PropertyListRow): Promise<void> {
       if (selecting) return;
-      selecting = true;
-      errorLine.clear();
-      const warning = await warnDescendantBindings(networkId, row.registry, {
-        ownerType,
-        types,
-        typeId,
-        editedTypeName,
-      });
-      if (warning !== null) {
-        const ok = await confirmDialog(t('typeManager.podklyuchitProperty'), warning, true);
-        if (!ok) {
-          selecting = false;
-          return;
+      setBusy(true);
+      try {
+        errorLine.clear();
+        const warning = await warnDescendantBindings(networkId, row.registry, {
+          ownerType,
+          types,
+          typeId,
+          editedTypeName,
+        });
+        if (warning !== null) {
+          const ok = await confirmDialog(t('typeManager.podklyuchitProperty'), warning, true);
+          if (!ok) return;
         }
+        close();
+        resolve({
+          draft: attachDraftFromExisting(row.registry, row.side, row.name),
+          registry: row.registry,
+        });
+      } catch (err) {
+        // Обработчик кнопки запускается через `void`: исключение проверки или
+        // подтверждения иначе ушло бы unhandled rejection, а «Выбрать» молча
+        // перестала бы работать. Показываем его в футере диалога (как ошибки
+        // записи вкладки) — диалог остаётся рабочим.
+        errorLine.show(errText(err));
+      } finally {
+        // Снятие флага и восстановление кнопок — при любом исходе (ошибка
+        // ef89c5c8): после исключения «Выбрать» снова работает.
+        setBusy(false);
       }
-      selecting = false;
-      close();
-      resolve({
-        draft: attachDraftFromExisting(row.registry, row.side, row.name),
-        registry: row.registry,
-      });
     }
 
     /** Перечитывает реестр (после того как общий редактор создал свойство) и
@@ -2815,10 +2833,18 @@ async function openAttachDialog(opts: {
       // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
       footerError: errorLine,
       buttons: [
-        { label: t('actions.cancel') },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+        },
         {
           label: t('typeManager.label.createProperty'),
           keepOpen: true,
+          ref: (btn) => {
+            createBtn = btn;
+          },
           onClick: () => {
             openPropertyManagerEditor(
               null,
@@ -2832,6 +2858,9 @@ async function openAttachDialog(opts: {
           label: t('actions.select'),
           primary: true,
           keepOpen: true,
+          ref: (btn) => {
+            selectBtn = btn;
+          },
           onClick: () => {
             const row = list.selected();
             if (row !== null) void choose(row);

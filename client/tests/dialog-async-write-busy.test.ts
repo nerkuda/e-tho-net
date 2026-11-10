@@ -134,6 +134,10 @@ async function labels(): Promise<{
   apply: string;
   deleteForever: string;
   execute: string;
+  select: string;
+  addProperty: string;
+  createProperty: string;
+  propertiesTab: string;
 }> {
   const { t } = await import('../src/renderer/lib/i18n.js');
   return {
@@ -142,6 +146,10 @@ async function labels(): Promise<{
     apply: t('actions.apply'),
     deleteForever: t('actions.deleteForever'),
     execute: t('layerMerge.label.vypolnit'),
+    select: t('actions.select'),
+    addProperty: t('typeEditor.addProperty'),
+    createProperty: t('typeManager.label.createProperty'),
+    propertiesTab: t('typeEditor.tab.properties'),
   };
 }
 
@@ -410,5 +418,233 @@ describe('busy: слияние изменений мысли (ef89c5c8)', () => 
     await tick(80);
 
     assert.equal(backdrops().length, 0, 'успех закрывает диалог слияния');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Пикер свойств в редакторе типа (screens/type-manager.ts): «Выбрать» — не
+// серверная запись, но флаг `selecting` тоже обязан сниматься в `finally`
+// (замечание верификатора к ошибке ef89c5c8).
+// ---------------------------------------------------------------------------
+
+function thoughtType(overrides: Record<string, unknown> = {}): any {
+  return {
+    id: 'tt-1',
+    name: 'Тип',
+    parent_id: 'tt-root',
+    is_root: false,
+    icon: null,
+    icon_kind: 'emoji',
+    icon_color: null,
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    description: null,
+    comment_template_md: null,
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    created_by: 'u-1',
+    ...overrides,
+  };
+}
+
+const ROOT_TYPE = thoughtType({ id: 'tt-root', name: 'основной', is_root: true, parent_id: null });
+const EDITED_TYPE = thoughtType();
+/** Потомок редактируемого типа — без него проверка «свойство у потомков» не идёт в реестр. */
+const CHILD_TYPE = thoughtType({ id: 'tt-2', name: 'Потомок', parent_id: 'tt-1' });
+
+/** Реестровая строка свойства с привязками — проверка использования включается. */
+function registryRow(): any {
+  return {
+    id: 'p-1',
+    name: 'Приоритет',
+    value_type: 'text',
+    config: null,
+    description: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    types_count: 1,
+    values_count: 0,
+  };
+}
+
+/**
+ * Монтирует редактор существующего типа и открывает в нём пикер свойств
+ * («Свойства» → «Добавить свойство»). `usage` — ответ `propertyRegistry.usage`
+ * на N-й вызов (проверка перенимаемых привязок потомков).
+ */
+async function mountPropertyPicker(
+  usage: (call: number) => Promise<any>,
+): Promise<{ editor: ShimEl; usageCalls: () => number }> {
+  let calls = 0;
+  const api: any = {
+    types: {
+      listThoughtTypes: async () => [ROOT_TYPE, EDITED_TYPE, CHILD_TYPE],
+      getThoughtType: async () => EDITED_TYPE,
+      updateThoughtType: async () => EDITED_TYPE,
+      createThoughtType: async () => EDITED_TYPE,
+      listTypeProperties: async () => [],
+      listThoughtTypeProperties: async () => [],
+    },
+    ui: { getState: async () => null, setState: async () => undefined },
+    viewRegistry: { list: async () => [] },
+    thoughtTypeViews: { list: async () => [] },
+    propertyRegistry: {
+      list: async () => [registryRow()],
+      usage: async () => {
+        calls += 1;
+        return usage(calls);
+      },
+    },
+    locks: {
+      acquire: async () => ({
+        id: 'lock-1',
+        entity_type: 'thought_type',
+        entity_id: 'tt-1',
+        user_id: 'me',
+        client_id: 'c',
+        acquired_at_ms: 0,
+      }),
+      release: async () => undefined,
+    },
+  };
+  (globalThis as any).window.etn = api;
+  (globalThis as any).etn = api;
+
+  const { store } = await import('../src/renderer/state.js');
+  (store.state as any).networkId = 'n1';
+  (store.state as any).me = null;
+  (store.state as any).network = { id: 'n1' };
+  (store.state as any).thoughtTypes = [ROOT_TYPE, EDITED_TYPE, CHILD_TYPE];
+  (store.state as any).linkTypes = [{ id: 'lt-root', is_root: true, parent_id: null }];
+
+  const { showThoughtTypeEditor } = await import('../src/renderer/screens/type-manager.js');
+  void showThoughtTypeEditor(EDITED_TYPE, () => undefined);
+  await tick(80);
+
+  const editor = topDialog();
+  const L = await labels();
+  button(editor, L.propertiesTab).fire('click', {});
+  await tick(40);
+  button(editor, L.addProperty).fire('click', {});
+  await tick(80);
+  return { editor, usageCalls: () => calls };
+}
+
+/** Выделяет первую строку пикера клавиатурой из поля поиска (общий список). */
+async function selectFirstPickerRow(root: ShimEl, searchPlaceholder: string): Promise<void> {
+  const search = root.findAll(
+    (n) => n.tagName === 'input' && (n as any).placeholder === searchPlaceholder,
+  )[0];
+  assert.ok(search !== undefined, 'в пикере есть поле поиска');
+  // Клавиатура полосы поиска идёт общим диспетчером контекстов клиента.
+  const keymap = await import('../src/renderer/lib/keymap.js');
+  search!.emit('focusin');
+  const press = (key: string): void => {
+    keymap.dispatchKeyEvent({
+      key,
+      target: search,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    } as unknown as KeyboardEvent);
+  };
+  press('ArrowDown');
+  press('Enter');
+  await tick(20);
+}
+
+describe('пикер свойств: снятие selecting в finally (ef89c5c8)', () => {
+  it('исключение в проверке свойства не глушит «Выбрать»: кнопки оживают, повторный выбор срабатывает', async () => {
+    await resetDialogs();
+    const L = await labels();
+    const pending = gate<any>();
+    // Первый ответ проверки — объект, чтение `bindings` которого бросает
+    // (битый ответ реестра; внутренний catch `usage` его не ловит — падение
+    // происходит уже при разборе результата, в `warnDescendantBindings`).
+    const brokenUsage = Object.defineProperty({}, 'bindings', {
+      get(): never {
+        throw new Error('проверка свойств упала');
+      },
+    });
+    const { usageCalls } = await mountPropertyPicker((call) =>
+      call === 1 ? pending.promise : Promise.resolve({ bindings: [] }),
+    );
+
+    const picker = topDialog();
+    assert.equal(backdrops().length, 2, 'пикер открыт поверх редактора типа');
+    const { t } = await import('../src/renderer/lib/i18n.js');
+    await selectFirstPickerRow(picker, t('actions.search'));
+
+    const selectBtn = button(picker, L.select);
+    selectBtn.fire('click', {});
+    await tick(30);
+
+    assert.equal(usageCalls(), 1, 'проверка использования ушла одним запросом');
+    assert.equal(selectBtn.disabled, true, '«Выбрать» отключена на время проверки');
+    assert.equal(
+      button(picker, L.createProperty).disabled,
+      true,
+      '«Создать свойство» отключена на время проверки',
+    );
+    assert.equal(button(picker, L.cancel).disabled, true, '«Отмена» отключена на время проверки');
+
+    pending.resolve(brokenUsage);
+    await tick(60);
+
+    assert.equal(backdrops().length, 2, 'исключение не закрывает диалог выбора');
+    assert.equal(selectBtn.disabled, false, 'после исключения «Выбрать» снова активна');
+    assert.equal(button(picker, L.cancel).disabled, false, '«Отмена» снова активна');
+    assert.ok(
+      picker.flatText().includes('проверка свойств упала'),
+      'исключение проверки показано в футере диалога',
+    );
+
+    // Повторный выбор: флаг снят, поэтому обработчик снова работает и диалог
+    // возвращает черновик (закрывается).
+    selectBtn.fire('click', {});
+    await tick(80);
+
+    assert.equal(usageCalls(), 2, 'повторный выбор снова запустил проверку');
+    assert.equal(backdrops().length, 1, 'успешный выбор закрывает пикер, редактор остаётся');
+  });
+
+  it('после исключения проверки флаг не залипает: повторный выбор уходит в проверку и закрывает пикер', async () => {
+    await resetDialogs();
+    const L = await labels();
+    const pending = gate<any>();
+    const brokenUsage = Object.defineProperty({}, 'bindings', {
+      get(): never {
+        throw new Error('проверка свойств упала');
+      },
+    });
+    const { usageCalls } = await mountPropertyPicker((call) =>
+      call === 1 ? pending.promise : Promise.resolve({ bindings: [] }),
+    );
+
+    const picker = topDialog();
+    const { t } = await import('../src/renderer/lib/i18n.js');
+    await selectFirstPickerRow(picker, t('actions.search'));
+
+    button(picker, L.select).fire('click', {});
+    await tick(30);
+    pending.resolve(brokenUsage);
+    await tick(60);
+    assert.equal(usageCalls(), 1, 'первая проверка упала');
+
+    // Прежний код оставлял `selecting = true` — второй выбор молча
+    // игнорировался, и диалог было не закрыть кнопкой.
+    button(picker, L.select).fire('click', {});
+    await tick(80);
+
+    assert.equal(usageCalls(), 2, 'второй выбор снова запустил проверку');
+    assert.equal(backdrops().length, 1, 'диалог выбора закрылся после успешного выбора');
   });
 });
