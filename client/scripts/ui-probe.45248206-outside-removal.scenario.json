@@ -78,7 +78,7 @@
     },
     {
       "name": "click-target-clear",
-      "probe": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const row=rows.find((r)=>r.textContent.includes('Содержится в B')); if(row === undefined) return 'no-row'; const btn=[...row.querySelectorAll('.link-value-corner-btn')].find((b)=>b.title==='Очистить значение'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const row=rows.find((r)=>r.textContent.includes('Содержится в B')); if(row === undefined) return 'no-row'; const btn=[...row.querySelectorAll('.link-value-corner-btn')].find((b)=>b.textContent.trim()==='✕'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {

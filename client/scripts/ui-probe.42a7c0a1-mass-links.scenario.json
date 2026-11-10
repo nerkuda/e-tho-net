@@ -2,6 +2,7 @@
   "name": "42a7c0a1-mass-links",
   "description": "GUI-гейт ошибки 42a7c0a1: вкладка «Граф» редактора при массовых связях. В изолированном стенде у засеянной мысли есть сосед с 12 однотипными (нетипизированными) рёбрами — порог MASS_LINK_THRESHOLD. Ожидание: на графе ровно одна линия этой пары (плюс линия структурного родителя HOME), остальные 11 рёбер — числом в чипе «+11» и в счётчике шапки «Скрыто массовых: 11»; полный список — на вкладке «Свойства», где все 12 рёбер видны отдельными чипами. На дофиксовой сборке сценарий краснеет: линий 13 (одна линия HOME + 12 линий массовой пары), чип при этом уже показывает «+11» — обещание счётчика расходится с отрисовкой. Прогон ОДНОЙ командой (фикстуру вызывает сам стенд): node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-mass-links.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs. Фикстура идемпотентна: повторный запуск на том же стенде число рёбер не меняет. Подстановки {{serverUrl}}, {{apiKey}}, {{thoughtId}}, {{seedTitle}} ставит ui-probe-stand.mjs.",
   "timeout": 90000,
+  "texts": { "massChip11": { "ru": "связь: ещё 11 связей. Полный список — на вкладке «Свойства».", "en": "link: 11 more links. The full list — is on the “Properties” tab." }, "hiddenMass11": { "ru": "Скрыто массовых: 11", "en": "Bulk hidden: 11" } },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -79,12 +80,12 @@
     {
       "name": "chip-tooltip",
       "probe": "document.querySelector('.mini-graph-mass-chip title')?.textContent ?? null",
-      "expect": "связь: ещё 11 связей. Полный список — на вкладке «Свойства»."
+      "expect": "{{text:massChip11}}"
     },
     {
       "name": "header-mass",
-      "probe": "Array.from(document.querySelectorAll('.mini-graph-header-stat')).map((s) => s.textContent).find((t) => t.startsWith('Скрыто массовых:')) ?? null",
-      "expect": "Скрыто массовых: 11"
+      "probe": "document.querySelectorAll('.mini-graph-header-stat')[1]?.textContent ?? null",
+      "expect": "{{text:hiddenMass11}}"
     },
     {
       "name": "hover-mass-line",

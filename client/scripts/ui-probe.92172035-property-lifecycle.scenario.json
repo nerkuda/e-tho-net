@@ -2,6 +2,7 @@
   "name": "92172035-property-lifecycle",
   "description": "Сценарий 479d530a (С3) — жизненный цикл «личное ↔ типовое» через контекстное меню имени свойства (0.14.1, задача 92172035, требование 53701739). Тип «квартира» (потомок «недвижимости»), у мысли внетиповое «Период проживания». Проверяются состав меню по состояниям строки, «Перенести в типовые», «Исключить из типовых» (источник в подписи), вариант с иерархией (привязка на родителе) и сохранность значения на каждом шаге.",
   "timeout": 60000,
+  "texts": { "editProperty": { "ru": "Изменить свойство", "en": "Edit property" }, "moveUp": { "ru": "Переместить выше", "en": "Move up" }, "moveDown": { "ru": "Переместить ниже", "en": "Move down" }, "clearItem": { "ru": "Очистить", "en": "Clear" }, "promoteToTyped": { "ru": "Перенести в типовые свойства", "en": "Move to typed properties" }, "excludeFromTyped": { "ru": "Исключить из типовых свойств", "en": "Exclude from typed properties" }, "deleteItem": { "ru": "Удалить", "en": "Delete" }, "netMenu": { "ru": "Меню мыслесети", "en": "Thought network menu" }, "thoughtTypes": { "ru": "Типы мыслей", "en": "Thought types" }, "propertiesTab": { "ru": "Свойства", "en": "Properties" }, "unbindTitle": { "ru": "Снять привязку свойства — значения не удаляются", "en": "Detach the property attachment — values are not deleted" }, "confirm": { "ru": "Подтвердить", "en": "Confirm" }, "applyAndClose": { "ru": "Применить и закрыть", "en": "Apply and close" } },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -73,17 +74,17 @@
       "name": "outside-menu-open",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Переместить выше",
-        "Переместить ниже",
-        "Очистить",
-        "Перенести в типовые свойства",
-        "Удалить"
+        "{{text:editProperty}}",
+        "{{text:moveUp}}",
+        "{{text:moveDown}}",
+        "{{text:clearItem}}",
+        "{{text:promoteToTyped}}",
+        "{{text:deleteItem}}"
       ]
     },
     {
       "name": "outside-menu-promote",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Перенести в типовые свойства')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('{{text:promoteToTyped}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -107,14 +108,14 @@
       "name": "typed-menu-open",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>r.textContent.includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Очистить",
-        "Исключить из типовых свойств"
+        "{{text:editProperty}}",
+        "{{text:clearItem}}",
+        "{{text:excludeFromTyped}}"
       ]
     },
     {
       "name": "typed-menu-exclude",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Исключить из типовых свойств')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('{{text:excludeFromTyped}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -147,14 +148,14 @@
       "name": "inherited-menu-open",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>r.textContent.includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Очистить",
-        "Исключить из типовых свойств"
+        "{{text:editProperty}}",
+        "{{text:clearItem}}",
+        "{{text:excludeFromTyped}}"
       ]
     },
     {
       "name": "inherited-menu-exclude",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('Исключить из типовых свойств')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>b.textContent.includes('{{text:excludeFromTyped}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -185,16 +186,16 @@
     },
     {
       "name": "open-net-menu",
-      "probe": "(() => { const btn=document.querySelector('button[title=\"Меню мыслесети\"]'); if(btn === null) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=document.querySelector('button[title=\"{{text:netMenu}}\"]'); if(btn === null) return 'no-btn'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
       "name": "net-menu-visible",
-      "waitFor": "(() => [...document.querySelectorAll('.menu .menu-item')].some((b)=>(b.textContent ?? '').includes('Типы мыслей')))()"
+      "waitFor": "(() => [...document.querySelectorAll('.menu .menu-item')].some((b)=>(b.textContent ?? '').includes('{{text:thoughtTypes}}')))()"
     },
     {
       "name": "open-thought-types",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Типы мыслей')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('{{text:thoughtTypes}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -221,34 +222,34 @@
     },
     {
       "name": "type-editor-properties-tab",
-      "waitFor": "(() => [...document.querySelectorAll('.dialog-backdrop .ui-tab, .dialog-backdrop [role=\"tab\"]')].some((t)=>(t.textContent ?? '').trim() === 'Свойства'))()"
+      "waitFor": "(() => [...document.querySelectorAll('.dialog-backdrop .ui-tab, .dialog-backdrop [role=\"tab\"]')].some((t)=>(t.textContent ?? '').trim() === '{{text:propertiesTab}}'))()"
     },
     {
       "name": "open-type-properties-tab",
-      "probe": "(() => { const tab=[...document.querySelectorAll('.dialog-backdrop .ui-tab, .dialog-backdrop [role=\"tab\"]')].find((t)=>(t.textContent ?? '').trim() === 'Свойства'); if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "probe": "(() => { const tab=[...document.querySelectorAll('.dialog-backdrop .ui-tab, .dialog-backdrop [role=\"tab\"]')].find((t)=>(t.textContent ?? '').trim() === '{{text:propertiesTab}}'); if(tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
       "name": "own-binding-row-visible",
-      "waitFor": "(() => { const btn=document.querySelector('button[title=\"Снять привязку свойства — значения не удаляются\"]'); if(btn === null) return false; const row=btn.closest('tr'); return row !== null && (row.textContent ?? '').includes('Период проживания'); })()"
+      "waitFor": "(() => { const btn=document.querySelector('button[title=\"{{text:unbindTitle}}\"]'); if(btn === null) return false; const row=btn.closest('tr'); return row !== null && (row.textContent ?? '').includes('Период проживания'); })()"
     },
     {
       "name": "unbind-in-type-editor",
-      "probe": "(() => { const btn=document.querySelector('button[title=\"Снять привязку свойства — значения не удаляются\"]'); if(btn === null) return 'no-btn'; const row=btn.closest('tr'); if(row === null || !(row.textContent ?? '').includes('Период проживания')) return 'no-row'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=document.querySelector('button[title=\"{{text:unbindTitle}}\"]'); if(btn === null) return 'no-btn'; const row=btn.closest('tr'); if(row === null || !(row.textContent ?? '').includes('Период проживания')) return 'no-row'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
       "name": "confirm-unbind",
-      "waitFor": "(() => [...document.querySelectorAll('.dialog-backdrop .ui-btn')].some((b)=>(b.textContent ?? '').trim() === 'Подтвердить'))()"
+      "waitFor": "(() => [...document.querySelectorAll('.dialog-backdrop .ui-btn')].some((b)=>(b.textContent ?? '').trim() === '{{text:confirm}}'))()"
     },
     {
       "name": "confirm-unbind-click",
-      "probe": "(() => { const dialogs=[...document.querySelectorAll('.dialog-backdrop')]; const dlg=dialogs[dialogs.length-1]; const btn=[...dlg.querySelectorAll('.ui-btn')].find((b)=>(b.textContent ?? '').trim() === 'Подтвердить'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const dialogs=[...document.querySelectorAll('.dialog-backdrop')]; const dlg=dialogs[dialogs.length-1]; const btn=[...dlg.querySelectorAll('.ui-btn')].find((b)=>(b.textContent ?? '').trim() === '{{text:confirm}}'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
       "name": "apply-and-close-type-editor",
-      "probe": "(() => { const dialogs=[...document.querySelectorAll('.dialog-backdrop')]; const btn=[...dialogs.flatMap((d)=>[...d.querySelectorAll('.ui-btn')])].find((b)=>(b.textContent ?? '').includes('Применить и закрыть')); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const dialogs=[...document.querySelectorAll('.dialog-backdrop')]; const btn=[...dialogs.flatMap((d)=>[...d.querySelectorAll('.ui-btn')])].find((b)=>(b.textContent ?? '').includes('{{text:applyAndClose}}')); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -285,17 +286,17 @@
       "name": "outside-menu-edit-open",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Переместить выше",
-        "Переместить ниже",
-        "Очистить",
-        "Перенести в типовые свойства",
-        "Удалить"
+        "{{text:editProperty}}",
+        "{{text:moveUp}}",
+        "{{text:moveDown}}",
+        "{{text:clearItem}}",
+        "{{text:promoteToTyped}}",
+        "{{text:deleteItem}}"
       ]
     },
     {
       "name": "outside-menu-edit-click",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Изменить свойство')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('{{text:editProperty}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -315,17 +316,17 @@
       "name": "outside-menu-delete",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Переместить выше",
-        "Переместить ниже",
-        "Очистить",
-        "Перенести в типовые свойства",
-        "Удалить"
+        "{{text:editProperty}}",
+        "{{text:moveUp}}",
+        "{{text:moveDown}}",
+        "{{text:clearItem}}",
+        "{{text:promoteToTyped}}",
+        "{{text:deleteItem}}"
       ]
     },
     {
       "name": "outside-delete-click",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Удалить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('{{text:deleteItem}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -355,17 +356,17 @@
       "name": "outside-menu-clear",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('Период проживания')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Переместить выше",
-        "Переместить ниже",
-        "Очистить",
-        "Перенести в типовые свойства",
-        "Удалить"
+        "{{text:editProperty}}",
+        "{{text:moveUp}}",
+        "{{text:moveDown}}",
+        "{{text:clearItem}}",
+        "{{text:promoteToTyped}}",
+        "{{text:deleteItem}}"
       ]
     },
     {
       "name": "outside-clear-click",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Очистить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('{{text:clearItem}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -415,14 +416,14 @@
       "name": "typed-link-menu",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-tab table.prop-table tbody tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Очистить",
-        "Исключить из типовых свойств"
+        "{{text:editProperty}}",
+        "{{text:clearItem}}",
+        "{{text:excludeFromTyped}}"
       ]
     },
     {
       "name": "typed-link-clear-click",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Очистить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('{{text:clearItem}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -526,17 +527,17 @@
       "name": "outside-link-menu",
       "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>(r.textContent ?? '').includes('связано с')); if(row === undefined) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:140,clientY:140})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent); })()",
       "expect": [
-        "Изменить свойство",
-        "Переместить выше",
-        "Переместить ниже",
-        "Очистить",
-        "Перенести в типовые свойства",
-        "Удалить"
+        "{{text:editProperty}}",
+        "{{text:moveUp}}",
+        "{{text:moveDown}}",
+        "{{text:clearItem}}",
+        "{{text:promoteToTyped}}",
+        "{{text:deleteItem}}"
       ]
     },
     {
       "name": "outside-link-delete-click",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Удалить')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('{{text:deleteItem}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {

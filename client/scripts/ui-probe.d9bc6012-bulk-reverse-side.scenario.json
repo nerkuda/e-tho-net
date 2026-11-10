@@ -2,6 +2,11 @@
   "name": "d9bc6012-bulk-reverse-side",
   "description": "Официальный GUI-сценарий ошибки d9bc6012: массовое назначение ОБРАТНОЙ стороны свойства-связи. Стенд: мысли A/B/C/D/E типа «Задача d9»; свойство-связь «версия» (прямая сторона) — «работы версии» (обратная) привязано к типу стороной source. Живой поиск обратной строки ограничен привязками (допустимые источники ребра — типы source-стороны), поэтому значение — мысль E того же типа; пара «имя стороны + сторона» от выбора значения не зависит. Пользователь выделяет A/B/C → «Свойства» → «Изменить значение свойства…» → (+) → строка «работы версии» (side=target) → значение E → «Применить». До фикса клиент отправлял РЕЕСТРОВОЕ имя «версия» + side=target, сервер отвечал 422 «сторона противоречит имени»: значения не записывались, диалог оставался с причинами. После фикса: диалог закрыт, у A/B/C живут рёбра обратной стороны (E→A/B/C), чтение отдаёт имя «работы версии»/side target, прямой стороны нет, у E — «версия»/source с четырьмя целями. Отдельный шаг пишет по API реестровым именем «версия» + side=target мысли D — проверка серверного правила «явный side приоритетен» на живой сборке (до фикса — 422).",
   "timeout": 300000,
+  "texts": {
+    "selectionProperties": { "ru": "Свойства", "en": "Properties" },
+    "editValueProperties": { "ru": "Изменить значение свойства…", "en": "Change property value…" },
+    "apply": { "ru": "Применить", "en": "Apply" }
+  },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -72,12 +77,12 @@
     },
     {
       "name": "open-properties-menu",
-      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='{{text:selectionProperties}}'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
       "name": "open-property-values-dialog",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('{{text:editValueProperties}}')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -173,7 +178,7 @@
     },
     {
       "name": "apply",
-      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Применить'); if(!btn) return 'no-button'; if(btn.disabled) return 'disabled'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='{{text:apply}}'); if(!btn) return 'no-button'; if(btn.disabled) return 'disabled'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {

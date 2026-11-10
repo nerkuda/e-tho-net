@@ -2,6 +2,7 @@
   "name": "2e87285b-property-order",
   "description": "Порядок и навигация таблицы свойств (Z7): DnD за имя, Alt+↑/↓, меню, событие порядка (запись мимо UI = второй участник), навигация ↑/↓, сохранение порядка при смене сущности.",
   "timeout": 60000,
+  "texts": { "moveUp": { "ru": "Переместить выше", "en": "Move up" }, "moveDown": { "ru": "Переместить ниже", "en": "Move down" } },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -103,7 +104,7 @@
     },
     {
       "name": "collapse-type-group",
-      "probe": "(() => { const h=[...document.querySelectorAll('.group-header')].find((x)=>(x.textContent ?? '').includes('Свойства типа')); if(h === undefined) return 'no-header'; h.click(); return 'ok'; })()",
+      "probe": "(() => { const h=document.querySelector('[data-group-id=\"properties.type\"] > .group-header'); if(h === null) return 'no-header'; h.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -211,15 +212,15 @@
     },
     {
       "name": "menu-order-items",
-      "probe": "(() => { const row=document.querySelector('.properties-outside-body tr:nth-child(2)'); if(row === null) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:160,clientY:160})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent).filter((t)=>t.startsWith('Переместить')); })()",
+      "probe": "(() => { const row=document.querySelector('.properties-outside-body tr:nth-child(2)'); if(row === null) return 'no-row'; const cell=row.querySelector('.prop-name-cell'); cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:160,clientY:160})); return [...document.querySelectorAll('.menu .menu-item-label')].map((e)=>e.textContent).filter((t)=>['{{text:moveUp}}','{{text:moveDown}}'].includes(t)); })()",
       "expect": [
-        "Переместить выше",
-        "Переместить ниже"
+        "{{text:moveUp}}",
+        "{{text:moveDown}}"
       ]
     },
     {
       "name": "menu-move-down",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('Переместить ниже')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((b)=>(b.textContent ?? '').includes('{{text:moveDown}}')); if(item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -296,7 +297,7 @@
     },
     {
       "name": "expand-type-group",
-      "probe": "(() => { const h=[...document.querySelectorAll('.group-header')].find((x)=>(x.textContent ?? '').includes('Свойства типа')); if(h === undefined) return 'no-header'; h.click(); return 'ok'; })()",
+      "probe": "(() => { const h=document.querySelector('[data-group-id=\"properties.type\"] > .group-header'); if(h === null) return 'no-header'; h.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {

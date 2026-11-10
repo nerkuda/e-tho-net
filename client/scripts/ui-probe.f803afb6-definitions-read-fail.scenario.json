@@ -2,6 +2,7 @@
   "name": "f803afb6-definitions-read-fail",
   "description": "GUI-сценарий ошибки f803afb6: полный обрыв связи, типовая таблица свойств не теряет строки и не показывает техническую английскую ошибку. Фикстура — ui-probe.d720265c-properties-read-fail-seed.mjs (тип «Т1 d720265c» с типовым «Теги d720265c» = «срочно» и внетиповым «Внешнее d720265c» = «старое»). Клиент подключается, открывает мысль и «Свойства», затем РЕАЛЬНЫЙ обрыв: window.etn.server.disconnect() (main сбрасывает RestClient — чтение определений падает каноническим отказом «Not connected: call etn.server.connect first», как при погашенном сервере). Локальный канал правок запускает перечитывание. Ожидание: строка «срочно» на месте, тост из словаря один (дедупликация), строк «Ошибка:»/«Not connected» нет; после server.connect + networks.open панель перечитывает определения и значения — показывает серверное «восстановлено». Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.f803afb6-definitions-read-fail.scenario.json --scenario-seed client/scripts/ui-probe.d720265c-properties-read-fail-seed.mjs --out .tmp/etn-f803afb6/out",
   "timeout": 300000,
+  "texts": { "valuesReadFailed": { "ru": "Не удалось прочитать значения свойств", "en": "Failed to read property values" } },
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
     { "name": "fill-server-url", "click": "input[placeholder^='http']" },
@@ -33,7 +34,7 @@
     },
     {
       "name": "dictionary-toast",
-      "waitFor": "[...document.querySelectorAll('.notice-text')].some((n)=>n.textContent.includes('Не удалось прочитать значения свойств'))",
+      "waitFor": "[...document.querySelectorAll('.notice-text')].some((n)=>n.textContent.includes('{{text:valuesReadFailed}}'))",
       "timeout": 20000
     },
     {
@@ -43,7 +44,7 @@
     },
     {
       "name": "toast-no-spam",
-      "probe": "(async () => { document.dispatchEvent(new CustomEvent('etn:property-values-refreshed')); document.dispatchEvent(new CustomEvent('etn:property-values-refreshed')); await new Promise((r)=>setTimeout(r,500)); return [...document.querySelectorAll('.notice-text')].filter((n)=>n.textContent.includes('Не удалось прочитать значения свойств')).length; })()",
+      "probe": "(async () => { document.dispatchEvent(new CustomEvent('etn:property-values-refreshed')); document.dispatchEvent(new CustomEvent('etn:property-values-refreshed')); await new Promise((r)=>setTimeout(r,500)); return [...document.querySelectorAll('.notice-text')].filter((n)=>n.textContent.includes('{{text:valuesReadFailed}}')).length; })()",
       "expect": 1
     },
     {
