@@ -70,6 +70,7 @@ export interface GroupSpec {
  */
 export function groupSection(spec: GroupSpec): HTMLElement {
   return collapsibleSection({
+    id: spec.id,
     title: spec.title,
     count: spec.count,
     loadCount: spec.loadCount,

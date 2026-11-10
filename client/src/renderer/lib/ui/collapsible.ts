@@ -38,6 +38,13 @@ export interface CollapsibleClasses {
 
 /** Спецификация сворачиваемой группы. */
 export interface CollapsibleSpec {
+  /**
+   * Стабильный идентификатор группы: попадает в `data-group-id` корня.
+   * Подпись группы локализована (ADR `daab6ac4`), поэтому адресовать группу в
+   * тестах и GUI-сценариях можно только так; у потребителя без своего id
+   * атрибута нет (у редактора id даёт `groupSection`).
+   */
+  id?: string;
   title: string;
   /** Статический текст счётчика. */
   count?: string;
@@ -142,6 +149,9 @@ export function collapsibleSection(spec: CollapsibleSpec): CollapsibleSection {
 
   const root = div();
   root.classList.add(...classes.root);
+  // Стабильный адрес группы для тестов и сценариев: подпись локализована, а
+  // `data-group-id` не зависит от языка (ошибка c73bcb60).
+  if (spec.id !== undefined) root.dataset.groupId = spec.id;
   if (spec.compact === true) root.classList.add('compact');
 
   const header = div();
