@@ -346,8 +346,10 @@ export type OntologyDeleteKind =
  *
  *   * `thought_type` — обнуляет `type_id` связанных мыслей, каскад на
  *     `type_properties` этого типа;
- *   * `link_type` — каскад на связи этого типа (связи удаляются вместе с
- *     их свойствами и комментариями);
+ *   * `link_type` — рёбра типа НЕ удаляются: у них обнуляется `type_id`, и
+ *     они становятся структурными («Родители/Потомки», требование 09f692ff);
+ *     удаляются привязки и парное свойство-связь. Число живых рёбер,
+ *     потерявших тип, — `affected_counts.links_becoming_structural`;
  *   * `property` — каскад на `property_values` и `type_properties` этого
  *     свойства;
  *   * `type_property` — удаляется только строка привязки.
@@ -363,9 +365,12 @@ export interface OntologyDeleteParams {
 
 /** Счётчики влияния удаления, по виду сущности. */
 export interface OntologyDeleteAffectedCounts {
-  /** Для `thought_type` / `link_type` — число мыслей/связей, у которых
-   *  обнулился `type_id` (или которые были удалены каскадом). */
+  /** Для `thought_type` — число мыслей этого типа (видимых в слое). После
+   *  удаления с `force` их `type_id` обнуляется, мысли не удаляются. */
   thoughts_count?: number;
+  /** Для `link_type` — ВСЕ рёбра типа, включая неактивные и помеченные на
+   *  удаление (без фильтров; `links_v` рабочего слоя). Не путать с
+   *  `links_becoming_structural`: это разные величины и разные фильтры. */
   links_count?: number;
   /** Для `property` — число сброшенных `property_values`. */
   property_values_count?: number;
@@ -374,6 +379,12 @@ export interface OntologyDeleteAffectedCounts {
   /** Для `thought_type` (с `force=true`) — число отборов, удалённых
    *  каскадом вместе с типом (задача c1fa71d4, 0.7.3). */
   type_views_count?: number;
+  /** Для `link_type` — число ЖИВЫХ рёбер, потерявших `type_id` и ставших
+   *  структурными (ошибка 3537f1c2): та же семантика и те же фильтры, что у
+   *  REST `DELETE /properties/:id` (`active = 1 AND marked_for_deletion = 0`).
+   *  Отдаётся ВСЕГДА для `kind: "link_type"`, включая `0` (не `null`, не
+   *  отсутствует). Для остальных `kind` поля нет. */
+  links_becoming_structural?: number;
 }
 
 /** Результат `etn.ontology.delete`. */

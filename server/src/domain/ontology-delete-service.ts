@@ -10,8 +10,11 @@
  *   * С `force` — каскад:
  *     - `thought_type` → обнулить `type_id` у связанных мыслей, удалить
  *       `type_properties` этого типа;
- *     - `link_type` → удалить связи этого типа (со свойствами и
- *       комментариями), удалить `type_properties`;
+ *     - `link_type` → рёбра типа **не удаляются**: у них обнуляется `type_id`,
+ *       и они становятся структурными («Родители/Потомки»); удаляются
+ *       привязки и парное свойство-связь. Число живых рёбер, потерявших тип,
+ *       считается до удаления и отдаётся в
+ *       `affected_counts.links_becoming_structural`;
  *     - `property` → удалить `property_values` и `type_properties` этого
  *       свойства;
  *     - `type_property` → удалить строку привязки.
@@ -34,6 +37,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { getRootTypeId } from './type-hierarchy.js';
 import {
+  countLinksBecomingStructural,
   deleteNetworkProperty,
   deleteTypeProperty,
   getLinkPropertyByLinkTypeId,
@@ -72,6 +76,10 @@ interface OntologyDeleteUsage {
   property_values_count?: number;
   /** Для `thought_type` — число отборов типа (задача c1fa71d4, 0.7.3). */
   type_views_count?: number;
+  /** Для `link_type` — число живых рёбер, теряющих `type_id` (ошибка
+   *  3537f1c2): считается до удаления с фильтрами REST и отдаётся всегда,
+   *  включая 0. */
+  links_becoming_structural?: number;
 }
 
 function buildUsageDetails(
@@ -171,6 +179,15 @@ export function deleteOntologyEntity(
         // рёбрами, а не в таблице значений (их судьбу решает deleteLinkType).
         // Живые рёбра типа — существующая семантика deleteLinkType:
         // без `force` отказ, с `force` обнуление `type_id`.
+        //
+        // Ошибка 3537f1c2: рёбра не удаляются — они теряют `type_id` и
+        // становятся структурными. Число таких рёбер считаем ДО удаления
+        // (после `deleteLinkType` в `links_v` их уже не найти) и тем же
+        // хелпером, что REST `DELETE /properties/:id`: фильтры REST — только
+        // живые рёбра. Значение отдаём всегда, включая 0; `links_count` из
+        // `collectUsage` считает шире (корзина и неактивные) и его не
+        // подменяет.
+        usage.links_becoming_structural = countLinksBecomingStructural(ndb, params.id);
         const pair = getLinkPropertyByLinkTypeId(ndb, params.id);
         if (pair !== null) {
           const foreignBindings = (

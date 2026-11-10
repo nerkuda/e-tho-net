@@ -2240,6 +2240,30 @@ export interface DeletePropertyResult {
   links_becoming_structural: number | null;
 }
 
+/**
+ * Число живых рёбер типа связи, которые после удаления типа станут
+ * структурными (требование 09f692ff, ошибка 3537f1c2): рёбра НЕ удаляются —
+ * у них обнуляется `type_id`, и они показываются как «Родители/Потомки».
+ *
+ * Фильтры — контракт REST `DELETE /properties/:id`: только живые видимые
+ * рёбра (`active = 1 AND marked_for_deletion = 0`). Это число НЕ равно
+ * «числу рёбер типа»: фактическое обнуление (`deleteLinkType`) идёт без
+ * фильтра `active`, поэтому рёбра корзины и неактивные тоже теряют тип, но в
+ * счётчик не входят.
+ *
+ * Считается по `links_v` — в рабочем слое отражает видимые рёбра
+ * (13-layers.md §5). Один источник числа для REST- и MCP-путей.
+ */
+export function countLinksBecomingStructural(ndb: NetworkDb, linkTypeId: string): number {
+  return (
+    ndb
+      .prepare(
+        'SELECT COUNT(*) AS c FROM links_v WHERE type_id = ? AND active = 1 AND marked_for_deletion = 0',
+      )
+      .get(linkTypeId) as { c: number }
+  ).c;
+}
+
 export function deleteNetworkProperty(
   ndb: NetworkDb,
   id: string,
@@ -2274,13 +2298,7 @@ export function deleteNetworkProperty(
     if (typeof linkTypeId === 'string' && linkTypeId !== '' && cfg.structural !== true) {
       const linkType = getLinkType(ndb, linkTypeId);
       if (linkType !== null) {
-        const linkCount = (
-          ndb
-            .prepare(
-              'SELECT COUNT(*) AS c FROM links_v WHERE type_id = ? AND active = 1 AND marked_for_deletion = 0',
-            )
-            .get(linkTypeId) as { c: number }
-        ).c;
+        const linkCount = countLinksBecomingStructural(ndb, linkTypeId);
         // Используем force=1 — принудительное удаление с обнулением
         // `type_id` у рёбер. Постоянные комментарии рёбер сохраняются
         // (требование 09f692ff).

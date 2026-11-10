@@ -810,7 +810,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     ],
     destructive: true,
     readOnly: false,
-    effects: 'with `force` — cascade by the rules (nulling `type_id` of thoughts / deleting links / `property_values` / bindings / cascade of type views); an element in `type_roles` is rejected even with `force`. One write budget + one audit_log row.',
+    effects: 'with `force` — cascade by the rules (nulling `type_id` of thoughts / detaching links of the type — the edges are NOT deleted, they lose `type_id` and become structural, `affected_counts.links_becoming_structural` counts the live ones / `property_values` / bindings / cascade of type views); an element in `type_roles` is rejected even with `force`. One write budget + one audit_log row.',
     errors: '`VALIDATION_ERROR` (a used element without `force`, a role in `type_roles`), `NOT_FOUND`.',
     paramsContract: OntologyDelete,
   },
