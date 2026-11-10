@@ -52,7 +52,6 @@ export interface DialogTab {
   content: HTMLElement | (() => HTMLElement);
 }
 
-
 /**
  * Метки подтверждения закрытия «грязного» диалога (ошибка ed299fa0). Не
  * заданы — действуют общие «Сохранить изменения?» / «Сохранить» /
@@ -678,7 +677,9 @@ function restoreFocus(
   previouslyFocused: FocusableElement | null | undefined,
   focusAnchor: HTMLElement | null,
 ): void {
-  const order: Array<FocusableElement | HTMLElement | null | undefined> = isTextEntry(previouslyFocused)
+  const order: Array<FocusableElement | HTMLElement | null | undefined> = isTextEntry(
+    previouslyFocused,
+  )
     ? [previouslyFocused, focusAnchor]
     : [focusAnchor, previouslyFocused];
   for (const candidate of order) {
@@ -864,6 +865,18 @@ export function showDialog(opts: DialogOptions): () => void {
   const close = (): void => {
     if (teardowns.get(backdrop) === undefined) return;
     teardowns.delete(backdrop);
+    // Закрытие хозяина снимает и диалоги, открытые НАД ним (ошибка 7abb6945):
+    // редактор, закрывшийся сам после асинхронного «Применить и закрыть»,
+    // оставлял открытое поверх него подтверждение сиротой — `.dialog-backdrop`
+    // без живого владельца висел над интерфейсом, пока его не закроют вручную.
+    // Порядок — сверху вниз: верхний диалог уходит первым, поэтому его
+    // `onClose`/возврат фокуса отрабатывают раньше нижнего, а `restoreFocus`
+    // ребёнка ещё находит якорь в живом хозяине. Сами вызовы идемпотентны:
+    // повторный вход в `close` уже снятого диалога ничего не делает.
+    const ownIndex = stack.indexOf(backdrop);
+    if (ownIndex >= 0) {
+      for (const above of stack.slice(ownIndex + 1).reverse()) teardowns.get(above)?.();
+    }
     // Диалог — такой же слой, как меню/поповер: со снятием с реестра `Escape`
     // переходит следующему открытому слою или диалогу под ним.
     escapeOverlay?.release();
