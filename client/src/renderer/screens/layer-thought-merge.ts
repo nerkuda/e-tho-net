@@ -189,6 +189,16 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
     }
     body.append(group);
 
+    // Пока слияние идёт на сервере, кнопки футера disabled (ошибка ef89c5c8):
+    // второй клик запускал ВТОРОЕ слияние того же набора.
+    let applying = false;
+    let applyBtn: HTMLButtonElement | null = null;
+    let cancelBtn: HTMLButtonElement | null = null;
+    const setBusy = (value: boolean): void => {
+      applying = value;
+      if (applyBtn !== null) applyBtn.disabled = value;
+      if (cancelBtn !== null) cancelBtn.disabled = value;
+    };
     showDialog({
       title:
         titleOne !== null
@@ -197,22 +207,33 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
       body,
       size: 'm',
       buttons: [
-        { label: t('actions.cancel'), onClick: (close) => close() },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+          onClick: (close) => close(),
+        },
         {
           label: t('layerMerge.label.vypolnit'),
           primary: true,
           keepOpen: true,
+          ref: (btn) => {
+            applyBtn = btn;
+          },
           onClick: (close) => {
+            if (applying) return;
             void (async () => {
-              const confirmed =
-                selected !== 'discard' ||
-                (await confirmDialog(
-                  t('layerMerge.otkazatsyaChanges2'),
-                  t('layerMerge.allEditsLayerWillDeletedBezvozvratno', titleText),
-                  true,
-                ));
-              if (!confirmed) return;
+              setBusy(true);
               try {
+                const confirmed =
+                  selected !== 'discard' ||
+                  (await confirmDialog(
+                    t('layerMerge.otkazatsyaChanges2'),
+                    t('layerMerge.allEditsLayerWillDeletedBezvozvratno', titleText),
+                    true,
+                  ));
+                if (!confirmed) return;
                 const result = await applyVariant(networkId, layerId, subjects, selected);
                 close();
                 scheduleLayerOverridesRefresh();
@@ -228,6 +249,8 @@ export function openMergeDialog(networkId: string, subjects: LayerMergeSubject[]
                 }
               } catch (err) {
                 errorDialog(t('layerMerge.notSucceededRazreshitChanges'), err);
+              } finally {
+                setBusy(false);
               }
             })();
           },

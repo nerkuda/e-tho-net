@@ -138,22 +138,42 @@ export async function openLinkPropertyDropDialog(opts: {
       class: 'thought-drop-property-field',
     }),
   );
+  // Пока запись значения ждёт сервер, кнопки футера disabled (ошибка ef89c5c8):
+  // второй клик отправлял второй запрос того же значения.
+  let applying = false;
+  let applyBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean): void => {
+    applying = value;
+    if (applyBtn !== null) applyBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
   showDialog({
     title: t('thoughtDrop.linkPropertyTitle'),
     body,
     size: 's',
     buttons: [
-      { label: t('actions.cancel') },
+      {
+        label: t('actions.cancel'),
+        ref: (btn) => {
+          cancelBtn = btn;
+        },
+      },
       {
         label: t('actions.apply'),
         primary: true,
         keepOpen: true,
+        ref: (btn) => {
+          applyBtn = btn;
+        },
         onClick: (close) => {
+          if (applying) return;
           if (pick === null) {
             notice(t('thoughtDrop.pickProperty'));
             return;
           }
           const chosen = pick;
+          setBusy(true);
           void addLinkPropertyValue(networkId, opts.draggedId, chosen, opts.targetId)
             .then(() => {
               // Общий модуль сигналит о смене состава публикации; здесь —
@@ -162,7 +182,8 @@ export async function openLinkPropertyDropDialog(opts: {
               scheduleRefresh();
               close();
             })
-            .catch((err) => notice(`${t('thoughtDrop.linkFailed')}: ${errText(err)}`, 'error'));
+            .catch((err) => notice(`${t('thoughtDrop.linkFailed')}: ${errText(err)}`, 'error'))
+            .finally(() => setBusy(false));
         },
       },
     ],

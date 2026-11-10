@@ -149,6 +149,15 @@ export function mountPicker(host: HTMLElement): () => void {
 
     const { showDialog } = await import('../../lib/dialog.js');
     let busy = false;
+    // Кнопки футера disabled, пока запрос создания ждёт сервер (ошибка ef89c5c8):
+    // второй клик давал ВТОРУЮ мыслесеть.
+    let createBtn: HTMLButtonElement | null = null;
+    let cancelBtn: HTMLButtonElement | null = null;
+    const setBusy = (value: boolean): void => {
+      busy = value;
+      if (createBtn !== null) createBtn.disabled = value;
+      if (cancelBtn !== null) cancelBtn.disabled = value;
+    };
     /** Создание сети и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
     async function create(close: () => void): Promise<void> {
       if (busy) return;
@@ -157,7 +166,7 @@ export function mountPicker(host: HTMLElement): () => void {
         dialogError.show(t('networks.enterTitleNetwork'), { field: () => nameInput });
         return;
       }
-      busy = true;
+      setBusy(true);
       try {
         const network = await etn.networks.create(name, descInput.value.trim() || undefined);
         close();
@@ -168,7 +177,7 @@ export function mountPicker(host: HTMLElement): () => void {
       } catch (err) {
         dialogError.show(errText(err));
       } finally {
-        busy = false;
+        setBusy(false);
       }
     }
     showDialog({
@@ -184,11 +193,19 @@ export function mountPicker(host: HTMLElement): () => void {
         save: (close) => void create(close),
       },
       buttons: [
-        { label: t('actions.cancel') },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+        },
         {
           label: t('admin.label.create'),
           primary: true,
           keepOpen: true,
+          ref: (btn) => {
+            createBtn = btn;
+          },
           onClick: (close) => void create(close),
         },
       ],

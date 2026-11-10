@@ -2733,6 +2733,12 @@ async function openAttachDialog(opts: {
 
   return new Promise((resolve) => {
     const errorLine = footerErrorLine();
+    /**
+     * Идёт выбор строки: «Выбрать»/Enter/двойной клик по строке запускают
+     * асинхронную проверку перенимаемых привязок, и второй выбор за время
+     * первой проверки не нужен (ошибка ef89c5c8).
+     */
+    let selecting = false;
 
     /** Строки каталога по текущему снимку каталога типов связей. */
     const list = buildPropertyList({
@@ -2754,6 +2760,8 @@ async function openAttachDialog(opts: {
     /** Активация строки: подтверждение перенимаемых привязок потомков, затем
      *  возврат черновика привязки — выбранное имя задаёт сторону. */
     async function choose(row: PropertyListRow): Promise<void> {
+      if (selecting) return;
+      selecting = true;
       errorLine.clear();
       const warning = await warnDescendantBindings(networkId, row.registry, {
         ownerType,
@@ -2763,8 +2771,12 @@ async function openAttachDialog(opts: {
       });
       if (warning !== null) {
         const ok = await confirmDialog(t('typeManager.podklyuchitProperty'), warning, true);
-        if (!ok) return;
+        if (!ok) {
+          selecting = false;
+          return;
+        }
       }
+      selecting = false;
       close();
       resolve({
         draft: attachDraftFromExisting(row.registry, row.side, row.name),
@@ -3023,9 +3035,24 @@ function openDescriptionOverrideDialog(opts: {
   hint.style.margin = '0';
   body.append(hint, area);
 
+  // Пока PATCH ждёт сервер, кнопки футера disabled (ошибка ef89c5c8): второй
+  // клик отправлял второй запрос того же значения.
+  let applying = false;
+  let applyBtn: HTMLButtonElement | null = null;
+  let resetBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean): void => {
+    applying = value;
+    if (applyBtn !== null) applyBtn.disabled = value;
+    if (resetBtn !== null) resetBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
+
   /** Applies the override (or clears it when the field is empty). */
   async function apply(close: () => void): Promise<void> {
+    if (applying) return;
     const description = area.value.trim();
+    setBusy(true);
     try {
       await etn.types.setPropertyDescriptionOverride(
         networkId,
@@ -3038,6 +3065,8 @@ function openDescriptionOverrideDialog(opts: {
       close();
     } catch (err) {
       errorLine.show(errText(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -3054,14 +3083,24 @@ function openDescriptionOverrideDialog(opts: {
       save: (close) => void apply(close),
     },
     buttons: [
-      { label: t('actions.cancel') },
+      {
+        label: t('actions.cancel'),
+        ref: (btn) => {
+          cancelBtn = btn;
+        },
+      },
       ...(def.description_overridden
         ? [
             {
               label: t('typeManager.label.resetOverride'),
               keepOpen: true,
+              ref: (btn) => {
+                resetBtn = btn;
+              },
               onClick: (close: () => void): void => {
+                if (applying) return;
                 void (async () => {
+                  setBusy(true);
                   try {
                     await etn.types.setPropertyDescriptionOverride(
                       networkId,
@@ -3074,13 +3113,23 @@ function openDescriptionOverrideDialog(opts: {
                     close();
                   } catch (err) {
                     errorLine.show(errText(err));
+                  } finally {
+                    setBusy(false);
                   }
                 })();
               },
             } satisfies DialogButton,
           ]
         : []),
-      { label: t('actions.apply'), primary: true, keepOpen: true, onClick: (close) => void apply(close) },
+      {
+        label: t('actions.apply'),
+        primary: true,
+        keepOpen: true,
+        ref: (btn) => {
+          applyBtn = btn;
+        },
+        onClick: (close) => void apply(close),
+      },
     ],
   });
 }
