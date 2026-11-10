@@ -9,7 +9,14 @@ import assert from 'node:assert/strict';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { EditorSelection, EditorState } from '@codemirror/state';
 
-import { isIdWikiLinkTarget, isInRangeInclusive, isNearInline, livePreview, wikiLabel } from '../src/renderer/editor/md-live.js';
+import {
+  isIdWikiLinkTarget,
+  isInRangeInclusive,
+  isNearInline,
+  livePreview,
+  wikiLabel,
+} from '../src/renderer/editor/md-live.js';
+import { ShimElement } from './dom-shim.js';
 import { createParsedState } from './editor-parse.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
 
@@ -446,3 +453,286 @@ test('HTML-комментарий (блочный CommentBlock): серый, м�
   assert.equal(hasHiddenMark(inside, block.to - 3, block.to), false);
 });
 
+
+// ---------------------------------------------------------------------------
+// HTML-виджет (`HtmlWidget`) и сдвиг позиций (ошибка 4df5e284): печать выше
+// блока меняет `from/to`, но содержимое остаётся прежним — виджет обязан
+// обновиться на месте (`updateDOM`), а не пересобираться. Пересоздание заново
+// рендерило mermaid на каждый символ и мигало таблицей/картинкой.
+// ---------------------------------------------------------------------------
+
+/** Виджет HTML-блока так, как его отдаёт декорация (`spec.widget`). */
+interface HtmlWidgetLike {
+  from: number;
+  to: number;
+  html: string;
+  eq(other: HtmlWidgetLike): boolean;
+  toDOM(): ShimElement;
+  updateDOM(dom: ShimElement, view: unknown): boolean;
+}
+
+/** HTML-виджеты состояния (fence, таблица, картинка — все на `HtmlWidget`). */
+function htmlWidgets(state: EditorState): HtmlWidgetLike[] {
+  const found: HtmlWidgetLike[] = [];
+  for (const it = state.field(livePreview).iter(); it.value !== null; it.next()) {
+    const widget = (it.value as unknown as { spec?: { widget?: unknown } }).spec?.widget;
+    if (widget !== undefined && typeof (widget as { html?: unknown }).html === 'string') {
+      found.push(widget as HtmlWidgetLike);
+    }
+  }
+  return found;
+}
+
+/** `document` для `toDOM`/`updateDOM` (в шиме нет глобального DOM). */
+function installDocumentShim(): void {
+  (globalThis as unknown as { document: unknown }).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+  };
+}
+
+/**
+ * Счётчик childList-мутаций внутри виджета: обёртки методов вставки/снятия
+ * детей (в шиме нет MutationObserver).
+ */
+function watchWidgetMutations(box: ShimElement): () => number {
+  let mutations = 0;
+  const target = box as unknown as Record<string, unknown>;
+  for (const method of [
+    'append',
+    'prepend',
+    'appendChild',
+    'insertBefore',
+    'removeChild',
+    'replaceChildren',
+    'replaceWith',
+  ]) {
+    const original = target[method] as ((...args: unknown[]) => unknown) | undefined;
+    if (typeof original !== 'function') continue;
+    target[method] = (...args: unknown[]): unknown => {
+      mutations += 1;
+      return original.apply(box, args);
+    };
+  }
+  for (const child of [...box.children]) {
+    const original = child.remove.bind(child);
+    child.remove = (): void => {
+      mutations += 1;
+      original();
+    };
+  }
+  return () => mutations;
+}
+
+/** Счётчик присваиваний `innerHTML` виджету (пересборка содержимого). */
+function watchWidgetInnerHtml(box: ShimElement): () => number {
+  let writes = 0;
+  let value = box.innerHTML;
+  Object.defineProperty(box, 'innerHTML', {
+    configurable: true,
+    get: () => value,
+    set: (next: string) => {
+      writes += 1;
+      value = next;
+    },
+  });
+  return () => writes;
+}
+
+const MERMAID_BLOCK = '```mermaid\ngraph TD\n  A-->B\n```';
+const TABLE_BLOCK = '| a | b |\n| --- | --- |\n| 1 | 2 |';
+const IMAGE_BLOCK = '![схема](pic.png)';
+/** Три вида HTML-блока в одном документе: fence (mermaid), таблица, картинка. */
+const HTML_DOC = `${MERMAID_BLOCK}\n\n${TABLE_BLOCK}\n\n${IMAGE_BLOCK}\n\nпара`;
+/** Печать выше блоков: две строки текста — смещения растут на их длину. */
+const TYPED_ABOVE = 'печать\n\n';
+
+test('HtmlWidget: печать выше блока не пересобирает DOM, меняя лишь data-md-from/to (4df5e284)', () => {
+  installDocumentShim();
+  const widgets = htmlWidgets(buildState(HTML_DOC, HTML_DOC.length));
+  assert.equal(widgets.length, 3, 'виджеты fence, таблицы и картинки найдены');
+  const shiftedWidgets = htmlWidgets(
+    buildState(`${TYPED_ABOVE}${HTML_DOC}`, HTML_DOC.length + TYPED_ABOVE.length),
+  );
+  assert.equal(shiftedWidgets.length, 3, 'после сдвига те же три виджета');
+
+  widgets.forEach((widget, index) => {
+    const box = widget.toDOM();
+    const mutations = watchWidgetMutations(box);
+    const htmlWrites = watchWidgetInnerHtml(box);
+    const shifted = shiftedWidgets[index]!;
+
+    assert.equal(shifted.from, widget.from + TYPED_ABOVE.length, `#${index}: from сдвинут`);
+    assert.equal(shifted.to, widget.to + TYPED_ABOVE.length, `#${index}: to сдвинут`);
+    assert.equal(shifted.html, widget.html, `#${index}: HTML содержимого не изменился`);
+    assert.equal(
+      widget.eq(shifted),
+      false,
+      `#${index}: смещения отличают виджеты (триггер updateDOM)`,
+    );
+    assert.equal(shifted.updateDOM(box, {}), true, `#${index}: updateDOM обновляет DOM на месте`);
+
+    assert.equal(htmlWrites(), 0, `#${index}: innerHTML не переназначался`);
+    assert.equal(mutations(), 0, `#${index}: ни одной childList-мутации`);
+    assert.equal(box.dataset.mdFrom, String(shifted.from), `#${index}: data-md-from актуален`);
+    assert.equal(box.dataset.mdTo, String(shifted.to), `#${index}: data-md-to актуален`);
+  });
+});
+
+test('HtmlWidget: мемо per-DOM — два живых виджета обновляются независимо (4df5e284)', () => {
+  installDocumentShim();
+  // «Несколько живых полей одновременно»: у каждого DOM своя запись мемо;
+  // ссылка на «последний отрисованный HTML» сломала бы второй виджет.
+  const identical = `${TABLE_BLOCK}\n\n${TABLE_BLOCK}\n\nпара`;
+  const widgets = htmlWidgets(buildState(identical, identical.length));
+  assert.equal(widgets.length, 2, 'две одинаковые таблицы');
+  const boxes = widgets.map((widget) => widget.toDOM());
+  const writes = boxes.map((box) => watchWidgetInnerHtml(box));
+
+  const shifted = htmlWidgets(
+    buildState(`${TYPED_ABOVE}${identical}`, identical.length + TYPED_ABOVE.length),
+  );
+  boxes.forEach((box, index) => {
+    assert.equal(shifted[index]!.updateDOM(box, {}), true, `#${index}: DOM обновлён на месте`);
+  });
+
+  assert.deepEqual(
+    writes.map((count) => count()),
+    [0, 0],
+    'ни одна таблица не пересобрана',
+  );
+  assert.equal(boxes[0]!.dataset.mdFrom, String(shifted[0]!.from), 'первый: data-md-from');
+  assert.equal(boxes[1]!.dataset.mdFrom, String(shifted[1]!.from), 'второй: data-md-from');
+});
+
+test('HtmlWidget: смена содержимого при живом виджете пересобирает его ровно один раз (4df5e284)', () => {
+  installDocumentShim();
+  const doc = `${MERMAID_BLOCK}\n\nпара`;
+  const widget = htmlWidgets(buildState(doc, doc.length))[0]!;
+  const box = widget.toDOM();
+  const mutations = watchWidgetMutations(box);
+  const htmlWrites = watchWidgetInnerHtml(box);
+
+  // Внешняя установка текста (`setValue`): у блока сменился исходник.
+  const edited = doc.replace('A-->B', 'A-->C');
+  const updated = htmlWidgets(buildState(edited, edited.length))[0]!;
+  assert.equal(widget.eq(updated), false, 'смена HTML отличает виджеты');
+  assert.equal(updated.updateDOM(box, {}), true, 'DOM пригоден к обновлению на месте');
+
+  assert.equal(htmlWrites(), 1, 'содержимое пересобрано ровно один раз');
+  assert.equal(box.innerHTML, updated.html, 'в DOM — новый HTML');
+  assert.equal(mutations(), 0, 'дети не переставлялись вручную');
+  assert.equal(box.dataset.mdFrom, String(updated.from), 'data-md-from актуален');
+  assert.equal(box.dataset.mdTo, String(updated.to), 'data-md-to актуален');
+
+  // Повторное обновление тем же HTML пересборки не даёт (мемо).
+  assert.equal(updated.updateDOM(box, {}), true);
+  assert.equal(htmlWrites(), 1, 'повторный updateDOM содержимое не трогает');
+});
+
+/** Первый виджет состояния, подходящий под предикат (для остальных классов). */
+function widgetWhere(
+  state: EditorState,
+  match: (widget: Record<string, unknown>) => boolean,
+): { from: number; to: number; eq(other: unknown): boolean; toDOM(): ShimElement } {
+  for (const it = state.field(livePreview).iter(); it.value !== null; it.next()) {
+    const widget = (it.value as unknown as { spec?: { widget?: unknown } }).spec?.widget;
+    if (widget !== undefined && match(widget as Record<string, unknown>)) {
+      return widget as {
+        from: number;
+        to: number;
+        eq(other: unknown): boolean;
+        toDOM(): ShimElement;
+      };
+    }
+  }
+  assert.fail('виджет не найден');
+}
+
+test('остальные виджеты: сдвиг их пересоздаёт, но DOM без удерживаемого состояния — смещения свежие (4df5e284)', () => {
+  installDocumentShim();
+  // Класс, а не случай: у этих виджетов `eq` тоже различает смещения, поэтому
+  // сдвиг выше их пересоздаёт — это допустимо ТОЛЬКО потому, что в DOM нет
+  // удерживаемого состояния (mermaid/async), а `data-md-from/to` берутся из
+  // нового инстанса. Тест фиксирует границу класса, чтобы «пересоздание»
+  // нельзя было молча распространить на HTML-виджет с состоянием.
+  const cases: Array<{
+    name: string;
+    doc: string;
+    match: (widget: Record<string, unknown>) => boolean;
+  }> = [
+    {
+      name: 'HrWidget',
+      doc: '---\n\nпара',
+      // У HrWidget нет собственных полей, кроме смещений (в отличие от
+      // HtmlWidget/wiki/чекбокса/маркера).
+      match: (w) => !('html' in w) && !('target' in w) && !('marker' in w) && !('checked' in w),
+    },
+    { name: 'WikiLinkWidget', doc: '[[Мысль]] x\n\nпара', match: (w) => w.target === 'Мысль' },
+  ];
+  for (const item of cases) {
+    const before = widgetWhere(buildState(item.doc, item.doc.length), item.match);
+    const shiftedDoc = `${TYPED_ABOVE}${item.doc}`;
+    const shifted = widgetWhere(buildState(shiftedDoc, shiftedDoc.length), item.match);
+    assert.equal(
+      shifted.from,
+      before.from + TYPED_ABOVE.length,
+      `${item.name}: смещение сдвинуто на длину печати`,
+    );
+    assert.equal(before.eq(shifted), false, `${item.name}: сдвиг отличает виджеты`);
+    const box = shifted.toDOM();
+    assert.equal(
+      box.dataset.mdFrom,
+      String(shifted.from),
+      `${item.name}: data-md-from посчитан из нового инстанса`,
+    );
+    assert.equal(
+      box.dataset.mdTo,
+      String(shifted.to),
+      `${item.name}: data-md-to посчитан из нового`,
+    );
+  }
+});
+
+test('HtmlWidget в цитате внутри списка: сдвиг выше не пересобирает таблицу (4df5e284)', () => {
+  installDocumentShim();
+  // Урок 49ebba76: блок в цитате ВНУТРИ списка — своя обёртка разметки, и класс
+  // дефекта не должен зависеть от контекста (проверка «класс, а не случай»).
+  const doc = '- пункт\n\n  > | a | b |\n  > | --- | --- |\n  > | 1 | 2 |\n\nпара';
+  const widgets = htmlWidgets(buildState(doc, doc.length));
+  assert.equal(widgets.length, 1, 'таблица в цитате внутри списка — HtmlWidget');
+  const box = widgets[0]!.toDOM();
+  const htmlWrites = watchWidgetInnerHtml(box);
+  const mutations = watchWidgetMutations(box);
+
+  const shiftedDoc = `${TYPED_ABOVE}${doc}`;
+  const shifted = htmlWidgets(buildState(shiftedDoc, shiftedDoc.length));
+  assert.equal(shifted.length, 1, 'виджет на месте после сдвига');
+  assert.equal(shifted[0]!.html, widgets[0]!.html, 'HTML содержимого не изменился');
+  assert.equal(widgets[0]!.eq(shifted[0]!), false, 'смещения отличают виджеты');
+  assert.equal(shifted[0]!.updateDOM(box, {}), true, 'DOM обновлён на месте');
+  assert.equal(htmlWrites(), 0, 'innerHTML не переназначался');
+  assert.equal(mutations(), 0, 'ни одной childList-мутации');
+  assert.equal(box.dataset.mdFrom, String(shifted[0]!.from), 'data-md-from актуален');
+  assert.equal(box.dataset.mdTo, String(shifted[0]!.to), 'data-md-to актуален');
+});
+
+test('HtmlWidget: печать НИЖЕ блока и движение каретки — eq=true, перерисовки нет (4df5e284)', () => {
+  const widgets = htmlWidgets(buildState(HTML_DOC, HTML_DOC.length));
+  const belowWidgets = htmlWidgets(
+    buildState(`${HTML_DOC}\n\nещё`, HTML_DOC.length + '\n\nещё'.length),
+  );
+  assert.equal(belowWidgets.length, widgets.length, 'состав виджетов прежний');
+  widgets.forEach((widget, index) => {
+    assert.equal(widget.eq(belowWidgets[index]!), true, `#${index}: печать ниже — виджеты равны`);
+  });
+
+  // Движение каретки вне блоков не меняет ни смещений, ни HTML.
+  const caretBefore = buildState(HTML_DOC, HTML_DOC.length);
+  const caretAfter = buildState(HTML_DOC, HTML_DOC.indexOf('пара'));
+  const a = htmlWidgets(caretBefore);
+  const b = htmlWidgets(caretAfter);
+  assert.equal(a.length, b.length, 'состав виджетов прежний');
+  a.forEach((widget, index) => {
+    assert.equal(widget.eq(b[index]!), true, `#${index}: движение каретки — виджеты равны`);
+  });
+});
