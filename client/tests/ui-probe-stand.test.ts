@@ -16,6 +16,7 @@ import path from 'node:path';
 import {
   applyServerLanguage,
   buildProbeArgs,
+  normalizeLanguageTag,
   parseArgs,
   parseDelaySeedRule,
   parseInitKey,
@@ -112,6 +113,42 @@ test('applyServerLanguage: ставит язык через REST и сверяе
     } finally {
       await new Promise<void>((resolve) => stubborn.close(() => resolve()));
     }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('--server-language: регистр и «_» не важны — EN/Ru/en_US (c73bcb60)', async () => {
+  // Флаг нормализует тег на входе: `EN` и `Ru` — валидные теги того же языка.
+  assert.equal(parseArgs(['--server-language', 'EN']).serverLanguage, 'en');
+  assert.equal(parseArgs(['--server-language', 'Ru']).serverLanguage, 'ru');
+  assert.equal(parseArgs(['--server-language', 'en_US']).serverLanguage, 'en-US');
+  assert.equal(normalizeLanguageTag(' Ru '), 'ru');
+
+  // Сервер канонизирует тег сам (Intl.getCanonicalLocales, ADR daab6ac4 §2):
+  // ответ «en» на заказ «EN» — тот же язык, а не «сервер проигнорировал флаг».
+  const asked: unknown[] = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      const parsed = body === '' ? null : (JSON.parse(body) as { language?: string });
+      asked.push(parsed?.language);
+      const language = Intl.getCanonicalLocales(String(parsed?.language ?? 'en'))[0]!;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: { language } }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  try {
+    const base = `http://127.0.0.1:${port}/api/v1`;
+    assert.equal(await applyServerLanguage(base, 'etn_x', 'EN'), 'en');
+    assert.equal(await applyServerLanguage(base, 'etn_x', 'Ru'), 'ru');
+    assert.equal(await applyServerLanguage(base, 'etn_x', 'en_us'), 'en-US');
+    assert.deepEqual(asked, ['en', 'ru', 'en-US']);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
