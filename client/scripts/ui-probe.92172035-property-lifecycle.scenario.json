@@ -253,13 +253,31 @@
       "expect": "ok"
     },
     {
+      "name": "dialogs-after-apply",
+      "probe": "(() => [...document.querySelectorAll('.dialog-backdrop')].map((d) => ({ title: (d.querySelector('.dialog-title')?.textContent ?? '').trim(), footer: (d.querySelector('.dialog-footer')?.textContent ?? '').trim(), disabled: [...d.querySelectorAll('.dialog-footer .ui-btn')].filter((b) => b.disabled).map((b) => (b.textContent ?? '').trim()) })))()"
+    },
+    {
+      "name": "type-editor-closed",
+      "waitFor": "(() => ![...document.querySelectorAll('.dialog-backdrop')].some((d) => [...d.querySelectorAll('.ui-btn')].some((b) => (b.textContent ?? '').includes('{{text:applyAndClose}}'))))()",
+      "timeout": 10000
+    },
+    {
+      "name": "dialogs-before-esc",
+      "probe": "(() => [...document.querySelectorAll('.dialog-backdrop')].map((d) => ({ title: (d.querySelector('.dialog-title')?.textContent ?? '').trim(), footer: (d.querySelector('.dialog-footer')?.textContent ?? '').trim(), disabled: [...d.querySelectorAll('.dialog-footer .ui-btn')].filter((b) => b.disabled).map((b) => (b.textContent ?? '').trim()) })))()"
+    },
+    {
       "name": "catalogue-close",
       "probe": "(() => { for (let i=0;i<3;i+=1) window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,bubbles:true})); return 'ok'; })()",
       "expect": "ok"
     },
     {
+      "name": "dialogs-after-esc",
+      "probe": "(() => [...document.querySelectorAll('.dialog-backdrop')].map((d) => ({ title: (d.querySelector('.dialog-title')?.textContent ?? '').trim(), footer: (d.querySelector('.dialog-footer')?.textContent ?? '').trim(), disabled: [...d.querySelectorAll('.dialog-footer .ui-btn')].filter((b) => b.disabled).map((b) => (b.textContent ?? '').trim()) })))()"
+    },
+    {
       "name": "dialogs-closed",
-      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+      "waitFor": "document.querySelector('.dialog-backdrop') === null",
+      "timeout": 10000
     },
     {
       "name": "refresh-properties-tab",
@@ -442,12 +460,28 @@
     },
     {
       "name": "seed-mixed-sides",
-      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const vals=await window.etn.properties.get(nid,'thought',tid); const entry=vals.find((v)=>v.property_name==='связано с' && v.side==='source'); if(entry === undefined || !('values' in entry) || entry.values.length === 0) return 'no-source'; const a=entry.values[0].target_id; const other=await window.etn.thoughts.create(nid,{ title:'Сосед-обратный' }); await window.etn.properties.set(nid,'thought',tid,'связано с', other.id, 'target'); window.__z6={ a, b: other.id }; return 'ok'; })()",
+      "probe": "(async () => { const nid='{{networkId}}', tid='{{thoughtId}}'; const vals=await window.etn.properties.get(nid,'thought',tid); const entry=vals.find((v)=>v.property_name==='связано с' && v.side==='source'); if(entry === undefined || !('values' in entry) || entry.values.length === 0) return 'no-source'; const a=entry.values[0].target_id; const other=await window.etn.thoughts.create(nid,{ title:'Сосед-обратный' }); /* Обратную сторону пишем СО СТОРОНЫ второй мысли: у `tid` свойство привязано к типу на стороне source, и запись `side: 'target'` от неё сервер отклоняет валидацией цели (0.14.1, d9bc6012: ограничение по привязке действует и при явном side). Ребро other→tid даёт у `tid` ровно внетиповую строку обратной стороны. */ const w=await window.etn.properties.set(nid,'thought',other.id,'связано с', tid, 'source'); if(w && w.__etnError === true) return 'refused: ' + String(w.error && w.error.message ? w.error.message : w.error); window.__z6={ a, b: other.id }; return 'ok'; })()",
       "expect": "ok"
     },
     {
       "name": "refresh-after-mixed-seed",
-      "eval": "(() => { /* Порядок вкладок мысли фиксирован (TABS_THOUGHT, editor.ts): 0 — комментарий, 1 — свойства. Подписи локализованы (ADR daab6ac4), поэтому переключаемся по позиции. */ const tabs=[...document.querySelectorAll('.editor-tab')]; if(tabs[0]) tabs[0].click(); if(tabs[1]) tabs[1].click(); return 'ok'; })()"
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
+    {
+      "name": "home-focused-for-mixed",
+      "waitFor": "document.querySelector('.editor-title-input')?.value !== '{{seedTitle}}'"
+    },
+    {
+      "name": "refocus-thought-for-mixed",
+      "click": "[data-id=\"{{thoughtId}}\"].cloud"
+    },
+    {
+      "name": "thought-reopened-for-mixed",
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "refresh-properties-after-mixed",
+      "eval": "(() => { /* Внешняя запись (мост, второй клиент) не инвалидирует панель «Свойства»: link.created обновляет только окрестность фокуса, а переключение вкладок берёт кэш живых запросов (ошибка cb875d0c-7a40-43a1-99c8-6dc53e2c8784). Поэтому после сида мысль переоткрывается — это пользовательский путь перечитывания. Порядок вкладок мысли фиксирован (TABS_THOUGHT, editor.ts): 0 — комментарий, 1 — свойства. */ const tabs=[...document.querySelectorAll('.editor-tab')]; if(tabs[0]) tabs[0].click(); if(tabs[1]) tabs[1].click(); return 'ok'; })()"
     },
     {
       "name": "mixed-rows-visible",
