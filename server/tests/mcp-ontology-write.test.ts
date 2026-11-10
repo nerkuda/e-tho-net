@@ -21,7 +21,10 @@
  *   * одна строка `audit_log` на ВЕСЬ вызов write/delete;
  *   * `affected_counts.links_becoming_structural` (ошибка 3537f1c2): точное
  *     число живых рёбер, теряющих `type_id`, фильтры REST, паритет с
- *     `DELETE /properties/:id`, 0 и отсутствие рёбер, рабочий слой, откат.
+ *     `DELETE /properties/:id`, 0 и отсутствие рёбер, рабочий слой, откат;
+ *   * `kind: "property"` для свойства-связи (ошибка 937b4d81): удаляется пара
+ *     «свойство + link_type» одним путём с REST, рёбра теряют `type_id`,
+ *     число — в ответе и `audit.details`, скаляр не затронут, откат.
  *
  * Bootstrap — `mcp-helpers.ts`.
  */
@@ -2355,6 +2358,278 @@ describe('etn.ontology.write / delete (0.7.2)', { skip: !nativeAvailable() }, ()
           handle.client,
           'ontology.delete',
           { network_id: ctx.networkId, kind: 'link_type', id: fixture.linkTypeId, force: true },
+          true,
+        );
+        assert.equal(del.isError, undefined, toolText(del));
+        assert.equal(countAudit() - before, 1, 'ровно одна строка аудита на вызов');
+
+        const row = ctx.rawDb
+          .prepare(
+            `SELECT details FROM audit_log
+              WHERE action = ? AND network_id = ?
+              ORDER BY rowid DESC LIMIT 1`,
+          )
+          .get('etn.ontology.delete', ctx.networkId) as { details: string | null } | undefined;
+        assert.ok(row?.details !== null && row?.details !== undefined, 'details записаны');
+        const details = JSON.parse(row.details) as {
+          affected_counts: Record<string, number>;
+        };
+        assert.equal(
+          details.affected_counts.links_becoming_structural,
+          1,
+          `число обязано попасть в audit.details: ${row.details}`,
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Ошибка 937b4d81: `kind: "property"` для свойства-связи обязан идти тем же
+  // путём, что REST `DELETE /properties/:id` — удалять пару «свойство +
+  // link_type» в одной транзакции (требование 09f692ff). Рёбра не удаляются,
+  // а теряют `type_id`; число живых рёбер — в ответе и `audit.details`.
+  // -------------------------------------------------------------------------
+
+  it('ontology.delete { kind: property } удаляет пару «свойство-связь + link_type», рёбра теряют type_id (937b4d81)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const fixture = seedLinkTypeWithEdges(ndb, ctx.adminId, {
+          tag: 'пара-свойство',
+          live: 1,
+          trashed: 1,
+          inactive: 1,
+        });
+
+        const del = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'property', id: fixture.propertyId },
+          true,
+        );
+        assert.equal(del.isError, undefined, toolText(del));
+        const counts = toolJson<OntologyDeleteResult>(del).affected_counts;
+        assert.equal(
+          counts.links_becoming_structural,
+          1,
+          `только живое ребро в счётчике (фильтры REST): ${JSON.stringify(counts)}`,
+        );
+
+        // Пара ушла целиком: и строка реестра, и парный тип связи.
+        assert.equal(
+          ndb.prepare('SELECT id FROM properties_v WHERE id = ?').get(fixture.propertyId),
+          undefined,
+          'свойство-связь удалено',
+        );
+        assert.equal(
+          ndb.prepare('SELECT id FROM link_types_v WHERE id = ?').get(fixture.linkTypeId),
+          undefined,
+          'парный тип связи удалён вместе со свойством',
+        );
+        // Рёбра живы и стали структурными; в базовом слое обнуление пишется
+        // на действующего пользователя.
+        for (const linkId of fixture.linkIds) {
+          const row = ndb
+            .prepare('SELECT type_id, updated_by FROM links WHERE id = ?')
+            .get(linkId) as { type_id: string | null; updated_by: string };
+          assert.equal(row.type_id, null, `ребро ${linkId} стало структурным, а не удалённым`);
+          assert.equal(row.updated_by, ctx.adminId, 'атрибуция обнуления — действующий агент');
+        }
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('ontology.delete { kind: property } на скалярном свойстве не добавляет links_becoming_structural (937b4d81)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const written = toolJson<OntologyWriteResult>(
+          await handle.client.callTool({
+            name: 'etn.ontology.write',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_types: [{ ref: 't', name: 'ScalarOwner' }],
+              properties: [{ ref: 'p', name: 'вес', value_type: 'number' }],
+              type_properties: [{ owner: 'thought_type', type_ref: 't', property_ref: 'p' }],
+            },
+          }),
+        );
+        const propertyId = written.properties[0]!.id;
+
+        const del = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'property', id: propertyId, force: true },
+          true,
+        );
+        assert.equal(del.isError, undefined, toolText(del));
+        const counts = toolJson<OntologyDeleteResult>(del).affected_counts;
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(counts, 'links_becoming_structural'),
+          false,
+          `скалярное свойство не отдаёт счётчик рёбер: ${JSON.stringify(counts)}`,
+        );
+        assert.equal(counts.property_values_count ?? 0, 0);
+        assert.equal(counts.type_properties_count, 1, 'привязка ушла каскадом, как раньше');
+
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        assert.equal(
+          ndb.prepare('SELECT id FROM properties_v WHERE id = ?').get(propertyId),
+          undefined,
+          'скалярное свойство удалено',
+        );
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('kind: property — links_becoming_structural совпадает с REST на эквивалентных фикстурах (937b4d81)', async () => {
+    const restCtx = await buildRestContext();
+    let mcpCtx: McpTestContext | undefined;
+    let handle: McpClientHandle | undefined;
+    try {
+      const ndb = restCtx.ndb;
+      // Две фикстуры одной формы: одну пару удаляем REST-путём, другую — MCP.
+      const restFixture = seedLinkTypeWithEdges(ndb, restCtx.adminId, {
+        tag: 'свойство-rest',
+        live: 1,
+        trashed: 1,
+        inactive: 1,
+      });
+      const mcpFixture = seedLinkTypeWithEdges(ndb, restCtx.adminId, {
+        tag: 'свойство-mcp',
+        live: 1,
+        trashed: 1,
+        inactive: 1,
+      });
+
+      const restDel = await restCtx.app.inject({
+        method: 'DELETE',
+        url: `/api/v1/networks/${restCtx.networkId}/properties/${restFixture.propertyId}`,
+        headers: authHeaders(restCtx),
+      });
+      assert.equal(restDel.statusCode, 200, restDel.body?.toString());
+      const restCount = (restDel.json().data as { links_becoming_structural: number | null })
+        .links_becoming_structural;
+      assert.equal(restCount, 1, 'REST-число на этой фикстуре');
+
+      mcpCtx = await buildMcpContext({
+        dataDir: restCtx.dataDir,
+        systemDb: restCtx.sys,
+        networkId: restCtx.networkId,
+      });
+      handle = await connectMcpClient(mcpCtx, restCtx.adminKey);
+      const mcpDel = await callOp(
+        handle.client,
+        'ontology.delete',
+        { network_id: restCtx.networkId, kind: 'property', id: mcpFixture.propertyId },
+        true,
+      );
+      assert.equal(mcpDel.isError, undefined, toolText(mcpDel));
+      assert.equal(
+        toolJson<OntologyDeleteResult>(mcpDel).affected_counts.links_becoming_structural,
+        restCount,
+        'MCP и REST обязаны давать одно число на одинаковой фикстуре',
+      );
+      assert.equal(
+        ndb.prepare('SELECT id FROM link_types_v WHERE id = ?').get(mcpFixture.linkTypeId),
+        undefined,
+        'MCP удаляет парный тип связи, как REST',
+      );
+    } finally {
+      if (handle !== undefined) await handle.close();
+      if (mcpCtx !== undefined) await closeMcpContext(mcpCtx);
+      await closeRestContext(restCtx);
+    }
+  });
+
+  it('ontology.delete { kind: property } откатывается на реальном триггере — свойство, тип и рёбра живы (937b4d81)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const fixture = seedLinkTypeWithEdges(ndb, ctx.adminId, { tag: 'пара-детка', live: 1 });
+        // Реальный триггер отказа внутри `deleteLinkType`: дочерний тип.
+        createLinkType(
+          ndb,
+          {
+            name_forward: 'связь-детка-пара',
+            name_reverse: 'связь-детка-пара-обр',
+            parent_id: fixture.linkTypeId,
+          },
+          ctx.adminId,
+        );
+
+        const refused = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'property', id: fixture.propertyId, force: true },
+          true,
+        );
+        assert.equal(refused.isError, true, 'тип с дочерними типами обязан быть отвергнут');
+        assert.ok(toolText(refused).includes('child types'), toolText(refused));
+
+        assert.ok(
+          ndb.prepare('SELECT id FROM properties_v WHERE id = ?').get(fixture.propertyId) !==
+            undefined,
+          'свойство живо после отказа',
+        );
+        assert.ok(
+          ndb.prepare('SELECT id FROM link_types_v WHERE id = ?').get(fixture.linkTypeId) !==
+            undefined,
+          'тип связи жив после отказа',
+        );
+        const linkRow = ndb
+          .prepare('SELECT type_id FROM links_v WHERE id = ?')
+          .get(fixture.linkIds[0]!) as { type_id: string | null } | undefined;
+        assert.ok(linkRow !== undefined, 'ребро живо после отказа');
+        assert.equal(linkRow.type_id, fixture.linkTypeId, 'ребро сохранило тип');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
+  it('ontology.delete { kind: property } пишет ОДНУ строку аудита с числом в details (937b4d81)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const fixture = seedLinkTypeWithEdges(ndb, ctx.adminId, {
+          tag: 'пара-аудит',
+          live: 1,
+          trashed: 1,
+        });
+        const countAudit = (): number =>
+          (
+            ctx.rawDb
+              .prepare('SELECT COUNT(*) AS c FROM audit_log WHERE action = ? AND network_id = ?')
+              .get('etn.ontology.delete', ctx.networkId) as { c: number }
+          ).c;
+        const before = countAudit();
+
+        const del = await callOp(
+          handle.client,
+          'ontology.delete',
+          { network_id: ctx.networkId, kind: 'property', id: fixture.propertyId },
           true,
         );
         assert.equal(del.isError, undefined, toolText(del));

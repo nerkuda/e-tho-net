@@ -16,7 +16,10 @@
  *       считается до удаления и отдаётся в
  *       `affected_counts.links_becoming_structural`;
  *     - `property` → удалить `property_values` и `type_properties` этого
- *       свойства;
+ *       свойства; для свойства-связи — тем же путём, что REST
+ *       `DELETE /properties/:id`: удаляется и парный тип связи, рёбра теряют
+ *       `type_id` (число живых — `affected_counts.links_becoming_structural`,
+ *       ошибка 937b4d81);
  *     - `type_property` → удалить строку привязки.
  *   * Элемент, занятый в `type_roles` сети → `VALIDATION_ERROR` даже с
  *     `force`. Сначала снять роль через `etn.networks.write`.
@@ -41,6 +44,7 @@ import {
   deleteNetworkProperty,
   deleteTypeProperty,
   getLinkPropertyByLinkTypeId,
+  getNetworkProperty,
 } from './property-service.js';
 import { deleteThoughtTypeWithViews } from './thought-type-delete-service.js';
 import { deleteLinkType } from './link-type-service.js';
@@ -78,7 +82,8 @@ interface OntologyDeleteUsage {
   type_views_count?: number;
   /** Для `link_type` — число живых рёбер, теряющих `type_id` (ошибка
    *  3537f1c2): считается до удаления с фильтрами REST и отдаётся всегда,
-   *  включая 0. */
+   *  включая 0. Для `property` — то же число, если это свойство-связь:
+   *  вместе с ним удаляется и парный тип связи (ошибка 937b4d81). */
   links_becoming_structural?: number;
 }
 
@@ -220,17 +225,32 @@ export function deleteOntologyEntity(
         break;
       }
       case 'property': {
-        // Каскад property_values + type_properties.
+        // Каскад property_values + type_properties (MCP-семантика `force`).
         if (force) {
           ndb
             .prepare("DELETE FROM property_values WHERE property_id = ?")
             .run(params.id);
         }
         ndb.prepare("DELETE FROM type_properties WHERE property_id = ?").run(params.id);
-        ndb.prepare("DELETE FROM properties WHERE id = ? AND layer_id = ?").run(
-          params.id,
-          ndb.layerId,
-        );
+        // Ошибка 937b4d81: свойство-связь и его тип связи — один жизненный
+        // цикл (требование 09f692ff). Для свойства-связи идём тем же путём,
+        // что REST `DELETE /properties/:id`: `deleteNetworkProperty` удаляет
+        // и парный `link_type`, рёбра теряют `type_id` и становятся
+        // структурными, а число живых таких рёбер возвращается в
+        // `links_becoming_structural`. Каскад выше обязателен: занятое
+        // свойство `deleteNetworkProperty` отвергает (`DUPLICATE`).
+        const current = getNetworkProperty(ndb, params.id);
+        if (current !== null && current.value_type === 'link') {
+          const removed = deleteNetworkProperty(ndb, params.id, { actorUserId });
+          if (removed.links_becoming_structural !== null) {
+            usage.links_becoming_structural = removed.links_becoming_structural;
+          }
+        } else {
+          ndb.prepare("DELETE FROM properties WHERE id = ? AND layer_id = ?").run(
+            params.id,
+            ndb.layerId,
+          );
+        }
         break;
       }
       case 'type_property': {

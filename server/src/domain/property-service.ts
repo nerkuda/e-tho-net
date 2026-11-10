@@ -2264,9 +2264,18 @@ export function countLinksBecomingStructural(ndb: NetworkDb, linkTypeId: string)
   ).c;
 }
 
+/** Параметры {@link deleteNetworkProperty}. */
+export interface DeleteNetworkPropertyOptions {
+  /** Пользователь, выполняющий удаление: попадает в обнуление `type_id`
+   *  рёбер пары (атрибуция в базовом слое, ошибка 937b4d81). REST-путь
+   *  опцию не передаёт — прежнее поведение (`'system'`). */
+  actorUserId?: string;
+}
+
 export function deleteNetworkProperty(
   ndb: NetworkDb,
   id: string,
+  opts: DeleteNetworkPropertyOptions = {},
 ): DeletePropertyResult {
   const current = getNetworkProperty(ndb, id);
   if (!current) {
@@ -2301,8 +2310,12 @@ export function deleteNetworkProperty(
         const linkCount = countLinksBecomingStructural(ndb, linkTypeId);
         // Используем force=1 — принудительное удаление с обнулением
         // `type_id` у рёбер. Постоянные комментарии рёбер сохраняются
-        // (требование 09f692ff).
-        deleteLinkType(ndb, linkTypeId, undefined, { force: true });
+        // (требование 09f692ff). Атрибуция обнуления — действующий
+        // пользователь, если путь его передал (MCP, ошибка 937b4d81).
+        deleteLinkType(ndb, linkTypeId, undefined, {
+          force: true,
+          ...(opts.actorUserId !== undefined ? { actorUserId: opts.actorUserId } : {}),
+        });
         linksBecomingStructural = linkCount;
       }
     }

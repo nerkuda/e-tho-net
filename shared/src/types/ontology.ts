@@ -351,7 +351,10 @@ export type OntologyDeleteKind =
  *     удаляются привязки и парное свойство-связь. Число живых рёбер,
  *     потерявших тип, — `affected_counts.links_becoming_structural`;
  *   * `property` — каскад на `property_values` и `type_properties` этого
- *     свойства;
+ *     свойства; для свойства-связи — тем же путём, что REST
+ *     `DELETE /properties/:id`: удаляется и парный тип связи, рёбра теряют
+ *     `type_id` и становятся структурными (требование 09f692ff), число живых —
+ *     `affected_counts.links_becoming_structural`;
  *   * `type_property` — удаляется только строка привязки.
  *
  *  Элемент, занятый в `type_roles` сети, отвергается даже с `force` —
@@ -383,7 +386,9 @@ export interface OntologyDeleteAffectedCounts {
    *  структурными (ошибка 3537f1c2): та же семантика и те же фильтры, что у
    *  REST `DELETE /properties/:id` (`active = 1 AND marked_for_deletion = 0`).
    *  Отдаётся ВСЕГДА для `kind: "link_type"`, включая `0` (не `null`, не
-   *  отсутствует). Для остальных `kind` поля нет. */
+   *  отсутствует). Для `kind: "property"` — то же число, если это
+   *  свойство-связь: вместе с ним удаляется и парный тип связи (ошибка
+   *  937b4d81). Для скалярных свойств и остальных `kind` поля нет. */
   links_becoming_structural?: number;
 }
 
