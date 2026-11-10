@@ -1130,8 +1130,8 @@ export function deleteComment(
       for (const targetId of targetIds) materializeTombstone(ndb, 'comment_targets', targetId);
       materializeTombstone(ndb, 'comments', id);
     } else {
-      ndb.prepare('DELETE FROM comment_targets WHERE comment_id = ?').run(id);
-      ndb.prepare('DELETE FROM comments WHERE id = ?').run(id);
+      ndb.prepare('DELETE FROM comment_targets WHERE comment_id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления
+      ndb.prepare('DELETE FROM comments WHERE id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления
     }
     // Удаление комментария — тоже активность владельцев (ошибка 228df7a4).
     for (const t of current.targets) {

@@ -808,7 +808,7 @@ export function deleteLink(ndb: NetworkDb, id: string, expectedVersion: number |
     // (incl. server-stored files) and property values are purged in the same
     // transaction.
     purgeOwnerDependants(ndb, 'link', [id]);
-    ndb.prepare('DELETE FROM links WHERE id = ?').run(id);
+    ndb.prepare('DELETE FROM links WHERE id = ?').run(id); // layers:physical-write — физический purge ребра в основе
   });
 }
 

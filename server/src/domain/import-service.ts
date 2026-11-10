@@ -780,6 +780,7 @@ function insertOrUpdateThought(
       );
     return { id: t.id, action: 'created' };
   }
+  // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
   ndb
     .prepare(
       `UPDATE thoughts SET
@@ -948,6 +949,7 @@ function insertComment(
       )
       .get(resolvedOwnerId) as { pk: number } | undefined;
     if (existing !== undefined) {
+      // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
       ndb
         .prepare(
           `UPDATE comments SET title = ?, body_md = ?, body_html = ?, use_time = ?, version = version + 1,
@@ -1204,6 +1206,7 @@ function upsertPublication(ndb: NetworkDb, p: Publication): 'created' | 'updated
   const extraProperties = JSON.stringify(p.extra_properties ?? []);
   const existing = ndb.prepare('SELECT 1 FROM publications_v WHERE id = ? LIMIT 1').get(p.id);
   if (existing !== undefined) {
+    // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
     ndb
       .prepare(
         `UPDATE publications SET
@@ -1327,6 +1330,7 @@ function upsertShelf(ndb: NetworkDb, row: EtnxShelf): 'created' | 'updated' {
   const markedBy = row.marked_for_deletion_by ?? null;
   const existing = ndb.prepare('SELECT 1 FROM shelves_v WHERE id = ? LIMIT 1').get(row.id);
   if (existing !== undefined) {
+    // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
     ndb
       .prepare(
         `UPDATE shelves SET title = ?, title_key = ?, position = ?, version = ?,
@@ -1741,6 +1745,7 @@ export function applyManifest(
           thoughtIdRemap.set(t.id, existingId);
           titleMatchIds.add(normTitle);
           const marked = markedColumns(t);
+          // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
           ndb
             .prepare(
               `UPDATE thoughts SET

@@ -499,12 +499,12 @@ export function deleteLinkType(
     // values outside type (02-data-model.md §3.5a); other types' overrides of
     // these properties stay valid too. Only THIS type's own rows die with it.
     ndb
-      .prepare("DELETE FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?")
+      .prepare("DELETE FROM type_properties WHERE owner_type = 'link_type' AND owner_id = ?") // layers:physical-write — базовая ветка слоёного удаления типа связи
       .run(id);
     ndb
-      .prepare("DELETE FROM type_property_overrides WHERE owner_type = 'link_type' AND type_id = ?")
+      .prepare("DELETE FROM type_property_overrides WHERE owner_type = 'link_type' AND type_id = ?") // layers:physical-write — базовая ветка слоёного удаления типа связи
       .run(id);
-    ndb.prepare('DELETE FROM link_types WHERE id = ?').run(id);
+    ndb.prepare('DELETE FROM link_types WHERE id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления типа связи
   });
 }
 

@@ -1278,7 +1278,7 @@ export function deleteThought(
     // state) or has none (comments, attachments, property values) is cleaned
     // up explicitly, in this transaction — see purgeThoughtDeletionDependants.
     purgeThoughtDeletionDependants(ndb, id);
-    ndb.prepare('DELETE FROM thoughts WHERE id = ?').run(id);
+    ndb.prepare('DELETE FROM thoughts WHERE id = ?').run(id); // layers:physical-write — физический purge мысли в основе
   });
 }
 

@@ -526,7 +526,7 @@ export function removeOwner(
       return { removed: true, attachment_deleted: false };
     }
 
-    ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(ownership.id);
+    ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(ownership.id); // layers:physical-write — базовая ветка слоёного удаления
     if (hasLiveOwnershipAnywhere(ndb, attachmentId)) {
       return { removed: true, attachment_deleted: false };
     }
@@ -539,12 +539,12 @@ export function removeOwner(
           'SELECT 1 FROM thoughts WHERE icon_attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
         )
         .get(attachmentId) !== undefined;
-    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(attachmentId);
+    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(attachmentId); // layers:physical-write — базовая ветка слоёного удаления
     ndb
-      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(attachmentId);
     ndb
-      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?')
+      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(attachmentId);
     const keepFile =
       iconBacksFile ||
@@ -2042,7 +2042,7 @@ export function updateAttachment(
       const srcOwnership = liveOwnership(ndb, id, current.owner_type, current.owner_id);
       if (srcOwnership !== undefined) {
         if (isBaseContext(ndb)) {
-          ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(srcOwnership.id);
+          ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(srcOwnership.id); // layers:physical-write — базовая ветка слоёного удаления
         } else {
           materializeTombstone(ndb, 'attachment_owners', srcOwnership.id);
         }
@@ -2146,15 +2146,15 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
           'SELECT 1 FROM thoughts WHERE icon_attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
         )
         .get(id) !== undefined;
-    ndb.prepare('DELETE FROM attachment_owners WHERE attachment_id = ?').run(id);
-    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+    ndb.prepare('DELETE FROM attachment_owners WHERE attachment_id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления
+    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления
     // Thoughts may reference this attachment as the backing picture of their
     // icon (L16) — drop the dangling reference; the icon preview itself stays.
     ndb
-      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(id);
     ndb
-      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?')
+      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(id);
     const keepFile =
       iconBacksFile ||

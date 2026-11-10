@@ -5981,7 +5981,7 @@ export function deletePropertyValue(
     }
     const result = ndb
       .prepare(
-        'DELETE FROM property_values WHERE owner_type = ? AND owner_id = ? AND property_id = ?',
+        'DELETE FROM property_values WHERE owner_type = ? AND owner_id = ? AND property_id = ?', // layers:physical-write — чистка значений владельца физическая: дефект класса 81184542 вне рамок
       )
       .run(ownerType, ownerId, prop.id);
     if (result.changes === 0) {

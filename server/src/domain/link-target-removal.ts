@@ -122,7 +122,7 @@ export function removeLinkTarget(
     purgeOwnerDependants(ndb, 'link', [linkId]);
     // Физическое удаление логической строки во всех слоях — поведение основы
     // до S4 (`deleteLink`); держащих слоёв здесь уже нет.
-    ndb.prepare('DELETE FROM links WHERE id = ?').run(linkId);
+    ndb.prepare('DELETE FROM links WHERE id = ?').run(linkId); // layers:physical-write — физическое удаление в основе: держащих слоёв уже нет
     return { link_id: linkId, action: 'deleted', link: snapshot };
   }
 

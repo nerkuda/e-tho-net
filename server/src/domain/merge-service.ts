@@ -1008,6 +1008,7 @@ function mergeLayerInner(
         (row.type_id as string | null) ?? null,
       );
       if (dup !== undefined) {
+        // layers:physical-write — реплей слияния пишет конкретную строку по rowid
         ndb
           .prepare(
             `UPDATE links SET (position, color, style, width, active, marked_for_deletion,
@@ -1539,6 +1540,7 @@ function combineThoughtComment(
   if (target === undefined || layerRow.base_version === target.version) return result;
   const merged = mergeCommentText(layerRow.body_md, target.body_md);
   if (merged.body !== layerRow.body_md) {
+    // layers:physical-write — реплей слияния пишет конкретную строку по rowid
     // `pk`, а не логический `id`: id общий у одноимённых строк всех слоёв
     // (тень копирует id предка; у постоянного комментария он детерминирован
     // от владельца — миграция 048), поэтому `WHERE id = ?` записывал

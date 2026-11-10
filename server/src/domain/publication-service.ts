@@ -830,10 +830,10 @@ export function purgePublication(ndb: NetworkDb, id: string): void {
     // (ADR 9f90b010, задача da59a4cf) — общее вложение не разрушается.
     purgeOwnerAttachments(ndb, 'publication', [id]);
 
-    ndb.prepare('DELETE FROM publication_order WHERE publication_id = ?').run(id);
-    ndb.prepare('DELETE FROM publication_exclusions WHERE publication_id = ?').run(id);
-    ndb.prepare('DELETE FROM shelf_items WHERE publication_id = ?').run(id);
-    ndb.prepare('DELETE FROM publications WHERE id = ?').run(id);
+    ndb.prepare('DELETE FROM publication_order WHERE publication_id = ?').run(id); // layers:physical-write — физическое удаление публикации только в основе
+    ndb.prepare('DELETE FROM publication_exclusions WHERE publication_id = ?').run(id); // layers:physical-write — физическое удаление публикации только в основе
+    ndb.prepare('DELETE FROM shelf_items WHERE publication_id = ?').run(id); // layers:physical-write — физическое удаление публикации только в основе
+    ndb.prepare('DELETE FROM publications WHERE id = ?').run(id); // layers:physical-write — физическое удаление публикации только в основе
     invalidatePublicationMembershipCache(id);
 
     // Строки состава полок удалены каскадом — «полки не блокируют удаление».

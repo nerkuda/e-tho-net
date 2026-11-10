@@ -19,7 +19,9 @@
  *       свойства; для свойства-связи — тем же путём, что REST
  *       `DELETE /properties/:id`: удаляется и парный тип связи, рёбра теряют
  *       `type_id` (число живых — `affected_counts.links_becoming_structural`,
- *       ошибка 937b4d81);
+ *       ошибка 937b4d81). В рабочем слое (ошибка 81184542) основа физически не
+ *       трогается: видимые привязки и значения (при `force`) получают
+ *       надгробия, строка реестра скрывается слоевым удалением;
  *     - `type_property` → удалить строку привязки.
  *   * Элемент, занятый в `type_roles` сети → `VALIDATION_ERROR` даже с
  *     `force`. Сначала снять роль через `etn.networks.write`.
@@ -38,6 +40,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { deleteRowLayered, isBaseContext } from '../db/layer-write.js';
 import { getRootTypeId } from './type-hierarchy.js';
 import {
   countLinksBecomingStructural,
@@ -225,13 +228,43 @@ export function deleteOntologyEntity(
         break;
       }
       case 'property': {
-        // Каскад property_values + type_properties (MCP-семантика `force`).
-        if (force) {
-          ndb
-            .prepare("DELETE FROM property_values WHERE property_id = ?")
-            .run(params.id);
+        const current = getNetworkProperty(ndb, params.id);
+        if (isBaseContext(ndb)) {
+          // Основа: широкая физическая чистка по `property_id` (снимает и
+          // слойные строки — сирот не остаётся), затем строка реестра.
+          // MCP-семантика `force`.
+          if (force) {
+            ndb
+              // layers:physical-write — базовая ветка слоёного удаления
+              .prepare("DELETE FROM property_values WHERE property_id = ?")
+              .run(params.id);
+          }
+          // layers:physical-write — базовая ветка слоёного удаления
+          ndb.prepare("DELETE FROM type_properties WHERE property_id = ?").run(params.id);
+        } else {
+          // Рабочий слой (ошибка 81184542): только надгробия по ВИДИМЫМ
+          // строкам — физическая чистка выметала базовые привязки и значения
+          // основы, а строка реестра искалась по `layer_id` и не находилась
+          // (тихий no-op при `deleted: true`). 13-layers.md §5.2.
+          const bindingIds = (
+            ndb.prepare('SELECT id FROM type_properties_v WHERE property_id = ?').all(params.id) as {
+              id: string;
+            }[]
+          ).map((row) => row.id);
+          for (const bindingId of bindingIds) {
+            deleteTypeProperty(ndb, bindingId, actorUserId);
+          }
+          if (force) {
+            const valueIds = (
+              ndb
+                .prepare('SELECT id FROM property_values_v WHERE property_id = ?')
+                .all(params.id) as { id: string }[]
+            ).map((row) => row.id);
+            for (const valueId of valueIds) {
+              deleteRowLayered(ndb, 'property_values', valueId);
+            }
+          }
         }
-        ndb.prepare("DELETE FROM type_properties WHERE property_id = ?").run(params.id);
         // Ошибка 937b4d81: свойство-связь и его тип связи — один жизненный
         // цикл (требование 09f692ff). Для свойства-связи идём тем же путём,
         // что REST `DELETE /properties/:id`: `deleteNetworkProperty` удаляет
@@ -239,17 +272,17 @@ export function deleteOntologyEntity(
         // структурными, а число живых таких рёбер возвращается в
         // `links_becoming_structural`. Каскад выше обязателен: занятое
         // свойство `deleteNetworkProperty` отвергает (`DUPLICATE`).
-        const current = getNetworkProperty(ndb, params.id);
-        if (current !== null && current.value_type === 'link') {
-          const removed = deleteNetworkProperty(ndb, params.id, { actorUserId });
-          if (removed.links_becoming_structural !== null) {
-            usage.links_becoming_structural = removed.links_becoming_structural;
+        // В основе каскад физический, в рабочем слое — надгробия: оба вида
+        // значения (скаляр и связь) идут одним путём слоевой семантики.
+        if (current !== null) {
+          if (current.value_type === 'link') {
+            const removed = deleteNetworkProperty(ndb, params.id, { actorUserId });
+            if (removed.links_becoming_structural !== null) {
+              usage.links_becoming_structural = removed.links_becoming_structural;
+            }
+          } else {
+            deleteRowLayered(ndb, 'properties', params.id);
           }
-        } else {
-          ndb.prepare("DELETE FROM properties WHERE id = ? AND layer_id = ?").run(
-            params.id,
-            ndb.layerId,
-          );
         }
         break;
       }
@@ -282,6 +315,7 @@ export function deleteOntologyEntity(
       if (homeRow !== undefined && homeRow.type_id !== null && homeRow.type_id !== rootId) {
         // Должно быть невозможно (HOME имеет только `is_root = 1`, но
         // защита от regression).
+        // layers:physical-write — защитный инвариант HOME: собственная строка основы
         ndb
           .prepare('UPDATE thoughts SET type_id = NULL WHERE id = ?')
           .run(homeRow.id);

@@ -315,7 +315,7 @@ describe('layers S3 — lint: domain code reads branchable tables only via the `
    * physical reads (holding-layer audit, file reference counting, purge
    * cascades — cases that must see every layer's rows) are allowed with an
    * explicit `layers:physical-read` marker on the same line. `DELETE FROM
-   * <table>` is a write and always targets the physical table.
+   * <table>` is a write: его проверяет правило записи ниже.
    */
   const MARKER = 'layers:physical-read';
   const DIRECT_READ =
@@ -364,5 +364,225 @@ describe('layers S3 — lint: domain code reads branchable tables only via the `
         'счётчик файла вложения).\n' +
         violations.join('\n'),
     );
+  });
+
+  /**
+   * Правило записи (ошибка 81184542, DoD 6): физический `DELETE`/`UPDATE`
+   * ветвимой таблицы без `layer_id` выполняется в ЛЮБОМ слое и выметает строки
+   * основы — класс срабатывал трижды (`385532e1` → `937b4d81` → `81184542`).
+   * Законные места (базовая ветка слоёного удаления, физический каскад-
+   * вычистка, импорт/слияние по `pk`) помечаются отпиской
+   * `layers:physical-write` — на строке запроса, на строке `.prepare(` перед
+   * ним или сразу после литерала.
+   */
+  const WRITE_MARKER = 'layers:physical-write';
+  const PHYSICAL_WRITE = new RegExp(
+    `\\b(?:DELETE\\s+FROM|UPDATE)\\s+(?:${BRANCHABLE_TABLES.join('|')})(?!_v)\\b`,
+    'i',
+  );
+  const LAYER_SCOPED = /\blayer_id\b/;
+
+  /**
+   * Строковые литералы файла с номерами строк: SQL живёт в них, а комментарии
+   * и проза («// Delete from the registry») — нет. Сканер пропускает
+   * комментарии и возвращает содержимое каждого литерала вместе с границами;
+   * шаблонные подстановки `${…}` остаются текстом литерала — для правил важно
+   * только ключевое слово и наличие `layer_id`.
+   */
+  const stringLiterals = (source: string): Array<{ text: string; from: number; to: number }> => {
+    const out: Array<{ text: string; from: number; to: number }> = [];
+    let i = 0;
+    let line = 1;
+    while (i < source.length) {
+      const ch = source[i];
+      const next = source[i + 1];
+      if (ch === '/' && next === '/') {
+        while (i < source.length && source[i] !== '\n') i += 1;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        i += 2;
+        while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+          if (source[i] === '\n') line += 1;
+          i += 1;
+        }
+        i += 2;
+        continue;
+      }
+      if (ch === '\n') {
+        line += 1;
+        i += 1;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === '`') {
+        const quote = ch;
+        const from = line;
+        let text = '';
+        let j = i + 1;
+        while (j < source.length && source[j] !== quote) {
+          if (source[j] === '\\') {
+            text += source[j + 1] ?? '';
+            j += 2;
+            continue;
+          }
+          if (source[j] === '\n') line += 1;
+          text += source[j];
+          j += 1;
+        }
+        out.push({ text, from, to: line });
+        i = j + 1;
+        continue;
+      }
+      i += 1;
+    }
+    return out;
+  };
+
+  /**
+   * Начало оператора с литералом: цепочка `ndb` → `.prepare(` → литерал.
+   * Нужна, чтобы маркер-отписка искалась в пределах ОДНОГО оператора: отписка
+   * соседней записи не должна «закрывать» новую.
+   */
+  const statementStart = (lines: string[], literalLine: number): number => {
+    let start = literalLine;
+    while (start > 1) {
+      const prev = lines[start - 2]!.trim();
+      if (prev === '') break;
+      // Комментарий-отписка строкой выше (или блок таких строк) входит в оператор.
+      if (prev.startsWith('//') || prev.startsWith('/*') || prev.startsWith('*')) {
+        start -= 1;
+        continue;
+      }
+      if (
+        prev === 'ndb' ||
+        /\bndb$/.test(prev) ||
+        prev.endsWith('.prepare(') ||
+        prev.endsWith('(')
+      ) {
+        start -= 1;
+        continue;
+      }
+      break;
+    }
+    return start;
+  };
+
+  /** Конец оператора: цепочка `.run(...)`/`.all(...)` и перенесённые аргументы. */
+  const statementEnd = (lines: string[], literalTo: number): number => {
+    let end = literalTo;
+    while (end < lines.length) {
+      const nextLine = lines[end]!.trim();
+      const currentLine = lines[end - 1]!.trimEnd();
+      if (nextLine === '') break;
+      if (nextLine.startsWith('.') || currentLine.endsWith(',') || currentLine.endsWith('(')) {
+        end += 1;
+        continue;
+      }
+      break;
+    }
+    return end;
+  };
+
+  /** Нарушения правила записи в ОДНОМ исходнике (чистая функция — для самотеста). */
+  const foreignWrites = (source: string): Array<{ line: number; sql: string }> => {
+    const lines = source.split(/\r?\n/);
+    const out: Array<{ line: number; sql: string }> = [];
+    for (const literal of stringLiterals(source)) {
+      if (!PHYSICAL_WRITE.test(literal.text)) continue;
+      // Запись адресована строке слоя — слоевой контекст соблюдён.
+      if (LAYER_SCOPED.test(literal.text)) continue;
+      // Отписка — в пределах оператора: комментарий перед `ndb`, сама строка
+      // запроса или хвост литерала (в том числе SQL-комментарий внутри него).
+      const from = statementStart(lines, literal.from);
+      const to = statementEnd(lines, literal.to);
+      let marked = false;
+      for (let n = from; n <= to; n += 1) {
+        if (lines[n - 1]!.includes(WRITE_MARKER)) {
+          marked = true;
+          break;
+        }
+      }
+      if (marked) continue;
+      out.push({ line: literal.from, sql: literal.text.replace(/\s+/g, ' ').trim().slice(0, 120) });
+    }
+    return out;
+  };
+
+  /** Нарушения правила записи в дереве исходников. */
+  const physicalWriteViolations = (): string[] => {
+    const srcRoot = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')),
+      '../src',
+    );
+    const violations: string[] = [];
+
+    const scan = (dir: string): void => {
+      for (const entry of readdirSync(path.join(srcRoot, dir), { withFileTypes: true })) {
+        const full = path.join(srcRoot, dir, entry.name);
+        if (entry.isDirectory()) {
+          scan(path.join(dir, entry.name));
+          continue;
+        }
+        if (!entry.name.endsWith('.ts')) continue;
+        for (const hit of foreignWrites(readFileSync(full, 'utf8'))) {
+          violations.push(`${path.relative(srcRoot, full)}:${hit.line}: ${hit.sql}`);
+        }
+      }
+    };
+
+    for (const dir of SCANNED_DIRS) scan(dir);
+    return violations;
+  };
+
+  it('every physical DELETE/UPDATE of a branchable table is layer-scoped or marked layers:physical-write', () => {
+    const violations = physicalWriteViolations();
+    assert.deepEqual(
+      violations,
+      [],
+      'Физическая запись ветвимой таблицы без `layer_id` выполняется в любом слое и меняет ' +
+        'строки основы (ошибка 81184542, docs/13-layers.md §5.2). В рабочем слое пиши через ' +
+        '`deleteRowLayered`/`materializeTombstone` (или ветвись по `isBaseContext`), а законное ' +
+        'физическое место пометь `layers:physical-write` с причиной.\n' +
+        violations.join('\n'),
+    );
+  });
+
+  it('детектор правила записи не вакуумный: сырой DELETE/UPDATE ловится, слой, проза и маркер — нет', () => {
+    // Сырой DELETE (нет `layer_id`, нет отписки) и UPDATE без отписки обязаны
+    // попасть в нарушения. Слоевая запись (`layer_id`), английская проза и
+    // записи с отпиской — нет. Отписка соседнего оператора НЕ закрывает новую
+    // запись: маркер ищется в пределах своего оператора.
+    const sample = [
+      "ndb.prepare('DELETE FROM type_properties WHERE property_id = ?').run(id);",
+      '// Delete from the registry of properties and from the layer of changes.',
+      "ndb.prepare('DELETE FROM type_properties WHERE id = ? AND layer_id = ?').run(id, layer);",
+      'ndb',
+      "  .prepare('UPDATE property_values SET value_number = 1 WHERE id = ?')",
+      '  .run(id); // layers:physical-write — отписка этого оператора',
+      'ndb',
+      '  .prepare(',
+      '    `UPDATE properties SET name = ? WHERE id = ?`,',
+      '  )',
+      '  .run(name, id);',
+    ].join('\n');
+    assert.deepEqual(foreignWrites(sample), [
+      { line: 1, sql: 'DELETE FROM type_properties WHERE property_id = ?' },
+      { line: 9, sql: 'UPDATE properties SET name = ? WHERE id = ?' },
+    ]);
+
+    // Отписка строкой ВЫШЕ оператора (перед `ndb`) действует; сырая запись без
+    // отписки в том же файле — по-прежнему нарушение.
+    const markedBefore = [
+      '// layers:physical-write — физическая вычистка всех слоёв',
+      'ndb',
+      '  .prepare(',
+      '    `DELETE FROM attachments WHERE id IN (${ids})`,',
+      '  )',
+      '  .run(...ids);',
+      'ndb.prepare(`DELETE FROM comments WHERE owner_type = ?`).run(owner);',
+    ].join('\n');
+    assert.deepEqual(foreignWrites(markedBefore), [
+      { line: 7, sql: 'DELETE FROM comments WHERE owner_type = ?' },
+    ]);
   });
 });
