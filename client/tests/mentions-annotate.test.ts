@@ -16,6 +16,7 @@ import {
   MentionsScanCache,
   MENTIONS_SCAN_MAX_CHARS,
   MENTIONS_SCAN_MAX_ITEMS,
+  resolveMentionsExcludeThoughtId,
   scanMentionsTexts,
 } from '../src/renderer/editor/mentions-annotate.js';
 
@@ -261,4 +262,45 @@ test('MentionsScanCache: смена сети сбрасывает записи, 
   cache.set(BASE_SCOPE, 'b', []);
   cache.clear();
   assert.equal(cache.get(BASE_SCOPE, 'b'), undefined);
+});
+
+// -----------------------------------------------------------------------------
+// resolveMentionsExcludeThoughtId — кого НЕ подсвечивать (ошибка 3ebb6512).
+// Поле markdown спрашивает исключение у геттера вызывающего, иначе берёт
+// владельца вложения. Разница между «геттера нет» и «геттер вернул undefined»
+// решает, теряет ли запись «Дневника» упоминания привязанной к ней мысли.
+// -----------------------------------------------------------------------------
+
+test('resolveMentionsExcludeThoughtId: без геттера — владелец вложения (страница мысли)', async () => {
+  const { resolveMentionsExcludeThoughtId: resolve } =
+    await import('../src/renderer/editor/mentions-annotate.js');
+  assert.equal(resolve(undefined, 'owner-thought'), 'owner-thought');
+  assert.equal(resolve(undefined, undefined), undefined);
+});
+
+test('resolveMentionsExcludeThoughtId: заданный геттер авторитетен, даже вернув undefined', async () => {
+  const { resolveMentionsExcludeThoughtId: resolve } =
+    await import('../src/renderer/editor/mentions-annotate.js');
+  // Запись «Дневника» — самостоятельная лента: владелец вложения (чипс) ей
+  // передан для вставки картинок, но из упоминаний он НЕ исключается.
+  const { recordMentionsExcludeThoughtId } =
+    await import('../src/renderer/screens/chronicle/diary.js');
+  assert.equal(
+    resolve(recordMentionsExcludeThoughtId, 'chip-thought'),
+    undefined,
+    'чипс записи не исключается из скана — иначе теряются все его упоминания',
+  );
+  // Геттер может вернуть и конкретную мысль.
+  assert.equal(
+    resolve(() => 'explicit', 'chip-thought'),
+    'explicit',
+  );
+});
+
+test('resolveMentionsExcludeThoughtId: чистая функция, геттер вызывается на каждый рендер', () => {
+  let current = 'first';
+  const getter = (): string | undefined => current;
+  assert.equal(resolveMentionsExcludeThoughtId(getter, undefined), 'first');
+  current = 'second';
+  assert.equal(resolveMentionsExcludeThoughtId(getter, undefined), 'second');
 });

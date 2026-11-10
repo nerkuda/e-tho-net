@@ -14,6 +14,17 @@ export function regexEscape(value: string): string {
 }
 
 /**
+ * Characters `*` may consume: the whole remainder of ONE word — letters,
+ * digits, combining marks and underscore — word characters §3.2 lets `*` span.
+ * Whitespace, punctuation and symbols end the word and stay
+ * OUTSIDE the match (bug 3ebb6512: the former greedy `\S*` underlined
+ * «пасечный?»/«Пасечный,» together with the trailing sign; 02-data-model §3.2
+ * defines the boundary as any character that is not a letter, digit or
+ * underscore).
+ */
+const SYNONYM_WORD_TAIL = '[\\p{L}\\p{N}_\\p{M}]*';
+
+/**
  * Builds the regex SOURCE of a synonym matcher (see
  * {@link synonymPatternToRegex} for the semantics). Exposed separately so
  * hot paths can compile whatever flag set they need (e.g. a global copy for
@@ -23,27 +34,40 @@ export function regexEscape(value: string): string {
 export function synonymPatternSource(synonym: string): string {
   const words = synonym.trim().split(/\s+/).filter((w) => w !== '');
   if (words.length === 0) return '(?!)';
+  // `*` — «любое количество символов В ПРЕДЕЛАХ ОДНОГО СЛОВА» (02-data-model
+  // §3.2), а граница слова — начало/конец текста либо не-слово (не буква, не
+  // цифра, не `_`). Поэтому `*` съедает ровно остаток СЛОВА
+  // ({@link SYNONYM_WORD_TAIL}) и никогда — завершающую пунктуацию: прежний
+  // `\S*` подчёркивал «пасечный?» и «Пасечный,» вместе со знаком (ошибка
+  // 3ebb6512). Цифры и `_` — словообразующие, поэтому «Пасечный65» остаётся
+  // ОДНИМ словом и совпадает целиком (законно по §3.2).
   const wordBody = (word: string): string =>
     word
       .split('*')
       .map((part) => (part === '' ? '' : regexEscape(part)))
-      .join('\\S*');
+      .join(SYNONYM_WORD_TAIL);
   const core = words.map(wordBody).join('\\s+');
-  return `(?:^|[^\\p{L}\\p{N}_])${core}(?=[^\\p{L}\\p{N}_]|$)`;
+  // Ведущая граница — ТОЛЬКО проверка (lookbehind), а не потребляемый символ:
+  // иначе совпадение в начале текста, где перед словом стоит пунктуация, заново
+  // захватывало этот знак через вторую ветвь альтернативы (ошибка 3ebb6512 —
+  // слово в кавычках в начале текста подчёркивалось вместе с кавычкой), а
+  // каждый потребитель вынужденно компенсировал `+1`.
+  return `(?<![\\p{L}\\p{N}_])${core}(?=[^\\p{L}\\p{N}_]|$)`;
 }
 
 /**
  * Compile a synonym (a single word or a whitespace-separated phrase) into a
- * case-insensitive matcher RegExp. `*` inside a pattern word matches any run
- * of non-whitespace characters (zero or more), so it never crosses a word
- * boundary. Pattern words must appear in the text as whole adjacent words in
- * the given order; the text may differ from the pattern only at `*`
- * positions. The match is not anchored to the text — a pattern matches
- * anywhere inside. A word boundary is the text start/end or any character
- * that is not a letter, digit or underscore, so a name inside quotes or
- * brackets («Проект А») is still found. Works identically for `*`-free
- * literal terms (a thought title or a title part, §2.2.3), which just become
- * an exact word-boundary phrase.
+ * case-insensitive matcher RegExp. `*` inside a pattern word matches any run of
+ * the SAME word's characters, so it never crosses a word boundary and never
+ * swallows the separator that ends the word (trailing punctuation stays
+ * outside the match — bug 3ebb6512). Pattern words must appear in the text as
+ * whole adjacent words in the given order; the text may differ from the
+ * pattern only at `*` positions. The match is not anchored to the text — a
+ * pattern matches anywhere inside. A word boundary is the text start/end or
+ * any character that is not a letter, digit or underscore, so a name inside
+ * quotes or brackets («Проект А») is still found. Works identically for
+ * `*`-free literal terms (a thought title or a title part, §2.2.3), which just
+ * become an exact word-boundary phrase.
  */
 export function synonymPatternToRegex(synonym: string): RegExp {
   return new RegExp(synonymPatternSource(synonym), 'iu');

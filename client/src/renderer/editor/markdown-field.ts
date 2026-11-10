@@ -70,7 +70,7 @@ import {
 } from './comment-collapse.js';
 import { createCommentSearch } from './comment-search.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
-import { annotateMentions } from './mentions-annotate.js';
+import { annotateMentions, resolveMentionsExcludeThoughtId } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
   commitTransclusionEdit,
@@ -732,8 +732,12 @@ export function createMarkdownField(opts: {
    * Thought never offered as an auto-mention match (L24): its own name and
    * synonyms must not be underlined in its own comment text. Evaluated on
    * every view render — the chronicle desktop passes a getter because a
-   * record's thought targets can change after the field is built. Falls back
-   * to the `attachmentsOwner` thought when omitted.
+   * record's thought targets can change after the field is built. When the
+   * getter is set it is AUTHORITATIVE: returning `undefined` means "exclude
+   * nothing" and does NOT fall back to `attachmentsOwner` (a diary record is a
+   * standalone feed, not a thought's own comment — bug 3ebb6512). Falls back to
+   * the `attachmentsOwner` thought only when the getter is omitted; the
+   * resolution itself is `resolveMentionsExcludeThoughtId`.
    */
   getMentionsExcludeThoughtId?: () => string | undefined;
   /**
@@ -1089,8 +1093,10 @@ export function createMarkdownField(opts: {
   wireMdZoomWheel(root, networkId);
 
   const excludeThoughtId = (): string | undefined =>
-    opts.getMentionsExcludeThoughtId?.() ??
-    (opts.attachmentsOwner?.ownerType === 'thought' ? opts.attachmentsOwner.ownerId : undefined);
+    resolveMentionsExcludeThoughtId(
+      opts.getMentionsExcludeThoughtId,
+      opts.attachmentsOwner?.ownerType === 'thought' ? opts.attachmentsOwner.ownerId : undefined,
+    );
 
   /**
    * «Вставить ссылку» (L24): replaces the first occurrence of the matched

@@ -128,6 +128,7 @@ import {
   localDayStart,
   parentThoughtIds,
   periodValuesForRange,
+  recordMentionsExcludeThoughtId,
   resolvePeriodDay,
   rowDays,
   todayLocal,
@@ -1635,6 +1636,12 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       externalChanges: () =>
         (title !== null ? title.value().trim() : row.title ?? '') !== (row.title ?? ''),
       ...(owner !== null ? { attachmentsOwner: owner } : {}),
+      // Авто-подсветка упоминаний в правке записи — БЕЗ исключения владельца
+      // (ошибка 3ebb6512): геттер задан явно и перекрывает fallback
+      // `attachmentsOwner` выше (владелец вложения — цель картинок, а не
+      // «своя мысль» текста записи). Единая точка записи —
+      // `recordMentionsExcludeThoughtId`, паритет с просмотром ленты.
+      getMentionsExcludeThoughtId: recordMentionsExcludeThoughtId,
       // Контекст комментария (карточка 34ffbd75 + ТЗ5 «Дневник без псевдослота»):
       // флоу «создать мысль по legacy-ссылке», команды вставки ссылки/
       // трансклюзии и родители новой мысли — ВСЕ цели-чипсы записи.
@@ -1701,7 +1708,12 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   setTimeout(() => {
     if (!recordView.isConnected) return;
     annotateMentions(recordView, {
-      excludeThoughtId: currentOwner()?.ownerId,
+      // Владелец записи подсвечивается как любая мысль (ошибка 3ebb6512):
+      // запись — самостоятельная лента, а не текст мысли, поэтому правило
+      // «своё имя в своём комментарии не подчёркивается» здесь не действует.
+      // Исключением раньше шёл первый чипс (`currentOwner()`), и привязанная
+      // запись теряла ВСЕ упоминания этой мысли, включая синонимы.
+      excludeThoughtId: recordMentionsExcludeThoughtId(),
       onInsertLink: (thought, matchedText) => {
         void ensureWidget().then((w) => {
           if (w !== null) insertMentionLinkIntoField(w, thought, matchedText);

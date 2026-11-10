@@ -2386,13 +2386,13 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     });
   };
 
-  /** Substrings of `body` matched by one term regex (the leading boundary character dropped). */
+  /** Substrings of `body` matched by one term regex (границы слова — нулевой ширины). */
   const matchSpans = (re: RegExp, body: string): string[] => {
     const reAll = new RegExp(re.source, `${re.flags}g`);
     const spans: string[] = [];
     let m: RegExpExecArray | null;
     while ((m = reAll.exec(body)) !== null) {
-      const start = m.index + (m.index > 0 ? 1 : 0);
+      const start = m.index;
       const end = m.index + m[0].length;
       if (end > start) spans.push(body.slice(start, end));
       if (m[0].length === 0) reAll.lastIndex += 1; // guard against empty matches
@@ -2686,13 +2686,12 @@ export function findMentionsInTexts(
             re.lastIndex += 1;
             continue;
           }
-          // The leading boundary group may have consumed one character (any
-          // non-letter/digit/underscore) — only possible when the match
-          // doesn't start at position 0, since `^` without the `m` flag only
-          // matches the absolute string start; the trailing lookahead is
-          // zero-width and never consumed, so `m[0].length` already excludes
-          // it.
-          const start = m.index + (m.index > 0 ? 1 : 0);
+          // Обе границы слова в матчере — нулевой ширины
+          // (`synonymPatternSource`): lookbehind/lookahead не потребляют
+          // символы, поэтому `m[0]` — ровно вхождение, а `m.index` — его
+          // начало (ошибка 3ebb6512: прежняя ведущая группа съедала символ
+          // пунктуации, и каждый потребитель компенсировал `+1`).
+          const start = m.index;
           const end = m.index + m[0].length;
           if (end > start) raw.push({ start, end, candidate, priority: pattern.priority });
         }

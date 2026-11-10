@@ -1699,7 +1699,10 @@ function referenceFindMentionsInTexts(
             re.lastIndex += 1;
             continue;
           }
-          const start = m.index + (m.index > 0 ? 1 : 0);
+          // Границы слова в матчере нулевой ширины — правка ошибки 3ebb6512
+          // (оракул повторяет текущий контракт `synonymPatternSource`, а не
+          // прежнюю компенсацию `+1`).
+          const start = m.index;
           const end = m.index + m[0].length;
           if (end > start) raw.push({ start, end, candidate, priority: pattern.priority });
         }
@@ -1756,6 +1759,55 @@ describe('findMentionsInTexts — паритет оптимизированно�
       assert.ok(
         expected.some((r) => r.length > 0),
         'синтетика реально что-то матчит (иначе паритет тривиален)',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+});
+
+/**
+ * §21 скан: `*`-синонимы обязаны находить словоформы, а `excludeThoughtId`
+ * гасит ВСЕ упоминания мысли — ровно это и воспроизвела ошибка 3ebb6512, когда
+ * лента «Дневника» передавала исключением первую привязанную мысль записи:
+ * запись, привязанная к мысли с `*`-синонимами, не подчёркивала ни её имя, ни
+ * синонимы. Здесь проверяется поведение домена (проводку клиента держат
+ * клиентские тесты): без исключения — находки, с исключением — пусто.
+ */
+describe('findMentionsInTexts — `*`-синонимы и исключение владельца (ошибка 3ebb6512)', () => {
+  it('`*`-синонимы находят словоформы и ровно вхождение, excludeThoughtId гасит их все', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const owner = seedThought(ndb, 'Пасечный Виктор Иванович');
+      seedSynonym(ndb, owner, 'Пасечн*');
+      seedSynonym(ndb, owner, 'Виктор*');
+      seedSynonym(ndb, owner, 'виктор* иванович*');
+      const text =
+        'Поздравление Пасечного 2026. Как сказал сам Пасечный, ' +
+        'встречаемся в пятницу. Созвон с Виктором Ивановичем — сроки.';
+      const found = findMentionsInTexts(ndb, [text], { showInactive: false })[0]!;
+      assert.deepEqual(
+        found.map((m) => text.slice(m.start, m.end)),
+        ['Пасечного', 'Пасечный', 'Виктором Ивановичем'],
+        'словоформы по `*`-синонимам, без завершающих знаков препинания',
+      );
+      assert.ok(
+        found.every((m) => m.thoughts.some((t) => t.id === owner)),
+        'каждая находка указывает на мысль-владельца синонимов',
+      );
+      // То, что делала лента «Дневника» для привязанной записи: исключение
+      // первой привязанной мысли убирает ВСЕ её упоминания (имя и синонимы).
+      assert.deepEqual(
+        findMentionsInTexts(ndb, [text], { showInactive: false, excludeThoughtId: owner }),
+        [[]],
+        'исключённая мысль не находится ни по одному своему термину',
+      );
+      // Исключение ЧУЖОЙ мысли находок не отнимает.
+      const other = seedThought(ndb, 'Другая мысль');
+      assert.equal(
+        findMentionsInTexts(ndb, [text], { showInactive: false, excludeThoughtId: other })[0]!
+          .length,
+        found.length,
       );
     } finally {
       ndb.close();
