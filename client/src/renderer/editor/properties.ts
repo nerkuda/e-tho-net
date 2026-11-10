@@ -309,6 +309,37 @@ function valueOwnerOfEvent(
   return { ownerType: data.owner_type, ownerId: data.owner_id };
 }
 
+/**
+ * Realtime-события РЕБРА, меняющие строки свойств-связей вкладки «Свойства».
+ *
+ * Состав чипов и сторона строки (`source`/`target`) читаются `properties.get`
+ * и зависят от живых рёбер, а не от значений свойства. Собственный путь записи
+ * значения-связи панель и раньше догоняла локальным каналом
+ * (`PROPERTY_VALUES_REFRESHED_EVENT`), а событие ребра от ДРУГОГО клиента,
+ * моста или API панель пропускала: строка появлялась только после переоткрытия
+ * мысли (ошибка cb875d0c).
+ */
+const LINK_ROW_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'link.created',
+  'link.updated',
+  'link.deleted',
+]);
+
+/**
+ * Мысль, чью окрестность адресует погашенный ключ `focus:@<id>` (или null).
+ *
+ * События ребра несут концы по-разному: `link.created` — полное ребро,
+ * `link.deleted` — только `id`, у `link.updated` концов нет. Общий адрес дают
+ * ключи роутера: он гасит окрестности обоих концов, и панель берёт владельца
+ * из самого ключа — показанная мысль перечитывается, чужая нет.
+ */
+function focusedThoughtOfPrefix(prefix: string): string | null {
+  const head = `${queryKeys.focusAll()}:@`;
+  if (!prefix.startsWith(head)) return null;
+  const id = prefix.slice(head.length);
+  return id === '' ? null : id;
+}
+
 /** Ключ строки-черновика совпадает с ключом серверной строки (см. outsideRowKey). */
 function pendingOutsideKey(item: PendingOutsideProperty): string {
   return item.side === null ? item.propertyId : `${item.propertyId}:${item.side}`;
@@ -900,8 +931,16 @@ function signalCompositionForOwner(ownerType: 'thought' | 'link', ownerId: strin
  * Тело «Свойства вне типа» подписано на тот же поток само (см.
  * `buildOutsidePropertiesBody`), поэтому здесь его не трогаем — иначе одно
  * событие давало бы двойное чтение.
+ *
+ * `opts.outsideCount` — изменение меняет и СОСТАВ строк «вне типа» (ребро
+ * свойства-связи, ошибка cb875d0c): счётчик группы — отдельный потребитель
+ * значений (`outsideCount`, круг 4 ошибки 9667b75c) и читает свой снимок сам.
  */
-function noteValueOwnerChanged(ownerType: 'thought' | 'link', ownerId: string): void {
+function noteValueOwnerChanged(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+  opts?: { outsideCount?: boolean },
+): void {
   const target = currentTarget;
   // Вкладка ещё не построена — метка не нужна: первая сборка прочитает данные
   // сама, а набор не растёт на события до открытия «Свойств».
@@ -912,6 +951,7 @@ function noteValueOwnerChanged(ownerType: 'thought' | 'link', ownerId: string): 
   // (ошибка da7bbb53, круг 3) — поколение уже отбросит ответы, начатые до
   // изменения, поэтому задержка не оставляет панель на устаревшем снимке.
   scheduleValueReloads();
+  if (opts?.outsideCount === true) scheduleOutsideCountReload();
 }
 
 /**
@@ -963,6 +1003,16 @@ export function registerPropertiesGroup(): void {
         if (data.owner_type !== 'thought' && data.owner_type !== 'link') return;
         if (typeof data.owner_id !== 'string') return;
         noteValueOwnerChanged(data.owner_type, data.owner_id);
+        return;
+      }
+      // Ребро меняет строки свойств-связей (ошибка cb875d0c): владельца берём
+      // из погашенного ключа окрестности — роутер адресует оба конца ребра.
+      // Показанная мысль перечитывается (её строка получила/потеряла чип),
+      // чужая — нет. Счётчик группы «Свойства вне типа» читается отдельным
+      // потребителем: состав строк «вне типа» тоже изменился.
+      if (LINK_ROW_EVENT_TYPES.has(evt.type)) {
+        const ownerId = focusedThoughtOfPrefix(prefix);
+        if (ownerId !== null) noteValueOwnerChanged('thought', ownerId, { outsideCount: true });
       }
     });
     // Локальный канал правок значений (карта, редактор значения): владелец в

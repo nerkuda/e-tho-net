@@ -134,6 +134,34 @@ const NEIGHBOURHOOD_KEYS = (): string[] => [
  */
 const PUBLICATION_COMPOSITION_KEYS = (): string[] => [queryKeys.publicationAssemblyAll()];
 
+/**
+ * Ключи окрестностей обоих КОНЦОВ ребра.
+ *
+ * Изменение ребра меняет строки свойств-связей обеих мыслей: состав чипов и
+ * сторона строки читаются `properties.get` и зависят от живых рёбер, а не от
+ * значений свойства. Без адресных ключей открытая вкладка «Свойства» держала
+ * прежний набор связей до переоткрытия мысли (ошибка cb875d0c).
+ *
+ * Нагрузка `link.deleted` несёт только `id`, у `link.updated` концов нет вовсе —
+ * поэтому они берутся из нормализованного кэша ДО удаления/патча записи (та же
+ * механика, что у `attachment.deleted`), плюс поля изменения: ребро могли
+ * перевесить на другие мысли. Ребро, которого клиент не знал (нет записи в
+ * кэше), адресовать нечем — этот случай закрывает серверный контракт события.
+ */
+function linkEndKeys(id: string, changes?: Record<string, unknown>): string[] {
+  const cached = getEntity<{ source_id?: unknown; target_id?: unknown }>('link', id);
+  const ends = new Set<string>();
+  for (const end of [
+    cached?.source_id,
+    cached?.target_id,
+    changes?.['source_id'],
+    changes?.['target_id'],
+  ]) {
+    if (typeof end === 'string' && end !== '') ends.add(end);
+  }
+  return [...ends].map((end) => queryKeys.focus(end));
+}
+
 /** Владельцы вложения из нормализованного кэша (для точной инвалидации). */
 function attachmentOwnerRefsFromCache(
   attachmentId: string,
@@ -325,15 +353,31 @@ export const realtimeRoutes: RouteTable = {
     }),
   ],
   'link.updated': [
+    // Порядок правил важен: концы ребра берутся из кэша ДО патча записи
+    // (правка могла перевесить ребро, тогда старые концы нужны тоже).
+    ruleFor<'link.updated'>({
+      invalidate: (evt) => [
+        ...linkEndKeys(evt.data.id, evt.data.changes as Record<string, unknown>),
+        ...NEIGHBOURHOOD_KEYS(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
+      ],
+    }),
     ruleFor<'link.updated'>({
       patch: (evt) => patch('link', evt.data.id, evt.data.changes, evt, evt.data.version),
-      invalidate: () => [...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'link.deleted': [
+    // Сперва инвалидация по концам ИЗ КЭША (запись ещё жива), затем удаление —
+    // иначе концы взять негде (`link.deleted` несёт только `id`).
+    ruleFor<'link.deleted'>({
+      invalidate: (evt) => [
+        ...linkEndKeys(evt.data.id),
+        ...NEIGHBOURHOOD_KEYS(),
+        ...PUBLICATION_COMPOSITION_KEYS(),
+      ],
+    }),
     ruleFor<'link.deleted'>({
       patch: (evt) => drop('link', evt.data.id),
-      invalidate: () => [...NEIGHBOURHOOD_KEYS(), ...PUBLICATION_COMPOSITION_KEYS()],
     }),
   ],
   'comment.created': [

@@ -1,0 +1,93 @@
+{
+  "name": "cb875d0c-link-outside-properties",
+  "description": "Официальный GUI-сценарий ошибки cb875d0c: вкладка «Свойства» обязана перечитать открытую мысль, когда РЕБРО создано ВНЕ открытого редактора (второе подключение — прямой REST-вызов стенда, шаг api, без участия клиента). Стенд: реестровое свойство-связь period/period-rev (к типу не привязано), открыта карточка мысли {{thoughtId}}, вкладка «Свойства». Шаг api делает PUT значения на ДРУГОЙ мысли ({{homeId}}) со стороной source — сервер создаёт ребро и публикует link.created; обратная сторона (period-rev, side=target) появляется у открытой мысли. Проверка: чип обратной стороны виден в «Свойствах вне типа» БЕЗ переоткрытия мысли и БЕЗ переключения вкладок; сервер отдаёт ту же строку. До фикса шаг waitFor не дожидается чипа (панель реагировала только на property-value.*).",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "seed-link-property",
+      "api": {
+        "name": "seed-link-property",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/properties",
+        "body": {
+          "name": "period",
+          "value_type": "link",
+          "name_forward": "period",
+          "name_reverse": "period-rev"
+        },
+        "expression": "data.name"
+      },
+      "expect": "period"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 90000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null"
+    },
+    { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
+    {
+      "name": "thought-opened",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "open-properties-tab",
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+    },
+    {
+      "name": "outside-group-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.properties-outside-body') !== null && document.querySelector('.properties-tab') !== null"
+    },
+    {
+      "name": "panel-before",
+      "probe": "(() => { const body=document.querySelector('.properties-outside-body'); if(!body) return 'no-body'; return { reverseRow: body.textContent.includes('period-rev'), chips: [...body.querySelectorAll('.prc-title')].length }; })()",
+      "expect": { "reverseRow": false, "chips": 0 }
+    },
+    {
+      "name": "external-link-via-api",
+      "api": {
+        "name": "external-link-via-api",
+        "method": "PUT",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/properties/period",
+        "body": { "value": ["{{thoughtId}}"], "side": "source" },
+        "expression": "Array.isArray(data.link_ids) ? data.link_ids.length : 'no-link-ids'"
+      },
+      "expect": 1
+    },
+    {
+      "name": "reverse-row-appeared-without-reopen",
+      "timeout": 20000,
+      "waitFor": "(() => { const body=document.querySelector('.properties-outside-body'); if(!body || !body.textContent.includes('period-rev')) return false; return [...body.querySelectorAll('.prc-title')].length > 0; })()"
+    },
+    {
+      "name": "panel-after",
+      "probe": "(() => { const body=document.querySelector('.properties-outside-body'); const rows=[...body.querySelectorAll('tr')]; const row=rows.find((r)=>r.textContent.includes('period-rev')); const chips=row ? [...row.querySelectorAll('.prc-title')].map((n)=>n.textContent) : []; return { row: row !== undefined, chipCount: chips.length, chipHasText: chips.length > 0 && chips[0].length > 0 }; })()",
+      "expect": { "row": true, "chipCount": 1, "chipHasText": true }
+    },
+    {
+      "name": "same-tab-still-open",
+      "probe": "(() => document.querySelector('.properties-outside-body') !== null && document.querySelector('.editor-title-input')?.value === '{{seedTitle}}')()",
+      "expect": true
+    },
+    {
+      "name": "reverse-edge-on-server",
+      "probe": "(async () => { const N='{{networkId}}'; const vs=await window.etn.properties.get(N,'thought','{{thoughtId}}'); const e=vs.find((x)=>Array.isArray(x.values) && x.side==='target'); return { name: e?.property_name ?? null, side: e?.side ?? null, direction: e?.direction ?? null, match: e ? e.values.length === 1 && e.values[0].target_id === '{{homeId}}' : false }; })()",
+      "expect": { "name": "period-rev", "side": "target", "direction": "in", "match": true }
+    }
+  ]
+}
