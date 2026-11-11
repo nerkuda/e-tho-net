@@ -24,7 +24,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -181,6 +181,7 @@ const SRC = {
   ),
   pinnedBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'pinned-bar.ts'),
   historyBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'history-bar.ts'),
+  canvas: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
 };
 
 function readText(path: string): string {
@@ -415,13 +416,34 @@ describe('двойной клик по облачку вне карты — от
     store.update({ activeView: 'map', focus: null, activeTabId: null, networkId: null } as any);
   });
 
-  it('потребители не собирают «двойной клик → фокус» вручную', () => {
+  it('потребители не собирают жест «двойной клик» вручную (любая форма обработчика)', () => {
+    // Правило (элемент 1bd47ca3 v3, задача ef085714): у потребителя двойной клик
+    // — ТОЛЬКО фабричный жест `doubleClickFocusOnMap` (открыть + фокус +
+    // активация «Карты мыслей»). Ключ `onDoubleClick` в файлах потребителей
+    // запрещён целиком: краткая и блочная формы, ссылка на функцию и
+    // многострочный обработчик с промежуточной переменной одинаково собирают
+    // жест вручную — и на другом экране дают фокус БЕЗ активации карты, то есть
+    // ровно ту ошибку, которую чинит задача. Проверка «в handler есть
+    // focusFromUi» ловила только краткую форму и обходилась блочным телом
+    // (замечание приёмки 1).
+    //
+    // Своя семантика двойного клика разрешена только владельцам жеста, и они
+    // в список потребителей не входят: `lib/thought-cloud.ts` (фабрика и
+    // профиль `canvas`), `canvas/canvas.ts` (холст и hover-превью поверх него),
+    // `editor/value-editor.ts` (чипы значения со своим путём «В фокус»).
     const consumers = [SRC.linksTab, SRC.miniGraph, SRC.pinnedBar, SRC.historyBar, SRC.structures];
     for (const path of consumers) {
       const src = readText(path);
       assert.ok(
-        !/onDoubleClick:\s*(?:\([^)]*\)|\w+)\s*=>\s*(?:void\s+)?focusFromUi\(/.test(src),
-        `${path}: двойной клик обязан идти фабричным жестом, а не focusFromUi (без активации карты)`,
+        !/\bonDoubleClick\b/.test(src),
+        `${path}: двойной клик отдан фабричному жесту — ключа onDoubleClick у потребителя быть не должно (краткая, блочная форма, ссылка на функцию, многострочный обработчик)`,
+      );
+      // Тот же обход «мимо фабрики»: переключение вида и фокус собраны вручную.
+      assert.ok(
+        !/setActiveView\('(?:map|structures|chronicle|activity|publications)'\);\s*(?:void\s+)?focusFromUi\(/.test(
+          src,
+        ),
+        `${path}: переключение вида и фокус собираются только общим focusThoughtOnMap`,
       );
     }
 
@@ -449,4 +471,28 @@ describe('двойной клик по облачку вне карты — от
       );
     }
   });
+
+  it('ключ onDoubleClick есть только у владельцев жеста — новый потребитель правило не обойдёт', () => {
+    // Полнота правила: список потребителей выше не должен «устареть». Если жест
+    // вручную соберут в НОВОМ файле клиента, проверка списка его пропустит —
+    // поэтому ключ `onDoubleClick` разрешён ровно владельцам семантики:
+    //  * `lib/thought-cloud.ts` — фабрика (дефолт `doubleClickFocusOnMap` и
+    //    профиль `canvas`: фокус без переключения вида);
+    //  * `canvas/canvas.ts` — облачко холста и hover-превью поверх него;
+    //  * `editor/value-editor.ts` — чипы значения со своим путём «В фокус».
+    // Любой другой файл с этим ключом — ручная сборка жеста мимо фабрики.
+    const allowed = new Set([SRC.thoughtCloud, SRC.valueEditor, SRC.canvas]);
+    const root = resolve(import.meta.dirname, '..', 'src');
+    const offenders = readdirSync(root, { recursive: true, encoding: 'utf8' })
+      .filter((entry) => entry.endsWith('.ts'))
+      .map((entry) => resolve(root, entry))
+      .filter((path) => !allowed.has(path))
+      .filter((path) => /\bonDoubleClick\b/.test(readText(path)));
+    assert.deepEqual(
+      offenders.map((path) => path.slice(root.length + 1)),
+      [],
+      'двойной клик собирается только фабричным жестом: ключ onDoubleClick — у владельцев семантики',
+    );
+  });
+
 });
