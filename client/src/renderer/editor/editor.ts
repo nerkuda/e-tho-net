@@ -424,8 +424,122 @@ export function openLinkInEditor(link: Link): void {
  * follows the focus.
  */
 export function openThoughtInEditor(id: string): void {
+  openThoughtTarget(id, { force: false });
+}
+
+/**
+ * Отложенный выбор записи «Дневника» программного входа «открыть привязку с
+ * записью» (0.15.4, тех.проект 43329662, требование ce121e09, задача 666d1d00).
+ */
+export interface PendingRecord {
+  /** id записи, которую надо выбрать в таблице «Дневника». */
+  commentId: string;
+  /**
+   * ОТКРЫВАЕМАЯ мысль (цель навигации), а не обязательно владелец записи:
+   * pending действует только на «Дневник» этой мысли.
+   */
+  thoughtId: string;
+}
+
+/**
+ * Отложенный выбор записи — МУТАБЕЛЬНОЕ состояние каркаса (не поле
+ * `EditorContext`: тот пересобирается `currentEditorContext()` на каждый render,
+ * и поле жило бы один render). Живёт до применения вкладкой «Дневник» либо до
+ * сброса каркасом (смена владельца, teardown, маунт).
+ *
+ * Читает его вкладка ЖИВЫМ аксессором {@link takePendingRecord}, а не снимком
+ * из контекста: снимок на момент сборки панели навязал бы выбор повторно при
+ * следующей перезагрузке списка (нарушение правил авто-выбора, задача 41ed99ab).
+ */
+let pendingRecord: PendingRecord | null = null;
+
+/**
+ * Забирает отложенный выбор записи для указанной мысли: чтение и сброс ОДНИМ
+ * вызовом (задача 666d1d00). Pending чужой мысли не отдаётся и не сбрасывается —
+ * его снимет смена владельца каркаса ({@link resetPendingRecord}).
+ */
+export function takePendingRecord(thoughtId: string): PendingRecord | null {
+  if (pendingRecord === null || pendingRecord.thoughtId !== thoughtId) return null;
+  const pending = pendingRecord;
+  pendingRecord = null;
+  return pending;
+}
+
+/**
+ * Сбрасывает отложенный выбор записи. `keepOwnerId` — владелец, переход
+ * которого выбор НЕ отменяет: доставка payload той же мысли
+ * (loading→loaded, `renderRetarget`) пересобирает панель, и выбор должен
+ * примениться уже в сборке из загруженного контекста.
+ */
+function resetPendingRecord(keepOwnerId: string | null = null): void {
+  if (pendingRecord !== null && keepOwnerId !== null && pendingRecord.thoughtId === keepOwnerId) {
+    return;
+  }
+  pendingRecord = null;
+}
+
+/**
+ * Программный вход «открыть привязку с записью» (0.15.4, требование ce121e09,
+ * задача 666d1d00): открывает редактор ОТКРЫВАЕМОЙ мысли, активирует вкладку
+ * «Дневник» и выбирает в её таблице строку записи.
+ *
+ * `thoughtId` — ЦЕЛЬ навигации (выбранная привязка-мысль из чипов/списка; при
+ * нуле видимых привязок — владелец-мысль записи), НЕ обязательно владелец
+ * записи: список комментариев отдаёт записи и по владельцу, и по m2m-цели
+ * (`comment-service.ts`, listComments — byOwner ∪ byTarget), поэтому запись
+ * чужого владельца, привязанная к открываемой мысли, находится в её «Дневнике».
+ *
+ * Порядок шагов — «открыть → pending → инвалидация → активация»:
+ *  * открытие идёт с обходом ОБОИХ молчаливых no-op {@link openThoughtInEditor}
+ *    (`force`): иначе повторный вход по ДРУГОЙ записи уже открытой мысли молча
+ *    вышел бы и выбор не изменился;
+ *  * отложенный выбор ставится ПОСЛЕ открытия: смена владельца в render
+ *    сбрасывает прежний pending, и новый не должен быть съеден этим сбросом;
+ *  * инвалидация вкладки «Дневник» — ДО активации: `invalidatePanes` при уже
+ *    показанной вкладке пересобирает её немедленно, поэтому порядок «активация
+ *    → инвалидация» строил бы панель ДВАЖДЫ (два конкурирующих reload: первый
+ *    применил бы pending и сбросил его, второй сделал бы авто-выбор) —
+ *    применение «ровно один раз» перестало бы быть детерминированным;
+ *  * активация — каналом отображения (`displayTab`), БЕЗ персистенции слота
+ *    `EDITOR_ACTIVE_TAB`: клик по записи не должен навсегда переводить
+ *    редактор на «Дневник» для всех мыслей.
+ *
+ * Фокус холста вход не меняет (ce121e09). Один канал доставки — инвалидация
+ * панели «Дневник» (не `onShow`-хук и не `patchHeader`). Вход односетевой:
+ * адресат — хит текущей сети, сеть параметром не передаётся.
+ */
+export function openRecordInEditor(thoughtId: string, commentId: string): void {
+  openThoughtTarget(thoughtId, { force: true });
+  pendingRecord = { commentId, thoughtId };
+  invalidatePanes(['chrono']);
+  displayTab('chrono');
+}
+
+/**
+ * Общее тело {@link openThoughtInEditor} и программного входа
+ * {@link openRecordInEditor}. `force` обходит ОБА молчаливых no-op повторного
+ * открытия (фокус и уже открытая та же мысль); публичный
+ * `openThoughtInEditor` сохраняет прежнее no-op-поведение.
+ */
+function openThoughtTarget(id: string, options: { force: boolean }): void {
+  const { force } = options;
   const focusId = store.state.focus?.focused.id ?? null;
-  if (id === focusId) {
+  // Программный вход по уже открытой мысли: переустановка цели сбросила бы её
+  // payload и запустила лишнее перечитывание сущности, а с ним — пересборку
+  // содержимого вкладок; входу остаётся работа ПОСЛЕ открытия (выбор записи).
+  if (force) {
+    const live = currentEditorContext();
+    if (
+      live !== null &&
+      live.ownerType === 'thought' &&
+      live.ownerId === id &&
+      live.thought !== null
+    ) {
+      if (store.state.selectedLinkId !== null) store.update({ selectedLinkId: null });
+      return;
+    }
+  }
+  if (!force && id === focusId) {
     if (
       store.state.editorTarget === null &&
       store.state.selectedLinkId === null &&
@@ -450,7 +564,7 @@ export function openThoughtInEditor(id: string): void {
     return;
   }
   const current = store.state.editorTarget;
-  if (current !== null && current.kind === 'thought' && current.id === id) {
+  if (!force && current !== null && current.kind === 'thought' && current.id === id) {
     if (store.state.selectedLinkId !== null) store.update({ selectedLinkId: null });
     return;
   }
@@ -857,6 +971,8 @@ export function mountEditor(editorHost: HTMLElement): void {
   disposeAllPanes();
   builtPanes = new Map();
   reflowOverflow = null;
+  // Новый каркас не наследует отложенный выбор записи прежнего (задача 666d1d00).
+  resetPendingRecord();
   headerRetarget = null;
   headerShapeKey = null;
   releaseHeaderLockSync();
@@ -1746,6 +1862,12 @@ async function render(): Promise<void> {
  */
 function renderRetarget(ctx: EditorContext): void {
   if (scrollBox === null) return;
+  // Отложенный выбор записи принадлежит ОТКРЫВАЕМОЙ мысли (задача 666d1d00):
+  // при переходе на другого владельца он не протекает в чужой «Дневник».
+  // Переход loading→loaded ТОЙ ЖЕ мысли выбор сохраняет — панель, собранная до
+  // доставки payload, его ещё не применяла; применяет сборка из загруженного
+  // контекста (этот же retarget её и делает).
+  resetPendingRecord(ctx.ownerId);
   // A new binding for the reused tab strip: bump the epoch so any count loader
   // still in flight for the PREVIOUS entity drops its result (task 90b2256e).
   renderEpoch += 1;
@@ -1877,6 +1999,10 @@ function renderFull(ctx: EditorContext | null): void {
   headerEl = null;
   tabBarEl = null;
   paneHostEl = null;
+  // Teardown каркаса: отложенный выбор записи не переживает пересборку панели
+  // (задача 666d1d00) — вкладка «Дневник» нового каркаса сделала бы авто-выбор,
+  // а «призрачный» pending применился бы к другой сущности.
+  resetPendingRecord();
   tabButtons = new Map();
   disposeAllPanes();
   builtPanes = new Map();
