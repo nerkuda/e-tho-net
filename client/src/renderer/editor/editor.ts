@@ -479,6 +479,16 @@ function resetPendingRecord(keepOwnerId: string | null = null): void {
 }
 
 /**
+ * Сбрасывает отложенный выбор записи, если он принадлежит указанной мысли.
+ * Нужен НЕУДАЧНОМУ открытию (замечание приёмки П2, задача 666d1d00): вход не
+ * состоялся — «нависший» pending применился бы при следующем штатном заходе в
+ * «Дневник» этой мысли. Pending другой мысли не трогаем: его ведёт свой вход.
+ */
+function dropPendingRecordFor(thoughtId: string): void {
+  if (pendingRecord !== null && pendingRecord.thoughtId === thoughtId) pendingRecord = null;
+}
+
+/**
  * Программный вход «открыть привязку с записью» (0.15.4, требование ce121e09,
  * задача 666d1d00): открывает редактор ОТКРЫВАЕМОЙ мысли, активирует вкладку
  * «Дневник» и выбирает в её таблице строку записи.
@@ -610,6 +620,10 @@ function openThoughtTarget(id: string, options: { force: boolean }): void {
       // still the one this call set (a newer click/selection wins).
       const live = store.state.editorTarget;
       if (live?.kind === 'thought' && live.id === id && live.thought === undefined) {
+        // Вход не состоялся — отложенный выбор ЭТОЙ мысли снимается вместе с
+        // целью: иначе «нависший» pending применился бы при следующем штатном
+        // заходе в её «Дневник» (замечание приёмки П2, задача 666d1d00).
+        dropPendingRecordFor(id);
         store.update(previous);
       }
     });

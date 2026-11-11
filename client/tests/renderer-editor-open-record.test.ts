@@ -262,9 +262,12 @@ function installEtn(
     thoughts?: Record<string, Thought>;
     /** Отложенная доставка сущности: id → промис, который тест разрешает сам. */
     deferred?: Record<string, Promise<Thought>>;
+    /** id мыслей, чей ПЕРВЫЙ `etn.thoughts.get` падает (проба П2: вход не состоялся). */
+    failOnce?: readonly string[];
   } = {},
 ): EtnCalls {
   const calls: EtnCalls = { setState: [], commentLists: 0 };
+  const failOnce = new Set(options.failOnce ?? []);
   const win = (globalThis as any).window as Record<string, any>;
   win.etn = {
     ui: {
@@ -286,6 +289,9 @@ function installEtn(
     attachments: { list: async () => [] },
     thoughts: {
       get: async (_networkId: string, id: string) => {
+        // Проба П2 приёмки: первый запрос этой мысли падает (мысль удалена,
+        // нет доступа, сеть) — вход «открыть с записью» не состоялся.
+        if (failOnce.delete(id)) throw new Error(`etn.thoughts.get(${id}) failed`);
         const deferred = options.deferred?.[id];
         if (deferred !== undefined) return deferred;
         return options.thoughts?.[id] ?? makeThought(id, id);
@@ -568,6 +574,33 @@ describe('программный вход «открыть привязку с �
       shownRecordTitle(scrollBox),
       'Запись t2: апрель',
       'выбор применён один раз — сборкой из загруженного контекста, а не плейсхолдером',
+    );
+  });
+
+  it('неудачное открытие мысли снимает pending: следующий заход даёт авто-выбор (П2)', async () => {
+    shimDom();
+    // Проба П2 приёмки: `etn.thoughts.get('t2')` падает — вход не состоялся.
+    installEtn({ failOnce: ['t2'] });
+    const { editor, store, scrollBox } = await mountThoughtEditor(makeThought('t1', 'T1'));
+
+    const targetBefore = store.state.editorTarget;
+    editor.openRecordInEditor('t2', 'c8');
+    await flush();
+
+    // Неудачное открытие откатило цель к снимку — отложенный выбор записи t2
+    // не должен нависнуть над каркасом.
+    assert.strictEqual(store.state.editorTarget, targetBefore, 'цель откачена к снимку');
+
+    // Штатный заход в «Дневник» той же мысли (payload приходит) — вкладка
+    // обязана сделать авто-выбор верхней строки, а не применить зависший c8.
+    editor.openThoughtInEditor('t2');
+    await flush();
+
+    assert.ok(activeTabTitle(scrollBox).startsWith('Дневник'));
+    assert.equal(
+      shownRecordTitle(scrollBox),
+      'Запись t2: май',
+      'зависший pending снят: показан штатный авто-выбор верхней строки, а не выбор неудавшегося входа',
     );
   });
 });
