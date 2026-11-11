@@ -10,9 +10,11 @@
  * сторож `tests/guard-canvas-menu-dictionary.test.ts`.
  *
  * Одно готовое меню поддерживает один уровень hover-подменю, закрытие кликом
- * вне / Escape / потерей фокуса / изменением размера окна и флаги пункта
- * `disabled` / `danger` / `checked`. Потребители: меню тулбара, меню мысли
- * холста и редактора, меню сортировки зон, панель выделения, меню списков.
+ * вне / Escape / потерей фокуса / изменением размера окна, флаги пункта
+ * `disabled` / `danger` / `checked` и — по опции `keyboard` — клавиатурный
+ * профиль списка выбора (↑/↓/Enter, ARIA `listbox`/`option`, 0.15.4,
+ * ADR 8f0e9412). Потребители: меню тулбара, меню мысли холста и редактора, меню
+ * сортировки зон, панель выделения, меню списков.
  *
  * Строк интерфейса у словаря нет: подпись пункта задаёт потребитель (при
  * переводе — `t('…')` из `lib/i18n.ts`).
@@ -21,6 +23,7 @@
 import { div, el, span } from './dom.js';
 import { noteFocusOrigin } from './focus-origin.js';
 import { pushKeyOverlay } from './keymap.js';
+import { nextNavIndex, resolveNavAction } from './ui/nav-core.js';
 
 /** A menu entry: leaf with `onClick` or a parent with `submenu`.
  *  `dragId` marks a row as a drag source for a thought (the history dropdown)
@@ -48,6 +51,23 @@ export interface MenuItem {
 
 /** A visible separator. */
 export const MENU_SEPARATOR: MenuItem = { label: '—' };
+
+/**
+ * Опции готового меню (профили поведения).
+ *
+ * `keyboard` — клавиатурная навигация по строкам (0.15.4, ADR 8f0e9412,
+ * элемент 50299ca1 «Список выбора привязки дневниковой записи»): ↑/↓ двигают
+ * подсвеченный пункт с пропуском недоступных, Enter выбирает его, текущий пункт
+ * подсвечен, контейнер — ARIA `listbox`, строки — `option` с `aria-selected`.
+ * Клавиши гасятся в СУЩЕСТВУЮЩЕМ capture-слушателе ({@link showMenuAt}) с
+ * `stopImmediatePropagation`: иначе стрелки одновременно двигали бы список
+ * результатов/холст под меню (сторож `guard-keymap-single-point` — второй
+ * слушатель здесь не заводится).
+ */
+export interface MenuOptions {
+  /** Клавиатурный профиль списка выбора (↑/↓/Enter, ARIA listbox/option). */
+  keyboard?: boolean;
+}
 
 /** Опции пункта словаря — всё, кроме подписи, обработчика и подменю. */
 export interface MenuItemOptions {
@@ -249,17 +269,79 @@ function isMenuRowTarget(target: EventTarget | null): boolean {
   return typeof node.closest === 'function' && node.closest('.menu-item') !== null;
 }
 
+/** Клавиатурное управление открытым меню (профиль `keyboard`). */
+interface MenuKeyboard {
+  /** Сдвинуть подсвеченный пункт; `false` — двигать некуда (край/нет строк). */
+  move(action: 'up' | 'down'): boolean;
+  /** Выбрать подсвеченный пункт (как клик по строке); `false` — выбирать нечего. */
+  activate(): boolean;
+}
+
+/**
+ * Включает клавиатурный профиль меню: ARIA `listbox`/`option`, стартовый пункт —
+ * первый доступный, подсветка текущего (`aria-selected`). Логика самих клавиш
+ * живёт не здесь, а в capture-слушателе {@link showMenuAt}: экранными
+ * слушателями клавиатуры клиент не пользуется (ADR b420b08c, сторож
+ * `guard-keymap-single-point`).
+ */
+function setupMenuKeyboard(root: HTMLElement): MenuKeyboard {
+  root.setAttribute('role', 'listbox');
+  const rows = (): HTMLElement[] =>
+    Array.from(root.querySelectorAll<HTMLElement>(':scope > .menu-item'));
+  /** Доступные пункты: по недоступным стрелки не ходят. */
+  const enabled = (): HTMLElement[] =>
+    rows().filter((row) => !row.classList.contains('menu-item-disabled'));
+  let active: HTMLElement | null = null;
+
+  const mark = (next: HTMLElement | null): void => {
+    for (const row of rows()) row.setAttribute('aria-selected', row === next ? 'true' : 'false');
+    active = next;
+  };
+
+  for (const row of rows()) row.setAttribute('role', 'option');
+  // Список навигационный — курсор виден сразу, без первого нажатия стрелки.
+  mark(enabled()[0] ?? null);
+
+  return {
+    move(action) {
+      const list = enabled();
+      if (list.length === 0) return false;
+      const current = active === null ? -1 : list.indexOf(active);
+      const next = nextNavIndex(action, current, list.length, { emptyTarget: 'direction' });
+      const target = list[next];
+      if (target === undefined || target === active) return false;
+      mark(target);
+      return true;
+    },
+    activate() {
+      if (active === null || active.classList.contains('menu-item-disabled')) return false;
+      // Строка меню сама закроет меню и выполнит свою команду (см. `buildMenu`).
+      active.click();
+      return true;
+    },
+  };
+}
+
 /**
  * Shows a menu at viewport coordinates and returns its root element (so the
  * caller can wire extra behaviour onto the rows, e.g. drag sources).
  * Coordinates are clamped to the viewport and the menu is closed on outside
  * click, Escape, blur or window resize.
+ *
+ * `options.keyboard` включает клавиатурный профиль списка выбора (0.15.4,
+ * ADR 8f0e9412): ↑/↓/Enter обслуживает ТОТ ЖЕ capture-слушатель ниже.
  */
-export function showMenuAt(x: number, y: number, items: MenuItem[]): HTMLElement {
+export function showMenuAt(
+  x: number,
+  y: number,
+  items: MenuItem[],
+  options: MenuOptions = {},
+): HTMLElement {
   closeMenu();
   const root = buildMenu(items);
   document.body.append(root);
   roots.push(root);
+  const keyboard = options.keyboard === true ? setupMenuKeyboard(root) : null;
 
   const rect = root.getBoundingClientRect();
   root.style.left = `${Math.max(4, Math.min(x, window.innerWidth - rect.width - 4))}px`;
@@ -277,8 +359,24 @@ export function showMenuAt(x: number, y: number, items: MenuItem[]): HTMLElement
   // раньше bubble-диспетчера).
   const escapeOverlay = pushKeyOverlay({ id: 'menu', onEscape: () => closeMenu() });
   const onKey = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || event.repeat) return;
-    if (!escapeOverlay.handleEscape(event)) return;
+    if (event.key === 'Escape' && !event.repeat) {
+      if (!escapeOverlay.handleEscape(event)) return;
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (keyboard === null) return;
+    // Клавиатура списка выбора — в ЭТОМ ЖЕ слушателе (новый слушатель краснит
+    // сторож `guard-keymap-single-point`); ↑/↓/Enter гасятся, иначе они
+    // одновременно двигали бы список результатов/холст под меню.
+    const action = resolveNavAction(event.key);
+    const handled =
+      action === 'up' || action === 'down'
+        ? keyboard.move(action)
+        : action === 'activate'
+          ? keyboard.activate()
+          : false;
+    if (!handled) return;
+    event.preventDefault();
     event.stopImmediatePropagation();
   };
   window.addEventListener('keydown', onKey, true);

@@ -168,7 +168,7 @@ describe('облачка привязок несохранённой запис�
     const fn = functionBody(CHRONICLE, 'function fillRecordCard(');
     assert.match(
       fn,
-      /const chips = createRecordChips\(\{ row, homeId: \(\) => homeId, buildChip \}\)/,
+      /const chips = createRecordChips\(\{ row, homeId: currentHomeId, buildChip \}\)/,
       'облачка — контейнер компонента шапки',
     );
     assert.match(fn, /chips: chips\.box/, 'контейнер вставлен в строку полей');

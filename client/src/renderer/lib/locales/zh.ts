@@ -591,6 +591,8 @@ export const zh = {
   'recordSearch.empty': '未找到结果。',
   'recordSearch.results': '找到的记录',
   'recordSearch.untitled': '记录',
+  /** Client render cap of record rows (0.15.4, задача 33ed043c). */
+  'records.more': '已显示 %1 / %2',
   'selection.add': '添加到选择',
   'selection.remove': '从选择中移除',
   'selection.unavailable': '不可用',

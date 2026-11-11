@@ -45,9 +45,13 @@ describe('раскладка хита-мысли в выпадашке поис�
     );
     assert.equal(
       (src.match(/isThought: false/g) ?? []).length,
-      2,
-      'links and chronology rows are NOT thought hits (single-line glyph rows)',
+      1,
+      'the links row is NOT a thought hit (single-line glyph row)',
     );
+    // Хроно-строка — общая строка-запись (0.15.4, задача 33ed043c, элемент
+    // 554e3129): своя раскладка «период + чипы + сниппет», а не глиф-строка.
+    assert.match(src, /kind: 'record',/, 'chronology rows are record rows');
+    assert.match(src, /createRecordRow\(/, 'record row is built by the shared component');
     assert.match(
       src,
       /const row = div\('search-hit search-hit-cloud'\);/,

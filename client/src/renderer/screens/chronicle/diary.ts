@@ -26,6 +26,7 @@ import {
   weekStartOffset,
 } from '../../lib/dates.js';
 import { formatDateParts, getLang } from '../../lib/i18n.js';
+import { visibleRecordTargets } from '../../lib/record-targets.js';
 
 // Общие чистые примитивы дат живут в `lib/dates.ts` (перенос календаря в
 // библиотеку, приёмка №5; резолвер токенов периода перенесён туда же — общий с
@@ -529,15 +530,19 @@ export function hasRowId(rows: readonly { id: string }[], id: string): boolean {
 /**
  * Видимые чипсы записи: все привязки, кроме первичной привязки к HOME —
  * она служебная (требование c81964c7) и крестика не имеет.
+ *
+ * Тонкая обёртка общего предиката `lib/record-targets.ts` (0.15.4, задача
+ * 33ed043c): экранная лента фильтрует ТОЛЬКО HOME, поэтому передаёт
+ * РАЗРЕШАЮЩИЕ флаги `showInactive`/`showTrash` — видимый результат прежний
+ * (граница версии «Экран «Дневник» не меняется»). Собственной копии предиката в
+ * экранах нет; сигнатура `visibleChips(targets, homeId)` сохранена для второго
+ * потребителя — `screens/chronicle/record-head.ts`.
  */
 export function visibleChips(
   targets: readonly ChronicleTarget[],
   homeId: string | null,
 ): ChronicleTarget[] {
-  if (homeId === null) return [...targets];
-  return targets.filter(
-    (target) => !(target.kind === 'thought' && target.thought.id === homeId),
-  );
+  return visibleRecordTargets(targets, { homeId, showInactive: true, showTrash: true });
 }
 
 /** Является ли привязка снятием последнего чипса (тогда нужно подтверждение). */

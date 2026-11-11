@@ -336,7 +336,13 @@ describe('приёмка №10, п.4: владелец вложения для �
       resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'chronicle', 'chronicle.ts'),
       'utf8',
     );
-    assert.match(src, /attachmentOwnerForRow\(row\.targets, homeId\)/, 'владелец считается помощником');
+    // 0.15.4 (задача 33ed043c): резолвер HOME вынесен в `lib/home.ts`, экран
+    // читает кеш синхронно — помощник получает его через `currentHomeId()`.
+    assert.match(
+      src,
+      /attachmentOwnerForRow\(row\.targets, currentHomeId\(\)\)/,
+      'владелец считается помощником',
+    );
     assert.match(src, /\.\.\.\(owner !== null \? \{ attachmentsOwner: owner \} : \{\}\)/, 'поле записи получает владельца');
   });
 

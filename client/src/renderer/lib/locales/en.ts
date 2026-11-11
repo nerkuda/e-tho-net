@@ -1245,6 +1245,8 @@ export const en = {
   'recordSearch.results': 'Matching entries',
   /** Запись без заголовка в результатах. */
   'recordSearch.untitled': 'Entry',
+  /** Client render cap of record rows (0.15.4, задача 33ed043c): «N of M shown». */
+  'records.more': '%1 of %2 shown',
 
   // -- Общее выделение -----------------------------------------------------
   /** Добавить мысль к выделению (меню чипов хроники). */
