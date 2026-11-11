@@ -887,6 +887,13 @@ function searchTexts(
   const { where, params } = joinClauses([
     { sql: 'fts_thought_texts MATCH ?', params: [match] },
     { sql: "c.owner_type = 'thought'", params: [] },
+    // Только ПОСТОЯННЫЙ комментарий (ошибка 5fbfe844): FTS индексирует тела
+    // всех комментариев (миграция 038), поэтому дневниковая запись находилась
+    // и в «Найдено по текстам», дублируя «Найдено в дневниках», — а клик вёл к
+    // комментарию, где искомого текста нет. Записи остаются в `by_chrono`.
+    // Предикат общий для count и rows (единый `where`) — счётчик считает ровно
+    // то, что рендерится.
+    { sql: "c.kind = 'permanent'", params: [] },
     // Мыслевые настройки — единой AST-конъюнкцией (см. `searchNames`).
     // Автор/редактор остаются корпусными параметрами (авторство МЫСЛИ).
     f.thoughtClause,
@@ -897,7 +904,9 @@ function searchTexts(
   // a thought with N matching comments shows up N times. The result list must
   // collapse to one hit per thought (UX expectation; `comment_id` keeps the
   // first match so the user can navigate to it). `total` counts distinct
-  // thoughts, the inner `rank` ordering drives which comment wins.
+  // thoughts, the inner `rank` ordering drives which comment wins. После
+  // kind-фильтра выше «N совпадений» — это N постоянных комментариев одной
+  // мысли (их больше одного не бывает, но схлопывание остаётся страховкой).
   const total = (
     ndb
       .prepare(

@@ -191,8 +191,9 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const t = seedThought(ndb, 'Owner');
-        // Постоянный комментарий владельца один (инвариант базы), остальные —
-        // дневниковые записи; FTS by_texts индексирует комментарии любого kind.
+        // Постоянный комментарий владельца один (инвариант базы). Дневниковые
+        // записи с тем же словом строку by_texts не порождают (ошибка
+        // 5fbfe844) — хит остаётся один и ведёт в постоянный комментарий.
         seedThoughtComment(ndb, t, 'remember the milk in the fridge');
         seedThoughtComment(ndb, t, 'oat milk for the coffee', 'chronological');
         seedThoughtComment(ndb, t, 'milk expires tomorrow', 'chronological');
@@ -201,6 +202,90 @@ describe(
         assert.equal(res.by_texts[0]!.thought_id, t);
         assert.equal(res.meta.total_in_group.texts, 1, 'total counts distinct thoughts');
         assert.ok(typeof res.by_texts[0]!.comment_id === 'string');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: совпадение только в дневниковой записи строку не даёт, запись остаётся в by_chrono (ошибка 5fbfe844)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Дневниковый владелец');
+        seedThoughtComment(ndb, t, 'постоянное тело без искомого', 'permanent');
+        const record = seedThoughtComment(
+          ndb,
+          t,
+          'редкозаписноеслово в дневнике',
+          'chronological',
+          '2026-10-10',
+        );
+        const res = search(ndb, { q: 'редкозаписноеслово' });
+        assert.equal(res.by_texts.length, 0, 'запись не даёт строку «Найдено по текстам»');
+        assert.equal(
+          res.meta.total_in_group.texts,
+          0,
+          'счётчик by_texts считает ровно то, что отдаётся строками',
+        );
+        assert.deepEqual(
+          res.by_chrono.map((h) => h.comment_id),
+          [record],
+          'запись по-прежнему видна в «Найдено в дневниках»',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: слово есть и в постоянном комментарии, и в записи — строка сохраняется', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Смешанный владелец');
+        const permanent = seedThoughtComment(ndb, t, 'общееслово в постоянном комментарии');
+        seedThoughtComment(ndb, t, 'общееслово в дневниковой записи', 'chronological');
+        const res = search(ndb, { q: 'общееслово' });
+        assert.equal(res.by_texts.length, 1, 'совпадение в постоянном сохраняет строку');
+        assert.equal(
+          res.by_texts[0]!.comment_id,
+          permanent,
+          'клик ведёт в постоянный комментарий, где текст действительно есть',
+        );
+        assert.equal(res.meta.total_in_group.texts, 1);
+        assert.equal(res.by_chrono.length, 1, 'запись отдельно видна в дневниках');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: слово только в постоянном комментарии — выдача прежняя', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Постоянный владелец');
+        const permanent = seedThoughtComment(ndb, t, 'толькопостоянноеслово в теле');
+        const res = search(ndb, { q: 'толькопостоянноеслово' });
+        assert.equal(res.by_texts.length, 1);
+        assert.equal(res.by_texts[0]!.comment_id, permanent);
+        assert.equal(res.by_texts[0]!.thought_id, t);
+        assert.equal(res.meta.total_in_group.texts, 1);
+        assert.equal(res.by_chrono.length, 0, 'в дневниках совпадения нет');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: total равен числу отданных строк, когда записи-дубли отсечены', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const withPermanent = seedThought(ndb, 'Мысль с постоянным телом');
+        seedThoughtComment(ndb, withPermanent, 'счётчикмаркер постоянный', 'permanent');
+        const recordOnlyA = seedThought(ndb, 'Мысль только с записью А');
+        seedThoughtComment(ndb, recordOnlyA, 'счётчикмаркер запись А', 'chronological');
+        const recordOnlyB = seedThought(ndb, 'Мысль только с записью Б');
+        seedThoughtComment(ndb, recordOnlyB, 'счётчикмаркер запись Б', 'chronological');
+        const res = search(ndb, { q: 'счётчикмаркер' });
+        assert.equal(res.meta.total_in_group.texts, 1, 'счётчик — только по постоянным');
+        assert.equal(res.by_texts.length, 1, 'строк столько же, сколько насчитал total');
+        assert.equal(res.by_texts[0]!.thought_id, withPermanent);
+        assert.equal(res.meta.total_in_group.chronology, 2, 'обе записи учтены в дневниках');
       } finally {
         ndb.close();
       }

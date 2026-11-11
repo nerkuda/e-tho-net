@@ -289,8 +289,8 @@ describe(
         assert.equal(page.meta.total_in_group.texts, 2);
         assert.equal(page.by_texts.length, 1);
 
-        // Override the permanent comment in the layer: A still finds `a` via
-        // its chronological comment, but not by the overridden base text.
+        // Override the permanent comment in the layer: A still finds `a`
+        // через редакцию слоя (слово есть и в ней), базовая редакция не видна.
         ndb.useLayer(LAYER_A);
         updateComment(ndb, perm.id, { body_md: 'мнд дельта' }, 1, USER);
         const inA = search(ndb, { q: 'мнд', scope: 'texts' });
