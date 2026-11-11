@@ -1002,12 +1002,19 @@ function searchLinks(
   const { where, params } = joinClauses([
     { sql: 'fts_link_texts MATCH ?', params: [match] },
     { sql: "c.owner_type = 'link'", params: [] },
+    // Только ПОСТОЯННЫЙ комментарий (ошибка 4aec5fe8, симметрично by_texts):
+    // FTS индексирует тела всех комментариев (миграция 038), поэтому дневниковая
+    // запись связи попадала в «Найдено связей», дублируя «Найдено в дневниках».
+    // Предикат общий для COUNT и страницы (единый `where`).
+    { sql: "c.kind = 'permanent'", params: [] },
     { sql: '(l.active = 1 OR ?)', params: [f.showInactive ? 1 : 0] },
     { sql: '(l.marked_for_deletion = 0 OR ?)', params: [f.trashed ? 1 : 0] },
     inListClause('l.type_id', f.linkTypeIds),
   ]);
   // Same collapse as `searchTexts`: one hit per `link_id`. `total` counts
-  // distinct links, the inner `rank` picks the first comment per link.
+  // distinct links, the inner `rank` picks the first comment per link. После
+  // kind-фильтра выше «N совпадений» — это N постоянных комментариев одной
+  // связи (их больше одного не бывает, схлопывание остаётся страховкой).
   const total = (
     ndb
       .prepare(

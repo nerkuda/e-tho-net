@@ -312,12 +312,117 @@ describe(
         const a = seedThought(ndb, 'A');
         const b = seedThought(ndb, 'B');
         const link = seedLink(ndb, a, b);
+        // Постоянный комментарий связи один (инвариант базы). Дневниковая
+        // запись с тем же словом строку by_links не порождает (ошибка
+        // 4aec5fe8) — хит остаётся один и ведёт в постоянный комментарий.
         seedLinkComment(ndb, link, 'wire notes one');
         seedLinkComment(ndb, link, 'wire notes two', 'chronological');
         const res = search(ndb, { q: 'wire' });
         assert.equal(res.by_links.length, 1, 'one hit per link, not per comment');
         assert.equal(res.by_links[0]!.link_id, link);
         assert.equal(res.meta.total_in_group.links, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: совпадение только в дневниковой записи связи строку не даёт, запись остаётся в by_chrono (ошибка 4aec5fe8)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Связь А');
+        const b = seedThought(ndb, 'Связь Б');
+        const link = seedLink(ndb, a, b);
+        seedLinkComment(ndb, link, 'постоянное тело связи без искомого', 'permanent');
+        const record = seedLinkComment(
+          ndb,
+          link,
+          'связьредкозаписьслово в дневнике',
+          'chronological',
+          '2026-10-10',
+        );
+        const res = search(ndb, { q: 'связьредкозаписьслово' });
+        assert.equal(res.by_links.length, 0, 'запись связи не даёт строку «Найдено связей»');
+        assert.equal(
+          res.meta.total_in_group.links,
+          0,
+          'счётчик by_links считает ровно то, что отдаётся строками',
+        );
+        assert.deepEqual(
+          res.by_chrono.map((h) => h.comment_id),
+          [record],
+          'запись по-прежнему видна в «Найдено в дневниках»',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: слово есть и в постоянном комментарии связи, и в записи — строка сохраняется', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Связь А');
+        const b = seedThought(ndb, 'Связь Б');
+        const link = seedLink(ndb, a, b);
+        seedLinkComment(ndb, link, 'связьобщееслово постоянный');
+        seedLinkComment(ndb, link, 'связьобщееслово запись', 'chronological');
+        const res = search(ndb, { q: 'связьобщееслово' });
+        assert.equal(res.by_links.length, 1, 'совпадение в постоянном сохраняет строку');
+        assert.equal(
+          res.by_links[0]!.link_id,
+          link,
+          'строка ведёт в ту же связь, что и раньше',
+        );
+        assert.equal(res.meta.total_in_group.links, 1);
+        assert.match(res.by_links[0]!.snippet, /<mark>/, 'сниппет подсвечивает совпадение');
+        assert.equal(res.by_chrono.length, 1, 'запись отдельно видна в дневниках');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: слово только в постоянном комментарии связи — выдача прежняя', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Связь А');
+        const b = seedThought(ndb, 'Связь Б');
+        const link = seedLink(ndb, a, b);
+        seedLinkComment(ndb, link, 'связьтолькопостоянноеслово в теле');
+        const res = search(ndb, { q: 'связьтолькопостоянноеслово' });
+        assert.equal(res.by_links.length, 1);
+        assert.equal(res.by_links[0]!.link_id, link);
+        assert.equal(res.meta.total_in_group.links, 1);
+        assert.equal(res.by_chrono.length, 0, 'в дневниках совпадения нет');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: total равен числу отданных строк, когда записи-дубли отсечены', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const linkWithPermanent = seedLink(
+          ndb,
+          seedThought(ndb, 'Связь П А'),
+          seedThought(ndb, 'Связь П Б'),
+        );
+        seedLinkComment(ndb, linkWithPermanent, 'связьсчётчикмаркер постоянный', 'permanent');
+        const recordOnlyA = seedLink(
+          ndb,
+          seedThought(ndb, 'Связь З А'),
+          seedThought(ndb, 'Связь З Б'),
+        );
+        seedLinkComment(ndb, recordOnlyA, 'связьсчётчикмаркер запись А', 'chronological');
+        const recordOnlyB = seedLink(
+          ndb,
+          seedThought(ndb, 'Связь В А'),
+          seedThought(ndb, 'Связь В Б'),
+        );
+        seedLinkComment(ndb, recordOnlyB, 'связьсчётчикмаркер запись Б', 'chronological');
+        const res = search(ndb, { q: 'связьсчётчикмаркер' });
+        assert.equal(res.meta.total_in_group.links, 1, 'счётчик — только по постоянным');
+        assert.equal(res.by_links.length, 1, 'строк столько же, сколько насчитал total');
+        assert.equal(res.by_links[0]!.link_id, linkWithPermanent);
+        assert.equal(res.meta.total_in_group.chronology, 2, 'обе записи учтены в дневниках');
       } finally {
         ndb.close();
       }
