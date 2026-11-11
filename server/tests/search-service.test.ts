@@ -279,7 +279,7 @@ describe(
         const t = seedThought(ndb, 'T');
         const second = seedThought(ndb, 'Вторая мысль');
         const early = seedThoughtComment(ndb, t, 'early chrono gamma', 'chronological', '2024-01-01');
-        seedThoughtComment(ndb, t, 'late chrono delta', 'chronological', '2024-03-01');
+        seedThoughtComment(ndb, t, 'late chrono gamma', 'chronological', '2024-03-01');
         // Привязки записи-представителя: владелец первичный, вторая — другая мысль.
         seedCommentTarget(ndb, early, 'thought', t);
         seedCommentTarget(ndb, early, 'thought', second);
@@ -294,6 +294,62 @@ describe(
           hit.targets.map((target) => (target.kind === 'thought' ? target.thought.id : 'link')),
           [t, second],
           'привязки записи-представителя, первичная первой',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_chrono: targets хроно-хита сохраняют флаги видимости как в базе (012b2dc6)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Объект');
+        const owner = seedThought(ndb, 'Дневник');
+        const other = seedThought(ndb, 'Другая');
+        const inactive = seedThought(ndb, 'Скрытая', { active: 0 });
+        const trashed = seedThought(ndb, 'В корзине');
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
+        const link = seedLink(ndb, owner, other);
+        ndb.prepare('UPDATE links SET active = 0 WHERE id = ?').run(link);
+        const record = seedThoughtComment(
+          ndb,
+          owner,
+          'запись про Объект с привязками',
+          'chronological',
+          '2024-02-01',
+        );
+        seedCommentTarget(ndb, record, 'thought', inactive);
+        seedCommentTarget(ndb, record, 'thought', trashed);
+        seedCommentTarget(ndb, record, 'link', link);
+
+        const res = search(ndb, { q: 'Объект', scope: 'chronology' }, false);
+        assert.equal(res.by_chrono.length, 1);
+        const targets = res.by_chrono[0]!.targets;
+        assert.equal(targets.length, 3, 'резолвер не отбрасывает невидимые цели');
+        const inactiveTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === inactive,
+        );
+        assert.ok(inactiveTarget !== undefined, 'неактуальная цель остаётся в привязках');
+        assert.equal(
+          inactiveTarget.kind === 'thought' ? inactiveTarget.thought.active : null,
+          false,
+          'ThoughtRef.active — как в базе',
+        );
+        const trashedTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === trashed,
+        );
+        assert.ok(trashedTarget !== undefined, 'цель в корзине остаётся в привязках');
+        assert.equal(
+          trashedTarget.kind === 'thought' ? trashedTarget.thought.marked_for_deletion : null,
+          true,
+          'ThoughtRef.marked_for_deletion — как в базе',
+        );
+        const linkTarget = targets.find((item) => item.kind === 'link' && item.link.id === link);
+        assert.ok(linkTarget !== undefined, 'неактуальная связь остаётся в привязках');
+        assert.equal(
+          linkTarget.kind === 'link' ? linkTarget.link.active : null,
+          false,
+          'ChronicleTargetLink.active не фильтруется',
         );
       } finally {
         ndb.close();
@@ -1490,6 +1546,62 @@ describe(
           'привязки записи, первичная первой',
         );
         assert.ok(records[0]!.snippet.includes('<mark>'), 'сниппет с подсветкой');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions: привязки записи сохраняют флаги видимости как в базе (012b2dc6)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Объект');
+        const owner = seedThought(ndb, 'Дневник');
+        const other = seedThought(ndb, 'Другая');
+        const inactive = seedThought(ndb, 'Скрытая', { active: 0 });
+        const trashed = seedThought(ndb, 'В корзине');
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
+        const link = seedLink(ndb, owner, other);
+        ndb.prepare('UPDATE links SET active = 0 WHERE id = ?').run(link);
+        const record = seedThoughtComment(
+          ndb,
+          owner,
+          'запись про Объект с привязками',
+          'chronological',
+          '2024-02-01',
+        );
+        seedCommentTarget(ndb, record, 'thought', inactive);
+        seedCommentTarget(ndb, record, 'thought', trashed);
+        seedCommentTarget(ndb, record, 'link', link);
+
+        const records = recordRows(findMentions(ndb, target));
+        assert.equal(records.length, 1);
+        const targets = records[0]!.targets;
+        assert.equal(targets.length, 3, 'резолвер не отбрасывает невидимые цели');
+        const inactiveTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === inactive,
+        );
+        assert.ok(inactiveTarget !== undefined, 'неактуальная цель остаётся в привязках');
+        assert.equal(
+          inactiveTarget.kind === 'thought' ? inactiveTarget.thought.active : null,
+          false,
+          'ThoughtRef.active — как в базе',
+        );
+        const trashedTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === trashed,
+        );
+        assert.ok(trashedTarget !== undefined, 'цель в корзине остаётся в привязках');
+        assert.equal(
+          trashedTarget.kind === 'thought' ? trashedTarget.thought.marked_for_deletion : null,
+          true,
+          'ThoughtRef.marked_for_deletion — как в базе',
+        );
+        const linkTarget = targets.find((item) => item.kind === 'link' && item.link.id === link);
+        assert.ok(linkTarget !== undefined, 'неактуальная связь остаётся в привязках');
+        assert.equal(
+          linkTarget.kind === 'link' ? linkTarget.link.active : null,
+          false,
+          'ChronicleTargetLink.active не фильтруется',
+        );
       } finally {
         ndb.close();
       }

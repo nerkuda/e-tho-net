@@ -228,6 +228,63 @@ describe('findBacklinks (R3)', { skip }, () => {
     }
   });
 
+
+  it('привязки записи сохраняют флаги видимости как в базе (012b2dc6)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Цель');
+      const owner = seedThought(ndb, 'Заметка');
+      const other = seedThought(ndb, 'Другая');
+      const inactive = seedThought(ndb, 'Скрытая', { active: 0 });
+      const trashed = seedThought(ndb, 'В корзине');
+      ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
+      const link = seedLink(ndb, owner, other);
+      ndb.prepare('UPDATE links SET active = 0 WHERE id = ?').run(link);
+      const record = seedThoughtComment(
+        ndb,
+        owner,
+        `запись [[#${target}]] с привязками`,
+        'chronological',
+        '2024-02-01',
+      );
+      seedCommentTarget(ndb, record, 'thought', inactive);
+      seedCommentTarget(ndb, record, 'thought', trashed);
+      seedCommentTarget(ndb, record, 'link', link);
+
+      const records = recordRows(findBacklinks(ndb, target));
+      assert.equal(records.length, 1);
+      const targets = records[0]!.targets;
+      assert.equal(targets.length, 3, 'резолвер не отбрасывает невидимые цели');
+      const inactiveTarget = targets.find(
+        (item) => item.kind === 'thought' && item.thought.id === inactive,
+      );
+      assert.ok(inactiveTarget !== undefined, 'неактуальная цель остаётся в привязках');
+      assert.equal(
+        inactiveTarget.kind === 'thought' ? inactiveTarget.thought.active : null,
+        false,
+        'ThoughtRef.active — как в базе',
+      );
+      const trashedTarget = targets.find(
+        (item) => item.kind === 'thought' && item.thought.id === trashed,
+      );
+      assert.ok(trashedTarget !== undefined, 'цель в корзине остаётся в привязках');
+      assert.equal(
+        trashedTarget.kind === 'thought' ? trashedTarget.thought.marked_for_deletion : null,
+        true,
+        'ThoughtRef.marked_for_deletion — как в базе',
+      );
+      const linkTarget = targets.find((item) => item.kind === 'link' && item.link.id === link);
+      assert.ok(linkTarget !== undefined, 'неактуальная связь остаётся в привязках');
+      assert.equal(
+        linkTarget.kind === 'link' ? linkTarget.link.active : null,
+        false,
+        'ChronicleTargetLink.active не фильтруется',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('невалидный UUID в [[#…]] не считается', () => {
     const ndb = createInMemoryNetworkDb();
     try {

@@ -8,7 +8,9 @@
  * импортируют `search-service`, а тот сам пользуется этим резолвером —
  * размещение в них замкнуло бы граф импортов `search → chronicle/query →
  * search` (уточнение предполёта 2026-11-11). Зависимости модуля — только
- * `thought-service` (канон колонок {@link REF_COLUMNS} и {@link rowToThoughtRef}).
+ * `thought-ref.ts` (канон колонок {@link REF_COLUMNS} и {@link rowToThoughtRef}):
+ * импорт `thought-service` замыкал цикл `comment-service → comment-targets →
+ * thought-service → comment-service` (замечание приёмки 1, 2026-11-11).
  *
  * Флаги видимости привязок (актуальность, корзина) резолвер НЕ фильтрует:
  * клиент рисует их по `ChronicleTargetLink.active`/`ThoughtRef.active`/
@@ -18,7 +20,7 @@
 import type { ChronicleTarget, ChronicleTargetLink, CommentTarget } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { REF_COLUMNS, rowToThoughtRef } from './thought-service.js';
+import { REF_COLUMNS, rowToThoughtRef } from './thought-ref.js';
 
 /** Row shape accepted by {@link rowToThoughtRef}. */
 type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];

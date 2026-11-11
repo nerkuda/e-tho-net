@@ -46,6 +46,17 @@ const CONTRACTS = fs.readFileSync(path.join(SERVER_SRC, 'contracts.ts'), 'utf8')
 /** Поля периода/критериев 0.10.1, которые оба фасада обязаны прокинуть. */
 const T3_FIELDS = ['targets', 'date_from', 'date_to'] as const;
 
+/** Все .ts-файлы каталога рекурсивно (для проверок «одна копия на весь server/src»). */
+function listTypeScriptFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listTypeScriptFiles(full));
+    else if (entry.name.endsWith('.ts')) out.push(full);
+  }
+  return out;
+}
+
 const USER = 'guard-parity-user';
 
 /** Seed a thought directly (same shape as the chronicle-service tests). */
@@ -167,6 +178,31 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
       TARGETS,
       /FROM comment_targets_v/,
       'SQL строк привязок живёт в резолвере — второй копии нет',
+    );
+  });
+
+  it('SQL батч-выдачи строк привязок существует в server/src в одном экземпляре', () => {
+    // Замечание приёмки 1: подстрочных проверок мало — копия SQL в соседнем
+    // файле разъедется с резолвером молча. Представление `comment_targets_v`
+    // читают и другие места (фильтры отбора хроники, comments-API, очистка
+    // владельца), поэтому инвариант — не «представление упомянуто один раз», а
+    // «батч-выборка строк привязок одна».
+    const ownerColumns = /comment_id,\s*owner_type,\s*owner_id\s+FROM\s+comment_targets_v/i;
+    const batchById = /FROM\s+comment_targets_v[\s\S]{0,300}?comment_id\s+IN\s*\(/i;
+    const files = listTypeScriptFiles(SERVER_SRC);
+    const pick = (pattern: RegExp): string[] =>
+      files
+        .filter((file) => pattern.test(fs.readFileSync(file, 'utf8')))
+        .map((file) => path.relative(SERVER_SRC, file).replace(/\\/g, '/'));
+    assert.deepEqual(
+      pick(ownerColumns),
+      ['domain/comment-targets.ts'],
+      'выборка comment_id/owner_type/owner_id из comment_targets_v — только в резолвере',
+    );
+    assert.deepEqual(
+      pick(batchById),
+      ['domain/comment-targets.ts'],
+      'батч-выборка привязок по comment_id IN (…) — только в резолвере',
     );
   });
 
