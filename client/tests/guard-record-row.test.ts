@@ -16,7 +16,10 @@
  *  * Ctrl+hover-предпросмотр в строке результата не включается (уточнение N5:
  *    предпросмотр — фича ленты «Дневника»);
  *  * перетаскивание с чипа не начинается (P3): чип — цель клика;
- *  * кнопка «+N» — из словаря кнопок и выглядит чипом (guard-ui-buttons).
+ *  * кнопка «+N» — из словаря кнопок и выглядит чипом (guard-ui-buttons);
+ *  * обвязка переполнения снимается во ВСЕХ ветках замены результатов — общим
+ *    хелпером `clearResults` (замечание приёмки 1, круг 2): иначе
+ *    `ResizeObserver` держал бы отцепленные полосы до полного рендера.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -156,6 +159,27 @@ describe('guard: общая строка-запись — одна компон�
   it('адаптеры обоих форматов записи объявлены (следующий потребитель — ae72e47e)', () => {
     assert.match(ROW_SOURCE, /export function recordRowFromChronoHit\(/);
     assert.match(ROW_SOURCE, /export function recordRowFromRecordHit\(/);
+  });
+
+  it('обвязка строк-записей снимается во ВСЕХ ветках замены результатов', () => {
+    const source = read('search', 'search.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+    assert.deepEqual(
+      source.match(/\bresultsBox\s*\.\s*replaceChildren\s*\(/g) ?? [],
+      [],
+      'коробку результатов очищает только общий хелпер: прямой replaceChildren ' +
+        'оставляет ResizeObserver на отцепленных строках-записях',
+    );
+    assert.match(
+      source,
+      /function clearResults\(box: Element \| null\): void \{[\s\S]*?mountedRecordRows\) handle\.destroy\(\);[\s\S]*?mountedRecordRows\.clear\(\);[\s\S]*?box\?\.replaceChildren\(\);/,
+      'хелпер снимает обвязку ДО очистки DOM (инвариант renderResults)',
+    );
+    const uses = (source.match(/\bclearResults\(/g) ?? []).length;
+    assert.ok(
+      uses >= 6,
+      `хелпер зовётся во всех ветках замены результатов (объявление + 5 мест), найдено: ${uses}`,
+    );
   });
 
   it('правило краснеет на втором сборщике строки в экране', () => {

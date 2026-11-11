@@ -809,7 +809,8 @@ async function run(): Promise<void> {
   persistState();
   const resultsBox = chrome.host.querySelector('.search-results');
   if (resultsBox !== null) {
-    resultsBox.replaceChildren(el('span', 'muted', t('actions.search')));
+    clearResults(resultsBox);
+    resultsBox.append(el('span', 'muted', t('actions.search')));
   }
   const idQuery = parseThoughtIdLookupQuery(q);
   if (idQuery !== null) {
@@ -818,7 +819,10 @@ async function run(): Promise<void> {
   }
   const scopes = scopesFor(options);
   // HOME сети — для фильтра чипов строк-записей: общий резолвер (кеш на сеть),
-  // запрос идёт ПАРАЛЛЕЛЬНО поиску и не задерживает выдачу.
+  // запрос стартует ПАРАЛЛЕЛЬНО поиску. Выдача ждёт оба промиса: без HOME первый
+  // рендер показал бы чип HOME и тут же перерисовался (мигание). Дополнительного
+  // круга задержки нет — HOME разрешается один раз на сеть и кешируется, а его
+  // запрос идёт одновременно с поиском.
   const homePromise = getHomeId(networkId).catch(() => null);
   try {
     // Гибрид (требование b91336e7, ADR 7581ac14): МЫСЛЕВЫЕ настройки —
@@ -846,6 +850,8 @@ async function run(): Promise<void> {
         }),
       ),
     );
+    // HOME ждём ПОСЛЕ ответов поиска (обычно уже разрешён: запрос стартовал
+    // параллельно) — см. комментарий у homePromise.
     const home = await homePromise;
     // Сеть могла смениться, пока шли ответы: HOME чужой сети панели не нужен.
     if (store.state.networkId === networkId) chronoHomeId = home;
@@ -853,7 +859,8 @@ async function run(): Promise<void> {
     renderResults(lastResults);
   } catch (err) {
     if (resultsBox !== null) {
-      resultsBox.replaceChildren(operationError(err, t('search.errorSearch')));
+      clearResults(resultsBox);
+      resultsBox.append(operationError(err, t('search.errorSearch')));
     }
   }
 }
@@ -876,7 +883,8 @@ async function runById(networkId: string, id: string): Promise<void> {
     if (chrome !== null) {
       const resultsBox = chrome.host.querySelector('.search-results');
       if (resultsBox !== null) {
-        resultsBox.replaceChildren(operationError(err, t('search.errorSearch')));
+        clearResults(resultsBox);
+        resultsBox.append(operationError(err, t('search.errorSearch')));
       }
     }
   }
@@ -891,7 +899,7 @@ function renderIdResult(thought: Thought | null): void {
   if (chrome === null) return;
   const resultsBox = chrome.host.querySelector('.search-results');
   if (resultsBox === null) return;
-  resultsBox.replaceChildren();
+  clearResults(resultsBox);
   const section = div('search-group');
   const header = div('search-group-header');
   const caret = span('▾', 'group-caret');
@@ -1077,15 +1085,28 @@ function renderUnresolvedDiagnostics(
   box.append(block);
 }
 
-/** Renders the four result groups. */
-function renderResults(response: SearchResponse | null): void {  if (chrome === null) return;
-  const resultsBox = chrome.host.querySelector('.search-results');
-  if (resultsBox === null) return;
-  // Обвязку переполнения прежних строк-записей снимаем вместе с их DOM: иначе
-  // ResizeObserver держал бы отцепленные полосы (0.15.4, задача 33ed043c).
+/**
+ * Снимает обвязку строк-записей и очищает коробку результатов.
+ *
+ * Инвариант (0.15.4, задача 33ed043c): обвязка переполнения живёт ровно столько
+ * же, сколько DOM строки-записи. Поэтому КАЖДАЯ ветка замены содержимого
+ * результатов идёт через этот хелпер — иначе ResizeObserver держал бы
+ * отцепленные полосы до следующего полного рендера.
+ */
+function clearResults(box: Element | null): void {
   for (const handle of mountedRecordRows) handle.destroy();
   mountedRecordRows.clear();
-  resultsBox.replaceChildren();
+  box?.replaceChildren();
+}
+
+/** Renders the four result groups. */
+function renderResults(response: SearchResponse | null): void {
+  if (chrome === null) return;
+  const resultsBox = chrome.host.querySelector('.search-results');
+  if (resultsBox === null) return;
+  // Обвязку переполнения прежних строк-записей снимаем вместе с их DOM —
+  // общий хелпер, тот же порядок обязателен во ВСЕХ ветках замены результатов.
+  clearResults(resultsBox);
   if (response === null) {
     resultsBox.append(el('p', 'muted', t('search.enterZaprosMinimumSimvola')));
     return;

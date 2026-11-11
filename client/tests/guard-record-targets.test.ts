@@ -59,9 +59,14 @@ const TARGETS_FILTER = /\btargets\s*\.\s*filter\s*\(/;
 /** Признак собственного фильтра HOME по привязке-мысли (старая форма). */
 const HOME_FILTER = /\.thought\.id\s*[!=]==\s*homeId\b/;
 
-/** Поверхности, которым запрещено заводить свою логику корзины привязок. */
+/**
+ * Поверхности, которым запрещено заводить свою логику корзины привязок.
+ * Место интеграции поиска входит в правило: строка-запись строится там, значит
+ * и собственная проверка пометки удаления там не появляется (замечание приёмки 1,
+ * круг 2).
+ */
 const TARGET_SURFACES =
-  /^(?:lib\/record-row|lib\/record-targets|screens\/chronicle\/diary|screens\/chronicle\/record-head)\.ts$/;
+  /^(?:lib\/record-row|lib\/record-targets|search\/search|screens\/chronicle\/diary|screens\/chronicle\/record-head)\.ts$/;
 
 /** Признак собственной проверки пометки удаления. */
 const TRASH_MARK = /\bmarked_for_deletion\b/;
