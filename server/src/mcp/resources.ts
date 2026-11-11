@@ -261,7 +261,12 @@ export function registerResources(mcp: McpServer, rt: McpRuntime): void {
         '[[n:<net>#<id>]] to this thought (phase R). Semantically different from ' +
         'mentions by name/synonym (`etn.ops { action: "thoughts.mentions" }`, ' +
         'FTS over title/synonyms) — here it is an explicit UUID. ' +
-        'Returns a MentionHit array (one item per (owner_type, owner_id)).',
+        'Returns a BacklinkHit array — a union discriminated by `kind`: one ' +
+        '{ kind: "mention", owner_type, owner_id, title, comment_id, snippet, active } ' +
+        'item per (owner_type, owner_id) PERMANENT comment, plus one ' +
+        '{ kind: "record", comment_id, valid_from, valid_to, use_time, snippet, targets, ' +
+        'owner_type, owner_id } item per matching chronological diary record, ' +
+        'newest first (0.15.4, ADR db88d819).',
       mimeType: JSON_MIME,
     },
     (uri, vars) =>

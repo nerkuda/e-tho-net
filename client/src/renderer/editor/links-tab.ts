@@ -252,7 +252,12 @@ function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
     box.replaceChildren(el('span', 'muted', t('linksTab.searchSsylokThought')));
     let hits: MentionHit[];
     try {
-      hits = await etn.thoughts.backlinks(networkId, ctx.ownerId);
+      // Строки-записи (`kind: 'record'`) эта вкладка не рендерит — их вывод
+      // входит в задачу ae72e47e (B4); union `BacklinkHit` сужаем до
+      // владельческих строк, поведение вкладки прежнее (0.15.4, 6af1be50).
+      hits = (await etn.thoughts.backlinks(networkId, ctx.ownerId)).filter(
+        (hit): hit is MentionHit => hit.kind !== 'record',
+      );
     } catch (err) {
       if (disposed) return;
       box.replaceChildren(operationError(err));
@@ -358,7 +363,10 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
     box.replaceChildren(el('span', 'muted', t('linksTab.searchUpominaniy')));
     let hits: MentionHit[];
     try {
-      hits = await etn.thoughts.mentions(networkId, ctx.ownerId);
+      // См. buildBacklinksBody: строки-записи появятся в задаче ae72e47e (B4).
+      hits = (await etn.thoughts.mentions(networkId, ctx.ownerId)).filter(
+        (hit): hit is MentionHit => hit.kind !== 'record',
+      );
     } catch (err) {
       if (disposed) return;
       box.replaceChildren(operationError(err));

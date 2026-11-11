@@ -79,6 +79,7 @@ import {
   synonymPatternSource,
   synonymPatternToRegex,
   TRAVERSAL_DEFAULTS,
+  type BacklinkHit,
   type DuplicateHit,
   type DuplicateMatchKind,
   type DuplicateSearchMode,
@@ -88,6 +89,7 @@ import {
   type MentionHit,
   type MentionPrefilterMarkers,
   type MentionsScanMatch,
+  type RecordHit,
   type SearchChronoHit,
   type SearchLinkHit,
   type SearchNameHit,
@@ -123,6 +125,7 @@ import {
   type TokenIssue,
 } from './thought-type-view-tokens.js';
 import { getThought } from './thought-service.js';
+import { resolveChronicleTargets } from './comment-targets.js';
 import { buildThoughtResolveContext } from './thought-type-views-service.js';
 
 // Re-export so route/MCP callers have a single import surface for read helpers
@@ -1051,6 +1054,8 @@ interface ChronoRow {
   owner_id: string;
   valid_from: string;
   valid_to: string | null;
+  /** 0/1 — флаг «учитывать время» записи (миграция 046). */
+  use_time: number;
   body: string;
 }
 
@@ -1089,7 +1094,8 @@ function buildChronoHalf(
   }
   const { where, params } = joinClauses(clauses);
   const sql = `SELECT c.id AS comment_id, '${side}' AS owner, c.owner_id AS owner_id,
-                 c.valid_from AS valid_from, c.valid_to AS valid_to, c.body_md AS body
+                 c.valid_from AS valid_from, c.valid_to AS valid_to, c.use_time AS use_time,
+                 c.body_md AS body
                FROM ${ftsTable} f
                JOIN comments_v c ON c.rowid = f.rowid
                ${joins}
@@ -1130,6 +1136,13 @@ function searchChrono(
   );
   const total = ordered.length;
   const paged = ordered.slice(f.offset, f.offset + f.limit);
+  // Привязки записи-представителя — ОДИН батч по comment_id СТРАНИЦЫ, не по
+  // всей выдаче (0.15.4, требование a9f455a4, ADR db88d819). Строк привязок
+  // нет — пустой массив (подстановки владельца в хронике нет).
+  const targetsByComment = resolveChronicleTargets(
+    ndb,
+    paged.map((r) => ({ id: r.comment_id, owner_type: r.owner, owner_id: r.owner_id })),
+  );
   return {
     hits: paged.map((r) => {
       const snippet = makeSnippet(r.body, f.terms);
@@ -1139,8 +1152,10 @@ function searchChrono(
         comment_id: r.comment_id,
         valid_from: r.valid_from,
         valid_to: r.valid_to,
+        use_time: r.use_time === 1,
         snippet,
         highlights: [snippet],
+        targets: targetsByComment.get(r.comment_id) ?? [],
       };
     }),
     total,
@@ -2327,11 +2342,13 @@ export function findBlockingDuplicate(
  * candidates, then {@link synonymPatternToRegex} enforces the exact semantics.
  * FTS5 alone cannot match whole terms: a phrase containing more than one
  * prefix token silently degrades to AND (single words of a name), so the
- * regex is the deciding matcher. Returns one hit per owning thought/link
- * (a thought with several matching comments collapses into a single hit);
- * the target thought's own comments are excluded.
+ * regex is the deciding matcher. Форма ответа — union {@link BacklinkHit}
+ * (0.15.4, требование 012b2dc6, ADR db88d819): постоянный комментарий даёт
+ * владельческую строку со схлопыванием «один элемент на владельца», дневниковая
+ * запись — отдельную строку-запись с периодом и привязками. Комментарии самой
+ * целевой мысли исключаются (анти-self).
  */
-export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
+export function findMentions(ndb: NetworkDb, thoughtId: string): BacklinkHit[] {
   const thought = ndb
     .prepare('SELECT id, title FROM thoughts_v WHERE id = ? LIMIT 1')
     .get(thoughtId) as { id: string; title: string } | undefined;
@@ -2358,25 +2375,54 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
   for (const part of splitCompoundTitle(thought.title)) addTerm(part);
   for (const s of synRows) addTerm(s.synonym);
 
-  const out: MentionHit[] = [];
-  const seen = new Set<string>();
+  const mentions: MentionHit[] = [];
+  const seenOwners = new Set<string>();
 
   interface MentionRow {
     comment_id: string;
     owner_id: string;
+    /** `permanent` | `chronological` — развилка выдачи (kind-split). */
+    kind: string;
     title: string;
     active: number;
+    valid_from: string;
+    valid_to: string | null;
+    /** 0/1 — флаг «учитывать время» записи (миграция 046). */
+    use_time: number;
     body: string;
   }
-  // One hit per owning thought/link (03-server-api.md §13 returns «мысли/связи»):
-  // several matching comments of the same owner collapse into its first hit.
-  // Highlight terms are the substrings actually matched, so the snippet
-  // highlights whole phrases, not their single words.
+  /**
+   * Строки-записи: ОДНА на `comment_id` (дедупликация не по владельцу), термы
+   * подсветки накапливаются по всем совпавшим термам — иначе запись с двумя
+   * совпадениями дала бы две строки (уточнение предполёта 2026-11-11).
+   */
+  const records = new Map<
+    string,
+    { row: MentionRow & { owner_type: 'thought' | 'link' }; terms: string[] }
+  >();
+
+  // Постоянный комментарий — прежняя владельческая строка: несколько совпавших
+  // комментариев одного владельца схлопываются в первую (03-server-api.md §13).
+  // Дневниковая запись — ОТДЕЛЬНАЯ строка-запись без схлопывания (0.15.4,
+  // требование 012b2dc6, ADR db88d819). Подсветка — фактически совпавшие
+  // подстроки, а не отдельные слова.
   const push = (r: MentionRow & { owner_type: 'thought' | 'link' }, highlightTerms: string[]): void => {
+    if (r.kind !== 'permanent') {
+      const existing = records.get(r.comment_id);
+      if (existing === undefined) {
+        records.set(r.comment_id, { row: r, terms: [...highlightTerms] });
+        return;
+      }
+      for (const term of highlightTerms) {
+        if (!existing.terms.includes(term)) existing.terms.push(term);
+      }
+      return;
+    }
     const key = `${r.owner_type}:${r.owner_id}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({
+    if (seenOwners.has(key)) return;
+    seenOwners.add(key);
+    mentions.push({
+      kind: 'mention',
       owner_type: r.owner_type,
       owner_id: r.owner_id,
       title: r.title,
@@ -2415,7 +2461,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
         ndb
           .prepare(
             `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
-                    t.active AS active, c.body_md AS body
+                    t.active AS active, c.kind AS kind, c.valid_from AS valid_from, c.valid_to AS valid_to,
+                    c.use_time AS use_time, c.body_md AS body
              FROM fts_thought_texts f
              JOIN comments_v c ON c.rowid = f.rowid
              JOIN thoughts_v t ON t.id = c.owner_id
@@ -2430,7 +2477,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
           .prepare(
             `SELECT c.id AS comment_id, c.owner_id AS owner_id,
                     COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
-                    c.body_md AS body
+                    c.kind AS kind, c.valid_from AS valid_from, c.valid_to AS valid_to,
+                    c.use_time AS use_time, c.body_md AS body
              FROM fts_link_texts f
              JOIN comments_v c ON c.rowid = f.rowid
              LEFT JOIN links_v l ON l.id = c.owner_id
@@ -2448,7 +2496,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
         ndb
           .prepare(
             `SELECT c.id AS comment_id, c.owner_id AS owner_id, t.title AS title,
-                    t.active AS active, c.body_md AS body
+                    t.active AS active, c.kind AS kind, c.valid_from AS valid_from, c.valid_to AS valid_to,
+                    c.use_time AS use_time, c.body_md AS body
              FROM comments_v c
              JOIN thoughts_v t ON t.id = c.owner_id
              WHERE c.owner_type = 'thought' AND c.owner_id <> ?`,
@@ -2462,7 +2511,8 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
           .prepare(
             `SELECT c.id AS comment_id, c.owner_id AS owner_id,
                     COALESCE(lt.name_forward, '') AS title, COALESCE(l.active, 1) AS active,
-                    c.body_md AS body
+                    c.kind AS kind, c.valid_from AS valid_from, c.valid_to AS valid_to,
+                    c.use_time AS use_time, c.body_md AS body
              FROM comments_v c
              LEFT JOIN links_v l ON l.id = c.owner_id
              LEFT JOIN link_types_v lt ON lt.id = l.type_id
@@ -2475,7 +2525,36 @@ export function findMentions(ndb: NetworkDb, thoughtId: string): MentionHit[] {
     }
   }
 
-  return out;
+  // Строки-записи — подблоком после владельческих строк, свежие сверху
+  // (`valid_from` по убыванию, требование 012b2dc6: паритет с таблицей
+  // «Дневника»). Привязки — один батч по comment_id страницы.
+  const recordHits: RecordHit[] = [...records.values()]
+    .sort((a, b) =>
+      a.row.valid_from < b.row.valid_from ? 1 : a.row.valid_from > b.row.valid_from ? -1 : 0,
+    )
+    .map(({ row, terms }) => ({
+      kind: 'record',
+      comment_id: row.comment_id,
+      valid_from: row.valid_from,
+      valid_to: row.valid_to,
+      use_time: row.use_time === 1,
+      snippet: makeSnippet(row.body, terms),
+      targets: [],
+      owner_type: row.owner_type,
+      owner_id: row.owner_id,
+    }));
+  if (recordHits.length > 0) {
+    const targetsByComment = resolveChronicleTargets(
+      ndb,
+      recordHits.map((hit) => ({
+        id: hit.comment_id,
+        owner_type: hit.owner_type,
+        owner_id: hit.owner_id,
+      })),
+    );
+    for (const hit of recordHits) hit.targets = targetsByComment.get(hit.comment_id) ?? [];
+  }
+  return [...mentions, ...recordHits];
 }
 
 // ---------------------------------------------------------------------------

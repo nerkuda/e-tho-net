@@ -4,13 +4,16 @@
  * explicit ID-based wiki-link to a given thought (`[[#<id>]]` or
  * `[[n:<net>#<id>]]`) or publication (`[[#pub:<id>]]`, 0.11.1, задача f37b468d,
  * требование 7f583ef9). Runtime regex over `body_md` (no separate index — task
- * R3 decision). One hit per `(owner_type, owner_id)`; a thought target's own
- * comments are excluded (anti-self). Publications have no comments of their own,
- * so no exclusion is needed there.
+ * R3 decision). One hit per `(owner_type, owner_id)` — только для ПОСТОЯННЫХ
+ * комментариев; дневниковая запись даёт отдельную строку-запись с периодом и
+ * привязками (kind-split, 0.15.4, требование 012b2dc6, ADR db88d819). Комментарии
+ * самой целевой мысли исключаются (anti-self). Publications have no comments of
+ * their own, so no exclusion is needed there.
  */
 
-import { EtnError, type MentionHit } from '@etn/shared';
+import { EtnError, type BacklinkHit, type MentionHit, type RecordHit } from '@etn/shared';
 import type { NetworkDb } from '../db/network-db.js';
+import { resolveChronicleTargets } from './comment-targets.js';
 import { makeSnippet } from './search-service.js';
 
 /** Matches `[[#<uuid>]]` or `[[#<uuid>|<alias>]]`. */
@@ -41,10 +44,29 @@ interface BacklinkMatchers {
 
 interface BacklinkRow {
   comment_id: string;
+  owner_type: 'thought' | 'link';
   owner_id: string;
+  /** `permanent` | `chronological` — развилка выдачи (kind-split). */
+  kind: string;
+  valid_from: string;
+  valid_to: string | null;
+  /** 0/1 — флаг «учитывать время» записи (миграция 046). */
+  use_time: number;
   title: string;
   active: number;
   body: string;
+}
+
+/** Параметры сканера совпадений `[[#…]]` по комментариям владельцев. */
+interface ScanOptions {
+  /** Когда задан — свои комментарии этой мысли пропускаются (анти-self). */
+  excludeThoughtId: string | null;
+  /**
+   * Разделять ли постоянные комментарии и дневниковые записи (0.15.4):
+   * `true` — владельческие строки + строки-записи (backlinks мысли),
+   * `false` — прежнее поведение публикационной ветки (всё схлопывается).
+   */
+  kindSplit: boolean;
 }
 
 /**
@@ -71,21 +93,30 @@ function findMatchingId(body: string, targetIdLowercased: string, m: BacklinkMat
   return null;
 }
 
+/** Оставить только владельческие строки (публикационной ветке записей не нужно). */
+function mentionsOnly(hits: BacklinkHit[]): MentionHit[] {
+  return hits.filter((hit): hit is MentionHit => hit.kind === 'mention');
+}
+
 /**
- * Scan thought- and link-owned comments for a matching wiki-link to `targetId`
- * and return one {@link MentionHit} per `(owner_type, owner_id)`.
+ * Scan thought- and link-owned comments for a matching wiki-link to `targetId`.
  *
- * @param excludeThoughtId — when set, that thought's own comments are skipped
- *   (anti-self for a thought target).
+ * При `kindSplit` постоянные комментарии дают по одному {@link MentionHit} на
+ * `(owner_type, owner_id)` (прежнее схлопывание), а дневниковые записи —
+ * ОТДЕЛЬНЫЕ {@link RecordHit} без схлопывания (0.15.4, требование 012b2dc6);
+ * строки-записи идут подблоком по `valid_from` по убыванию. Без `kindSplit`
+ * (публикационная ветка) поведение прежнее.
  */
 function scanBacklinkOwners(
   ndb: NetworkDb,
   targetId: string,
   matchers: BacklinkMatchers,
-  excludeThoughtId: string | null,
-): MentionHit[] {
+  opts: ScanOptions,
+): BacklinkHit[] {
+  const excludeThoughtId = opts.excludeThoughtId;
   const targetIdLower = targetId.toLowerCase();
   const out: MentionHit[] = [];
+  const records: RecordHit[] = [];
   const seen = new Set<string>();
 
   // 2) Pull thought-owned comments (excluding the target thought itself).
@@ -93,7 +124,9 @@ function scanBacklinkOwners(
   //    `active` aligned with the owner's actual row.
   const thoughtRows = ndb
     .prepare(
-      `SELECT c.id AS comment_id, c.owner_id AS owner_id,
+      `SELECT c.id AS comment_id, c.owner_type AS owner_type, c.owner_id AS owner_id,
+              c.kind AS kind, c.valid_from AS valid_from, c.valid_to AS valid_to,
+              c.use_time AS use_time,
               t.title AS title, t.active AS active, c.body_md AS body
        FROM comments_v c
        JOIN thoughts_v t ON t.id = c.owner_id
@@ -104,7 +137,9 @@ function scanBacklinkOwners(
   // 3) Pull link-owned comments — `title` is the link type's forward name.
   const linkRows = ndb
     .prepare(
-      `SELECT c.id AS comment_id, c.owner_id AS owner_id,
+      `SELECT c.id AS comment_id, c.owner_type AS owner_type, c.owner_id AS owner_id,
+              c.kind AS kind, c.valid_from AS valid_from, c.valid_to AS valid_to,
+              c.use_time AS use_time,
               COALESCE(lt.name_forward, '') AS title,
               COALESCE(l.active, 1) AS active,
               c.body_md AS body
@@ -120,15 +155,32 @@ function scanBacklinkOwners(
       const matchedId = findMatchingId(r.body, targetIdLower, matchers);
       if (matchedId === null) continue;
 
-      // Collapse per (owner_type, owner_id): the first matching comment
-      // wins. `owner_type` is implicit from the row group above.
-      const ownerType: 'thought' | 'link' = rows === thoughtRows ? 'thought' : 'link';
-      const key = `${ownerType}:${r.owner_id}`;
+      // Дневниковая запись — своя строка-запись: схлопывание «один на
+      // владельца» на неё не распространяется.
+      if (opts.kindSplit && r.kind !== 'permanent') {
+        records.push({
+          kind: 'record',
+          comment_id: r.comment_id,
+          valid_from: r.valid_from,
+          valid_to: r.valid_to,
+          use_time: r.use_time === 1,
+          snippet: makeSnippet(r.body, [matchedId]),
+          targets: [],
+          owner_type: r.owner_type,
+          owner_id: r.owner_id,
+        });
+        continue;
+      }
+
+      // Collapse per (owner_type, owner_id): the first matching PERMANENT
+      // comment wins; `owner_type` приходит колонкой строки.
+      const key = `${r.owner_type}:${r.owner_id}`;
       if (seen.has(key)) continue;
       seen.add(key);
 
       out.push({
-        owner_type: ownerType,
+        kind: 'mention',
+        owner_type: r.owner_type,
         owner_id: r.owner_id,
         title: r.title,
         comment_id: r.comment_id,
@@ -138,7 +190,22 @@ function scanBacklinkOwners(
     }
   }
 
-  return out;
+  if (records.length === 0) return out;
+  // Свежие записи сверху (паритет с таблицей «Дневника»); привязки — одним
+  // батчем по comment_id подблока.
+  records.sort((a, b) =>
+    a.valid_from < b.valid_from ? 1 : a.valid_from > b.valid_from ? -1 : 0,
+  );
+  const targetsByComment = resolveChronicleTargets(
+    ndb,
+    records.map((hit) => ({
+      id: hit.comment_id,
+      owner_type: hit.owner_type,
+      owner_id: hit.owner_id,
+    })),
+  );
+  for (const hit of records) hit.targets = targetsByComment.get(hit.comment_id) ?? [];
+  return [...out, ...records];
 }
 
 /**
@@ -146,13 +213,16 @@ function scanBacklinkOwners(
  *
  * @param ndb Network-scoped DB handle.
  * @param thoughtId Target thought id (UUID).
- * @returns One `MentionHit` per `(owner_type, owner_id)` owner whose comments
- *   carry a `[[#<id>]]` or `[[n:<net>#<id>]]` reference to this thought.
- *   The target thought's own comments are excluded. Publication links
- *   (`[[#pub:…]]`) are NOT thought references and are ignored.
+ * @returns Union {@link BacklinkHit} (0.15.4, требование 012b2dc6, ADR
+ *   db88d819): одна владельческая строка `MentionHit` на `(owner_type,
+ *   owner_id)` постоянного комментария + строки-записи `RecordHit`
+ *   дневниковых записей, чей текст несёт `[[#<id>]]` или
+ *   `[[n:<net>#<id>]]` на эту мысль. Комментарии самой целевой мысли
+ *   исключены. Публикационные ссылки (`[[#pub:…]]`) ссылками на мысль не
+ *   считаются и игнорируются.
  * @throws `EtnError('NOT_FOUND')` if the target thought does not exist.
  */
-export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
+export function findBacklinks(ndb: NetworkDb, thoughtId: string): BacklinkHit[] {
   // 1) Verify the target thought exists; mirror `findMentions` semantics.
   const exists = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(thoughtId);
   if (!exists) {
@@ -161,7 +231,10 @@ export function findBacklinks(ndb: NetworkDb, thoughtId: string): MentionHit[] {
       id: thoughtId,
     });
   }
-  return scanBacklinkOwners(ndb, thoughtId, { id: true, cross: true, pub: false }, thoughtId);
+  return scanBacklinkOwners(ndb, thoughtId, { id: true, cross: true, pub: false }, {
+    excludeThoughtId: thoughtId,
+    kindSplit: true,
+  });
 }
 
 /**
@@ -181,5 +254,13 @@ export function findPublicationBacklinks(ndb: NetworkDb, publicationId: string):
       id: publicationId,
     });
   }
-  return scanBacklinkOwners(ndb, publicationId, { id: false, cross: false, pub: true }, null);
+  // Публикационная ветка сохраняет прежнее поведение: схлопывание по
+  // владельцу без kind-split (её контракт не меняется, ADR db88d819), поэтому
+  // строк-записей в её выдаче нет — сужение до MentionHit безопасно.
+  return mentionsOnly(
+    scanBacklinkOwners(ndb, publicationId, { id: false, cross: false, pub: true }, {
+      excludeThoughtId: null,
+      kindSplit: false,
+    }),
+  );
 }

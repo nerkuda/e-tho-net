@@ -172,6 +172,23 @@ function rowToThought(row: ThoughtRow, synonyms: string[]): Thought {
 }
 
 /**
+ * Display columns every thought-ref SELECT must carry (см. `resolveThoughts`).
+ *
+ * `marked_for_deletion` входит в канон отображения (ошибка 8bbc9542, 0.8.2):
+ * без него соседи иерархии «Структур» приезжали клиенту без признака корзины
+ * и рисовались обычной строкой, хотя помеченная мысль видна (дефолт
+ * `show_trash`). Флаг — такая же часть внешнего вида, как `active`.
+ *
+ * Живёт рядом с {@link rowToThoughtRef} (0.15.4, задача 6af1be50): константой
+ * пользуется нейтральный резолвер привязок `comment-targets.ts`, которому
+ * нельзя импортировать `query-service` (тот импортирует `search-service`).
+ */
+export const REF_COLUMNS =
+  't.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id, t.icon_color,' +
+  ' t.active, t.marked_for_deletion, t.fg_color, t.bg_color,' +
+  ' t.font_bold, t.font_italic, t.font_underline, t.font_strike, t.font_manual';
+
+/**
  * Convert a raw row into a lightweight {@link ThoughtRef}. The row must carry
  * the display columns shared by every `SELECT` that builds refs; reused by
  * other domain modules (e.g. the property usage lookup).

@@ -39,6 +39,8 @@ const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const ROUTE = fs.readFileSync(path.join(SERVER_SRC, 'routes', 'chronicle.ts'), 'utf8');
 const MCP = fs.readFileSync(path.join(SERVER_SRC, 'mcp', 'tools', 'chronicle.ts'), 'utf8');
 const DOMAIN = fs.readFileSync(path.join(SERVER_SRC, 'domain', 'chronicle-service.ts'), 'utf8');
+/** Нейтральный резолвер привязок — единственный держатель SQL строк целей (0.15.4). */
+const TARGETS = fs.readFileSync(path.join(SERVER_SRC, 'domain', 'comment-targets.ts'), 'utf8');
 const CONTRACTS = fs.readFileSync(path.join(SERVER_SRC, 'contracts.ts'), 'utf8');
 
 /** Поля периода/критериев 0.10.1, которые оба фасада обязаны прокинуть. */
@@ -153,6 +155,18 @@ describe('guard: паритет REST ↔ MCP отбора хроники (0.10.1
       DOMAIN,
       /comment_targets_v/,
       'плоский компилятор ищет комментарии связей через comment_targets_v',
+    );
+    // 0.15.4 (задача 6af1be50, ADR db88d819): привязки СТРОК выдачи разрешает
+    // общий нейтральный резолвер, у домена по-строчного запроса не осталось.
+    assert.match(
+      DOMAIN,
+      /resolveChronicleTargets\(/,
+      'привязки строк хроники разрешает общий резолвер',
+    );
+    assert.match(
+      TARGETS,
+      /FROM comment_targets_v/,
+      'SQL строк привязок живёт в резолвере — второй копии нет',
     );
   });
 

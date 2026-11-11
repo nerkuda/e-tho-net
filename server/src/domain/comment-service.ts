@@ -46,6 +46,7 @@ import {
 import { DEFAULT_MAX_LENGTH, renderMarkdown } from '@etn/markdown';
 
 import { applySectionOps, type EditOp } from './markdown-sections.js';
+import { queryTargets } from './comment-targets.js';
 import { normaliseInstant } from './dates.js';
 import { enforceLock } from './lock-service.js';
 import type { BodyExpander } from './transclusion-service.js';
@@ -113,27 +114,19 @@ function orderTargets(row: { owner_type: string; owner_id: string }, targets: Co
 
 /**
  * Load the m2m targets of the given comments in one query, grouped by comment
- * id. Rows whose target set is somehow missing fall back to the primary owner
- * (keeps the «at least one target» invariant even on partially-lost data).
+ * id. Строки целей читает общий SQL-слой резолвера (0.15.4, задача 6af1be50);
+ * комментарий без строк целей падает на первичного владельца — у comments-API
+ * держится инвариант «at least one target» (у хроники подстановки нет,
+ * ADR db88d819).
  */
 function loadTargets(
   ndb: NetworkDb,
   rows: Array<{ id: string; owner_type: string; owner_id: string }>,
 ): Map<string, CommentTarget[]> {
-  const map = new Map<string, CommentTarget[]>();
-  if (rows.length === 0) return map;
-  const placeholders = rows.map(() => '?').join(', ');
-  const targetRows = ndb
-    .prepare(
-      `SELECT comment_id, owner_type, owner_id FROM comment_targets_v
-       WHERE comment_id IN (${placeholders})`,
-    )
-    .all(...rows.map((r) => r.id)) as Array<{ comment_id: string; owner_type: string; owner_id: string }>;
-  for (const tr of targetRows) {
-    const list = map.get(tr.comment_id) ?? [];
-    list.push({ owner_type: tr.owner_type as CommentOwnerType, owner_id: tr.owner_id });
-    map.set(tr.comment_id, list);
-  }
+  const map = queryTargets(
+    ndb,
+    rows.map((r) => r.id),
+  );
   for (const r of rows) {
     if (!map.has(r.id)) {
       map.set(r.id, [{ owner_type: r.owner_type as CommentOwnerType, owner_id: r.owner_id }]);
