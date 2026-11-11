@@ -19,6 +19,14 @@
  * Окрестность фокуса (`focus:<id>`) в набор НЕ входит сознательно: отклик фокуса
  * комментариев не несёт, а его перечитывание трясло редактор (ошибка 206e33a1) —
  * тест фиксирует это, чтобы фикс 04344707 не вернул 206e33a1.
+ *
+ * Замечание приёмки круга 1 ошибки 91b8afbb: проверка «фокуса нет в
+ * `RouteResult.invalidated`» была ВАКУУМНОЙ — `routeRealtimeEvent` возвращает
+ * только ЗАРЕГИСТРИРОВАННЫЕ ключи, а тест регистрировал одну страницу отбора,
+ * поэтому возврат `queryKeys.focus(<владелец>)` в маршруты `comment.*` сторож не
+ * ловил (краснел только `data-layer.test.ts`). Теперь кейсы `comment.*`
+ * регистрируют ещё и окрестность владельца из фикстуры (`focus:@t1`) — лишнее
+ * гашение фокуса попадает в `invalidated` и валит проверку.
  */
 
 import assert from 'node:assert/strict';
@@ -90,17 +98,24 @@ describe('активность комментария: страница отбо
       }),
       event('comment.deleted', { owner_type: 'thought', owner_id: 't1', id: 'c1' }),
     ];
+    // Окрестность владельца из фикстуры регистрируется НАМЕРЕННО: реестр
+    // возвращает только зарегистрированные ключи, и без этой регистрации
+    // `invalidated` не может содержать `focus` — проверка запрета 206e33a1
+    // была вакуумной (замечание приёмки круга 1 ошибки 91b8afbb): возврат
+    // `focus(owner_id)` в маршруты `comment.*` сторож не ловил.
+    const ownerFocusKey = queryKeys.focus('t1');
     for (const evt of cases) {
       resetQueryRegistry();
       resetEventRouter();
       const pageKey = queryKeys.structuresPage('all');
       registerQuery(pageKey, null);
+      registerQuery(ownerFocusKey, null);
       const res = routeRealtimeEvent(evt);
       assert.ok(res.routed, `${evt.type}: событие обязано быть маршрутизировано`);
       assert.deepEqual(
         res.invalidated,
         [pageKey],
-        `${evt.type}: маршрут обязан погасить ровно страницу отбора`,
+        `${evt.type}: маршрут обязан погасить ровно страницу отбора (окрестность фокуса запрещена, 206e33a1)`,
       );
       assert.equal(getQueryState(pageKey).status, 'stale', `${evt.type}: страница помечена stale`);
       assert.ok(
@@ -119,9 +134,15 @@ describe('активность комментария: страница отбо
     resetQueryRegistry();
     registerQuery(queryKeys.structuresPage('all'), null);
     const viaEvent = invalidatedKeys(() => {
-      routeRealtimeEvent(event('comment.deleted', { owner_type: 'thought', owner_id: 't1', id: 'c1' }));
+      routeRealtimeEvent(
+        event('comment.deleted', { owner_type: 'thought', owner_id: 't1', id: 'c1' }),
+      );
     });
-    assert.deepEqual(viaSignal, [queryKeys.structuresPage('all')], `свой путь: ${viaSignal.join(', ') || '—'}`);
+    assert.deepEqual(
+      viaSignal,
+      [queryKeys.structuresPage('all')],
+      `свой путь: ${viaSignal.join(', ') || '—'}`,
+    );
     assert.deepEqual(
       viaSignal.filter((k) => k.startsWith('structures-page')),
       viaEvent.filter((k) => k.startsWith('structures-page')),
