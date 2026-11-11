@@ -234,6 +234,12 @@ function attachmentOwnerKeys(ownerType: string, ownerId: string): string[] {
  * страницы — один префикс, лишняя инвалидация стоит лишь отложенного перезапроса
  * видимой страницы, а адреса всех владельцев-мыслей многоцелевого комментария в
  * событии нет (там лишь первичный владелец).
+ *
+ * Сигнал вкладки «Упоминания» (`queryKeys.mentionsAll`) в этот набор НЕ входит:
+ * он не про состав отбора, а про строки вкладки, и добавляется прямо в маршруты
+ * `comment.*` (ошибка 91b8afbb). Так набор остаётся единым «ключом отбора»,
+ * который гасит и mutator-слой своей правки (`signalOwnerActivity`), — вкладка
+ * же реагирует только на realtime-причину.
  */
 export function commentActivityKeys(): string[] {
   return [queryKeys.structuresPageAll()];
@@ -387,6 +393,12 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.indicators(evt.data.comment.owner_id),
         queryKeys.chronicleFeedAll(),
         queryKeys.publicationAssemblyAll(),
+        // Вкладка «Упоминания» (ошибка 91b8afbb): её строки порождают
+        // комментарии ЛЮБОГО владельца — и явной ID-ссылкой `[[#<id>]]`, и
+        // упоминанием в теле, — поэтому событие адресуется сигналом без
+        // конкретной мысли (`queryKeys.mentionsAll`), а не окрестностью
+        // фокуса (её на `comment.*` гасить нельзя, ошибка 206e33a1).
+        queryKeys.mentionsAll(),
         ...commentActivityKeys(),
       ],
     }),
@@ -399,6 +411,9 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.chronicleFeedAll(),
         // Блок документа образует только постоянный комментарий.
         ...(evt.data.kind === 'permanent' ? [queryKeys.publicationAssemblyAll()] : []),
+        // Правка `body_md` меняет состав ID-ссылок обеих групп «Упоминаний»
+        // (ошибка 91b8afbb).
+        queryKeys.mentionsAll(),
         ...commentActivityKeys(),
       ],
     }),
@@ -410,6 +425,9 @@ export const realtimeRoutes: RouteTable = {
         queryKeys.indicators(evt.data.owner_id),
         queryKeys.chronicleFeedAll(),
         queryKeys.publicationAssemblyAll(),
+        // Удалённый комментарий уносит и свою строку «Упоминаний», и ID-ссылку
+        // (ошибка 91b8afbb).
+        queryKeys.mentionsAll(),
         ...commentActivityKeys(),
       ],
     }),

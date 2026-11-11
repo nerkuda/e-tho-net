@@ -41,6 +41,13 @@ import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-prev
 import { cachedHomeId, getHomeId } from '../lib/home.js';
 import { openRecordTarget, type RecordOpenActions } from '../lib/record-open.js';
 import { mountRecordRowsBlock, type RecordRowsBlock } from '../lib/record-rows-block.js';
+import {
+  REALTIME_REFETCH_MAX_WAIT_MS,
+  REALTIME_REFETCH_WINDOW_MS,
+  asRealtimeCause,
+  onQueryInvalidated,
+  queryKeys,
+} from '../lib/live/index.js';
 import { toggleSelection } from '../selection/selection.js';
 import { isMapViewActive, onReconnected, store } from '../state.js';
 import { openPublicationInWorkspace } from '../screens/active-view.js';
@@ -60,6 +67,140 @@ import { rowSplitter } from './splitter.js';
 /** Cap on the batched resolve call — server-side limit of `thoughts.resolve`. */
 const RESOLVE_BATCH = 100;
 
+/**
+ * Слот группы-списка «Упоминаний»: перечитывание, пока её тело построено.
+ *
+ * Раскрытие группы и потолок строк живут в САМОМ теле, и realtime-обновление
+ * идёт через слот, а не через пересборку вкладки: активная вкладка, раскрытие
+ * групп и подпись «Показано N из M» не сбрасываются (ошибка 91b8afbb).
+ */
+interface MentionsSlot {
+  /** Перечитать тело, пока оно построено; `null` — тела нет (свёрнута/скрыта). */
+  reload: (() => void) | null;
+  /** Волна пришла, пока вкладка была скрыта: перечитать при показе. */
+  dirty: boolean;
+}
+
+/** Тело группы снято (свёрнута) — перечитывать нечего, слот очищается. */
+function dropMentionsSlot(slot: MentionsSlot): void {
+  slot.reload = null;
+  slot.dirty = false;
+}
+
+/** События комментариев: строки обеих групп «Упоминаний» (ошибка 91b8afbb). */
+const MENTIONS_COMMENT_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'comment.created',
+  'comment.updated',
+  'comment.deleted',
+]);
+
+/** События ребра: строки-владельцы-связи вкладки «Упоминания» (91b8afbb). */
+const MENTIONS_LINK_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'link.created',
+  'link.deleted',
+  'link.updated',
+]);
+
+/**
+ * Realtime-свежесть вкладки «Упоминания» (ошибка 91b8afbb; 08-ui-spec.md §6.7,
+ * ревизия 2026-11-11). Механизм — как у вкладки «Свойства» (прецедент
+ * cb875d0c/343448b6): подписка `onQueryInvalidated` на слой данных и
+ * коалесирование волны тем же окном реестра запросов.
+ *
+ * **Адресация.** `comment.*` — глобальный сигнал {@link queryKeys.mentionsAll}:
+ * строку «Ссылок на мысль» порождает постоянный комментарий ЛЮБОГО владельца
+ * (явная ID-ссылка `[[#<id>]]` в `body_md`), а «Упоминаний в текстах» —
+ * упоминание в теле или привязка дневниковой записи. Одной мыслью такую строку
+ * не адресовать, поэтому перечитываются только ПОСТРОЕННЫЕ (развёрнутые)
+ * группы: свёрнутая ленивая группа прочитает свежее при раскрытии. `link.*` —
+ * концы ребра: роутер гасит `focus:@<end>`, вкладка реагирует только если конец
+ * — показанная мысль (чужая окрестность — не её дело, урок cb875d0c).
+ * Окрестность фокуса на `comment.*` не гасится сознательно (ошибка 206e33a1).
+ *
+ * **Поведение.** Повторы событий волны схлопываются окном
+ * {@link REALTIME_REFETCH_WINDOW_MS} с жёстким сроком
+ * {@link REALTIME_REFETCH_MAX_WAIT_MS} от первого события (как у «Свойств»,
+ * ошибка da7bbb53): одна волна — один проход по развёрнутым группам. Скрытая
+ * вкладка не читает: копит «грязные» слоты и перечитывает их на
+ * `lifecycle.onShow` — та же граница чтения, что у вкладки «Свойства».
+ */
+function createMentionsRefresher(
+  root: HTMLElement,
+  ownerId: string,
+  slots: readonly MentionsSlot[],
+  lifecycle: TabPaneLifecycle,
+): void {
+  let windowTimer: ReturnType<typeof setTimeout> | null = null;
+  let maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
+  let pending = false;
+
+  const clearTimers = (): void => {
+    if (windowTimer !== null) {
+      clearTimeout(windowTimer);
+      windowTimer = null;
+    }
+    if (maxWaitTimer !== null) {
+      clearTimeout(maxWaitTimer);
+      maxWaitTimer = null;
+    }
+  };
+
+  /** Закрытие окна: перечитываем ровно построенные тела показанной вкладки. */
+  const flush = (): void => {
+    clearTimers();
+    pending = false;
+    for (const slot of slots) {
+      if (slot.reload === null) {
+        slot.dirty = false;
+        continue;
+      }
+      if (!root.isConnected) {
+        slot.dirty = true;
+        continue;
+      }
+      slot.dirty = false;
+      slot.reload();
+    }
+  };
+
+  /** Завести/продлить окно волны (жёсткий срок — от первого события). */
+  const request = (): void => {
+    // Скрытая вкладка не читает: помечаем построенные тела и выходим — их
+    // перечитает `onShow` (иначе фоновая вкладка грузила бы сервер зря).
+    if (!root.isConnected) {
+      for (const slot of slots) if (slot.reload !== null) slot.dirty = true;
+      return;
+    }
+    pending = true;
+    if (windowTimer !== null) clearTimeout(windowTimer);
+    windowTimer = setTimeout(flush, REALTIME_REFETCH_WINDOW_MS);
+    if (maxWaitTimer === null) maxWaitTimer = setTimeout(flush, REALTIME_REFETCH_MAX_WAIT_MS);
+  };
+
+  const unsubscribe = onQueryInvalidated((prefix, _keys, cause) => {
+    const evt = asRealtimeCause(cause);
+    if (evt === null) return;
+    if (MENTIONS_COMMENT_EVENT_TYPES.has(evt.type)) {
+      // Сигнал один: на прочие префиксы события (`structures-page`,
+      // `chronicle-feed`, …) вкладка не реагирует и не плодит перечитываний.
+      if (prefix === queryKeys.mentionsAll()) request();
+      return;
+    }
+    if (!MENTIONS_LINK_EVENT_TYPES.has(evt.type)) return;
+    if (prefix === queryKeys.focus(ownerId)) request();
+  });
+
+  lifecycle.onShow(() => {
+    if (pending || slots.some((slot) => slot.dirty)) flush();
+  });
+  lifecycle.onDispose(() => {
+    clearTimers();
+    pending = false;
+    unsubscribe();
+    for (const slot of slots) dropMentionsSlot(slot);
+  });
+}
+
 /** Registers the «Упоминания» tab content (thoughts and links). */
 export function registerLinksTab(): void {
   registerTabContent('links', buildLinksTab);
@@ -73,6 +214,13 @@ function buildLinksTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEle
 
   const root = div('links-tab');
 
+  // Обе группы-списка получают слот realtime-перечитывания: их строки
+  // порождают комментарии и рёбра (ошибка 91b8afbb), а раскрытие и потолок
+  // строк обязаны пережить волну. «Публикации» живут своим запросом и в
+  // realtime-свежесть вкладки не входят (граница задачи).
+  const backlinksSlot: MentionsSlot = { reload: null, dirty: false };
+  const textMentionsSlot: MentionsSlot = { reload: null, dirty: false };
+
   // Три плоские группы на верхнем уровне вкладки — больше нет родительской
   // группы-обёртки и нет отдельной группы «Локальный граф» (мини-граф
   // переехал на собственную вкладку «Граф»).
@@ -81,14 +229,18 @@ function buildLinksTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEle
     title: t('linksTab.title.linkRefThought'),
     lazyCount: true,
     defaultCollapsed: true,
-    buildBody: () => buildBacklinksBody(ctx, lifecycle),
+    // Тело снято (свёрнуто) — перечитывать нечего; при раскрытии оно прочитает
+    // свежие данные само.
+    onBeforeHide: () => dropMentionsSlot(backlinksSlot),
+    buildBody: () => buildBacklinksBody(ctx, lifecycle, backlinksSlot),
   });
   const textMentions = groupSection({
     id: 'links.text-mentions',
     title: t('linksTab.title.mentionsTekstah'),
     lazyCount: true,
     defaultCollapsed: true,
-    buildBody: () => buildMentionsBody(ctx, lifecycle),
+    onBeforeHide: () => dropMentionsSlot(textMentionsSlot),
+    buildBody: () => buildMentionsBody(ctx, lifecycle, textMentionsSlot),
   });
   // Группа «Публикации» (0.11.1, задача 3275fd8d, элемент интерфейса 928fb3fc):
   // ленивая загрузка с прелоадером, роли с хлебными крошками разделов.
@@ -123,6 +275,9 @@ function buildLinksTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEle
     rowSplitter(() => bodyOf(textMentions), { min: 50, persistKey: 'links.publications' }),
     publications,
   );
+  // Подписка живёт ровно с панелью: снимается на `lifecycle.onDispose` вместе
+  // с таймерами волны, а слоты групп очищаются при сворачивании.
+  createMentionsRefresher(root, ctx.ownerId, [backlinksSlot, textMentionsSlot], lifecycle);
   return root;
 }
 
@@ -249,6 +404,8 @@ interface HitListBodyOptions {
   loading: string;
   /** Подпись пустой группы. */
   empty: string;
+  /** Слот realtime-перечитывания этой группы (ошибка 91b8afbb). */
+  slot: MentionsSlot;
 }
 
 /**
@@ -277,6 +434,12 @@ function buildHitListBody(
   const box = div('mentions-body');
   let retryStop: (() => void) | null = null;
   let disposed = false;
+  /**
+   * Поколение чтения: ответ, начатый до перечитывания волны, не перерисовывает
+   * тело — иначе гонка «медленный первый GET ↔ быстрый второй» вернула бы
+   * прежний список (та же граница, что у вкладки «Свойства»).
+   */
+  let loadSeq = 0;
   /** Смонтированный подблок строк-записей: его обвязка живёт ровно с ним. */
   let recordRows: RecordRowsBlock | null = null;
 
@@ -292,16 +455,21 @@ function buildHitListBody(
     retryStop = null;
     dropRecordRows();
   });
+  // Слот волны: построенное тело перечитывается на месте, свёрнутое (или
+  // пересобранное) — очищает слот через `onBeforeHide` группы.
+  options.slot.reload = () => void reload();
   void reload();
 
   async function reload(): Promise<void> {
+    const seq = (loadSeq += 1);
+    const stale = (): boolean => disposed || seq !== loadSeq;
     dropRecordRows();
     box.replaceChildren(el('span', 'muted', options.loading));
     let hits: BacklinkHit[];
     try {
       hits = await options.load(networkId);
     } catch (err) {
-      if (disposed) return;
+      if (stale()) return;
       box.replaceChildren(operationError(err));
       if (isConnectionLostError(err)) {
         retryStop?.();
@@ -311,7 +479,7 @@ function buildHitListBody(
     }
     retryStop?.();
     retryStop = null;
-    if (disposed) return;
+    if (stale()) return;
     // Union ответа (ADR db88d819): владельческие строки постоянных комментариев
     // и строки-записи дневниковых. Записи упорядочил сервер.
     const mentions = hits.filter((hit): hit is MentionHit => hit.kind !== 'record');
@@ -333,7 +501,7 @@ function buildHitListBody(
             },
           })
         : null;
-    if (disposed) {
+    if (stale()) {
       mounted?.destroy();
       return;
     }
@@ -366,6 +534,9 @@ function buildHitListBody(
         refs = [];
       }
     }
+    // Пока шёл батч-резолв, тело могло уйти на перечитывание волны: строки
+    // устаревшего ответа не должны лечь поверх нового тела.
+    if (stale()) return;
     const refById = new Map(refs.map((r) => [r.id, r]));
     // The group body (this box) is the scroll area — items flow directly.
     for (const hit of visible) {
@@ -467,11 +638,16 @@ async function homeIdForRows(networkId: string): Promise<string | null> {
  * Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references плюс
  * строки-записи дневниковых, сославшихся на мысль явной ссылкой.
  */
-function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
+function buildBacklinksBody(
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+  slot: MentionsSlot,
+): HTMLElement {
   return buildHitListBody(ctx, lifecycle, {
     load: (networkId) => etn.thoughts.backlinks(networkId, ctx.ownerId),
     loading: t('linksTab.searchSsylokThought'),
     empty: t('linksTab.niktoNotSsylaetsyaEtuThoughtVia'),
+    slot,
   });
 }
 
@@ -479,11 +655,16 @@ function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
  * Builds the «Упоминания в текстах» body — поиск по имени/синонимам плюс
  * строки-записи дневниковых, упомянувших мысль в теле (счётчик — группа).
  */
-function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
+function buildMentionsBody(
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+  slot: MentionsSlot,
+): HTMLElement {
   return buildHitListBody(ctx, lifecycle, {
     load: (networkId) => etn.thoughts.mentions(networkId, ctx.ownerId),
     loading: t('linksTab.searchUpominaniy'),
     empty: t('linksTab.titleNigdeNotUpominaetsya'),
+    slot,
   });
 }
 
