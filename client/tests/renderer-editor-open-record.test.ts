@@ -244,6 +244,21 @@ const RECORDS: Comment[] = [
     title: 'Запись t2: май',
     validFrom: '2026-05-01T00:00:00.000Z',
   }),
+  // Мысль t3 — для инварианта «pending ЧУЖОЙ мысли не трогается» (кейс К2):
+  // c7 (июнь) — запись отложенного выбора, c6 (июль) — верхняя строка, которую
+  // даёт штатный авто-выбор. Разные записи делают инвариант наблюдаемым.
+  makeComment({
+    id: 'c7',
+    ownerId: 't3',
+    title: 'Запись t3: июнь',
+    validFrom: '2026-06-01T00:00:00.000Z',
+  }),
+  makeComment({
+    id: 'c6',
+    ownerId: 't3',
+    title: 'Запись t3: июль',
+    validFrom: '2026-07-01T00:00:00.000Z',
+  }),
 ];
 
 interface EtnCalls {
@@ -601,6 +616,40 @@ describe('программный вход «открыть привязку с �
       shownRecordTitle(scrollBox),
       'Запись t2: май',
       'зависший pending снят: показан штатный авто-выбор верхней строки, а не выбор неудавшегося входа',
+    );
+  });
+
+  it('неудачное открытие ЧУЖОЙ мысли не снимает отложенный выбор (инвариант К2)', async () => {
+    shimDom();
+    // Проба К2 приёмки: отложенный выбор ждёт payload t3, а штатное открытие
+    // ДРУГОЙ мысли (t2) падает — сброс обязан быть owner-scoped, иначе выбор
+    // t3 потеряется из-за чужой неудачи.
+    let release: (thought: Thought) => void = () => undefined;
+    const delivered = new Promise<Thought>((resolve) => {
+      release = resolve;
+    });
+    installEtn({ deferred: { t3: delivered }, failOnce: ['t2'] });
+    const { editor, scrollBox } = await mountThoughtEditor(makeThought('t1', 'T1'));
+
+    // 1) Вход «открыть с записью» для t3: pending {c7, t3} ждёт доставки payload.
+    editor.openRecordInEditor('t3', 'c7');
+    await flush();
+
+    // 2) Штатное открытие ЧУЖОЙ мысли t2 падает: откат цели t2 не должен
+    // снимать pending t3.
+    editor.openThoughtInEditor('t2');
+    await flush();
+
+    // 3) Payload t3 доставлен — применяется отложенный выбор (c7, «июнь»),
+    // а не штатный авто-выбор верхней строки («июль»).
+    release(makeThought('t3', 'T3'));
+    await flush();
+
+    assert.ok(activeTabTitle(scrollBox).startsWith('Дневник'));
+    assert.equal(
+      shownRecordTitle(scrollBox),
+      'Запись t3: июнь',
+      'pending чужой мысли пережил неудачное открытие t2 и применён в «Дневнике» t3',
     );
   });
 });
