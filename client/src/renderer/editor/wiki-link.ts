@@ -21,7 +21,6 @@ import type { Thought } from '@etn/shared';
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { focusFromUi, openNetwork, requireNetworkId } from '../app.js';
-import { showDialog } from '../lib/dialog.js';
 import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { otherHolder } from '../lib/lock-cache.js';
@@ -29,8 +28,8 @@ import { notice } from '../lib/notice.js';
 import { replaceLegacyWikiLinks } from '../lib/pure.js';
 import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { openPopover, type PopoverAnchor } from '../lib/ui/popover.js';
-import { isThoughtInResults, openStructuresThought } from '../screens/structures/structures.js';
-import { focusThoughtOnMap, openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
+import { openStructuresThought } from '../screens/structures/structures.js';
+import { openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
 import { openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
@@ -170,52 +169,15 @@ export function wikiLinkAutocompletion(): Extension {
 }
 
 /**
- * Диалог «переключиться на карту мыслей?» (M11): мысль не отображается в
- * текущих результатах структуры. Резолвится `true` по кнопке «Да» и `false`
- * при отказе — включая закрытие каркаса штатным путём («Нет», Esc, ×).
- * Экспортирован для юнит-тестов.
- */
-export function confirmSwitchToMap(): Promise<boolean> {
-  return new Promise((resolve) => {
-    /**
-     * Единственная точка завершения промиса. Отказ — ЛЮБОЙ путь закрытия
-     * каркаса (ошибка aff5a96c): кнопки завершают его явно, а Esc и × —
-     * через `onClose`. Флаг `settled` не даёт позднему событию
-     * `remove` переиграть уже принятое решение.
-     */
-    let settled = false;
-    const finish = (value: boolean): void => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-    showDialog({
-      title: t('wikiLink.title.thoughtNotOtobrazhaetsya'),
-      size: 's',
-      body: el(
-        'p',
-        'dialog-text',
-        t('wikiLink.etaThoughtNotOtobrazhaetsyaStruktureThoughts'),
-      ),
-      buttons: [
-        { label: t('wikiLink.label.no'), onClick: () => finish(false) },
-        { label: t('wikiLink.label.da'), primary: true, onClick: () => finish(true) },
-      ],
-      // Esc и × — отказ: контракт «`false` on cancel»,
-      // ровно как по кнопке «Нет» (ошибка aff5a96c).
-      onClose: () => finish(false),
-    });
-  });
-}
-
-/**
  * Opens an already-resolved thought by the current view's rules (M11): on the
- * canvas — focus; in structures — activation among displayed thoughts, else a
- * "switch to the map?" dialog; in the chronicle — open in the editor without
- * moving canvas focus (08-ui-spec.md §17). An inactive thought with «скрывать
- * неактуальное» on is refused with a notice. Shared by wiki-links (name
- * resolved here) and the mentions auto-annotation (L24, id already known —
- * see `mentions-annotate.ts`).
+ * canvas and other screens — focus; in structures — ALWAYS open in the editor
+ * without moving the canvas focus and without touching the active view (same as
+ * the history panel and the properties table; ошибка 4c2fe9b0); in the
+ * chronicle — open in the editor without moving canvas focus
+ * (08-ui-spec.md §17). An inactive thought with «скрывать неактуальное» on is
+ * refused with a notice. Shared by wiki-links (name resolved here) and the
+ * mentions auto-annotation (L24, id already known — see
+ * `mentions-annotate.ts`).
  */
 export async function openThoughtByRef(thought: Thought): Promise<void> {
   if (!thought.active && !store.state.showInactive) {
@@ -224,15 +186,11 @@ export async function openThoughtByRef(thought: Thought): Promise<void> {
   }
 
   if (store.state.activeView === 'structures') {
-    if (isThoughtInResults(thought.id)) {
-      await openStructuresThought(thought.id);
-      return;
-    }
-    if (await confirmSwitchToMap()) {
-      // Тот же путь, что у команды «В фокус»: показать карту и сфокусировать
-      // мысль (общий помощник, ошибка 562356a9).
-      await focusThoughtOnMap(thought.id);
-    }
+    // «Структуры» открывают мысль в редакторе ВСЕГДА — как панель истории и
+    // таблица свойств, независимо от того, есть ли мысль в результатах
+    // фильтра (ошибка 4c2fe9b0): фокус холста и активный вид не меняются,
+    // диалога «переключиться на карту мыслей?» нет.
+    await openStructuresThought(thought.id);
     return;
   }
 

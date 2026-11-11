@@ -123,10 +123,6 @@ let total = 0;
  */
 const resultPager = new StructuresPager();
 
-/** True when the thought id is among the currently displayed results (M11). */
-export function isThoughtInResults(id: string): boolean {
-  return resultIds.includes(id);
-}
 /** Known thought metadata: roots + every expanded neighbour. */
 const refs = new Map<string, ThoughtRef>();
 /**

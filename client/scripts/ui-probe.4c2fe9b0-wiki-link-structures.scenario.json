@@ -1,0 +1,145 @@
+{
+  "name": "wiki-link-structures-4c2fe9b0",
+  "description": "Ошибка 4c2fe9b0 (0.15.4): на экране «Структуры мыслей» клик по wiki-ссылке в тексте комментария открывает мысль в редакторе ВСЕГДА — как панель истории и таблица свойств, без диалога «Мысль не отображается / Переключиться на карту мыслей?», без смены активного вида и без сдвига фокуса холста. Проверяется: seed-мысль {{thoughtId}} получает постоянный комментарий со ссылкой [[#<цель>|Цель 4c2fe9b0]], цель создаётся БЕЗ связей (в результатах структуры её нет — это и есть условие прежнего диалога); открываем seed в редакторе кликом по облачку «Структур», кликаем wiki-ссылку в просмотре комментария. Ожидания: редактор показывает «Цель 4c2fe9b0»; .dialog-backdrop отсутствует до и после клика; текст отменённого диалога не появляется; активен вид «Структуры», не «Карта мыслей»; focus_id вкладки не изменился. Прежний код на этом шаге показывал диалог и не открывал мысль. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.4c2fe9b0-wiki-link-structures.scenario.json --seed-name '4c2fe9b0 wiki-link structures' --seed-title 'Мысль 4c2fe9b0'. Доказательство — DOM-пробы: значение .editor-title-input, число .dialog-backdrop, активный view-tab, focus_id вкладки.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "install-helpers",
+      "expect": true,
+      "probe": {
+        "name": "installHelpers",
+        "expression": "(() => { window.__wl = window.__wl || {}; window.__wlH = { focus: async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; }, view: () => { const tabs = [...document.querySelectorAll('button.view-tab')]; const on = (re) => tabs.some((b) => re.test(b.title) && b.classList.contains('ui-btn--active')); return { map: on(/Карта мыслей|thought map/i), structures: on(/Структуры|structures/i) }; }, dialogCount: () => document.querySelectorAll('.dialog-backdrop').length, dialogText: () => (document.body.textContent || '').includes('Переключиться на карту мыслей?'), cloud: (selector, id) => document.querySelector(selector + '[data-id=\"' + id + '\"]') }; return true; })()"
+      }
+    },
+    {
+      "name": "seed-comment-with-wiki-link",
+      "timeout": 120000,
+      "expect": "ok",
+      "probe": {
+        "name": "seedCommentWithWikiLink",
+        "expression": "(async () => { const nid = '{{networkId}}'; const api = window.etn; const box = await api.thoughts.create(nid, { title: 'Контейнер 4c2fe9b0', create_link: { direction: 'parent', target_thought_id: '{{homeId}}' } }); const target = await api.thoughts.create(nid, { title: 'Цель 4c2fe9b0', comment: { body_md: 'Целевая мысль 4c2fe9b0: в результатах структуры не отображается' }, create_link: { direction: 'parent', target_thought_id: box.id } }); window.__wl.target = target.id; window.__wl.box = box.id; const body = 'Ссылка в комментарии: [[#' + target.id + '|Цель 4c2fe9b0]] — на «Структурах» мысль обязана открыться в редакторе.'; const comments = await api.comments.list(nid, 'thought', '{{thoughtId}}'); const perm = comments.find((c) => c.kind === 'permanent'); if (perm === undefined) { await api.comments.create(nid, 'thought', '{{thoughtId}}', { kind: 'permanent', body_md: body }); } else { await api.comments.update(nid, perm.id, { body_md: body }, perm.version); } return 'ok'; })()"
+      }
+    },
+    {
+      "name": "switch-to-structures",
+      "click": ".view-tab[title=\"Структуры\"], .view-tab[title=\"Thought structures\"]"
+    },
+    {
+      "name": "structures-root-ready",
+      "timeout": 30000,
+      "waitFor": "(() => { const host = document.querySelector('.structures.view-host'); return host !== null && !host.classList.contains('hidden') && document.querySelector('.st-row .ellipse-bottom.filled') !== null; })()"
+    },
+    {
+      "name": "expand-root-children",
+      "expect": "ok",
+      "probe": {
+        "name": "expandRootChildren",
+        "expression": "(() => { const ellipse = document.querySelector('.st-row .ellipse-bottom.filled'); if (ellipse === null) return 'no-ellipse'; ellipse.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "seed-row-visible",
+      "timeout": 30000,
+      "waitFor": "window.__wlH.cloud('.st-cloud', '{{thoughtId}}') !== null"
+    },
+    {
+      "name": "target-not-in-structure-results",
+      "probe": {
+        "name": "targetNotInStructureResults",
+        "expression": "window.__wlH.cloud('.st-cloud', window.__wl.target) === null"
+      },
+      "expect": true
+    },
+    {
+      "name": "focus-before",
+      "probe": { "name": "focusBeforeWikiLink", "expression": "window.__wlH.focus()" }
+    },
+    {
+      "name": "single-click-seed-cloud",
+      "expect": "ok",
+      "probe": {
+        "name": "singleClickSeedCloud",
+        "expression": "(() => { const el = window.__wlH.cloud('.st-cloud', '{{thoughtId}}'); if (el === null) return 'no-cloud'; el.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "editor-shows-seed",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "wiki-link-visible-in-comment",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.ui-comment .md-field-view .wiki-link[data-wiki-id=\"' + window.__wl.target + '\"]') !== null"
+    },
+    {
+      "name": "no-dialog-before-click",
+      "probe": { "name": "dialogCountBeforeClick", "expression": "window.__wlH.dialogCount()" },
+      "expect": 0
+    },
+    {
+      "name": "view-before-click",
+      "probe": { "name": "viewBeforeClick", "expression": "window.__wlH.view()" }
+    },
+    {
+      "name": "click-wiki-link-in-comment",
+      "expect": "ok",
+      "probe": {
+        "name": "clickWikiLinkInComment",
+        "expression": "(() => { const el = document.querySelector('.ui-comment .md-field-view .wiki-link[data-wiki-id=\"' + window.__wl.target + '\"]'); if (el === null) return 'no-link'; el.scrollIntoView({ block: 'center' }); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "outcome-after-click",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop').length > 0 || document.querySelector('.editor-title-input')?.value === 'Цель 4c2fe9b0'"
+    },
+    {
+      "name": "no-dialog-after-click",
+      "probe": { "name": "dialogCountAfterClick", "expression": "window.__wlH.dialogCount()" },
+      "expect": 0
+    },
+    {
+      "name": "editor-shows-wiki-target",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Цель 4c2fe9b0'"
+    },
+    {
+      "name": "no-switch-dialog-text",
+      "probe": { "name": "switchDialogTextShown", "expression": "window.__wlH.dialogText()" },
+      "expect": false
+    },
+    {
+      "name": "still-structures-after-click",
+      "probe": {
+        "name": "stillStructuresAfterClick",
+        "expression": "(() => { const v = window.__wlH.view(); return v.structures === true && v.map === false; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "focus-unchanged-after-click",
+      "probe": { "name": "focusAfterWikiLink", "expression": "window.__wlH.focus()" },
+      "expectFrom": "focus-before"
+    }
+  ]
+}
