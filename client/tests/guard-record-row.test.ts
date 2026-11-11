@@ -102,7 +102,16 @@ function integrationProblems(root: string): string[] {
       tab,
     )
   ) {
-    problems.push('editor/links-tab.ts не монтирует подблок строк-записей (откат ae72e47e)');
+    problems.push('editor/links-tab.ts не импортирует подблок строк-записей (откат ae72e47e)');
+  }
+  // Импорта мало (замечание приёмки, круг 1): мутация «оставить импорт, убрать
+  // монтирование» выглядела подключённой, хотя строк-записей на вкладке не было.
+  // Проверяется ВЫЗОВ внутри сборки тела группы, а не факт импорта.
+  const tabBody = /function buildHitListBody\([\s\S]*?\n\}/.exec(tab)?.[0] ?? '';
+  if (!/\bmountRecordRowsBlock\s*\(\s*\{/.test(tabBody)) {
+    problems.push(
+      'editor/links-tab.ts не монтирует подблок строк-записей: в buildHitListBody нет вызова',
+    );
   }
   if (ROW_BUILD.test(tab)) problems.push('editor/links-tab.ts строит строку-запись мимо подблока');
   if (/record-row-(?:head|chips|snippet)/.test(tab)) {
@@ -182,6 +191,66 @@ describe('guard: общая строка-запись — одна компон�
         problems.some((problem) => problem.includes('не монтирует подблок')),
         'подблок при этом так и не подключён',
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('правило краснеет на ИМПОРТЕ подблока без монтирования (замечание приёмки, круг 1)', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-record-mount-call-'));
+    try {
+      writeTree(
+        dir,
+        SEARCH,
+        [
+          "import { createRecordRow } from '../lib/record-row.js';",
+          'export const row = (model: unknown, options: unknown) => createRecordRow(model, options);',
+        ].join('\n'),
+      );
+      writeTree(
+        dir,
+        BLOCK,
+        [
+          "import { createRecordRow } from './record-row.js';",
+          'export const rows = (model: unknown, options: unknown) => createRecordRow(model, options);',
+        ].join('\n'),
+      );
+      // Мутация «импорт остался, вызов убран»: подблок в сборке группы не монтируется.
+      writeTree(
+        dir,
+        TAB,
+        [
+          'import {',
+          '  mountRecordRowsBlock,',
+          '  type RecordRowsBlock,',
+          "} from '../lib/record-rows-block.js';",
+          '',
+          'export function buildHitListBody(): RecordRowsBlock | null {',
+          '  return null;',
+          '}',
+        ].join('\n'),
+      );
+      assert.ok(
+        integrationProblems(dir).some((problem) => problem.includes('нет вызова')),
+        'импорт без вызова монтирования — нарушение (иначе сторож зеленеет на пустом подблоке)',
+      );
+
+      // Обратный контроль: вызов внутри сборки группы — нарушений нет.
+      writeTree(
+        dir,
+        TAB,
+        [
+          'import {',
+          '  mountRecordRowsBlock,',
+          '  type RecordRowsBlock,',
+          "} from '../lib/record-rows-block.js';",
+          '',
+          'export function buildHitListBody(): RecordRowsBlock {',
+          '  return mountRecordRowsBlock({ networkId: "", hits: [], homeId: null, showInactive: false, showTrash: false, onOpen: () => undefined });',
+          '}',
+        ].join('\n'),
+      );
+      assert.deepEqual(integrationProblems(dir), [], 'импорт + вызов — правило довольно');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

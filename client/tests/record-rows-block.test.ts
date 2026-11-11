@@ -181,6 +181,38 @@ describe('видимость строки-записи — по active перв�
     assert.deepEqual(visibleRecordRows(hits, true), hits, 'настройка возвращает её в список');
   });
 
+  it('K4: помеченная корзиной привязка (active=true) НЕ прячет строку — это не fallback', () => {
+    // Маркировка удаления обратима и не убирает привязку из `targets`
+    // (миграция 024): у строки-записи она не отнимает видимость — прятать
+    // помеченное вправе только чипы-мысли (`show_trash`, lib/record-targets.ts).
+    const marked = recordHit({
+      targets: [
+        { kind: 'thought', thought: thought(OWNER, { active: true, marked_for_deletion: true }) },
+      ],
+    });
+
+    assert.equal(recordRowActive(marked), true, 'корзина не делает привязку неактуальной');
+    assert.deepEqual(
+      visibleRecordRows([marked], false),
+      [marked],
+      'строка видна при show_inactive=false (не путать с fallback «привязка не найдена»)',
+    );
+
+    installMinimalDom();
+    const block = mountRecordRowsBlock({
+      networkId: NETWORK,
+      hits: [marked],
+      homeId: null,
+      showInactive: true,
+      showTrash: false,
+      onOpen: () => undefined,
+    });
+    const rows = block.el.querySelectorAll('.record-row');
+    assert.equal(rows.length, 1, 'строка в подблоке');
+    assert.equal(rows[0]?.classList.contains('dim'), false, 'приглушения нет: привязка активна');
+    block.destroy();
+  });
+
   it('порядок сервера (`valid_from` по убыванию) сохраняется', () => {
     const hits = [
       recordHit({ valid_from: '2026-11-10T12:00:00.000Z' }),
