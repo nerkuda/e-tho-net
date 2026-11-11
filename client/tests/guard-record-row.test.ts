@@ -6,9 +6,10 @@
  * Почему сторож. Пока строку-запись собирал сам экран, форма разъезжалась:
  * группа «Найдено в хронологии» показывала только период и сниппет — без
  * привязок и без перехода. Компонента живёт в `lib/` и собирается ОДНИМ
- * вызовом в поиске; второй потребитель («Упоминания», задача ae72e47e) придёт
- * отдельной работой — тогда этот сторож осознанно расширится, а не «просто
- * позеленеет».
+ * вызовом на каждое место интеграции. С версии 0.15.4 таких мест ДВА — группа
+ * поиска «Найдено в хронологии» (`search/search.ts`) и вкладка «Упоминания»
+ * (`editor/links-tab.ts` через подблок `lib/record-rows-block.ts`, задача
+ * ae72e47e); сторож держит оба места на общей компоненте.
  *
  * Дополнительно фиксируются правила состава строки:
  *  * сниппет проходит ТОТ ЖЕ конвейер `[[#id]]` → имя мысли, что у прочих
@@ -43,8 +44,17 @@ const RENDERER_ROOT = path.resolve(
 /** Дом общей компоненты строки-записи. */
 const ROW = 'lib/record-row.ts';
 
-/** Единственное место интеграции этой версии. */
+/** Место интеграции общей строки — группа поиска «Найдено в хронологии». */
 const SEARCH = 'search/search.ts';
+
+/** Место интеграции общей строки — вкладка «Упоминания» (задача ae72e47e). */
+const TAB = 'editor/links-tab.ts';
+
+/** Подблок строк-записей вкладки — единственная сборка строки для неё. */
+const BLOCK = 'lib/record-rows-block.ts';
+
+/** Разрешённые сборщики строки: сама компонента, подблок вкладки и поиск. */
+const BUILDERS = [ROW, BLOCK, SEARCH];
 
 /** Признак сборки строки дневниковой записи. */
 const ROW_BUILD = /\bcreateRecordRow\s*\(/;
@@ -60,19 +70,121 @@ function read(...parts: string[]): string {
 /** Исходник строки-записи. */
 const ROW_SOURCE = read('lib', 'record-row.ts');
 
-describe('guard: общая строка-запись — одна компонента, одно место интеграции', () => {
-  it('строку собирает только lib/record-row.ts, интеграция — одна (поиск)', () => {
+/**
+ * Проблемы подключения общей строки в ОБОИХ местах интеграции. Пустой массив —
+ * всё на месте: поиск зовёт компоненту сам, вкладка «Упоминания» — через подблок,
+ * а собственной разметки строки у вкладки нет. Функция вынесена из теста, чтобы
+ * откат проверялся на синтетическом дереве (правило обязано краснеть).
+ */
+function integrationProblems(root: string): string[] {
+  const readRel = (rel: string): string => {
+    try {
+      return readFileSync(path.join(root, ...rel.split('/')), 'utf8');
+    } catch {
+      return '';
+    }
+  };
+  const problems: string[] = [];
+  const search = readRel(SEARCH);
+  if (
+    !/import\s*\{[^}]*\bcreateRecordRow\b[^}]*\}\s*from\s*'\.\.\/lib\/record-row\.js'/.test(search)
+  ) {
+    problems.push('search/search.ts не импортирует общую компоненту строки-записи');
+  }
+  if (!ROW_BUILD.test(search)) problems.push('search/search.ts не строит строку-запись');
+  const block = readRel(BLOCK);
+  if (!/import\s*\{[^}]*\bcreateRecordRow\b[^}]*\}\s*from\s*'\.\/record-row\.js'/.test(block)) {
+    problems.push('lib/record-rows-block.ts не использует общую компоненту строки-записи');
+  }
+  const tab = readRel(TAB);
+  if (
+    !/import\s*\{[\s\S]*?\bmountRecordRowsBlock\b[\s\S]*?\}\s*from\s*'\.\.\/lib\/record-rows-block\.js'/.test(
+      tab,
+    )
+  ) {
+    problems.push('editor/links-tab.ts не монтирует подблок строк-записей (откат ae72e47e)');
+  }
+  if (ROW_BUILD.test(tab)) problems.push('editor/links-tab.ts строит строку-запись мимо подблока');
+  if (/record-row-(?:head|chips|snippet)/.test(tab)) {
+    problems.push('editor/links-tab.ts повторяет разметку общей строки-записи');
+  }
+  return problems;
+}
+
+/** Запись файла синтетического дерева (каталоги создаются). */
+function writeTree(root: string, rel: string, content: string): void {
+  const file = path.join(root, ...rel.split('/'));
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, content, 'utf8');
+}
+
+describe('guard: общая строка-запись — одна компонента, места интеграции', () => {
+  it('строку собирает только lib/record-row.ts и её подблок вкладки', () => {
     assertGuardClean(RENDERER_ROOT, [
       {
         name: 'single-record-row-integration',
         description:
-          'Строку дневниковой записи собирает общая компонента lib/record-row.ts; ' +
-          'место интеграции этой версии — search/search.ts. Второй сборщик в экране ' +
-          'вернёт расхождение формы (период без привязок и перехода).',
+          'Строку дневниковой записи собирает общая компонента lib/record-row.ts. ' +
+          'Места интеграции — search/search.ts и подблок editor/links-tab.ts ' +
+          '(lib/record-rows-block.ts). Свой сборщик в экране вернёт расхождение ' +
+          'формы (период без привязок и перехода).',
         filePattern: ROW_BUILD,
-        allow: (rel) => rel === ROW || rel === SEARCH,
+        allow: (rel) => BUILDERS.includes(rel),
       },
     ]);
+  });
+
+  it('общая строка подключена в ОБОИХ местах интеграции: поиск и вкладка «Упоминания»', () => {
+    const problems = integrationProblems(RENDERER_ROOT);
+    assert.deepEqual(problems, [], problems.join('\n'));
+  });
+
+  it('правило краснеет на откате вкладки к собственной строке-записи', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'etn-guard-record-integrations-'));
+    try {
+      writeTree(
+        dir,
+        SEARCH,
+        [
+          "import { createRecordRow } from '../lib/record-row.js';",
+          'export const row = (model: unknown, options: unknown) => createRecordRow(model, options);',
+        ].join('\n'),
+      );
+      writeTree(
+        dir,
+        BLOCK,
+        [
+          "import { createRecordRow } from './record-row.js';",
+          'export const rows = (model: unknown, options: unknown) => createRecordRow(model, options);',
+        ].join('\n'),
+      );
+      // Откат: вкладка потеряла подблок строк-записей.
+      writeTree(dir, TAB, 'export function buildBody(): unknown { return null; }\n');
+      assert.ok(
+        integrationProblems(dir).some((problem) => problem.includes('не монтирует подблок')),
+        'вкладка без подблока строк-записей — нарушение',
+      );
+      // Регресс: вкладка собирает строку сама, мимо подблока.
+      writeTree(
+        dir,
+        TAB,
+        [
+          "import { createRecordRow } from '../lib/record-row.js';",
+          'export const row = (model: unknown, options: unknown) => createRecordRow(model, options);',
+        ].join('\n'),
+      );
+      const problems = integrationProblems(dir);
+      assert.ok(
+        problems.some((problem) => problem.includes('мимо подблока')),
+        'своя сборка строки-записи на вкладке — нарушение',
+      );
+      assert.ok(
+        problems.some((problem) => problem.includes('не монтирует подблок')),
+        'подблок при этом так и не подключён',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('компонента строки не импортирует экранные модули', () => {
@@ -162,7 +274,9 @@ describe('guard: общая строка-запись — одна компон�
   });
 
   it('обвязка строк-записей снимается во ВСЕХ ветках замены результатов', () => {
-    const source = read('search', 'search.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    const source = read('search', 'search.ts')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
 
     assert.deepEqual(
       source.match(/\bresultsBox\s*\.\s*replaceChildren\s*\(/g) ?? [],
@@ -197,7 +311,7 @@ describe('guard: общая строка-запись — одна компон�
           name: 'single-record-row-integration',
           description: '',
           filePattern: ROW_BUILD,
-          allow: (rel) => rel === ROW || rel === SEARCH,
+          allow: (rel) => BUILDERS.includes(rel),
         },
       ]);
       assert.deepEqual(

@@ -49,14 +49,7 @@ const SRC = {
     'publication-card.ts',
   ),
   canvas: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
-  contextMenu: resolve(
-    import.meta.dirname,
-    '..',
-    'src',
-    'renderer',
-    'canvas',
-    'context-menu.ts',
-  ),
+  contextMenu: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'context-menu.ts'),
   structures: resolve(
     import.meta.dirname,
     '..',
@@ -131,10 +124,7 @@ describe('контекстное меню облачка — общий конс
       'лента дневника обязана импортировать общий фасад меню вне холста',
     );
     const chip = functionBody(src, 'function buildChip(');
-    assert.ok(
-      chip.includes('contextmenu'),
-      'buildChip дневника обязан перехватывать правый клик',
-    );
+    assert.ok(chip.includes('contextmenu'), 'buildChip дневника обязан перехватывать правый клик');
     assert.ok(
       chip.includes('showOutOfCanvasThoughtMenu('),
       'облачко мысли в ленте дневника обязано открывать общее меню мысли',
@@ -244,10 +234,18 @@ describe('контекстное меню облачка — общий конс
       endpoint.includes('showOutOfCanvasThoughtMenu('),
       'облачко конца связи открывает меню тем же фасадом',
     );
+    // С 0.15.4 (задача ae72e47e) обе группы вкладки собирает ОДНА функция
+    // `buildHitListBody`: меню навешивается в одном месте и потому не может
+    // достаться одной группе и пропасть у другой.
     assert.equal(
       (src.match(/actions: mentionCloudActions\(\(\) => void open\(hit\), /g) ?? []).length,
-      2,
-      'обе группы упоминаний (ссылки и тексты) получают меню',
+      1,
+      'общая сборка групп упоминаний навешивает меню один раз (на обе группы)',
+    );
+    assert.match(
+      src,
+      /const backlinks[\s\S]*?buildBacklinksBody[\s\S]*?const textMentions[\s\S]*?buildMentionsBody/,
+      'групп по-прежнему две и обе идут через общую сборку',
     );
   });
 

@@ -69,6 +69,7 @@ import {
 } from '../editor/wiki-link-resolver.js';
 import { resolveFirstDayOfWeek } from '../lib/dates.js';
 import { getHomeId } from '../lib/home.js';
+import { openRecordTarget as openRecordTargetIn } from '../lib/record-open.js';
 import { createRecordRow, recordRowFromChronoHit, type RecordRowHandle } from '../lib/record-row.js';
 import type { RecordTargetRef } from '../lib/record-targets.js';
 import { div, el, errText, renderHtml, span } from '../lib/dom.js';
@@ -1435,24 +1436,15 @@ async function openLinkHit(linkId: string): Promise<void> {
  * 2026-11-10). Владелец записи приходит сюда же при нуле видимых привязок.
  */
 async function openRecordTarget(target: RecordTargetRef, commentId: string): Promise<void> {
-  if (target.kind === 'link') {
-    try {
-      const port = searchHitPort();
-      const link = await port.getLink(requireNetworkId(), target.id);
-      port.openLinkInEditor(link);
-    } catch (error) {
-      reportHitFailure(error);
-    }
-    return;
-  }
-  // Порядок важен: программный вход ставит отложенный выбор записи, а его
-  // force-ветка при цели, равной текущему фокусу, за фокусом НЕ идёт
-  // (`editor.ts`: force-ветка пропускается, пин остаётся) — поэтому адресат
-  // фокуса ставится ОТДЕЛЬНО, после входа. Требование ce121e09: адресат меняется
-  // с владельца записи на ОТКРЫВАЕМУЮ привязку.
-  const port = searchHitPort();
-  port.openRecordInEditor(target.id, commentId);
-  await port.focusFromUi(target.id);
+  // Решение «куда ведёт строка-запись» — ОДНО на поиск и вкладку «Упоминания»
+  // (`lib/record-open.ts`, задача ae72e47e): порядок «вход редактора, затем
+  // фокус на открываемую привязку» и различие мысль/связь живут там. Порт
+  // поиска остаётся тестовым швом и источником действий.
+  await openRecordTargetIn(target, commentId, {
+    ...searchHitPort(),
+    networkId: requireNetworkId(),
+    onFailure: reportHitFailure,
+  });
 }
 
 /**

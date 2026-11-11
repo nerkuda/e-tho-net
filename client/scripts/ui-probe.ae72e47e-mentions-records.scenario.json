@@ -1,0 +1,281 @@
+{
+  "name": "mentions-records-ae72e47e",
+  "description": "Ключевой сценарий задачи ae72e47e (0.15.4, тех.проект 43329662, требования 012b2dc6 и ce121e09): строки-записи на вкладке «Упоминания». Проверяется: (1) записи попадают в ОБЕ группы — «Упоминания в текстах» (упоминание имени мысли) и «Ссылки на мысль» (явная ссылка [[#id]]); (2) группа «Публикации» не затронута (тела её групп не монтируются, пока группа свёрнута); (3) счётчик группы публикуют ОБЕ группы и считает строки обоих видов: «Ссылки на мысль» = 22 (21 запись со ссылкой + запись с выбором), «Упоминания в текстах» = 1 (до фикса у «Ссылок на мысль» счётчика не было вообще — уточнение N8); (4) клиентский потолок: 20 строк + подпись «Показано 20 из 22» ТОЛЬКО у группы «Ссылки на мысль»; (5) сниппет проходит общий конвейер [[#id]] → имя мысли: в строке нет сырого [[# и uuid, имя мысли видно; (6) строки-записи идут ПОДБЛОКОМ после владельческих строк и несут вид строки списка (.mention-item); (7) клик по строке-записи «Упоминаний в текстах» открывает редактор её привязки с активной вкладкой «Дневник», выбранной записью и ФОКУСОМ холста на привязке; (8) клик по строке с ДВУМЯ видимыми привязками открывает список выбора, ↓/Enter ведут в ОТКРЫВАЕМУЮ привязку (не к владельцу записи) — редактор с записью и фокус на выбранной. Данные засеиваются шагом eval через window.etn: мысли «Владелец Б», «Упоминание В», «Выбор Г»; запись-упоминание на В; 21 запись со ссылкой на текущую мысль на Б; последняя — запись с двумя видимыми привязками (Б и Г) и HOME (скрыт). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ae72e47e-mentions-records.scenario.json --seed-name 'ae72e47e mentions records' --seed-title 'Проба ae72e47e'. На дофиксовой сборке (23743811) вкладка пропускала строки-записи (фильтр kind !== 'record'): групповая выдача пуста уже на шаге «mentions-record-row» — сценарий красный. Без скриншотов: доказательства — DOM-пробы строк, счётчиков, подписи, заголовка записи и focus_id вкладки.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "(() => { const el = document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); return el !== null && el.getBoundingClientRect().width > 0; })()"
+    },
+    {
+      "name": "seed-mentions-records",
+      "timeout": 120000,
+      "expect": 21,
+      "probe": {
+        "name": "seedMentionsRecords",
+        "expression": "(async () => { const nid = '{{networkId}}'; const a = '{{thoughtId}}'; const home = '{{homeId}}'; const b = await window.etn.thoughts.create(nid, { title: 'Владелец Б ae72e47e' }); const c = await window.etn.thoughts.create(nid, { title: 'Упоминание В ae72e47e' }); const d = await window.etn.thoughts.create(nid, { title: 'Выбор Г ae72e47e' }); const mk = (body) => ({ kind: 'chronological', title: null, body_md: body, use_time: false }); const mention = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: c.id }, { owner_type: 'thought', owner_id: home }], mk('zzae72 упоминание {{seedTitle}} в тексте записи.')); const records = []; for (let i = 1; i <= 21; i += 1) { const r = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: b.id }, { owner_type: 'thought', owner_id: home }], mk('zzae72 запись ' + i + ' со ссылкой [[#' + a + ']].')); records.push(r.id); } const pick = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: b.id }, { owner_type: 'thought', owner_id: d.id }, { owner_type: 'thought', owner_id: home }], mk('zzae72 запись с выбором привязки [[#' + a + ']].')); window.__mtData = { a: a, b: b.id, c: c.id, d: d.id, home: home, mention: mention.id, records: records, pick: pick.id }; return records.length; })()"
+      }
+    },
+    {
+      "name": "install-tab-helpers",
+      "expect": true,
+      "probe": {
+        "name": "installTabHelpers",
+        "expression": "(() => { const groups = () => [...document.querySelectorAll('.links-tab > .group')]; window.__mt = { backlinksIndex: 0, mentionsIndex: 1, group: (index) => groups()[index] ?? null, expand: (index) => { const g = window.__mt.group(index); if (g === null) return 'no-group'; const caret = g.querySelector(':scope > .group-header .group-caret'); if (caret !== null && caret.classList.contains('collapsed')) { g.querySelector(':scope > .group-header').click(); } return 'ok'; }, badge: (index) => { const g = window.__mt.group(index); if (g === null) return 'no-group'; const b = g.querySelector(':scope > .group-header .ui-badge'); return b === null ? 'no-badge' : (b.textContent || '').trim(); }, rows: (index) => { const g = window.__mt.group(index); return g === null ? [] : [...g.querySelectorAll('.mentions-records .record-row')]; }, row: (index, marker) => window.__mt.rows(index).find((r) => (r.textContent || '').includes(marker)) ?? null, caption: (index) => { const g = window.__mt.group(index); if (g === null) return 'no-group'; const p = g.querySelector('.mentions-records > p.muted'); return p === null ? 'no-caption' : (p.textContent || '').trim(); }, clickRow: (index, marker) => { const r = window.__mt.row(index, marker); if (r === null) return 'no-row'; r.click(); return 'ok'; } }; return true; })()"
+      }
+    },
+    {
+      "name": "open-thought-editor",
+      "expect": "ok",
+      "probe": {
+        "name": "clickSeedCloud",
+        "expression": "(() => { const el = [...document.querySelectorAll('.cloud[data-id=\"{{thoughtId}}\"]')].find((c) => c.getBoundingClientRect().width > 0); if (el === undefined) return 'no-cloud'; el.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "editor-tabs-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.editor-tab').length === 7"
+    },
+    {
+      "name": "open-mentions-tab",
+      "expect": "ok",
+      "probe": {
+        "name": "openMentionsTab",
+        "expression": "(() => { const tabs = [...document.querySelectorAll('.editor-tab')]; const tab = tabs[3]; if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "mentions-tab-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.links-tab') !== null"
+    },
+    {
+      "name": "groups-present",
+      "probe": {
+        "name": "groupsPresent",
+        "expression": "[...document.querySelectorAll('.links-tab > .group')].length"
+      },
+      "expect": 3
+    },
+    {
+      "name": "expand-text-mentions",
+      "expect": "ok",
+      "probe": {
+        "name": "expandTextMentions",
+        "expression": "window.__mt.expand(1)"
+      }
+    },
+    {
+      "name": "mentions-record-row",
+      "timeout": 30000,
+      "waitFor": "window.__mt.rows(1).length === 1"
+    },
+    {
+      "name": "mentions-counter",
+      "probe": {
+        "name": "mentionsCounter",
+        "expression": "window.__mt.badge(1)"
+      },
+      "expect": "(1)"
+    },
+    {
+      "name": "mentions-row-is-list-item",
+      "probe": {
+        "name": "mentionsRowClasses",
+        "expression": "(() => { const row = window.__mt.rows(1)[0]; return row === undefined ? 'no-row' : [row.classList.contains('record-row'), row.classList.contains('mention-item'), row.classList.contains('dim')]; })()"
+      },
+      "expect": [
+        true,
+        true,
+        false
+      ]
+    },
+    {
+      "name": "mentions-no-cap-caption",
+      "probe": {
+        "name": "mentionsCaption",
+        "expression": "window.__mt.caption(1)"
+      },
+      "expect": "no-caption"
+    },
+    {
+      "name": "mentions-snippet-no-raw-wiki-id",
+      "probe": {
+        "name": "mentionsSnippetRaw",
+        "expression": "(() => { const row = window.__mt.rows(1)[0]; return row === undefined ? 'no-row' : (row.querySelector('.record-row-snippet')?.innerHTML || '').includes('[[#'); })()"
+      },
+      "expect": false
+    },
+    {
+      "name": "mentions-snippet-shows-thought-name",
+      "probe": {
+        "name": "mentionsSnippetName",
+        "expression": "(() => { const row = window.__mt.rows(1)[0]; return row !== undefined && (row.querySelector('.record-row-snippet')?.textContent || '').includes('{{seedTitle}}'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "expand-backlinks",
+      "expect": "ok",
+      "probe": {
+        "name": "expandBacklinks",
+        "expression": "window.__mt.expand(0)"
+      }
+    },
+    {
+      "name": "backlinks-capped-rows",
+      "timeout": 60000,
+      "waitFor": "window.__mt.rows(0).length === 20"
+    },
+    {
+      "name": "backlinks-counter-counts-all-found-rows",
+      "probe": {
+        "name": "backlinksCounter",
+        "expression": "window.__mt.badge(0)"
+      },
+      "expect": "(22)"
+    },
+    {
+      "name": "backlinks-cap-caption-names-both-numbers",
+      "probe": {
+        "name": "backlinksCaption",
+        "expression": "(() => { const text = window.__mt.caption(0); return typeof text === 'string' && text.includes('20') && text.includes('22'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "backlinks-rows-not-dimmed",
+      "probe": {
+        "name": "backlinksRowsFlags",
+        "expression": "(() => { const rows = window.__mt.rows(0); const ok = rows.every((r) => r.classList.contains('mention-item') && !r.classList.contains('dim')); return rows.length === 20 && ok; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "backlinks-snippet-no-raw-wiki-id",
+      "probe": {
+        "name": "backlinksSnippetRaw",
+        "expression": "(() => { const row = window.__mt.row(0, 'запись 21 со ссылкой'); if (row === null) return 'no-row'; const html = row.querySelector('.record-row-snippet')?.innerHTML || ''; return html.includes('[[#') || /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(html); })()"
+      },
+      "expect": false
+    },
+    {
+      "name": "backlinks-snippet-shows-thought-name",
+      "probe": {
+        "name": "backlinksSnippetName",
+        "expression": "(() => { const row = window.__mt.row(0, 'запись 21 со ссылкой'); return row !== null && (row.querySelector('.record-row-snippet')?.textContent || '').includes('{{seedTitle}}'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "backlinks-row-chips-hide-home",
+      "probe": {
+        "name": "backlinksChipsNoHome",
+        "expression": "(() => { const row = window.__mt.row(0, 'запись 21 со ссылкой'); if (row === null) return 'no-row'; return [...row.querySelectorAll('.record-row-chips .chron-chip')].some((c) => (c.textContent || '').trim() === 'HOME'); })()"
+      },
+      "expect": false
+    },
+    {
+      "name": "click-row-with-choice",
+      "expect": "ok",
+      "probe": {
+        "name": "clickChoiceRow",
+        "expression": "window.__mt.clickRow(0, 'запись с выбором привязки')"
+      }
+    },
+    {
+      "name": "choice-list-open",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.menu[role=\"listbox\"]') !== null"
+    },
+    {
+      "name": "choice-list-options",
+      "probe": {
+        "name": "choiceOptionCount",
+        "expression": "document.querySelectorAll('.menu[role=\"listbox\"] > .menu-item[role=\"option\"]').length"
+      },
+      "expect": 2
+    },
+    {
+      "name": "choice-starts-on-owner",
+      "probe": {
+        "name": "choiceFirst",
+        "expression": "(document.querySelector('.menu-item[aria-selected=\"true\"]')?.textContent || '').includes('Владелец Б ae72e47e')"
+      },
+      "expect": true
+    },
+    {
+      "name": "choice-arrow-down",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "choice-moved-to-second-binding",
+      "probe": {
+        "name": "choiceSecond",
+        "expression": "(document.querySelector('.menu-item[aria-selected=\"true\"]')?.textContent || '').includes('Выбор Г ae72e47e')"
+      },
+      "expect": true
+    },
+    {
+      "name": "choice-enter",
+      "key": "Enter"
+    },
+    {
+      "name": "editor-shows-chosen-binding",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Выбор Г ae72e47e'"
+    },
+    {
+      "name": "chosen-binding-record-selected-in-diary",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('запись с выбором привязки')"
+    },
+    {
+      "name": "focus-on-chosen-binding",
+      "probe": {
+        "name": "focusAfterChoice",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t !== undefined && t.focus_id === window.__mtData.d; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "no-error-dialog",
+      "probe": "document.querySelectorAll('.dialog-backdrop').length === 0",
+      "expect": true
+    }
+  ]
+}

@@ -20,7 +20,13 @@
  * Enter). Счётчиков-иконок 📝/📅/📎 у этих облачков нет.
  */
 
-import type { MentionHit, PublicationUsageItem, ThoughtRef } from '@etn/shared';
+import type {
+  BacklinkHit,
+  MentionHit,
+  PublicationUsageItem,
+  RecordHit,
+  ThoughtRef,
+} from '@etn/shared';
 
 import { focusFromUi, requireNetworkId } from '../app.js';
 // Облачка мыслей во вкладке «Связи» (эндпоинты и строки упоминаний) собирает
@@ -32,11 +38,18 @@ import { div, el, isConnectionLostError, renderHtml, span } from '../lib/dom.js'
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
+import { cachedHomeId, getHomeId } from '../lib/home.js';
+import { openRecordTarget, type RecordOpenActions } from '../lib/record-open.js';
+import {
+  mountRecordRowsBlock,
+  type RecordRowsBlock,
+} from '../lib/record-rows-block.js';
 import { toggleSelection } from '../selection/selection.js';
 import { onReconnected, store } from '../state.js';
 import { openPublicationInWorkspace } from '../screens/active-view.js';
 import {
   openLinkInEditor,
+  openRecordInEditor,
   openThoughtInEditor,
   registerTabContent,
   type EditorContext,
@@ -235,138 +248,68 @@ function mentionCloudActions(open: () => void, title: string): ThoughtCloudActio
   };
 }
 
-/** Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references. */
-function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
-  const networkId = requireNetworkId();
-  const box = div('mentions-body');
-  let retryStop: (() => void) | null = null;
-  let disposed = false;
-  lifecycle.onDispose(() => {
-    disposed = true;
-    retryStop?.();
-    retryStop = null;
-  });
-  void reload();
+/** Запрос группы списка «Упоминаний»: union владельческих строк и строк-записей. */
+type HitListLoader = (networkId: string) => Promise<BacklinkHit[]>;
 
-  async function reload(): Promise<void> {
-    box.replaceChildren(el('span', 'muted', t('linksTab.searchSsylokThought')));
-    let hits: MentionHit[];
-    try {
-      // Строки-записи (`kind: 'record'`) эта вкладка не рендерит — их вывод
-      // входит в задачу ae72e47e (B4); union `BacklinkHit` сужаем до
-      // владельческих строк, поведение вкладки прежнее (0.15.4, 6af1be50).
-      hits = (await etn.thoughts.backlinks(networkId, ctx.ownerId)).filter(
-        (hit): hit is MentionHit => hit.kind !== 'record',
-      );
-    } catch (err) {
-      if (disposed) return;
-      box.replaceChildren(operationError(err));
-      if (isConnectionLostError(err)) {
-        retryStop?.();
-        retryStop = onReconnected(networkId, () => void reload());
-      }
-      return;
-    }
-    retryStop?.();
-    retryStop = null;
-    if (disposed) return;
-    const visible = hits.filter((hit) => hit.active || store.state.showInactive);
-    box.replaceChildren();
-    if (visible.length === 0) {
-      box.append(el('p', 'muted', t('linksTab.niktoNotSsylaetsyaEtuThoughtVia')));
-      return;
-    }
-    // Тот же chip-паттерн, что и в buildMentionsBody — иконка/styling
-    // подтягиваются батчем через thoughts.resolve.
-    const thoughtIds = visible
-      .filter((hit) => hit.owner_type === 'thought')
-      .map((hit) => hit.owner_id);
-    let refs: ThoughtRef[] = [];
-    if (thoughtIds.length > 0) {
-      try {
-        refs = await etn.thoughts.resolve(networkId, thoughtIds.slice(0, RESOLVE_BATCH));
-      } catch {
-        refs = [];
-      }
-    }
-    const refById = new Map(refs.map((r) => [r.id, r]));
-    for (const hit of visible) {
-      const item = div('mention-item');
-      if (!hit.active) item.classList.add('dim');
-      const ref = hit.owner_type === 'thought' ? refById.get(hit.owner_id) : undefined;
-      // Same chip pattern as `chronicle.ts`/`history-bar.ts`: the thought's
-      // icon, colours and font come from the shared cloud factory. For a
-      // deleted thought (ref missing) we still show the hit's title with the
-      // default icon, so the row is never blank. Links have no per-link
-      // visual — the «🔗» glyph.
-      const lead =
-        hit.owner_type === 'thought'
-          ? createThoughtCloud(
-              ref !== undefined
-                ? { ...ref, id: hit.owner_id, title: hit.title }
-                : { id: hit.owner_id, title: hit.title },
-              {
-                profile: 'chip',
-                // Ширина — по строке списка упоминаний.
-                width: 'container',
-                actions: mentionCloudActions(() => void open(hit), hit.title),
-              },
-            )
-          : span('🔗');
-      const snippet = el('div', 'muted mention-snippet');
-      // Сниппет несёт сырой `[[#<id>]]` — подставляем имена мыслей: синхронно
-      // из кеша (id не мелькает на экране), затем дорезолвиваем батчем.
-      renderHtml(snippet, paintWikiIdsInSnippet(hit.snippet, networkId));
-      void resolveWikiIdsInSnippet(hit.snippet, networkId).then((resolved) => {
-        if (snippet.isConnected) renderHtml(snippet, resolved);
-      });
-      item.append(lead, snippet);
-      // Stage 3: the row has no per-indicator icons — Ctrl+hover shows the
-      // owner's (thought or link) permanent comment.
-      if (hit.owner_type === 'thought') markThoughtCommentPreview(item, hit.owner_id, hit.title);
-      else markCommentPreview(item, 'link', hit.owner_id, hit.title);
-      item.addEventListener('click', () => void open(hit));
-      box.append(item);
-    }
-  }
-
-  async function open(hit: MentionHit): Promise<void> {
-    if (hit.owner_type === 'thought') {
-      focusFromUi(hit.owner_id);
-      return;
-    }
-    try {
-      const link = await etn.links.get(networkId, hit.owner_id);
-      openLinkInEditor(link);
-    } catch {
-      // stale link
-    }
-  }
-
-  return box;
+/** Параметры тела группы-списка «Упоминаний». */
+interface HitListBodyOptions {
+  /** Запрос группы: backlinks либо text-mentions. */
+  load: HitListLoader;
+  /** Подпись «идёт запрос». */
+  loading: string;
+  /** Подпись пустой группы. */
+  empty: string;
 }
 
-/** Builds the mentions body (search on expansion; badge via etn:set-count). */
-function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
+/**
+ * Тело группы списка «Упоминаний» — ОДНА сборка для «Ссылок на мысль» и
+ * «Упоминаний в текстах» (0.15.4, задача ae72e47e, требования 012b2dc6 и
+ * ce121e09). Группу различает только запрос и подписи, поэтому правила вкладки
+ * («что видно», счётчик, подблок записей, клик) не разъезжаются между копиями.
+ *
+ * Состав тела: владельческие строки постоянных комментариев (прежнее поведение)
+ * и ПОДБЛОКОМ после них — строки-записи дневниковых (общая компонента
+ * `lib/record-rows-block.ts` над `lib/record-row.ts`, элемент 554e3129).
+ * Порядок строк-записей — серверный (`valid_from` по убыванию), без
+ * пересортировки; владельческая строка порождается только постоянным
+ * комментарием, дублирования владельца нет.
+ *
+ * Счётчик группы (`etn:set-count`) публикует ОБЕ группы: все найденные строки
+ * обоих видов с учётом `show_inactive` — прежний дефект «у «Ссылок на мысль»
+ * счётчика нет» (уточнение N8) закрыт здесь же.
+ */
+function buildHitListBody(
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+  options: HitListBodyOptions,
+): HTMLElement {
   const networkId = requireNetworkId();
   const box = div('mentions-body');
   let retryStop: (() => void) | null = null;
   let disposed = false;
+  /** Смонтированный подблок строк-записей: его обвязка живёт ровно с ним. */
+  let recordRows: RecordRowsBlock | null = null;
+
+  /** Снять подблок: перерисовка группы не оставляет наблюдателей на строках. */
+  function dropRecordRows(): void {
+    recordRows?.destroy();
+    recordRows = null;
+  }
+
   lifecycle.onDispose(() => {
     disposed = true;
     retryStop?.();
     retryStop = null;
+    dropRecordRows();
   });
   void reload();
 
   async function reload(): Promise<void> {
-    box.replaceChildren(el('span', 'muted', t('linksTab.searchUpominaniy')));
-    let hits: MentionHit[];
+    dropRecordRows();
+    box.replaceChildren(el('span', 'muted', options.loading));
+    let hits: BacklinkHit[];
     try {
-      // См. buildBacklinksBody: строки-записи появятся в задаче ae72e47e (B4).
-      hits = (await etn.thoughts.mentions(networkId, ctx.ownerId)).filter(
-        (hit): hit is MentionHit => hit.kind !== 'record',
-      );
+      hits = await options.load(networkId);
     } catch (err) {
       if (disposed) return;
       box.replaceChildren(operationError(err));
@@ -379,16 +322,41 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
     retryStop?.();
     retryStop = null;
     if (disposed) return;
-    // Inactive mentioning thoughts/links follow the `show_inactive` setting.
-    const visible = hits.filter((hit) => hit.active || store.state.showInactive);
-    // `…` → the resolved count in the group header (08-ui-spec.md §6.7). The
-    // fetch cannot resolve before the group machinery mounts this box (the
-    // mount runs on a microtask queued before the response arrives), so
-    // `closest` finds the header; after a collapse it is a harmless no-op.
-    box.closest('.group')?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${visible.length})` }));
+    // Union ответа (ADR db88d819): владельческие строки постоянных комментариев
+    // и строки-записи дневниковых. Записи упорядочил сервер.
+    const mentions = hits.filter((hit): hit is MentionHit => hit.kind !== 'record');
+    const recordHits = hits.filter((hit): hit is RecordHit => hit.kind === 'record');
+    // Inactive mentioning thoughts/links follow the `show_inactive` setting;
+    // строки-записи — по актуальности ПЕРВИЧНОЙ привязки из `targets`
+    // (fallback «привязка не найдена → строка видна», уточнение итерации 8).
+    const visible = mentions.filter((hit) => hit.active || store.state.showInactive);
+    const mounted =
+      recordHits.length > 0
+        ? mountRecordRowsBlock({
+            networkId,
+            hits: recordHits,
+            homeId: await homeIdForRows(networkId),
+            showInactive: store.state.showInactive,
+            showTrash: store.state.showTrash,
+            onOpen: (target, model) => {
+              void openRecordTarget(target, model.commentId, recordOpenActions(networkId));
+            },
+          })
+        : null;
+    if (disposed) {
+      mounted?.destroy();
+      return;
+    }
+    recordRows = mounted;
+    // `…` → the resolved count in the group header (08-ui-spec.md §6.7): all
+    // found rows of BOTH kinds under `show_inactive` (DoD задачи ae72e47e).
+    const found = visible.length + (mounted?.visibleCount ?? 0);
+    box.closest('.group')?.dispatchEvent(
+      new CustomEvent('etn:set-count', { detail: `(${found})` }),
+    );
     box.replaceChildren();
-    if (visible.length === 0) {
-      box.append(el('p', 'muted', t('linksTab.titleNigdeNotUpominaetsya')));
+    if (found === 0) {
+      box.append(el('p', 'muted', options.empty));
       return;
     }
     // The mentions DTO (§13) carries only the owner/title/snippet/active; the
@@ -436,7 +404,7 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
       const snippet = el('div', 'muted mention-snippet');
       // Сниппет несёт сырой `[[#<id>]]` — подставляем имена мыслей: синхронно
       // из кеша (id не мелькает на экране), затем дорезолвиваем батчем — тем
-      // же механизмом, что группа «Ссылки на мысль» выше (ошибка 2a8181f4).
+      // же конвейером, что у прочих строк результатов (ошибка 2a8181f4).
       renderHtml(snippet, paintWikiIdsInSnippet(hit.snippet, networkId));
       void resolveWikiIdsInSnippet(hit.snippet, networkId).then((resolved) => {
         if (snippet.isConnected) renderHtml(snippet, resolved);
@@ -448,7 +416,10 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
       else markCommentPreview(item, 'link', hit.owner_id, hit.title);
       box.append(item);
     }
+    // Строки-записи — ПОДБЛОКОМ после владельческих строк (требование 012b2dc6).
+    if (mounted !== null && mounted.visibleCount > 0) box.append(mounted.el);
   }
+
   /** Opens the mentioning entity (thought → focus, link → editor). */
   async function open(hit: MentionHit): Promise<void> {
     if (hit.owner_type === 'thought') {
@@ -464,6 +435,60 @@ function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTM
   }
 
   return box;
+}
+
+/**
+ * Действия открытия цели строки-записи для вкладки — тот же вход редактора, что
+ * у поиска (`lib/record-open.ts`, требование ce121e09): запись открывается на
+ * своей привязке с фокусом холста, владелец-связь — редактор связи без записи.
+ * Отказ открытия связи на вкладке тихий: прежние строки вкладки тоже молчали, а
+ * stale-цель — не событие (сценарий 20d5a3cf).
+ */
+function recordOpenActions(networkId: string): RecordOpenActions {
+  return {
+    networkId,
+    getLink: (netId, linkId) => etn.links.get(netId, linkId),
+    openLinkInEditor,
+    openRecordInEditor,
+    focusFromUi,
+  };
+}
+
+/**
+ * HOME сети для чипов строк-записей (требование c81964c7): служебная привязка не
+ * показывается. Сбой разрешения группу не рушит — берём уже разрешённый HOME,
+ * иначе фильтр HOME отключается (строки и чипы остаются видны).
+ */
+async function homeIdForRows(networkId: string): Promise<string | null> {
+  try {
+    return await getHomeId(networkId);
+  } catch {
+    return cachedHomeId(networkId);
+  }
+}
+
+/**
+ * Builds the «Ссылки на мысль» body — explicit `[[#<id>]]` references плюс
+ * строки-записи дневниковых, сославшихся на мысль явной ссылкой.
+ */
+function buildBacklinksBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
+  return buildHitListBody(ctx, lifecycle, {
+    load: (networkId) => etn.thoughts.backlinks(networkId, ctx.ownerId),
+    loading: t('linksTab.searchSsylokThought'),
+    empty: t('linksTab.niktoNotSsylaetsyaEtuThoughtVia'),
+  });
+}
+
+/**
+ * Builds the «Упоминания в текстах» body — поиск по имени/синонимам плюс
+ * строки-записи дневниковых, упомянувших мысль в теле (счётчик — группа).
+ */
+function buildMentionsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLElement {
+  return buildHitListBody(ctx, lifecycle, {
+    load: (networkId) => etn.thoughts.mentions(networkId, ctx.ownerId),
+    loading: t('linksTab.searchUpominaniy'),
+    empty: t('linksTab.titleNigdeNotUpominaetsya'),
+  });
 }
 
 /**

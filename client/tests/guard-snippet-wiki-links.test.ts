@@ -8,8 +8,9 @@
  * `paintWikiIdsInSnippet` (синхронно, из кеша — id не мелькает на экране) и
  * `resolveWikiIdsInSnippet` (батч-дорезолв), как это делает группа «Ссылки на
  * мысль» (`editor/links-tab.ts`). Поверхности, рисовавшие `snippet` как есть
- * (`search/search.ts`, `lib/record-search.ts`, группа «Упоминания»
- * `editor/links-tab.ts` `buildMentionsBody`), показывали сырой `[[#<uuid>]]`.
+ * (`search/search.ts`, `lib/record-search.ts`, группы «Упоминания»
+ * `editor/links-tab.ts`), показывали сырой `[[#<uuid>]]`; обе группы вкладки
+ * рисует общая сборка `buildHitListBody` (0.15.4, задача ae72e47e).
  *
  * Сторож КЛАССОВЫЙ: сканирует все `renderHtml(...)` в рендерере и требует,
  * чтобы каждый вызов с аргументом-сниппетом нёс резолвер, — будущая
@@ -113,11 +114,10 @@ describe('сторож: резолв ID-форм в серверных снип�
     assert.match(src, /resolveWikiIdsInSnippet\(/, 'батч-дорезолв сниппета');
   });
 
-  it('editor/links-tab.ts buildMentionsBody резолвит сниппет группы «Упоминания»', () => {
+  it('editor/links-tab.ts buildHitListBody резолвит сниппет обеих групп «Упоминаний»', () => {
     const src = readFileSync(resolve(RENDERER, 'editor', 'links-tab.ts'), 'utf8');
-    const body =
-      /function buildMentionsBody\([\s\S]*?\n\}/.exec(src)?.[0] ?? '';
-    assert.ok(body !== '', 'тело buildMentionsBody найдено');
+    const body = /function buildHitListBody\([\s\S]*?\n\}/.exec(src)?.[0] ?? '';
+    assert.ok(body !== '', 'тело buildHitListBody найдено');
     assert.match(
       body.replace(/\/\/[^\n]*/g, ''),
       /renderHtml\(\s*snippet\s*,\s*paintWikiIdsInSnippet\(/,
