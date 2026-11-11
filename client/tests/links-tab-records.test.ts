@@ -132,7 +132,7 @@ describe('вкладка «Упоминания»: строки-записи (з
     );
   });
 
-  it('клик по строке-записи идёт общим решением (запись + фокус, связь без записи)', () => {
+  it('клик по строке-записи идёт общим решением (запись, фокус только с карты)', () => {
     const code = tabCode();
     const shared = bodyOf(code, 'buildHitListBody');
     const actions = bodyOf(code, 'recordOpenActions');
@@ -145,6 +145,10 @@ describe('вкладка «Упоминания»: строки-записи (з
     assert.match(actions, /openRecordInEditor,/, 'вход в редактор записи подключён');
     assert.match(actions, /openLinkInEditor,/, 'владелец-связь открывает редактор связи');
     assert.match(actions, /focusFromUi,/, 'фокус холста на открываемой привязке');
+    // Ревизия 2026-11-11 (задача 7c380088): фокус — только с активного вида
+    // «Карта мыслей»; предикат общий (`isMapViewActive`), своей копии на вкладке
+    // нет.
+    assert.match(actions, /isMapActive: isMapViewActive,/, 'предикат активного вида карты');
   });
 
   it('группа «Публикации» не тронута строками-записями', () => {

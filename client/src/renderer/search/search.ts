@@ -63,14 +63,15 @@ import { createThoughtCloud, type ThoughtCloudActions } from '../lib/thought-clo
 // а type-only импорт стирается при сборке и цикла не создаёт.
 import type { ThoughtMenuPlace } from '../canvas/context-menu.js';
 import { openLinkInEditor, openRecordInEditor } from '../editor/editor.js';
-import {
-  paintWikiIdsInSnippet,
-  resolveWikiIdsInSnippet,
-} from '../editor/wiki-link-resolver.js';
+import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from '../editor/wiki-link-resolver.js';
 import { resolveFirstDayOfWeek } from '../lib/dates.js';
 import { getHomeId } from '../lib/home.js';
 import { openRecordTarget as openRecordTargetIn } from '../lib/record-open.js';
-import { createRecordRow, recordRowFromChronoHit, type RecordRowHandle } from '../lib/record-row.js';
+import {
+  createRecordRow,
+  recordRowFromChronoHit,
+  type RecordRowHandle,
+} from '../lib/record-row.js';
 import type { RecordTargetRef } from '../lib/record-targets.js';
 import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
@@ -118,7 +119,7 @@ import {
   type Thought,
   type TokenIssue,
 } from '@etn/shared';
-import { store } from '../state.js';
+import { isMapViewActive, store } from '../state.js';
 import { requireNetworkId } from '../app.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
@@ -418,21 +419,23 @@ export function mountSearch(next: SearchChrome): () => void {
     if (host.classList.contains('hidden')) return;
     const target = event.target;
     if (!(target instanceof Node)) return;
-    if (!searchPanelClosesOnTap({
-      // Панель и её поле поиска (поле живёт в строке L18, вне хоста панели).
-      insidePanel: host.contains(target) || input.contains(target),
-      insideSuggest: isInsideSuggestDropdown(target),
-      insideDialog: isInsideDialog(target),
-      // Списки выбора редактора отбора (и прочие панели `lib/ui`) порталятся в
-      // `document.body` — клик по ним не закрывает строку поиска (ошибка
-      // 50d9bf4e п. B1).
-      insideFloating: isInsidePopover(target),
-      // Строка меню (`lib/menu.ts`): подменю «Добавить отбор…» порталится в
-      // `document.body`. Настоящий клик по нему (`pointerdown`) обязан не
-      // закрывать панель — иначе команда применяется «вслепую», а условия и
-      // результаты прячутся вместе с панелью (задача 4b1cc3d4, ошибка ddff7ca7).
-      insideMenu: isInsideMenu(target),
-    })) {
+    if (
+      !searchPanelClosesOnTap({
+        // Панель и её поле поиска (поле живёт в строке L18, вне хоста панели).
+        insidePanel: host.contains(target) || input.contains(target),
+        insideSuggest: isInsideSuggestDropdown(target),
+        insideDialog: isInsideDialog(target),
+        // Списки выбора редактора отбора (и прочие панели `lib/ui`) порталятся в
+        // `document.body` — клик по ним не закрывает строку поиска (ошибка
+        // 50d9bf4e п. B1).
+        insideFloating: isInsidePopover(target),
+        // Строка меню (`lib/menu.ts`): подменю «Добавить отбор…» порталится в
+        // `document.body`. Настоящий клик по нему (`pointerdown`) обязан не
+        // закрывать панель — иначе команда применяется «вслепую», а условия и
+        // результаты прячутся вместе с панелью (задача 4b1cc3d4, ошибка ddff7ca7).
+        insideMenu: isInsideMenu(target),
+      })
+    ) {
       return;
     }
     panelClosePending = true;
@@ -542,9 +545,7 @@ function applySettingsPlacement(): void {
 async function loadSettingsOpen(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const raw = await etn.ui
-    .getState(networkId, UI_STATE_KEY.SEARCH_SETTINGS_OPEN)
-    .catch(() => null);
+  const raw = await etn.ui.getState(networkId, UI_STATE_KEY.SEARCH_SETTINGS_OPEN).catch(() => null);
   if (chrome === null) return;
   setSettingsOpen(isSearchSettingsOpenStored(raw));
 }
@@ -1443,6 +1444,10 @@ async function openRecordTarget(target: RecordTargetRef, commentId: string): Pro
   await openRecordTargetIn(target, commentId, {
     ...searchHitPort(),
     networkId: requireNetworkId(),
+    // Фокус переводится только с активного вида «Карта мыслей» (ревизия
+    // 2026-11-11, требование ce121e09 v5): с другого экрана клик по записи
+    // открывает её в редакторе и не меняет мысль в фокусе карты.
+    isMapActive: isMapViewActive,
     onFailure: reportHitFailure,
   });
 }
@@ -1593,9 +1598,7 @@ function openQuickCommandsMenu(event: MouseEvent): void {
  * добавляется: значение-токен `$thought` осталось бы неразрешимым, и поиск шёл
  * бы с диагностикой `unresolved` вместо результата (задача 4b1cc3d4).
  */
-function runQuickCommand(
-  command: 'parentInFocus' | 'onlyActive' | 'onlyNotTrashed',
-): void {
+function runQuickCommand(command: 'parentInFocus' | 'onlyActive' | 'onlyNotTrashed'): void {
   if (command === 'parentInFocus' && (store.state.focus?.focused.id ?? null) === null) {
     notice(t('search.focusRequired'));
     return;

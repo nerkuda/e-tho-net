@@ -1,6 +1,6 @@
 {
   "name": "mentions-records-ae72e47e",
-  "description": "Ключевой сценарий задачи ae72e47e (0.15.4, тех.проект 43329662, требования 012b2dc6 и ce121e09): строки-записи на вкладке «Упоминания». Проверяется: (1) записи попадают в ОБЕ группы — «Упоминания в текстах» (упоминание имени мысли) и «Ссылки на мысль» (явная ссылка [[#id]]); (2) группа «Публикации» не затронута (тела её групп не монтируются, пока группа свёрнута); (3) счётчик группы публикуют ОБЕ группы и считает строки обоих видов: «Ссылки на мысль» = 22 (21 запись со ссылкой + запись с выбором), «Упоминания в текстах» = 1 (до фикса у «Ссылок на мысль» счётчика не было вообще — уточнение N8); (4) клиентский потолок: 20 строк + подпись «Показано 20 из 22» ТОЛЬКО у группы «Ссылки на мысль»; (5) сниппет проходит общий конвейер [[#id]] → имя мысли: в строке нет сырого [[# и uuid, имя мысли видно; (6) строки-записи идут ПОДБЛОКОМ после владельческих строк и несут вид строки списка (.mention-item); (7) клик по строке-записи «Упоминаний в текстах» открывает редактор её привязки с активной вкладкой «Дневник», выбранной записью и ФОКУСОМ холста на привязке; (8) клик по строке с ДВУМЯ видимыми привязками открывает список выбора, ↓/Enter ведут в ОТКРЫВАЕМУЮ привязку (не к владельцу записи) — редактор с записью и фокус на выбранной. Данные засеиваются шагом eval через window.etn: мысли «Владелец Б», «Упоминание В», «Выбор Г»; запись-упоминание на В; 21 запись со ссылкой на текущую мысль на Б; последняя — запись с двумя видимыми привязками (Б и Г) и HOME (скрыт). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ae72e47e-mentions-records.scenario.json --seed-name 'ae72e47e mentions records' --seed-title 'Проба ae72e47e'. На дофиксовой сборке (23743811) вкладка пропускала строки-записи (фильтр kind !== 'record'): групповая выдача пуста уже на шаге «mentions-record-row» — сценарий красный. Без скриншотов: доказательства — DOM-пробы строк, счётчиков, подписи, заголовка записи и focus_id вкладки.",
+  "description": "Ключевой сценарий задачи ae72e47e (0.15.4, тех.проект 43329662, требования 012b2dc6 и ce121e09): строки-записи на вкладке «Упоминания». Проверяется: (1) записи попадают в ОБЕ группы — «Упоминания в текстах» (упоминание имени мысли) и «Ссылки на мысль» (явная ссылка [[#id]]); (2) группа «Публикации» не затронута (тела её групп не монтируются, пока группа свёрнута); (3) счётчик группы публикуют ОБЕ группы и считает строки обоих видов: «Ссылки на мысль» = 22 (21 запись со ссылкой + запись с выбором), «Упоминания в текстах» = 1 (до фикса у «Ссылок на мысль» счётчика не было вообще — уточнение N8); (4) клиентский потолок: 20 строк + подпись «Показано 20 из 22» ТОЛЬКО у группы «Ссылки на мысль»; (5) сниппет проходит общий конвейер [[#id]] → имя мысли: в строке нет сырого [[# и uuid, имя мысли видно; (6) строки-записи идут ПОДБЛОКОМ после владельческих строк и несут вид строки списка (.mention-item); (7) клик по строке-записи «Упоминаний в текстах» открывает редактор её привязки с активной вкладкой «Дневник», выбранной записью и ФОКУСОМ холста на привязке; (8) клик по строке с ДВУМЯ видимыми привязками открывает список выбора, ↓/Enter ведут в ОТКРЫВАЕМУЮ привязку (не к владельцу записи) — редактор с записью и фокус на выбранной. Данные засеиваются шагом eval через window.etn: мысли «Владелец Б», «Упоминание В», «Выбор Г»; запись-упоминание на В; 21 запись со ссылкой на текущую мысль на Б; последняя — запись с двумя видимыми привязками (Б и Г) и HOME (скрыт). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ae72e47e-mentions-records.scenario.json --seed-name 'ae72e47e mentions records' --seed-title 'Проба ae72e47e'. На дофиксовой сборке (23743811) вкладка пропускала строки-записи (фильтр kind !== 'record'): групповая выдача пуста уже на шаге «mentions-record-row» — сценарий красный. B6 (7c380088): в конце проверяется НЕ-карта — вид переключается на «Дневник», вкладка «Упоминания» открывается заново, клик по строке-записи «Ссылок на мысль» открывает её владельца с выбранной записью, focus_id остаётся на выбранной ранее привязке Г (фокус не переводится), вид на карту не переключается; без фикса шаг focus-unchanged-nonmap краснеет. Без скриншотов: доказательства — DOM-пробы строк, счётчиков, подписи, заголовка записи и focus_id вкладки.",
   "timeout": 300000,
   "steps": [
     {
@@ -208,6 +208,130 @@
         "expression": "(() => { const row = window.__mt.row(0, 'запись 21 со ссылкой'); if (row === null) return 'no-row'; return [...row.querySelectorAll('.record-row-chips .chron-chip')].some((c) => (c.textContent || '').trim() === 'HOME'); })()"
       },
       "expect": false
+    },
+    {
+      "name": "focus-before-nonmap",
+      "probe": {
+        "name": "focusBeforeNonMap",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      }
+    },
+    {
+      "name": "switch-to-diary-nonmap",
+      "click": ".view-tab[title=\"Дневник\"], .view-tab[title=\"Diary\"]"
+    },
+    {
+      "name": "diary-view-active-nonmap",
+      "timeout": 20000,
+      "waitFor": "(() => { const host = document.querySelector('.chronicle.view-host'); const row = document.querySelector('.search-row'); return host !== null && !host.classList.contains('hidden') && row !== null && row.classList.contains('hidden'); })()"
+    },
+    {
+      "name": "open-mentions-tab-nonmap",
+      "expect": "ok",
+      "probe": {
+        "name": "openMentionsTabNonMap",
+        "expression": "(() => { const tabs = [...document.querySelectorAll('.editor-tab')]; const tab = tabs[3]; if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "mentions-tab-visible-nonmap",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.links-tab') !== null"
+    },
+    {
+      "name": "expand-backlinks-nonmap",
+      "expect": "ok",
+      "probe": {
+        "name": "expandBacklinksNonMap",
+        "expression": "window.__mt.expand(0)"
+      }
+    },
+    {
+      "name": "backlinks-rows-nonmap",
+      "timeout": 60000,
+      "waitFor": "window.__mt.rows(0).length === 20"
+    },
+    {
+      "name": "click-row-nonmap",
+      "expect": "ok",
+      "probe": {
+        "name": "clickRowNonMap",
+        "expression": "window.__mt.clickRow(0, 'запись 21 со ссылкой')"
+      }
+    },
+    {
+      "name": "editor-shows-row-owner-nonmap",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Владелец Б ae72e47e'"
+    },
+    {
+      "name": "record-selected-nonmap",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('запись 21 со ссылкой')"
+    },
+    {
+      "name": "focus-unchanged-nonmap",
+      "probe": {
+        "name": "focusUnchangedNonMap",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      },
+      "expectFrom": "focus-before-nonmap"
+    },
+    {
+      "name": "still-diary-view-nonmap",
+      "probe": {
+        "name": "stillDiaryNonMap",
+        "expression": "(() => { const tabs = [...document.querySelectorAll('button.view-tab')]; const diary = tabs.find((b) => /дневник|diary/i.test(b.title)); const map = tabs.find((b) => /карта мыслей|map/i.test(b.title)); return diary !== undefined && diary.classList.contains('ui-btn--active') && map !== undefined && !map.classList.contains('ui-btn--active'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "back-to-map-nonmap",
+      "click": ".view-tab[title=\"Карта мыслей\"], .view-tab[title=\"Thought map\"]"
+    },
+    {
+      "name": "map-view-active-again",
+      "timeout": 20000,
+      "waitFor": "(() => { const host = document.querySelector('.canvas.view-host'); return host !== null && !host.classList.contains('hidden'); })()"
+    },
+    {
+      "name": "reopen-seed-thought",
+      "expect": "ok",
+      "probe": {
+        "name": "reopenSeedThought",
+        "expression": "(() => { const el = [...document.querySelectorAll('.cloud[data-id=\"{{thoughtId}}\"]')].find((c) => c.getBoundingClientRect().width > 0); if (el === undefined) return 'no-cloud'; el.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "seed-thought-in-editor-again",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "open-mentions-tab-again",
+      "expect": "ok",
+      "probe": {
+        "name": "openMentionsTabAgain",
+        "expression": "(() => { const tabs = [...document.querySelectorAll('.editor-tab')]; const tab = tabs[3]; if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "mentions-tab-visible-again",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.links-tab') !== null"
+    },
+    {
+      "name": "expand-backlinks-again",
+      "expect": "ok",
+      "probe": {
+        "name": "expandBacklinksAgain",
+        "expression": "window.__mt.expand(0)"
+      }
+    },
+    {
+      "name": "backlinks-rows-again",
+      "timeout": 60000,
+      "waitFor": "window.__mt.rows(0).length === 20"
     },
     {
       "name": "click-row-with-choice",

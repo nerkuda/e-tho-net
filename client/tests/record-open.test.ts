@@ -8,6 +8,9 @@
  *  - мысль: сначала `openRecordInEditor` (вкладка «Дневник» + строка записи),
  *    затем `focusFromUi` на ОТКРЫВАЕМУЮ привязку — force-ветка входа за фокусом
  *    не следует, поэтому фокус ставит вызывающая сторона;
+ *  - фокус переводится ТОЛЬКО с активного вида «Карта мыслей» (ревизия
+ *    2026-11-11, задача 7c380088): вне карты запись открывается, а мысль в
+ *    фокусе карты не меняется;
  *  - связь: `getLink` → `openLinkInEditor`, без записи и без фокуса;
  *  - stale-цель: отказ уходит в `onFailure` (тишина/тост решает потребитель),
  *    редактор связи при этом не открывается; без `onFailure` отказ молчит.
@@ -57,6 +60,7 @@ function actions(overrides: Partial<RecordOpenActions> = {}): {
       calls.log.push('openRecordInEditor');
       calls.opened.push({ thoughtId, commentId });
     },
+    isMapActive: () => true,
     focusFromUi: async (thoughtId) => {
       calls.log.push(`focusFromUi:${thoughtId}`);
       calls.focused.push(thoughtId);
@@ -67,7 +71,7 @@ function actions(overrides: Partial<RecordOpenActions> = {}): {
 }
 
 describe('общее открытие цели строки-записи (требование ce121e09)', () => {
-  it('мысль: запись открывается в редакторе, ЗАТЕМ фокус на открываемую привязку', async () => {
+  it('мысль на карте: запись открывается в редакторе, ЗАТЕМ фокус на открываемую привязку', async () => {
     const { calls, port } = actions();
 
     await openRecordTarget({ kind: 'thought', id: THOUGHT }, COMMENT, port);
@@ -83,6 +87,24 @@ describe('общее открытие цели строки-записи (тре
       'запись адресуется привязке',
     );
     assert.deepEqual(calls.focused, [THOUGHT], 'адресат фокуса — открываемая привязка');
+  });
+
+  it('мысль ВНЕ карты: запись открывается, фокус холста не трогается', async () => {
+    const { calls, port } = actions({ isMapActive: () => false });
+
+    await openRecordTarget({ kind: 'thought', id: THOUGHT }, COMMENT, port);
+
+    assert.deepEqual(
+      calls.log,
+      ['openRecordInEditor'],
+      'вне карты только вход редактора — фокуса нет',
+    );
+    assert.deepEqual(
+      calls.opened,
+      [{ thoughtId: THOUGHT, commentId: COMMENT }],
+      'запись всё равно открывается на привязке',
+    );
+    assert.deepEqual(calls.focused, [], 'мысль в фокусе карты осталась прежней');
   });
 
   it('связь: редактор связи БЕЗ записи, фокус не трогается', async () => {

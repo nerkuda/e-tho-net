@@ -1,6 +1,6 @@
 {
   "name": "record-row-search-33ed043c",
-  "description": "Ключевой сценарий задачи 33ed043c (0.15.4, тех.проект 43329662): строка дневниковой записи в группе «Найдено в хронологии» — общая компонента lib/record-row.ts. Проверяется: (1) в группе три строки-записи с периодом, чипами привязок и сниппетом; (2) HOME среди чипов НЕ показывается (требование c81964c7); (3) сниппет проходит общий конвейер [[#id]] → имя мысли (ошибка 2a8181f4); (4) клик по строке с ДВУМЯ видимыми привязками открывает список выбора (ARIA listbox/option), ↓ двигает подсветку, Enter выбирает пункт — открывается редактор ОТКРЫВАЕМОЙ привязки (B) с активной вкладкой «Дневник» и выбранной записью, фокус холста — на B, а не на владельце записи (требование ce121e09); (5) клик по чипу ведёт в конкретную привязку (A); (6) клик по строке с ОДНОЙ видимой привязкой — прямой переход (владелец C); (7) клик по строке, где видна только HOME, ведёт к владельцу записи (HOME). Данные засеиваются шагом eval через window.etn: мысли B и C, три записи (A + HOME + B; C + HOME; только HOME) с маркером zzchrono33 в теле. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.33ed043c-record-row.scenario.json. Без скриншотов: доказательства — DOM-пробы строки, меню, заголовка записи и focus_id вкладки. До фикса строка хроно-хита показывала только период и сниппет (без .record-row и чипов), клик ничего не открывал — сценарий красный.",
+  "description": "Ключевой сценарий задачи 33ed043c (0.15.4, тех.проект 43329662): строка дневниковой записи в группе «Найдено в хронологии» — общая компонента lib/record-row.ts. Проверяется: (1) в группе три строки-записи с периодом, чипами привязок и сниппетом; (2) HOME среди чипов НЕ показывается (требование c81964c7); (3) сниппет проходит общий конвейер [[#id]] → имя мысли (ошибка 2a8181f4); (4) клик по строке с ДВУМЯ видимыми привязками открывает список выбора (ARIA listbox/option), ↓ двигает подсветку, Enter выбирает пункт — открывается редактор ОТКРЫВАЕМОЙ привязки (B) с активной вкладкой «Дневник» и выбранной записью, фокус холста — на B, а не на владельце записи (требование ce121e09); (5) клик по чипу ведёт в конкретную привязку (A); (6) клик по строке с ОДНОЙ видимой привязкой — прямой переход (владелец C); (7) клик по строке, где видна только HOME, ведёт к владельцу записи (HOME). Данные засеиваются шагом eval через window.etn: мысли B и C, три записи (A + HOME + B; C + HOME; только HOME) с маркером zzchrono33 в теле. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.33ed043c-record-row.scenario.json. Без скриншотов: доказательства — DOM-пробы строки, меню, заголовка записи и focus_id вкладки. До фикса строка хроно-хита показывала только период и сниппет (без .record-row и чипов), клик ничего не открывал — сценарий красный. B6 (7c380088): сценарий завершается проверкой НЕ-карты — вид переключается на «Дневник», клик по строке-записи открывает её привязку в редакторе с выбранной записью, focus_id остаётся прежним (HOME из шага focus-on-record-owner-home), вид на карту не переключается; без фикса (фокус безусловный) шаг focus-unchanged-outside-map краснеет.",
   "timeout": 240000,
   "steps": [
     {
@@ -165,10 +165,7 @@
         "name": "rowChipTitles",
         "expression": "(() => { const row = window.__rrRow('двумя привязками'); if (row === null) return []; return [...row.querySelectorAll('.record-row-chips .chron-chip.thought .prc-title')].map((e) => (e.textContent || '').trim()).sort(); })()"
       },
-      "expect": [
-        "Привязка Б 33ed043c",
-        "{{seedTitle}}"
-      ]
+      "expect": ["Привязка Б 33ed043c", "{{seedTitle}}"]
     },
     {
       "name": "two-chip-row-home-hidden",
@@ -384,6 +381,49 @@
         "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
       },
       "expect": "{{homeId}}"
+    },
+    {
+      "name": "switch-to-diary-nonmap",
+      "click": ".view-tab[title=\"Дневник\"], .view-tab[title=\"Diary\"]"
+    },
+    {
+      "name": "diary-view-active",
+      "timeout": 20000,
+      "waitFor": "(() => { const host = document.querySelector('.chronicle.view-host'); const row = document.querySelector('.search-row'); return host !== null && !host.classList.contains('hidden') && row !== null && row.classList.contains('hidden'); })()"
+    },
+    {
+      "name": "click-row-outside-map",
+      "expect": "ok",
+      "probe": {
+        "name": "clickRowOutsideMap",
+        "expression": "window.__rrClickRow('с одной привязкой')"
+      }
+    },
+    {
+      "name": "editor-shows-owner-c-outside-map",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Владелец В 33ed043c'"
+    },
+    {
+      "name": "record-selected-outside-map",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('Запись с одной привязкой')"
+    },
+    {
+      "name": "focus-unchanged-outside-map",
+      "probe": {
+        "name": "focusOutsideMap",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      },
+      "expectFrom": "focus-on-record-owner-home"
+    },
+    {
+      "name": "still-diary-view-outside-map",
+      "probe": {
+        "name": "stillDiaryOutsideMap",
+        "expression": "(() => { const tabs = [...document.querySelectorAll('button.view-tab')]; const diary = tabs.find((b) => /дневник|diary/i.test(b.title)); const map = tabs.find((b) => /карта мыслей|map/i.test(b.title)); return diary !== undefined && diary.classList.contains('ui-btn--active') && map !== undefined && !map.classList.contains('ui-btn--active'); })()"
+      },
+      "expect": true
     },
     {
       "name": "no-error-dialog",

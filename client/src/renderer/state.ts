@@ -383,6 +383,17 @@ class Store {
 export const store = new Store();
 
 /**
+ * Активен ли вид «Карта мыслей» — условие перевода фокуса холста при клике по
+ * строке-дневниковой записи (ревизия 2026-11-11, требование ce121e09 v5,
+ * задача 7c380088). С другого экрана клик только открывает запись в редакторе:
+ * мысль в фокусе карты не меняется. Единственная реализация предиката — им
+ * пользуются поиск и вкладка «Упоминания», чтобы правило не разъехалось.
+ */
+export function isMapViewActive(): boolean {
+  return store.state.activeView === 'map';
+}
+
+/**
  * Effective realtime status of the ACTIVE network (defect de34b35b). Statuses
  * are per network; switching a tab must show that network's status, not the
  * last event's. Falls back to the flat `rtStatus` for network-less states.

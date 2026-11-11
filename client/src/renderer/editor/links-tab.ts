@@ -40,12 +40,9 @@ import { etn } from '../lib/etn.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../lib/hover-preview.js';
 import { cachedHomeId, getHomeId } from '../lib/home.js';
 import { openRecordTarget, type RecordOpenActions } from '../lib/record-open.js';
-import {
-  mountRecordRowsBlock,
-  type RecordRowsBlock,
-} from '../lib/record-rows-block.js';
+import { mountRecordRowsBlock, type RecordRowsBlock } from '../lib/record-rows-block.js';
 import { toggleSelection } from '../selection/selection.js';
-import { onReconnected, store } from '../state.js';
+import { isMapViewActive, onReconnected, store } from '../state.js';
 import { openPublicationInWorkspace } from '../screens/active-view.js';
 import {
   openLinkInEditor,
@@ -79,35 +76,29 @@ function buildLinksTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEle
   // Три плоские группы на верхнем уровне вкладки — больше нет родительской
   // группы-обёртки и нет отдельной группы «Локальный граф» (мини-граф
   // переехал на собственную вкладку «Граф»).
-  const backlinks = groupSection(
-    {
-      id: 'links.backlinks',
-      title: t('linksTab.title.linkRefThought'),
-      lazyCount: true,
-      defaultCollapsed: true,
-      buildBody: () => buildBacklinksBody(ctx, lifecycle),
-    },
-  );
-  const textMentions = groupSection(
-    {
-      id: 'links.text-mentions',
-      title: t('linksTab.title.mentionsTekstah'),
-      lazyCount: true,
-      defaultCollapsed: true,
-      buildBody: () => buildMentionsBody(ctx, lifecycle),
-    },
-  );
+  const backlinks = groupSection({
+    id: 'links.backlinks',
+    title: t('linksTab.title.linkRefThought'),
+    lazyCount: true,
+    defaultCollapsed: true,
+    buildBody: () => buildBacklinksBody(ctx, lifecycle),
+  });
+  const textMentions = groupSection({
+    id: 'links.text-mentions',
+    title: t('linksTab.title.mentionsTekstah'),
+    lazyCount: true,
+    defaultCollapsed: true,
+    buildBody: () => buildMentionsBody(ctx, lifecycle),
+  });
   // Группа «Публикации» (0.11.1, задача 3275fd8d, элемент интерфейса 928fb3fc):
   // ленивая загрузка с прелоадером, роли с хлебными крошками разделов.
-  const publications = groupSection(
-    {
-      id: 'links.publications',
-      title: t('publications.mentions.title'),
-      lazyCount: true,
-      defaultCollapsed: true,
-      buildBody: () => buildPublicationsBody(ctx, lifecycle),
-    },
-  );
+  const publications = groupSection({
+    id: 'links.publications',
+    title: t('publications.mentions.title'),
+    lazyCount: true,
+    defaultCollapsed: true,
+    buildBody: () => buildPublicationsBody(ctx, lifecycle),
+  });
   // Раскладка групп (приёмка 0.8.1): сплиттеры и фиксированные высоты
   // действуют, только когда ВСЕ группы развёрнуты; каждая свёрнутая группа
   // схлопывается до заголовка, а единственная/частично развёрнутые
@@ -177,9 +168,7 @@ function buildLinkThoughtsTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): 
     const source = byId.get(link.source_id);
     const target = byId.get(link.target_id);
     if (source === undefined && target === undefined) {
-      root.replaceChildren(
-        el('p', 'muted', t('linksTab.koncyLinkNotFoundPossibleThought')),
-      );
+      root.replaceChildren(el('p', 'muted', t('linksTab.koncyLinkNotFoundPossibleThought')));
       return;
     }
     root.replaceChildren();
@@ -351,9 +340,9 @@ function buildHitListBody(
     // `…` → the resolved count in the group header (08-ui-spec.md §6.7): all
     // found rows of BOTH kinds under `show_inactive` (DoD задачи ae72e47e).
     const found = visible.length + (mounted?.visibleCount ?? 0);
-    box.closest('.group')?.dispatchEvent(
-      new CustomEvent('etn:set-count', { detail: `(${found})` }),
-    );
+    box
+      .closest('.group')
+      ?.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${found})` }));
     box.replaceChildren();
     if (found === 0) {
       box.append(el('p', 'muted', options.empty));
@@ -440,7 +429,9 @@ function buildHitListBody(
 /**
  * Действия открытия цели строки-записи для вкладки — тот же вход редактора, что
  * у поиска (`lib/record-open.ts`, требование ce121e09): запись открывается на
- * своей привязке с фокусом холста, владелец-связь — редактор связи без записи.
+ * своей привязке, владелец-связь — редактор связи без записи. Фокус холста
+ * переводится только с активного вида «Карта мыслей»: со вкладки редактора клик
+ * по записи его не двигает (ревизия 2026-11-11, задача 7c380088).
  * Отказ открытия связи на вкладке тихий: прежние строки вкладки тоже молчали, а
  * stale-цель — не событие (сценарий 20d5a3cf).
  */
@@ -450,6 +441,10 @@ function recordOpenActions(networkId: string): RecordOpenActions {
     getLink: (netId, linkId) => etn.links.get(netId, linkId),
     openLinkInEditor,
     openRecordInEditor,
+    // Фокус — только с активного вида «Карта мыслей» (ревизия 2026-11-11,
+    // требование ce121e09 v5): со вкладки редактора клик по записи фокус не
+    // двигает.
+    isMapActive: isMapViewActive,
     focusFromUi,
   };
 }
@@ -576,9 +571,7 @@ function buildPublicationsBody(ctx: EditorContext, lifecycle: TabPaneLifecycle):
       box.append(row);
     }
     if (hasMore) {
-      box.append(
-        el('p', 'muted', t('publications.mentions.more', [items.length, total])),
-      );
+      box.append(el('p', 'muted', t('publications.mentions.more', [items.length, total])));
     }
   }
 
