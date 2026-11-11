@@ -186,6 +186,10 @@ describe('разметка строки-записи (0.15.4, задача 33ed0
       'record-row-period',
       'текст периода — дата записи, а не имя класса (перепутанные аргументы span)',
     );
+    assert.ok(
+      period.querySelector('.icon') !== null,
+      'перед периодом — штатная иконка календаря из общего каталога (svg.icon)',
+    );
     assert.equal(handle.el.classList.contains('record-row'), true, 'корень строки — `.record-row`');
     handle.destroy();
   });

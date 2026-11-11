@@ -175,6 +175,17 @@
   margin-bottom: 8px;
 }
 
+/* Заголовок группы результатов поиска (задача b79aa1c9): отделяется от хитов
+   увеличенным на 0.5px шрифтом и подложкой ВСЕЙ строки — в светлой теме чуть
+   темнее поверхности, в тёмной чуть светлее (семантический токен
+   `--table-header-bg` = `--surface-2`; обе темы уже настроены). Своих
+   hex-значений и токенов не заводим. Область — группы панели поиска
+   (`.search-group >`), чтобы подпись списка поиска по записям не менялась. */
+.search-group > .search-group-header {
+  font-size: calc(var(--font-size-s) + 0.5px);
+  background: var(--table-header-bg);
+}
+
 .search-group-header {
   display: flex;
   align-items: center;
@@ -185,8 +196,11 @@
   user-select: none;
 }
 
+/* Hover заголовка заметно отличается от постоянной подложки в ОБЕИХ темах:
+   в тёмной теме `--bg-hover` совпадает с `--surface-2`, поэтому сдвигаем
+   подложку к цвету текста — color-mix по токенам темы, без своих значений. */
 .search-group-header:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--table-header-bg) 88%, var(--text) 12%);
 }
 
 .search-hit {

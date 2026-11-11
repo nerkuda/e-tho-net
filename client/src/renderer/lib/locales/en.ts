@@ -3594,9 +3594,9 @@ export const en = {
   'search.title.foundImenam': 'Found by names',
   'search.title.foundTekstam': 'Found by texts',
   'search.title.foundLinks': 'Found links',
-  'search.title.foundHronologii': 'Found in chronology',
+  'search.title.foundHronologii': 'Found in diaries',
   'search.placesSearch': 'Search areas:',
-  'search.hroniki': 'chronology',
+  'search.hroniki': 'diaries',
 
   // -- selection ---------------------------------------------------------
   'selection.selection': 'Selection',

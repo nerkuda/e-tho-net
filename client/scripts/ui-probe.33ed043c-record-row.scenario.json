@@ -96,6 +96,62 @@
       "expect": true
     },
     {
+      "name": "period-text-bold",
+      "probe": {
+        "name": "periodFontWeight",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); const p = row === null ? null : row.querySelector('.record-row-period'); return p === null ? -1 : parseInt(getComputedStyle(p).fontWeight, 10); })()"
+      },
+      "expect": 600
+    },
+    {
+      "name": "period-calendar-icon",
+      "probe": {
+        "name": "periodCalendarIcon",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); if (row === null) return 'no-row'; const icon = row.querySelector('.record-row-period svg.icon'); if (icon === null) return 'no-icon'; return icon.getAttribute('aria-hidden') === 'true' && icon.getAttribute('width') === '12' ? 'ok' : 'bad-icon'; })()"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "group-header-font-size",
+      "probe": {
+        "name": "groupHeaderFontSize",
+        "expression": "(() => { const t = document.querySelector('.search-results .search-group > .search-group-header .group-title'); return t === null ? 'no-header' : getComputedStyle(t).fontSize; })()"
+      },
+      "expect": "13.5px"
+    },
+    {
+      "name": "group-header-background-both-themes",
+      "probe": {
+        "name": "groupHeaderBackground",
+        "expression": "(() => { const root = document.documentElement; const prev = root.dataset.theme; const panel = document.querySelector('.search-panel'); const header = document.querySelector('.search-results .search-group > .search-group-header'); if (panel === null || header === null) return 'no-panel-header'; const prevTransition = header.style.transition; header.style.transition = 'none'; const bg = (theme) => { root.dataset.theme = theme; return [getComputedStyle(header).backgroundColor, getComputedStyle(panel).backgroundColor]; }; const light = bg('light'); const dark = bg('dark'); header.style.transition = prevTransition; if (prev === undefined) { delete root.dataset.theme; } else { root.dataset.theme = prev; } return light[0] !== light[1] && dark[0] !== dark[1] ? 'both-differ' : JSON.stringify({ light, dark }); })()"
+      },
+      "expect": "both-differ"
+    },
+    {
+      "name": "group-header-selected-preserved",
+      "probe": {
+        "name": "groupHeaderSelected",
+        "expression": "(() => { const header = document.querySelector('.search-results .search-group > .search-group-header'); if (header === null) return 'no-header'; const wasSelected = header.classList.contains('selected'); const prevTransition = header.style.transition; header.style.transition = 'none'; header.classList.remove('selected'); const base = getComputedStyle(header).backgroundColor; header.classList.add('selected'); const selected = getComputedStyle(header).backgroundColor; header.classList.remove('selected'); if (wasSelected) header.classList.add('selected'); header.style.transition = prevTransition; return base !== selected ? 'ok' : 'same-as-base:' + base + '/' + selected; })()"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "search-group-terminology-no-chronology",
+      "probe": {
+        "name": "groupTerminology",
+        "expression": "(() => { const labels = [...document.querySelectorAll('.search-results .search-group > .search-group-header .group-title')].map((e) => (e.textContent || '').trim()); return labels.some((l) => /хронологи|chronology|时间线/i.test(l)) ? labels : 'ok'; })()"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "search-areas-terminology-diaries",
+      "probe": {
+        "name": "areasTerminology",
+        "expression": "(() => { const labels = [...document.querySelectorAll('.search-settings .ui-choice-row')].map((e) => (e.textContent || '').trim()); return labels.some((l) => /хроник|chronolog|时间线/i.test(l)) ? labels : 'ok'; })()"
+      },
+      "expect": "ok"
+    },
+    {
       "name": "two-chip-row-chip-count",
       "probe": {
         "name": "rowChipCount",

@@ -3680,9 +3680,9 @@ export const ru = {
   'search.title.foundImenam': 'Найдено по именам',
   'search.title.foundTekstam': 'Найдено по текстам',
   'search.title.foundLinks': 'Найдено связей',
-  'search.title.foundHronologii': 'Найдено в хронологии',
+  'search.title.foundHronologii': 'Найдено в дневниках',
   'search.placesSearch': 'Места поиска:',
-  'search.hroniki': 'хроники',
+  'search.hroniki': 'дневники',
 
   // -- selection ---------------------------------------------------------
   'selection.selection': 'Выделение',

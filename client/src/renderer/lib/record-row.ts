@@ -55,6 +55,7 @@ import { isInsideMenu, menuAction, showMenuAt, type MenuItem } from './menu.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from '../editor/wiki-link-resolver.js';
 import { createThoughtCloud } from './thought-cloud.js';
 import { uiButton } from './ui/button.js';
+import { svgIcon } from './ui/icon.js';
 import {
   recordTargetRef,
   visibleRecordTargets,
@@ -213,9 +214,14 @@ export function createRecordRow(model: RecordRowModel, options: RecordRowOptions
 
   const row = div('record-row');
   const head = div('record-row-head');
-  const period = span(
+  // Период строки-записи (задача b79aa1c9): штатная иконка календаря перед
+  // текстом и жирный текст — строка-запись визуально отличается от прочих
+  // чипов. Иконка — из общего каталога `lib/ui/icon.ts` (`calendar-month`),
+  // своего глифа не заводим.
+  const period = span('', 'record-row-period');
+  period.append(
+    svgIcon('calendar-month', 12),
     formatRecordPeriod(model.validFrom, model.validTo, model.useTime),
-    'record-row-period',
   );
   const chipsHost = div('record-row-chips');
   head.append(period, chipsHost);

@@ -554,9 +554,20 @@
 
 .record-row-period {
   flex: 0 0 auto;
+  /* Иконка календаря и текст периода — одной строкой (задача b79aa1c9). */
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   color: var(--text-dim);
   font-size: 12px;
+  /* Период строки-записи жирный: строка-запись отличается от прочих чипов. */
+  font-weight: 600;
   white-space: nowrap;
+}
+
+/* Иконка календаря периода — из общего каталога значков; цвет наследует. */
+.record-row-period .icon {
+  flex: 0 0 auto;
 }
 
 /* Полоса чипов: перенос по строкам, «+N» — последней в полосе (паттерн нижней
