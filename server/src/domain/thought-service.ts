@@ -28,6 +28,7 @@ import {
   type FocusNeighbor,
   type FocusResponse,
   type IconKind,
+  type Link,
   type LinkTypeFilterInput,
   type ResolveResult,
   type SortKind,
@@ -65,7 +66,14 @@ import { resolveThoughtId } from './thought-id.js';
 import { rowToThoughtRef } from './thought-ref.js';
 
 import { getAttachment, hasOwnership } from './attachment-service.js';
-import { getEdgesAmong, getLinkDirections, toFocusEdge } from './link-service.js';
+import {
+  createLink,
+  deleteLink,
+  getEdgesAmong,
+  getLinkDirections,
+  incomingLinksOf,
+  toFocusEdge,
+} from './link-service.js';
 import { enforceLock } from './lock-service.js';
 import { getThoughtMeta } from './thought-meta.js';
 import {
@@ -743,6 +751,54 @@ function createLinkForNewThought(
 }
 
 /**
+ * Перемещение мысли в иерархии (ошибка d9ba9e68, 0.15.4): после операции у
+ * мысли ровно один СТРУКТУРНЫЙ (нетипизированный) родитель — `parentId`.
+ *
+ * Прежние нетипизированные входящие рёбра снимаются; типизированные связи не
+ * затрагиваются — их снял бы только групповой `set_only_parents` (§6.6), а
+ * «перемещение» не должно рвать «используется в»/«зависит от». Рёбра, уже
+ * помеченные на удаление, остаются в корзине: иерархия их не считает.
+ *
+ * Возвращает снятые и созданное рёбра — фасад строит из них события
+ * `link.deleted`/`link.created` и журнал активности.
+ */
+function replaceStructuralParent(
+  ndb: NetworkDb,
+  thoughtId: string,
+  parentId: string,
+  actorUserId: string,
+): { removed: Link[]; created: Link | null } {
+  if (parentId === thoughtId) {
+    throw new EtnError('VALIDATION_ERROR', 'a thought cannot be its own parent', {
+      field: 'parent_id',
+      id: thoughtId,
+    });
+  }
+  const exists = ndb.prepare('SELECT 1 FROM thoughts_v WHERE id = ?').get(parentId);
+  if (!exists) {
+    throw new EtnError('NOT_FOUND', `parent thought ${parentId} not found`, {
+      entity: 'thought',
+      id: parentId,
+    });
+  }
+  const removed: Link[] = [];
+  let kept = false;
+  for (const link of incomingLinksOf(ndb, thoughtId)) {
+    if (link.type_id !== null || link.marked_for_deletion) continue;
+    if (link.source_id === parentId) {
+      kept = true;
+      continue;
+    }
+    deleteLink(ndb, link.id, undefined);
+    removed.push(link);
+  }
+  const created = kept
+    ? null
+    : createLink(ndb, { source_id: parentId, target_id: thoughtId, type_id: null }, actorUserId);
+  return { removed, created };
+}
+
+/**
  * Create a thought (docs/03-server-api.md §6.3). Generates the id and
  * `title_norm`, sets `version = 1`, persists synonyms, and optionally creates a
  * parent/child link atomically. Returns the freshly-created {@link Thought}.
@@ -771,6 +827,13 @@ export function createThought(
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
   const synonyms = parseSynonyms(input.synonyms);
+  // Два способа задать связь при создании одновременно — неоднозначный вход
+  // (ошибка d9ba9e68, 0.15.4): молча выбирать один из них нельзя.
+  if (input.parent_id !== undefined && input.create_link !== undefined) {
+    throw new EtnError('VALIDATION_ERROR', 'parent_id and create_link are mutually exclusive', {
+      fields: ['parent_id', 'create_link'],
+    });
+  }
   const iconKind: IconKind = input.icon_kind ?? 'emoji';
   // Цвет символа иконки: пусто или HEX `#rrggbb` (0.12.1, задача 4105bd6a).
   assertIconColor(input.icon_color);
@@ -823,6 +886,19 @@ export function createThought(
     setSynonyms(ndb, id, synonyms);
     if (input.create_link) {
       createLinkForNewThought(ndb, id, input.create_link, actorUserId, now, nowMs);
+    }
+    // `parent_id` (ошибка d9ba9e68, 0.15.4) — сокращённая запись того же
+    // нетипизированного ребра «родитель → новая мысль»: одна транзакция,
+    // одна ветка кода. Взаимоисключение с `create_link` проверено выше.
+    if (input.parent_id !== undefined) {
+      createLinkForNewThought(
+        ndb,
+        id,
+        { direction: 'parent', target_thought_id: input.parent_id, type_id: null },
+        actorUserId,
+        now,
+        nowMs,
+      );
     }
     // Bug-fix (0.5.4, 2976daa1): a freshly created thought never picked up its
     // type's effective default property values — on the canvas, over REST or
@@ -935,6 +1011,13 @@ export function updateThought(
   changes: ThoughtUpdateInput,
   expectedVersion: number | undefined,
   actorUserId: string,
+  /**
+   * Коллектор рёбер, снятых/созданных перемещением `parent_id` (ошибка
+   * d9ba9e68, 0.15.4): фасад публикует по ним `link.deleted`/`link.created` и
+   * пишет журнал активности. Форма «массив-коллектор» — та же, что у
+   * `createThought` для рёбер link-дефолтов.
+   */
+  linkChanges?: { removed: Link[]; created: Link | null },
 ): Thought {
   return ndb.transaction(() => {
     // Object-lock enforcement (task 2031df5e, requirement f8d55c19): чужой
@@ -1097,6 +1180,16 @@ export function updateThought(
 
     if (changes.synonyms !== undefined) {
       setSynonyms(ndb, id, parseSynonyms(changes.synonyms));
+    }
+    // Перемещение в иерархии (ошибка d9ba9e68, 0.15.4): `parent_id` — не
+    // колонка мысли, а операция над структурными рёбрами; исполняется в той
+    // же транзакции, что и правка полей.
+    if (changes.parent_id !== undefined) {
+      const reparent = replaceStructuralParent(ndb, id, changes.parent_id, actorUserId);
+      if (linkChanges !== undefined) {
+        linkChanges.removed.push(...reparent.removed);
+        linkChanges.created = reparent.created;
+      }
     }
     return getThoughtOrThrow(ndb, id);
   });

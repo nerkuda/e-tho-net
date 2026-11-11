@@ -115,6 +115,14 @@ export interface ThoughtCreateInput {
   font_underline?: boolean;
   font_strike?: boolean;
   create_link?: ThoughtCreateLink;
+  /**
+   * Родитель новой мысли (ошибка d9ba9e68, 0.15.4): сокращённая запись
+   * `create_link { direction: "parent", target_thought_id: parent_id }` —
+   * нетипизированное (структурное) ребро «родитель → новая мысль» создаётся в
+   * той же транзакции. Не сочетается с `create_link` (конфликт —
+   * `VALIDATION_ERROR`).
+   */
+  parent_id?: string;
   /** Permanent comment created atomically with the thought (0.12.1). */
   comment?: ThoughtCreateComment;
 }
@@ -134,6 +142,14 @@ export interface ThoughtUpdateInput {
   active?: boolean;
   /** «Поместить в корзину» / «Вернуть из корзины» (03-server-api.md §6.4). */
   marked_for_deletion?: boolean;
+  /**
+   * Перемещение мысли в иерархии (ошибка d9ba9e68, 0.15.4): после правки у
+   * мысли остаётся ровно один структурный родитель — `parent_id`. Прежние
+   * нетипизированные входящие рёбра снимаются, типизированные связи не
+   * затрагиваются. `parent_id`, равный id самой мысли, — `VALIDATION_ERROR`,
+   * несуществующий — `NOT_FOUND`.
+   */
+  parent_id?: string;
   fg_color?: string | null;
   bg_color?: string | null;
   /**
@@ -696,7 +712,10 @@ export interface ThoughtCard {
   /** Свойства мысли в форме `etn.thoughts.get` (пометка `outside_type`
    *  для значений вне L21-цепочки; свойства-связи — счётчиком `count`,
    *  0.8.1). */
-  properties: (import('./thought-type.js').ResolvedPropertyValue | import('./thought-type.js').ResolvedLinkProperty)[];
+  properties: (
+    | import('./thought-type.js').ResolvedPropertyValue
+    | import('./thought-type.js').ResolvedLinkProperty
+  )[];
   /**
    * «Сигналы полноты» (см. {@link ThoughtMeta}). В карточке resolve
    * `meta.permanent` всегда `null` (ошибка 29def270): текст постоянного
