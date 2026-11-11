@@ -1090,17 +1090,16 @@ export function createAttachmentFromInputResult(
     input.data_base64.trim() !== '';
   if (!hasData) {
     // Ошибка 5fcb8307: `file_path` — путь в файловой системе СЕРВЕРА. Этот
-    // диспетчер обслуживает внешние MCP-вызовы (`etn.ops attachments.add` и
-    // `attachments[]` в `etn.thoughts.write`); агент работает с удалённым
-    // сервером, его локальный путь там не резолвится — раньше вызов молча
-    // создавал битое вложение (`mime_type`/`file_size` пусты, файл недоступен).
-    // Теперь нерезолвящийся путь — явная ошибка вызова; клиентский файл
-    // передаётся содержимым через `data_base64` ({@link createAttachmentFile}).
+    // диспетчер обслуживает обе точки входа — внешние MCP-вызовы
+    // (`etn.ops attachments.add` и `attachments[]` в `etn.thoughts.write`) и
+    // REST-создание `POST …/attachments` (ошибка 93925275, 0.15.4); агент и
+    // клиент работают с удалённым сервером, их локальный путь там не
+    // резолвится — раньше вызов молча создавал битое вложение (`mime_type`/
+    // `file_size` пусты, файл недоступен, `GET …/content` → 422). Теперь
+    // нерезолвящийся путь — явная ошибка вызова; содержимое передаётся
+    // `data_base64` ({@link createAttachmentFile}) или multipart-загрузкой.
     // Ошибка 6a95ba12: путь обязан указывать на обычный файл — каталог проходит
     // `existsSync`, поэтому используется `isResolvableFile` (`statSync().isFile()`).
-    // REST-маршрут `POST …/attachments` вызывает {@link createAttachment}
-    // напрямую и сохраняет документированный контракт «ссылка на путь в ОС
-    // клиента» (требование a5456b79) — его эта проверка не затрагивает.
     if (
       input.kind === 'file' &&
       typeof input.file_path === 'string' &&
@@ -1113,7 +1112,8 @@ export function createAttachmentFromInputResult(
         {
           field: 'file_path',
           file_path: input.file_path,
-          hint: "pass a file from the client machine as content in data_base64",
+          hint:
+            'upload the file content (POST …/attachments/file or multipart) or pass a path readable by the server',
         },
       );
     }

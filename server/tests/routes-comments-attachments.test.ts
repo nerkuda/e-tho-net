@@ -6,7 +6,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { DEFAULT_MAX_LENGTH } from '@etn/markdown';
@@ -119,9 +120,12 @@ describe(
           url: `/api/v1/networks/${ctx.networkId}/thoughts/${ctx.homeId}/properties`,
           headers: authHeaders(ctx),
         });
-        const potomki = (propsRes.json().data as Array<{ property_name: string; values?: Array<{ link_id: string }> }>).find(
-          (p) => p.property_name === 'Потомки',
-        );
+        const potomki = (
+          propsRes.json().data as Array<{
+            property_name: string;
+            values?: Array<{ link_id: string }>;
+          }>
+        ).find((p) => p.property_name === 'Потомки');
         const linkId = potomki!.values![0]!.link_id;
         const linkComment = await ctx.app.inject({
           method: 'POST',
@@ -167,7 +171,8 @@ describe(
         assert.equal(url.statusCode, 201);
         const urlAtt = url.json().data as { id: string };
 
-        // file without file_path → 422; with → 201.
+        // file without file_path → 422; with an existing file → 201 (93925275:
+        // the path must be readable on the server, a stub string is not enough).
         const badFile = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/attachments`,
@@ -176,11 +181,13 @@ describe(
         });
         assert.equal(badFile.statusCode, 422);
 
+        const localFile = join(ctx.dataDir, 'note.txt');
+        writeFileSync(localFile, 'заметка');
         const file = await ctx.app.inject({
           method: 'POST',
           url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/attachments`,
           headers: authHeaders(ctx),
-          payload: { kind: 'file', file_path: 'C:\\docs\\note.txt', mime_type: 'text/plain' },
+          payload: { kind: 'file', file_path: localFile, mime_type: 'text/plain' },
         });
         assert.equal(file.statusCode, 201);
         const fileAtt = file.json().data as { id: string };
@@ -374,10 +381,7 @@ describe(
         assert.equal(copyBody.added.length, 2);
         assert.deepEqual(copyBody.skipped, []);
         // Муль-владение: у того же вложения появились владельцы t1/t2.
-        assert.deepEqual(
-          copyBody.added.map((a) => a.owner_id).sort(),
-          [t1, t2].sort(),
-        );
+        assert.deepEqual(copyBody.added.map((a) => a.owner_id).sort(), [t1, t2].sort());
 
         // Re-copy: those owners already exist — all skipped, nothing added.
         const reCopy = await ctx.app.inject({
@@ -434,11 +438,14 @@ describe(
       try {
         const a = await createThought(ctx, 'Владелец A');
         const b = await createThought(ctx, 'Владелец B');
+        // 93925275: a `file` attachment needs a path that is readable on the server.
+        const notesFile = join(ctx.dataDir, 'notes.txt');
+        writeFileSync(notesFile, 'заметки');
         // Three attachments across two owners.
         for (const [owner, payload] of [
           [a, { kind: 'url', url: 'https://e.com/roadmap', title: 'Roadmap Q4' }],
           [a, { kind: 'url', url: 'https://e.com/budget', title: 'Budget 2025' }],
-          [b, { kind: 'file', file_path: 'C:\\notes.txt', title: 'Notes' }],
+          [b, { kind: 'file', file_path: notesFile, title: 'Notes' }],
         ] as const) {
           const res = await ctx.app.inject({
             method: 'POST',

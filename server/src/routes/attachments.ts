@@ -48,7 +48,7 @@ import {
   ATTACHMENT_FILE_MAX_BYTES,
   copyAttachment,
   createAttachmentFileResult,
-  createAttachmentResult,
+  createAttachmentFromInputResult,
   enrichUrlAttachment,
   getAttachment,
   getAttachmentContent,
@@ -271,11 +271,12 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
           const fx = restWriteFx(deps, req, input.network_id);
           // Создание — через обёртку (без событий: снимок ещё не окончательный).
-          // `createAttachmentResult` (не `createAttachment`) — чтобы узнать
-          // дедуп-переиспользование по хэшу: тогда эмитим владение, а не created
-          // (замечание проверки f77382ba).
+          // Общий доменный диспетчер (не `createAttachmentResult` напрямую):
+          // он проверяет, что `file_path` действительно читается сервером
+          // (ошибка 93925275, 0.15.4 — иначе создавалось висячее вложение), и
+          // отдаёт дедуп-переиспользование по хэшу (замечание f77382ba).
           const created = runWrite(ndb, fx, () => ({
-            result: createAttachmentResult(
+            result: createAttachmentFromInputResult(
               ndb,
               ownerType,
               input.owner_id,
