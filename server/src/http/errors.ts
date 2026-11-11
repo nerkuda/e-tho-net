@@ -105,6 +105,31 @@ export function sendEtnError(
 }
 
 /**
+ * Канонический код ошибки для клиентского HTTP-статуса, который выставил
+ * Fastify или его плагин (не `EtnError`). Статус на проводе остаётся исходным;
+ * код нужен клиенту для ветвления. Неизвестный 4xx — `BAD_REQUEST`.
+ */
+function clientErrorCodeForStatus(status: number): EtnErrorCode {
+  switch (status) {
+    case 401:
+      return 'UNAUTHORIZED';
+    case 403:
+      return 'FORBIDDEN';
+    case 404:
+      return 'NOT_FOUND';
+    case 409:
+      return 'DUPLICATE';
+    case 422:
+    case 413:
+      return 'VALIDATION_ERROR';
+    case 429:
+      return 'RATE_LIMITED';
+    default:
+      return 'BAD_REQUEST';
+  }
+}
+
+/**
  * Normalise any thrown value into the {@link ApiError} body + HTTP status used
  * by the global error handler. `EtnError` carries the canonical code/details;
  * Fastify validation errors map to `VALIDATION_ERROR`; anything else becomes a
@@ -164,10 +189,30 @@ export function normaliseError(
     };
   }
 
+  // Прочие ошибки, которые Fastify и его плагины уже классифицировали как
+  // клиентские (4xx), сохраняют свой статус. Класс шире разбора JSON (ошибка
+  // 92446fbc, 0.15.4): multipart-плагин отвечает 413 «request file too large»,
+  // 406 «the request is not multipart», сам Fastify — 415 на неизвестный
+  // `content-type`. Раньше все они падали в общий 500 «Internal server error»
+  // и выдавали клиентскую ошибку за отказ сервера.
+  if (
+    typeof maybeValidation.statusCode === 'number' &&
+    maybeValidation.statusCode >= 400 &&
+    maybeValidation.statusCode < 500
+  ) {
+    const statusCode = maybeValidation.statusCode;
+    const rawMessage = maybeValidation.message ?? 'invalid request';
+    return {
+      statusCode,
+      body: buildErrorBody(clientErrorCodeForStatus(statusCode), rawMessage, undefined, requestId),
+      internalMessage: rawMessage,
+    };
+  }
+
   const message = err instanceof Error ? err.message : String(err);
   return {
     statusCode: 500,
-    body: buildErrorBody('INTERNAL', "Internal server error", undefined, requestId),
+    body: buildErrorBody('INTERNAL', 'Internal server error', undefined, requestId),
     internalMessage: message,
   };
 }
