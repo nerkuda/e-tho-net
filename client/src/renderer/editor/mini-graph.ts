@@ -478,7 +478,6 @@ export function buildMiniGraph(opts: MiniGraphOptions): HTMLElement {
           }
           void openLinkRefInEditor(id);
         },
-        onDoubleClick: (id) => void focusLinkRef(id),
         onCtrlClick: (id) => toggleSelection([id]),
         onContextMenu: (event) => {
           // Правая кнопка больше не панорамирует — меню открывается всегда.

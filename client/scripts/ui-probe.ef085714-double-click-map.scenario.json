@@ -1,0 +1,216 @@
+{
+  "name": "double-click-focus-map-ef085714",
+  "description": "Ключевой сценарий задачи ef085714 (0.15.4, элемент 1bd47ca3 v3): двойной клик по облачку мысли ВНЕ карты открывает мысль в редакторе, ставит её в фокус и активирует экран «Карта мыслей»; одиночный клик только открывает редактор и фокус не меняет. Проверяется: (1) «Структуры» — одиночный клик по облачку ребёнка открывает его в редакторе при неизменном focus_id, вид остаётся «Структуры»; (2) «Структуры» — двойной клик по тому же облачку переключает активный вид на карту и ставит мысль в фокус (focus_id = ребёнок); (3) чип полосы истории в «Структурах» — одиночный клик открывает мысль в редакторе без смены фокуса, двойной клик переключает на карту и ставит в фокус. Данные засеиваются шагом eval через window.etn: мысль «Ребёнок ef085714» (ребёнок {{seedTitle}}). Дерево «Структур» раскрывается эллипсами (поведение эллипса не меняется): корень → мысль пробы → ребёнок. На дофиксовой сборке двойной клик в «Структурах» не делает ничего, а чип истории фокусирует без активации карты — сценарий красный (шаги map-active-after-child-double и map-active-after-chip-double). Примечание: вкладка «Упоминания» сейчас показывает строки-записи, чипы которых по ADR 8f0e9412 без жестов (клики по строкам — правило B6), поэтому облачко-жест этой вкладки недостижимо; правило чипов проверяется полосой истории (та же фабрика, профиль `chip`). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ef085714-double-click-map.scenario.json --seed-name 'ef085714 double click' --seed-title 'Проба ef085714'. Без скриншотов: доказательства — DOM-пробы облачков, активной закладки вида, заголовка редактора и focus_id вкладки.",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-double-click-data",
+      "timeout": 120000,
+      "expect": 2,
+      "probe": {
+        "name": "seedDoubleClickData",
+        "expression": "(async () => { const nid = '{{networkId}}'; const a = '{{thoughtId}}'; const child = await window.etn.thoughts.create(nid, { title: 'Ребёнок ef085714', create_link: { direction: 'parent', target_thought_id: a } }); window.__dblData = { b: child.id, a: a }; return Object.keys(window.__dblData).length; })()"
+      }
+    },
+    {
+      "name": "install-double-click-helpers",
+      "expect": true,
+      "probe": {
+        "name": "installDoubleClickHelpers",
+        "expression": "(() => { window.__ed = { cloud: (selector, id) => document.querySelector(selector + '[data-id=\"' + id + '\"]'), dbl: (el) => { el.click(); el.click(); el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); }, focus: async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; }, view: () => { const tabs = [...document.querySelectorAll('button.view-tab')]; const on = (re) => tabs.some((b) => re.test(b.title) && b.classList.contains('ui-btn--active')); return { map: on(/карта мыслей|thought map/i), structures: on(/структур|structures/i), diary: on(/дневник|diary/i) }; }, expand: (id, dir) => { const el = window.__ed.cloud('.st-cloud', id); if (el === null) return 'no-cloud'; const ellipse = el.querySelector('.ellipse-' + dir); if (ellipse === null) return 'no-ellipse'; if (ellipse.classList.contains('st-expanded')) return 'already'; if (!ellipse.classList.contains('filled')) return 'not-filled'; ellipse.click(); return 'ok'; } }; return true; })()"
+      }
+    },
+    {
+      "name": "open-seed-editor",
+      "expect": "ok",
+      "probe": {
+        "name": "clickSeedCloud",
+        "expression": "(() => { const el = document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); if (el === null) return 'no-cloud'; el.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "editor-tabs-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.editor-tab').length === 7"
+    },
+    {
+      "name": "focus-before-structures",
+      "probe": { "name": "focusBeforeStructures", "expression": "window.__ed.focus()" }
+    },
+    {
+      "name": "switch-to-structures",
+      "click": ".view-tab[title=\"Структуры\"], .view-tab[title=\"Thought structures\"]"
+    },
+    {
+      "name": "structures-root-ready",
+      "timeout": 30000,
+      "waitFor": "(() => { const host = document.querySelector('.structures.view-host'); return host !== null && !host.classList.contains('hidden') && document.querySelector('.st-row .ellipse-bottom.filled') !== null; })()"
+    },
+    {
+      "name": "expand-root-children",
+      "expect": "ok",
+      "probe": {
+        "name": "expandRootChildren",
+        "expression": "(() => { const ellipse = document.querySelector('.st-row .ellipse-bottom.filled'); if (ellipse === null) return 'no-ellipse'; ellipse.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "seed-thought-row-visible",
+      "timeout": 30000,
+      "waitFor": "window.__ed.cloud('.st-cloud', window.__dblData.a) !== null"
+    },
+    {
+      "name": "expand-seed-children",
+      "expect": "ok",
+      "probe": {
+        "name": "expandSeedChildren",
+        "expression": "window.__ed.expand(window.__dblData.a, 'bottom')"
+      }
+    },
+    {
+      "name": "child-row-visible",
+      "timeout": 30000,
+      "waitFor": "window.__ed.cloud('.st-cloud', window.__dblData.b) !== null"
+    },
+    {
+      "name": "single-click-child-cloud",
+      "expect": "ok",
+      "probe": {
+        "name": "singleClickChildCloud",
+        "expression": "(() => { const el = window.__ed.cloud('.st-cloud', window.__dblData.b); if (el === null) return 'no-cloud'; el.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "editor-shows-child",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Ребёнок ef085714'"
+    },
+    {
+      "name": "focus-unchanged-after-single",
+      "probe": { "name": "focusAfterStructuresSingle", "expression": "window.__ed.focus()" },
+      "expectFrom": "focus-before-structures"
+    },
+    {
+      "name": "still-structures-after-single",
+      "probe": {
+        "name": "stillStructuresAfterSingle",
+        "expression": "(() => { const v = window.__ed.view(); return v.structures === true && v.map === false; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "double-click-child-cloud",
+      "expect": "ok",
+      "probe": {
+        "name": "doubleClickChildCloud",
+        "expression": "(() => { const el = window.__ed.cloud('.st-cloud', window.__dblData.b); if (el === null) return 'no-cloud'; window.__ed.dbl(el); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "map-active-after-child-double",
+      "timeout": 30000,
+      "waitFor": "(() => { const host = document.querySelector('.canvas.view-host'); return host !== null && !host.classList.contains('hidden') && window.__ed.view().map === true; })()"
+    },
+    {
+      "name": "focus-after-child-double",
+      "timeout": 30000,
+      "waitFor": "window.__ed.focus().then((id) => id === window.__dblData.b)"
+    },
+    {
+      "name": "editor-shows-child-after-double",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Ребёнок ef085714'"
+    },
+    {
+      "name": "switch-to-structures-for-chip",
+      "click": ".view-tab[title=\"Структуры\"], .view-tab[title=\"Thought structures\"]"
+    },
+    {
+      "name": "history-chip-visible",
+      "timeout": 30000,
+      "waitFor": "(() => { const host = document.querySelector('.structures.view-host'); return host !== null && !host.classList.contains('hidden') && window.__ed.cloud('.history-cloud', window.__dblData.a) !== null; })()"
+    },
+    {
+      "name": "focus-before-history-chip",
+      "probe": { "name": "focusBeforeHistoryChip", "expression": "window.__ed.focus()" }
+    },
+    {
+      "name": "single-click-history-chip",
+      "expect": "ok",
+      "probe": {
+        "name": "singleClickHistoryChip",
+        "expression": "(() => { const el = window.__ed.cloud('.history-cloud', window.__dblData.a); if (el === null) return 'no-cloud'; el.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "editor-shows-seed-thought",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "focus-unchanged-after-history-chip",
+      "probe": { "name": "focusAfterHistoryChipSingle", "expression": "window.__ed.focus()" },
+      "expectFrom": "focus-before-history-chip"
+    },
+    {
+      "name": "still-structures-after-history-chip",
+      "probe": {
+        "name": "stillStructuresAfterHistoryChip",
+        "expression": "(() => { const v = window.__ed.view(); return v.structures === true && v.map === false; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "history-chip-b-visible",
+      "timeout": 30000,
+      "waitFor": "window.__ed.cloud('.history-cloud', window.__dblData.b) !== null"
+    },
+    {
+      "name": "double-click-history-chip",
+      "expect": "ok",
+      "probe": {
+        "name": "doubleClickHistoryChip",
+        "expression": "(() => { const el = window.__ed.cloud('.history-cloud', window.__dblData.b); if (el === null) return 'no-cloud'; window.__ed.dbl(el); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "map-active-after-chip-double",
+      "timeout": 30000,
+      "waitFor": "(() => { const host = document.querySelector('.canvas.view-host'); return host !== null && !host.classList.contains('hidden') && window.__ed.view().map === true; })()"
+    },
+    {
+      "name": "focus-after-chip-double",
+      "timeout": 30000,
+      "waitFor": "window.__ed.focus().then((id) => id === window.__dblData.b)"
+    },
+    {
+      "name": "editor-shows-child-after-chip-double",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Ребёнок ef085714'"
+    },
+    {
+      "name": "no-error-dialog",
+      "probe": "document.querySelectorAll('.dialog-backdrop').length === 0",
+      "expect": true
+    }
+  ]
+}

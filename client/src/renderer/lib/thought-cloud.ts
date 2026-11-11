@@ -28,6 +28,11 @@
  * класс-модификатор {@link CLOUD_WIDTH_CONTAINER_CLASS} и одно общее правило:
  * место, где предел ширины не задан явно, обязано передать `width: 'container'`
  * (следит сторож `guard-thought-cloud`).
+ *
+ * Жесты профилей ВНЕ карты: одиночный клик — открыть мысль в редакторе, фокус
+ * холста не меняется; двойной — {@link doubleClickFocusOnMap} (открыть, фокус и
+ * экран «Карта мыслей», элемент 1bd47ca3 v3, задача ef085714). Профиль `canvas`
+ * сохраняет жест холста, чипы значений формы — `navigation: false`.
  */
 
 import type { IconKind, ThoughtRef } from '@etn/shared';
@@ -220,11 +225,47 @@ export function deferSingleClick(action: () => void): { cancel: () => void } {
   };
 }
 
+/**
+ * Единый жест «двойной клик по облачку ВНЕ карты» (элемент 1bd47ca3 v3, задача
+ * ef085714): открыть мысль в редакторе, поставить её в фокус и активировать
+ * экран «Карта мыслей» — общий `focusThoughtOnMap` (эталон ошибки 562356a9).
+ * Одиночный клик двойным отменён, поэтому редактор открывается здесь же.
+ *
+ * Это действие по умолчанию для профилей вне карты: потребителю не нужно
+ * собирать пару «открыть + в фокус» самому (правило в одном месте). Импорты
+ * динамические — модуль подключается из `canvas.ts`, и статическая зависимость
+ * `editor/*`/`screens/*` замкнула бы цикл импортов.
+ */
+export function doubleClickFocusOnMap(id: string): void {
+  void (async () => {
+    const [{ openThoughtInEditor }, { focusThoughtOnMap }] = await Promise.all([
+      import('../editor/editor.js'),
+      import('../screens/active-view.js'),
+    ]);
+    try {
+      openThoughtInEditor(id);
+    } finally {
+      // Фокус и активация карты — главный результат жеста: он выполняется,
+      // даже если открытие редактора сорвалось.
+      await focusThoughtOnMap(id);
+    }
+  })().catch(() => {
+    // Жест интерфейса: отказ установки фокуса уже показан тостом внутри
+    // `focusFromUi`, а сбой загрузки чанка не должен давать unhandled rejection
+    // (ошибка 1656ef58).
+  });
+}
+
 /** Действия домена, подставляемые вызывающим в единые жесты облачка. */
 export interface ThoughtCloudActions {
   /** Одиночный клик — открыть мысль (откладывается на время двойного клика). */
   onClick?: (id: string) => void;
-  /** Двойной клик — редактирование/фокус по контексту. */
+  /**
+   * Двойной клик. Профили вне карты по умолчанию получают
+   * {@link doubleClickFocusOnMap} (открыть + фокус + экран «Карта мыслей»);
+   * свой обработчик нужен только области с иной семантикой (профиль `canvas` —
+   * фокус без переключения вида, значение свойства — своя навигация).
+   */
   onDoubleClick?: (id: string) => void;
   /** Ctrl/Cmd+клик — переход или мультивыбор по контексту. */
   onCtrlClick?: (id: string) => void;
@@ -387,6 +428,13 @@ export interface ThoughtCloudOptions {
    * не рисуется; элемент остаётся чисто визуальным.
    */
   actions?: ThoughtCloudActions;
+  /**
+   * Облачко — навигационное представление мысли (по умолчанию `true`): двойной
+   * клик профилей вне карты открывает мысль, ставит её в фокус и активирует
+   * «Карту мыслей» ({@link doubleClickFocusOnMap}). `false` — чип ЗНАЧЕНИЯ в
+   * форме/диалоге: двойной клик не навигация, вид под формой не переключается.
+   */
+  navigation?: boolean;
   /** Признак захвата — индикация блокировки; `null`/не задано — индикации нет. */
   lock?: ThoughtCloudLock | null;
   /**
@@ -622,7 +670,23 @@ export function createThoughtCloud(
     root.append(buildRemoveButton(input.id, options.actions));
   }
   if (options.actions !== undefined) {
-    wireCloudGestures(root, input.id, options.actions);
+    // Двойной клик профилей ВНЕ карты — единое правило (элемент 1bd47ca3 v3,
+    // задача ef085714): открыть мысль в редакторе, поставить её в фокус и
+    // активировать «Карту мыслей». Профиль `canvas` остаётся при действии холста
+    // (фокус без переключения вида), чипы значений формы передают
+    // `navigation: false`, своя семантика области — собственный
+    // `onDoubleClick`.
+    const navigationDoubleClick =
+      (options.navigation ?? true) &&
+      profile !== 'canvas' &&
+      options.actions.onDoubleClick === undefined;
+    wireCloudGestures(
+      root,
+      input.id,
+      navigationDoubleClick
+        ? { ...options.actions, onDoubleClick: doubleClickFocusOnMap }
+        : options.actions,
+    );
   }
   return root;
 }

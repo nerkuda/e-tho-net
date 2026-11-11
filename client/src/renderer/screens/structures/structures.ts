@@ -32,7 +32,6 @@ import {
   releaseCloudIndicatorInterest,
   setCloudIndicatorInterest,
 } from '../../lib/cloud-indicators.js';
-import { focusFromUi } from '../../app.js';
 import { showLinkContextMenu, showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { edgeGeometry } from '../../canvas/links.js';
 import { setThoughtEditorTarget } from '../../editor/editor.js';
@@ -41,7 +40,7 @@ import { ELLIPSE_INSIDE } from '../../lib/pure.js';
 import { resolveLinkTypeVisual } from '../../lib/type-tree.js';
 import { addNeighborsOf, toggleSelection } from '../../selection/selection.js';
 import { setScreenThoughtSource } from '../../lib/screen-thought-source.js';
-import { setActiveView } from '../active-view.js';
+import { focusThoughtOnMap } from '../active-view.js';
 import { div, el, setTooltip, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import {
@@ -1408,10 +1407,11 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
             {
               openHandler: (targetId) => void openStructuresThought(targetId),
               findOnMapHandler: (targetId) => {
-                // «Найти на карте мыслей» (L23, §15.8): switch the view first so
-                // the map is visible while the focus response arrives.
-                setActiveView('map');
-                focusFromUi(targetId);
+                // «Найти на карте мыслей» (L23, §15.8): единый путь «В фокус» —
+                // переключить экран на карту и поставить мысль в фокус
+                // (`focusThoughtOnMap`, ошибка 562356a9). Пара
+                // `setActiveView + focusFromUi` здесь была копией помощника.
+                void focusThoughtOnMap(targetId);
               },
             },
           );

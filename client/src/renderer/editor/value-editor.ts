@@ -537,6 +537,10 @@ function buildCrossNetworkRefEditor(opts: ValueEditorOptions): HTMLElement {
       {
         profile: 'chip',
         width: 'container',
+        // Чип значения (кросс-сетевая ссылка): навигация по нему идёт своим
+        // путём `openEntry`, двойной клик фабрики (открыть + фокус + карта)
+        // здесь не годится — в чужой сети он адресовал бы не ту мысль.
+        navigation: false,
         networkBadge: { label: netLabel },
         actions: {
           onClick: () => void openEntry(entry),
@@ -983,6 +987,9 @@ function buildTextChip(value: string, opts: {
       // Ширина — по чип-полю множественного значения (ошибка 10ad23d1):
       // длинное значение обрезается многоточием, а не раздувает таблицу.
       width: 'container',
+      // Чип ТЕКСТОВОГО значения (не мысль): двойной клик фабрики открыл бы
+      // «мысль» по тексту значения — навигация здесь неуместна.
+      navigation: false,
       actions: {
         onClick: opts.onClick === undefined ? undefined : () => opts.onClick?.(),
         onRemove: () => opts.onRemove(),

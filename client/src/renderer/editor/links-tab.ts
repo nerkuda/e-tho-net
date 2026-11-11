@@ -191,7 +191,9 @@ function endpointBlock(label: string, ref: ThoughtRef): HTMLElement {
  * behaviour as a thought cloud anywhere else in the client (canvas,
  * structures): single click opens the thought in the editor without moving
  * the canvas focus (deferred so a double click cancels it), double click
- * focuses, Ctrl/Cmd+click toggles the shared selection, Ctrl+hover previews
+ * opens it again, puts it in focus and activates the thought map (the factory
+ * default for profiles outside the map — элемент 1bd47ca3 v3, задача
+ * ef085714), Ctrl/Cmd+click toggles the shared selection, Ctrl+hover previews
  * the permanent comment, right-click opens the thought context menu, Enter
  * acts as a click. No indicator icons (📝/📅/📎) — the comment opens with
  * Ctrl+hover, like a pinned-thought chip.
@@ -205,7 +207,6 @@ function buildThoughtCloud(ref: ThoughtRef): HTMLElement {
     width: 'container',
     actions: {
       onClick: (id) => openThoughtInEditor(id),
-      onDoubleClick: (id) => focusFromUi(id),
       onCtrlClick: (id) => toggleSelection([id]),
       onContextMenu: (event, id) => {
         event.stopPropagation();
