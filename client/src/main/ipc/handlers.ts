@@ -30,10 +30,23 @@ import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
 import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
 import { errText } from '../../renderer/lib/dom.js';
+import { wallpaperCacheDir } from '../wallpaper/wallpaper-cache.js';
+import {
+  loadWallpaper,
+  removeWallpaper,
+  uploadWallpaper,
+  type WallpaperServiceDeps,
+  type WallpaperUploadInput,
+} from '../wallpaper/wallpaper-service.js';
 
 /** Shared state owned by the main process, injected into handlers. */
 export interface HandlerDeps {
   localDb: LocalDb;
+  /**
+   * Корень данных клиента (`app.getPath('userData')`): каталог локального кэша
+   * фоновой картинки карты (задача 80324150, сценарий 0ec86f0b).
+   */
+  userDataDir: string;
   /** Active REST client, or `null` when disconnected. */
   getRest: () => RestClient | null;
   /** Realtime pool (one socket per open network, Q2). `null` when disconnected. */
@@ -1875,6 +1888,49 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'me.getSettings',
     bind(() => requireRest(deps).getMySettings()),
   );
+  /**
+   * `GET /users/me/wallpaper` (+ байты): фоновая картинка карты (0.16.1,
+   * задача 80324150; операция 31ef478a). Главный процесс — единственный
+   * владелец сети и файлов: рендерер получает готовый `data:`-URL.
+   *
+   * Офлайн-старт: активного подключения нет, но профиль остался в локальной БД
+   * (`getActiveProfile`), поэтому кэш находится по нему и карта показывает
+   * последнюю известную картинку (сценарий 0ec86f0b). Без профиля и без
+   * подключения картинки нет.
+   */
+  const wallpaperServiceDeps = (): WallpaperServiceDeps | null => {
+    const profile = deps.getProfile() ?? deps.localDb.getActiveProfile();
+    if (profile === null) return null;
+    return {
+      remote: deps.getRest(),
+      cacheDir: wallpaperCacheDir(deps.userDataDir, profile.id, profile.user_id),
+    };
+  };
+  handlers.set(
+    'me.getWallpaper',
+    bind(async () => {
+      const wpDeps = wallpaperServiceDeps();
+      if (wpDeps === null) return { status: 'none' as const };
+      return loadWallpaper(wpDeps);
+    }),
+  );
+  handlers.set(
+    'me.uploadWallpaper',
+    bind(async (input: WallpaperUploadInput) => {
+      const wpDeps = wallpaperServiceDeps();
+      if (wpDeps === null) throw new Error(NOT_CONNECTED_ERROR_TEXT);
+      return uploadWallpaper(wpDeps, input);
+    }),
+  );
+  handlers.set(
+    'me.removeWallpaper',
+    bind(async () => {
+      const wpDeps = wallpaperServiceDeps();
+      if (wpDeps === null) return { status: 'none' as const };
+      await removeWallpaper(wpDeps);
+      return { status: 'none' as const };
+    }),
+  );
   handlers.set(
     'me.setSetting',
     bind((key: string, value: unknown) => requireRest(deps).setMySetting(key, value)),
@@ -2131,7 +2187,10 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'system.getJob',
     bind((jobId: string) => requireRest(deps).getJob(jobId)),
   );
-  handlers.set('system.pickImage', bind(() => pickImageFile()));
+  handlers.set(
+    'system.pickImage',
+    bind((maxBytes?: number) => pickImageFile({ maxBytes })),
+  );
   handlers.set('system.pickFile', bind(() => pickAnyFile()));
   handlers.set('system.readClipboard', bind(() => readSystemClipboard()));
   handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
@@ -2450,10 +2509,14 @@ async function readSystemClipboard(): Promise<ClipboardReadResult> {
 /**
  * Opens the OS file picker for an image and returns the ORIGINAL file as a
  * `data:` URL with its name/mime/size (08-ui-spec.md §6.8, workplan L16). The
- * icon-sized preview is the renderer's job — files up to the attachment limit
- * are accepted; bigger/unreadable ones resolve an error message.
+ * icon-sized preview is the renderer's job.
+ *
+ * `maxBytes` — потолок размера ИСХОДНОГО файла; по умолчанию — лимит вложения
+ * (10 МиБ). Фоновая картинка карты передаёт свой, больший потолок: фото-исходник
+ * даунскейлится клиентом перед отправкой (задача 80324150), поэтому файл-
+ * источник может быть крупным. Файл крупнее/unreadable — сообщение об ошибке.
  */
-async function pickImageFile(): Promise<PickImageResult> {
+async function pickImageFile(options?: { maxBytes?: number }): Promise<PickImageResult> {
   // electron is imported lazily so this module stays loadable in the Node test
   // runner (which resolves `electron` to a stub without the named exports).
   const { BrowserWindow, dialog } = await import('electron');
@@ -2476,10 +2539,11 @@ async function pickImageFile(): Promise<PickImageResult> {
   if (filePath === undefined) return { status: 'cancel' };
   try {
     const size = statSync(filePath).size;
-    if (size > PICK_IMAGE_MAX_BYTES) {
+    const maxBytes = options?.maxBytes ?? PICK_IMAGE_MAX_BYTES;
+    if (size > maxBytes) {
       return {
         status: 'error',
-        message: `Файл больше ${PICK_IMAGE_MAX_BYTES / (1024 * 1024)} МБ — лимит вложения.`,
+        message: `Файл больше ${Math.round(maxBytes / (1024 * 1024))} МБ — лимит.`,
       };
     }
     const buf = readFileSync(filePath);

@@ -613,6 +613,9 @@ app
     // event/status broadcast to whichever window is front-most.
     ipc = registerIpc({
       localDb,
+      // Корень данных клиента: локальный кэш фоновой картинки карты живёт в
+      // `<userData>/wallpaper` и переживает перезапуск (задача 80324150).
+      userDataDir: app.getPath('userData'),
       clientId,
       // Версия клиента для заголовка `Client-Version` в каждом REST-запросе
       // (требование 339b507f): сервер отклоняет изменяющие запросы вне

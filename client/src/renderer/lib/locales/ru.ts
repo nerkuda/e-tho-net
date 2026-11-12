@@ -1040,6 +1040,19 @@ export const ru = {
   'settings.uiMode.light': 'Светлый',
   /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
   'settings.uiThemeLiveHint': 'Тема и режим применяются сразу, без перезапуска.',
+  'settings.wallpaper': 'Фоновая картинка карты',
+  'settings.wallpaperUpload': 'Загрузить…',
+  'settings.wallpaperRemove': 'Убрать картинку',
+  'settings.wallpaperPreviewAlt': 'Текущая фоновая картинка карты',
+  'settings.wallpaperNone': 'Картинка не выбрана: карта показывает фон темы и сетку.',
+  'settings.wallpaperHint':
+    'Картинка хранится в профиле пользователя на сервере и применяется на всех ваших клиентах. Подготовка (размер, светлота) выполняется на клиенте.',
+  'settings.wallpaperErrorTooLargeSource': 'Файл больше %1 МБ — выберите картинку поменьше.',
+  'settings.wallpaperErrorNotImage': 'Не удалось прочитать файл как изображение.',
+  'settings.wallpaperErrorTooLargeResult':
+    'После подготовки картинка всё ещё больше %1 МБ — выберите другую.',
+  'settings.wallpaperErrorFileSize': 'Сервер отклонил картинку: файл больше лимита 5 МБ.',
+  'settings.wallpaperErrorServer': 'Сервер отклонил картинку: проверьте формат и размер файла.',
   /** Выбор хранится в профиле пользователя (требование 219d030c). */
   'settings.uiThemeHintAllDevices':
     'Хранится в профиле пользователя и действует на всех ваших клиентах на этом сервере.',

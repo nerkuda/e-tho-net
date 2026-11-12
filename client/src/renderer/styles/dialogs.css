@@ -929,6 +929,31 @@ button.ui-btn--icon.trash-act {
   overflow-wrap: anywhere;
 }
 
+/* Фоновая картинка карты (0.16.1, задача 80324150, элемент edc921ab): строка
+ * «Загрузить…» → мини-превью текущей картинки (16:9, cover) → «Убрать
+ * картинку». Контролы — фасады lib/ui; блок только раскладывает их. */
+.settings-wallpaper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.settings-wallpaper-preview {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.settings-wallpaper-preview[hidden] {
+  display: none;
+}
+
 .settings-error {
   /* Строка ошибки в sticky-футере диалога (ошибка add8d09d): видна на любом
    * разделе/вкладке настроек, даже когда содержимое прокручено. */

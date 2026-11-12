@@ -388,6 +388,9 @@ function buildApi(): EtnBridgeApi {
       getSettings: () => invoke('me.getSettings'),
       setSetting: (key, value) => invoke('me.setSetting', key, value),
       getLanguageSettings: () => invoke('me.getLanguageSettings'),
+      getWallpaper: () => invoke('me.getWallpaper'),
+      uploadWallpaper: (input) => invoke('me.uploadWallpaper', input),
+      removeWallpaper: () => invoke('me.removeWallpaper'),
     },
     locks: {
       acquire: (networkId, entityType, entityId) =>
@@ -574,7 +577,7 @@ function buildApi(): EtnBridgeApi {
         },
       ) => invoke('system.importEtnx', networkId, parentThoughtId, filePath, slices),
       pickArchiveFile: () => invoke('system.pickArchiveFile'),
-      pickImage: () => invoke('system.pickImage'),
+      pickImage: (options) => invoke('system.pickImage', options),
       pickFile: () => invoke('system.pickFile'),
       openPath: (filePath: string) => invoke('system.openPath', filePath),
       openAttachmentFile: (filePath: string) => invoke('system.openAttachment', filePath),

@@ -997,6 +997,22 @@ export const en = {
   'settings.uiMode.light': 'Light',
   /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
   'settings.uiThemeLiveHint': 'Theme and mode apply immediately, without a restart.',
+  'settings.wallpaper': 'Map background image',
+  'settings.wallpaperUpload': 'Upload…',
+  'settings.wallpaperRemove': 'Remove image',
+  'settings.wallpaperPreviewAlt': 'Current map background image',
+  'settings.wallpaperNone': 'No image selected: the map shows the theme background and the dot grid.',
+  'settings.wallpaperHint':
+    'The image is stored in your server-side user profile and applied to all your clients on this server. Preparation (size, luminance) runs in the client.',
+  'settings.wallpaperErrorTooLargeSource':
+    'The file is larger than %1 MB — choose a smaller image.',
+  'settings.wallpaperErrorNotImage': 'The file could not be read as an image.',
+  'settings.wallpaperErrorTooLargeResult':
+    'After preparation the image is still larger than %1 MB — choose another one.',
+  'settings.wallpaperErrorFileSize':
+    'The server rejected the image: the file exceeds the 5 MB limit.',
+  'settings.wallpaperErrorServer':
+    'The server rejected the image: check the format and file size.',
   /** Выбор хранится в профиле пользователя (требование 219d030c). */
   'settings.uiThemeHintAllDevices':
     'Stored in your user profile and applied to all your clients on this server.',

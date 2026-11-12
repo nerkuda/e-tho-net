@@ -485,6 +485,17 @@ export const zh = {
   'settings.uiMode.light': '浅色',
   /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
   'settings.uiThemeLiveHint': '主题和模式立即生效，无需重启。',
+  'settings.wallpaper': '地图背景图片',
+  'settings.wallpaperUpload': '上传…',
+  'settings.wallpaperRemove': '移除图片',
+  'settings.wallpaperPreviewAlt': '当前地图背景图片',
+  'settings.wallpaperNone': '未选择图片：地图显示主题背景和点阵网格。',
+  'settings.wallpaperHint': '图片保存在服务器上的用户配置中，并应用于此服务器上您的所有客户端。尺寸与亮度的处理在客户端完成。',
+  'settings.wallpaperErrorTooLargeSource': '文件大于 %1 MB — 请选择更小的图片。',
+  'settings.wallpaperErrorNotImage': '无法将文件读取为图片。',
+  'settings.wallpaperErrorTooLargeResult': '处理后图片仍大于 %1 MB — 请选择其他图片。',
+  'settings.wallpaperErrorFileSize': '服务器拒绝了图片：文件超过 5 MB 限制。',
+  'settings.wallpaperErrorServer': '服务器拒绝了图片：请检查格式和文件大小。',
   /** Выбор хранится в профиле пользователя (требование 219d030c). */
   'settings.uiThemeHintAllDevices': '保存在用户配置中，并应用于此服务器上您的所有客户端。',
   /** Старый сервер не хранит выбор темы в профиле. */

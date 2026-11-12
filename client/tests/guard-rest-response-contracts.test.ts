@@ -53,7 +53,14 @@ const SERVER_TS_DIR = path.join(REPO_ROOT, 'server', 'src');
  * поэтому собственный inline-тип здесь уместен (имя поля — обёртка содержимого,
  * а не форма сущности сервера).
  */
-const RAW_TRANSPORT_METHODS = new Set(['getAttachmentRaw', 'downloadJob', 'downloadServerLogFile']);
+const RAW_TRANSPORT_METHODS = new Set([
+  'getAttachmentRaw',
+  'downloadJob',
+  'downloadServerLogFile',
+  // Байты фоновой картинки карты (0.16.1, задача 80324150, операция 31ef478a):
+  // ответ — файл + заголовки Content-Type/ETag, JSON-контракта у него нет.
+  'getWallpaperRaw',
+]);
 
 /**
  * Формы, которые клиент СОБИРАЕТ сам из success-конверта (`data` + `meta`) —

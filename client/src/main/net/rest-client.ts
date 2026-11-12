@@ -1158,6 +1158,70 @@ export class RestClient {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Фоновая картинка карты (0.16.1, задача 80324150; операция 31ef478a)
+  // -------------------------------------------------------------------------
+
+  /**
+   * `GET /users/me/wallpaper` — метаданные фоновой картинки пользователя
+   * (сущность user_files, ADR a5888535). `404` — картинки нет (штатное
+   * состояние «без картинки», не ошибка клиента).
+   */
+  public async getWallpaper(): Promise<import('@etn/shared').WallpaperInfo> {
+    return this.request('GET', '/users/me/wallpaper');
+  }
+
+  /**
+   * `GET /users/me/wallpaper/raw` — байты картинки. Тело бинарное, поэтому
+   * запрос идёт мимо JSON-обёртки (как `getAttachmentRaw`). `etag` —
+   * серверный `content_hash` в кавычках (для локального кэша); заголовок
+   * может отсутствовать — тогда хеш считает вызывающий.
+   */
+  public async getWallpaperRaw(): Promise<{
+    contentType: string;
+    body: Buffer;
+    etag: string | null;
+  }> {
+    const url = `${this.baseUrl}/api/v1/users/me/wallpaper/raw`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${await this.getApiKey()}`,
+      ...this.clientHeaders(),
+      Accept: '*/*',
+    };
+    const res = await this.fetchImpl(url, { method: 'GET', headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new EtnError(
+        mapHttpStatus(res.status),
+        `wallpaper download failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
+      );
+    }
+    const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+    return {
+      contentType,
+      body: Buffer.from(await readResponseBody(() => res.arrayBuffer())),
+      etag: res.headers.get('etag'),
+    };
+  }
+
+  /**
+   * `PUT /users/me/wallpaper` — загрузка/перезапись картинки (JSON-ветка
+   * контракта: `{data_base64, mime_type, meta}`). Клиент готовит байты сам
+   * (даунскейл, метаданные светлоты — задача 80324150), сервер их валидирует.
+   */
+  public async uploadWallpaper(input: {
+    data_base64: string;
+    mime_type: string;
+    meta: import('@etn/shared').WallpaperMeta;
+  }): Promise<import('@etn/shared').WallpaperInfo> {
+    return this.request('PUT', '/users/me/wallpaper', { body: input });
+  }
+
+  /** `DELETE /users/me/wallpaper` — отказ от картинки (идемпотентен, 204). */
+  public async deleteWallpaper(): Promise<void> {
+    await this.request('DELETE', '/users/me/wallpaper');
+  }
+
   /**
    * `GET /users/me/language-settings` — «язык приложения» пользователя
    * (`null` — наследование) и эффективный язык по каждой доступной сети

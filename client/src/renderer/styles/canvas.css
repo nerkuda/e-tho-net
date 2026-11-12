@@ -20,6 +20,26 @@
     var(--layer-bg, var(--bg));
 }
 
+/* Пользовательская фоновая картинка (0.16.1, задача 80324150, элемент
+ * ef8112b0, требование e6d586d3): картинка привязана к окну
+ * (background-attachment: fixed — панорамирование и зум карты её не двигают) и
+ * заполняет окно по cover; поверх — тинт цвета фона темы (в основе) либо цвета
+ * фона слоя с повышенной прозрачностью (в слое). Плотность тинта и url
+ * картинки приходят переменными от `canvas/wallpaper.ts`.
+ *
+ * Точечная сетка в этом состоянии ОТКЛЮЧЕНА: правило заменяет фон целиком, а не
+ * добавляет слой к базовому. Без картинки действует правило `.canvas` выше.
+ * Тинт — только на холсте карты, на другие экраны не размножается (этап 1). */
+:root[data-canvas-wallpaper='on'] .canvas {
+  background:
+    linear-gradient(
+      var(--canvas-wallpaper-tint, transparent),
+      var(--canvas-wallpaper-tint, transparent)
+    ),
+    var(--canvas-wallpaper-image) center / cover no-repeat fixed,
+    var(--layer-bg, var(--bg));
+}
+
 /* The host is focusable (§2.9 keyboard navigation, kbd-nav.ts) — the keyboard
  * cursor frame marks the current cloud, so the host itself draws nothing. */
 .canvas:focus {

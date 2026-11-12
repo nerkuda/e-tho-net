@@ -74,6 +74,16 @@ import { scheduleStructuresRefresh } from './structures/structures.js';
 import { uiButton } from '../lib/ui/button.js';
 import { fieldInput, fieldRow, fieldSelect } from '../lib/ui/field.js';
 import { checkboxRow, radioRow, choiceGroup } from '../lib/ui/choice-row.js';
+import { chooseImageFile } from '../lib/image-source.js';
+import { wallpaperPrepareError, wallpaperUploadError } from '../lib/wallpaper-errors.js';
+import { WALLPAPER_SOURCE_MAX_BYTES } from '../lib/wallpaper-image.js';
+import { prepareWallpaper } from '../lib/wallpaper-prepare.js';
+import {
+  getWallpaperState,
+  removeWallpaper,
+  subscribeWallpaper,
+  uploadWallpaper,
+} from '../lib/wallpaper-state.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
 type Section = 'user' | 'network' | 'client' | 'logs';
@@ -268,6 +278,11 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   // видна на любой вкладке/разделе диалога, в т.ч. при прокрученном
   // содержимом (ошибка add8d09d).
   const errorLine = footerErrorLine('settings-error');
+  // Превью картинки обновляется подпиской уровня ДИАЛОГА: раздел «Клиент»
+  // пересобирается при каждом переходе, и слушатель, заведённый в разделе,
+  // копился бы на каждый переход. Снимается в `onClose`.
+  let refreshWallpaperSection: (() => void) | null = null;
+  const unsubscribeWallpaper = subscribeWallpaper(() => refreshWallpaperSection?.());
 
   body.append(nav, content);
 
@@ -791,6 +806,94 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     }
     refreshUiThemeHints();
 
+    // «Фоновая картинка карты» (0.16.1, задача 80324150, элемент edc921ab):
+    // «Загрузить…» → мини-превью 16:9 → «Убрать картинку». Как тема и
+    // «Логирование» — ИСКЛЮЧЕНИЕ из draft-модели: картинка живёт на сервере и
+    // применяется сразу, «Применить» её не ждёт. Ошибки — в закреплённом футере
+    // диалога (виден на любом разделе).
+    let wallpaperBusy = false;
+    const wallpaperPreview = el('img', 'settings-wallpaper-preview');
+    wallpaperPreview.alt = t('settings.wallpaperPreviewAlt');
+    const wallpaperEmptyNote = el('p', 'muted', t('settings.wallpaperNone'));
+    const wallpaperUploadBtn = uiButton({
+      label: t('settings.wallpaperUpload'),
+      role: 'secondary',
+      size: 's',
+      onClick: () => void pickWallpaper(),
+    });
+    const wallpaperRemoveBtn = uiButton({
+      label: t('settings.wallpaperRemove'),
+      role: 'secondary',
+      size: 's',
+      onClick: () => void dropWallpaper(),
+    });
+    const wallpaperBlock = div('settings-wallpaper');
+    wallpaperBlock.append(wallpaperUploadBtn, wallpaperPreview, wallpaperRemoveBtn);
+
+    function refreshWallpaperBlock(): void {
+      const state = getWallpaperState();
+      const has = state.status === 'ok';
+      wallpaperPreview.hidden = !has;
+      wallpaperEmptyNote.hidden = has;
+      wallpaperRemoveBtn.disabled = wallpaperBusy || !has;
+      wallpaperUploadBtn.disabled = wallpaperBusy;
+      if (has) wallpaperPreview.src = state.data_url;
+      else wallpaperPreview.removeAttribute('src');
+    }
+    refreshWallpaperSection = refreshWallpaperBlock;
+    refreshWallpaperBlock();
+
+    /** Выбор файла → подготовка (даунскейл/meta) → PUT → немедленное превью. */
+    async function pickWallpaper(): Promise<void> {
+      if (wallpaperBusy) return;
+      errorLine.clear();
+      const picked = await chooseImageFile({ maxBytes: WALLPAPER_SOURCE_MAX_BYTES });
+      if (picked.status === 'cancel') return;
+      if (picked.status === 'error') {
+        errorLine.show(picked.message);
+        return;
+      }
+      wallpaperBusy = true;
+      refreshWallpaperBlock();
+      try {
+        const prepared = await prepareWallpaper({
+          data_url: picked.dataUrl,
+          mime: picked.mime,
+          size: picked.size,
+        });
+        if (prepared.status === 'error') {
+          errorLine.show(wallpaperPrepareError(prepared.message));
+          return;
+        }
+        await uploadWallpaper({
+          data_base64: prepared.prepared.data_base64,
+          mime_type: prepared.prepared.mime_type,
+          meta: prepared.prepared.meta,
+        });
+      } catch (err) {
+        errorLine.show(wallpaperUploadError(err));
+      } finally {
+        wallpaperBusy = false;
+        refreshWallpaperBlock();
+      }
+    }
+
+    /** «Убрать картинку»: без подтверждения — обратимо новой загрузкой. */
+    async function dropWallpaper(): Promise<void> {
+      if (wallpaperBusy) return;
+      errorLine.clear();
+      wallpaperBusy = true;
+      refreshWallpaperBlock();
+      try {
+        await removeWallpaper();
+      } catch (err) {
+        errorLine.show(errText(err));
+      } finally {
+        wallpaperBusy = false;
+        refreshWallpaperBlock();
+      }
+    }
+
     const widthInput = fieldInput();
     widthInput.type = 'number';
     widthInput.min = String(CLOUD_WIDTH_MIN);
@@ -838,6 +941,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       deferredNote,
       fieldRow({ label: t('settings.uiMode'), control: modeGroup }),
       el('p', 'muted', t('settings.uiThemeLiveHint')),
+      fieldRow({ label: t('settings.wallpaper'), control: wallpaperBlock }),
+      wallpaperEmptyNote,
+      el('p', 'muted', t('settings.wallpaperHint')),
       el('h3', 'settings-section-title settings-section-title-spaced', t('settings.razmerOblachka')),
       fieldRow({ label: t('settings.shirinaOblachkaPx', [CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX]), control: widthInput }),
       fieldRow({ label: t('settings.otstupBetweenOblachkamiPx', [CLOUD_GAP_MIN, CLOUD_GAP_MAX]), control: gapInput }),
@@ -1098,6 +1204,11 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     onLangChange: () => {
       updateTexts();
       renderContent();
+    },
+    // Подписка на картинку живёт вместе с диалогом.
+    onClose: () => {
+      unsubscribeWallpaper();
+      refreshWallpaperSection = null;
     },
   });
 

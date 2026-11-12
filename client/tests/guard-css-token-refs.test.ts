@@ -69,6 +69,11 @@ const RUNTIME_TOKENS = new Set([
   '--st-indent',
   // screens/publications/workspace.ts
   '--pub-doc-width',
+  // canvas/wallpaper.ts — подложка холста карты (0.16.1, задача 80324150):
+  // url картинки и rgba-тинт считаются в JS (метаданные светлоты), CSS их
+  // только читает.
+  '--canvas-wallpaper-image',
+  '--canvas-wallpaper-tint',
 ]);
 
 /** Файл значений темы по умолчанию: там живут цветовые токены (ADR de24adef). */

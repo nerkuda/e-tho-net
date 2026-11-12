@@ -74,6 +74,12 @@ export interface RegisterIpcOptions {
   connectPrefill: ConnectPrefill | null;
   /** Resolves the current main window (for realtime broadcast). */
   getWindow: () => BrowserWindow | null;
+  /**
+   * Корень данных клиента (`app.getPath('userData')`). Нужен локальному кэшу
+   * фоновой картинки карты: он живёт рядом с локальной БД и переживает
+   * перезапуск (задача 80324150, сценарий офлайн-старта 0ec86f0b).
+   */
+  userDataDir: string;
 }
 
 /** Handle returned by {@link registerIpc} (see its docs). */
@@ -436,6 +442,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
 
   const handlers = createHandlers({
     localDb: opts.localDb,
+    userDataDir: opts.userDataDir,
     getRest: () => conn.getRest(),
     getRealtimePool: () => conn.getPool(),
     getProfile: () => conn.getProfile(),

@@ -82,6 +82,8 @@ import {
   syncLanguageForNetwork,
 } from './lib/app-language.js';
 import { initUiTheme, resetUiThemeState } from './lib/ui-theme.js';
+import { initWallpaperBackdrop } from './canvas/wallpaper.js';
+import { refreshWallpaper, resetWallpaperState } from './lib/wallpaper-state.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
@@ -734,6 +736,9 @@ export async function restoreSession(): Promise<void> {
   // применён в boot() до первого экрана; здесь серверные значения побеждают,
   // кэш чужого пользователя не применяется, отложенная запись повторяется.
   await initUiTheme(store.state.me?.id ?? null).catch(() => undefined);
+  // Фоновая картинка карты (задача 80324150): серверная копия побеждает
+  // локальный кэш; сбой чтения не блокирует вход (остаётся кэш или фон темы).
+  await refreshWallpaper().catch(() => undefined);
   // Q5: warm the `networkList` cache early so the first tab-strip render has
   // display_names. The accessibility marking itself re-runs at the end of
   // `openNetwork`, once `store.tabs` is populated — marking here raced an
@@ -775,6 +780,9 @@ export async function disconnect(): Promise<void> {
   // Серверный слой темы/режима — тоже принадлежность пользователя: снимок
   // сбрасывается, установочный кэш `client_meta` остаётся (тема не мигает).
   resetUiThemeState();
+  // Картинка — принадлежность пользователя сервера: чужую на холсте не
+  // показываем (установочный кэш остаётся в главном процессе).
+  resetWallpaperState();
   store.resetNetwork();
   store.update({ me: null, profileId: null });
   showScreen('onboarding');
@@ -938,6 +946,10 @@ export async function boot(): Promise<void> {
   // the --layer-* overrides (or clearing them) whenever the current layer,
   // its colours or the theme change.
   initLayerTheme();
+  // Подложка холста карты из пользовательской картинки (0.16.1, задача
+  // 80324150): подписки на тему/слой/картинку + первое чтение. Офлайн-старт
+  // берёт последнюю известную картинку из локального кэша главного процесса.
+  initWallpaperBackdrop();
   initLockCache();
   // Захваты живут только вместе с realtime-сессией: после переподключения
   // кэш перечитывается с сервера, а захваты открытых редакторов берутся

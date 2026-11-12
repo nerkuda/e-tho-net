@@ -331,6 +331,28 @@ export type PickImageResult =
   | { status: 'error'; message: string };
 
 /**
+ * Состояние фоновой картинки карты для рендерера (0.16.1, задача 80324150;
+ * операция API 31ef478a, сценарий офлайн-старта 0ec86f0b).
+ *
+ * `none` — картинки нет (или сервер ответил 404, или офлайн без кэша): карта
+ * показывает цветовой фон темы/слоя и точечную сетку, ошибка пользователю не
+ * показывается. `ok` — готовая картинка: `data_url` уже собран главным
+ * процессом (рендерер не ходит в сеть), `source` говорит, свежая она с сервера
+ * или из локального кэша прошлого запуска.
+ */
+export type WallpaperState =
+  | { status: 'none' }
+  | {
+      status: 'ok';
+      data_url: string;
+      mime_type: string;
+      file_size: number;
+      content_hash: string;
+      meta: import('@etn/shared').WallpaperMeta;
+      source: 'server' | 'cache';
+    };
+
+/**
  * Result of the generic OS file picker: the chosen file's absolute path and
  * name. No bytes are read — the add-attachment dialog only fills its path
  * field with it; the server sees the file once «Добавить» is pressed.
@@ -1412,6 +1434,24 @@ export interface EtnApi {
      * клиент трактует это как отсутствие серверной настройки.
      */
     getLanguageSettings(): Promise<UserLanguageSettings>;
+    /**
+     * `GET /users/me/wallpaper` + байты: текущая фоновая картинка карты.
+     * Онлайн — свежая с сервера (и кэш обновляется), офлайн — последняя из
+     * локального кэша, иначе `none` (цветовой фон и сетка).
+     */
+    getWallpaper(): Promise<WallpaperState>;
+    /**
+     * `PUT /users/me/wallpaper` — загрузить/перезаписать картинку. Клиент
+     * готовит байты сам (даунскейл до 3840 px / 5 МиБ, метаданные светлоты —
+     * задача 80324150); ответ и локальный кэш обновляются сразу.
+     */
+    uploadWallpaper(input: {
+      data_base64: string;
+      mime_type: string;
+      meta: import('@etn/shared').WallpaperMeta;
+    }): Promise<WallpaperState>;
+    /** `DELETE /users/me/wallpaper` — отказ от картинки; кэш очищается. */
+    removeWallpaper(): Promise<{ status: 'none' }>;
   };
   /**
    * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,
@@ -1824,8 +1864,13 @@ export interface EtnApi {
      * Opens the OS file picker for an image and returns the original file as a
      * `data:` URL with its name/mime/size (≤ the attachment upload limit). The
      * caller decides how to fit it into the icon limit (workplan L16).
+     *
+     * `maxBytes` — необязательный потолок ИСХОДНОГО файла (по умолчанию
+     * лимит вложения). Фоновая картинка передаёт свой потолок: фото-исходник
+     * может быть крупнее, клиент всё равно даунскейлит его перед отправкой
+     * (задача 80324150).
      */
-    pickImage(): Promise<PickImageResult>;
+    pickImage(options?: { maxBytes?: number }): Promise<PickImageResult>;
     /**
      * Opens the OS file picker for a file of ANY type and returns its absolute
      * path (no content is read). The add-attachment dialog's «Открыть с диска»
