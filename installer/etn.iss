@@ -961,6 +961,11 @@ var
   { Снимок отката текущего обновления (.install\rollback\<timestamp>) и
     последняя причина сбоя health-check для журнала и экрана ошибки. }
   GLastRollbackDir: String;
+  { Каталоги программы, попавшие в снимок переносом, а не копией: откат
+    обязан вернуть их переименованием, а неудачный снимок — так же вернуть
+    на место (a34f48da). }
+  GSnapshotMovedServer: Boolean;
+  GSnapshotMovedService: Boolean;
   GHealthReason: String;
   { Код возврата и текст последней команды службы: 1061/1062 (переход) нужны
     вызывающему для повтора stop, 1072 после uninstall — для подтверждения
@@ -4642,15 +4647,34 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
-  Снимок отката и восстановление — задача bb063ac3.
+  Снимок отката и восстановление — задача bb063ac3, ускорение — a34f48da.
 
   Снимок — единственная резервная копия программы для отката: каталог
-  %ProgramData%\ETN\.install\rollback\<timestamp> с копиями server и service
+  %ProgramData%\ETN\.install\rollback\<timestamp> с server и service
   (данные не копируются — для них есть архив ce3ab836). Создаётся до
   копирования файлов; после успешного обновления удаляется вместе со старыми
   снимками, при отказе остаётся единственной точкой ручного восстановления
   до следующего успешного обновления (замечание приёмки: старые снимки не
   накапливаются).
+
+  Снимок — ПЕРЕНОС каталога, а не копия: служба остановлена, старые файлы
+  никто не держит, поэтому достаточно переименовать каталоги server и service
+  программы в каталог снимка (MoveFileExW в пределах тома — операция над
+  метаданными, байты не читаются и не пишутся). В реальной установке копия
+  10 808 файлов / 649 МБ шла 48–72 с в silent и более 900 с в GUI (замеры
+  a34f48da); в замере snapshot-bench на дереве серверной части из поставки
+  (10 721 файл, 65 МБ) копия — 8,5–18,9 с против 0,6–0,7 с у переноса. Копия
+  остаётся запасным путём: другой том (каталог программы не на системном
+  диске) или незакрытый файл в каталоге (осиротевший node.exe, грабли
+  8bec9706) — тогда WARN и прежний CopyTreeRec.
+  Откат так же возвращает каталоги переименованием, копия — только если
+  перенос невозможен.
+
+  Данные пользователя (БД, вложения в %ProgramData%\ETN) в снимок не входят
+  никогда: откат файлов согласован с архивом БД ЭТОГО запуска, который
+  создаётся до снимка (RestoreDatabaseFromArchive; LatestBackupDir не
+  используется). Перенос не меняет состав данных — он лишь убирает
+  копирование байтов.
   --------------------------------------------------------------------------- }
 function RollbackRoot: String;
 begin
@@ -4704,6 +4728,69 @@ begin
   Result := True;
 end;
 
+{ Перенос каталога программы в снимок (a34f48da): переименование в пределах
+  тома вместо побайтовой копии. В реальной установке копия 10 808 файлов /
+  649 МБ шла 48–72 с в silent и более 900 с в GUI; на дереве из поставки
+  (10 721 файл, 65 МБ) перенос — 0,6–0,7 с против 8,5–18,9 с у копии
+  (snapshot-bench). Moved = True — каталог именно перенесён (откат обязан
+  вернуть его переименованием), False — скопирован запасным путём.
+
+  Перенос невозможен, когда у каталога программы и каталога данных разные тома
+  либо файл каталога не закрыт (осиротевший node.exe, грабли 8bec9706): тогда
+  WARN и прежний CopyTreeRec — обновление замедляется, но не отменяется. }
+function TakeSnapshot(const Src, Dest, Component: String; var Moved: Boolean): Boolean;
+begin
+  Result := False;
+  Moved := False;
+  if not DirExists(Src) then
+  begin
+    { Компонента нет — переносить нечего; снимок из одного компонента
+      корректен (например, установка без клиента не имеет service). }
+    Result := True;
+    Exit;
+  end;
+  if MoveFileExW(Src, Dest, 0) then
+  begin
+    Moved := True;
+    LogLine('INFO', 'Снимок отката: ' + Component + ' перенесён: ' + Src +
+      ' → ' + Dest);
+    Result := True;
+    Exit;
+  end;
+  LogLine('WARN', 'Снимок отката: ' + Component + ' не перенесён (' + Src +
+    ') — копируется');
+  if not CopyTreeRec(Src, Dest) then
+  begin
+    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + Src + ' в ' + Dest);
+    Exit;
+  end;
+  LogLine('INFO', 'Снимок отката: ' + Component + ' скопирован: ' + Dest);
+  Result := True;
+end;
+
+{ Возврат каталогов, перенесённых в снимок, на место: неудачный снимок не
+  должен оставить установку без файлов сервера — вызывается до удаления
+  каталога снимка. }
+procedure UndoSnapshotMoves(const Dir: String);
+begin
+  if GSnapshotMovedService and DirExists(Dir + '\service') then
+  begin
+    if MoveFileExW(Dir + '\service', GServerDir + '\service', 0) then
+      LogLine('INFO', 'Снимок отката: service возвращён на место')
+    else
+      LogLine('WARN', 'Снимок отката: service не удалось вернуть из ' + Dir);
+    GSnapshotMovedService := False;
+  end;
+  if GSnapshotMovedServer and DirExists(Dir + '\server') then
+  begin
+    if MoveFileExW(Dir + '\server', GServerDir + '\server', 0) then
+      LogLine('INFO', 'Снимок отката: server возвращён на место')
+    else
+      LogLine('WARN', 'Снимок отката: server не удалось вернуть из ' + Dir);
+    GSnapshotMovedServer := False;
+  end;
+end;
+
 function NewRollbackDirName(const Root: String): String;
 var
   Base: String;
@@ -4749,15 +4836,19 @@ begin
   end;
 end;
 
-{ Снимок перед заменой файлов. False — копию сделать не удалось: файлы
+{ Снимок перед заменой файлов. False — снимок сделать не удалось: файлы
   заменять нельзя, обновление останавливается. Неудачный (частичный) снимок
-  удаляется, старые снимки — тоже: остаётся только копия этого запуска. }
+  удаляется, а уже перенесённые каталоги возвращаются на место — иначе
+  установка осталась бы без файлов сервера. Старые снимки удаляются: остаётся
+  только снимок этого запуска. }
 function CreateRollbackSnapshot: Boolean;
 var
   Dir, Name: String;
 begin
   Result := False;
   GLastRollbackDir := '';
+  GSnapshotMovedServer := False;
+  GSnapshotMovedService := False;
   if not GServerFilesPresent then
   begin
     LogLine('INFO', 'Снимок отката: файлов сервера нет — копировать нечего');
@@ -4772,17 +4863,24 @@ begin
   end;
   Name := NewRollbackDirName(RollbackRoot);
   Dir := RollbackRoot + '\' + Name;
-  if not CopyTreeRec(GServerDir + '\server', Dir + '\server') then
+  { Перенос, а не копия: копия серверной части (10 721 файл, 65 МБ) занимала
+    8,5–18,9 с, а реальный этап «Снимок отката» шёл 48–72 с в silent и больше
+    20 минут в GUI (ошибка a34f48da). }
+  if not TakeSnapshot(GServerDir + '\server', Dir + '\server', 'server',
+    GSnapshotMovedServer) then
   begin
-    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
+    LogLine('ERROR', 'Снимок отката: не удалось сохранить ' + GServerDir +
       '\server в ' + Dir);
+    UndoSnapshotMoves(Dir);
     DelTree(Dir, True, True, True);
     Exit;
   end;
-  if not CopyTreeRec(GServerDir + '\service', Dir + '\service') then
+  if not TakeSnapshot(GServerDir + '\service', Dir + '\service', 'service',
+    GSnapshotMovedService) then
   begin
-    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
+    LogLine('ERROR', 'Снимок отката: не удалось сохранить ' + GServerDir +
       '\service в ' + Dir);
+    UndoSnapshotMoves(Dir);
     DelTree(Dir, True, True, True);
     Exit;
   end;
@@ -4797,12 +4895,16 @@ end;
   бы файлы новой версии (dist\cli.js, новые миграции, новые зависимости), и
   прежняя версия применила бы их к восстановленной БД. Поэтому старый каталог
   сначала переименовывается рядом (или удаляется, если переименовать нельзя),
-  и только затем на его место копируется снимок — состав файлов совпадает со
-  снимком побайтово (замечание приёмки bb063ac3). }
+  и только затем на его место возвращается снимок — состав файлов совпадает со
+  снимком побайтово (замечание приёмки bb063ac3).
+
+  Снимок, сделанный переносом, возвращается тоже переносом (a34f48da): байты
+  не копируются, откат мгновенный. Копия — запасной путь для снимка, который
+  оказался на другом томе. }
 function ReplaceTreeFromSnapshot(const Src, Dest, Tag: String): Boolean;
 var
   OldDir: String;
-  Swapped: Boolean;
+  Swapped, Moved: Boolean;
 begin
   Result := False;
   OldDir := Dest + '.rollback-' + Tag;
@@ -4833,7 +4935,10 @@ begin
   end;
   if DirExists(Src) then
   begin
-    if not CopyTreeRec(Src, Dest) then
+    Moved := MoveFileExW(Src, Dest, 0);
+    if Moved then
+      LogLine('INFO', 'Откат файлов: ' + Dest + ' возвращён переносом снимка')
+    else if not CopyTreeRec(Src, Dest) then
     begin
       LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + Dest + ' из снимка' +
         IfStr(Swapped, '; прежний каталог сохранён как ' + OldDir, ''));
@@ -6854,6 +6959,8 @@ begin
   GLastBackupDir := '';
   GDatabaseToolPath := '';
   GLastRollbackDir := '';
+  GSnapshotMovedServer := False;
+  GSnapshotMovedService := False;
   GHealthReason := '';
   GAdminLogin := '';
   GAdminDisplayName := '';

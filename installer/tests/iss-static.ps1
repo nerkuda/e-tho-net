@@ -273,6 +273,66 @@ function Invoke-IssStaticChecks {
         (-not $uninsManualName)
     ) -Note 'журнал удаления — тот же TryInitLog, имя не собирается вручную'
 
+    # a34f48da: снимок отката — перенос каталога, а не побайтовая копия. Копия
+    # дерева серверной части занимала 8,5–18,9 с, а реальный этап «Снимок
+    # отката» шёл 48–72 с в silent и больше 20 минут в GUI. Обязательные
+    # свойства: перенос первым (копия — только запасной путь), неудачный
+    # снимок возвращает уже перенесённое, откат возвращает снимок
+    # переименованием, данные пользователя в снимок не попадают.
+    $takeSnapshotBody = Get-IssFunctionBody -Text $issText -Name 'TakeSnapshot'
+    $createSnapshotBody = Get-IssFunctionBody -Text $issText -Name 'CreateRollbackSnapshot'
+    $undoMovesBody = Get-IssFunctionBody -Text $issText -Name 'UndoSnapshotMoves'
+    $replaceBody = Get-IssFunctionBody -Text $issText -Name 'ReplaceTreeFromSnapshot'
+    Add-StaticResult -Name 'static:snapshot-move-first' -Ok (
+        (Test-IssCode -Text $takeSnapshotBody -Pattern ([regex]::Escape('if MoveFileExW(Src, Dest, 0) then'))) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape("TakeSnapshot(GServerDir + '\server', Dir + '\server', 'server',"))) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape("TakeSnapshot(GServerDir + '\service', Dir + '\service', 'service',")))
+    ) -Note 'снимок server/service создаётся переносом каталога'
+    Add-StaticResult -Name 'static:snapshot-no-copy-in-create' -Ok (
+        -not (Test-IssCode -Text $createSnapshotBody -Pattern 'CopyTreeRec\(')
+    ) -Note 'в создании снимка побайтовой копии нет — только TakeSnapshot'
+    Add-StaticResult -Name 'static:snapshot-copy-fallback' -Ok (
+        (Test-IssCode -Text $takeSnapshotBody -Pattern ([regex]::Escape('if not CopyTreeRec(Src, Dest) then')))
+    ) -Note 'другой том/занятый файл: перенос не удался — прежняя копия остаётся'
+    $undoCalls = @(Get-IssStrippedLines -Text $createSnapshotBody |
+        Where-Object { $_ -match [regex]::Escape('UndoSnapshotMoves(Dir);') })
+    Add-StaticResult -Name 'static:snapshot-failure-undoes-moves' -Ok (
+        ($undoCalls.Count -ge 2) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("MoveFileExW(Dir + '\server', GServerDir + '\server', 0)"))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("MoveFileExW(Dir + '\service', GServerDir + '\service', 0)")))
+    ) -Note ('неудачный снимок возвращает перенесённые каталоги (вызовов: {0})' -f $undoCalls.Count)
+    Add-StaticResult -Name 'static:rollback-restores-by-move' -Ok (
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('Moved := MoveFileExW(Src, Dest, 0);'))) -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('else if not CopyTreeRec(Src, Dest) then')))
+    ) -Note 'откат файлов возвращает снимок переносом, копия — запасной путь'
+    Add-StaticResult -Name 'static:snapshot-excludes-user-data' -Ok (
+        -not (Test-IssCode -Text $issText -Pattern '(CopyTreeRec|TakeSnapshot)\(GDataDir')
+    ) -Note 'данные пользователя (БД, вложения) в снимок не копируются и не переносятся'
+    <# Порядок фаз делает перенос безопасным: файлы нельзя переименовывать, пока
+      служба работает. Остановка службы → бэкап БД → снимок, строго в этом
+      порядке (иначе незакрытые файлы сервера блокируют перенос, а архив БД
+      перестаёт соответствовать моменту остановки). #>
+    $phaseLines = @(Get-IssStrippedLines -Text $issText)
+    $stopAt = -1; $backupAt = -1; $snapshotAt = -1
+    for ($i = 0; $i -lt $phaseLines.Count; $i++) {
+        if (($stopAt -lt 0) -and ($phaseLines[$i] -match [regex]::Escape('if not StopServiceForUpdate(Reason, False) then'))) { $stopAt = $i }
+        if (($backupAt -lt 0) -and ($phaseLines[$i] -match [regex]::Escape('if not CreateDatabaseBackup(True) then'))) { $backupAt = $i }
+        if (($snapshotAt -lt 0) -and ($phaseLines[$i] -match [regex]::Escape('if not CreateRollbackSnapshot then'))) { $snapshotAt = $i }
+    }
+    Add-StaticResult -Name 'static:snapshot-after-service-stop' -Ok (
+        ($stopAt -ge 0) -and ($backupAt -gt $stopAt) -and ($snapshotAt -gt $backupAt)
+    ) -Note ("порядок фаз: остановка службы ({0}) → бэкап БД ({1}) → снимок ({2})" -f ($stopAt + 1), ($backupAt + 1), ($snapshotAt + 1))
+
+    # Комментарии [Code] не вкладываются: `}` закрывает `{ ... }`, поэтому
+    # `{app}` внутри такого комментария обрывает его и остаток строки
+    # становится кодом — ISCC падает с синтаксической ошибкой, а построчный
+    # сторож видит «код», которого нет. Ловится только компиляцией, поэтому
+    # проверяем исходник (нашлось на a34f48da).
+    $nestedComments = @(Test-IssNestedComment -Text $issText)
+    Add-StaticResult -Name 'static:code-comments-flat' -Ok ($nestedComments.Count -eq 0) `
+        -Note ($(if ($nestedComments.Count -eq 0) { 'комментарии [Code] без вложенных фигурных скобок' }
+            else { $nestedComments -join '; ' }))
+
     # 4dc117f5: каждый CustomMessage('X') обязан быть определён — иначе Inno
     # бросает исключение в рантайме (до компиляции сторож дешевле); дубликат имени
     # в [CustomMessages] — ошибка компиляции.

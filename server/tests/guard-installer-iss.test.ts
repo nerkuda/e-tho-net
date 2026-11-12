@@ -537,11 +537,7 @@ describe('guard: исходник установщика — высокоцен�
     const code = stripPascalComments(codeSection(readIss()));
     const args = functionBody(code, 'UninstallerArgs');
     assert.notEqual(args, '', `${ISS}: нет функции UninstallerArgs.`);
-    assert.match(
-      args,
-      /'\/S'/,
-      `${ISS}: legacy-деинсталлятору NSIS нужен /S (тихий режим).`,
-    );
+    assert.match(args, /'\/S'/, `${ISS}: legacy-деинсталлятору NSIS нужен /S (тихий режим).`);
     assert.match(
       args,
       /' _\?='/,
@@ -629,6 +625,183 @@ describe('guard: исходник установщика — высокоцен�
       readIss(),
       /Source: "\{#ServerPayload\}\\dist\\db\\db-backup\.js"; DestName: "etn-db-tool\.mjs"/,
       `${ISS}: [Files] должен извлекать server\\dist\\db\\db-backup.js как etn-db-tool.mjs.`,
+    );
+  });
+
+  it(`${ISS}: журнал — своё имя на запуск и подтверждённая запись (f7887a35)`, () => {
+    const code = stripPascalComments(codeSection(readIss()));
+
+    const tryInit = functionBody(code, 'TryInitLog');
+    assert.notEqual(tryInit, '', `${ISS}: нет функции TryInitLog.`);
+    assert.match(
+      tryInit,
+      /if FileExists\(Candidate\) then Continue/,
+      `${ISS}: TryInitLog обязан пропускать уже существующий файл — иначе второй запуск ` +
+        'в ту же секунду пишет в чужой журнал (f7887a35).',
+    );
+    assert.match(
+      tryInit,
+      /IntToStr\(N\)/,
+      `${ISS}: имя журнала должно различать запуски одной секунды — номер попытки в имени.`,
+    );
+    assert.match(
+      tryInit,
+      /if not LogProbeWritten\(Candidate, Marker\) then Continue/,
+      `${ISS}: успех инициализации журнала — подтверждённая запись (LogProbeWritten), ` +
+        'а не FileExists: на FileExists журнал неэлевированного запуска терялся.',
+    );
+    assert.match(
+      code,
+      /LOG_NAME_ATTEMPTS = \d+;/,
+      `${ISS}: число попыток имени журнала — именованная константа LOG_NAME_ATTEMPTS.`,
+    );
+
+    const probe = functionBody(code, 'LogProbeWritten');
+    assert.notEqual(probe, '', `${ISS}: нет функции LogProbeWritten.`);
+    assert.match(
+      probe,
+      /if not SaveStringsToUTF8File\(/,
+      `${ISS}: результат SaveStringsToUTF8File обязан проверяться — при ACL-отказе ` +
+        'он возвращает False, а FileExists уже истинно на чужом файле.',
+    );
+    assert.match(
+      probe,
+      /LoadStringsFromFile\(/,
+      `${ISS}: факт записи подтверждается чтением файла назад.`,
+    );
+
+    const logLine = functionBody(code, 'LogLine');
+    assert.match(
+      logLine,
+      /if not AppendUtf8Line\(GLogPath, Line\) then/,
+      `${ISS}: неудачная дописка строки журнала должна уходить в журнал Inno, а не теряться.`,
+    );
+
+    const uninstall = functionBody(code, 'InitializeUninstall');
+    assert.match(
+      uninstall,
+      /TryInitLog\(/,
+      `${ISS}: журнал удаления использует общий TryInitLog — тот же класс дефекта (f7887a35).`,
+    );
+    assert.doesNotMatch(
+      uninstall,
+      /'\\uninstall-' \+/,
+      `${ISS}: имя журнала удаления не собирается вручную — только через TryInitLog.`,
+    );
+  });
+
+  it(`${ISS}: снимок отката — перенос каталога, копия только запасной путь (a34f48da)`, () => {
+    const code = stripPascalComments(codeSection(readIss()));
+
+    const take = functionBody(code, 'TakeSnapshot');
+    assert.notEqual(take, '', `${ISS}: нет функции TakeSnapshot.`);
+    assert.match(
+      take,
+      /if MoveFileExW\(Src, Dest, 0\) then/,
+      `${ISS}: снимок создаётся переносом каталога: побайтовая копия ` +
+        'шла 48–72 с в silent и больше 20 минут в GUI (a34f48da).',
+    );
+    assert.match(
+      take,
+      /if not CopyTreeRec\(Src, Dest\) then/,
+      `${ISS}: запасной путь обязан остаться — другой том или незакрытый файл.`,
+    );
+
+    const create = functionBody(code, 'CreateRollbackSnapshot');
+    assert.notEqual(create, '', `${ISS}: нет функции CreateRollbackSnapshot.`);
+    assert.doesNotMatch(
+      create,
+      /CopyTreeRec\(/,
+      `${ISS}: в создании снимка не должно быть побайтовой копии — только TakeSnapshot.`,
+    );
+    assert.match(
+      create,
+      /TakeSnapshot\(GServerDir \+ '\\server'/,
+      `${ISS}: каталог server попадает в снимок через TakeSnapshot.`,
+    );
+    assert.match(
+      create,
+      /TakeSnapshot\(GServerDir \+ '\\service'/,
+      `${ISS}: каталог service попадает в снимок через TakeSnapshot.`,
+    );
+    assert.equal(
+      (create.match(/UndoSnapshotMoves\(Dir\);/g) ?? []).length,
+      2,
+      `${ISS}: обе ветки отказа снимка обязаны вернуть уже перенесённые каталоги ` +
+        '(UndoSnapshotMoves) — иначе установка остаётся без файлов сервера.',
+    );
+
+    const restore = functionBody(code, 'ReplaceTreeFromSnapshot');
+    assert.match(
+      restore,
+      /Moved := MoveFileExW\(Src, Dest, 0\);/,
+      `${ISS}: откат возвращает снимок переименованием, а не копированием.`,
+    );
+
+    assert.doesNotMatch(
+      code,
+      /(?:CopyTreeRec|TakeSnapshot)\(GDataDir/,
+      `${ISS}: данные пользователя (БД, вложения) в снимок отката не попадают.`,
+    );
+  });
+
+  it(`${ISS}: комментарии [Code] без вложенных фигурных скобок (a34f48da)`, () => {
+    // Pascal Script не поддерживает вложенные `{ … }`: `}` внутри комментария
+    // закрывает его, остаток строки становится кодом — ISCC падает с
+    // синтаксической ошибкой, а построчные сторожа видят несуществующий код.
+    const raw = codeSection(readIss());
+    let block: 'brace' | 'paren' | null = null;
+    let inString = false;
+    const problems: string[] = [];
+    let line = 1;
+    for (let i = 0; i < raw.length; i += 1) {
+      const c = raw[i]!;
+      const next = raw[i + 1];
+      if (c === '\n') line += 1;
+      if (block === 'brace') {
+        if (c === '}') block = null;
+        else if (c === '{') problems.push(`строка ${line}`);
+        continue;
+      }
+      if (block === 'paren') {
+        if (c === '*' && next === ')') {
+          block = null;
+          i += 1;
+        }
+        continue;
+      }
+      if (inString) {
+        if (c === "'") {
+          if (next === "'") {
+            i += 1;
+            continue;
+          }
+          inString = false;
+        }
+        continue;
+      }
+      if (c === "'") {
+        inString = true;
+        continue;
+      }
+      if (c === '{') {
+        block = 'brace';
+        continue;
+      }
+      if (c === '(' && next === '*') {
+        block = 'paren';
+        i += 1;
+        continue;
+      }
+      if (c === '/' && next === '/') {
+        while (i < raw.length && raw[i] !== '\n') i += 1;
+      }
+    }
+    assert.deepEqual(
+      problems,
+      [],
+      `${ISS}: фигурная скобка внутри комментария [Code] (${problems.join(', ')}) — ` +
+        'комментарии Pascal Script не вкладываются, `}` закрывает комментарий раньше.',
     );
   });
 

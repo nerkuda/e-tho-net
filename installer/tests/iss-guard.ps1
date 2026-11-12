@@ -332,6 +332,63 @@ function Get-IssUiLiterals {
     return @($found)
 }
 
+<# Фигурные комментарии Pascal Script не вкладываются: `}` закрывает `{ ... }`.
+    Строка вида `{ Перенос {app}\server }` обрывает комментарий на `}`, и
+    остаток становится кодом — ISCC падает с синтаксической ошибкой. Ошибка
+    невидима для построчных сторожей: Get-IssStrippedLines по правилам самого
+    языка считает остаток строки кодом, поэтому такой «код» попадает в проверки
+    (нашлось на a34f48da). Функция возвращает список проблем «строка: описание».
+    Скобки вне [Code] (константы `{app}` в [Setup]) не проверяются. #>
+function Test-IssNestedComment {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $problems = New-Object System.Collections.Generic.List[string]
+    $section = ''
+    $block = ''
+    $lineNo = 0
+    foreach ($line in ($Text -split "`r?`n")) {
+        $lineNo++
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^\[([^\]]+)\]$') {
+            $section = $Matches[1]
+            $block = ''
+            continue
+        }
+        if ($section -ine 'Code') { continue }
+        $inString = $false
+        for ($i = 0; $i -lt $line.Length; $i++) {
+            $c = $line[$i]
+            if ($block -eq 'brace') {
+                if ($c -eq '}') { $block = '' }
+                elseif ($c -eq '{') { $problems.Add(('строка {0}: {{ внутри комментария {{ }}' -f $lineNo)) }
+                continue
+            }
+            if ($block -eq 'paren') {
+                if (($c -eq '*') -and (($i + 1) -lt $line.Length) -and ($line[$i + 1] -eq ')')) {
+                    $block = ''
+                    $i++
+                }
+                continue
+            }
+            if ($inString) {
+                if ($c -eq "'") {
+                    if ((($i + 1) -lt $line.Length) -and ($line[$i + 1] -eq "'")) { $i++; continue }
+                    $inString = $false
+                }
+                continue
+            }
+            if ($c -eq "'") { $inString = $true; continue }
+            if ($c -eq '{') { $block = 'brace'; continue }
+            if (($c -eq '(') -and (($i + 1) -lt $line.Length) -and ($line[$i + 1] -eq '*')) {
+                $block = 'paren'
+                $i++
+                continue
+            }
+            if (($c -eq '/') -and (($i + 1) -lt $line.Length) -and ($line[$i + 1] -eq '/')) { break }
+        }
+    }
+    return @($problems)
+}
+
 function Test-IssGuardSelfTest {
     $failures = New-Object System.Collections.Generic.List[string]
     $pattern = [regex]::Escape('function ValidDisplayName')
@@ -417,6 +474,21 @@ function Test-IssGuardSelfTest {
     $uiNested = "[Code]`r`nbegin`r`n  LogLine('INFO', FmtMessage('в журнале', [X]));`r`nend;"
     if (@(Get-IssUiLiterals -Text $uiNested).Count -ne 0) {
         $failures.Add('UI-литералы: вложенные аргументы журнального вызова не считаются')
+    }
+
+    # Фигурные комментарии [Code] не вкладываются: `{app}` внутри `{ ... }`
+    # обрывает комментарий на `}` и остаток становится кодом (ISCC — синтаксис).
+    $nested = "[Code]`r`n{ Перенос {app}\server и service в снимок }`r`nfunction A;"
+    if (@(Test-IssNestedComment -Text $nested).Count -eq 0) {
+        $failures.Add('вложенная скобка в комментарии [Code] должна находиться')
+    }
+    $flat = "[Code]`r`n{ Обычный комментарий без скобок }`r`nX := '{app}';`r`n(* {app} в комментарии (* *) не проверяется *)"
+    if (@(Test-IssNestedComment -Text $flat).Count -ne 0) {
+        $failures.Add('комментарии без вложенных скобок и строковые литералы не должны считаться нарушением')
+    }
+    $flatIni = "[Setup]`r`nDefaultDirName={app}\ETN"
+    if (@(Test-IssNestedComment -Text $flatIni).Count -ne 0) {
+        $failures.Add('константы {app} вне [Code] не проверяются')
     }
 
     return [pscustomobject]@{
