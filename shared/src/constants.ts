@@ -174,6 +174,29 @@ export const PREF_KEY = {
 export type PrefKey = (typeof PREF_KEY)[keyof typeof PREF_KEY];
 
 /**
+ * Набор имён тем интерфейса (L10; требование 7cc0cdad, задача 0e4a52cd) —
+ * единственный источник значений: серверная валидация `ui_theme`
+ * (`routes/me.ts`) и реестр тем клиента (`lib/theme.ts`). Имя совпадает с
+ * файлом `lib/ui/themes/<тема>.css`.
+ */
+export const UI_THEME_NAMES = [
+  'current',
+  'blue-topaz',
+  'catppuccin',
+  'nordic',
+  'retronotes',
+  'wasp',
+] as const;
+export type UiThemeName = (typeof UI_THEME_NAMES)[number];
+
+/**
+ * Допустимые режимы интерфейса (требование 219d030c): ключ `ui_mode`.
+ * Единственный источник для серверной валидации и типа клиента.
+ */
+export const UI_MODES = ['light', 'dark'] as const;
+export type UiModeName = (typeof UI_MODES)[number];
+
+/**
  * L3s server-level user settings stored in `user_settings` of `_system.db`
  * (11-settings-and-state.md §2.1 L3s, ADR 3a829d25). They sit outside any
  * network and are shared by all networks and all devices of the user on this

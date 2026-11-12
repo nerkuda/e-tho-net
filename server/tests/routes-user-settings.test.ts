@@ -6,8 +6,8 @@
  *   PUT  /api/v1/users/me/settings/:key   — set one key
  *
  * Covers save/read round-trip, isolation between users, last-write-wins and
- * value validation. Requires the `better-sqlite3` native binding; skipped
- * otherwise.
+ * value validation (unknown key, `ui_theme`/`ui_mode` enums — task 3b1716e3).
+ * Requires the `better-sqlite3` native binding; skipped otherwise.
  */
 
 import assert from 'node:assert/strict';
@@ -17,6 +17,8 @@ import { describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
+
+import { UI_MODES, UI_THEME_NAMES } from '@etn/shared';
 
 import {
   DEFAULT_MCP_SESSION_IDLE_TTL_MS,
@@ -165,12 +167,91 @@ describe(
       assert.deepEqual(get.json().data, { comment_hotkeys: { bold: 'Alt+B' } });
     });
 
-    it('unknown keys are accepted as-is (future server settings)', async () => {
+    it('rejects an unknown key with 422 and stores nothing', async () => {
       const { app, alice } = await buildApp();
       const put = await putSetting(app, alice, 'future_setting', { nested: [1, 2, 3] });
-      assert.equal(put.statusCode, 200);
+      assert.equal(put.statusCode, 422);
+      assert.equal(put.json().error.code, 'VALIDATION_ERROR');
+      assert.equal(put.json().error.details.field, 'key');
+      assert.equal(put.json().error.details.key, 'future_setting');
       const get = await getSettings(app, alice);
-      assert.deepEqual(get.json().data, { future_setting: { nested: [1, 2, 3] } });
+      assert.deepEqual(get.json().data, {}, 'неизвестный ключ не попал в БД');
+    });
+
+    it('accepts every ui_theme name and round-trips it', async () => {
+      const { app, alice } = await buildApp();
+      for (const theme of UI_THEME_NAMES) {
+        const put = await putSetting(app, alice, 'ui_theme', theme);
+        assert.equal(put.statusCode, 200, `тема ${theme}`);
+        assert.deepEqual(put.json().data, { key: 'ui_theme', value: theme });
+        const get = await getSettings(app, alice);
+        assert.equal(get.json().data.ui_theme, theme, `тема ${theme} прочитана`);
+      }
+    });
+
+    it('accepts both ui_mode values and round-trips them', async () => {
+      const { app, alice } = await buildApp();
+      for (const mode of UI_MODES) {
+        const put = await putSetting(app, alice, 'ui_mode', mode);
+        assert.equal(put.statusCode, 200, `режим ${mode}`);
+        const get = await getSettings(app, alice);
+        assert.equal(get.json().data.ui_mode, mode, `режим ${mode} прочитан`);
+      }
+    });
+
+    it('rejects an unknown ui_theme with 422 and keeps the previous value', async () => {
+      const { app, alice } = await buildApp();
+      await putSetting(app, alice, 'ui_theme', 'nordic');
+      const put = await putSetting(app, alice, 'ui_theme', 'neon-future');
+      assert.equal(put.statusCode, 422);
+      assert.equal(put.json().error.code, 'VALIDATION_ERROR');
+      assert.equal(put.json().error.details.field, 'value');
+      assert.deepEqual(put.json().error.details.allowed, [...UI_THEME_NAMES]);
+      const get = await getSettings(app, alice);
+      assert.equal(get.json().data.ui_theme, 'nordic', 'прежнее значение не затёрто');
+    });
+
+    it('rejects a non-enum ui_theme (null, number, case mismatch) with 422', async () => {
+      const { app, alice } = await buildApp();
+      for (const bad of [42, 'NORDIC', '', ['nordic'], { name: 'nordic' }]) {
+        const put = await putSetting(app, alice, 'ui_theme', bad);
+        assert.equal(put.statusCode, 422, `значение ${JSON.stringify(bad)}`);
+        assert.equal(put.json().error.code, 'VALIDATION_ERROR');
+      }
+    });
+
+    it('rejects an invalid ui_mode with 422 and keeps the previous value', async () => {
+      const { app, alice } = await buildApp();
+      await putSetting(app, alice, 'ui_mode', 'light');
+      for (const bad of ['dim', 'DARK', 1, ['light']]) {
+        const put = await putSetting(app, alice, 'ui_mode', bad);
+        assert.equal(put.statusCode, 422, `значение ${JSON.stringify(bad)}`);
+        assert.equal(put.json().error.details.field, 'value');
+      }
+      const get = await getSettings(app, alice);
+      assert.equal(get.json().data.ui_mode, 'light');
+    });
+
+    it('null clears ui_theme/ui_mode (unset, not an unknown value)', async () => {
+      const { app, alice } = await buildApp();
+      await putSetting(app, alice, 'ui_theme', 'wasp');
+      await putSetting(app, alice, 'ui_mode', 'dark');
+      for (const key of ['ui_theme', 'ui_mode']) {
+        const put = await putSetting(app, alice, key, null);
+        assert.equal(put.statusCode, 200, `${key}: null снимает значение`);
+        assert.deepEqual(put.json().data, { key, value: null });
+      }
+      const get = await getSettings(app, alice);
+      assert.equal(get.json().data.ui_theme, null);
+      assert.equal(get.json().data.ui_mode, null);
+    });
+
+    it('ui_theme and ui_mode are independent keys (no cross-wipe)', async () => {
+      const { app, alice } = await buildApp();
+      await putSetting(app, alice, 'ui_theme', 'wasp');
+      await putSetting(app, alice, 'ui_mode', 'dark');
+      const get = await getSettings(app, alice);
+      assert.deepEqual(get.json().data, { ui_theme: 'wasp', ui_mode: 'dark' });
     });
 
     it('rejects a missing value field', async () => {

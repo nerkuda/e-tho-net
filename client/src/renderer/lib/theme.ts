@@ -28,7 +28,7 @@
  * (`store.state.uiTheme`/`theme`) и зовёт `lib/ui-theme.ts`.
  */
 
-import { CLIENT_META_KEY } from '@etn/shared';
+import { CLIENT_META_KEY, UI_THEME_NAMES } from '@etn/shared';
 
 import { store, type Theme, type UiTheme } from '../state.js';
 import { etn } from './etn.js';
@@ -37,14 +37,8 @@ import { t, type MessageKey } from './i18n.js';
 /** Реестр тем сборки — имена совпадают именами файлов `lib/ui/themes/*.css`. */
 export type { UiTheme } from '../state.js';
 
-export const THEME_NAMES: readonly UiTheme[] = [
-  'current',
-  'blue-topaz',
-  'catppuccin',
-  'nordic',
-  'retronotes',
-  'wasp',
-];
+/** Реестр тем — значения приходят из единственного источника (`@etn/shared`). */
+export const THEME_NAMES: readonly UiTheme[] = UI_THEME_NAMES;
 
 /** Дефолтная тема и режим установки без выбора (как до 0.16.1). */
 export const DEFAULT_UI_THEME: UiTheme = 'current';

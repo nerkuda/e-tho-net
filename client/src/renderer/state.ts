@@ -19,6 +19,8 @@ import {
   SELECTION_W_DEFAULT,
   USAGE_W_DEFAULT,
   type CurrentUser,
+  type UiModeName,
+  type UiThemeName,
   type FocusEdge,
   type FocusResponse,
   type Layer,
@@ -73,20 +75,14 @@ export type RtStatusDetail = 'server-restart' | 'server-maintenance';
  * профиле (`ui_mode`, требование 219d030c), кэш офлайн-старта —
  * `client_meta.ui_mode`.
  */
-export type Theme = 'light' | 'dark';
+export type Theme = UiModeName;
 
 /**
  * Имя темы интерфейса (набор значений токенов, L10; требование 7cc0cdad):
  * совпадает с именем файла `lib/ui/themes/<тема>.css`. Реестр загрузки —
  * `lib/theme.ts` (`THEME_NAMES`).
  */
-export type UiTheme =
-  | 'current'
-  | 'blue-topaz'
-  | 'catppuccin'
-  | 'nordic'
-  | 'retronotes'
-  | 'wasp';
+export type UiTheme = UiThemeName;
 
 /** Shared renderer state snapshot. */
 export interface AppState {
