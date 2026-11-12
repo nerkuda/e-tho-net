@@ -102,3 +102,88 @@ export function declaredTokens(body: string): Map<string, string> {
   }
   return out;
 }
+
+/** Цвет в sRGB (0–255) для расчёта контраста. */
+export interface RgbColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
+/**
+ * Разбор цвета значения токена темы: `#rgb`/`#rrggbb`/`#rrggbbaa`, `rgb[a]()`
+ * и `hsl[a]()`. Альфа отбрасывается (сравниваются чистые тона), непонятное
+ * значение — `null` (сторож сам скажет, что значение не цвет).
+ */
+export function parseThemeColor(value: string): RgbColor | null {
+  const v = value.trim();
+  const hex = /^#([0-9a-f]{3,8})$/i.exec(v);
+  if (hex) {
+    let digits = hex[1]!;
+    if (digits.length === 3 || digits.length === 4) {
+      digits = digits
+        .slice(0, 3)
+        .split('')
+        .map((c) => c + c)
+        .join('');
+    }
+    if (digits.length < 6) return null;
+    return {
+      r: parseInt(digits.slice(0, 2), 16),
+      g: parseInt(digits.slice(2, 4), 16),
+      b: parseInt(digits.slice(4, 6), 16),
+    };
+  }
+  const rgb = /^rgba?\(([^)]+)\)$/i.exec(v);
+  if (rgb) {
+    const parts = rgb[1]!.split(',').map((part) => part.trim());
+    if (parts.length < 3) return null;
+    const channel = (part: string): number =>
+      part.endsWith('%') ? (parseFloat(part) * 255) / 100 : parseFloat(part);
+    const [r, g, b] = parts.map(channel) as [number, number, number];
+    if ([r, g, b].some((c) => Number.isNaN(c))) return null;
+    return { r, g, b };
+  }
+  const hsl = /^hsla?\(([^)]+)\)$/i.exec(v);
+  if (hsl) {
+    const parts = hsl[1]!.split(',').map((part) => part.trim());
+    if (parts.length < 3) return null;
+    const h = parseFloat(parts[0]!);
+    const s = parseFloat(parts[1]!) / 100;
+    const l = parseFloat(parts[2]!) / 100;
+    if ([h, s, l].some((c) => Number.isNaN(c))) return null;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    let rgbParts: [number, number, number];
+    if (h < 60) rgbParts = [c, x, 0];
+    else if (h < 120) rgbParts = [x, c, 0];
+    else if (h < 180) rgbParts = [0, c, x];
+    else if (h < 240) rgbParts = [0, x, c];
+    else if (h < 300) rgbParts = [x, 0, c];
+    else rgbParts = [c, 0, x];
+    return {
+      r: Math.round((rgbParts[0] + m) * 255),
+      g: Math.round((rgbParts[1] + m) * 255),
+      b: Math.round((rgbParts[2] + m) * 255),
+    };
+  }
+  return null;
+}
+
+/** Относительная яркость по WCAG 2.1. */
+export function relativeLuminance(color: RgbColor): number {
+  const channel = (value: number): number => {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
+}
+
+/** Коэффициент контраста пары цветов по WCAG 2.1 (1–21). */
+export function contrastRatio(a: RgbColor, b: RgbColor): number {
+  const first = relativeLuminance(a);
+  const second = relativeLuminance(b);
+  const [hi, lo] = first > second ? [first, second] : [second, first];
+  return (hi + 0.05) / (lo + 0.05);
+}

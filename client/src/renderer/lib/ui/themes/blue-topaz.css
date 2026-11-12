@@ -34,7 +34,9 @@
   --accent-strong: hsla(209, 95%, 54%, 1);
   --accent-pressed: hsla(209, 95%, 46%, 1);
   --accent-soft: hsla(209, 90%, 93%, 1);
-  --accent-fg: #ffffff;
+  /* Надпись на акцентной заливке — тёмная: пара rgb(66,161,250)/#202020 даёт
+     5.98:1 (белая надпись давала 2.72:1 и не проходила 4.5:1). */
+  --accent-fg: #202020;
   --selection-bg: hsla(209, 95%, 62%, 0.35);
   /* Оранжевый референса (--simple-orange) — контур выбранного облачка:
      отличим от синего акцента. */
@@ -95,6 +97,7 @@
   /* Мягкие тени референса (`0 2px 6px rgba(0,0,0,0.1)`, `0 3px 8px`). */
   --shadow-c: hsla(210, 20%, 20%, 0.16);
   --shadow-sm-c: hsla(210, 20%, 20%, 0.08);
+  --shadow-xs-c: hsla(210, 20%, 20%, 0.15);
   --shadow: 0 8px 28px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 2px 10px var(--shadow-c);
@@ -125,8 +128,9 @@
   --accent-strong: hsla(209, 90%, 76%, 1);
   --accent-pressed: hsla(209, 90%, 60%, 1);
   --accent-soft: hsla(209, 50%, 24%, 1);
-  /* text-on-accent референса в тёмном режиме. */
-  --accent-fg: #e4e4e4;
+  /* Тёмная надпись на светлом голубом акценте референса: #64b0f7/#202020 —
+     7.06:1 (светлая #e4e4e4 давала 1.82:1). */
+  --accent-fg: #202020;
   --selection-bg: hsla(209, 90%, 68%, 0.4);
   --selection: hsla(25, 85%, 62%, 1);
   --cal-weekend: hsla(338, 85%, 72%, 1);
@@ -181,6 +185,7 @@
   /* Глубокие тени референса (`0 3px 8px rgba(0,0,0,.25)`). */
   --shadow-c: hsla(0, 0%, 0%, 0.55);
   --shadow-sm-c: hsla(0, 0%, 0%, 0.35);
+  --shadow-xs-c: hsla(0, 0%, 0%, 0.18);
   --shadow: 0 8px 28px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 4px 16px var(--shadow-c);

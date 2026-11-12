@@ -13,13 +13,18 @@
  *      переменных (`:root`/`[data-theme='<тема>'][data-mode='<режим>']`);
  *      ни одного класса или правила оформления — тема не добавляет сущностей
  *      интерфейса (запрет ADR).
- *   3. **Цвета — только в блоках тем.** Прямой цвет (`#hex`, `rgb()`,
- *      `hsl()`) в CSS рендерера допустим только внутри блока темы; в
- *      `styles/**`, в правилах `lib/ui` и в прочих CSS рендерера — запрещён
- *      (требование c244557c: цветовых литералов в `styles/` не остаётся).
+ *   3. **Цвета — только в файлах и блоках тем.** Прямой цвет (`#hex`, `rgb()`,
+ *      `hsl()`, `hwb()`, `oklch()`, именованные цвета) в CSS рендерера
+ *      допустим только внутри блока значений темы в файлах каталога
+ *      `lib/ui/themes/*.css`; в `styles/**`, в правилах `lib/ui` и в прочих
+ *      CSS рендерера — запрещён (требование c244557c: цветовых литералов в
+ *      `styles/` не остаётся). Блок с `[data-theme=…]` вне каталога тем не
+ *      даёт поблажки — это такая же утечка цвета.
  *   4. **Загрузка.** Каждый файл темы подключён импортом из
  *      `lib/ui/register.ts` (ADR: не `@import` в `styles.css`); забытая тема
  *      не доедет до бандла.
+ *   5. **Читаемость акцента.** Пара `--accent`/`--accent-fg` (надпись на
+ *      акцентной заливке) в каждой теме и режиме — не ниже 4.5:1 по WCAG 2.1.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -34,7 +39,9 @@ import { RENDERER_ROOT } from './renderer-css.js';
 import {
   THEMES_DIR,
   THEME_MODES,
+  contrastRatio,
   declaredTokens,
+  parseThemeColor,
   readTheme,
   stripCssComments,
   themeBlockBody,
@@ -45,10 +52,11 @@ import {
 } from './theme-css.js';
 
 /**
- * Полный перечень тем версии. Этап 1 задачи (ранний срез заказчику) —
- * `current` и `blue-topaz`; этап 2 добавляет `catppuccin` и `nordic`.
+ * Полный перечень тем версии (ADR de24adef: 4 темы × 2 режима). Этап 1 задачи
+ * — ранний срез заказчику (`current`, `blue-topaz`); этап 2 добавил
+ * `catppuccin` и `nordic`.
  */
-const THEME_NAMES = ['current', 'blue-topaz'] as const;
+const THEME_NAMES = ['current', 'blue-topaz', 'catppuccin', 'nordic'] as const;
 
 /**
  * Полный набор токенов темы: цвета + тени + радиусы + обязательный
@@ -122,6 +130,7 @@ const THEME_TOKENS = [
   '--hljs-deletion',
   '--shadow-c',
   '--shadow-sm-c',
+  '--shadow-xs-c',
   '--shadow',
   '--shadow-sm',
   '--shadow-hover',
@@ -133,8 +142,171 @@ const THEME_TOKENS = [
   '--radius-pill',
 ] as const;
 
-/** Признак прямого цвета: hex, rgb()/rgba(), hsl()/hsla(). */
-const COLOR_LITERAL = /(#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\()/g;
+/**
+ * Признак прямого цвета: hex, функции цвета (`rgb[a]()`, `hsl[a]()`, `hwb()`,
+ * `oklch()`, `oklab()`, `lab()`, `lch()`) и именованные цвета CSS.
+ * `transparent` и `currentColor` — не цвет темы, а модификатор/наследование,
+ * поэтому в список не входят.
+ */
+const NAMED_COLORS = [
+  'aliceblue',
+  'antiquewhite',
+  'aqua',
+  'aquamarine',
+  'azure',
+  'beige',
+  'bisque',
+  'black',
+  'blanchedalmond',
+  'blue',
+  'blueviolet',
+  'brown',
+  'burlywood',
+  'cadetblue',
+  'chartreuse',
+  'chocolate',
+  'coral',
+  'cornflowerblue',
+  'cornsilk',
+  'crimson',
+  'cyan',
+  'darkblue',
+  'darkcyan',
+  'darkgoldenrod',
+  'darkgray',
+  'darkgreen',
+  'darkgrey',
+  'darkkhaki',
+  'darkmagenta',
+  'darkolivegreen',
+  'darkorange',
+  'darkorchid',
+  'darkred',
+  'darksalmon',
+  'darkseagreen',
+  'darkslateblue',
+  'darkslategray',
+  'darkslategrey',
+  'darkturquoise',
+  'darkviolet',
+  'deeppink',
+  'deepskyblue',
+  'dimgray',
+  'dimgrey',
+  'dodgerblue',
+  'firebrick',
+  'floralwhite',
+  'forestgreen',
+  'fuchsia',
+  'gainsboro',
+  'ghostwhite',
+  'gold',
+  'goldenrod',
+  'gray',
+  'green',
+  'greenyellow',
+  'grey',
+  'honeydew',
+  'hotpink',
+  'indianred',
+  'indigo',
+  'ivory',
+  'khaki',
+  'lavender',
+  'lavenderblush',
+  'lawngreen',
+  'lemonchiffon',
+  'lightblue',
+  'lightcoral',
+  'lightcyan',
+  'lightgoldenrodyellow',
+  'lightgray',
+  'lightgreen',
+  'lightgrey',
+  'lightpink',
+  'lightsalmon',
+  'lightseagreen',
+  'lightskyblue',
+  'lightslategray',
+  'lightslategrey',
+  'lightsteelblue',
+  'lightyellow',
+  'lime',
+  'limegreen',
+  'linen',
+  'magenta',
+  'maroon',
+  'mediumaquamarine',
+  'mediumblue',
+  'mediumorchid',
+  'mediumpurple',
+  'mediumseagreen',
+  'mediumslateblue',
+  'mediumspringgreen',
+  'mediumturquoise',
+  'mediumvioletred',
+  'midnightblue',
+  'mintcream',
+  'mistyrose',
+  'moccasin',
+  'navajowhite',
+  'navy',
+  'oldlace',
+  'olive',
+  'olivedrab',
+  'orange',
+  'orangered',
+  'orchid',
+  'palegoldenrod',
+  'palegreen',
+  'paleturquoise',
+  'palevioletred',
+  'papayawhip',
+  'peachpuff',
+  'peru',
+  'pink',
+  'plum',
+  'powderblue',
+  'purple',
+  'rebeccapurple',
+  'red',
+  'rosybrown',
+  'royalblue',
+  'saddlebrown',
+  'salmon',
+  'sandybrown',
+  'seagreen',
+  'seashell',
+  'sienna',
+  'silver',
+  'skyblue',
+  'slateblue',
+  'slategray',
+  'slategrey',
+  'snow',
+  'springgreen',
+  'steelblue',
+  'tan',
+  'teal',
+  'thistle',
+  'tomato',
+  'turquoise',
+  'violet',
+  'wheat',
+  'white',
+  'whitesmoke',
+  'yellow',
+  'yellowgreen',
+] as const;
+
+const COLOR_LITERAL = new RegExp(
+  [
+    '#[0-9a-f]{3,8}\\b',
+    '\\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch)\\s*\\(',
+    `(?<![-\\w])(?:${NAMED_COLORS.join('|')})(?![-\\w])`,
+  ].join('|'),
+  'gi',
+);
 
 /** Полнота блока режима: недостающие и лишние токены. */
 export function completenessProblems(css: string, name: string, mode: ThemeMode): string[] {
@@ -185,22 +357,31 @@ export function shapeProblems(css: string, name: string): string[] {
 
 /**
  * Прямые цвета вне блоков тем. Возвращает список `файл:строка — фрагмент`.
- * Маска: тела блоков с `[data-theme=…]` заменяются пробелами, поэтому
- * находка = цвет вне блока темы.
+ *
+ * Маска: значения разрешены ТОЛЬКО в файлах каталога `lib/ui/themes/*.css` —
+ * там тела блоков значений заменяются пробелами. Блоки с `[data-theme=…]` в
+ * любом другом файле (`styles/**`, правила `lib/ui`) не маскируются: тёмное
+ * переопределение экрана прямо в модуле стилей — такая же утечка цвета, как
+ * hex в правиле.
  */
 export function colorLiteralsOutsideThemes(
   files: ReadonlyArray<{ rel: string; css: string }>,
 ): string[] {
   const out: string[] = [];
   for (const { rel, css } of files) {
+    // Значения тем живут только в файлах каталога тем (ADR de24adef).
+    const isThemeFile = /^lib\/ui\/themes\/[^/]+\.css$/.test(rel);
     // Комментарии вырезаются до маски: hex в пояснении — не цвет правила.
     const stripped = stripCssComments(css);
     const chars = stripped.split('');
-    for (const block of topLevelBlocks(stripped)) {
-      const isThemeBlock = block.prelude.includes('[data-theme=');
-      if (!isThemeBlock) continue;
-      for (let i = block.bodyStart; i < block.bodyEnd; i += 1) {
-        if (chars[i] !== '\n') chars[i] = ' ';
+    if (isThemeFile) {
+      for (const block of topLevelBlocks(stripped)) {
+        const selector = block.prelude.replace(/\s+/g, '');
+        const isValueBlock = selector.includes('[data-theme=') || selector === ':root';
+        if (!isValueBlock) continue;
+        for (let i = block.bodyStart; i < block.bodyEnd; i += 1) {
+          if (chars[i] !== '\n') chars[i] = ' ';
+        }
       }
     }
     const masked = chars.join('');
@@ -278,6 +459,33 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
     );
   });
 
+  it('пара --accent/--accent-fg читается во всех темах и режимах (WCAG ≥ 4.5:1)', () => {
+    const problems: string[] = [];
+    for (const name of THEME_NAMES) {
+      const css = readTheme(name);
+      for (const mode of THEME_MODES) {
+        const tokens = declaredTokens(themeBlockBody(css, name, mode) ?? '');
+        const accent = parseThemeColor(tokens.get('--accent') ?? '');
+        const foreground = parseThemeColor(tokens.get('--accent-fg') ?? '');
+        if (accent === null || foreground === null) {
+          problems.push(`${name}.css [${mode}]: --accent/--accent-fg не цвета`);
+          continue;
+        }
+        const ratio = contrastRatio(accent, foreground);
+        if (ratio < 4.5) {
+          problems.push(
+            `${name}.css [${mode}]: --accent/--accent-fg = ${ratio.toFixed(2)}:1 (< 4.5:1)`,
+          );
+        }
+      }
+    }
+    assert.deepEqual(
+      problems,
+      [],
+      `контраст надписи на акцентной заливке:\n${problems.join('\n')}`,
+    );
+  });
+
   it('сторож краснеет на неполном блоке, постороннем селекторе и цвете вне темы', () => {
     const incomplete = `
       /* Тема без половины токенов и без color-scheme */
@@ -313,5 +521,47 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
       },
     ]);
     assert.equal(leaks.length, 2, `ожидались два литерала вне темы, найдено: ${leaks.join(' | ')}`);
+
+    // Тёмное переопределение экрана прямо в модуле стилей — утечка цвета:
+    // маскируются только блоки значений в файлах каталога тем.
+    const styleOverride = colorLiteralsOutsideThemes([
+      {
+        rel: 'styles/layout.css',
+        css: "[data-theme='dark'] .demo-theme-leak { color: #abcdef; }",
+      },
+    ]);
+    assert.equal(
+      styleOverride.length,
+      1,
+      `переопределение с hex в styles/ обязано краснить: ${styleOverride.join(' | ')}`,
+    );
+
+    // Именованный цвет — тоже литерал (требование c244557c).
+    const named = colorLiteralsOutsideThemes([
+      { rel: 'styles/layout.css', css: '.demo-named-leak{color:red}' },
+    ]);
+    assert.deepEqual(named, ['styles/layout.css:1 — red'], 'именованный цвет обязан краснить');
+
+    // Функции современного синтаксиса цвета — тоже литералы.
+    const modern = colorLiteralsOutsideThemes([
+      {
+        rel: 'styles/layout.css',
+        css: '.demo-modern-leak{color:oklch(0.7 0.1 200);background:hwb(0 0% 0%)}',
+      },
+    ]);
+    assert.equal(modern.length, 2, `oklch()/hwb() обязаны краснить: ${modern.join(' | ')}`);
+
+    // `white-space` и `transparent` — не цвет: ложных срабатываний нет.
+    const clean = colorLiteralsOutsideThemes([
+      {
+        rel: 'styles/layout.css',
+        css: '.demo-clean{white-space:nowrap;background:transparent;}',
+      },
+    ]);
+    assert.deepEqual(
+      clean,
+      [],
+      `ложное срабатывание на white-space/transparent: ${clean.join(' | ')}`,
+    );
   });
 });

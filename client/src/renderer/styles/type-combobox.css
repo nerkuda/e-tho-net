@@ -231,7 +231,9 @@ button.entity-combo-pick {
 }
 
 button.entity-combo-pick:hover {
-  background: var(--bg-hover);
+  /* Подслой от цвета текста: hover темнее/светлее родительского фона сам,
+     без «прыжка» на готовый --bg-hover (в тёмной теме он светлее панели). */
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 

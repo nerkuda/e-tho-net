@@ -1,0 +1,195 @@
+/*
+ * Тема «Catppuccin» — значения из официального референса
+ * catppuccin/obsidian (`theme.css`) и палитры catppuccin.com/palette.
+ * Взяты два официальных вкуса: светлый — Latte, тёмный — Mocha; шрифты
+ * референса НЕ переносятся, easing/анимации — действующие ETN (ADR de24adef).
+ *
+ * Палитра: фон-основа base, поверхности mantle/crust/surface0-2, акцент —
+ * blue (`#1e66f5` Latte / `#89b4fa` Mocha), служебные тона — red/green/
+ * yellow/teal/pink/mauve/sapphire референса. Радиусы референса
+ * (`--radius-s/-m/-l/-xl` = 4/8/10/16 px) перенесены как есть, «пилюля»
+ * дополнена шкалой ETN. Тени Catppuccin мягкие: крупная — от чёрного/базы,
+ * микро-тень (`--shadow-xs-c`) — прежней величины (0.15 α), чтобы бейджи и
+ * небольшие поповеры не темнели в тёмном режиме.
+ *
+ * Надпись на акцентной заливке (`--accent-fg`) подобрана по контрасту:
+ * Latte blue/белый = 4.91:1, Mocha blue/crust = 8.91:1 (порог 4.5:1).
+ *
+ * Файл значений СУЩЕСТВУЮЩИХ токенов (ADR de24adef): только объявления
+ * переменных, ни одного класса. Селекция — `data-theme='catppuccin'` +
+ * `data-mode` на корне документа. Состав набора токенов обязан совпадать с
+ * остальными темами (сторож `guard-ui-theme-tokens`).
+ */
+
+[data-theme='catppuccin'][data-mode='light'] {
+  color-scheme: light;
+
+  /* palette — Catppuccin Latte */
+  --bg: #eff1f5;
+  --surface: #ffffff;
+  --surface-2: #e6e9ef;
+  --bg-hover: #e6e9ef;
+  --bg-active: #dce0e8;
+  --border: #ccd0da;
+  --border-strong: #bcc0cc;
+  --text: #4c4f69;
+  --text-dim: #6c6f85;
+  --text-faint: #8c8fa1;
+  --accent: #1e66f5;
+  --accent-strong: #0b55e0;
+  --accent-pressed: #0946b9;
+  --accent-soft: #d4e0f7;
+  /* blue/белый = 4.91:1 (порог 4.5:1). */
+  --accent-fg: #ffffff;
+  --selection-bg: rgba(30, 102, 245, 0.32);
+  --selection: #179299;
+  --cal-weekend: #ea76cb;
+  --danger: #d20f39;
+  --danger-soft: #fcedf0;
+  --ok: #40a02b;
+  --ok-soft: #e5f5e5;
+  --warn: #df8e1d;
+  --warn-strong: #bd740f;
+  --warn-soft: #fcedd9;
+  --warn-glow: rgba(223, 142, 29, 0.35);
+  --mark-bg: #f9e4c8;
+  --link-default: #9ca0b0;
+  --ft-tone-1: #e9edfb;
+  --ft-tone-2: #e7f3e4;
+  --ft-tone-3: #faf0e0;
+  --ft-tone-4: #f1e9fb;
+  --ellipse-fill: #c3d3fb;
+  --ellipse-fill-border: #7b9cf8;
+  --backdrop: rgba(76, 79, 105, 0.35);
+  --canvas-dot: rgba(76, 79, 105, 0.14);
+  --focus-band-color: #1e66f5;
+  --focus-accent: var(--accent);
+  --focus-ring-contrast: #ffffff;
+  --md-html-comment: #8c8fa1;
+  --mark-danger: #d20f39;
+  --mark-network: #1e66f5;
+  --mark-layer: #8839ef;
+  --mark-warn: #df8e1d;
+  --mark-lock-own: #209fb5;
+  --badge-bg: #1e1e2e;
+  --badge-fg: #cdd6f4;
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — синтаксическая палитра Latte референса. */
+  --hljs-comment: #8c8fa1;
+  --hljs-keyword: #8839ef;
+  --hljs-string: #40a02b;
+  --hljs-number: #fe640b;
+  --hljs-literal: #fe640b;
+  --hljs-title: #1e66f5;
+  --hljs-builtin: #fe640b;
+  --hljs-attr: #df8e1d;
+  --hljs-type: #179299;
+  --hljs-tag: #d20f39;
+  --hljs-meta: #209fb5;
+  --hljs-symbol: #ea76cb;
+  --hljs-section: #1e66f5;
+  --hljs-addition: #40a02b;
+  --hljs-deletion: #d20f39;
+
+  --shadow-c: rgba(76, 79, 105, 0.18);
+  --shadow-sm-c: rgba(76, 79, 105, 0.1);
+  --shadow-xs-c: rgba(76, 79, 105, 0.15);
+  --shadow: 0 8px 24px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 2px 10px var(--shadow-c);
+  --shadow-focus: 0 4px 18px rgba(30, 102, 245, 0.22);
+
+  /* Радиусы референса: 4 / 8 / 10 / 16 px (шкала ETN). */
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 10px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+}
+
+[data-theme='catppuccin'][data-mode='dark'] {
+  color-scheme: dark;
+
+  /* palette — Catppuccin Mocha */
+  --bg: #11111b;
+  --surface: #1e1e2e;
+  --surface-2: #313244;
+  --bg-hover: #313244;
+  --bg-active: #45475a;
+  --border: #45475a;
+  --border-strong: #585b70;
+  --text: #cdd6f4;
+  --text-dim: #a6adc8;
+  --text-faint: #6c7086;
+  --accent: #89b4fa;
+  --accent-strong: #a7c7fb;
+  --accent-pressed: #5996f8;
+  --accent-soft: #243b60;
+  /* blue/crust = 8.91:1 (белый на акценте давал 2.11:1). */
+  --accent-fg: #11111b;
+  --selection-bg: rgba(137, 180, 250, 0.4);
+  --selection: #94e2d5;
+  --cal-weekend: #f5c2e7;
+  --danger: #f38ba8;
+  --danger-soft: #3a2331;
+  --ok: #a6e3a1;
+  --ok-soft: #24331f;
+  --warn: #f9e2af;
+  --warn-strong: #f6d7ac;
+  --warn-soft: #3a2f1c;
+  --warn-glow: rgba(249, 226, 175, 0.32);
+  --mark-bg: rgba(249, 226, 175, 0.28);
+  --link-default: #6c7086;
+  --ft-tone-1: #232338;
+  --ft-tone-2: #1f2b26;
+  --ft-tone-3: #2e2a24;
+  --ft-tone-4: #2a2437;
+  --ellipse-fill: #3d4a6b;
+  --ellipse-fill-border: #5a7fc0;
+  --backdrop: rgba(0, 0, 0, 0.55);
+  --canvas-dot: rgba(205, 214, 244, 0.08);
+  --focus-band-color: #89b4fa;
+  --focus-accent: var(--accent);
+  --focus-ring-contrast: #cdd6f4;
+  --md-html-comment: #7f849c;
+  --mark-danger: #f38ba8;
+  --mark-network: #89b4fa;
+  --mark-layer: #cba6f7;
+  --mark-warn: #f9e2af;
+  --mark-lock-own: #74c7ec;
+  --badge-bg: #11111b;
+  --badge-fg: #cdd6f4;
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — синтаксическая палитра Mocha референса. */
+  --hljs-comment: #6c7086;
+  --hljs-keyword: #cba6f7;
+  --hljs-string: #a6e3a1;
+  --hljs-number: #fab387;
+  --hljs-literal: #fab387;
+  --hljs-title: #89b4fa;
+  --hljs-builtin: #fab387;
+  --hljs-attr: #f9e2af;
+  --hljs-type: #94e2d5;
+  --hljs-tag: #f38ba8;
+  --hljs-meta: #74c7ec;
+  --hljs-symbol: #f5c2e7;
+  --hljs-section: #89b4fa;
+  --hljs-addition: #a6e3a1;
+  --hljs-deletion: #f38ba8;
+
+  --shadow-c: rgba(0, 0, 0, 0.5);
+  --shadow-sm-c: rgba(0, 0, 0, 0.3);
+  --shadow-xs-c: rgba(0, 0, 0, 0.18);
+  --shadow: 0 8px 24px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 4px 16px var(--shadow-c);
+  --shadow-focus: 0 4px 22px rgba(137, 180, 250, 0.28);
+
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 10px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+}

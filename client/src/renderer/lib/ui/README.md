@@ -120,10 +120,13 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 Нетематические токены (шкалы типографики/отступов, геометрия, длительности,
 группа `--user-*`) объявлены в `client/src/renderer/styles/tokens.css`;
 тематические значения (цвета, тени, радиусы, `--focus-accent`) — в файлах тем
-`client/src/renderer/lib/ui/themes/{current,blue-topaz,…}.css` по блоку на
-режим (ADR `de24adef`, требование `7cc0cdad`). Тема выбирается атрибутом
-`data-theme`, режим — `data-mode` на корне документа; дефолт — `current`
-(светлый блок объявлен на `:root`). `styles.css` — манифест модулей стилей,
+`client/src/renderer/lib/ui/themes/{current,blue-topaz,catppuccin,nordic}.css`
+по блоку на режим (ADR `de24adef`, требование `7cc0cdad`). Тема выбирается
+атрибутом `data-theme`, режим — `data-mode` на корне документа; дефолт —
+`current` (светлый блок объявлен на `:root`). Полноту набора токенов в каждой
+теме и режиме и контраст пары `--accent`/`--accent-fg` (≥ 4.5:1) стережёт
+`guard-ui-theme-tokens`; прямые цвета вне файлов тем запрещены.
+`styles.css` — манифест модулей стилей,
 см. `styles/`. Компоненты `lib/ui` ссылаются только на токены.
 
 **Шкалы оформления** (требование `0dddd939`, сторож `guard-ui-tokens`):
@@ -172,6 +175,6 @@ CSS фасадов. Порядок внутри `register.ts` значим (см
 `guard-ui-fields`, `guard-ui-comment`, `guard-ui-popover`, `guard-ui-tables`,
 `guard-ui-tree`, `guard-ui-empty-state`, `guard-ui-states`,
 `guard-ui-discoverability`, `guard-ui-hit-area`, `guard-ui-container`,
-`guard-ui-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
+`guard-ui-tokens`, `guard-ui-theme-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
 `guard-ui-licenses`, `guard-ui-dialog`, `guard-ui-icons`, `guard-keyed-lists`,
 `guard-list-nav`, `guard-drag-channel`.

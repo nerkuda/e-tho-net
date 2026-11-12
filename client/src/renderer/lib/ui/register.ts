@@ -32,6 +32,8 @@ import '@awesome.me/webawesome/dist/styles/webawesome.css';
 // на `:root`, поэтому первый кадр не мигает чужими цветами.
 import './themes/current.css';
 import './themes/blue-topaz.css';
+import './themes/catppuccin.css';
+import './themes/nordic.css';
 
 // Карта маппинга токенов ETN → `--wa-*` (одна на все темы: темы меняют
 // значения ETN-токенов, маппинг не трогают).

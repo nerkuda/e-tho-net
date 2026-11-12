@@ -15,8 +15,9 @@
  * одна и та же карта красит обе темы, отдельный блок `[data-theme='dark']`
  * не нужен.
  *
- * Прямых hex здесь нет — только ссылки на токены ETN (`white` — ключевое
- * слово, не hex). Порядок подключения (после вендорских стилей) задаёт
+ * Прямых цветов здесь нет — только ссылки на токены ETN (надпись поверх
+ * насыщенной заливки — токен темы `--overlay-fg`, а не ключевое слово
+ * `white`). Порядок подключения (после вендорских стилей) задаёт
  * `./register.ts`.
  */
 
@@ -46,7 +47,7 @@
   --wa-color-brand-border-loud: var(--accent-strong);
   --wa-color-brand-on-quiet: var(--accent);
   --wa-color-brand-on-normal: var(--accent-strong);
-  --wa-color-brand-on-loud: white;
+  --wa-color-brand-on-loud: var(--overlay-fg);
 
   /* success ↔ «успех» ETN. */
   --wa-color-success-fill-quiet: var(--ok-soft);
@@ -57,7 +58,7 @@
   --wa-color-success-border-loud: var(--ok);
   --wa-color-success-on-quiet: var(--ok);
   --wa-color-success-on-normal: var(--ok);
-  --wa-color-success-on-loud: white;
+  --wa-color-success-on-loud: var(--overlay-fg);
 
   /* warning ↔ «предупреждение» ETN. */
   --wa-color-warning-fill-quiet: var(--warn-soft);
@@ -68,7 +69,7 @@
   --wa-color-warning-border-loud: var(--warn-strong);
   --wa-color-warning-on-quiet: var(--warn-strong);
   --wa-color-warning-on-normal: var(--warn-strong);
-  --wa-color-warning-on-loud: white;
+  --wa-color-warning-on-loud: var(--overlay-fg);
 
   /* danger ↔ «опасность» ETN (удаление, ошибки). */
   --wa-color-danger-fill-quiet: var(--danger-soft);
@@ -79,7 +80,7 @@
   --wa-color-danger-border-loud: var(--danger);
   --wa-color-danger-on-quiet: var(--danger);
   --wa-color-danger-on-normal: var(--danger);
-  --wa-color-danger-on-loud: white;
+  --wa-color-danger-on-loud: var(--overlay-fg);
 
   /* neutral ↔ рамки/текст/поверхности ETN (нейтральные кнопки, границы полей). */
   --wa-color-neutral-fill-quiet: var(--surface-2);

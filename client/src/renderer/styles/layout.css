@@ -200,7 +200,9 @@
 }
 
 .tab-close:hover {
-  background: var(--bg-hover);
+  /* Полупрозрачный подслой поверх фона вкладки, а не готовый --bg-hover:
+     иначе в тёмной теме кнопка становится светлее родительской поверхности. */
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 /* Крестик вкладки — невидимая зона нажатия не меньше тач-таргета
@@ -242,7 +244,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  box-shadow: 0 4px 12px var(--shadow-c);
+  box-shadow: 0 4px 12px var(--shadow-xs-c);
   min-width: 220px;
   padding: 4px;
   z-index: 1000;

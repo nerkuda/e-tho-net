@@ -403,7 +403,8 @@
   border-color: var(--accent);
   border-width: 1.6px;
 }
-/* Hover на связи: связанные мысли — оранжевая рамка и поверх остальных
+/* Hover на связи: связанные мысли — янтарная рамка тона --warn (ближайший
+   токен палитры к прежнему оранжевому литералу #e8871e) и поверх остальных
    (узлы подняты append'ом в mini-graph.ts). */
 .mini-node.edge-hi .mini-node-cloud {
   border-color: var(--warn);

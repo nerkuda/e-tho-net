@@ -118,10 +118,12 @@
   --hljs-addition: #1a7f37;
   --hljs-deletion: #82071e;
 
-  /* Тени: цвета-основы (--shadow-c — крупная, --shadow-sm-c — мелкая), из
-     которых собираются готовые токены. */
+  /* Тени: цвета-основы (--shadow-c — крупная, --shadow-sm-c — мелкая,
+     --shadow-xs-c — микро: бейджи и небольшие поповеры), из которых
+     собираются готовые токены. */
   --shadow-c: rgba(24, 32, 48, 0.16);
   --shadow-sm-c: rgba(24, 32, 48, 0.08);
+  --shadow-xs-c: rgba(24, 32, 48, 0.15);
   --shadow: 0 8px 28px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 2px 10px var(--shadow-c);
@@ -153,8 +155,9 @@
   --accent-strong: #7ba1ff;
   --accent-pressed: #4d7fe8;
   --accent-soft: #22304d;
-  /* Акцент обеих тем — насыщенный синий, на нём читается светлый текст. */
-  --accent-fg: #ffffff;
+  /* Акцент тёмного режима — насыщенный светлый синий; надпись на нём тёмная:
+     пара #5b8cff/#0e1116 даёт 5.98:1 (белый давал 3.16:1 и не проходил 4.5:1). */
+  --accent-fg: #0e1116;
   /* Акцент #5b8cff с альфой: на тёмных фонах смесь достаточно светлая. */
   --selection-bg: rgba(91, 140, 255, 0.5);
   --selection: #2fbfae;
@@ -212,6 +215,7 @@
 
   --shadow-c: rgba(0, 0, 0, 0.55);
   --shadow-sm-c: rgba(0, 0, 0, 0.35);
+  --shadow-xs-c: rgba(0, 0, 0, 0.18);
   --shadow: 0 8px 28px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 4px 16px var(--shadow-c);

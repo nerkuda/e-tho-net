@@ -325,9 +325,16 @@ describe('type-manager — вкладки несохранённого типа:
       'primary-роль должна брать цвет текста из var(--accent-fg)',
     );
     const theme = readFileSync(resolve(renderer, 'lib', 'ui', 'themes', 'current.css'), 'utf8');
+    // `--accent-fg` — токен ТЕМЫ (ADR de24adef), у других тем он свой (на
+    // светлом акценте — тёмная надпись). Здесь проверяется только светлый
+    // режим темы `current`; контраст пары во всех темах стережёт
+    // `guard-ui-theme-tokens`.
+    const lightAt = theme.indexOf("[data-theme='current'][data-mode='light']");
+    assert.ok(lightAt >= 0, 'в current.css нет блока светлого режима');
+    const lightBody = theme.slice(theme.indexOf('{', lightAt), theme.indexOf('}', lightAt));
     assert.ok(
-      /--accent-fg:\s*#ffffff/.test(theme),
-      '--accent-fg должен быть белым (#ffffff) в файле темы',
+      /--accent-fg:\s*#ffffff/.test(lightBody),
+      '--accent-fg в светлом режиме current должен быть белым (#ffffff)',
     );
   });
 

@@ -213,7 +213,8 @@ body.resizing-h {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
-  box-shadow: 0 1px 2px var(--shadow-c);
+  /* Микро-тень: у бейджика счётчика она заметно легче крупной тени панелей. */
+  box-shadow: 0 1px 2px var(--shadow-xs-c);
 }
 
 .zone-count.hidden {

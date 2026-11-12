@@ -20,6 +20,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { THEMES_DIR, THEME_MODES, readTheme, themeBlockBody } from './theme-css.js';
+
 const RENDERER = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 
 function read(...parts: string[]): string {
@@ -34,32 +36,40 @@ function ruleBody(css: string, selector: string): string {
   return match[1] ?? '';
 }
 
-const TOKENS = read('lib', 'ui', 'themes', 'current.css');
+/**
+ * Все файлы тем версии (`lib/ui/themes/*.css`) — фокус-пара обязана быть в
+ * КАЖДОЙ теме, а не только в `current` (карточка сторожа 642ff492).
+ */
+const THEMES = fs
+  .readdirSync(THEMES_DIR)
+  .filter((file) => file.endsWith('.css'))
+  .map((file) => file.replace(/\.css$/, ''))
+  .sort();
+
 const CANVAS = read('styles', 'canvas.css');
 const PUBLICATIONS = read('styles', 'screens', 'publications.css');
 const STRUCTURES_VISUAL = read('screens', 'structures', 'visual-states.ts');
 
-/** Тело блока режима темы: значения токенов темы (ADR de24adef). */
-function themeModeBlock(css: string, mode: 'light' | 'dark'): string {
-  const at = css.indexOf(`[data-mode='${mode}']`);
-  assert.ok(at >= 0, `в файле темы нет блока режима '${mode}'`);
-  const open = css.indexOf('{', at);
-  const close = css.indexOf('}', open);
-  return css.slice(open + 1, close);
-}
-
 describe('guard: двойная рамка открытого — единый контрастный кант (3af98e31)', () => {
-  it('токен контраста объявлен в обеих темах', () => {
-    assert.match(
-      themeModeBlock(TOKENS, 'light'),
-      /--focus-ring-contrast:\s*#[0-9a-f]{6};/i,
-      'кант объявлен в светлом режиме темы',
-    );
-    assert.match(
-      themeModeBlock(TOKENS, 'dark'),
-      /--focus-ring-contrast:\s*#[0-9a-f]{6};/i,
-      'кант объявлен в тёмном режиме темы',
-    );
+  it('токены фокуса объявлены в каждой теме в обоих режимах', () => {
+    assert.ok(THEMES.length >= 2, `ожидались файлы тем, найдено: ${THEMES.join(', ')}`);
+    for (const name of THEMES) {
+      const css = readTheme(name);
+      for (const mode of THEME_MODES) {
+        const body = themeBlockBody(css, name, mode);
+        assert.ok(body !== null, `${name}.css: нет блока режима '${mode}'`);
+        assert.match(
+          body!,
+          /--focus-accent:\s*[^;]+;/i,
+          `${name}.css [${mode}]: нет программного фокус-акцента основы (--focus-accent)`,
+        );
+        assert.match(
+          body!,
+          /--focus-ring-contrast:\s*#[0-9a-f]{6};/i,
+          `${name}.css [${mode}]: кант объявлен`,
+        );
+      }
+    }
   });
 
   it('гало карты и «Структур» (.cloud.halo) несёт контрастный кант', () => {
