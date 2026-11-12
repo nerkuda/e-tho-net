@@ -28,28 +28,37 @@ function read(...parts: string[]): string {
 
 /** Тело CSS-правила по точному селектору (первое совпадение). */
 function ruleBody(css: string, selector: string): string {
-  const rx = new RegExp(
-    selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}',
-  );
+  const rx = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}');
   const match = rx.exec(css);
   assert.ok(match !== null, `найдено правило ${selector}`);
   return match[1] ?? '';
 }
 
-const TOKENS = read('styles', 'tokens.css');
+const TOKENS = read('lib', 'ui', 'themes', 'current.css');
 const CANVAS = read('styles', 'canvas.css');
 const PUBLICATIONS = read('styles', 'screens', 'publications.css');
 const STRUCTURES_VISUAL = read('screens', 'structures', 'visual-states.ts');
 
+/** Тело блока режима темы: значения токенов темы (ADR de24adef). */
+function themeModeBlock(css: string, mode: 'light' | 'dark'): string {
+  const at = css.indexOf(`[data-mode='${mode}']`);
+  assert.ok(at >= 0, `в файле темы нет блока режима '${mode}'`);
+  const open = css.indexOf('{', at);
+  const close = css.indexOf('}', open);
+  return css.slice(open + 1, close);
+}
+
 describe('guard: двойная рамка открытого — единый контрастный кант (3af98e31)', () => {
   it('токен контраста объявлен в обеих темах', () => {
-    const rootBlock = /:root\s*\{([\s\S]*?)\n\}/.exec(TOKENS)?.[1] ?? '';
-    const darkBlock = /\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/.exec(TOKENS)?.[1] ?? '';
-    assert.match(rootBlock, /--focus-ring-contrast:\s*#[0-9a-f]{6};/i, 'кант объявлен в :root');
     assert.match(
-      darkBlock,
+      themeModeBlock(TOKENS, 'light'),
       /--focus-ring-contrast:\s*#[0-9a-f]{6};/i,
-      'кант объявлен в тёмной теме',
+      'кант объявлен в светлом режиме темы',
+    );
+    assert.match(
+      themeModeBlock(TOKENS, 'dark'),
+      /--focus-ring-contrast:\s*#[0-9a-f]{6};/i,
+      'кант объявлен в тёмном режиме темы',
     );
   });
 

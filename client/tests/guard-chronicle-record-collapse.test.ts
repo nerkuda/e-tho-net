@@ -37,7 +37,7 @@ const RECORD_TITLE = read('screens', 'chronicle', 'record-title.ts');
 const FEED_NAV = read('screens', 'chronicle', 'feed-nav.ts');
 const CALENDAR = read('lib', 'month-calendar.ts');
 const CHRONICLE_CSS = read('styles', 'screens', 'chronicle.css');
-const TOKENS = read('styles', 'tokens.css');
+const THEME = read('lib', 'ui', 'themes', 'current.css');
 
 describe('сторож: сворачиваемая запись «Дневника» (41ed99ab)', () => {
   it('переключение записи меняет карточку на месте, без пересборки ленты', () => {
@@ -126,9 +126,10 @@ describe('сторож: сворачиваемая запись «Дневник
   });
 
   it('токен выходного дня определён в светлой и тёмной темах', () => {
-    assert.match(TOKENS, /--cal-weekend:/, 'токен объявлен');
-    const dark = TOKENS.slice(TOKENS.indexOf("[data-theme='dark']"));
-    assert.match(dark, /--cal-weekend:/, 'токен переопределён в тёмной теме');
+    const light = THEME.slice(0, THEME.indexOf("[data-mode='dark']"));
+    assert.match(light, /--cal-weekend:/, 'токен объявлен в светлом режиме');
+    const dark = THEME.slice(THEME.indexOf("[data-mode='dark']"));
+    assert.match(dark, /--cal-weekend:/, 'токен переопределён в тёмном режиме');
     assert.match(CHRONICLE, /isWeekend\(day\)/, 'заголовок выходного дня помечается классом');
     assert.match(CHRONICLE_CSS, /\.diary-day-head\.is-weekend/, 'вид выходного дня');
   });
@@ -193,7 +194,8 @@ describe('сторож: сворачиваемая запись «Дневник
       'стрелка-шеврон создаётся в замыкании, у `collapsible: false` — null',
     );
     const buildView =
-      /function buildView\(\): HTMLButtonElement \{([\s\S]*?)\n {2}\}/.exec(RECORD_TITLE)?.[1] ?? '';
+      /function buildView\(\): HTMLButtonElement \{([\s\S]*?)\n {2}\}/.exec(RECORD_TITLE)?.[1] ??
+      '';
     assert.ok(buildView !== '', 'тело buildView найдено');
     assert.match(
       buildView,
@@ -207,11 +209,7 @@ describe('сторож: сворачиваемая запись «Дневник
       /buildRecordHead\(/,
       'карточка берёт заголовок из единого конструктора шапки',
     );
-    assert.match(
-      RECORD_HEAD,
-      /createRecordTitle\(/,
-      'узел заголовка создаётся общим компонентом',
-    );
+    assert.match(RECORD_HEAD, /createRecordTitle\(/, 'узел заголовка создаётся общим компонентом');
     assert.match(
       RECORD_GROUPS,
       /title\.classList\?\.toggle\('is-collapsed', collapsed\)/,
@@ -248,8 +246,7 @@ describe('сторож: сворачиваемая запись «Дневник
       !/view\.firstChild/.test(code),
       'иконка не берётся первым узлом кнопки (`view.firstChild`) — текст надписи не иконка',
     );
-    const helper =
-      /export function setRecordTitleLabel\(([\s\S]*?)\n\}/.exec(code)?.[0] ?? '';
+    const helper = /export function setRecordTitleLabel\(([\s\S]*?)\n\}/.exec(code)?.[0] ?? '';
     assert.ok(helper !== '', 'тело setRecordTitleLabel найдено');
     assert.match(
       helper,

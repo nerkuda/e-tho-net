@@ -44,7 +44,7 @@
   display: inline-flex;
   align-items: center;
   margin-right: 4px;
-  color: #e53935;
+  color: var(--mark-danger);
   background: none;
   border: 0;
   padding: 0;
@@ -618,11 +618,15 @@
 }
 
 @keyframes editor-icon-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .editor-icon-loading svg { animation: none; }
+  .editor-icon-loading svg {
+    animation: none;
+  }
 }
 
 .editor-title-input {
@@ -1148,17 +1152,35 @@
 /* Зазор заголовка — своя шкала по уровням (в `em` от кегля заголовка, как
    браузерные поля UA), отдельная от базового межблочного `--md-block-gap`. */
 .comment-view h1,
-.cm-editor .cm-line.cm-md-h1 { font-size: 2em;    --md-heading-gap: 0.67em; }
+.cm-editor .cm-line.cm-md-h1 {
+  font-size: 2em;
+  --md-heading-gap: 0.67em;
+}
 .comment-view h2,
-.cm-editor .cm-line.cm-md-h2 { font-size: 1.5em;  --md-heading-gap: 0.83em; }
+.cm-editor .cm-line.cm-md-h2 {
+  font-size: 1.5em;
+  --md-heading-gap: 0.83em;
+}
 .comment-view h3,
-.cm-editor .cm-line.cm-md-h3 { font-size: 1.17em; --md-heading-gap: 1em; }
+.cm-editor .cm-line.cm-md-h3 {
+  font-size: 1.17em;
+  --md-heading-gap: 1em;
+}
 .comment-view h4,
-.cm-editor .cm-line.cm-md-h4 { font-size: 1em;    --md-heading-gap: 1.33em; }
+.cm-editor .cm-line.cm-md-h4 {
+  font-size: 1em;
+  --md-heading-gap: 1.33em;
+}
 .comment-view h5,
-.cm-editor .cm-line.cm-md-h5 { font-size: 0.83em; --md-heading-gap: 1.67em; }
+.cm-editor .cm-line.cm-md-h5 {
+  font-size: 0.83em;
+  --md-heading-gap: 1.67em;
+}
 .comment-view h6,
-.cm-editor .cm-line.cm-md-h6 { font-size: 0.67em; --md-heading-gap: 2.33em; }
+.cm-editor .cm-line.cm-md-h6 {
+  font-size: 0.67em;
+  --md-heading-gap: 2.33em;
+}
 
 /* Применение отступа: просмотр — внешние поля (как UA у h1–h6), редактор —
    внутренние отступы строки (см. шапку блока). */
@@ -1328,7 +1350,6 @@ input.task-list-item-checkbox:checked,
   color: var(--md-html-comment);
 }
 
-
 .comment-view blockquote,
 .cm-editor .cm-line.cm-md-quote-line {
   padding-left: var(--md-quote-indent);
@@ -1437,7 +1458,7 @@ input.task-list-item-checkbox:checked,
 .cm-editor .cm-transclusion-block {
   position: relative;
   border-left: 2px solid var(--border-strong, var(--border));
-  background: var(--surface, rgba(127, 127, 127, 0.06));
+  background: var(--surface);
   border-radius: 3px;
   padding: var(--md-transclusion-pad);
   /* Содержимое блока — готовый HTML единого рендерера (`transclusion.ts`,
@@ -2663,8 +2684,6 @@ input.task-list-item-checkbox:checked,
   background: transparent;
   border-right: 0;
 }
-
-
 
 /* --- Общий компонент выбора вложения (editor/attachment-picker.ts, задача
        0f6c3e39): закреплённый сверху поиск, прокручиваемый внутри список и

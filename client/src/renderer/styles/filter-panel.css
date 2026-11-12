@@ -385,7 +385,7 @@
   fill: var(--text-dim);
   font-size: var(--link-label-font, 11px);
   paint-order: stroke;
-  stroke: var(--surface, #fff);
+  stroke: var(--surface);
   stroke-width: 3px;
   pointer-events: none;
   user-select: none;
@@ -423,4 +423,3 @@
   color: var(--text-faint);
   font-style: italic;
 }
-

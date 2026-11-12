@@ -182,11 +182,18 @@ describe('дерево условий: группы, тона, связатор�
       assert.notEqual(classes[d], classes[d - 1], `уровень ${d} не повторяет тон предыдущего`);
     }
 
-    // Тона объявлены токенами обеих тем, в модуле и его CSS нет hex.
-    const tokens = fs.readFileSync(path.join(RENDERER, 'styles', 'tokens.css'), 'utf8');
-    for (let n = 1; n <= 4; n += 1) {
-      const declarations = tokens.match(new RegExp(`--ft-tone-${n}:`, 'g')) ?? [];
-      assert.equal(declarations.length, 2, `тон ${n} объявлен в обеих темах`);
+    // Тона объявлены токенами обеих тем (блоки light/dark файла темы),
+    // в модуле и его CSS нет hex.
+    const themes = ['current', 'blue-topaz'];
+    for (const theme of themes) {
+      const tokens = fs.readFileSync(
+        path.join(RENDERER, 'lib', 'ui', 'themes', `${theme}.css`),
+        'utf8',
+      );
+      for (let n = 1; n <= 4; n += 1) {
+        const declarations = tokens.match(new RegExp(`--ft-tone-${n}:`, 'g')) ?? [];
+        assert.equal(declarations.length, 2, `тон ${n} объявлен в обеих режимах темы ${theme}`);
+      }
     }
     for (const file of ['lib/filter-tree.ts', 'styles/filter-tree.css']) {
       const source = fs.readFileSync(path.join(RENDERER, file), 'utf8');

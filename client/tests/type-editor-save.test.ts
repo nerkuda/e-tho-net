@@ -34,7 +34,6 @@ import {
   typeRowRevealIds,
   type ThoughtTypeDraft,
 } from '../src/renderer/screens/type-manager.js';
-import { assembledStylesFile } from './renderer-css.js';
 
 const SOURCE_PATH = resolve(
   import.meta.dirname,
@@ -325,8 +324,11 @@ describe('type-manager — вкладки несохранённого типа:
       /color:\s*var\(--accent-fg\)/.test(css),
       'primary-роль должна брать цвет текста из var(--accent-fg)',
     );
-    const styles = readFileSync(assembledStylesFile(), 'utf8');
-    assert.ok(/--accent-fg:\s*#ffffff/.test(styles), '--accent-fg должен быть белым (#ffffff)');
+    const theme = readFileSync(resolve(renderer, 'lib', 'ui', 'themes', 'current.css'), 'utf8');
+    assert.ok(
+      /--accent-fg:\s*#ffffff/.test(theme),
+      '--accent-fg должен быть белым (#ffffff) в файле темы',
+    );
   });
 
   it('регрессия 74d9b4ed: ключ дедупликации нового типа не сломан', () => {

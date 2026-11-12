@@ -6,7 +6,9 @@
  * network list, workspace — and is restored on boot BEFORE the first screen
  * mounts, so there is no light-theme flash. Applying the theme sets the
  * `data-theme` attribute on the document root; colours themselves live in the
- * `[data-theme='dark']` variable block in styles.css.
+ * theme value files `lib/ui/themes/*.css` (ADR de24adef; for now the dark mode
+ * is also matched by the transitional `[data-theme='dark']` selector until the
+ * theme/mode mechanism task 0e4a52cd lands).
  *
  * The store keeps the current theme so hover-dependent redraws (link lines
  * read the themed `--link-default` variable) and the View-menu checkbox can

@@ -231,7 +231,7 @@ button.entity-combo-pick {
 }
 
 button.entity-combo-pick:hover {
-  background: rgba(127, 127, 127, 0.18);
+  background: var(--bg-hover);
   color: var(--text);
 }
 
@@ -383,7 +383,7 @@ button.entity-combo-pick:disabled {
   display: inline-block;
   margin-right: 6px;
   vertical-align: middle;
-  color: var(--link-default, #9aa3b2);
+  color: var(--link-default);
 }
 
 /* Type editors (L6): disabled settings/icon buttons and a stretching name. */
@@ -401,4 +401,3 @@ button.entity-combo-pick:disabled {
 .editor-icon-box:disabled:hover {
   border-color: var(--border-strong);
 }
-

@@ -523,7 +523,7 @@
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  color: #e53935;
+  color: var(--mark-danger);
 }
 
 /* Компактная метка «мысль чужой сети» в списочных строках/чипах — зеркало
@@ -533,7 +533,7 @@
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  color: #4a9eff;
+  color: var(--mark-network);
 }
 
 .group-delete-warning {
@@ -1114,7 +1114,6 @@ button.ui-btn--icon.trash-act {
   background: var(--warn-soft);
   color: var(--warn-strong);
 }
-
 
 /* --- Диалог настройки сочетаний клавиш комментария (d534eb35, ТП1) --------- */
 /* Список команд: подпись слева, сочетание и кнопка сброса справа. Коллекция

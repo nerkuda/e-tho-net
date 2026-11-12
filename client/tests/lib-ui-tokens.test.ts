@@ -18,6 +18,12 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { readRendererCss } from './renderer-css.js';
+import {
+  declaredTokens as blockTokens,
+  readTheme,
+  themeBlockBody,
+  type ThemeMode,
+} from './theme-css.js';
 
 const RENDERER_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -27,10 +33,16 @@ const RENDERER_ROOT = path.resolve(
 );
 
 const STYLES_CSS = readRendererCss(RENDERER_ROOT);
-const TOKENS_CSS = fs.readFileSync(
-  path.join(RENDERER_ROOT, 'lib', 'ui', 'tokens.css'),
-  'utf8',
-);
+const TOKENS_CSS = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'tokens.css'), 'utf8');
+
+/** Значения темы по умолчанию: цвета/тени/радиусы уехали из `styles/` (ADR de24adef). */
+const THEME_CSS = readTheme('current');
+
+/** Токены темы по умолчанию в одном режиме. */
+function themeTokens(mode: ThemeMode): Set<string> {
+  const body = themeBlockBody(THEME_CSS, 'current', mode);
+  return body === null ? new Set<string>() : new Set(blockTokens(body).keys());
+}
 
 /** Внутренность CSS-блока, начинающегося с указанного заголовка (баланс скобок). */
 function extractBlock(css: string, header: string): string {
@@ -57,8 +69,11 @@ function declaredTokens(block: string): Set<string> {
   return names;
 }
 
-const lightTokens = declaredTokens(extractBlock(STYLES_CSS, ':root {'));
-const darkTokens = declaredTokens(extractBlock(STYLES_CSS, "[data-theme='dark'] {"));
+const lightTokens = new Set([
+  ...declaredTokens(extractBlock(STYLES_CSS, ':root {')),
+  ...themeTokens('light'),
+]);
+const darkTokens = themeTokens('dark');
 
 /** Токены ETN, на которые ссылается карта через `var(--x)`. */
 const mappedRefs = new Set<string>();
@@ -73,9 +88,7 @@ describe('lib/ui: карта маппинга токенов ETN → --wa-*', ()
   it('ссылается только на токены ETN, объявленные в styles.css', () => {
     const dangling = [...mappedRefs].filter((t) => !lightTokens.has(t));
     if (dangling.length > 0) {
-      throw new Error(
-        `tokens.css ссылается на несуществующие токены ETN: ${dangling.join(', ')}`,
-      );
+      throw new Error(`tokens.css ссылается на несуществующие токены ETN: ${dangling.join(', ')}`);
     }
   });
 

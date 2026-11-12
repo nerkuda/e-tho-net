@@ -579,7 +579,6 @@
   margin-left: auto;
 }
 
-
 /* --- Вкладки карточки: резюме, свойства текстов/доп. материалы, метаданные,
        состояние пересборки -------------------------------------------------- */
 
@@ -624,7 +623,6 @@
   flex-direction: column;
   gap: var(--space-2);
 }
-
 
 /* --- Рабочая область открытой публикации (0.11.1, задача 4f03b9d5) ------- */
 
@@ -1058,11 +1056,11 @@
 .pub-doc-titlepage-cover .pub-doc-title,
 .pub-doc-titlepage-cover .pub-doc-subtitle,
 .pub-doc-titlepage-cover .pub-doc-meta {
-  color: #fff;
+  color: var(--overlay-fg);
   text-shadow:
-    0 1px 3px rgb(0 0 0 / 85%),
-    0 0 2px rgb(0 0 0 / 90%);
-  -webkit-text-stroke: 0.4px rgb(255 255 255 / 65%);
+    0 1px 3px color-mix(in srgb, var(--badge-bg) 85%, transparent),
+    0 0 2px color-mix(in srgb, var(--badge-bg) 90%, transparent);
+  -webkit-text-stroke: 0.4px color-mix(in srgb, var(--overlay-fg) 65%, transparent);
 }
 
 /* Автор/дата — последняя строка нижней половины, внизу СПРАВА, с отступами от

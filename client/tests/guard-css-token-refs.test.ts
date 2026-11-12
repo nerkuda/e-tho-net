@@ -28,6 +28,7 @@ import { describe, it } from 'node:test';
 
 import { listSourceFiles } from './guard-helpers.js';
 import { RENDERER_ROOT } from './renderer-css.js';
+import { THEME_MODES, declaredTokens as blockDeclaredTokens, themeBlockBody } from './theme-css.js';
 
 /** Токены, выставляемые из JS в рантайме (не объявляются в CSS). */
 const RUNTIME_TOKENS = new Set([
@@ -70,7 +71,8 @@ const RUNTIME_TOKENS = new Set([
   '--pub-doc-width',
 ]);
 
-const TOKENS_CSS = path.join(RENDERER_ROOT, 'styles', 'tokens.css');
+/** Файл значений темы по умолчанию: там живут цветовые токены (ADR de24adef). */
+const TOKENS_CSS = path.join(RENDERER_ROOT, 'lib', 'ui', 'themes', 'current.css');
 
 /** Блочные комментарии → пробелы (номера строк сохраняются). */
 function stripComments(css: string): string {
@@ -144,11 +146,16 @@ describe('guard: ссылки на CSS-токены рендерера', () => {
     }
   });
 
-  it('канонические токены приглушённого текста объявлены', () => {
-    const root = stripComments(fs.readFileSync(TOKENS_CSS, 'utf8'));
-    const missing = ['--text-dim', '--text-faint'].filter(
-      (t) => !new RegExp(`(^|[;{\\s])${t}\\s*:`).test(root),
-    );
+  it('канонические токены приглушённого текста объявлены в обоих режимах темы', () => {
+    const css = fs.readFileSync(TOKENS_CSS, 'utf8');
+    const missing: string[] = [];
+    for (const mode of THEME_MODES) {
+      const body = themeBlockBody(css, 'current', mode);
+      const tokens = body === null ? new Map() : blockDeclaredTokens(body);
+      for (const token of ['--text-dim', '--text-faint']) {
+        if (!tokens.has(token)) missing.push(`${token} [${mode}]`);
+      }
+    }
     if (missing.length > 0) {
       throw new Error(`Не объявлены токены приглушённого текста: ${missing.join(', ')}`);
     }

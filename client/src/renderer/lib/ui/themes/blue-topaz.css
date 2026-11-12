@@ -1,0 +1,194 @@
+/*
+ * Тема «Blue Topaz» — значения из официального референса
+ * pkm-er/Blue-Topaz_Obsidian-css (`theme.css`): палитра, радиусы и характер
+ * теней перенесены в токены ETN, шрифты референса НЕ переносятся (ADR de24adef).
+ *
+ * Палитра референса: синий акцент `hsla(209, 95%, 62%, 1)` (--simple-blue-1),
+ * золото `#f1b024` (--main-color, ушло в токены предупреждений и меток),
+ * фиолетовый `hsla(245, 60%, 67%, 1)` (--simple-blue-3, метка слоя), светлые
+ * поверхности белые с голубым оттенком, тёмные — графит `#202020`/`#151515`.
+ * Радиусы референса: 5 / 7 / 15 px (--radius-s/-m/-l); шкала ETN дополнена
+ * `--radius-xl` и «пилюлей».
+ *
+ * Файл значений СУЩЕСТВУЮЩИХ токенов (ADR de24adef): только объявления
+ * переменных, ни одного класса. Селекция — `data-theme='blue-topaz'` +
+ * `data-mode` на корне документа. Состав набора токенов обязан совпадать с
+ * остальными темами (сторож `guard-ui-theme-tokens`).
+ */
+
+[data-theme='blue-topaz'][data-mode='light'] {
+  color-scheme: light;
+
+  /* palette */
+  --bg: hsla(204, 45%, 97%, 1);
+  --surface: #ffffff;
+  --surface-2: hsla(210, 45%, 95%, 1);
+  --bg-hover: #e6e6e6;
+  --bg-active: #dbdbdc;
+  --border: #dddddd;
+  --border-strong: #bfbfbf;
+  --text: #0e0e0e;
+  --text-dim: #7f7f7f;
+  --text-faint: #9a9a9a;
+  --accent: hsla(209, 95%, 62%, 1);
+  --accent-strong: hsla(209, 95%, 54%, 1);
+  --accent-pressed: hsla(209, 95%, 46%, 1);
+  --accent-soft: hsla(209, 90%, 93%, 1);
+  --accent-fg: #ffffff;
+  --selection-bg: hsla(209, 95%, 62%, 0.35);
+  /* Оранжевый референса (--simple-orange) — контур выбранного облачка:
+     отличим от синего акцента. */
+  --selection: hsla(25, 85%, 50%, 1);
+  --cal-weekend: hsla(338, 85%, 55%, 1);
+  --danger: hsla(5, 85%, 52%, 1);
+  --danger-soft: hsla(5, 85%, 95%, 1);
+  --ok: hsla(150, 55%, 38%, 1);
+  --ok-soft: hsla(150, 55%, 94%, 1);
+  --warn: hsla(42, 78%, 48%, 1);
+  --warn-strong: hsla(42, 85%, 38%, 1);
+  --warn-soft: hsla(42, 90%, 94%, 1);
+  --warn-glow: hsla(42, 90%, 48%, 0.35);
+  --mark-bg: hsla(57, 85%, 70%, 0.85);
+  --link-default: #8a8a8a;
+  --ft-tone-1: hsla(209, 85%, 96%, 1);
+  --ft-tone-2: hsla(150, 50%, 96%, 1);
+  --ft-tone-3: hsla(42, 80%, 95%, 1);
+  --ft-tone-4: hsla(275, 60%, 97%, 1);
+  --ellipse-fill: #a9d1ea;
+  --ellipse-fill-border: #69a2ee;
+  --backdrop: hsla(210, 25%, 10%, 0.35);
+  --canvas-dot: hsla(210, 20%, 12%, 0.14);
+  --focus-band-color: hsla(209, 95%, 45%, 1);
+  --focus-accent: var(--accent);
+  --focus-ring-contrast: #ffffff;
+  --md-html-comment: #9a9a9a;
+  --mark-danger: hsla(5, 85%, 52%, 1);
+  --mark-network: hsla(209, 95%, 58%, 1);
+  /* Фиолетовый референса (--simple-blue-3) — метка работы в слое. */
+  --mark-layer: hsla(245, 60%, 67%, 1);
+  /* Золото референса (--main-color). */
+  --mark-warn: #f1b024;
+  --mark-lock-own: hsla(209, 95%, 55%, 1);
+  --badge-bg: hsla(210, 25%, 8%, 1);
+  --badge-fg: #d0d0d0;
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — палитра кода референса (code-theme-bt-default:
+     blue-green/red/purple/orange/green), приглушённая до читаемого контраста
+     на белом фоне. */
+  --hljs-comment: #7f7f7f;
+  --hljs-keyword: #0e8f96;
+  --hljs-string: #40916c;
+  --hljs-number: #478fee;
+  --hljs-literal: #478fee;
+  --hljs-title: #d0616b;
+  --hljs-builtin: #cc7523;
+  --hljs-attr: #cc7523;
+  --hljs-type: #40916c;
+  --hljs-tag: #a76bc4;
+  --hljs-meta: #7f7f7f;
+  --hljs-symbol: #b74ff3;
+  --hljs-section: #478fee;
+  --hljs-addition: #068a5e;
+  --hljs-deletion: #d64545;
+
+  /* Мягкие тени референса (`0 2px 6px rgba(0,0,0,0.1)`, `0 3px 8px`). */
+  --shadow-c: hsla(210, 20%, 20%, 0.16);
+  --shadow-sm-c: hsla(210, 20%, 20%, 0.08);
+  --shadow: 0 8px 28px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 2px 10px var(--shadow-c);
+  --shadow-focus: 0 4px 18px hsla(209, 95%, 62%, 0.2);
+
+  /* Радиусы референса: 5 / 7 / 15 px (шкала ETN). */
+  --radius-s: 5px;
+  --radius-m: 7px;
+  --radius-l: 15px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+}
+
+[data-theme='blue-topaz'][data-mode='dark'] {
+  color-scheme: dark;
+
+  --bg: #151515;
+  --surface: #202020;
+  --surface-2: #262626;
+  --bg-hover: #2b2b2b;
+  --bg-active: #373737;
+  --border: #343434;
+  --border-strong: #4a4a4a;
+  --text: #c6c6c6;
+  --text-dim: #8a8a8a;
+  --text-faint: #797979;
+  --accent: hsla(209, 90%, 68%, 1);
+  --accent-strong: hsla(209, 90%, 76%, 1);
+  --accent-pressed: hsla(209, 90%, 60%, 1);
+  --accent-soft: hsla(209, 50%, 24%, 1);
+  /* text-on-accent референса в тёмном режиме. */
+  --accent-fg: #e4e4e4;
+  --selection-bg: hsla(209, 90%, 68%, 0.4);
+  --selection: hsla(25, 85%, 62%, 1);
+  --cal-weekend: hsla(338, 85%, 72%, 1);
+  --danger: hsla(5, 80%, 62%, 1);
+  --danger-soft: hsla(5, 60%, 20%, 1);
+  --ok: hsla(150, 45%, 58%, 1);
+  --ok-soft: hsla(150, 35%, 16%, 1);
+  --warn: hsla(42, 75%, 62%, 1);
+  --warn-strong: hsla(42, 80%, 72%, 1);
+  --warn-soft: hsla(42, 60%, 18%, 1);
+  --warn-glow: hsla(42, 80%, 55%, 0.35);
+  --mark-bg: hsla(57, 60%, 40%, 0.5);
+  --link-default: #6f6f6f;
+  --ft-tone-1: hsla(209, 30%, 16%, 1);
+  --ft-tone-2: hsla(150, 20%, 15%, 1);
+  --ft-tone-3: hsla(42, 25%, 16%, 1);
+  --ft-tone-4: hsla(275, 20%, 18%, 1);
+  --ellipse-fill: #3a5f8a;
+  --ellipse-fill-border: #69a2ee;
+  --backdrop: hsla(0, 0%, 0%, 0.55);
+  --canvas-dot: hsla(0, 0%, 100%, 0.07);
+  --focus-band-color: hsla(209, 90%, 55%, 1);
+  --focus-accent: var(--accent);
+  --focus-ring-contrast: #e4e4e4;
+  --md-html-comment: #797979;
+  --mark-danger: hsla(5, 80%, 62%, 1);
+  --mark-network: hsla(209, 90%, 68%, 1);
+  --mark-layer: hsla(245, 65%, 75%, 1);
+  --mark-warn: #f1b024;
+  --mark-lock-own: hsla(209, 90%, 62%, 1);
+  --badge-bg: #101010;
+  --badge-fg: #d0d0d0;
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — палитра кода референса в тёмном режиме. */
+  --hljs-comment: #797979;
+  --hljs-keyword: #3bd4da;
+  --hljs-string: #abd58e;
+  --hljs-number: #a0c7e9;
+  --hljs-literal: #a0c7e9;
+  --hljs-title: #db7c84;
+  --hljs-builtin: #d1945b;
+  --hljs-attr: #d1945b;
+  --hljs-type: #abd58e;
+  --hljs-tag: #c594d4;
+  --hljs-meta: #abb2bf;
+  --hljs-symbol: #b74ff3;
+  --hljs-section: #a0c7e9;
+  --hljs-addition: #40916c;
+  --hljs-deletion: #fd355a;
+
+  /* Глубокие тени референса (`0 3px 8px rgba(0,0,0,.25)`). */
+  --shadow-c: hsla(0, 0%, 0%, 0.55);
+  --shadow-sm-c: hsla(0, 0%, 0%, 0.35);
+  --shadow: 0 8px 28px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 4px 16px var(--shadow-c);
+  --shadow-focus: 0 4px 24px hsla(209, 90%, 68%, 0.25);
+
+  --radius-s: 5px;
+  --radius-m: 7px;
+  --radius-l: 15px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+}

@@ -26,11 +26,9 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { assertGuardClean, type GuardRule } from './guard-helpers.js';
-import { assembledStylesFile } from './renderer-css.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
-const STYLES_CSS = assembledStylesFile();
 
 /** Минимум объявлений группы `--user-*` (шрифты, холст, комментарии). */
 const MIN_USER_TOKENS = 5;
@@ -60,11 +58,9 @@ function rules(): GuardRule[] {
 
 describe('guard: пользовательские токены lib/ui', () => {
   it('группа --user-* объявлена и задокументирована в :root styles.css', () => {
-    const css = fs.readFileSync(STYLES_CSS, 'utf8');
-    // Блок :root до селектора тёмной темы (в шапке-комментарии `:root` тоже
-    // упоминается `[data-theme='dark']`, поэтому ищем сам селектор).
-    const rootEnd = css.indexOf("[data-theme='dark'] {");
-    const root = css.slice(0, rootEnd === -1 ? css.length : rootEnd);
+    // Группа живёт в нетематическом файле токенов; цветовые значения теперь
+    // в файлах тем (ADR de24adef), поэтому читаем сам `styles/tokens.css`.
+    const root = fs.readFileSync(path.join(RENDERER_ROOT, 'styles', 'tokens.css'), 'utf8');
     if (!root.includes(USER_GROUP_MARKER)) {
       throw new Error(
         `Группа пользовательских токенов не задокументирована: в :root styles.css ` +

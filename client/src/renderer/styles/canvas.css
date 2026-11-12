@@ -213,7 +213,7 @@ body.resizing-h {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+  box-shadow: 0 1px 2px var(--shadow-c);
 }
 
 .zone-count.hidden {
@@ -877,8 +877,8 @@ body.cloud-dragging * {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #000;
-  color: #d0d0d0;
+  background: var(--badge-bg);
+  color: var(--badge-fg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -888,7 +888,7 @@ body.cloud-dragging * {
   pointer-events: none;
   user-select: none;
   z-index: 2;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 .cloud-pos[hidden] {
@@ -908,7 +908,7 @@ body.cloud-dragging * {
   width: 27.2px;
   height: 27.2px;
   border-radius: 50%;
-  background: #000;
+  background: var(--badge-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -916,13 +916,13 @@ body.cloud-dragging * {
   cursor: pointer;
   user-select: none;
   z-index: 3;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 /* The trash glyph (lucide «trash», lib/icons.ts) is drawn bright red on the
    black circle — well readable on both light and dark themes. */
 .cloud-trash-badge svg {
-  color: #e53935;
+  color: var(--mark-danger);
 }
 
 /* Метка «мысль чужой сети» облачка (кросс-сетевая ссылка, ошибка 9be98ae1):
@@ -935,20 +935,20 @@ body.cloud-dragging * {
   width: 27.2px;
   height: 27.2px;
   border-radius: 50%;
-  background: #000;
+  background: var(--badge-bg);
   display: flex;
   align-items: center;
   justify-content: center;
   line-height: 1;
   user-select: none;
   z-index: 3;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 /* Глиф «сеть» (lucide «network», lib/icons.ts) — акцентный голубой на чёрном
    круге, читаемый на обеих темах и отличимый от красной корзины. */
 .cloud-network-badge svg {
-  color: #4a9eff;
+  color: var(--mark-network);
 }
 
 /* Object-lock badge (task 4f141756, UI element 8e3703ee): small 🔒 chip
@@ -964,28 +964,28 @@ body.cloud-dragging * {
   line-height: 1;
   padding: 2px 4px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #ffd54f;
+  background: color-mix(in srgb, var(--badge-bg) 72%, transparent);
+  color: var(--mark-warn);
   user-select: none;
   pointer-events: auto;
   z-index: 4;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 .cloud-lock-badge.own {
-  background: rgba(33, 150, 243, 0.85);
-  color: #fff;
+  background: color-mix(in srgb, var(--mark-lock-own) 85%, transparent);
+  color: var(--overlay-fg);
 }
 
 /* A locked-by-other cloud wears a soft red outline; a locked-by-self cloud
    wears a soft blue one — visually distinct from the trash dim and the
    layer-override dashed outline so the three states never collide. */
 .cloud.locked-by-other {
-  outline: 2px solid rgba(229, 57, 53, 0.55);
+  outline: 2px solid color-mix(in srgb, var(--mark-danger) 55%, transparent);
   outline-offset: 1px;
 }
 .cloud.locked-by-self {
-  outline: 2px solid rgba(33, 150, 243, 0.45);
+  outline: 2px solid color-mix(in srgb, var(--mark-lock-own) 45%, transparent);
   outline-offset: 1px;
 }
 
@@ -995,11 +995,11 @@ body.cloud-dragging * {
    slight dash gap distinguishes the two without giving up readability. */
 .link-line.link-locked-other {
   stroke-dasharray: 6 4;
-  filter: drop-shadow(0 0 1.5px rgba(229, 57, 53, 0.5));
+  filter: drop-shadow(0 0 1.5px color-mix(in srgb, var(--mark-danger) 50%, transparent));
 }
 .link-line.link-locked-own {
   stroke-dasharray: 4 2;
-  filter: drop-shadow(0 0 1.5px rgba(33, 150, 243, 0.4));
+  filter: drop-shadow(0 0 1.5px color-mix(in srgb, var(--mark-lock-own) 40%, transparent));
 }
 
 .cloud.font-bold .cloud-title {
@@ -1075,4 +1075,3 @@ body.cloud-dragging * {
   background: var(--accent);
   border-color: var(--accent-strong);
 }
-

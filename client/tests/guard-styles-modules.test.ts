@@ -74,7 +74,6 @@ const MIN_RULES = 1000;
 /** Ключевые селекторы крупных блоков — «снимок перечня». */
 const KEY_SELECTORS = [
   ':root',
-  "[data-theme='dark']",
   '.screen',
   '.workspace-body',
   '.top-row',
@@ -167,9 +166,7 @@ function countTopLevelRules(css: string): number {
 
 /** Собирает CSS всех модулей манифеста в порядке импортов. */
 function readModules(rendererRoot: string, imports: string[]): string {
-  return imports
-    .map((rel) => fs.readFileSync(path.join(rendererRoot, rel), 'utf8'))
-    .join('\n');
+  return imports.map((rel) => fs.readFileSync(path.join(rendererRoot, rel), 'utf8')).join('\n');
 }
 
 describe('guard: модульный styles.css (de23c709)', () => {
@@ -216,6 +213,9 @@ describe('guard: модульный styles.css (de23c709)', () => {
   });
 
   it('ключевые селекторы крупных блоков на месте', () => {
+    // Блок цветовых значений тёмного режима уехал из `styles/` в файлы тем
+    // `lib/ui/themes/*` (ADR de24adef), поэтому его в снимке нет; тематические
+    // блоки сторожит `guard-ui-theme-tokens`.
     const missing = KEY_SELECTORS.filter((sel) => !combined.includes(sel));
     assert.deepEqual(missing, [], `потеряны ключевые селекторы: ${missing.join(', ')}`);
   });
@@ -226,11 +226,7 @@ describe('guard: модульный styles.css (de23c709)', () => {
       fs.mkdirSync(path.join(dir, 'styles'));
       fs.writeFileSync(path.join(dir, 'styles', 'a.css'), '.a { color: red; }\n', 'utf8');
       fs.writeFileSync(path.join(dir, 'styles', 'b.css'), '.b { color: red; }\n', 'utf8');
-      fs.writeFileSync(
-        path.join(dir, 'styles.css'),
-        "@import './styles/a.css';\n",
-        'utf8',
-      );
+      fs.writeFileSync(path.join(dir, 'styles.css'), "@import './styles/a.css';\n", 'utf8');
       const manifest2 = fs.readFileSync(path.join(dir, 'styles.css'), 'utf8');
       const imports2 = parseManifestImports(manifest2);
       assert.deepEqual(imports2, ['styles/a.css']);
@@ -244,10 +240,7 @@ describe('guard: модульный styles.css (de23c709)', () => {
         "@import './styles/a.css';\n.a { color: red; }\n",
         'utf8',
       );
-      assert.notEqual(
-        manifestResidue(fs.readFileSync(path.join(dir, 'styles.css'), 'utf8')),
-        '',
-      );
+      assert.notEqual(manifestResidue(fs.readFileSync(path.join(dir, 'styles.css'), 'utf8')), '');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

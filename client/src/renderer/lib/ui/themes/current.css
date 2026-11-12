@@ -1,0 +1,225 @@
+/*
+ * Тема «current» — действующий облик ETN (референс: прежние блоки
+ * `:root`/`[data-theme='dark']` из `styles/tokens.css`).
+ *
+ * Файл значений СУЩЕСТВУЮЩИХ токенов дизайн-системы (ADR de24adef): только
+ * объявления переменных, ни одного класса и ни одного правила оформления.
+ * Тема выбирается атрибутом `data-theme`, режим — `data-mode` на корне
+ * документа; смена темы меняет только этот блок переменных, `color-scheme`
+ * следует за режимом.
+ *
+ * Правила файла (требование 7cc0cdad, сторож `guard-ui-theme-tokens`):
+ *   • каждый режим объявляет ПОЛНЫЙ набор токенов темы (цвета, тени, радиусы)
+ *     и обязательный `--focus-accent`; недописанный блок — красный сторож;
+ *   • прямые цвета (hex/rgb/rgba/hsl) в CSS рендерера разрешены ТОЛЬКО внутри
+ *     блоков тем этого каталога (ADR de24adef);
+ *   • группа `--user-*`, шкалы типографики/отступов и runtime-токены слоя
+ *     (`--layer-*`) сюда НЕ входят — они живут в `styles/tokens.css` и
+ *     `lib/layer-colors.ts`.
+ *
+ * Светлый блок объявлен на `:root`: это дефолт темы до применения атрибутов
+ * (первый кадр не мигает чужими цветами). Переходный селектор
+ * `[data-theme='dark']` оставлен до задачи «Механизм применения темы и режима
+ * в клиенте» (0e4a52cd): нынешний клиент ставит режим в `data-theme`, после
+ * перехода на пару `data-theme`/`data-mode` селектор снимается.
+ */
+
+:root,
+[data-theme='current'][data-mode='light'] {
+  color-scheme: light;
+
+  /* palette */
+  --bg: #eef0f4;
+  --surface: #ffffff;
+  --surface-2: #f6f7f9;
+  /* Hover/active backgrounds for chrome controls (menu items, list rows). */
+  --bg-hover: #e3e6ec;
+  --bg-active: #d8dde5;
+  --border: #d7dbe3;
+  --border-strong: #b9c1cf;
+  --text: #20242d;
+  --text-dim: #5c6675;
+  --text-faint: #8a93a3;
+  --accent: #2f6fed;
+  /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
+  --accent-strong: #245cc9;
+  /* Нажатие акцентной заливки (primary-кнопка). */
+  --accent-pressed: #1d4aa8;
+  --accent-soft: #e4ecfd;
+  /* Текст и иконки НА акцентной заливке (primary-кнопка, активная вкладка). */
+  --accent-fg: #ffffff;
+  /* Фон текстового выделения (::selection и .cm-selectionBackground). */
+  --selection-bg: rgba(47, 111, 237, 0.4);
+  /* Selection outline of clouds picked into the selection panel — teal. */
+  --selection: #0f8f86;
+  /* Заголовок группы выходного дня (сб/вс) в ленте «Дневника». */
+  --cal-weekend: #d6478a;
+  --danger: #d64545;
+  --danger-soft: #fdeaea;
+  --ok: #2f9e44;
+  --ok-soft: #e6f4ea;
+  --warn: #c98a06;
+  --warn-strong: #9a6b00;
+  --warn-soft: #fdf0dc;
+  --warn-glow: rgba(201, 138, 6, 0.35);
+  /* Search/mention highlight (<mark>). */
+  --mark-bg: #ffe08a;
+  /* Default (untyped) link line colour; also read by links.ts. */
+  --link-default: #9aa3b2;
+  /* Тоны тонированной вложенности дерева условий (требование 5ef1bce1). */
+  --ft-tone-1: #f3f6fd;
+  --ft-tone-2: #f2f8f3;
+  --ft-tone-3: #fbf6ec;
+  --ft-tone-4: #f6f3fb;
+  /* Filled link-direction ellipse of a non-focus cloud. */
+  --ellipse-fill: #9dbcf2;
+  --ellipse-fill-border: #5b87d9;
+  --backdrop: rgba(24, 32, 48, 0.35);
+  /* Canvas dot-grid colour. */
+  --canvas-dot: rgba(24, 32, 48, 0.14);
+  /* Focus band: colour of the horizontal stripe across the focus row. */
+  --focus-band-color: #1e62be;
+  /* Фокус-акцент ОСНОВЫ: полоса фокуса карты и акцент выделения на прочих
+     экранах. Слой поверх пишет свой цвет в runtime `--layer-focus-stripe`
+     (`lib/layer-colors.ts`, контракт c19cbb81), в файл темы он не входит. */
+  --focus-accent: var(--accent);
+  /* Контрастный кант двойной рамки открытого в редакторе элемента. */
+  --focus-ring-contrast: #ffffff;
+  /* HTML-комментарий `<!-- … -->` в правке. */
+  --md-html-comment: #8a93a3;
+  /* Яркие метки-глифы поверх тёмных кружков карты и в списках: корзина,
+     чужая сеть, слой, замок. Значения — прежние литералы экранов, сведённые
+     в токены (требование c244557c). */
+  --mark-danger: #e53935;
+  --mark-network: #4a9eff;
+  --mark-layer: #8c9eff;
+  --mark-warn: #ffd54f;
+  --mark-lock-own: #2196f3;
+  /* Кружок-бейдж поверх облачка/связи и его содержимое. */
+  --badge-bg: #000000;
+  --badge-fg: #d0d0d0;
+  /* Текст поверх пользовательской картинки (титул публикации). */
+  --overlay-fg: #ffffff;
+
+  /* highlight.js palette: токены подсветки fenced-кода в просмотре */
+  --hljs-comment: #6e7781;
+  --hljs-keyword: #cf222e;
+  --hljs-string: #0a3069;
+  --hljs-number: #0550ae;
+  --hljs-literal: #0550ae;
+  --hljs-title: #8250df;
+  --hljs-builtin: #953800;
+  --hljs-attr: #953800;
+  --hljs-type: #116329;
+  --hljs-tag: #116329;
+  --hljs-meta: #0550ae;
+  --hljs-symbol: #8250df;
+  --hljs-section: #0550ae;
+  --hljs-addition: #1a7f37;
+  --hljs-deletion: #82071e;
+
+  /* Тени: цвета-основы (--shadow-c — крупная, --shadow-sm-c — мелкая), из
+     которых собираются готовые токены. */
+  --shadow-c: rgba(24, 32, 48, 0.16);
+  --shadow-sm-c: rgba(24, 32, 48, 0.08);
+  --shadow: 0 8px 28px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 2px 10px var(--shadow-c);
+  --shadow-focus: 0 4px 18px rgba(47, 111, 237, 0.18);
+
+  /* Шкала радиусов (требование 0dddd939): имена неизменны, значения — темы. */
+  --radius-s: 6px; /* мелкие элементы: чипы, svg-свотчи */
+  --radius-m: 8px; /* обычные контролы и панели */
+  --radius-l: 10px; /* крупные панели */
+  --radius-xl: 14px; /* карточки-облака */
+  --radius-pill: 999px; /* метки-«пилюли» (бейджи) */
+}
+
+[data-theme='current'][data-mode='dark'],
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0e1116;
+  --surface: #161b23;
+  --surface-2: #1f2630;
+  --bg-hover: #1f2630;
+  --bg-active: #2a3340;
+  --border: #29303d;
+  --border-strong: #3a4353;
+  --text: #e6e9f0;
+  --text-dim: #9aa3b5;
+  --text-faint: #67707f;
+  --accent: #5b8cff;
+  --accent-strong: #7ba1ff;
+  --accent-pressed: #4d7fe8;
+  --accent-soft: #22304d;
+  /* Акцент обеих тем — насыщенный синий, на нём читается светлый текст. */
+  --accent-fg: #ffffff;
+  /* Акцент #5b8cff с альфой: на тёмных фонах смесь достаточно светлая. */
+  --selection-bg: rgba(91, 140, 255, 0.5);
+  --selection: #2fbfae;
+  --cal-weekend: #ff8fc0;
+  --danger: #e06a6a;
+  --danger-soft: #3a2226;
+  --ok: #4cb763;
+  --ok-soft: #17281c;
+  --warn: #d9a13c;
+  --warn-strong: #e8b45a;
+  --warn-soft: #322712;
+  --warn-glow: rgba(217, 161, 60, 0.35);
+  --mark-bg: rgba(250, 204, 21, 0.28);
+  --link-default: #6b7587;
+  /* Тоны вложенности дерева условий — те же четыре позиции цикла, но
+     приглушённые поверхности. */
+  --ft-tone-1: #1a2130;
+  --ft-tone-2: #17241f;
+  --ft-tone-3: #262019;
+  --ft-tone-4: #211c2b;
+  --ellipse-fill: #2f4a7d;
+  --ellipse-fill-border: #4a6db3;
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --canvas-dot: rgba(255, 255, 255, 0.07);
+  --focus-band-color: #1e62be;
+  --focus-accent: var(--accent);
+  /* В тёмной теме кант чуть мягче чистого белого — не слепит. */
+  --focus-ring-contrast: #e6e9f0;
+  --md-html-comment: #7c8798;
+  --mark-danger: #e53935;
+  --mark-network: #4a9eff;
+  --mark-layer: #8c9eff;
+  --mark-warn: #ffd54f;
+  --mark-lock-own: #2196f3;
+  --badge-bg: #000000;
+  --badge-fg: #d0d0d0;
+  --overlay-fg: #ffffff;
+
+  /* highlight.js palette (M4) */
+  --hljs-comment: #8b949e;
+  --hljs-keyword: #ff7b72;
+  --hljs-string: #a5d6ff;
+  --hljs-number: #79c0ff;
+  --hljs-literal: #79c0ff;
+  --hljs-title: #d2a8ff;
+  --hljs-builtin: #ffa657;
+  --hljs-attr: #ffa657;
+  --hljs-type: #7ee787;
+  --hljs-tag: #7ee787;
+  --hljs-meta: #79c0ff;
+  --hljs-symbol: #d2a8ff;
+  --hljs-section: #79c0ff;
+  --hljs-addition: #3fb950;
+  --hljs-deletion: #f85149;
+
+  --shadow-c: rgba(0, 0, 0, 0.55);
+  --shadow-sm-c: rgba(0, 0, 0, 0.35);
+  --shadow: 0 8px 28px var(--shadow-c);
+  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
+  --shadow-hover: 0 4px 16px var(--shadow-c);
+  --shadow-focus: 0 4px 24px rgba(91, 140, 255, 0.28);
+
+  --radius-s: 6px;
+  --radius-m: 8px;
+  --radius-l: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+}

@@ -117,9 +117,14 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 
 ## Карта токенов
 
-Токены объявлены в `client/src/renderer/styles/tokens.css` (блоки `:root`
-и `[data-theme='dark']`); `styles.css` — манифест модулей, см. `styles/`.
-Компоненты `lib/ui` ссылаются только на токены.
+Нетематические токены (шкалы типографики/отступов, геометрия, длительности,
+группа `--user-*`) объявлены в `client/src/renderer/styles/tokens.css`;
+тематические значения (цвета, тени, радиусы, `--focus-accent`) — в файлах тем
+`client/src/renderer/lib/ui/themes/{current,blue-topaz,…}.css` по блоку на
+режим (ADR `de24adef`, требование `7cc0cdad`). Тема выбирается атрибутом
+`data-theme`, режим — `data-mode` на корне документа; дефолт — `current`
+(светлый блок объявлен на `:root`). `styles.css` — манифест модулей стилей,
+см. `styles/`. Компоненты `lib/ui` ссылаются только на токены.
 
 **Шкалы оформления** (требование `0dddd939`, сторож `guard-ui-tokens`):
 
@@ -127,7 +132,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
   `--font-weight-normal|medium|semibold|bold`;
 - отступы: `--space-1`…`--space-8` (2→16px);
 - радиусы: `--radius-s|m|l|xl|pill` (+ алиасы `--radius-sm`, `--radius`,
-  `--radius-cloud`);
+  `--radius-cloud`) — имена общие для всех тем, значения задаёт файл темы;
 - состояния и геометрия: `--transition-hover`, `--state-disabled-opacity`,
   `--hit-area`, `--hit-area-min`, `--tree-indent`.
 
@@ -154,10 +159,11 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 ## Порядок CSS
 
 Каталог — источник CSS-словаря (`.ui-btn*`, `.ui-field*`, `.ui-table` и т. д.).
-`lib/ui/register.ts` подключает: стили вендора → `tokens.css` → CSS фасадов.
-Порядок внутри `register.ts` значим (см. грабли `36889dd6` и раздел «Как
-пользоваться», п. 4). Правила вида лежат в `client/src/renderer/styles/**`
-(модульный CSS, задача `de23c709`).
+`lib/ui/register.ts` подключает: стили вендора → файлы тем
+(`themes/*.css`, импортом, не `@import` в `styles.css`) → `tokens.css` →
+CSS фасадов. Порядок внутри `register.ts` значим (см. грабли `36889dd6` и
+раздел «Как пользоваться», п. 4). Правила вида лежат в
+`client/src/renderer/styles/**` (модульный CSS, задача `de23c709`).
 
 ## Сторожа
 

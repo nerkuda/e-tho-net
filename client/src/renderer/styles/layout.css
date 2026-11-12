@@ -200,7 +200,7 @@
 }
 
 .tab-close:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--bg-hover);
 }
 
 /* Крестик вкладки — невидимая зона нажатия не меньше тач-таргета
@@ -242,7 +242,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px var(--shadow-c);
   min-width: 220px;
   padding: 4px;
   z-index: 1000;
@@ -999,4 +999,3 @@
   color: var(--text-faint);
   font-size: 12px;
 }
-
