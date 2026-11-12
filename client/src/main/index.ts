@@ -28,6 +28,7 @@ import {
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { parseConnectArgs } from './connect-prefill.js';
+import { resolveWindowBackground } from './window-background.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { decideNavigation, EXTERNAL_SCHEMES } from './navigation-policy.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
@@ -195,14 +196,13 @@ let localDb: LocalDb | null = null;
 
 /**
  * Фон окна до первого кадра — цвет `--bg` последней применённой темы (L5
- * `client_meta.ui_window_bg`, ревизия задачи 0e4a52cd). Палитра в main не
- * дублируется: значение записывает renderer при каждом применении темы, и оно
- * переживает перезапуск, поэтому тёмная тема не мигает светлым. Нет кэша
- * (первый запуск) — фон по умолчанию Electron.
+ * `client_meta.ui_window_bg`, ревизия задачи 0e4a52cd). Правило выбора —
+ * чистая функция {@link resolveWindowBackground}: кэш, иначе исторический
+ * `client_meta.theme` (режим), поэтому первый запуск после обновления не даёт
+ * белой вспышки у тёмного пользователя.
  */
-function storedWindowBackground(db: LocalDb): string | undefined {
-  const raw = db.getMeta(CLIENT_META_KEY.UI_WINDOW_BG);
-  return typeof raw === 'string' && /^#[0-9a-f]{6}$/i.test(raw) ? raw : undefined;
+function storedWindowBackground(db: LocalDb): string {
+  return resolveWindowBackground((key) => db.getMeta(key));
 }
 
 /**
@@ -242,7 +242,8 @@ function dispatchOrBuffer(win: BrowserWindow | undefined, payload: DeepLinkPaylo
  */
 function createWindow(db: LocalDb): BrowserWindow {
   const bounds = sanitizeBounds(loadWindowBounds(db), screen.getAllDisplays());
-  // Фон до первого кадра — цвет `--bg` последней применённой темы (кэш L5).
+  // Фон до первого кадра — `--bg` применённой темы: кэш, иначе режим из
+  // исторического `client_meta.theme` (первый запуск после обновления).
   const background = storedWindowBackground(db);
   const win = new BrowserWindow({
     x: bounds.x,

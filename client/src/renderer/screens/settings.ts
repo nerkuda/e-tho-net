@@ -57,7 +57,6 @@ import {
   changeUiMode,
   changeUiTheme,
   getUiThemeState,
-  isUiThemeApiSupported,
 } from '../lib/ui-theme.js';
 import {
   changeAppLanguage,
@@ -736,7 +735,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     // draft-модели (как «Логирование»): выбор применяется и сохраняется сразу,
     // «Применить» его не ждёт. Строки — только из словаря, термины: «тема» —
     // набор значений, «режим» — тёмный/светлый.
-    const uiThemeState = getUiThemeState();
     const themeSelect = fieldSelect({
       options: themeOptions(),
       value: store.state.uiTheme,
@@ -744,6 +742,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         if (value === store.state.uiTheme) return;
         errorLine.clear();
         void changeUiTheme(value as Parameters<typeof changeUiTheme>[0]).then((synced) => {
+          refreshUiThemeHints();
           if (!synced) errorLine.show(t('settings.uiThemeSyncDeferred'));
         });
       },
@@ -759,6 +758,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
           if (!checked) return;
           errorLine.clear();
           void changeUiMode(mode).then((synced) => {
+            refreshUiThemeHints();
             if (!synced) errorLine.show(t('settings.uiThemeSyncDeferred'));
           });
         },
@@ -766,16 +766,30 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       return row.row;
     };
     modeGroup.append(modeRow('dark'), modeRow('light'));
-    const themeSupportHint = isUiThemeApiSupported()
-      ? t('settings.uiThemeHintAllDevices')
-      : t('settings.uiThemeLocalOnly');
-    const unknownThemeNote =
-      uiThemeState.unknownTheme === null
-        ? null
-        : el('p', 'muted', t('settings.uiThemeUnknown', uiThemeState.unknownTheme));
-    const deferredNote = uiThemeState.syncDeferred
-      ? el('p', 'muted', t('settings.uiThemeSyncDeferred'))
-      : null;
+    // Подсказки — живой снимок серверного слоя: пересчитываются при открытии
+    // диалога и после каждого выбора/ответа синхронизации (замечание проверки
+    // 0e4a52cd). Пока сервер не ответил (`support: 'unknown'`), обещать
+    // «хранится в профиле» или «сервер не поддерживает» нельзя — это догадка.
+    const themeSupportHint = el('p', 'muted');
+    const unknownThemeNote = el('p', 'muted');
+    const deferredNote = el('p', 'muted');
+    function refreshUiThemeHints(): void {
+      const snapshot = getUiThemeState();
+      themeSupportHint.hidden = snapshot.support === 'unknown';
+      themeSupportHint.textContent = themeSupportHint.hidden
+        ? ''
+        : snapshot.support === 'supported'
+          ? t('settings.uiThemeHintAllDevices')
+          : t('settings.uiThemeLocalOnly');
+      unknownThemeNote.hidden = snapshot.unknownTheme === null;
+      unknownThemeNote.textContent =
+        snapshot.unknownTheme === null
+          ? ''
+          : t('settings.uiThemeUnknown', snapshot.unknownTheme);
+      deferredNote.hidden = !snapshot.syncDeferred;
+      deferredNote.textContent = snapshot.syncDeferred ? t('settings.uiThemeSyncDeferred') : '';
+    }
+    refreshUiThemeHints();
 
     const widthInput = fieldInput();
     widthInput.type = 'number';
@@ -819,9 +833,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       ...(unavailableNote === null ? [] : [unavailableNote]),
       el('h3', 'settings-section-title settings-section-title-spaced', t('settings.appearance')),
       fieldRow({ label: t('settings.uiTheme'), control: themeSelect }),
-      el('p', 'muted', themeSupportHint),
-      ...(unknownThemeNote === null ? [] : [unknownThemeNote]),
-      ...(deferredNote === null ? [] : [deferredNote]),
+      themeSupportHint,
+      unknownThemeNote,
+      deferredNote,
       fieldRow({ label: t('settings.uiMode'), control: modeGroup }),
       el('p', 'muted', t('settings.uiThemeLiveHint')),
       el('h3', 'settings-section-title settings-section-title-spaced', t('settings.razmerOblachka')),

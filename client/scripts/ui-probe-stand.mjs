@@ -12,6 +12,7 @@
  *      `--scenario-seed <file>` дополнительно готовит фикстуру сценария (скрипт
  *      получает `--data-dir`, `--network-id`, `--center-id`, `--api`, `--api-key`
  *      и может добавить свои `--trash` и т.п. через `--scenario-seed-arg`);
+ *      JSON, напечатанный фикстурой в stdout, становится `--var` сценария;
  *   4. поднимает СКРЫТЫЙ клиент обёрткой `ui-probe-launch.mjs` (невидимое окно,
  *      изолированный профиль — клиент пользователя не затрагивается,
  *      грабли 91720eda);
@@ -49,6 +50,7 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
       --scenario-seed <file>
                          Скрипт-фикстура сценария: запускается после засева сети
                          с --data-dir/--network-id/--center-id/--api/--api-key.
+                         JSON-объект из её stdout становится переменной --var сценария.
                          Требует засеянную сеть (не с --no-seed).
       --scenario-seed-arg <a>
                          Дополнительный аргумент фикстуры (повторяемый), например
@@ -442,15 +444,58 @@ function spawnNode(entry, args, { env = {} } = {}) {
     windowsHide: true,
   });
   let log = '';
+  // stdout отдельно от лога: фикстура печатает JSON с id созданных сущностей,
+  // и он должен дойти до сценария как `--var`, не смешавшись с диагностикой.
+  let stdout = '';
   const label = `[${path.basename(entry, '.mjs').replace(/\.js$/, '')}]`;
   const sink = (chunk) => {
     const text = chunk.toString();
     log += text;
     process.stdout.write(`${label} ${text}`);
   };
-  child.stdout?.on('data', sink);
+  child.stdout?.on('data', (chunk) => {
+    stdout += chunk.toString();
+    sink(chunk);
+  });
   child.stderr?.on('data', sink);
-  return { child, getLog: () => log };
+  return { child, getLog: () => log, getStdout: () => stdout };
+}
+
+/**
+ * Переменные сценария из stdout фикстуры `--scenario-seed`.
+ *
+ * Фикстура печатает JSON-объект с id созданных сущностей (прецедент —
+ * ui-probe.5768f479-publications-network-switch-seed.mjs); стенд превращает
+ * его в `--var имя=значение`, и сценарий подставляет `{{имя}}` без ручного
+ * второго запуска. Разбирается ПОСЛЕДНЯЯ строка, валидная как JSON-объект:
+ * служебные строки фикстуры разбор не ломают. Подставляются только скаляры —
+ * сценарию нужны id, а не деревья; пустые строки пропускаются (в `{{}}`
+ * пустое значение — ошибка прогона, а не «нет подстановки»).
+ */
+export function parseFixtureVars(stdout) {
+  const lines = String(stdout ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let parsed;
+    try {
+      parsed = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const vars = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string') {
+        if (value !== '') vars[key] = value;
+      } else if (typeof value === 'number' || typeof value === 'boolean') {
+        vars[key] = String(value);
+      }
+    }
+    return vars;
+  }
+  return {};
 }
 
 /** Ждать готовности HTTP-эндпоинта (health/CDP-version). */
@@ -686,7 +731,7 @@ async function seedStand(base, key, opts) {
 }
 
 /** Подтянуть id/ключ/адрес сценарию; собрать команду ui-probe. */
-export function buildProbeArgs(opts, ports, seed, key) {
+export function buildProbeArgs(opts, ports, seed, key, fixtureVars = {}) {
   const args = [path.join(clientDir, 'scripts', 'ui-probe.mjs')];
   // В интерактивном режиме сценария нет — не подставляем «--scenario null».
   if (opts.scenario !== null) args.push('--scenario', opts.scenario);
@@ -717,6 +762,11 @@ export function buildProbeArgs(opts, ports, seed, key) {
     args.push('--var', `networkName=${seed.networkName}`);
     args.push('--var', `thoughtId=${seed.thoughtId}`);
     args.push('--var', `homeId=${seed.homeId}`);
+  }
+  // Переменные фикстуры сценария идут последними: её id — про созданные ею
+  // сущности, и для одноимённого ключа они точнее общих id стенда.
+  for (const [name, value] of Object.entries(fixtureVars)) {
+    args.push('--var', `${name}=${value}`);
   }
   return args;
 }
@@ -882,6 +932,8 @@ async function main(argv) {
     }
 
     // --- 3б. Фикстура сценария (--scenario-seed) ---------------------------
+    /** Переменные сценария из stdout фикстуры (`{{имя}}` → `--var`). */
+    let fixtureVars = {};
     // Прогон должен быть воспроизводим одной командой: фикстура получает
     // каталог данных стенда и id засеянных сущностей, поэтому не нужно
     // вручную поднимать стенд, запускать seed и только потом ui-probe.
@@ -910,6 +962,7 @@ async function main(argv) {
           `фикстура сценария завершилась с кодом ${code}\n${fixture.getLog().slice(-1500)}`,
         );
       }
+      fixtureVars = parseFixtureVars(fixture.getStdout());
     }
 
     // --- 4. Скрытый клиент -------------------------------------------------
@@ -924,7 +977,13 @@ async function main(argv) {
 
     // Онбординг (переменная serverUrl) идёт через прокси задержки, шаги `api`
     // — напрямую: служебные проверки не должны ждать медленную сеть.
-    const probeArgs = buildProbeArgs(opts, { cdp: cdpPort, apiBase, serverRoot: clientRoot }, seed, apiKey);
+    const probeArgs = buildProbeArgs(
+      opts,
+      { cdp: cdpPort, apiBase, serverRoot: clientRoot },
+      seed,
+      apiKey,
+      fixtureVars,
+    );
 
     // --- 5а. Прогон сценария ----------------------------------------------
     if (opts.scenario !== null) {

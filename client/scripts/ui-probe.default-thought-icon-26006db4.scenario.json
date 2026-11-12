@@ -13,36 +13,36 @@
     { "name": "open-network", "click": ".networks-list .network-item" },
     { "name": "seeded-cloud-visible", "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"].cloud') !== null" },
 
-    { "name": "set-light", "eval": "document.documentElement.dataset.theme = 'light'" },
+    { "name": "set-light", "eval": "document.documentElement.dataset.mode = 'light'" },
     {
       "name": "canvas-light",
-      "probe": "(() => { const box = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-icon'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, hasSvg: svg !== null, boxText: box?.textContent ?? null, strokeAttr: path?.getAttribute('stroke') ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
-      "expect": { "theme": "light", "hasSvg": true, "boxText": "", "strokeAttr": null, "pathStroke": "rgb(92, 102, 117)", "circleStroke": "rgb(92, 102, 117)" }
+      "probe": "(() => { const box = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-icon'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { mode: document.documentElement.dataset.mode ?? null, hasSvg: svg !== null, boxText: box?.textContent ?? null, strokeAttr: path?.getAttribute('stroke') ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "mode": "light", "hasSvg": true, "boxText": "", "strokeAttr": null, "pathStroke": "rgb(92, 102, 117)", "circleStroke": "rgb(92, 102, 117)" }
     },
 
-    { "name": "set-dark", "eval": "document.documentElement.dataset.theme = 'dark'" },
+    { "name": "set-dark", "eval": "document.documentElement.dataset.mode = 'dark'" },
     {
       "name": "canvas-dark",
-      "probe": "(() => { const box = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-icon'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
-      "expect": { "theme": "dark", "pathStroke": "rgb(154, 163, 181)", "circleStroke": "rgb(154, 163, 181)" }
+      "probe": "(() => { const box = document.querySelector('[data-id=\"{{thoughtId}}\"].cloud .cloud-icon'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { mode: document.documentElement.dataset.mode ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "mode": "dark", "pathStroke": "rgb(154, 163, 181)", "circleStroke": "rgb(154, 163, 181)" }
     },
-    { "name": "set-light-again", "eval": "document.documentElement.dataset.theme = 'light'" },
+    { "name": "set-light-again", "eval": "document.documentElement.dataset.mode = 'light'" },
 
     { "name": "open-thought", "click": "[data-id=\"{{thoughtId}}\"].cloud" },
     { "name": "editor-open", "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'" },
     {
       "name": "editor-light",
-      "probe": "(() => { const box = document.querySelector('.editor-icon-box'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, boxText: box?.textContent ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
-      "expect": { "theme": "light", "boxText": "", "pathStroke": "rgb(92, 102, 117)", "circleStroke": "rgb(92, 102, 117)" }
+      "probe": "(() => { const box = document.querySelector('.editor-icon-box'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { mode: document.documentElement.dataset.mode ?? null, boxText: box?.textContent ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "mode": "light", "boxText": "", "pathStroke": "rgb(92, 102, 117)", "circleStroke": "rgb(92, 102, 117)" }
     },
 
-    { "name": "set-dark-editor", "eval": "document.documentElement.dataset.theme = 'dark'" },
+    { "name": "set-dark-editor", "eval": "document.documentElement.dataset.mode = 'dark'" },
     { "name": "editor-dark-ready", "waitFor": "getComputedStyle(document.querySelector('.editor-icon-box svg.icon path')).stroke === 'rgb(154, 163, 181)'" },
     {
       "name": "editor-dark",
-      "probe": "(() => { const box = document.querySelector('.editor-icon-box'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { theme: document.documentElement.dataset.theme ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
-      "expect": { "theme": "dark", "pathStroke": "rgb(154, 163, 181)", "circleStroke": "rgb(154, 163, 181)" }
+      "probe": "(() => { const box = document.querySelector('.editor-icon-box'); const svg = box?.querySelector('svg.icon') ?? null; const path = svg?.querySelector('path') ?? null; const circle = svg?.querySelector('circle') ?? null; return { mode: document.documentElement.dataset.mode ?? null, pathStroke: path ? getComputedStyle(path).stroke : null, circleStroke: circle ? getComputedStyle(circle).stroke : null }; })()",
+      "expect": { "mode": "dark", "pathStroke": "rgb(154, 163, 181)", "circleStroke": "rgb(154, 163, 181)" }
     },
-    { "name": "set-light-editor", "eval": "document.documentElement.dataset.theme = 'light'" }
+    { "name": "set-light-editor", "eval": "document.documentElement.dataset.mode = 'light'" }
   ]
 }

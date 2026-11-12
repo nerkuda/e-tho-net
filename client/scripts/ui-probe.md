@@ -149,6 +149,18 @@ node client/scripts/ui-probe-stand.mjs \
 обязана быть идемпотентной: повторный запуск на том же стенде не должен менять
 данные — иначе ожидания сценария разъедутся.
 
+JSON-объект, напечатанный фикстурой в stdout, стенд передаёт сценарию как
+`--var имя=значение` (берётся последняя строка, валидная как JSON; подставляются
+только скаляры). Так сценарий получает id созданных фикстурой сущностей и
+остаётся прогоном одной командой — без ручного второго запуска `ui-probe.mjs`:
+
+```bash
+node client/scripts/ui-probe-stand.mjs \
+  --scenario client/scripts/ui-probe.publication-recipe.scenario.json \
+  --scenario-seed client/scripts/ui-probe.publication-recipe-seed.mjs \
+  --server-language ru
+```
+
 ## Сценарий
 
 Формат — JSON-объект `{ name?, description?, timeout?, steps: [...] }`. Каждый

@@ -1563,7 +1563,10 @@ export interface EtnApi {
   meta: {
     /**
      * Reads an L5 `client_meta` key — installation-scoped state such as the
-     * UI theme (`CLIENT_META_KEY.THEME`, L10). Works without a connection.
+     * cached UI theme and mode (`CLIENT_META_KEY.UI_THEME` / `UI_MODE`, L10).
+     * `CLIENT_META_KEY.THEME` — legacy-ключ РЕЖИМА (`light`/`dark`): он
+     * мигрирует в серверный `ui_mode` (задача 0e4a52cd) и читается только как
+     * fallback (фон окна до первого кэша). Works without a connection.
      */
     get(key: string): Promise<string | null>;
     /** Upserts an L5 `client_meta` key. */

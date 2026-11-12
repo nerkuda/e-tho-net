@@ -281,6 +281,10 @@ export async function changeUiTheme(theme: UiTheme): Promise<boolean> {
   applyUiTheme(choice);
   const owner = store.state.me?.id ?? null;
   cacheChoice(choice, owner);
+  // Локальный выбор перекрыл серверное значение: пояснение «сервер хранит
+  // неизвестную тему» относится к фактическому применению и снимается сразу,
+  // не дожидаясь ответа записи.
+  state = { ...state, unknownTheme: null };
   if (state.support === 'unsupported') {
     pendingParts.add('theme');
     await writePendingParts();

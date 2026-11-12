@@ -289,6 +289,12 @@ export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 export const CLIENT_META_KEY = {
   CLIENT_ID: 'client_id',
   LAST_SEQ: 'last_seq',
+  /**
+   * Legacy-ключ РЕЖИМА интерфейса (`light`/`dark`), не имени темы: до
+   * задачи 0e4a52cd клиент хранил здесь бинарный выбор. Значение мигрирует в
+   * серверный `ui_mode` (маркер {@link CLIENT_META_KEY.UI_THEME_MIGRATED});
+   * остаётся только fallback — фон окна до появления `ui_window_bg`.
+   */
   THEME: 'theme',
   /**
    * Кэш последнего известного эффективного языка интерфейса (ADR daab6ac4 §5,

@@ -19,6 +19,7 @@ import {
   normalizeLanguageTag,
   parseArgs,
   parseDelaySeedRule,
+  parseFixtureVars,
   parseInitKey,
   readScenarioLogRules,
   resolveDelaySeedPath,
@@ -215,6 +216,43 @@ test('buildProbeArgs: со сценарием содержит --scenario и п�
   assert.ok(args.includes('thoughtId=t1'));
   assert.equal(args.includes('--api-key') ? args[args.indexOf('--api-key') + 1] : null, 'etn_key');
   assert.equal(args.some((arg) => arg === null || arg === undefined), false);
+});
+
+test('parseFixtureVars: JSON фикстуры становится переменными сценария', () => {
+  const stdout = [
+    'фикстура: засеваю данные',
+    '{"pubId":"p1","networkId":"n1","index":2,"fresh":true}',
+    '',
+  ].join('\n');
+  assert.deepEqual(parseFixtureVars(stdout), { pubId: 'p1', networkId: 'n1', index: '2', fresh: 'true' });
+});
+
+test('parseFixtureVars: берётся последний JSON-объект, не-скаляры и пустышки отброшены', () => {
+  const stdout = [
+    '{"old":"первый"}',
+    '{"pubId":"p2","nested":{"id":"x"},"list":[1,2],"empty":"","nil":null}',
+  ].join('\n');
+  assert.deepEqual(parseFixtureVars(stdout), { pubId: 'p2' }, 'подставляются только скаляры');
+});
+
+test('parseFixtureVars: без JSON-объекта переменных нет (прогон не выдумывает id)', () => {
+  for (const stdout of ['', 'только лог', '[1,2]', 'null', '"строка"']) {
+    assert.deepEqual(parseFixtureVars(stdout), {}, `stdout «${stdout}»`);
+  }
+});
+
+test('buildProbeArgs: переменные фикстуры идут в --var последними', () => {
+  const opts = parseArgs(['--scenario', 's.json']);
+  const seed = { networkId: 'n1', networkName: 'Сеть', homeId: 'h1', thoughtId: 't1' };
+  const args = buildProbeArgs(
+    opts,
+    { cdp: 9455, serverRoot: 'http://127.0.0.1:4455', apiBase: 'http://127.0.0.1:4455/api/v1' },
+    seed,
+    'etn_key',
+    { pubId: 'p1' },
+  );
+  assert.equal(args.filter((arg) => arg === '--var').length, 9, '4 общие + 4 стенда + 1 фикстуры');
+  assert.equal(args[args.lastIndexOf('--var') + 1], 'pubId=p1', 'id фикстуры подставлен');
 });
 
 test('buildProbeArgs: интерактив (scenario=null) без --scenario и без null-аргументов', () => {
