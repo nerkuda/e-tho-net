@@ -84,7 +84,8 @@
   --border-thick: 2px;
   --focus-ring-width: 2px;
   /* Дальность затухания полосы фокуса к верхнему/нижнему краю холста; цвет
-     полосы — токен темы `--focus-band-color`. */
+     полосы — фокус-токен темы `--focus-accent` (в слое — runtime
+     `--layer-focus-stripe`, требование c19cbb81). */
   --focus-band-fade: 180px;
   --underline-offset: 2px;
   --letter-spacing-wide: 2px;

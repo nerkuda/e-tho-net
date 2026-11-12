@@ -65,8 +65,7 @@
   --ellipse-fill-border: #69a2ee;
   --backdrop: hsla(210, 25%, 10%, 0.35);
   --canvas-dot: hsla(210, 20%, 12%, 0.14);
-  --focus-band-color: hsla(209, 95%, 45%, 1);
-  --focus-accent: var(--accent);
+  --focus-accent: hsla(209, 95%, 45%, 1);
   /* Кант открытого: чернильный синий референса — контрастен к светлому фону
      и к полосе слоя. */
   --focus-ring-contrast: #0b2340;
@@ -165,8 +164,7 @@
   --ellipse-fill-border: #69a2ee;
   --backdrop: hsla(0, 0%, 0%, 0.55);
   --canvas-dot: hsla(0, 0%, 100%, 0.07);
-  --focus-band-color: hsla(209, 90%, 55%, 1);
-  --focus-accent: var(--accent);
+  --focus-accent: hsla(209, 90%, 55%, 1);
   /* Кант открытого: светло-голубой референса, контрастный к тёмному фону и к
      полосе слоя. */
   --focus-ring-contrast: #e6f2ff;

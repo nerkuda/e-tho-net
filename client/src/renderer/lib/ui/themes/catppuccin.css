@@ -66,8 +66,7 @@
   --ellipse-fill-border: #7b9cf8;
   --backdrop: rgba(76, 79, 105, 0.35);
   --canvas-dot: rgba(76, 79, 105, 0.14);
-  --focus-band-color: #1e66f5;
-  --focus-accent: var(--accent);
+  --focus-accent: #1e66f5;
   /* Кант открытого: чернильный тон палитры, контрастный к светлому фону и к
      полосе слоя. */
   --focus-ring-contrast: #2a2e42;
@@ -157,8 +156,7 @@
   --ellipse-fill-border: #5a7fc0;
   --backdrop: rgba(0, 0, 0, 0.55);
   --canvas-dot: rgba(205, 214, 244, 0.08);
-  --focus-band-color: #89b4fa;
-  --focus-accent: var(--accent);
+  --focus-accent: #89b4fa;
   /* Кант открытого: светлый тон палитры, контрастный к тёмному фону и к полосе
      слоя. */
   --focus-ring-contrast: #f2f5ff;

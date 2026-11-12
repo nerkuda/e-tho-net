@@ -29,7 +29,7 @@ import { describe, it } from 'node:test';
 import { BASE_LAYER_ID, type Layer, type LayerColors } from '@etn/shared';
 
 import {
-  DEFAULT_FOCUS_BAND_COLOR,
+  DEFAULT_FOCUS_ACCENT,
   LABEL_FONT_SHARE,
   LABEL_MIN_FONT_PX,
   LABEL_OPACITY,
@@ -347,7 +347,7 @@ describe('map label (0.6.4 §2.2a)', () => {
     // theme-default focus band.
     const plain = layerLabelView({ id: 'l1', title: 'Слой' }, null, 'dark', 300, 1000);
     assert.equal(plain.visible, true);
-    assert.equal(plain.stripe, DEFAULT_FOCUS_BAND_COLOR);
+    assert.equal(plain.stripe, DEFAULT_FOCUS_ACCENT);
 
     // Degenerate geometry: no focus row → no label.
     const flat = layerLabelView({ id: 'l1', title: 'Слой' }, null, 'dark', 0, 1000);
@@ -406,14 +406,14 @@ describe('styles.css rules the runtime relies on', () => {
     assert.match(css.match(/^\.chronicle \{[^}]*\}/m)?.[0] ?? '', /var\(--layer-bg,\s*var\(--bg\)\)/);
   });
 
-  it('the focus band and the editor halo follow --layer-focus-stripe', () => {
+  it('the focus band and the editor halo follow the focus token chain', () => {
     assert.match(
       css.match(/\.canvas::before\s*\{[^}]*\}/)?.[0] ?? '',
-      /var\(--layer-focus-stripe,\s*var\(--focus-band-color\)\)/,
+      /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
     );
     assert.match(
       css.match(/\.cloud\.halo\s*\{[^}]*\}/)?.[0] ?? '',
-      /var\(--layer-focus-stripe,\s*var\(--accent\)\)/,
+      /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
     );
   });
 });

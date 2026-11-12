@@ -66,8 +66,7 @@
   --ellipse-fill-border: #9d8137; /* base-60 */
   --backdrop: rgba(41, 34, 14, 0.35); /* base-100 с альфой */
   --canvas-dot: rgba(41, 34, 14, 0.16); /* base-100 с альфой — сетка карты */
-  --focus-band-color: #9d8137; /* base-60 — полоса фокуса на пергаменте */
-  --focus-accent: var(--accent);
+  --focus-accent: #9d8137; /* base-60 — полоса фокуса на пергаменте */
   /* Кант открытого: самые тёмные чернила base-100 — читается на бумаге и
      отделяет латунную полосу слоя от карты. */
   --focus-ring-contrast: #29220e;
@@ -161,8 +160,7 @@
   --ellipse-fill-border: #c29938; /* color-yellow */
   --backdrop: rgba(0, 0, 0, 0.6);
   --canvas-dot: rgba(249, 246, 238, 0.07); /* main-ink с альфой */
-  --focus-band-color: #a8812b; /* производный: color-yellow темнее — полоса фокуса */
-  --focus-accent: var(--accent);
+  --focus-accent: #a8812b; /* производный: color-yellow темнее — полоса фокуса */
   /* Кант открытого: светлая бумага main-ink — контрастный кант на тёмной карте. */
   --focus-ring-contrast: #f9f6ee;
   --md-html-comment: #828282; /* base-60 */

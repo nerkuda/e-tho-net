@@ -110,7 +110,6 @@ const THEME_TOKENS = [
   '--ellipse-fill-border',
   '--backdrop',
   '--canvas-dot',
-  '--focus-band-color',
   '--focus-accent',
   '--focus-ring-contrast',
   '--md-html-comment',

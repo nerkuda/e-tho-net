@@ -3,7 +3,8 @@
  *
  * Правило: сплошная рамка открытого в редакторе элемента рисуется ОДНИМ
  * механизмом — внутренняя полоса цветом фокуса активного слоя
- * (`--layer-focus-stripe`) плюс внешний тонкий контрастный кант
+ * (`--layer-focus-stripe` → `--focus-accent` темы → `--accent`) плюс
+ * внешний тонкий контрастный кант
  * (`--focus-ring-contrast`), иначе рамка сливается с фоном фокуса того же
  * цвета. Контрастный кант — единый токен темы; его обязаны использовать ВСЕ
  * сплошные рамки открытого: гало карты и «Структур» (общий класс
@@ -74,7 +75,11 @@ describe('guard: двойная рамка открытого — единый �
 
   it('гало карты и «Структур» (.cloud.halo) несёт контрастный кант', () => {
     const body = ruleBody(CANVAS, '.cloud.halo');
-    assert.match(body, /var\(--layer-focus-stripe/, 'внутренняя полоса — цвет фокуса слоя');
+    assert.match(
+      body,
+      /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
+      'внутренняя полоса — цвет фокуса слоя',
+    );
     assert.match(body, /var\(--focus-ring-contrast\)/, 'внешний кант — общий токен контраста');
   });
 
@@ -84,7 +89,11 @@ describe('guard: двойная рамка открытого — единый �
     // правилом, иначе у фокуса (обычный случай: редактор следует за фокусом)
     // двойного кольца нет (ошибка реализации задачи 3af98e31).
     const body = ruleBody(CANVAS, '.cloud.focus-cloud.halo');
-    assert.match(body, /var\(--layer-focus-stripe/, 'внутренняя полоса — цвет фокуса слоя');
+    assert.match(
+      body,
+      /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
+      'внутренняя полоса — цвет фокуса слоя',
+    );
     assert.match(body, /var\(--focus-ring-contrast\)/, 'внешний кант — общий токен контраста');
   });
 
@@ -93,7 +102,7 @@ describe('guard: двойная рамка открытого — единый �
       const body = ruleBody(PUBLICATIONS, selector);
       assert.match(
         body,
-        /var\(--layer-focus-stripe/,
+        /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
         `${selector}: внутренняя полоса — цвет фокуса слоя`,
       );
       assert.match(body, /var\(--focus-ring-contrast\)/, `${selector}: внешний кант — общий токен`);

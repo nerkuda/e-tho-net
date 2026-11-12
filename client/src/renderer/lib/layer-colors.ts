@@ -28,9 +28,10 @@ import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerEcho } from '@et
 
 import { store, type Theme } from '../state.js';
 
-/** Theme default of the focus band (styles.css `--focus-band-color`, L12) —
- *  the label contrast fallback for a layer without explicit colours. */
-export const DEFAULT_FOCUS_BAND_COLOR = '#1e62be';
+/** Focus accent of the `current` theme (`--focus-accent`, requirement
+ *  c19cbb81) — the label contrast fallback for a layer without explicit
+ *  colours. */
+export const DEFAULT_FOCUS_ACCENT = '#1e62be';
 
 /** Creation defaults of the dark theme (0.6.4): a violet stripe clearly
  *  distinct from the blue base band (#1e62be) and a violet-tinted canvas
@@ -284,7 +285,7 @@ export function layerLabelView(
 ): LayerLabelView {
   const visible =
     current !== null && current.id !== BASE_LAYER_ID && zoneHeight > 0 && canvasWidth > 0;
-  const stripe = colors?.focus_stripe[theme] ?? DEFAULT_FOCUS_BAND_COLOR;
+  const stripe = colors?.focus_stripe[theme] ?? DEFAULT_FOCUS_ACCENT;
   return {
     visible,
     title: current?.title ?? '',

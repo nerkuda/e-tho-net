@@ -67,8 +67,7 @@
   --ellipse-fill-border: #b07a2a; /* производный: янтарь, приглушённый */
   --backdrop: rgba(44, 36, 25, 0.35); /* text-normal с альфой */
   --canvas-dot: rgba(44, 36, 25, 0.15); /* text-normal с альфой — сетка карты */
-  --focus-band-color: #c87628; /* background-modifier-border — полоса фокуса */
-  --focus-accent: var(--accent);
+  --focus-accent: #c87628; /* background-modifier-border — полоса фокуса */
   /* Кант открытого: чернила text-normal — читается на кремовом и отделяет
      янтарную полосу слоя от карты. */
   --focus-ring-contrast: #2c2419;
@@ -163,8 +162,7 @@
   --ellipse-fill-border: #d49335; /* h3-цвет референса */
   --backdrop: rgba(0, 0, 0, 0.65);
   --canvas-dot: rgba(250, 242, 214, 0.08); /* text-normal с альфой */
-  --focus-band-color: #d49335; /* h3-цвет референса — полоса фокуса */
-  --focus-accent: var(--accent);
+  --focus-accent: #d49335; /* h3-цвет референса — полоса фокуса */
   /* Кант открытого: белый — на чёрной карте отделяет жёлтую полосу слоя и не
      сливается с кремовой рамкой выделения. */
   --focus-ring-contrast: #ffffff;

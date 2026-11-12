@@ -83,7 +83,7 @@
    правило 5, ошибка 4f27f85c): фасад помечает её ячейки `part(row-current)`,
    здесь токен подсветки включается только для них. */
 .ui-table .ui-table-grid::part(row-current) {
-  --vaadin-grid-row-highlight-background-color: var(--accent-soft);
+  --vaadin-grid-row-highlight-background-color: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
 }
 
 /* Пустое состояние рисует общий компонент `lib/ui/empty-state.ts` (свой вид
@@ -99,8 +99,8 @@
 
 /* Режим `nav: 'cell'` (таблица хроники): обёртка ячейки, подсветка текущей
    ячейки и выбранного фокусируемого элемента (чипа). Обёртку и элементы
-   подсвечивает фасад классами, стиль — здесь (токен акцента, как у прочих
-   контролов ETN). */
+   подсвечивает фасад классами, стиль — здесь (цвет — цепочка фокуса слоя/темы,
+   требование c19cbb81: текущий элемент говорит на одном языке на всех экранах). */
 .ui-table-cell {
   display: block;
   min-width: 0;
@@ -108,12 +108,12 @@
 }
 
 .ui-table-cell-current {
-  outline: var(--focus-ring-width) solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
   outline-offset: calc(-1 * var(--focus-ring-width));
 }
 
 .ui-table-focusable-current {
-  outline: var(--focus-ring-width) solid var(--accent);
+  outline: var(--focus-ring-width) solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
   outline-offset: 1px;
 }
 

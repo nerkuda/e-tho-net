@@ -233,13 +233,13 @@
 }
 
 .sfd-row.cursor {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
   outline-offset: -1px;
 }
 
 .sfd-row.active {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
   font-weight: 600;
 }
 
