@@ -82,7 +82,7 @@ export function themeSelector(name: string, mode: ThemeMode): string {
  * Тело блока режима темы или `null`, если блока нет. Селектор
  * `[data-theme='<name>'][data-mode='<mode>']` ищется среди селекторов блока:
  * прелюдия может содержать дополнительные (`:root` дефолтного светлого
- * режима, переходный `[data-theme='dark']`).
+ * режима).
  */
 export function themeBlockBody(css: string, name: string, mode: ThemeMode): string | null {
   const marker = themeSelector(name, mode).replace(/\s+/g, '');

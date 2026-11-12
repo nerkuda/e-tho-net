@@ -193,11 +193,17 @@ if (process.defaultApp && process.argv.length >= 2) {
  */
 let localDb: LocalDb | null = null;
 
-/** Window background per theme; matches the `--bg` tokens in styles.css (L10). */
-const THEME_BG: Record<'light' | 'dark', string> = {
-  light: '#eef0f4',
-  dark: '#0e1116',
-};
+/**
+ * Фон окна до первого кадра — цвет `--bg` последней применённой темы (L5
+ * `client_meta.ui_window_bg`, ревизия задачи 0e4a52cd). Палитра в main не
+ * дублируется: значение записывает renderer при каждом применении темы, и оно
+ * переживает перезапуск, поэтому тёмная тема не мигает светлым. Нет кэша
+ * (первый запуск) — фон по умолчанию Electron.
+ */
+function storedWindowBackground(db: LocalDb): string | undefined {
+  const raw = db.getMeta(CLIENT_META_KEY.UI_WINDOW_BG);
+  return typeof raw === 'string' && /^#[0-9a-f]{6}$/i.test(raw) ? raw : undefined;
+}
 
 /**
  * Deep-link цели до подтверждения готовности renderer (ошибка d8b81425).
@@ -219,11 +225,6 @@ function dispatchOrBuffer(win: BrowserWindow | undefined, payload: DeepLinkPaylo
   if (deepLinks.offer(payload)) dispatchDeepLink(win, payload);
 }
 
-/** Reads the stored L5 theme, defaulting to light. */
-function storedTheme(db: LocalDb): 'light' | 'dark' {
-  return db.getMeta(CLIENT_META_KEY.THEME) === 'dark' ? 'dark' : 'light';
-}
-
 /**
  * Creates and configures the main application window.
  *
@@ -239,8 +240,10 @@ function storedTheme(db: LocalDb): 'light' | 'dark' {
  * is disabled because Electron's sandboxed loader cannot import the ESM preload
  * bundle; see the inline comment at the `sandbox` field below.
  */
-function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
+function createWindow(db: LocalDb): BrowserWindow {
   const bounds = sanitizeBounds(loadWindowBounds(db), screen.getAllDisplays());
+  // Фон до первого кадра — цвет `--bg` последней применённой темы (кэш L5).
+  const background = storedWindowBackground(db);
   const win = new BrowserWindow({
     x: bounds.x,
     y: bounds.y,
@@ -258,7 +261,7 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
     icon: isDev ? path.join(mainDir, '../../build/icon.png') : undefined,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: THEME_BG[theme],
+    backgroundColor: background,
     webPreferences: {
       // electron-vite emits the preload bundle as `.mjs` (package "type":"module")
       // into `out/preload/`. Resolve it relative to `out/main/` at runtime so
@@ -631,15 +634,12 @@ app
     // `app.ready`, hence the subscription lives here.
     powerMonitor.on('resume', () => ipc.forceReconnectRealtime());
 
-    // Window background follows the stored theme so the very first paint
-    // already matches (the renderer applies data-theme on boot, L10).
-    const theme = storedTheme(localDb);
-
+    // Фон окна берётся из кэша применённой темы (`--bg`), поэтому первый кадр
+    // уже совпадает с ней (renderer ставит data-theme на boot, L10).
     // Языки нативной проверки орфографии (задача 1e373ac7) — до создания окна.
     configureSpellCheckerLanguages();
 
-    const win = createWindow(theme, localDb);
-
+    const win = createWindow(localDb);
     // Готовность renderer (ошибка d8b81425): холодный deep-link ждёт не
     // `did-finish-load` (он раньше подписки), а IPC-сигнал после установки
     // слушателя. Перезагрузка окна сбрасывает готовность — новый renderer
@@ -661,7 +661,7 @@ app
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0 && localDb !== null) {
-        createWindow(theme, localDb);
+        createWindow(localDb);
       }
     });
   })

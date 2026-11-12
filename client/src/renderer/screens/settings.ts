@@ -23,8 +23,10 @@
  *   `examples`), the per-network `type_roles.table_of_contents` dropdown and the
  *   per-user `show_inactive` / `show_trash` L3 preferences (group «Видимость»). Markdown
  *   tabs are owner-only.
- * - **Клиент** — UI theme (L5 `client_meta.theme`) and `cloud_width` /
- *   `cloud_gap` (L4 `ui_state`), all clipped to the system constants.
+ * - **Клиент** — «Оформление» (тема интерфейса и режим: значение из профиля
+ *   пользователя с офлайн-кэшем, ИСКЛЮЧЕНИЕ из draft-модели — применяется
+ *   сразу), язык приложения и `cloud_width` / `cloud_gap` (L4 `ui_state`),
+ *   ограниченные системными константами.
  * - **Логирование** — client/server diagnostic journals (task 92b89e6f,
  *   08-ui-spec.md §9.7): immediate-effect toggles and file actions, built in
  *   `settings-logs.ts`; deliberately outside the draft/«Применить» model.
@@ -50,6 +52,13 @@ import { div, el, errText } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { availableLocales, getLang, t } from '../lib/i18n.js';
 import { applyLang, unavailableLang } from '../lib/lang.js';
+import { themeOptions } from '../lib/theme.js';
+import {
+  changeUiMode,
+  changeUiTheme,
+  getUiThemeState,
+  isUiThemeApiSupported,
+} from '../lib/ui-theme.js';
 import {
   changeAppLanguage,
   getAppLanguageState,
@@ -60,7 +69,7 @@ import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { clip } from '../lib/pure.js';
-import { store, type Theme } from '../state.js';
+import { store } from '../state.js';
 import { buildLogsSection } from './settings-logs.js';
 import { scheduleStructuresRefresh } from './structures/structures.js';
 import { uiButton } from '../lib/ui/button.js';
@@ -142,7 +151,6 @@ interface Draft {
   networkFirstDayOfWeek: number;
   showInactive: boolean;
   showTrash: boolean;
-  theme: Theme;
   /**
    * «Язык приложения» из профиля пользователя (ADR daab6ac4 §2–3, задачи
    * faba9ff4/222666db): `null` — «использовать язык сетей», иначе тег.
@@ -186,7 +194,6 @@ function readInitialDraft(): Draft {
         : 1,
     showInactive: store.state.showInactive,
     showTrash: store.state.showTrash,
-    theme: store.state.theme,
     appLanguage: getAppLanguageState().language,
     networkLanguage: net?.language ?? null,
     lang: getLang(),
@@ -209,7 +216,6 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.networkFirstDayOfWeek !== b.networkFirstDayOfWeek ||
     a.showInactive !== b.showInactive ||
     a.showTrash !== b.showTrash ||
-    a.theme !== b.theme ||
     a.appLanguage !== b.appLanguage ||
     a.networkLanguage !== b.networkLanguage ||
     a.lang !== b.lang ||
@@ -724,27 +730,52 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       ? null
       : el('p', 'muted', t('settings.languageLocalOnly'));
 
-    const themeGroup = choiceGroup();
-    const lightOpt = radioRow({
-      label: t('settings.label.light'),
-      name: 'settings-theme',
-      value: 'light',
-      checked: draft.theme === 'light',
+    // «Оформление» (элемент edc921ab, требование 219d030c, задача 0e4a52cd):
+    // тема интерфейса — fieldSelect из реестра `lib/theme.ts`, режим —
+    // действующий переключатель из двух опций. Оба контрола — ИСКЛЮЧЕНИЕ из
+    // draft-модели (как «Логирование»): выбор применяется и сохраняется сразу,
+    // «Применить» его не ждёт. Строки — только из словаря, термины: «тема» —
+    // набор значений, «режим» — тёмный/светлый.
+    const uiThemeState = getUiThemeState();
+    const themeSelect = fieldSelect({
+      options: themeOptions(),
+      value: store.state.uiTheme,
+      onChange: (value) => {
+        if (value === store.state.uiTheme) return;
+        errorLine.clear();
+        void changeUiTheme(value as Parameters<typeof changeUiTheme>[0]).then((synced) => {
+          if (!synced) errorLine.show(t('settings.uiThemeSyncDeferred'));
+        });
+      },
     });
-    const darkOpt = radioRow({
-      label: t('settings.label.dark'),
-      name: 'settings-theme',
-      value: 'dark',
-      checked: draft.theme === 'dark',
-    });
-    for (const radio of [lightOpt.input, darkOpt.input]) {
-      radio.addEventListener('change', () => {
-        if (!radio.checked) return;
-        draft.theme = radio.value as Theme;
-        markDirty();
+    const modeGroup = choiceGroup();
+    const modeRow = (mode: 'light' | 'dark'): HTMLElement => {
+      const row = radioRow({
+        label: mode === 'light' ? t('settings.uiMode.light') : t('settings.uiMode.dark'),
+        name: 'settings-ui-mode',
+        value: mode,
+        checked: store.state.theme === mode,
+        onChange: (checked) => {
+          if (!checked) return;
+          errorLine.clear();
+          void changeUiMode(mode).then((synced) => {
+            if (!synced) errorLine.show(t('settings.uiThemeSyncDeferred'));
+          });
+        },
       });
-    }
-    themeGroup.append(lightOpt.row, darkOpt.row);
+      return row.row;
+    };
+    modeGroup.append(modeRow('dark'), modeRow('light'));
+    const themeSupportHint = isUiThemeApiSupported()
+      ? t('settings.uiThemeHintAllDevices')
+      : t('settings.uiThemeLocalOnly');
+    const unknownThemeNote =
+      uiThemeState.unknownTheme === null
+        ? null
+        : el('p', 'muted', t('settings.uiThemeUnknown', uiThemeState.unknownTheme));
+    const deferredNote = uiThemeState.syncDeferred
+      ? el('p', 'muted', t('settings.uiThemeSyncDeferred'))
+      : null;
 
     const widthInput = fieldInput();
     widthInput.type = 'number';
@@ -786,9 +817,13 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       ...(effectiveNote === null ? [] : [effectiveNote]),
       ...(localOnlyNote === null ? [] : [localOnlyNote]),
       ...(unavailableNote === null ? [] : [unavailableNote]),
-      el('h3', 'settings-section-title settings-section-title-spaced', t('settings.tema')),
-      themeGroup,
-      el('p', 'muted', t('settings.applyAllEkranahAppliesOnlyClient')),
+      el('h3', 'settings-section-title settings-section-title-spaced', t('settings.appearance')),
+      fieldRow({ label: t('settings.uiTheme'), control: themeSelect }),
+      el('p', 'muted', themeSupportHint),
+      ...(unknownThemeNote === null ? [] : [unknownThemeNote]),
+      ...(deferredNote === null ? [] : [deferredNote]),
+      fieldRow({ label: t('settings.uiMode'), control: modeGroup }),
+      el('p', 'muted', t('settings.uiThemeLiveHint')),
       el('h3', 'settings-section-title settings-section-title-spaced', t('settings.razmerOblachka')),
       fieldRow({ label: t('settings.shirinaOblachkaPx', [CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX]), control: widthInput }),
       fieldRow({ label: t('settings.otstupBetweenOblachkamiPx', [CLOUD_GAP_MIN, CLOUD_GAP_MAX]), control: gapInput }),
@@ -923,18 +958,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
-    // Client: theme (L5). Mirrors `lib/theme.ts` — apply to the DOM right
-    // away so the user sees the change live, then persist.
-    if (draft.theme !== original.theme) {
-      tasks.push(
-        (async () => {
-          await etn.meta.set(CLIENT_META_KEY.THEME, draft.theme);
-          document.documentElement.dataset['theme'] = draft.theme;
-          store.update({ theme: draft.theme });
-        })(),
-      );
-    }
-
     // Client: «язык приложения». При доступном сервере значение живёт в
     // профиле пользователя (ADR daab6ac4 §2–3, задача 222666db п. 1):
     // сохранение `PUT /users/me/settings/app_language` и живое применение
@@ -999,7 +1022,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.networkFirstDayOfWeek = draft.networkFirstDayOfWeek;
       original.showInactive = draft.showInactive;
       original.showTrash = draft.showTrash;
-      original.theme = draft.theme;
       original.appLanguage = draft.appLanguage;
       original.networkLanguage = draft.networkLanguage;
       original.lang = draft.lang;

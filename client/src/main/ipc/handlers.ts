@@ -75,6 +75,12 @@ export interface HandlerDeps {
   getServerMaintenance: () => ServerMaintenanceDto;
   /** Returns the currently open network id (realtime `getNetworkId` source). */
   getCurrentNetworkId: () => string | null;
+  /**
+   * Текущее главное окно (`null` — ещё не создано/уже уничтожено). Нужно
+   * обработчику `system.setWindowBackground`: фон окна следует за применённой
+   * темой (ревизия задачи 0e4a52cd).
+   */
+  getWindow: () => import('electron').BrowserWindow | null;
   /** Opens a network: persists L4 state, connects realtime, returns meta. */
   openNetwork: (networkId: string) => Promise<Network>;
   /** Bridge: forwards a realtime event to the renderer window. */
@@ -2071,6 +2077,22 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     }),
   );
   handlers.set('system.appInfo', bind(() => appInfo()));
+  // Фон окна под применённую тему (ревизия задачи 0e4a52cd): renderer присылает
+  // `#rrggbb`, вычисленный из `--bg`; цвет проверяем здесь, окно — текущее.
+  handlers.set(
+    'system.setWindowBackground',
+    bind((color: string) => {
+      if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'color must be a CSS hex colour "#rrggbb".',
+          { field: 'color' },
+        );
+      }
+      const win = deps.getWindow();
+      if (win !== null && !win.isDestroyed()) win.setBackgroundColor(color);
+    }),
+  );
   handlers.set('system.preferredLanguage', bind(() => preferredLanguage()));
   handlers.set(
     'system.health',

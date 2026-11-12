@@ -47,7 +47,6 @@ import {
   parseCanvasLayout,
   parseCanvasZoom,
   contrastText,
-  parseTheme,
   parseCloudGap,
   parseCloudWidth,
   parseCollapsedGroups,
@@ -499,16 +498,6 @@ describe('canvas zoom', () => {
       font: cloudFontSize(200),
       height: cloudHeight(200),
     });
-  });
-});
-
-describe('ui theme (L10)', () => {
-  it("parses client_meta theme; anything but 'dark' falls back to light", () => {
-    assert.equal(parseTheme(null), 'light');
-    assert.equal(parseTheme(''), 'light');
-    assert.equal(parseTheme('light'), 'light');
-    assert.equal(parseTheme('DARK'), 'light');
-    assert.equal(parseTheme('dark'), 'dark');
   });
 });
 

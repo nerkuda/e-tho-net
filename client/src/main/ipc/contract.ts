@@ -1704,6 +1704,13 @@ export interface EtnApi {
      */
     appInfo(): Promise<AppInfo>;
     /**
+     * Фон окна под применённую тему (ревизия 2026-11-12 задачи 0e4a52cd):
+     * renderer вычисляет цвет `--bg` применённой темы и просит main покрасить
+     * фон окна без перезапуска. `color` — `#rrggbb`; иное значение —
+     * `VALIDATION_ERROR`. Работает без соединения с сервером.
+     */
+    setWindowBackground(color: string): Promise<void>;
+    /**
      * Язык системного окружения для ПЕРВОГО запуска (задача e6374cd1): первый
      * элемент `app.getPreferredSystemLanguages()`, сведённый к коду каталога
      * (`en-*` → `en`, `zh-*` → `zh`, иначе `ru`). Используется только как

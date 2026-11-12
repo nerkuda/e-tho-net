@@ -1029,6 +1029,36 @@ export const ru = {
   'settings.langUnavailable':
     'Каталог языка «%1» недоступен в этой сборке. Интерфейс показан на русском.',
 
+  // -- Оформление: тема и режим (элемент edc921ab, задача 0e4a52cd) ---------
+  /** Заголовок раздела «Оформление» в разделе «Клиент». */
+  'settings.appearance': 'Оформление',
+  /** Подпись поля выбора набора значений токенов. */
+  'settings.uiTheme': 'Тема интерфейса',
+  /** Подпись переключателя тёмного/светлого варианта темы. */
+  'settings.uiMode': 'Режим',
+  'settings.uiMode.dark': 'Тёмный',
+  'settings.uiMode.light': 'Светлый',
+  /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
+  'settings.uiThemeLiveHint': 'Тема и режим применяются сразу, без перезапуска.',
+  /** Выбор хранится в профиле пользователя (требование 219d030c). */
+  'settings.uiThemeHintAllDevices':
+    'Хранится в профиле пользователя и действует на всех ваших клиентах на этом сервере.',
+  /** Старый сервер не хранит выбор темы в профиле. */
+  'settings.uiThemeLocalOnly':
+    'Сервер не поддерживает хранение темы в профиле: выбор действует только на этом клиенте.',
+  /** Запись на сервер не удалась — применено локально, повтор при подключении. */
+  'settings.uiThemeSyncDeferred':
+    'Не удалось сохранить выбор на сервере. Он применён на этом клиенте; синхронизация повторится при подключении.',
+  /** Сервер хранит неизвестную этой сборке тему: %1 — значение сервера. */
+  'settings.uiThemeUnknown':
+    'Сервер хранит тему «%1», которой нет в этой версии клиента. Применена «Стандартная», значение на сервере не изменено.',
+  'settings.theme.current': 'Стандартная',
+  'settings.theme.blueTopaz': 'Blue Topaz',
+  'settings.theme.catppuccin': 'Catppuccin',
+  'settings.theme.nordic': 'Nordic',
+  'settings.theme.retronotes': 'Retro Notes',
+  'settings.theme.wasp': 'Wasp',
+
   // -- «О программе» -------------------------------------------------------
   /** Заголовок раздела сторонних компонентов. */
   'about.thirdParty': 'Сторонние компоненты',
@@ -3523,10 +3553,6 @@ export const ru = {
   'settings.label.typeInstructionAgents': 'Тип инструкций агентам',
   'settings.vidimost': 'Видимость',
   'settings.commonSettingAllVashihKlientovNetwork': 'Общая настройка для всех ваших клиентов в этой сети.',
-  'settings.label.light': 'Светлая',
-  'settings.label.dark': 'Тёмная',
-  'settings.tema': 'Тема',
-  'settings.applyAllEkranahAppliesOnlyClient': 'Применяется на всех экранах. Действует только на этом клиенте.',
   'settings.razmerOblachka': 'Размер облачка',
   'settings.shirinaOblachkaPx': 'Ширина облачка, px (%1–%2)',
   'settings.otstupBetweenOblachkamiPx': 'Отступ между облачками, px (%1–%2)',

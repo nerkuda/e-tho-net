@@ -986,6 +986,36 @@ export const en = {
    */
   'settings.langUnavailable': 'The “%1” language catalog is unavailable in this build. The interface is shown in Russian.',
 
+  // -- Оформление: тема и режим (элемент edc921ab, задача 0e4a52cd) ---------
+  /** Заголовок раздела «Оформление» в разделе «Клиент». */
+  'settings.appearance': 'Appearance',
+  /** Подпись поля выбора набора значений токенов. */
+  'settings.uiTheme': 'Interface theme',
+  /** Подпись переключателя тёмного/светлого варианта темы. */
+  'settings.uiMode': 'Mode',
+  'settings.uiMode.dark': 'Dark',
+  'settings.uiMode.light': 'Light',
+  /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
+  'settings.uiThemeLiveHint': 'Theme and mode apply immediately, without a restart.',
+  /** Выбор хранится в профиле пользователя (требование 219d030c). */
+  'settings.uiThemeHintAllDevices':
+    'Stored in your user profile and applied to all your clients on this server.',
+  /** Старый сервер не хранит выбор темы в профиле. */
+  'settings.uiThemeLocalOnly':
+    'The server does not store the interface theme in the profile: the choice applies to this client only.',
+  /** Запись на сервер не удалась — применено локально, повтор при подключении. */
+  'settings.uiThemeSyncDeferred':
+    'Could not save the choice on the server. It is applied on this client; synchronization will retry on the next connection.',
+  /** Сервер хранит неизвестную этой сборке тему: %1 — значение сервера. */
+  'settings.uiThemeUnknown':
+    'The server stores theme “%1”, which is not available in this client version. “Default” is applied; the server value is left unchanged.',
+  'settings.theme.current': 'Default',
+  'settings.theme.blueTopaz': 'Blue Topaz',
+  'settings.theme.catppuccin': 'Catppuccin',
+  'settings.theme.nordic': 'Nordic',
+  'settings.theme.retronotes': 'Retro Notes',
+  'settings.theme.wasp': 'Wasp',
+
   // -- «О программе» -------------------------------------------------------
   /** Заголовок раздела сторонних компонентов. */
   'about.thirdParty': 'Third-party components',
@@ -3437,10 +3467,6 @@ export const en = {
   'settings.label.typeInstructionAgents': 'Agent instruction type',
   'settings.vidimost': 'Visibility',
   'settings.commonSettingAllVashihKlientovNetwork': 'A common setting for all your clients in this network.',
-  'settings.label.light': 'Light',
-  'settings.label.dark': 'Dark',
-  'settings.tema': 'Theme',
-  'settings.applyAllEkranahAppliesOnlyClient': 'Applies to all screens. Affects this client only.',
   'settings.razmerOblachka': 'Bubble size',
   'settings.shirinaOblachkaPx': 'Bubble width, px (%1–%2)',
   'settings.otstupBetweenOblachkamiPx': 'Spacing between bubbles, px (%1–%2)',

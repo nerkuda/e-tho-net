@@ -1,0 +1,361 @@
+{
+  "name": "0e4a52cd-theme-mode",
+  "description": "Задача 0e4a52cd «Механизм применения темы и режима в клиенте» (требование 219d030c, элемент edc921ab, сценарии 580f8d10 и b1131d65). Стенд: язык сервера ru. Проверяется: boot-применение до первого экрана (атрибуты data-theme/data-mode на корне, фон body); раздел «Оформление» в «Клиенте» (fieldSelect из 6 тем + режим из двух опций, подписи из словаря); живая перекраска при смене темы и режима (--bg/--surface темы + color-scheme) без перезапуска; тема/режим — исключение из draft-модели (кнопки «Применить» остаются неактивными); сохранение в профиль (PUT ui_theme/ui_mode) и кэш client_meta с владельцем; восстановление после перезапуска страницы; деградация «сервер новее сборки» (неизвестная тема → current, серверное значение не затирается, в настройках пояснение); восстановление из кэша, когда серверных значений нет. Запуск: npm -w @etn/server run build && npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.0e4a52cd-theme-mode.scenario.json --out .tmp/0e4a52cd/out",
+  "timeout": 300000,
+  "texts": {
+    "appearance": { "ru": "Оформление", "en": "Appearance" },
+    "themeField": { "ru": "Тема интерфейса", "en": "Interface theme" },
+    "modeField": { "ru": "Режим", "en": "Mode" },
+    "themeUnknownNote": {
+      "ru": "Сервер хранит тему «neon-future», которой нет в этой версии клиента. Применена «Стандартная», значение на сервере не изменено.",
+      "en": "The server stores theme “neon-future”, which is not available in this client version. “Default” is applied; the server value is left unchanged."
+    }
+  },
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": { "language": "ru" },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "boot-defaults",
+      "probe": "({ theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg: getComputedStyle(document.body).backgroundColor, surface: getComputedStyle(document.body).getPropertyValue('--surface').trim(), colorScheme: getComputedStyle(document.documentElement).colorScheme })",
+      "expect": {
+        "theme": "current",
+        "mode": "light",
+        "bg": "rgb(238, 240, 244)",
+        "surface": "#ffffff",
+        "colorScheme": "light"
+      }
+    },
+
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "after-login-defaults",
+      "probe": "(async () => { const settings = await window.etn.me.getSettings(); const me = await window.etn.me.get(); return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, settingsKeys: Object.keys(settings).sort(), owner: (await window.etn.meta.get('ui_theme_owner')) === me.id }; })()",
+      "expect": {
+        "theme": "current",
+        "mode": "light",
+        "settingsKeys": [],
+        "owner": true
+      }
+    },
+
+    { "name": "open-user-menu", "click": "button[title^='Меню пользователя'], .top-right button" },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "appearance-section",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-section select')).some((s) => Array.from(s.options).some((o) => o.value === 'blue-topaz'))"
+    },
+    {
+      "name": "theme-select",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); return { values: Array.from(s.options).map((o) => o.value), labels: Array.from(s.options).map((o) => (o.textContent || '').trim()), value: s.value }; })()",
+      "expect": {
+        "values": ["current", "blue-topaz", "catppuccin", "nordic", "retronotes", "wasp"],
+        "labels": ["Стандартная", "Blue Topaz", "Catppuccin", "Nordic", "Retro Notes", "Wasp"],
+        "value": "current"
+      }
+    },
+    {
+      "name": "mode-radios",
+      "probe": "(() => { const rs = Array.from(document.querySelectorAll('input[name=\"settings-ui-mode\"]')); return { values: rs.map((r) => r.value), checked: rs.filter((r) => r.checked).map((r) => r.value), labels: rs.map((r) => (r.closest('.ui-choice-row')?.textContent || '').trim()) }; })()",
+      "expect": {
+        "values": ["dark", "light"],
+        "checked": ["light"],
+        "labels": ["Тёмный", "Светлый"]
+      }
+    },
+    {
+      "name": "section-labels",
+      "probe": "(() => { const titles = Array.from(document.querySelectorAll('.settings-section .settings-section-title')).map((e) => (e.textContent || '').trim()); const fields = Array.from(document.querySelectorAll('.settings-section .ui-field-label')).map((e) => (e.textContent || '').trim()); return { hasAppearance: titles.includes('{{text:appearance}}'), fields: fields.filter((s) => s === '{{text:themeField}}' || s === '{{text:modeField}}') }; })()",
+      "expect": {
+        "hasAppearance": true,
+        "fields": ["Тема интерфейса", "Режим"]
+      }
+    },
+
+    {
+      "name": "pick-retronotes",
+      "expect": "retronotes",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); s.value = 'retronotes'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "theme-applied-live",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.theme === 'retronotes'"
+    },
+    {
+      "name": "theme-colors-light",
+      "probe": "({ theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg: getComputedStyle(document.body).backgroundColor, surface: getComputedStyle(document.body).getPropertyValue('--surface').trim(), colorScheme: getComputedStyle(document.documentElement).colorScheme })",
+      "expect": {
+        "theme": "retronotes",
+        "mode": "light",
+        "bg": "rgb(244, 238, 224)",
+        "surface": "#f9f6ee",
+        "colorScheme": "light"
+      }
+    },
+    {
+      "name": "apply-buttons-not-dirty",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.disabled)",
+      "expect": [true, false, true]
+    },
+    {
+      "name": "theme-cached",
+      "probe": "(async () => { const me = await window.etn.me.get(); return { theme: await window.etn.meta.get('ui_theme'), mode: await window.etn.meta.get('ui_mode'), bg: await window.etn.meta.get('ui_window_bg'), owner: (await window.etn.meta.get('ui_theme_owner')) === me.id }; })()",
+      "expect": {
+        "theme": "retronotes",
+        "mode": "light",
+        "bg": "#f4eee0",
+        "owner": true
+      }
+    },
+    {
+      "name": "theme-server",
+      "api": {
+        "name": "theme-server",
+        "method": "GET",
+        "path": "/users/me/settings",
+        "expression": "({ theme: data.ui_theme ?? null, mode: data.ui_mode ?? null })"
+      },
+      "expect": { "theme": "retronotes", "mode": null }
+    },
+
+    {
+      "name": "pick-dark-mode",
+      "expect": true,
+      "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"dark\"]'); if (!r) throw new Error('нет режима dark'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "mode-applied-live",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.mode === 'dark'"
+    },
+    {
+      "name": "theme-colors-dark",
+      "probe": "({ theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg: getComputedStyle(document.body).backgroundColor, surface: getComputedStyle(document.body).getPropertyValue('--surface').trim(), text: getComputedStyle(document.body).getPropertyValue('--text').trim(), colorScheme: getComputedStyle(document.documentElement).colorScheme })",
+      "expect": {
+        "theme": "retronotes",
+        "mode": "dark",
+        "bg": "rgb(12, 12, 12)",
+        "surface": "#161616",
+        "text": "#f9f6ee",
+        "colorScheme": "dark"
+      }
+    },
+    {
+      "name": "mode-server",
+      "api": {
+        "name": "mode-server",
+        "method": "GET",
+        "path": "/users/me/settings",
+        "expression": "({ theme: data.ui_theme, mode: data.ui_mode })"
+      },
+      "expect": { "theme": "retronotes", "mode": "dark" }
+    },
+    {
+      "name": "settle-transitions",
+      "probe": "(async () => { await new Promise((r) => setTimeout(r, 500)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "control-colors-dark",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); const cs = getComputedStyle(s); return { bg: cs.backgroundColor, color: cs.color, border: cs.borderTopColor }; })()",
+      "expect": {
+        "bg": "rgb(22, 22, 22)",
+        "color": "rgb(249, 246, 238)",
+        "border": "rgb(71, 71, 71)"
+      }
+    },
+
+    {
+      "name": "reload-after-choice",
+      "expect": "scheduled",
+      "probe": "(() => { setTimeout(() => location.reload(), 120); return 'scheduled'; })()"
+    },
+    {
+      "name": "choice-restored",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null && document.documentElement.dataset.theme === 'retronotes' && document.documentElement.dataset.mode === 'dark'"
+    },
+    {
+      "name": "restored-colors",
+      "probe": "({ bg: getComputedStyle(document.body).backgroundColor, colorScheme: getComputedStyle(document.documentElement).colorScheme })",
+      "expect": { "bg": "rgb(12, 12, 12)", "colorScheme": "dark" }
+    },
+
+    {
+      "name": "server-unknown-theme",
+      "api": {
+        "name": "server-unknown-theme",
+        "method": "PUT",
+        "path": "/users/me/settings/ui_theme",
+        "body": { "value": "neon-future" },
+        "expression": "data.value"
+      },
+      "expect": "neon-future"
+    },
+    {
+      "name": "reload-with-unknown-theme",
+      "expect": "scheduled",
+      "probe": "(() => { setTimeout(() => location.reload(), 120); return 'scheduled'; })()"
+    },
+    {
+      "name": "unknown-degrades-to-current",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null && document.documentElement.dataset.theme === 'current' && document.documentElement.dataset.mode === 'dark'"
+    },
+    {
+      "name": "server-value-kept",
+      "api": {
+        "name": "server-value-kept",
+        "method": "GET",
+        "path": "/users/me/settings",
+        "expression": "({ theme: data.ui_theme, mode: data.ui_mode })"
+      },
+      "expect": { "theme": "neon-future", "mode": "dark" }
+    },
+    {
+      "name": "cache-degraded",
+      "probe": "(async () => ({ theme: await window.etn.meta.get('ui_theme'), mode: await window.etn.meta.get('ui_mode') }))()",
+      "expect": { "theme": "current", "mode": "dark" }
+    },
+    {
+      "name": "open-user-menu-unknown",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    { "name": "user-menu-unknown", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-unknown",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-unknown",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-unknown",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "unknown-note",
+      "timeout": 10000,
+      "waitFor": "Array.from(document.querySelectorAll('.settings-section select')).some((s) => Array.from(s.options).some((o) => o.value === 'blue-topaz'))"
+    },
+    {
+      "name": "unknown-shown-as-current",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); const muted = Array.from(document.querySelectorAll('.settings-section p.muted')).map((p) => (p.textContent || '').trim()); return { selected: s.value, note: muted.find((t) => t.includes('neon-future')) ?? null }; })()",
+      "expect": {
+        "selected": "current",
+        "note": "{{text:themeUnknownNote}}"
+      }
+    },
+
+    {
+      "name": "pick-wasp",
+      "expect": "wasp",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); s.value = 'wasp'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+    },
+    {
+      "name": "wasp-applied",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.theme === 'wasp'"
+    },
+    {
+      "name": "pick-light-mode",
+      "expect": true,
+      "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]'); if (!r) throw new Error('нет режима light'); r.click(); return r.checked; })()"
+    },
+    {
+      "name": "wasp-light-applied",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.theme === 'wasp' && document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "wasp-colors",
+      "probe": "({ bg: getComputedStyle(document.body).backgroundColor, colorScheme: getComputedStyle(document.documentElement).colorScheme })",
+      "expect": { "bg": "rgb(250, 246, 240)", "colorScheme": "light" }
+    },
+    {
+      "name": "clear-server-theme",
+      "api": {
+        "name": "clear-server-theme",
+        "method": "PUT",
+        "path": "/users/me/settings/ui_theme",
+        "body": { "value": null },
+        "expression": "data.value"
+      },
+      "expect": null
+    },
+    {
+      "name": "clear-server-mode",
+      "api": {
+        "name": "clear-server-mode",
+        "method": "PUT",
+        "path": "/users/me/settings/ui_mode",
+        "body": { "value": null },
+        "expression": "data.value"
+      },
+      "expect": null
+    },
+    {
+      "name": "reload-cache-only",
+      "expect": "scheduled",
+      "probe": "(() => { setTimeout(() => location.reload(), 120); return 'scheduled'; })()"
+    },
+    {
+      "name": "cache-restores-choice",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.dialog-backdrop') === null && document.documentElement.dataset.theme === 'wasp' && document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "cache-only-colors",
+      "probe": "({ theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg: getComputedStyle(document.body).backgroundColor, surface: getComputedStyle(document.body).getPropertyValue('--surface').trim() })",
+      "expect": {
+        "theme": "wasp",
+        "mode": "light",
+        "bg": "rgb(250, 246, 240)",
+        "surface": "#fffcf7"
+      }
+    }
+  ]
+}

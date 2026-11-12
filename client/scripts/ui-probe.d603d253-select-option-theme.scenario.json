@@ -30,11 +30,11 @@
     { "name": "pick-gte", "eval": "(() => { const it = document.querySelector('.ft-choice__item[data-key=\"gte\"]'); if (it) { it.click(); return true; } return false; })()" },
     { "name": "date-widget", "timeout": 8000, "waitFor": "document.querySelector('.st-filter .ft-row .fv-date__anchor optgroup') !== null" },
 
-    { "name": "set-dark", "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()" },
-    { "name": "theme-dark", "probe": "(() => document.documentElement.dataset.theme)()", "expect": "dark" },
+    { "name": "set-dark", "eval": "(() => { document.documentElement.dataset.mode = 'dark'; return document.documentElement.dataset.mode; })()" },
+    { "name": "theme-dark", "probe": "(() => document.documentElement.dataset.mode)()", "expect": "dark" },
     {
       "name": "dark-facts",
-      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return 'no-select'; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const read = (el) => { if (!el) return null; const cs = getComputedStyle(el); return { tag: el.tagName, bg: cs.getPropertyValue('background-color'), color: cs.getPropertyValue('color') }; }; const probe = document.createElement('select'); const opt = document.createElement('option'); opt.disabled = true; opt.textContent = 'disabled'; probe.append(opt); document.body.append(probe); const disabledColor = getComputedStyle(opt).getPropertyValue('color'); probe.remove(); return JSON.stringify({ theme: document.documentElement.dataset.theme, groupLabel: group ? group.label : null, outside: read(outside), inside: read(inside), group: read(group), disabledColor }); })()"
+      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return 'no-select'; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const read = (el) => { if (!el) return null; const cs = getComputedStyle(el); return { tag: el.tagName, bg: cs.getPropertyValue('background-color'), color: cs.getPropertyValue('color') }; }; const probe = document.createElement('select'); const opt = document.createElement('option'); opt.disabled = true; opt.textContent = 'disabled'; probe.append(opt); document.body.append(probe); const disabledColor = getComputedStyle(opt).getPropertyValue('color'); probe.remove(); return JSON.stringify({ mode: document.documentElement.dataset.mode, groupLabel: group ? group.label : null, outside: read(outside), inside: read(inside), group: read(group), disabledColor }); })()"
     },
     {
       "name": "dark-assert",
@@ -42,11 +42,11 @@
       "expect": true
     },
 
-    { "name": "set-light", "eval": "(() => { document.documentElement.dataset.theme = 'light'; return document.documentElement.dataset.theme; })()" },
-    { "name": "theme-light", "probe": "(() => document.documentElement.dataset.theme)()", "expect": "light" },
+    { "name": "set-light", "eval": "(() => { document.documentElement.dataset.mode = 'light'; return document.documentElement.dataset.mode; })()" },
+    { "name": "theme-light", "probe": "(() => document.documentElement.dataset.mode)()", "expect": "light" },
     {
       "name": "light-facts",
-      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return 'no-select'; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const read = (el) => { if (!el) return null; const cs = getComputedStyle(el); return { tag: el.tagName, bg: cs.getPropertyValue('background-color'), color: cs.getPropertyValue('color') }; }; const probe = document.createElement('select'); const opt = document.createElement('option'); opt.disabled = true; opt.textContent = 'disabled'; probe.append(opt); document.body.append(probe); const disabledColor = getComputedStyle(opt).getPropertyValue('color'); probe.remove(); return JSON.stringify({ theme: document.documentElement.dataset.theme, outside: read(outside), inside: read(inside), group: read(group), disabledColor }); })()"
+      "probe": "(() => { const sel = document.querySelector('.st-filter .ft-row .fv-date__anchor'); if (!sel) return 'no-select'; const group = sel.querySelector('optgroup'); const outside = sel.querySelector(':scope > option'); const inside = group ? group.querySelector('option') : null; const read = (el) => { if (!el) return null; const cs = getComputedStyle(el); return { tag: el.tagName, bg: cs.getPropertyValue('background-color'), color: cs.getPropertyValue('color') }; }; const probe = document.createElement('select'); const opt = document.createElement('option'); opt.disabled = true; opt.textContent = 'disabled'; probe.append(opt); document.body.append(probe); const disabledColor = getComputedStyle(opt).getPropertyValue('color'); probe.remove(); return JSON.stringify({ mode: document.documentElement.dataset.mode, outside: read(outside), inside: read(inside), group: read(group), disabledColor }); })()"
     },
     {
       "name": "light-assert",

@@ -542,6 +542,9 @@ function buildApi(): EtnBridgeApi {
     },
     system: {
       appInfo: () => invoke('system.appInfo'),
+      // Фон окна под применённую тему (ревизия задачи 0e4a52cd): renderer
+      // вычисляет `--bg` темы и просит main перекрасить фон без перезапуска.
+      setWindowBackground: (color: string) => invoke('system.setWindowBackground', color),
       // Язык системного окружения для первого запуска (задача e6374cd1).
       preferredLanguage: () => invoke('system.preferredLanguage'),
       readClipboard: () => invoke('system.readClipboard'),

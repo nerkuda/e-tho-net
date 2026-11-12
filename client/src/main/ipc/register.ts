@@ -458,6 +458,7 @@ export function registerIpc(opts: RegisterIpcOptions): IpcHandle {
           };
     },
     getCurrentNetworkId: () => conn.getCurrentNetworkId(),
+    getWindow: () => opts.getWindow(),
     openNetwork: (networkId) => conn.openNetwork(networkId),
     broadcastRealtimeEvent: (event) => broadcast('realtime:event', event),
     broadcastRealtimeStatus: (status) => broadcast('realtime:status', status),

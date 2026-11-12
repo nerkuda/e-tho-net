@@ -191,6 +191,18 @@ export const USER_SETTING_KEY = {
    * пользователя; локальный `client_meta.lang` — только кэш (ADR §5).
    */
   APP_LANGUAGE: 'app_language',
+  /**
+   * Тема интерфейса пользователя (требование 219d030c, задача 0e4a52cd):
+   * имя файла темы `current | blue-topaz | catppuccin | nordic | retronotes |
+   * wasp`. Живёт на уровне «пользователь × сервер» (L3s) и действует на всех
+   * клиентах пользователя; `client_meta.ui_theme` — только кэш для офлайн-старта.
+   */
+  UI_THEME: 'ui_theme',
+  /**
+   * Режим интерфейса пользователя (требование 219d030c): `dark | light`.
+   * L3s, как `ui_theme`; локальный кэш — `client_meta.ui_mode`.
+   */
+  UI_MODE: 'ui_mode',
 } as const satisfies Record<string, string>;
 export type UserSettingKey = (typeof USER_SETTING_KEY)[keyof typeof USER_SETTING_KEY];
 
@@ -291,6 +303,37 @@ export const CLIENT_META_KEY = {
    * наследование и не перезаписывается.
    */
   LANG_MIGRATED: 'lang_migrated',
+  /**
+   * Кэш выбора темы интерфейса (`ui_theme`/`ui_mode`, требование 219d030c,
+   * задача 0e4a52cd): значения последнего эффективного выбора для офлайн-старта.
+   * При доступном сервере серверные значения побеждают и перезаписывают кэш.
+   */
+  UI_THEME: 'ui_theme',
+  /** Кэш режима интерфейса (`dark | light`) — см. {@link CLIENT_META_KEY.UI_THEME}. */
+  UI_MODE: 'ui_mode',
+  /**
+   * Идентификатор пользователя сервера, которому принадлежит кэш `ui_theme`/
+   * `ui_mode` (требование 219d030c, ревизия итерации 2). При входе другого
+   * пользователя кэш игнорируется до ответа сервера, затем перезаписывается.
+   */
+  UI_THEME_OWNER: 'ui_theme_owner',
+  /**
+   * Маркер разовой миграции «старый `client_meta.theme` → `ui_mode` на сервере»
+   * (требование 219d030c): `'true'` — перенос выполнен/не требуется.
+   */
+  UI_THEME_MIGRATED: 'theme_migrated',
+  /**
+   * Отложенная синхронизация выбора темы/режима: `'true'` — локальный выбор
+   * ещё не дошёл до сервера (офлайн, старый сервер, 422). Повторная попытка —
+   * при следующем входе.
+   */
+  UI_THEME_PENDING: 'ui_theme_pending',
+  /**
+   * Цвет фона окна, вычисленный из `--bg` применённой темы (ревизия 2026-11-12
+   * задачи 0e4a52cd): main ставит его окну `backgroundColor` до первого кадра,
+   * чтобы тёмная тема не мигала светлым. Хранится установочно (L5).
+   */
+  UI_WINDOW_BG: 'ui_window_bg',
   ZOOM: 'zoom',
   ACTIVE_PROFILE_ID: 'active_profile_id',
   WINDOW_BOUNDS: 'window_bounds',
@@ -561,7 +604,7 @@ export function validateTypeRoles(input: unknown): TypeRoles {
   if (typeof input !== 'object' || Array.isArray(input)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      "type_roles must be an object { [role]: type_id | null }.",
+      'type_roles must be an object { [role]: type_id | null }.',
       { field: 'type_roles' },
     );
   }
@@ -575,11 +618,9 @@ export function validateTypeRoles(input: unknown): TypeRoles {
       );
     }
     if (raw !== null && typeof raw !== 'string') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `type_roles["${key}"] must be a string or null.`,
-        { field: `type_roles.${key}` },
-      );
+      throw new EtnError('VALIDATION_ERROR', `type_roles["${key}"] must be a string or null.`, {
+        field: `type_roles.${key}`,
+      });
     }
     (out as Record<string, string | null>)[key] = raw as string | null;
   }
@@ -627,4 +668,3 @@ export const ETNX_MAX_BYTES = 50 * 1024 * 1024;
  * (задача 99c16033, 0.12.2): REST и клиент принимают те же 1..20.
  */
 export const ETNX_SUBTREE_DEPTH_MAX = 20;
-

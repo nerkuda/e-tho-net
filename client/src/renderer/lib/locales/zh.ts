@@ -473,6 +473,34 @@ export const zh = {
   'settings.networkLanguageInherit': '使用服务器语言',
   'settings.networkLanguageHint': '应用语言为“使用网络语言”的成员所使用的界面语言。',
   'settings.langUnavailable': '此构建中没有语言「%1」的词典。界面以俄语显示。',
+
+  // -- Оформление: тема и режим (элемент edc921ab, задача 0e4a52cd) ---------
+  /** Заголовок раздела «Оформление» в разделе «Клиент». */
+  'settings.appearance': '外观',
+  /** Подпись поля выбора набора значений токенов. */
+  'settings.uiTheme': '界面主题',
+  /** Подпись переключателя тёмного/светлого варианта темы. */
+  'settings.uiMode': '模式',
+  'settings.uiMode.dark': '深色',
+  'settings.uiMode.light': '浅色',
+  /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
+  'settings.uiThemeLiveHint': '主题和模式立即生效，无需重启。',
+  /** Выбор хранится в профиле пользователя (требование 219d030c). */
+  'settings.uiThemeHintAllDevices': '保存在用户配置中，并应用于此服务器上您的所有客户端。',
+  /** Старый сервер не хранит выбор темы в профиле. */
+  'settings.uiThemeLocalOnly': '服务器不支持在配置中保存界面主题：选择仅对当前客户端生效。',
+  /** Запись на сервер не удалась — применено локально, повтор при подключении. */
+  'settings.uiThemeSyncDeferred':
+    '无法在服务器上保存选择。选择已在当前客户端应用；下次连接时将重试同步。',
+  /** Сервер хранит неизвестную этой сборке тему: %1 — значение сервера. */
+  'settings.uiThemeUnknown':
+    '服务器保存了此客户端版本中不存在的主题「%1」。已应用「标准」，服务器上的值未更改。',
+  'settings.theme.current': '标准',
+  'settings.theme.blueTopaz': 'Blue Topaz',
+  'settings.theme.catppuccin': 'Catppuccin',
+  'settings.theme.nordic': 'Nordic',
+  'settings.theme.retronotes': 'Retro Notes',
+  'settings.theme.wasp': 'Wasp',
   'about.thirdParty': '第三方组件',
   'about.website': '网站',
   'about.thirdPartyHint': '完整列表及许可证文本见 THIRD-PARTY-NOTICES.txt 文件。',
@@ -2286,10 +2314,6 @@ export const zh = {
   'settings.label.typeInstructionAgents': '代理指令类型',
   'settings.vidimost': '可见性',
   'settings.commonSettingAllVashihKlientovNetwork': '此网络中所有客户端的通用设置。',
-  'settings.label.light': '浅色',
-  'settings.label.dark': '深色',
-  'settings.tema': '主题',
-  'settings.applyAllEkranahAppliesOnlyClient': '应用于所有界面。仅对当前客户端生效。',
   'settings.razmerOblachka': '气泡大小',
   'settings.shirinaOblachkaPx': '气泡宽度，px（%1–%2）',
   'settings.otstupBetweenOblachkamiPx': '气泡间距，px（%1–%2）',
