@@ -10,7 +10,7 @@
 
 Сервер ETN — один процесс Node.js; все данные он хранит в SQLite в каталоге данных. Работает на Linux, Windows 10/11 и macOS. Клиент подключается к нему по сети (в примерах ниже — порт 4321).
 
-Готовые сборки версии 0.15.4 публикуются в релизах проекта:
+Готовые сборки версии 0.15.3 публикуются в релизах проекта:
 
 - `ETN-Setup-<версия>.exe` — установщик Windows: ставит сервер службой Windows и/или клиент;
 - `etn-server-<версия>.tar.gz` — серверная поставка Linux (нужен установленный Node.js 22 LTS);
@@ -43,8 +43,8 @@ sc qc ETN
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf etn-server-0.15.4.tar.gz
-cd etn-server-0.15.4
+tar -xzf etn-server-0.15.3.tar.gz
+cd etn-server-0.15.3
 ```
 
 Нужен Node.js 22 LTS. Первый запуск и работа — из распакованного каталога `etn-server-<версия>/` (в нём лежит `dist/`):
@@ -398,7 +398,7 @@ npm run build
 Клиент ETN — настольное приложение (Windows 10/11 x64, Linux x64, macOS). Оно работает **только при связи с сервером**: без соединения правки не сохраняются.
 
 ### Установка
-Готовые сборки версии 0.15.4 — в релизах проекта.
+Готовые сборки версии 0.15.3 — в релизах проекта.
 
 **Linux** — одной командой, без sudo (клиент ставится в `~/.local/opt/etn`). Нужен `curl` или `wget`; в минимальной Ubuntu 24.04 `curl` нет — поставьте его один раз: `sudo apt-get install -y curl`.
 
@@ -416,7 +416,7 @@ wget -qO- https://github.com/nerkuda/e-tho-net/releases/latest/download/install.
 
 Варианты:
 
-- конкретная версия — `bash install.sh --version 0.15.4`;
+- конкретная версия — `bash install.sh --version 0.15.3`;
 - системная установка в `/opt/etn` (нужен root) — `sudo bash install.sh --system`;
 - удаление без потери профилей и ключей — `bash install.sh --uninstall`;
 - вручную — распакуйте `ETN-Client-<версия>-linux-x64.tar.gz`.
@@ -473,7 +473,7 @@ etn.exe --user-data-dir=<путь>
 ### Обновиться вручную
 - **Windows:** скачайте `ETN-Setup-<версия>.exe` из релизов проекта и установите поверх текущей версии — профили, серверы и ключи сохраняются. Область установки при обновлении не меняется (только для меня / для всех пользователей).
 - **Linux:** та же одношная команда — `curl -fsSL https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash`. Нужен `curl` или `wget`; в минимальной Ubuntu 24.04 `curl` нет — `sudo apt-get install -y curl`, либо используйте вариант `wget -qO- https://github.com/nerkuda/e-tho-net/releases/latest/download/install.sh | bash`. Новая версия ставится рядом со старой, симлинк `current` переключается только после проверки SHA-256; профили и ключи в `~/.config/ETN` не трогаются. Конкретную версию задаёт `--version X.Y.Z`, системную установку — `sudo bash install.sh --system`. Либо распакуйте `ETN-Client-<версия>-linux-x64.tar.gz` и замените файлы вручную.
-- **macOS:** готового DMG в релизе 0.15.4 нет — соберите клиент из исходников (`npm install`, `npm -w @etn/client run package`) и замените приложение.
+- **macOS:** готового DMG в релизе 0.15.3 нет — соберите клиент из исходников (`npm install`, `npm -w @etn/client run package`) и замените приложение.
 
 Хеши ассетов — в файле `SHA256SUMS` соответствующего релиза.
 
