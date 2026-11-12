@@ -558,9 +558,11 @@ body.resizing-h {
 
 /* Keyboard cursor frame (§2.9): the cloud the arrow navigation points at.
  * Dashed and offset further than the selection outline so both stay visible
- * when they combine. */
+ * when they combine. Цвет — отдельный токен темы `--cursor`: состояние
+ * «текущий элемент» не является предупреждением, `--warn-strong` был чужой
+ * семантикой (задача 7a652ce8). */
 .cloud.kbd-cursor {
-  outline: 2px dashed var(--warn-strong);
+  outline: 2px dashed var(--cursor);
   outline-offset: 3px;
 }
 

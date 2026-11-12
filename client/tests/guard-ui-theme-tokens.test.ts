@@ -25,6 +25,11 @@
  *      не доедет до бандла.
  *   5. **Читаемость акцента.** Пара `--accent`/`--accent-fg` (надпись на
  *      акцентной заливке) в каждой теме и режиме — не ниже 4.5:1 по WCAG 2.1.
+ *   6. **Рамки состояний — только токены темы.** Рамки «выделен», «текущий
+ *      (курсор)» и «открыт в редакторе» на карте, в структурах и в
+ *      публикациях рисуются переменными темы (`--selection`, `--cursor`,
+ *      `--focus-ring-contrast`/`--layer-focus-stripe`), а не литералами и не
+ *      токенами чужой семантики; состояния различимы внутри темы.
  *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
@@ -82,6 +87,7 @@ const THEME_TOKENS = [
   '--accent-fg',
   '--selection-bg',
   '--selection',
+  '--cursor',
   '--cal-weekend',
   '--danger',
   '--danger-soft',
@@ -356,6 +362,98 @@ export function shapeProblems(css: string, name: string): string[] {
 }
 
 /**
+ * Связка «рамка состояния → токены темы» (задача 7a652ce8). Один механизм на
+ * карту (`.cloud.*`), структуры (переиспользуют те же классы) и публикации:
+ * состояние «выделен» — `--selection`, «текущий (курсор)» — `--cursor`,
+ * «открыт в редакторе» — полоса `--layer-focus-stripe` (на основе — акцент) и
+ * кант `--focus-ring-contrast`.
+ */
+const STATE_FRAMES = [
+  { file: 'styles/canvas.css', selector: '.cloud.selected', tokens: ['--selection'] },
+  { file: 'styles/canvas.css', selector: '.cloud.kbd-cursor', tokens: ['--cursor'] },
+  {
+    file: 'styles/canvas.css',
+    selector: '.cloud.halo',
+    tokens: ['--layer-focus-stripe', '--focus-ring-contrast'],
+  },
+  { file: 'styles/screens/publications.css', selector: '.pub-current', tokens: ['--cursor'] },
+  { file: 'styles/screens/publications.css', selector: '.pub-doc-current', tokens: ['--cursor'] },
+  {
+    file: 'styles/screens/publications.css',
+    selector: '.pub-open',
+    tokens: ['--layer-focus-stripe', '--focus-ring-contrast'],
+  },
+  {
+    file: 'styles/screens/publications.css',
+    selector: '.pub-doc-editor',
+    tokens: ['--layer-focus-stripe', '--focus-ring-contrast'],
+  },
+] as const;
+
+/** Тело правила по точному селектору (`null`, если правила нет). */
+export function ruleBodyOf(css: string, selector: string): string | null {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`(?:^|[}\\s])${escaped}\\s*\\{([^}]*)\\}`, 'm').exec(css);
+  return match === null ? null : (match[1] ?? '');
+}
+
+/**
+ * Рамки состояний берут цвета только из токенов темы. `sources` — CSS
+ * рендерера (относительный путь → содержимое). Возвращает список нарушений.
+ */
+export function stateFrameProblems(sources: ReadonlyMap<string, string>): string[] {
+  const problems: string[] = [];
+  for (const frame of STATE_FRAMES) {
+    const css = sources.get(frame.file);
+    if (css === undefined) {
+      problems.push(`${frame.file}: файла нет (ожидалась рамка ${frame.selector})`);
+      continue;
+    }
+    const body = ruleBodyOf(stripCssComments(css), frame.selector);
+    if (body === null) {
+      problems.push(`${frame.file}: нет правила ${frame.selector}`);
+      continue;
+    }
+    for (const token of frame.tokens) {
+      if (!body.includes(`var(${token}`)) {
+        problems.push(`${frame.selector}: рамка не использует токен темы ${token}`);
+      }
+    }
+    const literal = new RegExp(COLOR_LITERAL.source, 'i').exec(body);
+    if (literal !== null) {
+      problems.push(`${frame.selector}: прямой цвет «${literal[0]}» вместо токена темы`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * Различимость состояний внутри темы: акцент (гало), рамка выделения и
+ * пунктир курсора — разные значения (решение пользователя 2026-11-12).
+ */
+export function stateDistinctnessProblems(css: string, name: string, mode: ThemeMode): string[] {
+  const tokens = declaredTokens(themeBlockBody(css, name, mode) ?? '');
+  const roles: Array<[string, string]> = [
+    ['--accent', 'акцент/гало'],
+    ['--selection', 'рамка выделения'],
+    ['--cursor', 'курсор'],
+  ];
+  const problems: string[] = [];
+  const seen = new Map<string, string>();
+  for (const [token, role] of roles) {
+    const value = tokens.get(token)?.replace(/\s+/g, '').toLowerCase();
+    if (value === undefined) {
+      problems.push(`нет ${token}`);
+      continue;
+    }
+    const twin = seen.get(value);
+    if (twin !== undefined) problems.push(`${role} (${token}) совпала с ${twin}`);
+    else seen.set(value, `${role} (${token})`);
+  }
+  return problems;
+}
+
+/**
  * Прямые цвета вне блоков тем. Возвращает список `файл:строка — фрагмент`.
  *
  * Маска: значения разрешены ТОЛЬКО в файлах каталога `lib/ui/themes/*.css` —
@@ -486,6 +584,25 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
     );
   });
 
+  it('рамки состояний на карте и в публикациях берут только токены темы', () => {
+    const sources = new Map(rendererCssFiles().map((file) => [file.rel, file.css] as const));
+    const problems = stateFrameProblems(sources);
+    assert.deepEqual(problems, [], `рамки состояний:\n${problems.join('\n')}`);
+  });
+
+  it('состояния различимы внутри темы: акцент, рамка выделения, курсор', () => {
+    const problems: string[] = [];
+    for (const name of THEME_NAMES) {
+      const css = readTheme(name);
+      for (const mode of THEME_MODES) {
+        for (const problem of stateDistinctnessProblems(css, name, mode)) {
+          problems.push(`${name}.css [${mode}]: ${problem}`);
+        }
+      }
+    }
+    assert.deepEqual(problems, [], `состояния не различены:\n${problems.join('\n')}`);
+  });
+
   it('сторож краснеет на неполном блоке, постороннем селекторе и цвете вне темы', () => {
     const incomplete = `
       /* Тема без половины токенов и без color-scheme */
@@ -562,6 +679,53 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
       clean,
       [],
       `ложное срабатывание на white-space/transparent: ${clean.join(' | ')}`,
+    );
+
+    // Рамки состояний: подмена токена литералом и потеря токена — красные.
+    const canvas = rendererCssFiles().find((file) => file.rel === 'styles/canvas.css');
+    assert.ok(canvas !== undefined, 'canvas.css должен читаться');
+    const literalFrame = stateFrameProblems(
+      new Map([
+        [
+          'styles/canvas.css',
+          canvas.css.replace('outline: 2px dashed var(--cursor);', 'outline: 2px dashed #ff00ff;'),
+        ],
+        ...rendererCssFiles()
+          .filter((file) => file.rel !== 'styles/canvas.css')
+          .map((file) => [file.rel, file.css] as const),
+      ]),
+    );
+    assert.ok(
+      literalFrame.some((p) => p.includes('--cursor')),
+      `подмена var(--cursor) литералом обязана краснить: ${literalFrame.join(' | ')}`,
+    );
+
+    const lostFrame = stateFrameProblems(
+      new Map([
+        [
+          'styles/canvas.css',
+          canvas.css.replace(
+            'outline: 2px solid var(--selection);',
+            'outline: 2px solid var(--accent);',
+          ),
+        ],
+        ...rendererCssFiles()
+          .filter((file) => file.rel !== 'styles/canvas.css')
+          .map((file) => [file.rel, file.css] as const),
+      ]),
+    );
+    assert.ok(
+      lostFrame.some((p) => p.includes('--selection')),
+      `рамка выделения без --selection обязана краснить: ${lostFrame.join(' | ')}`,
+    );
+
+    // Совпадение состояний внутри темы — красное.
+    const demoTheme =
+      "[data-theme='demo'][data-mode='light'] { --accent: #112233; --selection: #112233; --cursor: #445566; }";
+    const same = stateDistinctnessProblems(demoTheme, 'demo', 'light');
+    assert.ok(
+      same.some((p) => p.includes('--selection')),
+      `рамка выделения, равная акценту, обязана краснить: ${same.join(' | ')}`,
     );
   });
 });

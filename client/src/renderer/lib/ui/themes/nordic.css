@@ -38,7 +38,9 @@
   /* nord9/nord0 = 4.64:1; светлая надпись на акценте давала 2.69:1. */
   --accent-fg: #2e3440;
   --selection-bg: rgba(129, 161, 193, 0.4);
-  --selection: #88c0d0;
+  --selection: #9a6b92;
+  /* Пунктир курсора — nord13 (жёлтый авроры), приглушённый для светлого фона. */
+  --cursor: #8a5f1a;
   --cal-weekend: #b48ead;
   --danger: #bf616a;
   --danger-soft: #f3e2e4;
@@ -60,7 +62,9 @@
   --canvas-dot: rgba(46, 52, 64, 0.14);
   --focus-band-color: #81a1c1;
   --focus-accent: var(--accent);
-  --focus-ring-contrast: #ffffff;
+  /* Кант открытого: nord0 — чернильный тон палитры, контрастный к светлому
+     фону и к полосе слоя. */
+  --focus-ring-contrast: #2e3440;
   --md-html-comment: #7a8698;
   --mark-danger: #bf616a;
   --mark-network: #5e81ac;
@@ -95,7 +99,7 @@
   --shadow: 0 8px 22px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 2px 10px var(--shadow-c);
-  --shadow-focus: 0 4px 18px rgba(129, 161, 193, 0.25);
+  --shadow-focus: 0 2px 8px rgba(129, 161, 193, 0.16);
 
   /* Радиусы — базовые Obsidian (шкала ETN). */
   --radius-s: 4px;
@@ -122,11 +126,13 @@
   --accent: #81a1c1;
   --accent-strong: #88c0d0;
   --accent-pressed: #5e81ac;
-  --accent-soft: #3a4453;
+  --accent-soft: #414b5c;
   /* nord9/nord0 = 4.64:1 (светлая надпись на акценте давала 2.69:1). */
   --accent-fg: #2e3440;
   --selection-bg: rgba(129, 161, 193, 0.45);
-  --selection: #88c0d0;
+  --selection: #b48ead;
+  /* Пунктир курсора — nord13 (жёлтый авроры). */
+  --cursor: #ebcb8b;
   --cal-weekend: #b48ead;
   --danger: #bf616a;
   --danger-soft: #3d2a2e;
@@ -182,7 +188,7 @@
   --shadow: 0 8px 22px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 4px 16px var(--shadow-c);
-  --shadow-focus: 0 4px 22px rgba(129, 161, 193, 0.28);
+  --shadow-focus: 0 2px 10px rgba(129, 161, 193, 0.16);
 
   --radius-s: 4px;
   --radius-m: 8px;

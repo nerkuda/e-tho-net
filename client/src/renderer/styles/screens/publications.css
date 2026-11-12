@@ -364,7 +364,9 @@
    активного слоя. При совпадении пунктир не рисуется контроллером
    (`library-nav.ts`), остаётся только сплошная. */
 .pub-current {
-  outline: 2px dashed var(--warn-strong);
+  /* Текущая строка клавиатурной навигации — пунктир токена темы `--cursor`
+     (тот же, что у курсора карты; не семантика предупреждения). */
+  outline: 2px dashed var(--cursor);
   outline-offset: -2px;
   border-radius: var(--radius-s);
 }
@@ -1132,7 +1134,9 @@
    `lib/ui/list.ts` поверх `nav-core.ts`) — пунктирная рамка, как курсор карты
    мыслей (`.cloud.kbd-cursor`, задача 77cce0ba, п.2). */
 .pub-doc-current {
-  outline: 2px dashed var(--warn-strong);
+  /* Текущий блок навигации тела документа — пунктир токена темы `--cursor`
+     (как курсор карты и текущая строка библиотеки). */
+  outline: 2px dashed var(--cursor);
   outline-offset: -2px;
   border-radius: var(--radius-s);
 }

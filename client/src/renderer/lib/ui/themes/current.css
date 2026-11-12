@@ -45,13 +45,16 @@
   --accent-strong: #245cc9;
   /* Нажатие акцентной заливки (primary-кнопка). */
   --accent-pressed: #1d4aa8;
-  --accent-soft: #e4ecfd;
+  --accent-soft: #dbe6fd;
   /* Текст и иконки НА акцентной заливке (primary-кнопка, активная вкладка). */
   --accent-fg: #ffffff;
   /* Фон текстового выделения (::selection и .cm-selectionBackground). */
   --selection-bg: rgba(47, 111, 237, 0.4);
   /* Selection outline of clouds picked into the selection panel — teal. */
   --selection: #0f8f86;
+  /* Рамка текущего элемента клавиатурного курсора (пунктир): розовый тон
+     темы, отличимый от акцента (гало открытого) и от рамки выделения. */
+  --cursor: #c02f77;
   /* Заголовок группы выходного дня (сб/вс) в ленте «Дневника». */
   --cal-weekend: #d6478a;
   --danger: #d64545;
@@ -83,8 +86,9 @@
      экранах. Слой поверх пишет свой цвет в runtime `--layer-focus-stripe`
      (`lib/layer-colors.ts`, контракт c19cbb81), в файл темы он не входит. */
   --focus-accent: var(--accent);
-  /* Контрастный кант двойной рамки открытого в редакторе элемента. */
-  --focus-ring-contrast: #ffffff;
+  /* Контрастный кант двойной рамки открытого элемента: тёмный чернильный тон
+     палитры — читается на светлом фоне и отделяет полосу слоя от карты. */
+  --focus-ring-contrast: #1b2436;
   /* HTML-комментарий `<!-- … -->` в правке. */
   --md-html-comment: #8a93a3;
   /* Яркие метки-глифы поверх тёмных кружков карты и в списках: корзина,
@@ -127,7 +131,9 @@
   --shadow: 0 8px 28px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 2px 10px var(--shadow-c);
-  --shadow-focus: 0 4px 18px rgba(47, 111, 237, 0.18);
+  /* Свечение открытого: умеренное — не забивает остальные состояния
+     (решение пользователя 2026-11-12). */
+  --shadow-focus: 0 2px 8px rgba(47, 111, 237, 0.12);
 
   /* Шкала радиусов (требование 0dddd939): имена неизменны, значения — темы. */
   --radius-s: 6px; /* мелкие элементы: чипы, svg-свотчи */
@@ -154,13 +160,15 @@
   --accent: #5b8cff;
   --accent-strong: #7ba1ff;
   --accent-pressed: #4d7fe8;
-  --accent-soft: #22304d;
+  --accent-soft: #25345a;
   /* Акцент тёмного режима — насыщенный светлый синий; надпись на нём тёмная:
      пара #5b8cff/#0e1116 даёт 5.98:1 (белый давал 3.16:1 и не проходил 4.5:1). */
   --accent-fg: #0e1116;
   /* Акцент #5b8cff с альфой: на тёмных фонах смесь достаточно светлая. */
   --selection-bg: rgba(91, 140, 255, 0.5);
   --selection: #2fbfae;
+  /* Пунктир курсора: светлый розовый тон темы — виден на тёмной карте. */
+  --cursor: #ff8fc0;
   --cal-weekend: #ff8fc0;
   --danger: #e06a6a;
   --danger-soft: #3a2226;
@@ -184,8 +192,9 @@
   --canvas-dot: rgba(255, 255, 255, 0.07);
   --focus-band-color: #1e62be;
   --focus-accent: var(--accent);
-  /* В тёмной теме кант чуть мягче чистого белого — не слепит. */
-  --focus-ring-contrast: #e6e9f0;
+  /* Кант открытого: светлый тон палитры, контрастный к тёмному фону и к
+     полосе слоя. */
+  --focus-ring-contrast: #dfe7f5;
   --md-html-comment: #7c8798;
   --mark-danger: #e53935;
   --mark-network: #4a9eff;
@@ -219,7 +228,8 @@
   --shadow: 0 8px 28px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 4px 16px var(--shadow-c);
-  --shadow-focus: 0 4px 24px rgba(91, 140, 255, 0.28);
+  /* Свечение открытого ослаблено (решение пользователя 2026-11-12). */
+  --shadow-focus: 0 2px 10px rgba(91, 140, 255, 0.16);
 
   --radius-s: 6px;
   --radius-m: 8px;

@@ -42,7 +42,9 @@
   /* blue/белый = 4.91:1 (порог 4.5:1). */
   --accent-fg: #ffffff;
   --selection-bg: rgba(30, 102, 245, 0.32);
-  --selection: #179299;
+  --selection: #c24d08;
+  /* Пунктир курсора — mauve палитры Latte, отличим от акцента и выделения. */
+  --cursor: #8839ef;
   --cal-weekend: #ea76cb;
   --danger: #d20f39;
   --danger-soft: #fcedf0;
@@ -64,7 +66,9 @@
   --canvas-dot: rgba(76, 79, 105, 0.14);
   --focus-band-color: #1e66f5;
   --focus-accent: var(--accent);
-  --focus-ring-contrast: #ffffff;
+  /* Кант открытого: чернильный тон палитры, контрастный к светлому фону и к
+     полосе слоя. */
+  --focus-ring-contrast: #2a2e42;
   --md-html-comment: #8c8fa1;
   --mark-danger: #d20f39;
   --mark-network: #1e66f5;
@@ -98,7 +102,7 @@
   --shadow: 0 8px 24px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 2px 10px var(--shadow-c);
-  --shadow-focus: 0 4px 18px rgba(30, 102, 245, 0.22);
+  --shadow-focus: 0 2px 8px rgba(30, 102, 245, 0.14);
 
   /* Радиусы референса: 4 / 8 / 10 / 16 px (шкала ETN). */
   --radius-s: 4px;
@@ -125,11 +129,13 @@
   --accent: #89b4fa;
   --accent-strong: #a7c7fb;
   --accent-pressed: #5996f8;
-  --accent-soft: #243b60;
+  --accent-soft: #2a3f68;
   /* blue/crust = 8.91:1 (белый на акценте давал 2.11:1). */
   --accent-fg: #11111b;
   --selection-bg: rgba(137, 180, 250, 0.4);
-  --selection: #94e2d5;
+  --selection: #fab387;
+  /* Пунктир курсора — mauve палитры Mocha. */
+  --cursor: #cba6f7;
   --cal-weekend: #f5c2e7;
   --danger: #f38ba8;
   --danger-soft: #3a2331;
@@ -151,7 +157,9 @@
   --canvas-dot: rgba(205, 214, 244, 0.08);
   --focus-band-color: #89b4fa;
   --focus-accent: var(--accent);
-  --focus-ring-contrast: #cdd6f4;
+  /* Кант открытого: светлый тон палитры, контрастный к тёмному фону и к полосе
+     слоя. */
+  --focus-ring-contrast: #f2f5ff;
   --md-html-comment: #7f849c;
   --mark-danger: #f38ba8;
   --mark-network: #89b4fa;
@@ -185,7 +193,7 @@
   --shadow: 0 8px 24px var(--shadow-c);
   --shadow-sm: 0 1px 4px var(--shadow-sm-c);
   --shadow-hover: 0 4px 16px var(--shadow-c);
-  --shadow-focus: 0 4px 22px rgba(137, 180, 250, 0.28);
+  --shadow-focus: 0 2px 10px rgba(137, 180, 250, 0.16);
 
   --radius-s: 4px;
   --radius-m: 8px;
