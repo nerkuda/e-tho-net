@@ -32,7 +32,7 @@ import { startEventLogCleanup } from '../realtime/event-log-cleanup.js';
 import { EventLogRelay } from '../realtime/event-log-relay.js';
 import { RealtimeGateway, type RealtimeGatewayOptions } from '../realtime/gateway.js';
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
-import { normaliseError, sendEtnError } from './errors.js';
+import { sendEtnError, sendNormalisedError } from './errors.js';
 import { createMaintenanceGuard } from './maintenance-guard.js';
 import { SERVER_UPDATING_MESSAGE, createMaintenanceService } from '../maintenance.js';
 import { createUpdateChecker } from '../update/checker.js';
@@ -184,13 +184,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Registered before any plugin/route so encapsulated child contexts inherit
   // the canonical { error: { code, message, details?, request_id? } } shape.
   app.setErrorHandler((err, req, reply) => {
-    const { statusCode, body, internalMessage } = normaliseError(err, req.id);
-    if (statusCode >= 500) {
-      logger.error({ err, request_id: req.id }, internalMessage);
-    } else {
-      logger.warn({ request_id: req.id, statusCode }, internalMessage);
-    }
-    reply.code(statusCode).send(body);
+    sendNormalisedError(err, req, reply, logger);
   });
 
   // Correlation id on every request: surface it back via X-Request-Id so

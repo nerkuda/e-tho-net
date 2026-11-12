@@ -3172,6 +3172,28 @@ export const RestUserSettingKey = defineContract(
   },
 );
 
+/**
+ * PUT /users/me/wallpaper — JSON-ветка загрузки фоновой картинки (0.16.1,
+ * задача 8e007e63, операция 31ef478a). Стандарт 02c164ed: хендлер читает из
+ * `parseRest` только объявленные поля. Структуру `meta` проверяет домен
+ * (422 с details) — контракт объявляет лишь её наличие и JSON-форму;
+ * `mime_type` необязателен: при отсутствии тип берётся из магических байтов.
+ * Multipart-ветка читается потоком частей (как у вложений) — это не JSON-тело.
+ */
+export const RestUserWallpaperUpload = defineContract(
+  'rest:users.me.wallpaper.upload',
+  z.object({
+    data_base64: z.string(),
+    meta: z.unknown(),
+    mime_type: z.string().min(1).optional(),
+  }),
+  {
+    data_base64: { from: { kind: 'body' } },
+    meta: { from: { kind: 'body' }, t: z.unknown(), req: true, msg: 'meta is required.' },
+    mime_type: { from: { kind: 'body' } },
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Языковые настройки (REST — routes/language.ts; ADR daab6ac4, задача f99f0542)
 // ---------------------------------------------------------------------------

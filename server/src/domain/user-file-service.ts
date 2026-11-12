@@ -33,12 +33,21 @@ import { userFilesDir, usersRoot } from '../paths.js';
 /** Относительный путь байтов картинки в ответе `GET …/wallpaper` (поле `url`). */
 export const WALLPAPER_RAW_PATH = '/api/v1/users/me/wallpaper/raw';
 
-/** Расширение файла по mime — часть имени в каталоге пользователя. */
+/** Расширение файла по mime — часть имени в каталоге и в `content-disposition`. */
 const MIME_EXTENSION: Readonly<Record<string, string>> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
 };
+
+/**
+ * Расширение по mime (`jpg`/`png`/`webp`) или `null` для неизвестного типа.
+ * Одно место правды для имени файла на диске и для `content-disposition` у
+ * `GET …/wallpaper/raw` (правки по вердикту проверки 8e007e63).
+ */
+export function fileExtensionForMime(mimeType: string): string | null {
+  return MIME_EXTENSION[mimeType.trim().toLowerCase()] ?? null;
+}
 
 /** Сигнатура PNG (`\x89PNG\r\n\x1a\n`). */
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -110,10 +119,12 @@ function isFiniteNumber(value: unknown): value is number {
  * Проверить структуру `meta` от клиента (операция 31ef478a, «повреждённый meta
  * → 422»): обязательны `width`/`height` (целые > 0) и `avg_luminance` (0..1);
  * необязательные `dominant_hue` (0..360) и `dominant_sat` (0..1) проверяются,
- * только если пришли. Неизвестные ключи не отвергаются — метаданные хранятся
- * как есть (клиент доверенный в рамках своей учётки, сущность 62fd29b5).
+ * только если пришли. Известные поля НЕ пересобираются: проверенный объект
+ * возвращается и хранится как есть — лишние ключи клиента остаются в JSON
+ * (сущность 62fd29b5: «meta хранится как есть», клиент доверенный в рамках
+ * своей учётки). Правки по вердикту проверки 8e007e63.
  */
-export function validateWallpaperMeta(raw: unknown, requestId?: string): WallpaperMeta {
+export function validateWallpaperMeta(raw: unknown, requestId?: string): Record<string, unknown> {
   function fail(reason: string, field = 'meta'): never {
     throw new EtnError(
       'VALIDATION_ERROR',
@@ -138,22 +149,20 @@ export function validateWallpaperMeta(raw: unknown, requestId?: string): Wallpap
   if (!isFiniteNumber(avgLuminance) || avgLuminance < 0 || avgLuminance > 1) {
     fail('avg_luminance must be a number in 0..1', 'meta.avg_luminance');
   }
-  const meta: WallpaperMeta = { width, height, avg_luminance: avgLuminance };
   const hue = src['dominant_hue'];
   if (hue !== undefined && hue !== null) {
     if (!isFiniteNumber(hue) || hue < 0 || hue > 360) {
       fail('dominant_hue must be a number in 0..360', 'meta.dominant_hue');
     }
-    meta.dominant_hue = hue;
   }
   const sat = src['dominant_sat'];
   if (sat !== undefined && sat !== null) {
     if (!isFiniteNumber(sat) || sat < 0 || sat > 1) {
       fail('dominant_sat must be a number in 0..1', 'meta.dominant_sat');
     }
-    meta.dominant_sat = sat;
   }
-  return meta;
+  // Проверки пройдены — объект уходит в JSON без пересборки.
+  return src;
 }
 
 /** Разобрать JSON-метаданные строки; повреждённая запись не роняет ответ. */
@@ -247,7 +256,7 @@ export function putUserFile(
 
   const meta = validateWallpaperMeta(upload.meta, requestId);
   const contentHash = createHash('sha256').update(upload.buffer).digest('hex');
-  const extension = MIME_EXTENSION[mimeType] ?? 'bin';
+  const extension = fileExtensionForMime(mimeType) ?? 'bin';
   const dir = userFilesDir(dataDir, userId);
   mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `${kind}-${contentHash.slice(0, 16)}.${extension}`);

@@ -391,7 +391,6 @@ export class SystemDb {
   private readonly stUpsertUserSetting: Database.Statement;
   private readonly stListUserSettings: Database.Statement;
   private readonly stGetUserFile: Database.Statement;
-  private readonly stListUserFiles: Database.Statement;
   private readonly stUpsertUserFile: Database.Statement;
   private readonly stDeleteUserFile: Database.Statement;
   private readonly stGetSetting: Database.Statement;
@@ -536,9 +535,6 @@ export class SystemDb {
     );
     this.stGetUserFile = db.prepare(
       'SELECT user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at FROM user_files WHERE user_id = ? AND kind = ? LIMIT 1',
-    );
-    this.stListUserFiles = db.prepare(
-      'SELECT user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at FROM user_files WHERE user_id = ? ORDER BY kind',
     );
     this.stUpsertUserFile = db.prepare(
       'INSERT INTO user_files (user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, kind) DO UPDATE SET file_path = excluded.file_path, content_hash = excluded.content_hash, file_size = excluded.file_size, mime_type = excluded.mime_type, meta = excluded.meta, updated_at = excluded.updated_at',
@@ -1283,11 +1279,6 @@ export class SystemDb {
   getUserFile(userId: string, kind: string): UserFileRow | null {
     const row = this.stGetUserFile.get(userId, kind) as UserFileRow | undefined;
     return row ?? null;
-  }
-
-  /** All file rows of a user — used by the physical cleanup on user deletion. */
-  listUserFiles(userId: string): UserFileRow[] {
-    return this.stListUserFiles.all(userId) as UserFileRow[];
   }
 
   /**

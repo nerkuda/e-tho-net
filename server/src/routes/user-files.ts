@@ -22,19 +22,16 @@ import multipartPlugin from '@fastify/multipart';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 
-import {
-  EtnError,
-  USER_FILE_KIND,
-  USER_FILE_MAX_BYTES,
-  USER_FILE_MIME_TYPES,
-  type WallpaperInfo,
-} from '@etn/shared';
+import { EtnError, USER_FILE_KIND, USER_FILE_MAX_BYTES } from '@etn/shared';
 
+import { RestUserWallpaperUpload, parseRest } from '../contracts.js';
+import { buildErrorBody, isPayloadTooLargeError, sendNormalisedError } from '../http/errors.js';
 import { buildContentDisposition } from '../http/content-disposition.js';
 import { sendSuccess } from '../http/responses.js';
 import {
   deleteUserFile,
   detectImageMime,
+  fileExtensionForMime,
   putUserFile,
   readUserFile,
   wallpaperInfo,
@@ -46,25 +43,21 @@ import type { RouteDeps } from './helpers.js';
  * Жёсткий потолок multipart-запроса (страховка памяти). Файл длиннее лимита
  * `USER_FILE_MAX_BYTES`, но короче потолка, отклоняется доменной проверкой с
  * 422 (как требует контракт операции); запрос сверх потолка режет сам
- * multipart-парсер (413) — защита от переполнения памяти, а не бизнес-правило.
+ * multipart-парсер, а скоуповый обработчик ошибок (`setErrorHandler` ниже)
+ * переводит этот транспортный отказ в тот же 422 с `details.field =
+ * file_size` — клиент не должен различать, где именно сработал предел.
  */
 const MULTIPART_HARD_CAP_BYTES = 8 * 1024 * 1024;
 
 /**
  * Потолок JSON-тела PUT: 5 МиБ в base64 ≈ 6.7 МиБ; 8 МиБ — запас. Тело сверх
- * потолка режет Fastify (413), в пределах — доменная проверка (422).
+ * потолка режет Fastify, скоуповый обработчик ошибок переводит отказ в 422
+ * (`file_size`), как и доменную проверку лимита.
  */
 const JSON_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 
 /** Текстовые части multipart-запроса (`file` — файловая часть). */
 const MULTIPART_FIELDS = ['meta', 'mime_type'] as const;
-
-/** JSON-тело PUT (`data_base64` + `meta`; `mime_type` — необязательный override). */
-interface WallpaperPutJsonBody {
-  data_base64?: unknown;
-  meta?: unknown;
-  mime_type?: unknown;
-}
 
 /** Разбор JSON-поля `meta` (multipart присылает его строкой). */
 function parseMetaField(raw: unknown, requestId?: string): unknown {
@@ -138,33 +131,23 @@ async function readMultipartUpload(req: FastifyRequest): Promise<UserFileUpload>
   };
 }
 
-/** Разобрать JSON-тело PUT: `{data_base64, meta}` (+ необязательный `mime_type`). */
-function readJsonUpload(req: FastifyRequest): UserFileUpload {
-  const body = (req.body ?? {}) as WallpaperPutJsonBody;
-  const data = body.data_base64;
-  if (typeof data !== 'string' || data.trim() === '') {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'data_base64 is required for a JSON wallpaper upload.',
-      { field: 'data_base64' },
-      req.id,
-    );
-  }
-  const buffer = Buffer.from(data, 'base64');
-  if (buffer.length === 0) {
-    throw new EtnError(
-      'VALIDATION_ERROR',
-      'data_base64 is not valid base64.',
-      { field: 'data_base64' },
-      req.id,
-    );
-  }
-  const declared = typeof body.mime_type === 'string' ? body.mime_type.trim() : '';
+/**
+ * JSON-ветка PUT: поля контракта {@link RestUserWallpaperUpload} → доменный вход
+ * загрузки. Тело объявлено контрактом (стандарт 02c164ed), пустой/битый
+ * `data_base64` отвергает домен (422: пустой файл / не картинка).
+ */
+function buildJsonUpload(input: {
+  data_base64: string;
+  meta: unknown;
+  mime_type?: string;
+}): UserFileUpload {
+  const buffer = Buffer.from(input.data_base64, 'base64');
+  const declared = (input.mime_type ?? '').trim();
   const detected = detectImageMime(buffer);
   return {
     mime_type: declared === '' ? (detected ?? '') : declared,
     buffer,
-    meta: parseMetaField(body.meta, req.id),
+    meta: input.meta,
   };
 }
 
@@ -185,6 +168,27 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
     // MULTIPART_HARD_CAP_BYTES; бизнес-лимит 5 МиБ проверяет домен (422).
     await app.register(multipartPlugin, {
       limits: { fileSize: MULTIPART_HARD_CAP_BYTES, files: 1, fields: 2, parts: 4 },
+    });
+
+    // Транспортные потолки (8 МиБ) — страховка памяти, а не бизнес-правило:
+    // контракт операции 31ef478a требует 422 на файл сверх 5 МиБ независимо от
+    // того, где сработал предел (домен или парсер). Прочие ошибки — общий
+    // конвейер сервера (та же форма ответа и логирование).
+    app.setErrorHandler((err, req, reply) => {
+      if (isPayloadTooLargeError(err)) {
+        reply
+          .code(422)
+          .send(
+            buildErrorBody(
+              'VALIDATION_ERROR',
+              `file is too large: the request exceeded the transport limit, server limit is ${USER_FILE_MAX_BYTES} bytes.`,
+              { field: 'file_size', limit: USER_FILE_MAX_BYTES, reason: 'payload_too_large' },
+              req.id,
+            ),
+          );
+        return;
+      }
+      sendNormalisedError(err, req, reply, app.appLogger);
     });
 
     const kind = USER_FILE_KIND.MAP_WALLPAPER;
@@ -214,13 +218,18 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
         if (matchesEtag(req.headers['if-none-match'], etag)) {
           return reply.code(304).header('etag', etag).send();
         }
+        // Расширение по фактическому mime: клиент (и человек) видят, что это
+        // за файл, даже если сохранит его из ответа (правки по вердикту).
+        const extension = fileExtensionForMime(file.row.mime_type);
+        const filename =
+          extension === null ? `wallpaper.${kind}` : `wallpaper.${kind}.${extension}`;
         return reply
           .header('content-type', file.row.mime_type)
           .header('content-length', String(file.size))
           .header('etag', etag)
           .header('cache-control', 'private, max-age=0, must-revalidate')
           .header('x-content-type-options', 'nosniff')
-          .header('content-disposition', buildContentDisposition('inline', `wallpaper.${kind}`))
+          .header('content-disposition', buildContentDisposition('inline', filename))
           .send(createReadStream(file.filePath));
       },
     );
@@ -232,7 +241,9 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
         bodyLimit: JSON_BODY_LIMIT_BYTES,
       },
       async (req: FastifyRequest, reply) => {
-        const upload = req.isMultipart() ? await readMultipartUpload(req) : readJsonUpload(req);
+        const upload = req.isMultipart()
+          ? await readMultipartUpload(req)
+          : buildJsonUpload(parseRest(RestUserWallpaperUpload, req));
         const { info, created } = putUserFile(
           app.systemDb,
           deps.dataDir,
@@ -255,14 +266,3 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
     );
   };
 }
-
-/** Белый список форматов — реэкспорт для тестов контракта. */
-export const ALLOWED_WALLPAPER_MIME_TYPES = USER_FILE_MIME_TYPES;
-
-/** Предел размера файла — реэкспорт для тестов контракта. */
-export const WALLPAPER_MAX_BYTES = USER_FILE_MAX_BYTES;
-
-/** DTO метаданных — тип ответа GET/PUT (для клиентской задачи 80324150). */
-export type WallpaperInfoDto = WallpaperInfo;
-
-/** Сырой ответ байтов не нужен клиенту как DTO: он читает поток по `url`. */

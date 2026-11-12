@@ -9,9 +9,11 @@
  * throw model (e.g. authentication preHandlers).
  */
 
-import type { FastifyReply } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { EtnError, type ApiError, type EtnErrorBody, type EtnErrorCode } from '@etn/shared';
+
+import type { Logger } from '../logger.js';
 
 /**
  * Явный HTTP-статус из `details.status`, если домен его задал (400–599).
@@ -215,4 +217,37 @@ export function normaliseError(
     body: buildErrorBody('INTERNAL', 'Internal server error', undefined, requestId),
     internalMessage: message,
   };
+}
+
+/**
+ * Транспортный отказ «тело/файл запроса больше потолка» (HTTP 413 от Fastify и
+ * `@fastify/multipart`). Отдельный предикат нужен маршрутам, где потолок —
+ * только страховка памяти, а бизнес-правило требует 422: там такой отказ
+ * переводится в `VALIDATION_ERROR` с доменным `details` (задача 8e007e63,
+ * правки по вердикту).
+ */
+export function isPayloadTooLargeError(err: unknown): boolean {
+  const code = (err as { code?: unknown }).code;
+  return code === 'FST_ERR_CTP_BODY_TOO_LARGE' || code === 'FST_REQ_FILE_TOO_LARGE';
+}
+
+/**
+ * Ответ на ошибку по общему контракту: тело {@link normaliseError}, статус из
+ * кода, 5xx — в лог как `error`, 4xx — как `warn`. Общий путь для корневого
+ * обработчика сервера и для скоупов, которым нужно классифицировать ошибку
+ * раньше (см. {@link isPayloadTooLargeError}).
+ */
+export function sendNormalisedError(
+  err: unknown,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  logger: Logger,
+): void {
+  const { statusCode, body, internalMessage } = normaliseError(err, req.id);
+  if (statusCode >= 500) {
+    logger.error({ err, request_id: req.id }, internalMessage);
+  } else {
+    logger.warn({ request_id: req.id, statusCode }, internalMessage);
+  }
+  reply.code(statusCode).send(body);
 }

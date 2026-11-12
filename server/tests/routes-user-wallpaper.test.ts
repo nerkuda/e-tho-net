@@ -297,6 +297,11 @@ describe(
         assert.match(String(raw.headers['etag']), /^"[0-9a-f]{64}"$/);
         assert.match(String(raw.headers['cache-control']), /private/);
         assert.match(String(raw.headers['content-disposition']), /^inline;/);
+        // Расширение по фактическому mime (правки по вердикту проверки).
+        assert.match(
+          String(raw.headers['content-disposition']),
+          /filename="wallpaper\.map_wallpaper\.png"/,
+        );
 
         // Клиент повторяет запрос с ETag — получает 304 без тела.
         const etag = String(raw.headers['etag']);
@@ -320,7 +325,12 @@ describe(
         const webp = await putJson(ctx, ctx.alice, webpBytes(), META, 'image/webp');
         assert.equal(webp.statusCode, 200, webp.body);
         assert.equal((webp.json().data as { mime_type: string }).mime_type, 'image/webp');
-        assert.deepEqual((await getRaw(ctx, ctx.alice)).rawPayload, webpBytes());
+        const raw = await getRaw(ctx, ctx.alice);
+        assert.deepEqual(raw.rawPayload, webpBytes());
+        assert.match(
+          String(raw.headers['content-disposition']),
+          /filename="wallpaper\.map_wallpaper\.webp"/,
+        );
       } finally {
         await teardown(ctx);
       }
@@ -589,6 +599,70 @@ describe(
         }
         const raw = await ctx.app.inject({ method: 'GET', url: '/api/v1/users/me/wallpaper/raw' });
         assert.equal(raw.statusCode, 401);
+      } finally {
+        await teardown(ctx);
+      }
+    });
+
+    it('meta хранится как есть: лишние ключи клиента остаются в JSON', async () => {
+      const ctx = await setup();
+      try {
+        const meta = {
+          width: 1920,
+          height: 1080,
+          avg_luminance: 0.42,
+          dominant_hue: null,
+          dominant_sat: 0.35,
+          // Поля, которых нет в схеме сервера: сущность 62fd29b5 требует
+          // «meta хранится как есть», поэтому они не отбрасываются.
+          crop: 'cover',
+          focal: { x: 0.5, y: 0.5 },
+        };
+        const put = await putJson(ctx, ctx.alice, pngBytes('meta-asis'), meta);
+        assert.equal(put.statusCode, 201, put.body);
+        const created = put.json().data as { meta: unknown };
+        assert.deepEqual(created.meta, meta);
+
+        const metaRes = await getMeta(ctx, ctx.alice);
+        assert.equal(metaRes.statusCode, 200, metaRes.body);
+        assert.deepEqual((metaRes.json().data as { meta: unknown }).meta, meta);
+      } finally {
+        await teardown(ctx);
+      }
+    });
+
+    it('транспортный потолок отдаёт 422, как и доменный лимит (multipart и JSON)', async () => {
+      const ctx = await setup();
+      try {
+        const oversize = Buffer.concat([pngBytes('huge'), Buffer.alloc(9 * 1024 * 1024)]);
+
+        // multipart: файл больше транспортного потолка (8 МиБ) — отказ
+        // multipart-парсера переводится в 422 с доменным details.
+        const multipart = await putMultipart(ctx, ctx.alice, [
+          { name: 'meta', value: JSON.stringify(META) },
+          { name: 'file', filename: 'huge.png', contentType: 'image/png', data: oversize },
+        ]);
+        assert.equal(multipart.statusCode, 422, multipart.body);
+        const multipartError = multipart.json().error;
+        assert.equal(multipartError.code, 'VALIDATION_ERROR');
+        assert.equal(multipartError.details.field, 'file_size');
+        assert.equal(multipartError.details.limit, USER_FILE_MAX_BYTES);
+        assert.equal(multipartError.details.reason, 'payload_too_large');
+
+        // JSON: тело больше `bodyLimit` (8 МиБ, 5 МиБ в base64 ≈ 6.7 МиБ) —
+        // тот же 422 и та же форма details.
+        const json = await ctx.app.inject({
+          method: 'PUT',
+          url: '/api/v1/users/me/wallpaper',
+          headers: authHeaders(ctx.alice),
+          payload: { data_base64: 'A'.repeat(9 * 1024 * 1024), meta: META },
+        });
+        assert.equal(json.statusCode, 422, json.body);
+        assert.equal(json.json().error.details.field, 'file_size');
+        assert.equal(json.json().error.details.reason, 'payload_too_large');
+
+        // После отказов картинки нет — запись не появилась.
+        assert.equal((await getMeta(ctx, ctx.alice)).statusCode, 404);
       } finally {
         await teardown(ctx);
       }
