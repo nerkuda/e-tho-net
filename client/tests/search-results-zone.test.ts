@@ -90,8 +90,11 @@ describe('Enter по выбранной строке результатов (з�
   it('хит-мысль ведёт в фокус, группа — сворачивается/разворачивается', () => {
     const src = readText(SEARCH_TS);
     assert.equal(
-      (src.match(/const activate = activateHit\(key, \(\) => focusFromUi\(hit\.thought_id\)\);/g) ?? [])
-        .length,
+      (
+        src.match(
+          /const activate = activateHit\(key, \(\) => focusFromUi\(hit\.thought_id\)\);/g,
+        ) ?? []
+      ).length,
       2,
       'обе группы мыслей (имена, тексты) ведут в фокус',
     );
@@ -100,10 +103,31 @@ describe('Enter по выбранной строке результатов (з�
       /const activate = activateHit\(key, \(\) => void openLinkHit\(hit\.link_id\)\);/,
       'хит связи открывает связь',
     );
+    // Хроно-строка — общая компонента строки-записи (0.15.4, задача 33ed043c,
+    // элемент 554e3129): переход — открытие ВИДИМОЙ привязки (при нуле видимых —
+    // владельца записи), ключ строки — id записи-представителя.
     assert.match(
       src,
-      /const activate = activateHit\(key, \(\) => void openChronoHit\(hit\.owner, hit\.owner_id\)\);/,
-      'хит хронологии открывает владельца',
+      /const model = recordRowFromChronoHit\(hit\);/,
+      'хроно-хит приводится к единой view-модели строки-записи (ADR 8f0e9412)',
+    );
+    assert.match(
+      src,
+      /const key = `chrono:\$\{hit\.comment_id\}`;/,
+      'ключ хроно-строки — comment_id записи-представителя (элемент 554e3129)',
+    );
+    assert.match(
+      src,
+      /onOpen: \(target, rowModel\) =>\s*activateHit\(key, \(\) => void openRecordTarget\(target, rowModel\.commentId\)\)\(\),/,
+      'переход строки-записи — активация хита с открытием цели (требование ce121e09)',
+    );
+    // Фокус переводится только с активного вида «Карта мыслей» (ревизия
+    // 2026-11-11, задача 7c380088): предикат — общий `isMapViewActive` из
+    // store, а не самодельное сравнение в поиске.
+    assert.match(
+      src,
+      /isMapActive: isMapViewActive,/,
+      'поиск передаёт общему решению предикат активного вида карты',
     );
     // Заголовок группы сворачивает/разворачивает тело — обработчик на самом
     // заголовке (activateRow падает на el.click()).
@@ -141,8 +165,16 @@ describe('подсветка совпадений в названии облач
     const fn = /export function renderHighlightedText\((?<body>[\s\S]*?)\n\}/.exec(dom);
     assert.ok(fn?.groups?.['body'] !== undefined, 'хелпер найден');
     const body = fn.groups['body'] ?? '';
-    assert.match(body, /node\.append\(el\('mark', undefined, run\.text\)\);/, 'совпадение — <mark>');
-    assert.match(body, /node\.append\(document\.createTextNode\(run\.text\)\);/, 'остальное — текстом');
+    assert.match(
+      body,
+      /node\.append\(el\('mark', undefined, run\.text\)\);/,
+      'совпадение — <mark>',
+    );
+    assert.match(
+      body,
+      /node\.append\(document\.createTextNode\(run\.text\)\);/,
+      'остальное — текстом',
+    );
     assert.ok(!body.includes('innerHTML'), 'innerHTML не используется');
     assert.match(
       body,

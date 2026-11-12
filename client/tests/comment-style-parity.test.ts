@@ -23,6 +23,14 @@
  * что `margin: 6px 0` просмотра, но padding-ом (высотная карта), а линию рисует
  * внутренний `hr`.
  *
+ * Межблочное пространство просмотра — ТОЛЬКО пустые строки исходника (ошибка
+ * a3c19b1b, регресс ad6e62ef): правка показывает исходник построчно, поэтому
+ * блоки без пустой строки стоят вплотную, а разделённые пустой строкой — на её
+ * строковый ритм. Автоматический зазор «любому блоку с соседом» (`:has(+ *)`,
+ * соседний комбинатор `+`/`~` и `--wa-content-spacing` прозы Web Awesome)
+ * убран; маркер
+ * `.md-blank-line` из рендерера несёт ровно N строковых ритмов `--md-block-gap`.
+ *
  * Сторож входит в обычный прогон `npm -w @etn/client test`.
  */
 
@@ -49,7 +57,11 @@ const PAIRS: Array<{ view: string; editor: string; what: string }> = [
     editor: '.cm-editor .md-widget.md-hr .md-hr-line',
     what: 'горизонтальная линейка',
   },
-  { view: '.comment-view code', editor: '.cm-editor .cm-line .cm-md-inline-code', what: 'inline-код' },
+  {
+    view: '.comment-view code',
+    editor: '.cm-editor .cm-line .cm-md-inline-code',
+    what: 'inline-код',
+  },
 ];
 
 /** Список селекторов каждого правила верхнего уровня собранного CSS. */
@@ -122,6 +134,76 @@ function genericWidgetPadRule(css: string): CssRule | undefined {
     (r) =>
       r.selectors.some((s) => /\.cm-editor \.md-widget\b/.test(s)) &&
       /padding:\s*var\(--md-widget-gap\) 0/.test(r.body),
+  );
+}
+
+/** Нулевое CSS-значение поля: `0`, `0px`, `0em`, `0%`, `0.0`. */
+function isZeroLength(value: string): boolean {
+  return /^0(?:\.0+)?(?:[a-z%]+)?$/i.test(value.trim());
+}
+
+/** Вертикальные компоненты shorthand `margin`/`padding` ненулевые. */
+function shorthandHasNonzeroVertical(value: string): boolean {
+  const parts = value.trim().split(/\s+/);
+  const top = parts[0] ?? '';
+  // margin/padding: top [right] [bottom] [left]; при 1–2 значениях низ = верх.
+  const bottom = parts.length >= 3 ? (parts[2] ?? '') : top;
+  return !isZeroLength(top) || !isZeroLength(bottom);
+}
+
+/**
+ * Тело правила задаёт ненулевое ВЕРТИКАЛЬНОЕ поле (margin/padding) — источник
+ * межблочного зазора. Горизонтальные свойства (`*-inline*`) и нулевые значения
+ * не в счёт.
+ */
+function hasNonzeroBlockSpacing(body: string): boolean {
+  const re =
+    /(?:^|[;{\s])(margin|padding)(?:-(block|block-start|block-end|top|bottom))?\s*:\s*([^;]+)/g;
+  for (const m of body.matchAll(re)) {
+    const axis = m[2];
+    const value = (m[3] ?? '').trim();
+    if (axis === undefined) {
+      if (shorthandHasNonzeroVertical(value)) return true;
+      continue;
+    }
+    if (axis === 'block') {
+      // `margin-block: start end` — зазор даёт любое ненулевое значение.
+      if (value.split(/\s+/).some((part) => !isZeroLength(part))) return true;
+      continue;
+    }
+    if (!isZeroLength(value)) return true;
+  }
+  return false;
+}
+
+/** Селектор без аргументов функциональных псевдоклассов и значений атрибутов. */
+function stripFunctionalPseudoArgs(selector: string): string {
+  return selector.replace(/:[\w-]+\((?:[^()]|\([^()]*\))*\)/g, '').replace(/\[[^\]]*\]/g, '');
+}
+
+/**
+ * Селектор задаёт автоматический межблочный зазор одной из двух форм: «блоку с
+ * соседом» (`:has(+ …)`) либо соседнему блоку через комбинатор `+`/`~` в хосте
+ * просмотра (`.comment-view`, `.diary-body`). Оба вида — дефект класса a3c19b1b:
+ * зазор появляется там, где в исходнике нет пустой строки. Легитимные парные
+ * правила заголовков/цитаты/линейки/картинки/виджетов задают зазор самому
+ * элементу (без комбинатора) и под запрет не попадают.
+ */
+function selectorHasAutoBlockGap(selector: string): boolean {
+  if (/:has\(\s*[+~]/.test(selector)) return true;
+  const bare = stripFunctionalPseudoArgs(selector);
+  if (!/[+~]/.test(bare)) return false;
+  return /\.(?:comment-view|diary-body)\b/.test(bare);
+}
+
+/**
+ * Правила просмотра, которые добавляют блоку вертикальное поле за соседство
+ * (ошибка a3c19b1b, регресс ad6e62ef): `:has(+ *)` и sibling-форма `p + ul` —
+ * один и тот же дефект, которого нет в правке.
+ */
+function rulesWithAutoBlockGap(css: string): CssRule[] {
+  return parseRules(css).filter(
+    (r) => r.selectors.some((s) => selectorHasAutoBlockGap(s)) && hasNonzeroBlockSpacing(r.body),
   );
 }
 
@@ -284,23 +366,23 @@ describe('единая шкала вертикальных отступов бл
     }
   });
 
-  it('абзацы и списки: просмотр берёт зазор из --md-block-gap', () => {
+  it('абзацы и списки: автоматического зазора в просмотре нет (ошибка a3c19b1b)', () => {
     const css = readRendererCss();
-    // Проза Web Awesome задавала зазор сама (24px) — теперь источник один:
-    // переменная WA внутри .comment-view переопределена нашим токеном.
-    assert.ok(
-      bodiesFor(css, '.comment-view').some((b) =>
-        /--wa-content-spacing:\s*var\(--md-block-gap\)/.test(b),
-      ),
-      'в .comment-view --wa-content-spacing переопределён на --md-block-gap',
-    );
-    assert.ok(
-      parseRules(css).some(
-        (r) =>
-          r.prelude.includes(':is(p, ul, ol):has(+ *)') &&
-          /margin-block-end:\s*var\(--md-block-gap\)/.test(r.body),
-      ),
-      'абзацы/списки: внешнее поле просмотра — из --md-block-gap',
+    // Регресс ad6e62ef: просмотр добавлял зазор ВСЕМ соседним блокам
+    // (`:is(p, ul, ol):has(+ *)` + `--wa-content-spacing`), и после абзаца перед
+    // списком БЕЗ пустой строки появлялся разрыв, которого в правке нет.
+    for (const host of ['.comment-view', '.diary-body']) {
+      assert.ok(
+        bodiesFor(css, host).some((b) => /--wa-content-spacing:\s*0(?:px)?\s*;/.test(b)),
+        `${host}: проза Web Awesome не должна давать межблочный зазор — ` +
+          '`--wa-content-spacing: 0` (иначе просмотр расходится с правкой)',
+      );
+    }
+    assert.deepEqual(
+      rulesWithAutoBlockGap(css).map((r) => r.prelude.trim()),
+      [],
+      'ни одно правило не добавляет вертикальное поле блоку «у которого есть сосед»: ' +
+        'в правке такого зазора нет, пространство дают только пустые строки',
     );
     assert.ok(
       parseRules(css).some(
@@ -311,8 +393,30 @@ describe('единая шкала вертикальных отступов бл
           r.selectors.includes('.comment-view li') &&
           /margin-block:\s*0/.test(r.body),
       ),
-      'внешние поля абзацев/списков/пунктов в просмотре обнулены (зазор задаёт :has(+ *))',
+      'внешние поля абзацев/списков/пунктов в просмотре обнулены',
     );
+  });
+
+  it('межблочное пространство просмотра — маркер пустой строки в один ритм', () => {
+    const css = readRendererCss();
+    // Единственный источник зазора между блоками (кроме собственных парных
+    // правил заголовков/цитаты/линейки/картинки) — маркер пустой строки
+    // рендерера: каждый `<br>` = один строковый ритм правки.
+    const marker = bodiesFor(css, '.md-blank-line');
+    assert.ok(
+      marker.some((b) => /line-height:\s*var\(--md-block-gap\)/.test(b)),
+      'высота строки маркера `.md-blank-line` — токен --md-block-gap',
+    );
+    for (const body of marker) {
+      for (const m of body.matchAll(/(?:margin|padding)[^:;]*:\s*([^;]+)/g)) {
+        assert.match(
+          m[1]!.trim(),
+          /^0(?:px)?$/,
+          'маркер пустой строки не несёт собственных полей — иначе пустая строка ' +
+            'считалась бы дважды',
+        );
+      }
+    }
   });
 
   it('горизонтальная линейка и виджеты: значения — из токенов', () => {
@@ -418,7 +522,9 @@ describe('ссылки: автолинк голых URL выглядит как 
     for (const tag of ['tags.link', 'tags.url']) {
       assert.match(
         theme,
-        new RegExp(`\\{\\s*tag:\\s*${tag.replace('.', '\\.')},\\s*color:\\s*'var\\(--accent\\)'\\s*\\}`),
+        new RegExp(
+          `\\{\\s*tag:\\s*${tag.replace('.', '\\.')},\\s*color:\\s*'var\\(--accent\\)'\\s*\\}`,
+        ),
         `${tag} в теме CodeMirror обязан быть var(--accent) — как .comment-view a`,
       );
     }
@@ -443,16 +549,23 @@ describe('пустые строки исходника: маркер ренде�
     );
   });
 
-  it('автоматический зазор снят у блока перед маркером пустой строки', () => {
+  it('автоматического зазора у блока перед маркером нет — пустая строка считается один раз', () => {
     const css = readRendererCss();
+    // Инвариант ошибки 7f017ce1 (первая пустая строка не считается дважды) с
+    // фикса a3c19b1b держится сильнее: автоматического зазора у блоков просмотра
+    // нет вовсе, поэтому отдельное правило-заплатка
+    // `:is(...):has(+ .md-blank-line) { margin-block-end: 0 }` удалено вместе с
+    // ним. Здесь проверяется сам «нет двойного счёта»: ни один блок просмотра не
+    // несёт собственного вертикального поля.
+    assert.deepEqual(
+      rulesWithAutoBlockGap(css).map((r) => r.prelude.trim()),
+      [],
+      'блок просмотра не должен добавлять свой зазор: иначе пустая строка ' +
+        'считается дважды, а серия из двух и более строк склеивается',
+    );
     assert.ok(
-      parseRules(css).some(
-        (r) =>
-          r.prelude.includes(':has(+ .md-blank-line)') &&
-          /margin-block-end:\s*0/.test(r.body),
-      ),
-      'блок перед `.md-blank-line` не должен добавлять свой зазор: иначе первая ' +
-        'пустая строка считается дважды, а серия склеивается',
+      bodiesFor(css, '.md-blank-line').some((b) => /line-height:\s*var\(--md-block-gap\)/.test(b)),
+      'межблочное пространство даёт только маркер пустой строки (ритм — токен)',
     );
   });
 });

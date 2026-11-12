@@ -1291,6 +1291,12 @@ export const ru = {
   'recordSearch.results': 'Найденные записи',
   /** Запись без заголовка в результатах. */
   'recordSearch.untitled': 'Запись',
+  /**
+   * Подпись клиентского потолка строк-записей (0.15.4, задача 33ed043c):
+   * «Показано N из M» — N строк-записей показано из M в ответе. Отдельный
+   * ключ: у `publications.mentions.more` M — серверный total публикаций.
+   */
+  'records.more': 'Показано %1 из %2',
 
   // -- Общее выделение -----------------------------------------------------
   /** Добавить мысль к выделению (меню чипов хроники). */
@@ -2565,10 +2571,6 @@ export const ru = {
   'wikiLink.obnovitFormatId': 'Обновить формат на [[#<id>]] (%1)',
   'wikiLink.notSucceededOpredelitPoziciyuLinkRefDokumente': 'Не удалось определить позицию ссылки в документе.',
   'wikiLink.label.openThought': 'Открыть мысль',
-  'wikiLink.title.thoughtNotOtobrazhaetsya': 'Мысль не отображается',
-  'wikiLink.etaThoughtNotOtobrazhaetsyaStruktureThoughts': 'Эта мысль не отображается в структуре мыслей. Переключиться на карту мыслей?',
-  'wikiLink.label.no': 'Нет',
-  'wikiLink.label.da': 'Да',
   'wikiLink.firstOpenNetwork': 'Сначала откройте сеть.',
   'wikiLink.pokazanyPervyeUtochniteName': 'Показаны первые %1, уточните имя.',
   'wikiLink.foundNeskolkoThoughts': 'Найдено несколько мыслей: «%1»',
@@ -3674,9 +3676,9 @@ export const ru = {
   'search.title.foundImenam': 'Найдено по именам',
   'search.title.foundTekstam': 'Найдено по текстам',
   'search.title.foundLinks': 'Найдено связей',
-  'search.title.foundHronologii': 'Найдено в хронологии',
+  'search.title.foundHronologii': 'Найдено в дневниках',
   'search.placesSearch': 'Места поиска:',
-  'search.hroniki': 'хроники',
+  'search.hroniki': 'дневники',
 
   // -- selection ---------------------------------------------------------
   'selection.selection': 'Выделение',

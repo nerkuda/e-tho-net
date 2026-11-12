@@ -7,8 +7,11 @@
  *    удалены после поиска — тишина, редактор не открывается) и
  *    сетевой/серверный отказ (тост из словаря, редактор не открывается);
  *    успех — фокус установлен и связь открыта;
- *  - `openChronoHit` по связи подчиняется тем же правилам — это тот же класс
- *    (инструкция «Исправить ошибку», правило «класс, а не случай»);
+ *  - `openRecordTarget` строки-записи (0.15.4, задача 33ed043c) по связи
+ *    подчиняется тем же правилам — это тот же класс (инструкция «Исправить
+ *    ошибку», правило «класс, а не случай»); по мысли сначала идёт вход редактора
+ *    с записью, затем — фокус холста на ОТКРЫВАЕМУЮ привязку (требование
+ *    ce121e09);
  *  - «В фокус» из меню «Действия ▾» редактора гасит rejection
  *    `focusThoughtOnMap` (сбой ленивого импорта `active-view.js`) тостом и
  *    записью в журнал: unhandled rejection не возникает.
@@ -145,6 +148,8 @@ describe('хит-связь в результатах поиска (ошибка
       openLinkInEditor: () => {
         opened += 1;
       },
+      openRecordInEditor: () => undefined,
+      focusFromUi: async () => undefined,
     });
 
     await search.searchInternals.openLinkHit('link-1');
@@ -166,6 +171,8 @@ describe('хит-связь в результатах поиска (ошибка
       openLinkInEditor: () => {
         opened += 1;
       },
+      openRecordInEditor: () => undefined,
+      focusFromUi: async () => undefined,
     });
 
     await search.searchInternals.openLinkHit('link-gone');
@@ -184,6 +191,8 @@ describe('хит-связь в результатах поиска (ошибка
       openLinkInEditor: () => {
         opened += 1;
       },
+      openRecordInEditor: () => undefined,
+      focusFromUi: async () => undefined,
     });
 
     await search.searchInternals.openLinkHit('link-2');
@@ -205,6 +214,8 @@ describe('хит-связь в результатах поиска (ошибка
       openLinkInEditor: () => {
         opened += 1;
       },
+      openRecordInEditor: () => undefined,
+      focusFromUi: async () => undefined,
     });
 
     await search.searchInternals.openLinkHit('link-3');
@@ -224,6 +235,8 @@ describe('хит-связь в результатах поиска (ошибка
       openLinkInEditor: (value) => {
         opened.push(value.id);
       },
+      openRecordInEditor: () => undefined,
+      focusFromUi: async () => undefined,
     });
 
     await search.searchInternals.openLinkHit('link-4');
@@ -233,7 +246,7 @@ describe('хит-связь в результатах поиска (ошибка
     assert.equal(errorToast(), null, 'успешный путь не шумит');
   });
 
-  it('хроно-хит по связи: сетевой отказ — тост (тот же класс)', async () => {
+  it('строка-запись с привязкой-связью: сетевой отказ — тост (тот же класс)', async () => {
     let opened = 0;
     search.setSearchHitPort({
       getLink: async () => {
@@ -243,14 +256,48 @@ describe('хит-связь в результатах поиска (ошибка
       openLinkInEditor: () => {
         opened += 1;
       },
+      openRecordInEditor: () => undefined,
+      focusFromUi: async () => undefined,
     });
 
-    await search.searchInternals.openChronoHit('link', 'link-5');
+    await search.searchInternals.openRecordTarget({ kind: 'link', id: 'link-5' }, 'comment-5');
 
     assert.equal(opened, 0, 'редактор не открыт');
     const toast = errorToast();
-    assert.ok(toast !== null, 'отказ открытия из хронологии не проглочен');
+    assert.ok(toast !== null, 'отказ открытия из строки-записи не проглочен');
     assert.match(toast.flatText(), /Не удалось открыть связь/u);
+  });
+
+  it('строка-запись с привязкой-мыслью: вход редактора с записью, затем фокус на привязку', async () => {
+    const calls: string[] = [];
+    search.setSearchHitPort({
+      getLink: async () => {
+        throw new Error('связь не нужна');
+      },
+      setFocus: async () => undefined,
+      openLinkInEditor: () => {
+        throw new Error('редактор связи не нужен');
+      },
+      openRecordInEditor: (thoughtId, commentId) => {
+        calls.push(`record:${thoughtId}:${commentId}`);
+      },
+      focusFromUi: async (thoughtId) => {
+        calls.push(`focus:${thoughtId}`);
+      },
+    });
+
+    await search.searchInternals.openRecordTarget({ kind: 'thought', id: THOUGHT_ID }, 'comment-7');
+
+    // Порядок обязателен: программный вход ставит отложенный выбор записи и НЕ
+    // трогает фокус; адресат фокуса ставится ПОСЛЕ и отдельно — force-ветка
+    // `openRecordInEditor` при цели, равной текущему фокусу, за фокусом не идёт
+    // (требование ce121e09: адресат — открываемая привязка, не владелец записи).
+    assert.deepEqual(
+      calls,
+      [`record:${THOUGHT_ID}:comment-7`, `focus:${THOUGHT_ID}`],
+      'сначала вход редактора с записью, затем фокус на открываемую привязку',
+    );
+    assert.equal(errorToast(), null, 'успешный путь не шумит');
   });
 });
 

@@ -144,10 +144,15 @@ export interface ScenarioStep {
   eval?: NormalizedExpression;
 }
 
+/** Словарь ожиданий сценария: ключ → тексты по языкам интерфейса. */
+export type ScenarioTexts = Record<string, Record<string, string>>;
+
 export interface Scenario {
   name: string;
   steps: ScenarioStep[];
   timeout: number;
+  /** Словарь ожиданий `texts` (если сценарий использует `{{text:<ключ>}}`). */
+  texts?: ScenarioTexts;
 }
 
 export declare const DEFAULT_STEP_TIMEOUT: number;
@@ -163,3 +168,12 @@ export declare function normalizeModifiers(mods?: unknown): number;
 export declare function resolveKey(spec: unknown): NormalizedKey;
 export declare function validateScenario(value: unknown): Scenario;
 export declare function parseScenario(text: string): Scenario;
+export declare function normalizeTexts(raw: unknown): ScenarioTexts;
+export declare function collectTextKeys(steps: unknown): Set<string>;
+export declare function pickText(texts: ScenarioTexts, key: string, lang: string): string;
+export declare function resolveStepTexts(
+  step: ScenarioStep,
+  texts: ScenarioTexts,
+  lang: string,
+): ScenarioStep;
+export declare function stepHasTexts(step: ScenarioStep): boolean;

@@ -1663,7 +1663,6 @@ export const NetworksStructure = defineContract(
   z.object({
     network_id: NetworkId,
     include_examples: z.boolean().optional(),
-    include_conventions: z.boolean().optional(),
   }),
   {},
 );
@@ -3565,6 +3564,35 @@ export function parseBody<S extends z.ZodObject>(
   } as unknown as FastifyRequest);
 }
 
+/**
+ * Отклонить неизвестные поля тела запроса (`VALIDATION_ERROR` 422 с
+ * `details.fields` — что пришло, `details.allowed` — что допустимо) вместо
+ * молчаливого отбрасывания (ошибка d9ba9e68, 0.15.4; та же диагностика, что у
+ * требования 40efde41 для тел отбора).
+ *
+ * Проверяются только тела-объекты: тип тела (`null`/массив) отклонит
+ * {@link parseRest} собственной ошибкой.
+ */
+export function assertKnownBodyFields(
+  contract: OperationContract<z.ZodObject>,
+  body: unknown,
+  requestId: string,
+): void {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return;
+  const allowed = Object.entries(contract.rest as Record<string, RestFieldSpec>)
+    .filter(([, spec]) => (spec.from ?? { kind: 'body' }).kind === 'body')
+    .map(([key, spec]) => (spec.from as { name?: string }).name ?? key);
+  const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Unknown fields: ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}.`,
+      { fields: unknown, allowed },
+      requestId,
+    );
+  }
+}
+
 /** Непустой массив непустых строк (parseAnchorIds прежних роутов). */
 export const AnchorIdsSchema = z.array(z.string().min(1)).min(1);
 
@@ -3609,6 +3637,9 @@ export const RestThoughtCreateBody = defineContract(
     font_italic: z.boolean().optional(),
     font_underline: z.boolean().optional(),
     font_strike: z.boolean().optional(),
+    // Родитель новой мысли (ошибка d9ba9e68, 0.15.4) — сокращённая запись
+    // ребра `create_link { direction: "parent" }`.
+    parent_id: z.string().min(1).optional(),
   })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
@@ -3627,6 +3658,7 @@ export const RestThoughtCreateBody = defineContract(
     font_italic: { from: { kind: 'body' } },
     font_underline: { from: { kind: 'body' } },
     font_strike: { from: { kind: 'body' } },
+    parent_id: { from: { kind: 'body' } },
     create_link: {
       from: { kind: 'body' },
       parse: (raw: unknown, requestId: string) => {
@@ -3707,6 +3739,9 @@ export const RestThoughtUpdateBody = defineContract(
     font_italic: z.boolean().nullable().optional(),
     font_underline: z.boolean().nullable().optional(),
     font_strike: z.boolean().nullable().optional(),
+    // Перемещение в иерархии (ошибка d9ba9e68, 0.15.4): после правки у
+    // мысли ровно один структурный родитель — этот.
+    parent_id: z.string().min(1).optional(),
   })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
@@ -3727,6 +3762,7 @@ export const RestThoughtUpdateBody = defineContract(
     font_italic: { from: { kind: 'body' } },
     font_underline: { from: { kind: 'body' } },
     font_strike: { from: { kind: 'body' } },
+    parent_id: { from: { kind: 'body' } },
   },
 );
 

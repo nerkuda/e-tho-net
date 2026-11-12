@@ -2,6 +2,7 @@
   "name": "626b29bd-properties-add",
   "description": "Z5 (0.14.1, задача 626b29bd): вкладка «Свойства» — кнопка (+) «Добавить свойство», пикер property-list с исключением уже присутствующих (обе группы, по стороне), «Создать новое…» единым диалогом, редактируемые внетиповые строки, обе группы развёрнуты. Покрывает сценарии 9aea535d (C1), e77c6e52 (P3), 1c0d0192 (C2), 21b9d23b (P2 частично). Данные заводятся шагами api на изолированном стенде. Состояние пикера проверяется по модели данных grid.items: в скрытом окне виртуализированная сетка не перерисовывает DOM после фильтра, а модель и клавиатура (Enter) работают штатно.",
   "timeout": 120000,
+  "texts": { "cancel": { "ru": "Отмена", "en": "Cancel" }, "applyAndClose": { "ru": "Применить и закрыть", "en": "Apply and close" }, "createNew": { "ru": "Создать новое…", "en": "Create new…" }, "propertyTitlePlaceholder": { "ru": "Заголовок свойства (обязательно)", "en": "Property title (required)" } },
   "steps": [
     {
       "name": "seed-scalar-property",
@@ -112,7 +113,7 @@
     },
     {
       "name": "open-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "outside-group-expanded",
@@ -120,7 +121,7 @@
     },
     {
       "name": "both-groups-expanded",
-      "probe": "(() => { const headers=[...document.querySelectorAll('.properties-tab .group-header')]; const bodies=[...document.querySelectorAll('.properties-tab .group-body')]; const outside=headers.find((h)=>h.textContent.includes('Свойства вне типа')); return { headers: headers.length, bodies: bodies.length, outsideHasBody: outside ? outside.parentElement?.querySelector('.group-body') !== null : false }; })()",
+      "probe": "(() => { const headers=[...document.querySelectorAll('.properties-tab .group-header')]; const bodies=[...document.querySelectorAll('.properties-tab .group-body')]; const outside=document.querySelector('[data-group-id=\"properties.outside\"]'); return { headers: headers.length, bodies: bodies.length, outsideHasBody: outside ? outside.querySelector(':scope > .group-body') !== null : false }; })()",
       "expect": {
         "headers": 2,
         "bodies": 2,
@@ -129,7 +130,7 @@
     },
     {
       "name": "outside-badge-loaded",
-      "waitFor": "(() => { const header=[...document.querySelectorAll('.properties-tab .group-header')].find((h)=>h.textContent.includes('Свойства вне типа')); return (header?.querySelector('.ui-badge')?.textContent ?? '') === '(0)'; })()"
+      "waitFor": "(() => { const header=document.querySelector('[data-group-id=\"properties.outside\"] > .group-header'); return (header?.querySelector('.ui-badge')?.textContent ?? '') === '(0)'; })()"
     },
     {
       "name": "open-picker",
@@ -231,7 +232,7 @@
     },
     {
       "name": "cancel-picker",
-      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Отмена'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='{{text:cancel}}'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -352,7 +353,7 @@
     },
     {
       "name": "cancel-picker-both",
-      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Отмена'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='{{text:cancel}}'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -457,7 +458,7 @@
     },
     {
       "name": "remove-link-target",
-      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в')); const btn=row?.querySelector('[title=\"Убрать из значения\"]'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const row=[...document.querySelectorAll('.properties-outside-body tr')].find((r)=>r.textContent.includes('читал в')); const btn=row?.querySelector('.st-f-clear-inline'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -484,16 +485,16 @@
     },
     {
       "name": "open-create-dialog",
-      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Создать новое…'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='{{text:createNew}}'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
       "name": "create-dialog-visible",
-      "waitFor": "document.querySelector(\"input[placeholder='Заголовок свойства (обязательно)']\") !== null"
+      "waitFor": "document.querySelector(\"input[placeholder='{{text:propertyTitlePlaceholder}}']\") !== null"
     },
     {
       "name": "fill-new-name",
-      "click": "input[placeholder='Заголовок свойства (обязательно)']"
+      "click": "input[placeholder='{{text:propertyTitlePlaceholder}}']"
     },
     {
       "name": "new-name-typed",
@@ -505,7 +506,7 @@
     },
     {
       "name": "apply-new-property",
-      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Применить и закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=[...document.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='{{text:applyAndClose}}'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {

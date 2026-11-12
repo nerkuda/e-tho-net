@@ -21,6 +21,7 @@
  * Веха 8 (задача c9d5f21e): вход — единые контракты из `contracts.ts`.
  */
 
+import multipartPlugin from '@fastify/multipart';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 
@@ -44,9 +45,10 @@ import {
 } from './helpers.js';
 import {
   addOwners,
+  ATTACHMENT_FILE_MAX_BYTES,
   copyAttachment,
   createAttachmentFileResult,
-  createAttachmentResult,
+  createAttachmentFromInputResult,
   enrichUrlAttachment,
   getAttachment,
   getAttachmentContent,
@@ -75,10 +77,104 @@ import {
   RestAttachmentUsage,
 } from '../contracts.js';
 
+/**
+ * Текстовые части multipart-запроса создания вложения (ошибка 92446fbc,
+ * 0.15.4). Файловая часть — ровно одна, с именем `file`; `kind` принимается
+ * только со значением `file` (multipart умеет лишь загрузку содержимого).
+ */
+const MULTIPART_ATTACHMENT_FIELDS = ['kind', 'title', 'description', 'mime_type'] as const;
+
+/** Разобранный multipart-запрос создания вложения. */
+interface MultipartAttachmentInput {
+  title: string | null;
+  description: string | null;
+  mime_type: string;
+  data_base64: string;
+}
+
+/**
+ * Разобрать `multipart/form-data` запрос создания вложения: одна файловая часть
+ * `file` (лимит размера — `ATTACHMENT_FILE_MAX_BYTES`, его держит busboy) плюс
+ * необязательные поля {@link MULTIPART_ATTACHMENT_FIELDS}.
+ *
+ * Неизвестное поле, лишняя файловая часть и отсутствие `file` —
+ * `VALIDATION_ERROR` с перечнем допустимых полей (неизвестный вход не
+ * игнорируется молча). Части дочитываются ДО проверок: брошенный посреди
+ * итерации `parts()` запрос оставил бы поток тела незавершённым.
+ */
+async function readMultipartAttachment(req: FastifyRequest): Promise<MultipartAttachmentInput> {
+  const allowedFields: string[] = ['file', ...MULTIPART_ATTACHMENT_FIELDS];
+  const fields: Record<string, string> = {};
+  const files: { fieldname: string; buffer: Buffer; mimetype: string; filename: string }[] = [];
+
+  for await (const part of req.parts()) {
+    if (part.type === 'file') {
+      files.push({
+        fieldname: part.fieldname,
+        buffer: await part.toBuffer(),
+        mimetype: part.mimetype,
+        filename: part.filename,
+      });
+      continue;
+    }
+    if (!(MULTIPART_ATTACHMENT_FIELDS as readonly string[]).includes(part.fieldname)) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `unknown multipart field "${part.fieldname}". Allowed: ${allowedFields.join(', ')}.`,
+        { field: part.fieldname, allowed: allowedFields },
+        req.id,
+      );
+    }
+    fields[part.fieldname] = typeof part.value === 'string' ? part.value : String(part.value);
+  }
+
+  const [file] = files;
+  if (file === undefined || files.length !== 1 || file.fieldname !== 'file') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'a multipart attachment request takes exactly one file part named "file".',
+      { field: 'file', allowed: allowedFields },
+      req.id,
+    );
+  }
+  if (file.buffer.length === 0) {
+    throw new EtnError('VALIDATION_ERROR', 'the "file" part is empty.', { field: 'file' }, req.id);
+  }
+  const kind = fields['kind']?.trim() ?? '';
+  if (kind !== '' && kind !== 'file') {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'multipart upload supports kind="file" only.',
+      { field: 'kind', allowed: ['file'] },
+      req.id,
+    );
+  }
+  const mimeType = (fields['mime_type'] ?? '').trim() || file.mimetype;
+  // Имя загруженного файла — дефолт заголовка (как у `POST …/attachments/file`
+  // без `title`); пустое значение любого текстового поля — отсутствие значения.
+  const titleRaw = fields['title'] ?? file.filename;
+  const descriptionRaw = fields['description'] ?? '';
+  return {
+    title: titleRaw.trim() === '' ? null : titleRaw,
+    description: descriptionRaw.trim() === '' ? null : descriptionRaw,
+    mime_type: mimeType,
+    data_base64: file.buffer.toString('base64'),
+  };
+}
+
 /** `/api/v1/networks*` attachment routes plugin factory. */
 export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
     const { requireNetworkMember } = app.accessControl;
+
+    // Multipart-загрузка на маршруте создания вложения (ошибка 92446fbc,
+    // 0.15.4). Плагин подключён В КОНТЕКСТЕ этого семейства маршрутов: прочие
+    // REST-роуты продолжают принимать только JSON, а `multipart/form-data` там
+    // получает честный 415. Лимиты — те же, что у JSON-загрузки
+    // (`POST …/attachments/file`): один файл не больше `ATTACHMENT_FILE_MAX_BYTES`.
+    await app.register(multipartPlugin, {
+      limits: { fileSize: ATTACHMENT_FILE_MAX_BYTES, files: 2, fields: 8, parts: 12 },
+    });
 
     /**
      * События добавления владений (0.12.1, задача f77382ba, сущность 109be255):
@@ -115,6 +211,52 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
         `${pathBase}/attachments`,
         { preHandler: [app.authPreHandler, requireNetworkMember(), app.idempotency.preHandler] },
         async (req: FastifyRequest, reply) => {
+          if (req.isMultipart()) {
+            // Multipart-загрузка (ошибка 92446fbc, 0.15.4): тот же результат,
+            // что у JSON-создания, — `201 { data: Attachment }`; содержимое
+            // файла сохраняет домен (`createAttachmentFileResult`), отдельного
+            // хранилища у этого маршрута нет (ADR 8c93f03a).
+            const { network_id, owner_id } = parseRest(RestAttachmentListOwner, req);
+            const upload = await readMultipartAttachment(req);
+            const ndb = openRouteNetworkDb(deps, req, network_id, app.appLogger);
+            const created = runWrite(ndb, restWriteFx(deps, req, network_id), () => {
+              const stored = createAttachmentFileResult(
+                ndb,
+                ownerType,
+                owner_id,
+                {
+                  title: upload.title,
+                  mime_type: upload.mime_type,
+                  data_base64: upload.data_base64,
+                },
+                req.auth!.user.id,
+              );
+              // `description` домен файловой загрузки не принимает — тот же
+              // приём, что у PATCH: правка метаданных в этой же транзакции.
+              const attachment =
+                upload.description === null
+                  ? stored.attachment
+                  : updateAttachment(
+                      ndb,
+                      stored.attachment.id,
+                      { description: upload.description },
+                      req.auth!.user.id,
+                    );
+              return {
+                result: attachment,
+                // Дедуп по хэшу (ADR e3a35864): новой строки нет — эмитим
+                // владение, а не `attachment.created` (как в JSON-загрузке).
+                events: stored.reused
+                  ? stored.ownership_added
+                    ? ownerAddedEvents(attachment.id, [{ owner_type: ownerType, owner_id }])
+                    : []
+                  : [{ type: 'attachment.created', data: { attachment } }],
+                activity: [{ kind: 'attachment', action: 'created', attachment }],
+              };
+            });
+            sendCreated(reply, created, { request_id: req.id });
+            return;
+          }
           const input = parseRest(RestAttachmentCreate, req);
           const parsed: AttachmentInput = {
             kind: input.kind as AttachmentKind,
@@ -129,11 +271,12 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
           const fx = restWriteFx(deps, req, input.network_id);
           // Создание — через обёртку (без событий: снимок ещё не окончательный).
-          // `createAttachmentResult` (не `createAttachment`) — чтобы узнать
-          // дедуп-переиспользование по хэшу: тогда эмитим владение, а не created
-          // (замечание проверки f77382ba).
+          // Общий доменный диспетчер (не `createAttachmentResult` напрямую):
+          // он проверяет, что `file_path` действительно читается сервером
+          // (ошибка 93925275, 0.15.4 — иначе создавалось висячее вложение), и
+          // отдаёт дедуп-переиспользование по хэшу (замечание f77382ba).
           const created = runWrite(ndb, fx, () => ({
-            result: createAttachmentResult(
+            result: createAttachmentFromInputResult(
               ndb,
               ownerType,
               input.owner_id,
@@ -182,7 +325,11 @@ export function createAttachmentsRoutes(deps: RouteDeps): FastifyPluginAsync {
           };
           const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
           const outcome = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-            const { attachment: created, reused, ownership_added } = createAttachmentFileResult(
+            const {
+              attachment: created,
+              reused,
+              ownership_added,
+            } = createAttachmentFileResult(
               ndb,
               ownerType,
               input.owner_id,

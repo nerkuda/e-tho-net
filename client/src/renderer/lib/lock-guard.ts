@@ -215,6 +215,19 @@ export function lockHandleFromOutcome(
 }
 
 /**
+ * True when the server has already dropped the lock (or does not know it):
+ * `release` answers 404. The server's code is `LOCK_NOT_FOUND`; `NOT_FOUND` is
+ * kept for older servers and for callers that normalise the status.
+ *
+ * Checking only `NOT_FOUND` left the whole branch dead in production: a
+ * released dead id stayed in the cache as a phantom 🔒 (ошибки 0702efb6,
+ * 27f0780a).
+ */
+function isLockGoneError(err: unknown): boolean {
+  return err instanceof EtnError && (err.code === 'LOCK_NOT_FOUND' || err.code === 'NOT_FOUND');
+}
+
+/**
  * Release the lock referenced by `handle`. Safe to call when the handle has
  * no `lockId` (no-op). Swallows errors — a release that 404s (already cleared
  * by `ws_disconnect`) is fine.
@@ -231,13 +244,23 @@ export async function releaseHeld(handle: LockHandle | null | undefined): Promis
   if (lockId === null) return;
   const networkId = handle.networkId ?? store.state.networkId;
   if (networkId === null) return;
+  /**
+   * Confirm the release locally: the matching row is dropped immediately; a row
+   * with another id for the same entity is reconciled against the server (the
+   * phantom row of a dead session, ошибка 27f0780a) — guessing would either
+   * keep the 🔒 or hide a live capture.
+   */
+  const settleReleased = (): void => {
+    if (dropLockById(lockId)) return;
+    if (getLock(handle.entityType, handle.entityId) !== undefined) void refreshLockCache();
+  };
   try {
     await etn.locks.release(networkId, lockId);
-    dropLockById(lockId);
+    settleReleased();
   } catch (err) {
     // The server may have already cleared it (ws_disconnect on the other end,
     // or a manual reset). The row is dead either way.
-    if (err instanceof EtnError && err.code === 'NOT_FOUND') dropLockById(lockId);
+    if (isLockGoneError(err)) settleReleased();
   }
 }
 

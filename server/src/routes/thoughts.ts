@@ -32,6 +32,7 @@ import {
   type FocusOrderInput,
   type FocusOrderResult,
   type FocusPreferencesInput,
+  type Link,
   type LinkTypeFilterInput,
   type SortKind,
   type SortOrder,
@@ -69,6 +70,7 @@ import {
 import {
   AnchorIdsSchema,
   assertImageIcon,
+  assertKnownBodyFields,
   parseBody,
   RestThoughtCopyBody,
   RestThoughtCreateBody,
@@ -184,6 +186,9 @@ function parseThoughtCreateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtCreateInput {
+  // Неизвестное поле — 422 со списком (ошибка d9ba9e68, 0.15.4): тело больше
+  // не разбирается «по белому списку» с молчаливым отбрасыванием остального.
+  assertKnownBodyFields(RestThoughtCreateBody, body, requestId);
   const out = parseBody(RestThoughtCreateBody, body, requestId);
   const iconKind = out.icon_kind as ThoughtCreateInput['icon_kind'];
   if (iconKind === 'image') {
@@ -203,6 +208,7 @@ function parseThoughtCreateBody(
     font_italic: out.font_italic as boolean | undefined,
     font_underline: out.font_underline as boolean | undefined,
     font_strike: out.font_strike as boolean | undefined,
+    parent_id: out.parent_id as string | undefined,
     create_link: out.create_link as ThoughtCreateInput['create_link'],
     comment: out.comment as ThoughtCreateInput['comment'],
   };
@@ -213,6 +219,8 @@ function parseThoughtUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtUpdateInput {
+  // Неизвестное поле — 422 со списком (ошибка d9ba9e68, 0.15.4).
+  assertKnownBodyFields(RestThoughtUpdateBody, body, requestId);
   const out = parseBody(RestThoughtUpdateBody, body, requestId);
   const changes: ThoughtUpdateInput = {};
   if (out.title !== undefined) changes.title = out.title as string;
@@ -231,6 +239,9 @@ function parseThoughtUpdateBody(
   if (out.active !== undefined) changes.active = out.active as boolean;
   if (out.marked_for_deletion !== undefined)
     changes.marked_for_deletion = out.marked_for_deletion as boolean;
+  // Перемещение в иерархии (ошибка d9ba9e68, 0.15.4): домен снимает прежние
+  // структурные рёбра и ставит это; типизированные связи не трогаются.
+  if (out.parent_id !== undefined) changes.parent_id = out.parent_id as string;
   if (out.fg_color !== undefined) changes.fg_color = out.fg_color as string | null;
   if (out.bg_color !== undefined) changes.bg_color = out.bg_color as string | null;
   if (out.font_bold !== undefined) changes.font_bold = out.font_bold as boolean | null;
@@ -409,12 +420,45 @@ export function createThoughtsRoutes(deps: RouteDeps): FastifyPluginAsync {
             req.id,
           );
         }
+        // Коллектор рёбер перемещения `parent_id`: домен кладёт в него снятые
+        // и созданное рёбра, фасад публикует события и пишет журнал (ошибка
+        // d9ba9e68, 0.15.4).
+        const linkChanges: { removed: Link[]; created: Link | null } = {
+          removed: [],
+          created: null,
+        };
         const thought = runWrite(ndb, restWriteFx(deps, req, networkId), () => {
-          const updated = updateThought(ndb, id, changes, expectedVersion, req.auth!.user.id);
+          const updated = updateThought(
+            ndb,
+            id,
+            changes,
+            expectedVersion,
+            req.auth!.user.id,
+            linkChanges,
+          );
           return {
             result: updated,
-            events: [{ type: 'thought.updated', data: { id, changes, version: updated.version } }],
-            activity: [{ kind: 'thought', action: 'updated', thought: updated }],
+            events: [
+              { type: 'thought.updated', data: { id, changes, version: updated.version } },
+              ...linkChanges.removed.map((link) => ({
+                type: 'link.deleted' as const,
+                data: { id: link.id },
+              })),
+              ...(linkChanges.created === null
+                ? []
+                : [{ type: 'link.created' as const, data: { link: linkChanges.created } }]),
+            ],
+            activity: [
+              { kind: 'thought', action: 'updated', thought: updated },
+              ...linkChanges.removed.map((link) => ({
+                kind: 'link' as const,
+                action: 'deleted' as const,
+                link,
+              })),
+              ...(linkChanges.created === null
+                ? []
+                : [{ kind: 'link' as const, action: 'created' as const, link: linkChanges.created }]),
+            ],
           };
         });
         sendSuccess(reply, thought, {

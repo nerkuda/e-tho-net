@@ -210,6 +210,29 @@ export async function scanMentionsTexts(
   return results.map((r) => r ?? []);
 }
 
+/**
+ * Итоговая мысль, никогда не предлагаемая в авто-упоминаниях
+ * (`excludeThoughtId` скана).
+ *
+ * `explicit` — геттер вызывающего (опция поля `getMentionsExcludeThoughtId`):
+ * заданный геттер авторитетен, его ответ окончателен, в том числе `undefined` —
+ * «ничего не исключать». Иначе действует `fallback` — мысль-владелец вложения
+ * (`attachmentsOwner`), паритет со страницей мысли, где собственный владелец в
+ * своём комментарии не подчёркивается (L24).
+ *
+ * Различать «геттера нет» и «геттер вернул `undefined`» обязательно: запись
+ * «Дневника» — самостоятельная лента, владельца она НЕ исключает (ошибка
+ * 3ebb6512), хотя `attachmentsOwner` ей передают для вставки картинок.
+ * Pure — экспортируется для тестов.
+ */
+export function resolveMentionsExcludeThoughtId(
+  explicit: (() => string | undefined) | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  if (explicit !== undefined) return explicit();
+  return fallback;
+}
+
 /** Ancestors whose text must never be scanned/wrapped. */
 const EXCLUDED_SELECTOR = 'a, code, pre, .wiki-link, .thought-mention';
 
@@ -450,8 +473,12 @@ export function annotateMentions(
           wrapMatch(unit, match.start, match.end, match.thoughts, opts.onInsertLink);
         }
       });
-    } catch {
-      // Best-effort annotation — a failed scan just leaves the text plain.
+    } catch (error) {
+      // Best-effort annotation — a failed scan just leaves the text plain. Но
+      // отказ НЕ глотается молча (класс ошибки 8ca4841b): без строки в консоли
+      // «не нашлось упоминаний» и «скан упал» неотличимы, и симптом ошибки
+      // 3ebb6512 (пустое тело записи без подсветки) не диагностируется.
+      console.error('[mentions] скан упоминаний не удался — текст остаётся без подсветки', error); // i18n: technical — диагностика для разработчика
     }
   };
   scanChain = scanChain.then(run);

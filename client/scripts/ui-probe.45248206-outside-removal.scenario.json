@@ -55,7 +55,7 @@
     },
     {
       "name": "open-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "outside-rows-visible",
@@ -78,7 +78,7 @@
     },
     {
       "name": "click-target-clear",
-      "probe": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const row=rows.find((r)=>r.textContent.includes('Содержится в B')); if(row === undefined) return 'no-row'; const btn=[...row.querySelectorAll('.link-value-corner-btn')].find((b)=>b.title==='Очистить значение'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const rows=[...document.querySelectorAll('.properties-outside-body tr')]; const row=rows.find((r)=>r.textContent.includes('Содержится в B')); if(row === undefined) return 'no-row'; const btn=[...row.querySelectorAll('.link-value-corner-btn')].find((b)=>b.textContent.trim()==='✕'); if(btn === undefined) return 'no-btn'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {

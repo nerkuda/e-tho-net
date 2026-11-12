@@ -168,6 +168,15 @@ export function composeThoughtCreate(
       activity.push({ kind: 'link', action: 'created', link });
     }
   }
+  if (input.parent_id !== undefined) {
+    // `parent_id` (ошибка d9ba9e68, 0.15.4) — то же нетипизированное ребро
+    // «родитель → новая мысль», что и `create_link` с `direction="parent"`.
+    const link = findLinksBetween(ndb, input.parent_id, created.id, null)[0];
+    if (link) {
+      events.push({ type: 'link.created', data: { link } });
+      activity.push({ kind: 'link', action: 'created', link });
+    }
+  }
   return { result: created, events, activity };
 }
 

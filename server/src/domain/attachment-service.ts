@@ -526,7 +526,7 @@ export function removeOwner(
       return { removed: true, attachment_deleted: false };
     }
 
-    ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(ownership.id);
+    ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(ownership.id); // layers:physical-write — базовая ветка слоёного удаления
     if (hasLiveOwnershipAnywhere(ndb, attachmentId)) {
       return { removed: true, attachment_deleted: false };
     }
@@ -539,12 +539,12 @@ export function removeOwner(
           'SELECT 1 FROM thoughts WHERE icon_attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
         )
         .get(attachmentId) !== undefined;
-    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(attachmentId);
+    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(attachmentId); // layers:physical-write — базовая ветка слоёного удаления
     ndb
-      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(attachmentId);
     ndb
-      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?')
+      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(attachmentId);
     const keepFile =
       iconBacksFile ||
@@ -1090,17 +1090,16 @@ export function createAttachmentFromInputResult(
     input.data_base64.trim() !== '';
   if (!hasData) {
     // Ошибка 5fcb8307: `file_path` — путь в файловой системе СЕРВЕРА. Этот
-    // диспетчер обслуживает внешние MCP-вызовы (`etn.ops attachments.add` и
-    // `attachments[]` в `etn.thoughts.write`); агент работает с удалённым
-    // сервером, его локальный путь там не резолвится — раньше вызов молча
-    // создавал битое вложение (`mime_type`/`file_size` пусты, файл недоступен).
-    // Теперь нерезолвящийся путь — явная ошибка вызова; клиентский файл
-    // передаётся содержимым через `data_base64` ({@link createAttachmentFile}).
+    // диспетчер обслуживает обе точки входа — внешние MCP-вызовы
+    // (`etn.ops attachments.add` и `attachments[]` в `etn.thoughts.write`) и
+    // REST-создание `POST …/attachments` (ошибка 93925275, 0.15.4); агент и
+    // клиент работают с удалённым сервером, их локальный путь там не
+    // резолвится — раньше вызов молча создавал битое вложение (`mime_type`/
+    // `file_size` пусты, файл недоступен, `GET …/content` → 422). Теперь
+    // нерезолвящийся путь — явная ошибка вызова; содержимое передаётся
+    // `data_base64` ({@link createAttachmentFile}) или multipart-загрузкой.
     // Ошибка 6a95ba12: путь обязан указывать на обычный файл — каталог проходит
     // `existsSync`, поэтому используется `isResolvableFile` (`statSync().isFile()`).
-    // REST-маршрут `POST …/attachments` вызывает {@link createAttachment}
-    // напрямую и сохраняет документированный контракт «ссылка на путь в ОС
-    // клиента» (требование a5456b79) — его эта проверка не затрагивает.
     if (
       input.kind === 'file' &&
       typeof input.file_path === 'string' &&
@@ -1113,7 +1112,8 @@ export function createAttachmentFromInputResult(
         {
           field: 'file_path',
           file_path: input.file_path,
-          hint: "pass a file from the client machine as content in data_base64",
+          hint:
+            'upload the file content (POST …/attachments/file or multipart) or pass a path readable by the server',
         },
       );
     }
@@ -2042,7 +2042,7 @@ export function updateAttachment(
       const srcOwnership = liveOwnership(ndb, id, current.owner_type, current.owner_id);
       if (srcOwnership !== undefined) {
         if (isBaseContext(ndb)) {
-          ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(srcOwnership.id);
+          ndb.prepare('DELETE FROM attachment_owners WHERE id = ?').run(srcOwnership.id); // layers:physical-write — базовая ветка слоёного удаления
         } else {
           materializeTombstone(ndb, 'attachment_owners', srcOwnership.id);
         }
@@ -2146,15 +2146,15 @@ export function deleteAttachment(ndb: NetworkDb, id: string): void {
           'SELECT 1 FROM thoughts WHERE icon_attachment_id = ? AND deleted = 0 LIMIT 1', // layers:physical-read
         )
         .get(id) !== undefined;
-    ndb.prepare('DELETE FROM attachment_owners WHERE attachment_id = ?').run(id);
-    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+    ndb.prepare('DELETE FROM attachment_owners WHERE attachment_id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления
+    ndb.prepare('DELETE FROM attachments WHERE id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления
     // Thoughts may reference this attachment as the backing picture of their
     // icon (L16) — drop the dangling reference; the icon preview itself stays.
     ndb
-      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?')
+      .prepare('UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(id);
     ndb
-      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?')
+      .prepare('UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id = ?') // layers:physical-write — базовая ветка слоёного удаления
       .run(id);
     const keepFile =
       iconBacksFile ||

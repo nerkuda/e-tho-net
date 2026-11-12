@@ -752,6 +752,10 @@ const
   EXIT_PRECONDITION = 20;
   MOVEFILE_REPLACE_EXISTING = 1;
   MOVEFILE_WRITE_THROUGH = 8;
+  { Журнал: имя файла уникально для запуска (ошибка f7887a35). Метка времени
+    в имени — до секунды, поэтому два запуска в одну секунду различаются
+    номером попытки: install-<метка>.log, install-<метка>-1.log и т. д. }
+  LOG_NAME_ATTEMPTS = 100;
   { Правило брандмауэра: имя постоянное (удаление ищет по имени, а не по
     порту), профили — домен и частная сеть; публичные сети правилом не
     открываются (требование 15a1d3e4). }
@@ -957,6 +961,16 @@ var
   { Снимок отката текущего обновления (.install\rollback\<timestamp>) и
     последняя причина сбоя health-check для журнала и экрана ошибки. }
   GLastRollbackDir: String;
+  { Каталоги программы, попавшие в снимок переносом, а не копией: откат
+    обязан вернуть их переименованием, а неудачный снимок — так же вернуть
+    на место (a34f48da). Флаг снимается только подтверждённым возвратом. }
+  GSnapshotMovedServer: Boolean;
+  GSnapshotMovedService: Boolean;
+  { Каталог программы был на месте к моменту снимка: при откате он ОБЯЗАН
+    найтись в снимке — иначе откат не трогает текущие файлы и сообщает
+    ошибку, а не «успех без возврата» (a34f48da, круг доработки 1). }
+  GSnapshotHasServer: Boolean;
+  GSnapshotHasService: Boolean;
   GHealthReason: String;
   { Код возврата и текст последней команды службы: 1061/1062 (переход) нужны
     вызывающему для повтора stop, 1072 после uninstall — для подтверждения
@@ -1163,6 +1177,10 @@ end;
   Журнал установщика: UTF-8 (с BOM в начале файла — его добавляет первая
   запись), по строке на событие, без MsgBox. Значения «секретных» параметров
   (ключ, токен, пароль) в журнал не попадают никогда.
+  Файл журнала свой у каждого запуска: имя install-<метка>-<номер>.log, уже
+  существующий файл не используется, факт записи подтверждается чтением
+  (f7887a35). Не удалось записать ни в один каталог — строки идут в журнал
+  Inno, а не теряются молча.
   --------------------------------------------------------------------------- }
 function RedactLine(const S: String): String;
 var
@@ -1178,29 +1196,37 @@ begin
     Result := Copy(S, 1, P) + '***';
 end;
 
-procedure AppendUtf8Line(const FileName, Text: String);
+function AppendUtf8Line(const FileName, Text: String): Boolean;
 var
   Lines: TArrayOfString;
 begin
   SetArrayLength(Lines, 1);
   Lines[0] := Text;
-  SaveStringsToUTF8File(FileName, Lines, True);
+  { Результат обязан проверяться вызывающим: запись в каталог может быть
+    запрещена (ACL) или файл занят — тогда строки молча не будет (f7887a35). }
+  Result := SaveStringsToUTF8File(FileName, Lines, True);
 end;
 
 procedure LogLine(const Level, Msg: String);
+var
+  Line: String;
 begin
+  Line := GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + '  [' + Level + ']  ' +
+    RedactLine(Msg);
   if GLogPath = '' then
   begin
     { Журнал установщика ещё не создан (InitializeSetup) или это
       деинсталлятор, где InitializeSetup не вызывается и свой журнал создать
       не удалось: строка уходит в журнал Inno (Log), иначе причина отказа
       снятия службы при удалении теряется. }
-    Log(RedactLine(Msg));
+    Log(Line);
     Exit;
   end;
-  AppendUtf8Line(GLogPath,
-    GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + '  [' + Level + ']  ' +
-    RedactLine(Msg));
+  { Файл журнала мог стать недоступен по ходу установки (ACL каталога,
+    занятый файл, диск): AppendUtf8Line возвращает False, и строка не должна
+    пропасть молча — дублируем её в журнал Inno (ведётся при /LOG). }
+  if not AppendUtf8Line(GLogPath, Line) then
+    Log(Line);
 end;
 
 { Запись в журнал до его создания: строки копятся в буфере и выводятся после
@@ -1248,19 +1274,56 @@ begin
   GDeferredLog := '';
 end;
 
-function TryInitLog(const Dir: String): Boolean;
+{ Запись в файл с подтверждением результата: SaveStringsToUTF8File возвращает
+  False, если файл не удалось создать или дописать (ACL каталога, занятый
+  файл, диск). FileExists признаком успеха не является — именно на этом
+  терялся журнал неэлевированного запуска (ошибка f7887a35): файл с чужим
+  именем уже существовал, дописать его прав не было, и все строки молча
+  пропадали. Дополнительно строка перечитывается: подтверждается не только
+  отсутствие ошибки, но и факт записи. }
+function LogProbeWritten(const FileName, Marker: String): Boolean;
 var
-  Candidate: String;
+  Lines: TArrayOfString;
+  Count: Integer;
+begin
+  Result := False;
+  SetArrayLength(Lines, 1);
+  Lines[0] := Marker;
+  if not SaveStringsToUTF8File(FileName, Lines, True) then Exit;
+  if not LoadStringsFromFile(FileName, Lines) then Exit;
+  Count := GetArrayLength(Lines);
+  if Count = 0 then Exit;
+  Result := Lines[Count - 1] = Marker;
+end;
+
+{ Журнал в указанном каталоге: имя уникально для запуска. Метка времени в
+  имени — до секунды, поэтому два запуска в одну секунду различаются номером
+  попытки (install-<метка>.log, install-<метка>-1.log, …), а уже существующий
+  файл никогда не используется: записи разных запусков не смешиваются и чужие
+  права на файл не мешают создать свой. Ни одна попытка не удалась — False,
+  вызывающий уходит на следующий каталог (f7887a35). }
+function TryInitLog(const Dir, Prefix, FirstLine: String): Boolean;
+var
+  Base, Candidate, Marker: String;
+  N: Integer;
 begin
   Result := False;
   if Dir = '' then Exit;
   if not ForceDirectories(Dir) then Exit;
-  Candidate := Dir + '\install-' +
-    GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
-  AppendUtf8Line(Candidate, 'ETN setup log');
-  if not FileExists(Candidate) then Exit;
-  GLogPath := Candidate;
-  Result := True;
+  Base := Prefix + '-' + GetDateTimeString('yyyymmdd-hhnnss', '-', '-');
+  for N := 0 to LOG_NAME_ATTEMPTS - 1 do
+  begin
+    if N = 0 then
+      Candidate := Dir + '\' + Base + '.log'
+    else
+      Candidate := Dir + '\' + Base + '-' + IntToStr(N) + '.log';
+    if FileExists(Candidate) then Continue;
+    Marker := FirstLine + ' ' + Base + IfStr(N = 0, '', '-' + IntToStr(N));
+    if not LogProbeWritten(Candidate, Marker) then Continue;
+    GLogPath := Candidate;
+    Result := True;
+    Exit;
+  end;
 end;
 
 { Журнал установщика по контракту — %ProgramData%\ETN\logs, но этот каталог
@@ -1276,12 +1339,15 @@ var
   TempDir: String;
 begin
   GLogPath := '';
-  { Основной путь по контракту: %ProgramData%\ETN\logs. }
-  if DataDirLogAllowed and TryInitLog(GDataDir + '\logs') then Exit;
+  { Основной путь по контракту: %ProgramData%\ETN\logs. Неэлевированный
+    запуск может не иметь прав на каталог, созданный администратором, —
+    тогда TryInitLog честно вернёт False и журнал уйдёт в %TEMP%. }
+  if DataDirLogAllowed and TryInitLog(GDataDir + '\logs', 'install',
+    'ETN setup log') then Exit;
   { Fallback по контракту: %TEMP%. }
   TempDir := GetEnv('TEMP');
   if TempDir = '' then TempDir := GetEnv('TMP');
-  if TryInitLog(TempDir) then
+  if TryInitLog(TempDir, 'install', 'ETN setup log') then
     LogLine('WARN', 'Журнал в %TEMP%: каталог ' + GDataDir + '\logs не используется')
   else
     GLogPath := '';
@@ -4586,15 +4652,34 @@ begin
 end;
 
 { ---------------------------------------------------------------------------
-  Снимок отката и восстановление — задача bb063ac3.
+  Снимок отката и восстановление — задача bb063ac3, ускорение — a34f48da.
 
   Снимок — единственная резервная копия программы для отката: каталог
-  %ProgramData%\ETN\.install\rollback\<timestamp> с копиями server и service
+  %ProgramData%\ETN\.install\rollback\<timestamp> с server и service
   (данные не копируются — для них есть архив ce3ab836). Создаётся до
   копирования файлов; после успешного обновления удаляется вместе со старыми
   снимками, при отказе остаётся единственной точкой ручного восстановления
   до следующего успешного обновления (замечание приёмки: старые снимки не
   накапливаются).
+
+  Снимок — ПЕРЕНОС каталога, а не копия: служба остановлена, старые файлы
+  никто не держит, поэтому достаточно переименовать каталоги server и service
+  программы в каталог снимка (MoveFileExW в пределах тома — операция над
+  метаданными, байты не читаются и не пишутся). В реальной установке копия
+  10 808 файлов / 649 МБ шла 48–72 с в silent и более 900 с в GUI (замеры
+  a34f48da); в замере snapshot-bench на дереве серверной части из поставки
+  (10 721 файл, 65 МБ) копия — 8,5–18,9 с против 0,6–0,7 с у переноса. Копия
+  остаётся запасным путём: другой том (каталог программы не на системном
+  диске) или незакрытый файл в каталоге (осиротевший node.exe, грабли
+  8bec9706) — тогда WARN и прежний CopyTreeRec.
+  Откат так же возвращает каталоги переименованием, копия — только если
+  перенос невозможен.
+
+  Данные пользователя (БД, вложения в %ProgramData%\ETN) в снимок не входят
+  никогда: откат файлов согласован с архивом БД ЭТОГО запуска, который
+  создаётся до снимка (RestoreDatabaseFromArchive; LatestBackupDir не
+  используется). Перенос не меняет состав данных — он лишь убирает
+  копирование байтов.
   --------------------------------------------------------------------------- }
 function RollbackRoot: String;
 begin
@@ -4648,6 +4733,87 @@ begin
   Result := True;
 end;
 
+{ Перенос каталога программы в снимок (a34f48da): переименование в пределах
+  тома вместо побайтовой копии. В реальной установке копия 10 808 файлов /
+  649 МБ шла 48–72 с в silent и более 900 с в GUI; на дереве из поставки
+  (10 721 файл, 65 МБ) перенос — 0,6–0,7 с против 8,5–18,9 с у копии
+  (snapshot-bench). Moved = True — каталог именно перенесён (откат обязан
+  вернуть его переименованием), False — скопирован запасным путём.
+
+  Перенос невозможен, когда у каталога программы и каталога данных разные тома
+  либо файл каталога не закрыт (осиротевший node.exe, грабли 8bec9706): тогда
+  WARN и прежний CopyTreeRec — обновление замедляется, но не отменяется. }
+function TakeSnapshot(const Src, Dest, Component: String; var Moved: Boolean): Boolean;
+begin
+  Result := False;
+  Moved := False;
+  if not DirExists(Src) then
+  begin
+    { Компонента нет — переносить нечего; снимок из одного компонента
+      корректен (например, установка без клиента не имеет service). }
+    Result := True;
+    Exit;
+  end;
+  if MoveFileExW(Src, Dest, 0) then
+  begin
+    Moved := True;
+    LogLine('INFO', 'Снимок отката: ' + Component + ' перенесён: ' + Src +
+      ' → ' + Dest);
+    Result := True;
+    Exit;
+  end;
+  LogLine('WARN', 'Снимок отката: ' + Component + ' не перенесён (' + Src +
+    ') — копируется');
+  if not CopyTreeRec(Src, Dest) then
+  begin
+    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + Src + ' в ' + Dest);
+    Exit;
+  end;
+  LogLine('INFO', 'Снимок отката: ' + Component + ' скопирован: ' + Dest);
+  Result := True;
+end;
+
+{ Возврат каталогов, перенесённых в снимок, на место: неудачный снимок не
+  должен оставить установку без файлов сервера — вызывается до удаления
+  каталога снимка.
+
+  True — возвращать больше нечего (все перенесённые каталоги вернулись или их
+  не было); False — хотя бы один остался в снимке. Флаг переноса снимается
+  ТОЛЬКО подтверждённым возвратом: вызывающий по нему решает, можно ли удалять
+  каталог снимка (иначе единственная копия файлов сервера пропадёт). }
+function UndoSnapshotMoves(const Dir: String): Boolean;
+begin
+  Result := True;
+  if GSnapshotMovedService then
+  begin
+    if DirExists(Dir + '\service') and
+      MoveFileExW(Dir + '\service', GServerDir + '\service', 0) then
+    begin
+      LogLine('INFO', 'Снимок отката: service возвращён на место');
+      GSnapshotMovedService := False;
+    end
+    else
+    begin
+      LogLine('WARN', 'Снимок отката: service не удалось вернуть из ' + Dir);
+      Result := False;
+    end;
+  end;
+  if GSnapshotMovedServer then
+  begin
+    if DirExists(Dir + '\server') and
+      MoveFileExW(Dir + '\server', GServerDir + '\server', 0) then
+    begin
+      LogLine('INFO', 'Снимок отката: server возвращён на место');
+      GSnapshotMovedServer := False;
+    end
+    else
+    begin
+      LogLine('WARN', 'Снимок отката: server не удалось вернуть из ' + Dir);
+      Result := False;
+    end;
+  end;
+end;
+
 function NewRollbackDirName(const Root: String): String;
 var
   Base: String;
@@ -4693,15 +4859,21 @@ begin
   end;
 end;
 
-{ Снимок перед заменой файлов. False — копию сделать не удалось: файлы
+{ Снимок перед заменой файлов. False — снимок сделать не удалось: файлы
   заменять нельзя, обновление останавливается. Неудачный (частичный) снимок
-  удаляется, старые снимки — тоже: остаётся только копия этого запуска. }
+  удаляется, а уже перенесённые каталоги возвращаются на место — иначе
+  установка осталась бы без файлов сервера. Старые снимки удаляются: остаётся
+  только снимок этого запуска. }
 function CreateRollbackSnapshot: Boolean;
 var
   Dir, Name: String;
 begin
   Result := False;
   GLastRollbackDir := '';
+  GSnapshotMovedServer := False;
+  GSnapshotMovedService := False;
+  GSnapshotHasServer := False;
+  GSnapshotHasService := False;
   if not GServerFilesPresent then
   begin
     LogLine('INFO', 'Снимок отката: файлов сервера нет — копировать нечего');
@@ -4716,17 +4888,47 @@ begin
   end;
   Name := NewRollbackDirName(RollbackRoot);
   Dir := RollbackRoot + '\' + Name;
-  if not CopyTreeRec(GServerDir + '\server', Dir + '\server') then
+  { Каталог-приёмник создаётся ДО переноса: MoveFileExW не создаёт родителя, и
+    без этого перенос молча падал в побайтовую копию (блокер приёмки 1). }
+  if not ForceDirectories(Dir) then
   begin
-    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
+    LogLine('ERROR', 'Снимок отката: не удалось создать каталог снимка ' + Dir);
+    Exit;
+  end;
+  { Что было на месте к моменту снимка: при откате эти каталоги обязаны
+    найтись в снимке, иначе откат не трогает файлы и сообщает ошибку. }
+  GSnapshotHasServer := DirExists(GServerDir + '\server');
+  GSnapshotHasService := DirExists(GServerDir + '\service');
+  { Перенос, а не копия: копия серверной части (10 721 файл, 65 МБ) занимала
+    8,5–18,9 с, а реальный этап «Снимок отката» шёл 48–72 с в silent и больше
+    20 минут в GUI (ошибка a34f48da). }
+  if not TakeSnapshot(GServerDir + '\server', Dir + '\server', 'server',
+    GSnapshotMovedServer) then
+  begin
+    LogLine('ERROR', 'Снимок отката: не удалось сохранить ' + GServerDir +
       '\server в ' + Dir);
+    if not UndoSnapshotMoves(Dir) then
+    begin
+      GLastRollbackDir := Dir;
+      LogLine('ERROR', 'Снимок отката: часть каталогов осталась в ' + Dir +
+        ' — каталог снимка НЕ удалён, верните файлы из него вручную');
+      Exit;
+    end;
     DelTree(Dir, True, True, True);
     Exit;
   end;
-  if not CopyTreeRec(GServerDir + '\service', Dir + '\service') then
+  if not TakeSnapshot(GServerDir + '\service', Dir + '\service', 'service',
+    GSnapshotMovedService) then
   begin
-    LogLine('ERROR', 'Снимок отката: не удалось скопировать ' + GServerDir +
+    LogLine('ERROR', 'Снимок отката: не удалось сохранить ' + GServerDir +
       '\service в ' + Dir);
+    if not UndoSnapshotMoves(Dir) then
+    begin
+      GLastRollbackDir := Dir;
+      LogLine('ERROR', 'Снимок отката: часть каталогов осталась в ' + Dir +
+        ' — каталог снимка НЕ удалён, верните файлы из него вручную');
+      Exit;
+    end;
     DelTree(Dir, True, True, True);
     Exit;
   end;
@@ -4741,14 +4943,31 @@ end;
   бы файлы новой версии (dist\cli.js, новые миграции, новые зависимости), и
   прежняя версия применила бы их к восстановленной БД. Поэтому старый каталог
   сначала переименовывается рядом (или удаляется, если переименовать нельзя),
-  и только затем на его место копируется снимок — состав файлов совпадает со
-  снимком побайтово (замечание приёмки bb063ac3). }
-function ReplaceTreeFromSnapshot(const Src, Dest, Tag: String): Boolean;
+  и только затем на его место возвращается снимок — состав файлов совпадает со
+  снимком побайтово (замечание приёмки bb063ac3).
+
+  Снимок, сделанный переносом, возвращается тоже переносом (a34f48da): байты
+  не копируются, откат мгновенный. Копия — запасной путь для снимка, который
+  оказался на другом томе.
+
+  Expected = True — каталог БЫЛ на месте к моменту снимка (GSnapshotHasServer/
+  GSnapshotHasService), поэтому его отсутствие в снимке — потеря снимка:
+  функция не трогает текущие файлы и возвращает False, иначе откат
+  «отчитался бы успехом», ничего не вернув. Expected = False — каталога не
+  было, и после отката его быть не должно: текущий каталог удаляется. }
+function ReplaceTreeFromSnapshot(const Src, Dest, Tag: String;
+  Expected: Boolean): Boolean;
 var
   OldDir: String;
-  Swapped: Boolean;
+  Swapped, Moved: Boolean;
 begin
   Result := False;
+  if Expected and (not DirExists(Src)) then
+  begin
+    LogLine('ERROR', 'Откат файлов: в снимке нет ' + Src +
+      ' — откат невозможен, текущие файлы оставлены на месте');
+    Exit;
+  end;
   OldDir := Dest + '.rollback-' + Tag;
   Swapped := False;
   if DirExists(Dest) then
@@ -4777,13 +4996,19 @@ begin
   end;
   if DirExists(Src) then
   begin
-    if not CopyTreeRec(Src, Dest) then
+    Moved := MoveFileExW(Src, Dest, 0);
+    if Moved then
+      LogLine('INFO', 'Откат файлов: ' + Dest + ' возвращён переносом снимка')
+    else if not CopyTreeRec(Src, Dest) then
     begin
       LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + Dest + ' из снимка' +
         IfStr(Swapped, '; прежний каталог сохранён как ' + OldDir, ''));
       Exit;
     end;
-  end;
+  end
+  else
+    LogLine('INFO', 'Откат файлов: каталога ' + Src +
+      ' в снимке нет — так и было до обновления');
   if Swapped and DirExists(OldDir) then
   begin
     if not DelTree(OldDir, True, True, True) then
@@ -4806,13 +5031,13 @@ begin
     Exit;
   end;
   if not ReplaceTreeFromSnapshot(GLastRollbackDir + '\server',
-    GServerDir + '\server', 'server') then
+    GServerDir + '\server', 'server', GSnapshotHasServer) then
   begin
     LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\server');
     Exit;
   end;
   if not ReplaceTreeFromSnapshot(GLastRollbackDir + '\service',
-    GServerDir + '\service', 'service') then
+    GServerDir + '\service', 'service', GSnapshotHasService) then
   begin
     LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\service');
     Exit;
@@ -6798,6 +7023,10 @@ begin
   GLastBackupDir := '';
   GDatabaseToolPath := '';
   GLastRollbackDir := '';
+  GSnapshotMovedServer := False;
+  GSnapshotMovedService := False;
+  GSnapshotHasServer := False;
+  GSnapshotHasService := False;
   GHealthReason := '';
   GAdminLogin := '';
   GAdminDisplayName := '';
@@ -7587,8 +7816,8 @@ end;
   лишь при /LOG. *)
 function InitializeUninstall: Boolean;
 var
-  JsonPath, Text, Dir, Candidate: String;
-  JsonPresent: Boolean;
+  JsonPath, Text: String;
+  JsonPresent, LogReady: Boolean;
 begin
   Result := True;
   GDataDir := ExpandConstant('{#DataDir}');
@@ -7603,20 +7832,16 @@ begin
       GServerMode := JsonGetRaw(Text, 'mode');
   end;
   { Журнал — в каталоге данных только у серверной установки (install.json);
-    удаление клиента без сервера не должно создавать %ProgramData%\ETN. }
-  Dir := GDataDir + '\logs';
-  Candidate := Dir + '\uninstall-' +
-    GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
-  if JsonPresent and ForceDirectories(Dir) then
-    AppendUtf8Line(Candidate, 'ETN uninstall log');
-  if not FileExists(Candidate) then
-  begin
-    Dir := ExpandConstant('{tmp}');
-    Candidate := Dir + '\etn-uninstall-' +
-      GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
-    AppendUtf8Line(Candidate, 'ETN uninstall log');
-  end;
-  if FileExists(Candidate) then GLogPath := Candidate;
+    удаление клиента без сервера не должно создавать %ProgramData%\ETN.
+    Имя и проверка записи — общий TryInitLog: журнал удаления того же класса,
+    что и установочный, и терялся бы так же при совпадении секунды у двух
+    запусков (f7887a35). }
+  if JsonPresent then
+    LogReady := TryInitLog(GDataDir + '\logs', 'uninstall', 'ETN uninstall log')
+  else
+    LogReady := False;
+  if not LogReady then
+    TryInitLog(ExpandConstant('{tmp}'), 'etn-uninstall', 'ETN uninstall log');
   LogLine('INFO', 'Удаление ETN: каталог данных ' + GDataDir + ', режим ' +
     IfStr(GServerMode = '', '—', GServerMode));
 end;

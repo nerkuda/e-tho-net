@@ -1,0 +1,145 @@
+{
+  "name": "html-widget-shift-no-rebuild (4df5e284)",
+  "description": "Ошибка 4df5e284: HTML-виджет live-preview (mermaid/таблица/картинка) пересоздавался при сдвиге позиций, и mermaid рендерился заново на каждый введённый символ. Сценарий: вход в правку постоянного комментария (api POST засевает тело с fence ```mermaid), каретка в начало документа, два символа печати ВЫШЕ блока. Проверки: (1) до печати mermaid отрисован (svg — невакуумный гейт); (2) после двух символов тот же DOM-узел и тот же svg, ноль childList-мутаций в виджете, data-md-from вырос ровно на 2; (3) клик по виджету после сдвига ставит каретку в НОВЫЙ диапазон (from+1 … to-1). На дофиксовой сборке шаг mermaid-after падает: CM6 пересоздаёт виджет, svg пропадает до асинхронного рендера. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.4df5e284-html-widget-shift.scenario.json --out .tmp/4df5e284.",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "Вступление\n\n```mermaid\ngraph TD\n  A-->B\n```"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "open-comment-owner",
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "enter-edit",
+      "click": "[data-action=\"edit\"]"
+    },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "caret-to-doc-start",
+      "key": "Home",
+      "modifiers": ["ctrl"]
+    },
+    {
+      "name": "mermaid-rendered",
+      "waitFor": "document.querySelector('.md-field--editing .md-widget pre.mermaid svg') !== null",
+      "timeout": 30000
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { const widget = () => document.querySelector('.md-field--editing .md-widget'); window.__mmd = null; window.__mmdObserver = null; window.__armMermaid = () => { const box = widget(); const svg = box === null ? null : box.querySelector('svg'); if (window.__mmdObserver !== null) window.__mmdObserver.disconnect(); window.__mmd = { box, svg, from: box === null ? null : Number(box.dataset.mdFrom), to: box === null ? null : Number(box.dataset.mdTo), mutations: 0 }; if (box !== null) { window.__mmdObserver = new MutationObserver((list) => { window.__mmd.mutations += list.length; }); window.__mmdObserver.observe(box, { childList: true, subtree: true }); } return { hasSvg: svg !== null, from: window.__mmd.from, to: window.__mmd.to }; }; window.__mermaidState = () => { const box = widget(); if (box === null || window.__mmd === null) return { sameBox: false, sameSvg: false, hasSvg: false, delta: null, mutations: null }; const svg = box.querySelector('svg'); return { sameBox: box === window.__mmd.box, sameSvg: svg !== null && svg === window.__mmd.svg, hasSvg: svg !== null, delta: Number(box.dataset.mdFrom) - window.__mmd.from, mutations: window.__mmd.mutations }; }; window.__cmSel = () => { const editor = document.querySelector('.md-field--editing .cm-content'); const selection = window.getSelection(); if (editor === null || selection === null || selection.rangeCount === 0) return null; const offsetOf = (node, offset) => { if (node === null || node.nodeType !== Node.TEXT_NODE) return null; const line = node.parentElement === null ? null : node.parentElement.closest('.cm-line'); if (line === null || !editor.contains(line)) return null; const lines = [...editor.querySelectorAll('.cm-line')]; const index = lines.indexOf(line); if (index < 0) return null; let before = 0; for (let i = 0; i < index; i += 1) before += (lines[i].textContent ?? '').length + 1; const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT); let within = 0; let textNode = walker.nextNode(); while (textNode !== null) { if (textNode === node) return before + within + offset; within += (textNode.textContent ?? '').length; textNode = walker.nextNode(); } return null; }; return { anchor: offsetOf(selection.anchorNode, selection.anchorOffset), head: offsetOf(selection.focusNode, selection.focusOffset) }; }; window.__caretShifted = () => { const sel = window.__cmSel(); const from = window.__mmd === null ? null : window.__mmd.from + 2; const to = window.__mmd === null ? null : window.__mmd.to + 2; const anchor = sel === null ? null : sel.anchor; return { inBlock: from !== null && anchor !== null && anchor > from && anchor <= to - 1, caret: anchor, from, to }; }; return true; })()"
+    },
+    {
+      "name": "arm-observer",
+      "expect": true,
+      "probe": {
+        "name": "armed",
+        "expression": "(() => { const armed = window.__armMermaid(); return armed.hasSvg === true && Number.isFinite(armed.from) && Number.isFinite(armed.to); })()"
+      }
+    },
+    {
+      "name": "before-from",
+      "probe": {
+        "name": "beforeFrom",
+        "expression": "window.__mmd === null ? null : { from: window.__mmd.from, to: window.__mmd.to }"
+      }
+    },
+    {
+      "name": "type-a-above",
+      "key": "A"
+    },
+    {
+      "name": "type-b-above",
+      "key": "B"
+    },
+    {
+      "name": "same-widget-after-typing",
+      "expect": {
+        "sameBox": true,
+        "sameSvg": true,
+        "hasSvg": true,
+        "delta": 2,
+        "mutations": 0
+      },
+      "probe": {
+        "name": "mermaidAfter",
+        "expression": "window.__mermaidState()"
+      }
+    },
+    {
+      "name": "click-widget-after-shift",
+      "click": ".md-field--editing .md-widget"
+    },
+    {
+      "name": "caret-state",
+      "probe": {
+        "name": "caretShifted",
+        "expression": "window.__caretShifted()"
+      }
+    },
+    {
+      "name": "caret-in-new-range",
+      "expect": true,
+      "probe": {
+        "name": "caretInBlock",
+        "expression": "window.__caretShifted().inBlock === true"
+      }
+    }
+  ]
+}

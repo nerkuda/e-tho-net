@@ -19,6 +19,7 @@ import {
   getLock,
   getLockByKey,
   holderNameByUserId,
+  initLockCache,
   listLocks,
   lockKey,
   otherHolder,
@@ -26,6 +27,7 @@ import {
   refresh,
   subscribeLockCache,
 } from '../src/renderer/lib/lock-cache.js';
+import { resetEventRouter, routeRealtimeEvent } from '../src/renderer/lib/live/event-router.js';
 
 function row(overrides: Partial<LockRow> = {}): LockRow {
   return {
@@ -36,6 +38,50 @@ function row(overrides: Partial<LockRow> = {}): LockRow {
     client_id: overrides.client_id ?? null,
     acquired_at_ms: overrides.acquired_at_ms ?? Date.now(),
   };
+}
+
+/** Кладёт дублёр моста; `list` — ответ `GET /locks`. */
+function installList(rows: LockRow[] | (() => Promise<LockRow[]>)): { calls: () => number } {
+  let calls = 0;
+  const list = typeof rows === 'function' ? rows : async (): Promise<LockRow[]> => rows;
+  const bridge = {
+    locks: {
+      list: async (...args: unknown[]): Promise<LockRow[]> => {
+        calls += 1;
+        void args;
+        return list();
+      },
+    },
+  };
+  (globalThis as unknown as { etn: unknown }).etn = bridge;
+  const win = (globalThis as unknown as { window?: { etn: unknown } }).window;
+  if (win !== undefined) win.etn = bridge;
+  return { calls: () => calls };
+}
+
+/** Дать отработать цепочке `refresh()` из сверки с сервером. */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+interface LockEventData {
+  entity_type: string;
+  entity_id: string;
+  lock_id: string;
+  user_id: string;
+  client_id: string | null;
+  acquired_at_ms?: number;
+  reason?: 'server_start' | 'ws_disconnect' | 'manual';
+}
+
+/** Пропускает событие через production-роутер (тот же путь, что из WS). */
+async function feed(
+  event: 'edit.released' | 'edit.cleared',
+  seq: number,
+  data: LockEventData,
+): Promise<void> {
+  routeRealtimeEvent({ network_id: 'net-1', seq, type: event, data } as never);
+  await flush();
 }
 
 describe('lock-cache: key helpers', () => {
@@ -133,18 +179,6 @@ describe('lock-cache: otherHolder / holderNameByUserId', () => {
 });
 
 describe('lock-cache: refresh — серверная правда после переподключения (0702efb6)', () => {
-  /** Кладёт дублёр моста; fake.list — ответ `GET /locks`. */
-  function installList(rows: LockRow[] | (() => Promise<LockRow[]>)): void {
-    const list =
-      typeof rows === 'function'
-        ? rows
-        : async (): Promise<LockRow[]> => rows;
-    const bridge = { locks: { list } };
-    (globalThis as unknown as { etn: unknown }).etn = bridge;
-    const win = (globalThis as unknown as { window?: { etn: unknown } }).window;
-    if (win !== undefined) win.etn = bridge;
-  }
-
   it('успешный refresh заменяет кэш серверным снимком и возвращает true', async () => {
     const { store } = await import('../src/renderer/state.js');
     __resetForTests();
@@ -185,6 +219,170 @@ describe('lock-cache: refresh — серверная правда после п�
 
     assert.equal(await refresh(), false);
     assert.equal(calls, 0);
+  });
+});
+
+describe('lock-cache: события с чужим lock_id — сверка с сервером (27f0780a)', () => {
+  it('совпавший lock_id снимает строку без сетевого вызова', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    const list = installList([]);
+    __setForTests([row({ id: 'lock-1', entity_id: 'th-1', user_id: 'me' })]);
+    initLockCache();
+
+    await feed('edit.released', 1, {
+      entity_type: 'thought',
+      entity_id: 'th-1',
+      lock_id: 'lock-1',
+      user_id: 'me',
+      client_id: null,
+    });
+
+    assert.equal(getLock('thought', 'th-1'), undefined);
+    assert.equal(list.calls(), 0, 'сверка не нужна: id совпал');
+  });
+
+  it('несовпавший lock_id вытесняет фантомную строку сверкой с сервером', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    const list = installList([]); // сервер уже пуст — строка кэша фантомная
+    __setForTests([row({ id: 'lock-dead', entity_id: 'th-1', user_id: 'me' })]);
+    initLockCache();
+
+    await feed('edit.released', 1, {
+      entity_type: 'thought',
+      entity_id: 'th-1',
+      lock_id: 'lock-other',
+      user_id: 'someone',
+      client_id: null,
+    });
+
+    assert.equal(getLock('thought', 'th-1'), undefined, 'фантом вытеснен серверной правдой');
+    assert.equal(list.calls(), 1, 'расхождение лечится одной сверкой');
+  });
+
+  it('несовпавший lock_id не скрывает живой захват, если сервер его отдаёт', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    installList([row({ id: 'lock-live', entity_id: 'th-1', user_id: 'other' })]);
+    __setForTests([row({ id: 'lock-dead', entity_id: 'th-1', user_id: 'me' })]);
+    initLockCache();
+
+    await feed('edit.cleared', 1, {
+      entity_type: 'thought',
+      entity_id: 'th-1',
+      lock_id: 'lock-other',
+      user_id: 'me',
+      client_id: null,
+      reason: 'manual',
+    });
+
+    assert.equal(getLock('thought', 'th-1')?.id, 'lock-live', 'живой захват не теряется');
+  });
+
+  it('серия событий между сверками — один GET /locks на всю серию', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    const list = installList([]); // сервер пуст: первая же сверка вытесняет фантом
+    __setForTests([row({ id: 'lock-dead', entity_id: 'th-1', user_id: 'me' })]);
+    initLockCache();
+
+    // Каждое событие приходит, когда предыдущая сверка уже завершилась
+    // (reconcile не в полёте) — после первой строки сущности в кэше нет.
+    for (let i = 1; i <= 4; i += 1) {
+      await feed(i % 2 === 1 ? 'edit.released' : 'edit.cleared', i, {
+        entity_type: 'thought',
+        entity_id: 'th-1',
+        lock_id: `lock-ghost-${i}`,
+        user_id: 'someone',
+        client_id: null,
+        reason: 'manual',
+      });
+    }
+
+    assert.equal(getLock('thought', 'th-1'), undefined, 'фантом вытеснен и не вернулся');
+    assert.equal(list.calls(), 1, 'серия после сверки не порождает повторных GET');
+  });
+
+  it('серия событий во время сверки — ровно одна догоняющая сверка (reconcileAgain)', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    let releaseFirst: ((rows: LockRow[]) => void) | null = null;
+    let call = 0;
+    const list = installList(() => {
+      call += 1;
+      if (call === 1) {
+        return new Promise<LockRow[]>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return Promise.resolve([]);
+    });
+    __setForTests([row({ id: 'lock-dead', entity_id: 'th-1', user_id: 'me' })]);
+    initLockCache();
+
+    // Первое событие стартует сверку и «висит» на ответе сервера.
+    await feed('edit.released', 1, {
+      entity_type: 'thought',
+      entity_id: 'th-1',
+      lock_id: 'lock-ghost-1',
+      user_id: 'someone',
+      client_id: null,
+    });
+    assert.equal(list.calls(), 1);
+    assert.notEqual(getLock('thought', 'th-1'), undefined, 'кэш ещё не заменён снимком');
+
+    // Остальные события серии приходят в полёте: новых GET не начинают.
+    for (let i = 2; i <= 5; i += 1) {
+      await feed(i % 2 === 0 ? 'edit.cleared' : 'edit.released', i, {
+        entity_type: 'thought',
+        entity_id: 'th-1',
+        lock_id: `lock-ghost-${i}`,
+        user_id: 'someone',
+        client_id: null,
+        reason: 'manual',
+      });
+    }
+    assert.equal(list.calls(), 1, 'во время сверки второй GET не стартует');
+
+    assert.notEqual(releaseFirst, null);
+    releaseFirst!([]);
+    await flush();
+
+    assert.equal(list.calls(), 2, 'после завершения — одна догоняющая сверка на всю серию');
+    assert.equal(getLock('thought', 'th-1'), undefined, 'догоняющая сверка вытеснила фантом');
+  });
+
+  it('синтетическая pending-строка (LOCKED) не переживает edit.cleared', async () => {
+    const { store } = await import('../src/renderer/state.js');
+    __resetForTests();
+    resetEventRouter();
+    store.update({ networkId: 'net-1' });
+    const list = installList([]);
+    __setForTests([row({ id: 'pending-thought:th-1', entity_id: 'th-1', user_id: 'other' })]);
+    initLockCache();
+
+    await feed('edit.cleared', 1, {
+      entity_type: 'thought',
+      entity_id: 'th-1',
+      lock_id: 'lock-real',
+      user_id: 'other',
+      client_id: null,
+      reason: 'manual',
+    });
+
+    assert.equal(getLock('thought', 'th-1'), undefined, 'pending-строка не остаётся навсегда');
+    assert.equal(list.calls(), 1);
   });
 });
 

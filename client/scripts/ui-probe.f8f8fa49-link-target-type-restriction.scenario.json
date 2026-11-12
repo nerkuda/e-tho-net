@@ -2,6 +2,7 @@
   "name": "f8f8fa49-link-target-type-restriction",
   "description": "Ключевой GUI-сценарий ошибки f8f8fa49: пикер целей свойства-связи ограничен типами ПРОТИВОПОЛОЖНОГО КОНЦА привязок (не config.allowed_*). Пример заказчика: свойство «Место работы» с привязкой source к типу «Персона» и target к типу «Организация». В массовом диалоге, типовых и внетиповых строках карточки прямое имя предлагает организации, обратное имя «Сотрудники» — персоны; «Кандидат без типа» не предлагается при любом ограничении. Самодостаточно: онтология и мысли заводятся probe-шагом через window.etn до открытия сети. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.f8f8fa49-link-target-type-restriction.scenario.json --out .tmp/etn-f8f8fa49/out",
   "timeout": 60000,
+  "texts": { "changePropertyValue": { "ru": "Изменить значение свойства…", "en": "Change property value…" }, "close": { "ru": "Закрыть", "en": "Close" } },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -62,7 +63,7 @@
     },
     {
       "name": "open-selection-properties",
-      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { /* Меню панели выделения — фиксированный набор selection.ts (выделение, действия, свойства): «Свойства» — третий пункт, подписи локализованы. */ const btn=document.querySelectorAll('.selection-menu-btn')[2]; if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -72,7 +73,7 @@
     },
     {
       "name": "open-property-values-dialog",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('{{text:changePropertyValue}}')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -192,7 +193,7 @@
     },
     {
       "name": "bulk-close-dialog",
-      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='{{text:close}}'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -216,7 +217,7 @@
     },
     {
       "name": "typed-source-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "typed-source-link-row",
@@ -266,7 +267,7 @@
     },
     {
       "name": "typed-target-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "typed-target-link-row",
@@ -316,7 +317,7 @@
     },
     {
       "name": "outside-source-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "outside-source-link-row",
@@ -371,7 +372,7 @@
     },
     {
       "name": "outside-target-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "outside-target-link-row",
@@ -440,7 +441,7 @@
     },
     {
       "name": "bulk-add-open-menu",
-      "probe": "(() => { const btn=[...document.querySelectorAll('.selection-menu-btn')].find((b)=>b.textContent.trim()==='Свойства'); if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { /* Меню панели выделения — фиксированный набор selection.ts (выделение, действия, свойства): «Свойства» — третий пункт, подписи локализованы. */ const btn=document.querySelectorAll('.selection-menu-btn')[2]; if(!btn) return 'no-menu-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -450,7 +451,7 @@
     },
     {
       "name": "bulk-add-open-dialog",
-      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('Изменить значение свойства')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
+      "probe": "(() => { const item=[...document.querySelectorAll('.menu .menu-item')].find((m)=>m.textContent.includes('{{text:changePropertyValue}}')); if(!item) return 'no-item'; item.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -546,7 +547,7 @@
     },
     {
       "name": "bulk-add-close",
-      "eval": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='Закрыть'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()"
+      "eval": "(() => { const d=[...document.querySelectorAll('.dialog-backdrop')].at(-1); if(!d) return 'no-dialog'; const btn=[...d.querySelectorAll('.dialog-footer .ui-btn')].find((b)=>b.textContent.trim()==='{{text:close}}'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()"
     },
     {
       "name": "bulk-add-closed",
@@ -564,7 +565,7 @@
     },
     {
       "name": "draft-properties-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "eval": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "draft-outside-visible",

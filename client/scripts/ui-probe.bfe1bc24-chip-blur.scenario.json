@@ -20,7 +20,7 @@
 
     { "name": "open-p1", "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P1+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
     { "name": "p1-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'", "timeout": 20000 },
-    { "name": "open-properties-tab", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "open-properties-tab", "probe": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
     { "name": "chip-field-visible", "waitFor": "document.querySelector('.properties-type-body .value-chips-input') !== null", "timeout": 20000 },
 
     { "name": "phase1-focus", "click": ".properties-type-body .value-chips-input" },
@@ -29,7 +29,7 @@
     { "name": "phase1-leave-field", "click": ".editor-title-input" },
     { "name": "phase1-server", "probe": "(async () => { await new Promise((r)=>setTimeout(r,500)); const b=window.__repro; const vs=await window.etn.properties.get('{{networkId}}','thought',b.P1); const v=vs.find((x)=>x.property_name==='Теги'); return v ? v.value : null; })()", "expect": "срочно" },
 
-    { "name": "phase2-open-properties", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "phase2-open-properties", "probe": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
     { "name": "phase2-chip-visible", "waitFor": "document.querySelector('.properties-type-body .value-chips-input') !== null", "timeout": 20000 },
     { "name": "phase2-focus", "click": ".properties-type-body .value-chips-input" },
     { "name": "phase2-type", "text": "смена" },
@@ -40,7 +40,7 @@
 
     { "name": "phase3-open-p1", "probe": "(() => { const b=window.__repro; const c=document.querySelector('.cloud[data-id=\"'+b.P1+'\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
     { "name": "p1-again", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Персона 1'", "timeout": 20000 },
-    { "name": "phase3-open-properties", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "phase3-open-properties", "probe": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
     { "name": "phase3-chip-visible", "waitFor": "document.querySelector('.properties-type-body .value-chips-input') !== null", "timeout": 20000 },
     { "name": "phase3-stable", "waitFor": "(() => { const body=document.querySelector('.properties-type-body'); if(!body) return false; const titles=[...body.querySelectorAll('.prc-title')].map((n)=>n.textContent); return titles.includes('срочно') && titles.includes('смена'); })()", "timeout": 20000 },
     { "name": "phase3-focus", "click": ".properties-type-body .value-chips-input" },

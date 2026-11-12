@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -1737,5 +1737,245 @@ describe(
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
+    // ------------------------------------------------------------------
+    // 053: парное свойство-связь каждому «голому» типу связи (0.15.4,
+    // ошибка 117a999a). Исторические данные: MCP `etn.ontology.write`
+    // создавал тип без пары, и GUI не давал править такой тип.
+    // ------------------------------------------------------------------
+
+    /** Apply migrations up to (excluding) 053 and return the prepared db. */
+    function pre053Db(): Database.Database {
+      const dir = mkdtempSync(path.join(tmpdir(), 'etn-mig-'));
+      for (const f of readdirSync(networkMigrationsDir()).filter(
+        (f) => f.endsWith('.sql') && f < '053',
+      )) {
+        cpSync(path.join(networkMigrationsDir(), f), path.join(dir, f));
+      }
+      const db = new Database(':memory:');
+      db.pragma('foreign_keys = ON');
+      registerMigrationHelpers(db);
+      runMigrations(db, dir);
+      rmSync(dir, { recursive: true, force: true });
+      return db;
+    }
+
+    const ROOT_LINK_TYPE = '00000000-0000-4000-8000-000000000002';
+
+    it('053 создаёт пару голым типам связи в базовом и рабочем слое, обходя надгробия', () => {
+      const db = pre053Db();
+      try {
+        const now = '2026-11-09T00:00:00Z';
+        const insLinkType = db.prepare(
+          `INSERT INTO link_types
+             (id, layer_id, name_forward, name_forward_key, name_reverse, name_reverse_key,
+              parent_id, is_root, style, width, style_set, width_set, version,
+              created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, type_name_key(?), ?, type_name_key(?),
+                   ?, ?, 'solid', 1, 1, 1, 1, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        // Уникальность в `link_types` — по ПАРЕ имён, поэтому одинаковый
+        // forward при разных reverse допустим (это и есть коллизия имён пары).
+        const addLinkType = (
+          id: string,
+          layer: string,
+          forward: string,
+          isRoot = 0,
+          reverse = `${forward}-обр`,
+        ): void => {
+          insLinkType.run(
+            id,
+            layer,
+            forward,
+            forward,
+            reverse,
+            reverse,
+            isRoot === 1 ? null : ROOT_LINK_TYPE,
+            isRoot,
+            now,
+            now,
+          );
+        };
+
+        // Рабочий слой (живой, не базовый).
+        db.prepare(
+          `INSERT INTO layers (id, parent_id, title, is_base, depth, created_by, created_at, last_activity_at)
+           VALUES ('lay-053', ?, 'слой-053', 0, 1, 'u1', ?, ?)`,
+        ).run(BASE, now, now);
+
+        addLinkType('lt-bare', BASE, 'голый-базовый');
+        addLinkType('lt-layer', 'lay-053', 'голый-слойный');
+        addLinkType('lt-root', BASE, 'корень-053', 1);
+        // Тип, у которого пара уже есть, — не трогаем.
+        addLinkType('lt-has-prop', BASE, 'уже-свойство');
+        // Имя занято надгробием (deleted = 1) в базовом слое — числовой суффикс.
+        addLinkType('lt-tomb', BASE, 'занято-труп');
+        // Два голых типа с одинаковым forward-именем в одном слое.
+        addLinkType('lt-dup1', BASE, 'дубль-имя');
+        addLinkType('lt-dup2', BASE, 'дубль-имя', 0, 'дубль-имя-обр-2');
+
+        const insProperty = db.prepare(
+          `INSERT INTO properties
+             (id, layer_id, deleted, base_version, name, name_key, value_type, config,
+              description, created_at, updated_at, created_by, updated_by,
+              created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, 0, ?, type_name_key(?), ?, ?, NULL, ?, ?, 'u1', 'u1', 0, 0)`,
+        );
+        insProperty.run(
+          'p-has-prop',
+          BASE,
+          0,
+          'уже-свойство',
+          'уже-свойство',
+          'link',
+          JSON.stringify({ link_type_id: 'lt-has-prop' }),
+          now,
+          now,
+        );
+        insProperty.run(
+          'p-tomb',
+          BASE,
+          1,
+          'занято-труп',
+          'занято-труп',
+          'text',
+          null,
+          now,
+          now,
+        );
+
+        const bindingsBefore = (
+          db.prepare('SELECT COUNT(*) AS c FROM type_properties').get() as { c: number }
+        ).c;
+        runMigrations(db, networkMigrationsDir());
+
+        interface PropRow {
+          id: string;
+          layer_id: string;
+          name: string;
+          description: string | null;
+          config: string;
+          show_on_map: string;
+          blocks_target_deletion: string;
+        }
+        const pairs = db
+          .prepare(
+            `SELECT id, layer_id, name, description, config,
+                    json_type(config, '$.show_on_map') AS show_on_map,
+                    json_type(config, '$.blocks_target_deletion') AS blocks_target_deletion
+               FROM properties
+              WHERE value_type = 'link'
+                AND (json_extract(config, '$.structural') IS NULL
+                     OR json_extract(config, '$.structural') = 0)
+              ORDER BY name`,
+          )
+          .all() as PropRow[];
+        const byLinkType = new Map(
+          pairs.map((p) => [(JSON.parse(p.config) as { link_type_id: string }).link_type_id, p]),
+        );
+
+        // Голый тип в основе: имя = name_forward, флаги — настоящие JSON-булевы.
+        const bare = byLinkType.get('lt-bare')!;
+        assert.equal(bare.name, 'голый-базовый');
+        assert.equal(bare.layer_id, BASE, 'свойство живёт в слое типа');
+        assert.equal(bare.show_on_map, 'true', 'show_on_map — JSON true, не 1');
+        assert.equal(bare.blocks_target_deletion, 'true', 'blocks_target_deletion — JSON true');
+        assert.match(bare.description ?? '', /^создано миграцией 053/, 'маркер миграции');
+
+        // Голый тип в рабочем слое — свойство в том же слое.
+        const layer = byLinkType.get('lt-layer')!;
+        assert.equal(layer.layer_id, 'lay-053');
+        assert.equal(layer.name, 'голый-слойный');
+
+        // Рутовый тип пары не получает.
+        assert.equal(byLinkType.has('lt-root'), false, 'рутовый тип — без пары');
+
+        // Тип с парой не раздвоен.
+        assert.equal(
+          pairs.filter((p) => p.id === 'p-has-prop').length,
+          1,
+          'существующая пара не дублируется',
+        );
+
+        // Надгробие имени: числовой суффикс.
+        assert.equal(byLinkType.get('lt-tomb')!.name, 'занято-труп 2', 'суффикс при надгробии');
+
+        // Два одинаковых forward-имени в слое — второе получает суффикс.
+        const dupNames = ['lt-dup1', 'lt-dup2'].map((id) => byLinkType.get(id)!.name).sort();
+        assert.deepEqual(dupNames, ['дубль-имя', 'дубль-имя 2']);
+
+        // Привязок к типам мысли миграция не создаёт (требование e93001ac).
+        const bindings = (
+          db.prepare('SELECT COUNT(*) AS c FROM type_properties').get() as { c: number }
+        ).c;
+        assert.equal(bindings, bindingsBefore, 'type_properties не пополняются');
+
+        // Диагностический отчёт: строка на каждую созданную пару.
+        const report = db
+          .prepare('SELECT link_type_id, details FROM _mig053_report')
+          .all() as Array<{ link_type_id: string; details: string }>;
+        assert.deepEqual(
+          report.map((r) => r.link_type_id).sort(),
+          ['lt-bare', 'lt-dup1', 'lt-dup2', 'lt-layer', 'lt-tomb'],
+        );
+        const tombDetails = JSON.parse(
+          report.find((r) => r.link_type_id === 'lt-tomb')!.details,
+        ) as { final_name: string; name_suffixed: number };
+        assert.equal(tombDetails.final_name, 'занято-труп 2');
+        assert.equal(tombDetails.name_suffixed, 1);
+
+        // Идемпотентность SQL: повторный прогон ничего не создаёт.
+        const sql = readFileSync(
+          path.join(networkMigrationsDir(), '053_bare_link_type_properties.sql'),
+          'utf8',
+        );
+        const before = pairs.length;
+        db.exec(sql);
+        const after = (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM properties
+                WHERE value_type = 'link'
+                  AND (json_extract(config, '$.structural') IS NULL
+                       OR json_extract(config, '$.structural') = 0)`,
+            )
+            .get() as { c: number }
+        ).c;
+        assert.equal(after, before, 'повторный прогон — no-op');
+        assert.equal(
+          (db.prepare('SELECT COUNT(*) AS c FROM _mig053_report').get() as { c: number }).c,
+          0,
+          'отчёт повторного прогона пуст',
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    it('053 — no-op без голых типов связи', () => {
+      const db = pre053Db();
+      try {
+        runMigrations(db, networkMigrationsDir());
+        const affected = (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM properties
+                WHERE json_extract(config, '$.link_type_id') IS NOT NULL
+                  AND (json_extract(config, '$.structural') IS NULL
+                       OR json_extract(config, '$.structural') = 0)`,
+            )
+            .get() as { c: number }
+        ).c;
+        assert.equal(affected, 0, 'голых типов нет — миграция ничего не создаёт');
+        assert.equal(
+          (db.prepare('SELECT COUNT(*) AS c FROM _mig053_report').get() as { c: number }).c,
+          0,
+        );
+      } finally {
+        db.close();
+      }
+    });
+
   },
 );

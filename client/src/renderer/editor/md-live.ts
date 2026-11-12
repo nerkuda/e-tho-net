@@ -83,6 +83,16 @@ export function isNearInline(
   });
 }
 
+/**
+ * Что уже отрисовано в DOM каждого HTML-виджета — мемо per-DOM (`WeakMap`, как
+ * `renderedContent` в `transclusion.ts`): у нескольких живых полей свои DOM, и
+ * «последний отрисованный HTML» в модульной переменной сломал бы соседей.
+ * Сдвиг блока правкой текста ВЫШЕ меняет `from/to`, а содержимое оставляет
+ * прежним — без мемо CM6 пересоздавал бы виджет и заново рендерил mermaid на
+ * каждый введённый символ (ошибка `4df5e284`).
+ */
+const renderedHtml = new WeakMap<HTMLElement, string>();
+
 /** Базовый виджет: HTML-блок из единого рендерера; клик раскрывает исходник. */
 class HtmlWidget extends WidgetType {
   constructor(
@@ -105,10 +115,33 @@ class HtmlWidget extends WidgetType {
     // HTML из @etn/markdown экранируется по построению (тот же контракт,
     // что и у серверного body_html).
     box.innerHTML = this.html;
+    renderedHtml.set(box, this.html);
     // Mermaid-блоки рендерятся асинхронно после монтирования виджета (M7).
     // Без requestAnimationFrame: в фоновом окне Electron он не тикает.
     renderMermaidBlocks(box);
     return box;
+  }
+
+  /**
+   * Обновляет существующий DOM блока вместо его пересоздания (WidgetType API):
+   * сдвиг правкой текста выше меняет лишь абсолютные `from/to`, содержимое —
+   * нет. `eq` при этом остаётся строгим по смещениям (он и есть триггер этого
+   * метода), а `data-md-from/to` пишутся всегда: `mdWidgetMouseDown` читает
+   * смещения из DOM, и протухшие атрибуты увели бы каретку в старый диапазон.
+   * Пересборка содержимого — только при смене `html` (см. {@link renderedHtml});
+   * `renderMermaidBlocks` вызывается лишь на этом пути, чтобы диаграмма не
+   * гасла и не перерисовывалась на каждый символ (ошибка `4df5e284`).
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    if (renderedHtml.get(dom) === this.html) return true;
+    renderedHtml.set(dom, this.html);
+    // `pre.mermaid` не переиспользуем: pending `mermaid.render` пишет в
+    // отсоединённый узел, и в свежий DOM пришла бы устаревшая диаграмма.
+    dom.innerHTML = this.html;
+    renderMermaidBlocks(dom);
+    return true;
   }
 
   override ignoreEvent(): boolean {

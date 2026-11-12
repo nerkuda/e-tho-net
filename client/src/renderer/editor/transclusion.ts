@@ -159,7 +159,11 @@ import { openPopover, watchOutsideTap } from '../lib/ui/popover.js';
 import { matchesKeywords, parseKeywords } from '../lib/filter-builder.js';
 
 import { buildTransclusionMenuItems, TRANSCLUSION_NAV_MENU_LAYOUT } from './comment-commands.js';
-import { collapseScopeFacet, decorateCommentView } from './comment-collapse.js';
+import {
+  collapseScopeFacet,
+  decorateCommentView,
+  type CollapseScopeFactory,
+} from './comment-collapse.js';
 import {
   MAX_NESTED_DEPTH,
   NestedEditorStore,
@@ -1210,6 +1214,43 @@ export function wireViewTransclusionLocks(): void {
   });
 }
 
+/**
+ * Входные данные области содержимого блока — всё, от чего зависит её DOM.
+ * Абсолютных смещений (`from`/`to`) здесь нет намеренно: сдвиг блока правкой
+ * текста выше не пересобирает содержимое (ошибка `1b5378ca`).
+ */
+interface TransclusionContentInputs {
+  readonly editorKey: string;
+  readonly sourceId: string;
+  readonly active: boolean;
+  readonly lockedBy: string | null;
+  readonly error: TransclusionEntry['error'];
+  readonly html: string;
+  readonly nestedDom: HTMLElement | null;
+  readonly collapseFactory: CollapseScopeFactory | null;
+}
+
+/** Что уже отрисовано в области содержимого конкретного DOM блока. */
+const renderedContent = new WeakMap<HTMLElement, TransclusionContentInputs>();
+
+/** Входные данные содержимого совпадают — DOM области уже актуален. */
+function sameContentInputs(
+  rendered: TransclusionContentInputs | undefined,
+  next: TransclusionContentInputs,
+): boolean {
+  return (
+    rendered !== undefined &&
+    rendered.editorKey === next.editorKey &&
+    rendered.sourceId === next.sourceId &&
+    rendered.active === next.active &&
+    rendered.lockedBy === next.lockedBy &&
+    rendered.error === next.error &&
+    rendered.html === next.html &&
+    rendered.nestedDom === next.nestedDom &&
+    rendered.collapseFactory === next.collapseFactory
+  );
+}
+
 /** Блок трансклюзии: шапка-чип «имя · раздел» и развёрнутый текст источника. */
 class TransclusionBlockWidget extends WidgetType {
   constructor(
@@ -1261,8 +1302,10 @@ class TransclusionBlockWidget extends WidgetType {
    * Обновляет существующий DOM блока вместо его пересоздания (WidgetType API):
    * косметические пересборки (класс `--covered`, «замочек», подпись чипа, смена
    * активного блока) НЕ переносят DOM вложенного редактора — иначе
-   * `remove`+`insert` сбрасывал бы фокус и каретку (ошибка `ce46723d`). Всегда
-   * возвращает `true`: DOM пригоден к обновлению на месте.
+   * `remove`+`insert` сбрасывал бы фокус и каретку (ошибка `ce46723d`). Сдвиг
+   * блока правкой текста выше (`from`/`to` изменились, содержимое — нет) правит
+   * только `data-md-from/to` и косметику, не трогая детей (ошибка `1b5378ca`).
+   * Всегда возвращает `true`: DOM пригоден к обновлению на месте.
    */
   override updateDOM(dom: HTMLElement, view: EditorView): boolean {
     this.render(dom, view);
@@ -1273,6 +1316,9 @@ class TransclusionBlockWidget extends WidgetType {
    * Идемпотентная отрисовка блока в существующий `box`. Держит на месте уже
    * подключённый DOM активного вложенного редактора (не переставляет его) —
    * фокус вложенного инстанса сохраняется при любой пересборке декораций.
+   * Содержимое области пересобирается только при смене входных данных
+   * ({@link sameContentInputs}); сдвиг `from`/`to` правит лишь атрибуты
+   * смещений (ошибка `1b5378ca`).
    */
   private render(box: HTMLElement, view: EditorView): void {
     // Без класса `md-widget`: его клик обрабатывает mdWidgetClick (md-live.ts),
@@ -1313,8 +1359,15 @@ class TransclusionBlockWidget extends WidgetType {
       head = directChildByClass(box, TRANSCLUSION_HEAD_CLASS);
       if (head === null) {
         head = createTransclusionHead(label, (event) => {
-          const ref = transclusionRefStartingAt(view.state.doc.toString(), this.from);
-          if (ref !== null) openTransclusionLinkPopover(view, ref, event.currentTarget as HTMLElement);
+          // Смещение берём из DOM блока, а не из захваченного `this.from`: шапка
+          // живёт дольше виджета, и после сдвига блока правкой выше замыкание на
+          // старое смещение открыло бы поповер по устаревшей позиции (ошибка
+          // `1b5378ca`).
+          const from = Number(box.dataset.mdFrom);
+          if (!Number.isFinite(from)) return;
+          const ref = transclusionRefStartingAt(view.state.doc.toString(), from);
+          if (ref !== null)
+            openTransclusionLinkPopover(view, ref, event.currentTarget as HTMLElement);
         });
         box.append(head);
       } else {
@@ -1330,6 +1383,24 @@ class TransclusionBlockWidget extends WidgetType {
     const store = view.state.facet(blockEditorStoreFacet);
     const nestedDom =
       this.active && this.lockedBy === null ? store?.dom(this.editorKey) ?? null : null;
+    const content: TransclusionContentInputs = {
+      editorKey: this.editorKey,
+      sourceId: this.sourceId,
+      active: this.active,
+      lockedBy: this.lockedBy,
+      error: this.entry.error,
+      html: this.entry.html ?? '',
+      nestedDom,
+      collapseFactory: view.state.facet(collapseScopeFacet),
+    };
+    // Сдвиг блока правкой текста ВЫШЕ меняет лишь абсолютные `from/to`:
+    // смещения уже обновлены в `data-md-from/to`, а дети, свёрнутость разделов
+    // и прокрутка блока остаются на месте (ошибка `1b5378ca`: прежде на каждый
+    // символ снимались и заново создавались все дети и пересчитывался layout
+    // декораций свёрнутости). Realtime источника приходит сменой `entry.html` —
+    // тогда содержимое пересобирается.
+    if (sameContentInputs(renderedContent.get(box), content)) return;
+    renderedContent.set(box, content);
     let nestedAttached = false;
     for (const child of Array.from(box.children)) {
       if (child === badge || child === head) continue;
@@ -1365,7 +1436,7 @@ class TransclusionBlockWidget extends WidgetType {
     // готовый HTML, поэтому декорируем своё содержимое как область просмотра.
     // В активном блоке текст живёт во вложенном редакторе — свёрнутость там
     // состояние самого инстанса (свой стек расширений).
-    const factory = view.state.facet(collapseScopeFacet);
+    const factory = content.collapseFactory;
     if (factory !== null) {
       const path = [this.sourceId];
       decorateCommentView(body, factory(path), factory, path);

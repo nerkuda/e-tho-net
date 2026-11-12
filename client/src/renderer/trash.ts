@@ -672,6 +672,17 @@ export async function openThoughtGroupDeleteDialog(
     );
   }
 
+  // Пока пакетная операция идёт на сервере, кнопки футера disabled (ошибка
+  // ef89c5c8): второй клик повторял удаление/очистку (404 на уже удалённом).
+  let applying = false;
+  let applyBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean): void => {
+    applying = value;
+    if (applyBtn !== null) applyBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
+
   showDialog({
     title: t('trash.deleteVybrannogo2', ids.length),
     size: 'l',
@@ -681,9 +692,14 @@ export async function openThoughtGroupDeleteDialog(
         label: t('actions.apply'),
         primary: true,
         keepOpen: true,
-        ref: (btn) => setTooltip(btn, t('trash.applyUkazannyeDeletePomeschenieTrash')),
+        ref: (btn) => {
+          applyBtn = btn;
+          setTooltip(btn, t('trash.applyUkazannyeDeletePomeschenieTrash'));
+        },
         onClick: async (close) => {
+          if (applying) return;
           const { trashIds, purgeIds } = splitChoice(ids, choice);
+          setBusy(true);
           try {
             let failures = 0;
             if (trashIds.length > 0) {
@@ -730,10 +746,17 @@ export async function openThoughtGroupDeleteDialog(
             noticePartial(failures > 0 ? t('trash.primenenoErrors', failures) : t('trash.primeneno'), failures);
           } catch (err) {
             errorDialog(t('trash.deleteVybrannogo'), err);
+          } finally {
+            setBusy(false);
           }
         },
       },
-      { label: t('actions.cancel') },
+      {
+        label: t('actions.cancel'),
+        ref: (btn) => {
+          cancelBtn = btn;
+        },
+      },
     ],
     onClose: () => table.destroy(),
   });

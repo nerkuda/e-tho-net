@@ -2,6 +2,7 @@
   "name": "snippet-wiki-links",
   "description": "Ключевой сценарий ошибки 2a8181f4: серверные сниппеты показывают ИМЯ мысли, а не сырой [[#<uuid>]]. Проверяются все три поверхности класса: строка поиска «Карта мыслей» (search/search.ts), строка поиска записей «Дневника» (lib/record-search.ts), группа «Упоминания в текстах» (editor/links-tab.ts). Данные засеиваются шагами api: мысль-ссылочник с комментарием «zzqmark52 Проба стенда [[#<seedThoughtId>]]» и дневниковая запись с тем же сырым кодом. Запускается стендом: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.snippet-wiki-links.scenario.json. Без скриншотов: доказательства — пробы innerHTML сниппетов (нет [[#, нет uuid) и контроль по БД. До фикса сниппеты содержали сырой [[#<uuid>]].",
   "timeout": 120000,
+  "texts": { "recordSearch": { "ru": "Поиск по записям", "en": "Search entries" } },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -105,7 +106,7 @@
       "name": "switch-to-links-tab",
       "eval": {
         "name": "click-links-tab",
-        "expression": "(() => { const t=[...document.querySelectorAll('.editor-tab')].find(b => b.textContent.trim().startsWith('Упоминания')); t?.click(); return !!t; })()"
+        "expression": "(() => { /* Упоминания — индекс 3 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const t=[...document.querySelectorAll('.editor-tab')][3]; t?.click(); return !!t; })()"
       }
     },
     {
@@ -116,7 +117,7 @@
       "name": "expand-text-mentions",
       "eval": {
         "name": "click-mentions-group",
-        "expression": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find(x => x.textContent.includes('Упоминания в текстах')); const h=g?.querySelector('.group-header'); h?.click(); return !!h; })()"
+        "expression": "(() => { const h=document.querySelector('[data-group-id=\"links.text-mentions\"] > .group-header'); h?.click(); return !!h; })()"
       }
     },
     {
@@ -148,16 +149,16 @@
       "expect": true
     },
 
-    { "name": "open-diary", "click": ".view-tab[title=\"Дневник\"]" },
+    { "name": "open-diary", "click": ".view-switch .view-tab:nth-child(3)" },
     {
       "name": "wait-diary-search",
-      "waitFor": "document.querySelector('input[placeholder^=\"Поиск по записям\"]') !== null"
+      "waitFor": "document.querySelector('input[placeholder^=\"{{text:recordSearch}}\"]') !== null"
     },
     {
       "name": "focus-diary-search",
       "eval": {
         "name": "focus-record-search",
-        "expression": "document.querySelector('input[placeholder^=\"Поиск по записям\"]')?.focus(), true"
+        "expression": "document.querySelector('input[placeholder^=\"{{text:recordSearch}}\"]')?.focus(), true"
       }
     },
     { "name": "type-diary-marker", "text": "zzqmarkdiary" },

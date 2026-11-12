@@ -44,7 +44,6 @@ import {
   type ChronicleQueryResponse,
   type ChronicleRow,
   type ChronicleTarget,
-  type ChronicleTargetLink,
   type FilterAst,
   type FilterAstLeaf,
   type FilterAstListItem,
@@ -58,8 +57,8 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { makeSnippet } from './search-service.js';
-import { rowToThoughtRef } from './thought-service.js';
-import { buildThoughtIdSelect, buildKeywordWordClause, compileThoughtQueryToAst, REF_COLUMNS, structureRequestToQuery } from './query-service.js';
+import { resolveChronicleTargets } from './comment-targets.js';
+import { buildThoughtIdSelect, buildKeywordWordClause, compileThoughtQueryToAst, structureRequestToQuery } from './query-service.js';
 import { expandTypeIdsToSubtree } from './type-hierarchy.js';
 import { collectHierarchySubtree } from './graph-traversal.js';
 import { normaliseInstant } from './dates.js';
@@ -68,9 +67,6 @@ import { parseFilterAst } from './filter-ast.js';
 import { assertFilterAstInProfile } from './filter-profile-validation.js';
 import { diagnoseFilterAst, filterDiagnosticsError } from './filter-diagnostics.js';
 import { resolveGlobalDateTokens, scanStringForTokens } from './thought-type-view-tokens.js';
-
-/** Row shape accepted by {@link rowToThoughtRef}. */
-type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
 
 /** Build a `placeholders` string of `n` `?`. */
 function placeholders(n: number): string {
@@ -661,38 +657,14 @@ export { commentScopeEnabled };
 
 /** Resolve one comment row with all its targets into a {@link ChronicleRow}. */
 function buildRows(
-  ndb: NetworkDb,
   rows: Row[],
-  refs: Map<string, ThoughtRefRow>,
-  linkTargets: Map<string, ChronicleTargetLink>,
+  targetsByComment: Map<string, ChronicleTarget[]>,
   bodyFormat: ChronicleBodyFormat,
 ): ChronicleRow[] {
   return rows.map((row) => {
-    const targetRows = ndb
-      .prepare(
-        `SELECT owner_type, owner_id FROM comment_targets_v WHERE comment_id = ?
-         ORDER BY owner_type ASC, owner_id ASC`,
-      )
-      .all(row.id) as Array<{ owner_type: string; owner_id: string }>;
-    const targets: ChronicleTarget[] = [];
-    for (const t of targetRows) {
-      if (t.owner_type === 'thought') {
-        const ref = refs.get(t.owner_id);
-        if (ref !== undefined) targets.push({ kind: 'thought', thought: rowToThoughtRef(ref) });
-      } else {
-        const link = linkTargets.get(t.owner_id);
-        if (link !== undefined) targets.push({ kind: 'link', link });
-      }
-    }
-    // Stable order: the primary owner first (matches the DTO convention).
-    targets.sort((a, b) => {
-      const aId = a.kind === 'thought' ? a.thought.id : a.link.id;
-      const bId = b.kind === 'thought' ? b.thought.id : b.link.id;
-      const aPrimary = a.kind === 'thought' ? row.owner_type === 'thought' && row.owner_id === aId : row.owner_type === 'link' && row.owner_id === aId;
-      const bPrimary = b.kind === 'thought' ? row.owner_type === 'thought' && row.owner_id === bId : row.owner_type === 'link' && row.owner_id === bId;
-      if (aPrimary !== bPrimary) return aPrimary ? -1 : 1;
-      return 0;
-    });
+    // Привязки всей страницы разрешены ОДНИМ батчем до вызова (0.15.4,
+    // задача 6af1be50): по-строчного запроса `comment_targets_v` больше нет.
+    const targets = targetsByComment.get(row.id) ?? [];
     return {
       id: row.id,
       title: row.title,
@@ -718,7 +690,7 @@ function buildRows(
 /** Raw phase-2 row (comment columns + precomputed snippet). */
 interface Row {
   id: string;
-  owner_type: string;
+  owner_type: 'thought' | 'link';
   owner_id: string;
   title: string | null;
   body_md: string;
@@ -1428,64 +1400,12 @@ export function queryChronicle(
     )
     .all(...args, request.limit, request.offset) as Row[];
 
-  // Resolve targets: collect all thought ids and link ids of the page.
-  const thoughtIds = new Set<string>();
-  const linkIds = new Set<string>();
-  for (const row of rows) {
-    const targetRows = ndb
-      .prepare('SELECT owner_type, owner_id FROM comment_targets_v WHERE comment_id = ?')
-      .all(row.id) as Array<{ owner_type: string; owner_id: string }>;
-    for (const t of targetRows) {
-      if (t.owner_type === 'thought') thoughtIds.add(t.owner_id);
-      else linkIds.add(t.owner_id);
-    }
-  }
-  const refs = new Map<string, ThoughtRefRow>();
-  const allRefIds = [...thoughtIds];
-  const linkRows = linkIds.size > 0
-    ? (ndb
-        .prepare(
-          `SELECT l.id, l.type_id, l.active, l.source_id, l.target_id,
-                  lt.name_forward, lt.name_reverse
-           FROM links_v l
-           LEFT JOIN link_types_v lt ON lt.id = l.type_id
-           WHERE l.id IN (${placeholders(linkIds.size)})`,
-        )
-        .all(...linkIds) as Array<{
-        id: string;
-        type_id: string | null;
-        active: number;
-        source_id: string;
-        target_id: string;
-        name_forward: string | null;
-        name_reverse: string | null;
-      }>)
-    : [];
-  for (const lr of linkRows) {
-    allRefIds.push(lr.source_id, lr.target_id);
-  }
-  const uniqueRefIds = [...new Set(allRefIds)];
-  if (uniqueRefIds.length > 0) {
-    const refRows = ndb
-      .prepare(`SELECT ${REF_COLUMNS} FROM thoughts_v t WHERE t.id IN (${placeholders(uniqueRefIds.length)})`)
-      .all(...uniqueRefIds) as ThoughtRefRow[];
-    for (const r of refRows) refs.set(r.id, r);
-  }
-  const linkTargets = new Map<string, ChronicleTargetLink>();
-  for (const lr of linkRows) {
-    const source = refs.get(lr.source_id);
-    const target = refs.get(lr.target_id);
-    if (source === undefined || target === undefined) continue;
-    linkTargets.set(lr.id, {
-      id: lr.id,
-      type_id: lr.type_id,
-      active: lr.active === 1,
-      type_name_forward: lr.name_forward,
-      type_name_reverse: lr.name_reverse,
-      source: rowToThoughtRef(source),
-      target: rowToThoughtRef(target),
-    });
-  }
+  // Привязки строк страницы — один батч-резолв (0.15.4, ADR db88d819): тот же
+  // механизм `comment_targets_v`, что у потребителей поиска и backlinks/mentions.
+  const targetsByComment = resolveChronicleTargets(
+    ndb,
+    rows.map((row) => ({ id: row.id, owner_type: row.owner_type, owner_id: row.owner_id })),
+  );
 
   const bodyFormat: ChronicleBodyFormat = request.body ?? 'html';
   const withSnippets = rows.map((row) => {
@@ -1508,7 +1428,7 @@ export function queryChronicle(
     };
   });
   return {
-    rows: buildRows(ndb, withSnippets, refs, linkTargets, bodyFormat),
+    rows: buildRows(withSnippets, targetsByComment, bodyFormat),
     total,
     ...(warnings.length > 0 ? { warnings } : {}),
   };

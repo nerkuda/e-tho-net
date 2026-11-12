@@ -32,7 +32,6 @@
 
 import type { ThoughtRef } from '@etn/shared';
 
-import { focusFromUi } from '../app.js';
 // Мини-облачка закреплённых и строки их дропдауна собирает общая фабрика:
 // значок, цвета, начертание, бледность и метка корзины — из одного
 // представления мысли (стандарт «представление мысли — только через фабрику»).
@@ -139,14 +138,24 @@ function currentPins(): string[] {
   return getQueryState<string[]>(queryKeys.pins()).data ?? [];
 }
 
-/** Opens a pinned thought the way the active view implies (08-ui-spec.md §16). */
+/**
+ * Opens a pinned thought the way the active view implies (08-ui-spec.md §16).
+ * Одиночный клик фокус холста НЕ переводит (элемент 1bd47ca3 v3, задача
+ * ef085714): на «Структурах»/«Дневнике» — экранный вход открытия, на остальных
+ * экранах — только редактор. Фокус и активацию «Карты мыслей» даёт двойной клик
+ * — жест фабрики облачка (`doubleClickFocusOnMap`).
+ */
 function openPinnedEntry(id: string): void {
   if (store.state.activeView === 'structures') {
     void openStructuresThought(id);
   } else if (store.state.activeView === 'chronicle') {
     void openChronicleThought(id);
   } else {
-    focusFromUi(id);
+    // Ленивый импорт: статический `editor/*` мог бы замкнуть граф импортов
+    // панели (editor → … → pinned-bar).
+    void import('../editor/editor.js').then(({ openThoughtInEditor }) => {
+      openThoughtInEditor(id);
+    });
   }
 }
 

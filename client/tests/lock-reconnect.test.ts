@@ -174,10 +174,10 @@ describe('lock-guard: восстановление захватов после �
     );
   });
 
-  it('освобождение мёртвого id (NOT_FOUND) тоже снимает фантомную строку', async () => {
+  it('освобождение мёртвого id (LOCK_NOT_FOUND сервера) снимает фантомную строку', async () => {
     installLocks({
       release: async () => {
-        throw new EtnError('NOT_FOUND', 'Захват не найден');
+        throw new EtnError('LOCK_NOT_FOUND', 'Захват не найден');
       },
     });
     openNetwork();
@@ -188,6 +188,54 @@ describe('lock-guard: восстановление захватов после �
     await guard.releaseHeld(handle);
 
     assert.equal(lockCache.getLock('thought', 'th-d'), undefined);
+  });
+
+  it('чужой id в кэше при своём release лечится сверкой с сервером (27f0780a)', async () => {
+    let listCalls = 0;
+    installLocks({
+      release: async () => undefined,
+      list: async () => {
+        listCalls += 1;
+        return [];
+      },
+    });
+    openNetwork();
+    // Строка кэша — фантом прошлой сессии с другим id, сервер пуст.
+    lockCache.__setForTests([row({ id: 'lock-phantom', entity_id: 'th-p', user_id: 'me' })]);
+    const handle = {
+      entityType: 'thought',
+      entityId: 'th-p',
+      lockId: 'lock-dead',
+      ownerUserId: 'me',
+      networkId: 'net-1',
+    };
+
+    await guard.releaseHeld(handle);
+    await flush();
+
+    assert.equal(listCalls, 1, 'расхождение id лечится сверкой, а не догадкой');
+    assert.equal(lockCache.getLock('thought', 'th-p'), undefined, 'фантом вытеснен');
+  });
+
+  it('сверка после release не скрывает живой захват с сервера (27f0780a)', async () => {
+    installLocks({
+      release: async () => undefined,
+      list: async () => [row({ id: 'lock-live', entity_id: 'th-l', user_id: 'other' })],
+    });
+    openNetwork();
+    lockCache.__setForTests([row({ id: 'lock-phantom', entity_id: 'th-l', user_id: 'me' })]);
+    const handle = {
+      entityType: 'thought',
+      entityId: 'th-l',
+      lockId: 'lock-dead',
+      ownerUserId: 'me',
+      networkId: 'net-1',
+    };
+
+    await guard.releaseHeld(handle);
+    await flush();
+
+    assert.equal(lockCache.getLock('thought', 'th-l')?.id, 'lock-live', 'живой 🔒 не потерян');
   });
 
   it('если объект забрал другой пользователь, handle перестаёт «держать» захват', async () => {

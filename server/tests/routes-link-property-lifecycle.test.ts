@@ -15,7 +15,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
+
+import type { AnyRealtimeEvent, PropertyRegistryUpdatedData } from '@etn/shared';
 
 import {
   authHeaders,
@@ -419,6 +422,166 @@ describe(
         });
         assert.equal(colorRes.statusCode, 200, colorRes.body?.toString());
       } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
+    it('переименование типа связи — только через PATCH /properties: пара следует за типом, событие реестра, коллизия 409 (a43e32a2)', async () => {
+      const ctx = await buildRestContext();
+      const seen: AnyRealtimeEvent[] = [];
+      const unsubscribe = ctx.app.pubsub.subscribe(ctx.networkId, (e) =>
+        seen.push(e as unknown as AnyRealtimeEvent),
+      );
+      try {
+        const h = authHeaders(ctx);
+        const nid = ctx.networkId;
+
+        const createRes = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: {
+            name: 'пара',
+            value_type: 'link',
+            name_forward: 'вперёд',
+            name_reverse: 'назад',
+          },
+        });
+        assert.equal(createRes.statusCode, 201, createRes.body);
+        const prop = createRes.json().data as {
+          id: string;
+          name: string;
+          config: { link_type_id: string };
+        };
+        seen.length = 0;
+
+        // `/link-types` имена не меняет (служебный CRUD): 422 с подсказкой,
+        // пара и реестр не тронуты, событий нет.
+        const ltPatch = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/link-types/${prop.config.link_type_id}`,
+          headers: h,
+          payload: { name_forward: 'нельзя' },
+        });
+        assert.equal(ltPatch.statusCode, 422, ltPatch.body);
+        const ltErr = ltPatch.json() as { error: { code: string; details: { field: string } } };
+        assert.equal(ltErr.error.code, 'VALIDATION_ERROR');
+        assert.equal(ltErr.error.details.field, 'name_forward');
+        assert.equal(seen.length, 0, 'попытка правки имён через /link-types событий не даёт');
+
+        // Канонический путь переименования — свойство-связь: тип и имя пары
+        // меняются в одной транзакции, реестр получает событие.
+        const rename = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${prop.id}`,
+          headers: h,
+          payload: { name_forward: 'новое-вперёд' },
+        });
+        assert.equal(rename.statusCode, 200, rename.body);
+        const renamed = rename.json().data as { name: string };
+        assert.equal(renamed.name, 'новое-вперёд', 'имя пары следует за типом (38eaa15c)');
+        const ltAfter = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/link-types/${prop.config.link_type_id}`,
+          headers: h,
+        });
+        assert.equal(
+          (ltAfter.json().data as { name_forward: string }).name_forward,
+          'новое-вперёд',
+        );
+        const propertyEvents = seen.filter((e) => e.type === 'property-registry.updated');
+        assert.equal(propertyEvents.length, 1, 'событие реестра ровно одно');
+        const eventData = propertyEvents[0]!.data as PropertyRegistryUpdatedData;
+        assert.equal(eventData.id, prop.id);
+        assert.deepEqual(eventData.changes, { name_forward: 'новое-вперёд' });
+
+        // Коллизия нового имени — 409 DUPLICATE с понятными деталями (не 500);
+        // транзакция откатывается, имя не меняется.
+        const occupied = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${nid}/properties`,
+          headers: h,
+          payload: { name: 'занято', value_type: 'text' },
+        });
+        assert.equal(occupied.statusCode, 201, occupied.body);
+        const occupiedId = (occupied.json().data as { id: string }).id;
+        const clash = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${prop.id}`,
+          headers: h,
+          payload: { name_forward: 'занято' },
+        });
+        assert.equal(clash.statusCode, 409, clash.body);
+        const clashErr = clash.json() as {
+          error: {
+            code: string;
+            details: { conflict_property_id: string; property_id: string };
+          };
+        };
+        assert.equal(clashErr.error.code, 'DUPLICATE');
+        assert.equal(clashErr.error.details.conflict_property_id, occupiedId);
+        assert.equal(
+          clashErr.error.details.property_id,
+          occupiedId,
+          'маршрут дублирует конфликт в details.property_id',
+        );
+        const afterClash = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/properties/${prop.id}`,
+          headers: h,
+        });
+        assert.equal((afterClash.json().data as { name: string }).name, 'новое-вперёд');
+
+        // Коллизия с НАДГРОБИЕМ слоя: физическая строка `deleted = 1`
+        // занимает `UNIQUE (name_key, layer_id)`, хотя `properties_v` её не
+        // показывает. Регресс физической проверки в `assertRenameAvailable`
+        // ловится здесь: без неё UPDATE упирается в UNIQUE и даёт 500.
+        const tombstoneId = randomUUID();
+        const nowIso = new Date().toISOString();
+        ctx.ndb
+          .prepare(
+            `INSERT INTO properties
+               (id, layer_id, deleted, name, name_key, value_type, created_at, updated_at)
+             VALUES (?, ?, 1, ?, type_name_key(?), 'text', ?, ?)`,
+          )
+          .run(
+            tombstoneId,
+            ctx.ndb.layerId,
+            'надгробие-пары',
+            'надгробие-пары',
+            nowIso,
+            nowIso,
+          );
+
+        const tombClash = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${nid}/properties/${prop.id}`,
+          headers: h,
+          payload: { name_forward: 'надгробие-пары' },
+        });
+        assert.equal(tombClash.statusCode, 409, tombClash.body);
+        const tombErr = tombClash.json() as {
+          error: {
+            code: string;
+            details: { conflict_property_id: string; property_id: string };
+          };
+        };
+        assert.equal(tombErr.error.code, 'DUPLICATE');
+        assert.equal(tombErr.error.details.conflict_property_id, tombstoneId);
+        assert.equal(tombErr.error.details.property_id, tombstoneId);
+        const tombRow = ctx.ndb
+          .prepare('SELECT deleted, name FROM properties WHERE id = ? AND layer_id = ?')
+          .get(tombstoneId, ctx.ndb.layerId) as { deleted: number; name: string };
+        assert.equal(tombRow.deleted, 1, 'надгробие не «пробуждено»');
+        assert.equal(tombRow.name, 'надгробие-пары');
+        const afterTomb = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/networks/${nid}/properties/${prop.id}`,
+          headers: h,
+        });
+        assert.equal((afterTomb.json().data as { name: string }).name, 'новое-вперёд');
+      } finally {
+        unsubscribe();
         await closeRestContext(ctx);
       }
     });

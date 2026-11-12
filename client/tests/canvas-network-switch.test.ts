@@ -14,6 +14,11 @@
  * Проверка ведётся на РЕАЛЬНОМ `mountCanvas` в DOM-ши́ме: настоящий рендер
  * собирает карту, а подменённый `Element.animate` собирает созданные анимации.
  * Входит в обычный прогон `npm -w @etn/client test`.
+ *
+ * Ожидания — по реальному состоянию (`waitFor`), а не по числу тиков: под
+ * параллельной нагрузкой один тик стоит десятки миллисекунд, и «фиксированный
+ * settle» либо не успевает, либо переживает проверяемое состояние (ошибка
+ * dac886af — слой хореографии живёт 0.68 с).
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -46,6 +51,8 @@ const ANIM_TOKENS: Record<string, string> = {
   '--anim-focus-ease': 'cubic-bezier(0.2, 0.7, 0.3, 1)',
   '--anim-network-reveal': '300ms',
 };
+/** Исходные токены: тест меняет окно наблюдения хореографии (см. ниже). */
+const ANIM_TOKENS_DEFAULT: Readonly<Record<string, string>> = { ...ANIM_TOKENS };
 
 let currentHost: ShimElement | null = null;
 let created: FakeAnimation[] = [];
@@ -213,6 +220,21 @@ async function settle(times = 25): Promise<void> {
   for (let i = 0; i < times; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Ждёт выполнения условия, опрашивая его на каждом тике. Фиксированное число
+ * тиков — ложная детерминированность (ошибка dac886af): под параллельной
+ * нагрузкой один тик стоит десятки миллисекунд, и прогон «25 тиков» переживает
+ * то состояние, которое проверяется. `timeoutMs` — страховка от вечного
+ * ожидания, а не ожидаемая длительность.
+ */
+async function waitFor(what: string, cond: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() >= deadline) assert.fail(`не дождались: ${what} (${timeoutMs}ms)`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 function makeHost(): ShimElement {
   const host = new ShimElement('section', 'canvas-host');
   currentHost = host;
@@ -243,6 +265,7 @@ before(async () => {
 
 beforeEach(() => {
   installEtn();
+  Object.assign(ANIM_TOKENS, ANIM_TOKENS_DEFAULT);
   created = [];
   store.update({
     networkId: NETWORK_A,
@@ -262,20 +285,23 @@ describe('canvas: смена мыслесети — мгновенная очи�
 
     // Расклад сети A.
     store.update({ focus: focusResponse(FOCUS_A, CHILD_A, 'A') });
-    await settle();
+    await waitFor('расклад сети A собран (фокус + потомок)', () => cloudsIn(host).length >= 2);
     created = [];
-    assert.ok(cloudsIn(host).length >= 2, 'расклад сети A собран (фокус + потомок)');
 
     // --- Смена мыслесети: сначала фокус сбрасывается (как делает openNetwork). ---
     store.update({ networkId: NETWORK_B, focus: null });
-    await settle();
-    assert.equal(cloudsIn(host).length, 0, 'содержимое прежней сети очищено одномоментно');
-    assert.equal(hasFocusLayer(host), false, 'анимационных слоёв не осталось');
+    await waitFor(
+      'содержимое прежней сети очищено, анимационных слоёв не осталось',
+      () => cloudsIn(host).length === 0 && !hasFocusLayer(host),
+    );
 
     // --- Первый расклад сети B: одно общее проявление, без перелётов. ---
     created = [];
     store.update({ focus: focusResponse(FOCUS_B, CHILD_B, 'B') });
-    await settle();
+    await waitFor(
+      'расклад сети B проявлен целиком (у каждого облачка своё проявление)',
+      () => opacityReveals().length >= 2 && opacityReveals().length === cloudsIn(host).length,
+    );
 
     assert.equal(hasFocusLayer(host), false, 'фокус-хореография при смене сети не играется');
     assert.equal(transformAnims().length, 0, 'нет transform-анимаций (перелётов и клонов)');
@@ -289,10 +315,24 @@ describe('canvas: смена мыслесети — мгновенная очи�
     }
 
     // --- Внутрисетевая смена фокуса: двухфазная хореография сохранена. ---
+    // Слой `.focus-anim-layer` живёт ровно flight+settle и затем снимается
+    // `complete()`; окно наблюдения задаётся тестовыми токенами, чтобы проверка
+    // не зависела от того, сколько успел прожить слой к моменту опроса. Сама
+    // проверка — реальное состояние DOM (слой создан), длительность
+    // хореографии ею не утверждается.
+    ANIM_TOKENS['--anim-focus-flight'] = '5000ms';
+    ANIM_TOKENS['--anim-focus-settle'] = '5000ms';
+    ANIM_TOKENS['--anim-focus-fade'] = '5000ms';
     created = [];
     store.update({ focus: focusResponse(FOCUS_A, CHILD_A, 'A2') });
-    await settle();
+    await waitFor('фокус-хореография создала слой .focus-anim-layer', () => hasFocusLayer(host));
     assert.equal(hasFocusLayer(host), true, 'внутри сети смена фокуса играет фокус-хореографию');
+
+    // Хореография не должна переживать проверку: снятие фокуса завершает её
+    // немедленно (рендер начинается с `finishFocusTransition`), и растянутые
+    // таймеры не держат процесс теста.
+    store.update({ focus: null });
+    await waitFor('хореография завершена снятием фокуса', () => !hasFocusLayer(host));
 
     dispose();
   });

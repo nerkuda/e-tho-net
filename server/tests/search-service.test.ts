@@ -13,7 +13,10 @@ import {
   splitCompoundTitle,
   synonymPatternToRegex,
   typeNameKey,
+  type BacklinkHit,
+  type MentionHit,
   type MentionsScanMatch,
+  type RecordHit,
 } from '@etn/shared';
 
 import { createInMemoryNetworkDb } from '../src/db/network-db.js';
@@ -66,12 +69,17 @@ function seedSynonym(ndb: NetworkDb, thoughtId: string, synonym: string): void {
     .run(thoughtId, synonym, synonym.normalize('NFC').toLowerCase());
 }
 
-/** Insert a thought-owned comment directly. */
+/**
+ * Insert a thought-owned comment directly. Дефолт — `permanent`: владельческая
+ * строка ответов backlinks/mentions порождается только постоянным комментарием,
+ * дневниковая запись даёт строку-запись (0.15.4, задача 6af1be50). Дневниковые
+ * кейсы задают `kind` явно.
+ */
 function seedThoughtComment(
   ndb: NetworkDb,
   thoughtId: string,
   body: string,
-  kind: 'permanent' | 'chronological' = 'chronological',
+  kind: 'permanent' | 'chronological' = 'permanent',
   validFrom = '2024-01-01',
 ): string {
   const id = randomUUID();
@@ -98,17 +106,47 @@ function seedLink(ndb: NetworkDb, sourceId: string, targetId: string): string {
   return id;
 }
 
-/** Insert a link-owned comment directly. */
-function seedLinkComment(ndb: NetworkDb, linkId: string, body: string): string {
+/** Insert a link-owned comment directly (дефолт — постоянный, см. выше). */
+function seedLinkComment(
+  ndb: NetworkDb,
+  linkId: string,
+  body: string,
+  kind: 'permanent' | 'chronological' = 'permanent',
+  validFrom = '2024-01-01',
+): string {
   const id = randomUUID();
   ndb
     .prepare(
       `INSERT INTO comments (id, owner_type, owner_id, kind, body_md, body_html, valid_from,
                              version, created_at, updated_at, created_by, updated_by)
-       VALUES (?, 'link', ?, 'chronological', ?, ?, '2024-01-01', 1, '2024', '2024', 'u', 'u')`,
+       VALUES (?, 'link', ?, ?, ?, ?, ?, 1, '2024', '2024', 'u', 'u')`,
     )
-    .run(id, linkId, body, body);
+    .run(id, linkId, kind, body, body, validFrom);
   return id;
+}
+
+/** Attach a comment to a target (m2m `comment_targets`). */
+function seedCommentTarget(
+  ndb: NetworkDb,
+  commentId: string,
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+): void {
+  ndb
+    .prepare(
+      `INSERT INTO comment_targets (id, comment_id, owner_type, owner_id) VALUES (?, ?, ?, ?)`,
+    )
+    .run(randomUUID(), commentId, ownerType, ownerId);
+}
+
+/** Владельческие строки union `BacklinkHit` (сужение по дискриминатору). */
+function mentionRows(hits: readonly BacklinkHit[]): MentionHit[] {
+  return hits.filter((hit): hit is MentionHit => hit.kind === 'mention');
+}
+
+/** Строки-записи union `BacklinkHit`. */
+function recordRows(hits: readonly BacklinkHit[]): RecordHit[] {
+  return hits.filter((hit): hit is RecordHit => hit.kind === 'record');
 }
 
 describe(
@@ -153,14 +191,101 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         const t = seedThought(ndb, 'Owner');
+        // Постоянный комментарий владельца один (инвариант базы). Дневниковые
+        // записи с тем же словом строку by_texts не порождают (ошибка
+        // 5fbfe844) — хит остаётся один и ведёт в постоянный комментарий.
         seedThoughtComment(ndb, t, 'remember the milk in the fridge');
-        seedThoughtComment(ndb, t, 'oat milk for the coffee');
-        seedThoughtComment(ndb, t, 'milk expires tomorrow');
+        seedThoughtComment(ndb, t, 'oat milk for the coffee', 'chronological');
+        seedThoughtComment(ndb, t, 'milk expires tomorrow', 'chronological');
         const res = search(ndb, { q: 'milk' });
         assert.equal(res.by_texts.length, 1, 'one hit per thought, not per comment');
         assert.equal(res.by_texts[0]!.thought_id, t);
         assert.equal(res.meta.total_in_group.texts, 1, 'total counts distinct thoughts');
         assert.ok(typeof res.by_texts[0]!.comment_id === 'string');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: совпадение только в дневниковой записи строку не даёт, запись остаётся в by_chrono (ошибка 5fbfe844)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Дневниковый владелец');
+        seedThoughtComment(ndb, t, 'постоянное тело без искомого', 'permanent');
+        const record = seedThoughtComment(
+          ndb,
+          t,
+          'редкозаписноеслово в дневнике',
+          'chronological',
+          '2026-10-10',
+        );
+        const res = search(ndb, { q: 'редкозаписноеслово' });
+        assert.equal(res.by_texts.length, 0, 'запись не даёт строку «Найдено по текстам»');
+        assert.equal(
+          res.meta.total_in_group.texts,
+          0,
+          'счётчик by_texts считает ровно то, что отдаётся строками',
+        );
+        assert.deepEqual(
+          res.by_chrono.map((h) => h.comment_id),
+          [record],
+          'запись по-прежнему видна в «Найдено в дневниках»',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: слово есть и в постоянном комментарии, и в записи — строка сохраняется', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Смешанный владелец');
+        const permanent = seedThoughtComment(ndb, t, 'общееслово в постоянном комментарии');
+        seedThoughtComment(ndb, t, 'общееслово в дневниковой записи', 'chronological');
+        const res = search(ndb, { q: 'общееслово' });
+        assert.equal(res.by_texts.length, 1, 'совпадение в постоянном сохраняет строку');
+        assert.equal(
+          res.by_texts[0]!.comment_id,
+          permanent,
+          'клик ведёт в постоянный комментарий, где текст действительно есть',
+        );
+        assert.equal(res.meta.total_in_group.texts, 1);
+        assert.equal(res.by_chrono.length, 1, 'запись отдельно видна в дневниках');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: слово только в постоянном комментарии — выдача прежняя', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'Постоянный владелец');
+        const permanent = seedThoughtComment(ndb, t, 'толькопостоянноеслово в теле');
+        const res = search(ndb, { q: 'толькопостоянноеслово' });
+        assert.equal(res.by_texts.length, 1);
+        assert.equal(res.by_texts[0]!.comment_id, permanent);
+        assert.equal(res.by_texts[0]!.thought_id, t);
+        assert.equal(res.meta.total_in_group.texts, 1);
+        assert.equal(res.by_chrono.length, 0, 'в дневниках совпадения нет');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_texts: total равен числу отданных строк, когда записи-дубли отсечены', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const withPermanent = seedThought(ndb, 'Мысль с постоянным телом');
+        seedThoughtComment(ndb, withPermanent, 'счётчикмаркер постоянный', 'permanent');
+        const recordOnlyA = seedThought(ndb, 'Мысль только с записью А');
+        seedThoughtComment(ndb, recordOnlyA, 'счётчикмаркер запись А', 'chronological');
+        const recordOnlyB = seedThought(ndb, 'Мысль только с записью Б');
+        seedThoughtComment(ndb, recordOnlyB, 'счётчикмаркер запись Б', 'chronological');
+        const res = search(ndb, { q: 'счётчикмаркер' });
+        assert.equal(res.meta.total_in_group.texts, 1, 'счётчик — только по постоянным');
+        assert.equal(res.by_texts.length, 1, 'строк столько же, сколько насчитал total');
+        assert.equal(res.by_texts[0]!.thought_id, withPermanent);
+        assert.equal(res.meta.total_in_group.chronology, 2, 'обе записи учтены в дневниках');
       } finally {
         ndb.close();
       }
@@ -187,12 +312,117 @@ describe(
         const a = seedThought(ndb, 'A');
         const b = seedThought(ndb, 'B');
         const link = seedLink(ndb, a, b);
+        // Постоянный комментарий связи один (инвариант базы). Дневниковая
+        // запись с тем же словом строку by_links не порождает (ошибка
+        // 4aec5fe8) — хит остаётся один и ведёт в постоянный комментарий.
         seedLinkComment(ndb, link, 'wire notes one');
-        seedLinkComment(ndb, link, 'wire notes two');
+        seedLinkComment(ndb, link, 'wire notes two', 'chronological');
         const res = search(ndb, { q: 'wire' });
         assert.equal(res.by_links.length, 1, 'one hit per link, not per comment');
         assert.equal(res.by_links[0]!.link_id, link);
         assert.equal(res.meta.total_in_group.links, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: совпадение только в дневниковой записи связи строку не даёт, запись остаётся в by_chrono (ошибка 4aec5fe8)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Связь А');
+        const b = seedThought(ndb, 'Связь Б');
+        const link = seedLink(ndb, a, b);
+        seedLinkComment(ndb, link, 'постоянное тело связи без искомого', 'permanent');
+        const record = seedLinkComment(
+          ndb,
+          link,
+          'связьредкозаписьслово в дневнике',
+          'chronological',
+          '2026-10-10',
+        );
+        const res = search(ndb, { q: 'связьредкозаписьслово' });
+        assert.equal(res.by_links.length, 0, 'запись связи не даёт строку «Найдено связей»');
+        assert.equal(
+          res.meta.total_in_group.links,
+          0,
+          'счётчик by_links считает ровно то, что отдаётся строками',
+        );
+        assert.deepEqual(
+          res.by_chrono.map((h) => h.comment_id),
+          [record],
+          'запись по-прежнему видна в «Найдено в дневниках»',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: слово есть и в постоянном комментарии связи, и в записи — строка сохраняется', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Связь А');
+        const b = seedThought(ndb, 'Связь Б');
+        const link = seedLink(ndb, a, b);
+        seedLinkComment(ndb, link, 'связьобщееслово постоянный');
+        seedLinkComment(ndb, link, 'связьобщееслово запись', 'chronological');
+        const res = search(ndb, { q: 'связьобщееслово' });
+        assert.equal(res.by_links.length, 1, 'совпадение в постоянном сохраняет строку');
+        assert.equal(
+          res.by_links[0]!.link_id,
+          link,
+          'строка ведёт в ту же связь, что и раньше',
+        );
+        assert.equal(res.meta.total_in_group.links, 1);
+        assert.match(res.by_links[0]!.snippet, /<mark>/, 'сниппет подсвечивает совпадение');
+        assert.equal(res.by_chrono.length, 1, 'запись отдельно видна в дневниках');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: слово только в постоянном комментарии связи — выдача прежняя', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const a = seedThought(ndb, 'Связь А');
+        const b = seedThought(ndb, 'Связь Б');
+        const link = seedLink(ndb, a, b);
+        seedLinkComment(ndb, link, 'связьтолькопостоянноеслово в теле');
+        const res = search(ndb, { q: 'связьтолькопостоянноеслово' });
+        assert.equal(res.by_links.length, 1);
+        assert.equal(res.by_links[0]!.link_id, link);
+        assert.equal(res.meta.total_in_group.links, 1);
+        assert.equal(res.by_chrono.length, 0, 'в дневниках совпадения нет');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_links: total равен числу отданных строк, когда записи-дубли отсечены', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const linkWithPermanent = seedLink(
+          ndb,
+          seedThought(ndb, 'Связь П А'),
+          seedThought(ndb, 'Связь П Б'),
+        );
+        seedLinkComment(ndb, linkWithPermanent, 'связьсчётчикмаркер постоянный', 'permanent');
+        const recordOnlyA = seedLink(
+          ndb,
+          seedThought(ndb, 'Связь З А'),
+          seedThought(ndb, 'Связь З Б'),
+        );
+        seedLinkComment(ndb, recordOnlyA, 'связьсчётчикмаркер запись А', 'chronological');
+        const recordOnlyB = seedLink(
+          ndb,
+          seedThought(ndb, 'Связь В А'),
+          seedThought(ndb, 'Связь В Б'),
+        );
+        seedLinkComment(ndb, recordOnlyB, 'связьсчётчикмаркер запись Б', 'chronological');
+        const res = search(ndb, { q: 'связьсчётчикмаркер' });
+        assert.equal(res.meta.total_in_group.links, 1, 'счётчик — только по постоянным');
+        assert.equal(res.by_links.length, 1, 'строк столько же, сколько насчитал total');
+        assert.equal(res.by_links[0]!.link_id, linkWithPermanent);
+        assert.equal(res.meta.total_in_group.chronology, 2, 'обе записи учтены в дневниках');
       } finally {
         ndb.close();
       }
@@ -228,6 +458,130 @@ describe(
         );
         assert.equal(res.by_chrono[0]!.owner_id, t);
         assert.equal(res.meta.total_in_group.chronology, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_chrono hit carries the representative targets and use_time (a9f455a4)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'T');
+        const second = seedThought(ndb, 'Вторая мысль');
+        const early = seedThoughtComment(ndb, t, 'early chrono gamma', 'chronological', '2024-01-01');
+        seedThoughtComment(ndb, t, 'late chrono gamma', 'chronological', '2024-03-01');
+        // Привязки записи-представителя: владелец первичный, вторая — другая мысль.
+        seedCommentTarget(ndb, early, 'thought', t);
+        seedCommentTarget(ndb, early, 'thought', second);
+        ndb.prepare('UPDATE comments SET use_time = 1 WHERE id = ?').run(early);
+
+        const res = search(ndb, { q: 'gamma', scope: 'chronology' }, false);
+        assert.equal(res.by_chrono.length, 1);
+        const hit = res.by_chrono[0]!;
+        assert.equal(hit.comment_id, early, 'представитель — самая ранняя запись владельца');
+        assert.equal(hit.use_time, true);
+        assert.deepEqual(
+          hit.targets.map((target) => (target.kind === 'thought' ? target.thought.id : 'link')),
+          [t, second],
+          'привязки записи-представителя, первичная первой',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_chrono: targets хроно-хита сохраняют флаги видимости как в базе (012b2dc6)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 'Объект');
+        const owner = seedThought(ndb, 'Дневник');
+        const other = seedThought(ndb, 'Другая');
+        const inactive = seedThought(ndb, 'Скрытая', { active: 0 });
+        const trashed = seedThought(ndb, 'В корзине');
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
+        const link = seedLink(ndb, owner, other);
+        ndb.prepare('UPDATE links SET active = 0 WHERE id = ?').run(link);
+        const record = seedThoughtComment(
+          ndb,
+          owner,
+          'запись про Объект с привязками',
+          'chronological',
+          '2024-02-01',
+        );
+        seedCommentTarget(ndb, record, 'thought', inactive);
+        seedCommentTarget(ndb, record, 'thought', trashed);
+        seedCommentTarget(ndb, record, 'link', link);
+
+        const res = search(ndb, { q: 'Объект', scope: 'chronology' }, false);
+        assert.equal(res.by_chrono.length, 1);
+        const targets = res.by_chrono[0]!.targets;
+        assert.equal(targets.length, 3, 'резолвер не отбрасывает невидимые цели');
+        const inactiveTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === inactive,
+        );
+        assert.ok(inactiveTarget !== undefined, 'неактуальная цель остаётся в привязках');
+        assert.equal(
+          inactiveTarget.kind === 'thought' ? inactiveTarget.thought.active : null,
+          false,
+          'ThoughtRef.active — как в базе',
+        );
+        const trashedTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === trashed,
+        );
+        assert.ok(trashedTarget !== undefined, 'цель в корзине остаётся в привязках');
+        assert.equal(
+          trashedTarget.kind === 'thought' ? trashedTarget.thought.marked_for_deletion : null,
+          true,
+          'ThoughtRef.marked_for_deletion — как в базе',
+        );
+        const linkTarget = targets.find((item) => item.kind === 'link' && item.link.id === link);
+        assert.ok(linkTarget !== undefined, 'неактуальная связь остаётся в привязках');
+        assert.equal(
+          linkTarget.kind === 'link' ? linkTarget.link.active : null,
+          false,
+          'ChronicleTargetLink.active не фильтруется',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_chrono hit without comment_targets rows carries an empty targets array', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const t = seedThought(ndb, 'T');
+        seedThoughtComment(ndb, t, 'chrono notes about gamma', 'chronological');
+        const res = search(ndb, { q: 'gamma', scope: 'chronology' }, false);
+        assert.equal(res.by_chrono.length, 1);
+        assert.deepEqual(res.by_chrono[0]!.targets, [], 'отсутствие строк привязок — [], не undefined');
+        assert.equal(res.by_chrono[0]!.use_time, false);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('by_chrono resolves targets for the page after paging', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const firstOwner = seedThought(ndb, 'Первая');
+        const secondOwner = seedThought(ndb, 'Вторая');
+        const third = seedThought(ndb, 'Третья');
+        const early = seedThoughtComment(ndb, firstOwner, 'gamma один', 'chronological', '2024-01-01');
+        const late = seedThoughtComment(ndb, secondOwner, 'gamma два', 'chronological', '2024-03-01');
+        seedCommentTarget(ndb, early, 'thought', firstOwner);
+        seedCommentTarget(ndb, late, 'thought', secondOwner);
+        seedCommentTarget(ndb, late, 'thought', third);
+
+        // Резолв — ПОСЛЕ пагинации: вторая страница тоже несёт свои привязки.
+        const page = search(ndb, { q: 'gamma', scope: 'chronology', limit: 1, offset: 1 }, false);
+        assert.equal(page.by_chrono.length, 1);
+        const hit = page.by_chrono[0]!;
+        assert.equal(hit.comment_id, late, 'вторая страница — вторая запись по valid_from');
+        assert.deepEqual(
+          hit.targets.map((target) => (target.kind === 'thought' ? target.thought.id : 'link')),
+          [secondOwner, third],
+          'привязки страницы, первичная первой',
+        );
       } finally {
         ndb.close();
       }
@@ -1100,7 +1454,7 @@ describe(
         seedSynonym(ndb, target, 'И*ян');
         const other = seedThought(ndb, 'Заметки');
         seedThoughtComment(ndb, other, 'в тексте есть Игорян');
-        seedThoughtComment(ndb, other, 'а тут только Иван');
+        seedThoughtComment(ndb, other, 'а тут только Иван', 'chronological');
         const link = seedLink(ndb, target, other);
         seedLinkComment(ndb, link, 'ссылка на Игорян');
 
@@ -1125,7 +1479,7 @@ describe(
         ndb.prepare('UPDATE links SET active = 0 WHERE id = ?').run(link);
         seedLinkComment(ndb, link, 'связь с Объект');
 
-        const mentions = findMentions(ndb, target);
+        const mentions = mentionRows(findMentions(ndb, target));
         assert.equal(mentions.length, 3);
         const byOwner = new Map(mentions.map((m) => [`${m.owner_type}:${m.owner_id}`, m]));
         assert.equal(byOwner.get(`thought:${activeOwner}`)!.active, true);
@@ -1269,18 +1623,28 @@ describe(
       }
     });
 
-    it('findMentions returns one hit per owning thought, not per comment', () => {
+    it('findMentions returns one owner row per owning thought, records go separately', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const target = seedThought(ndb, 'Петров Василий');
         seedSynonym(ndb, target, 'Петров* Вас*');
         const other = seedThought(ndb, 'Заметки');
-        // Two comments of the same thought both mention the target.
-        seedThoughtComment(ndb, other, 'Петрову Васе передали привет');
-        seedThoughtComment(ndb, other, 'Видел Петрова Василия вчера');
-        const mentions = findMentions(ndb, target);
-        assert.equal(mentions.length, 1, 'several matching comments collapse into one hit');
+        // Постоянный комментарий владельца + дневниковая запись того же владельца.
+        const permanent = seedThoughtComment(ndb, other, 'Петрову Васе передали привет');
+        const record = seedThoughtComment(
+          ndb,
+          other,
+          'Видел Петрова Василия вчера',
+          'chronological',
+        );
+        const hits = findMentions(ndb, target);
+        const mentions = mentionRows(hits);
+        assert.equal(mentions.length, 1, 'владельческая строка — одна, по постоянному комментарию');
         assert.equal(mentions[0]!.owner_id, other);
+        assert.equal(mentions[0]!.comment_id, permanent);
+        const records = recordRows(hits);
+        assert.equal(records.length, 1, 'дневниковая запись — отдельная строка-запись');
+        assert.equal(records[0]!.comment_id, record);
       } finally {
         ndb.close();
       }
@@ -1310,6 +1674,148 @@ describe(
         seedThoughtComment(ndb, target, 'Self reference here');
         const mentions = findMentions(ndb, target);
         assert.equal(mentions.length, 0, 'a thought does not "mention" itself in its own comments');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions keeps owner rows only for permanent comments (kind-split, 012b2dc6)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Объект');
+        const permanentOwner = seedThought(ndb, 'Постоянные');
+        seedThoughtComment(ndb, permanentOwner, 'постоянный комментарий про Объект');
+        const recordOnlyOwner = seedThought(ndb, 'Дневник');
+        seedThoughtComment(ndb, recordOnlyOwner, 'запись про Объект', 'chronological');
+
+        const hits = findMentions(ndb, target);
+        assert.deepEqual(
+          mentionRows(hits).map((hit) => hit.owner_id),
+          [permanentOwner],
+          'владелец, совпавший только записью, владельческой строки не даёт',
+        );
+        assert.equal(recordRows(hits).length, 1, 'дневниковая запись — строка-запись');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions returns one record row per comment with period, targets and highlight', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Объект');
+        const owner = seedThought(ndb, 'Дневник');
+        const second = seedThought(ndb, 'Ещё мысль');
+        const first = seedThoughtComment(ndb, owner, 'первая запись про Объект', 'chronological', '2024-01-01');
+        const secondRec = seedThoughtComment(
+          ndb,
+          owner,
+          'свежая запись про Объект',
+          'chronological',
+          '2024-03-01',
+        );
+        seedCommentTarget(ndb, first, 'thought', owner);
+        seedCommentTarget(ndb, first, 'thought', second);
+        ndb.prepare('UPDATE comments SET use_time = 1 WHERE id = ?').run(secondRec);
+
+        const records = recordRows(findMentions(ndb, target));
+        assert.deepEqual(
+          records.map((record) => record.comment_id),
+          [secondRec, first],
+          'строки-записи идут подблоком, свежие сверху (valid_from desc)',
+        );
+        assert.equal(records[0]!.valid_from, '2024-03-01');
+        assert.equal(records[0]!.valid_to, null, 'valid_to записи — строка или null');
+        assert.equal(records[0]!.use_time, true);
+        assert.equal(records[0]!.owner_type, 'thought');
+        assert.equal(records[0]!.owner_id, owner, 'владелец записи — comments.owner_*');
+        assert.deepEqual(records[0]!.targets, [], 'строк привязок нет — пустой массив');
+        assert.deepEqual(
+          records[1]!.targets.map((item) => (item.kind === 'thought' ? item.thought.id : 'link')),
+          [owner, second],
+          'привязки записи, первичная первой',
+        );
+        assert.ok(records[0]!.snippet.includes('<mark>'), 'сниппет с подсветкой');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions: привязки записи сохраняют флаги видимости как в базе (012b2dc6)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Объект');
+        const owner = seedThought(ndb, 'Дневник');
+        const other = seedThought(ndb, 'Другая');
+        const inactive = seedThought(ndb, 'Скрытая', { active: 0 });
+        const trashed = seedThought(ndb, 'В корзине');
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
+        const link = seedLink(ndb, owner, other);
+        ndb.prepare('UPDATE links SET active = 0 WHERE id = ?').run(link);
+        const record = seedThoughtComment(
+          ndb,
+          owner,
+          'запись про Объект с привязками',
+          'chronological',
+          '2024-02-01',
+        );
+        seedCommentTarget(ndb, record, 'thought', inactive);
+        seedCommentTarget(ndb, record, 'thought', trashed);
+        seedCommentTarget(ndb, record, 'link', link);
+
+        const records = recordRows(findMentions(ndb, target));
+        assert.equal(records.length, 1);
+        const targets = records[0]!.targets;
+        assert.equal(targets.length, 3, 'резолвер не отбрасывает невидимые цели');
+        const inactiveTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === inactive,
+        );
+        assert.ok(inactiveTarget !== undefined, 'неактуальная цель остаётся в привязках');
+        assert.equal(
+          inactiveTarget.kind === 'thought' ? inactiveTarget.thought.active : null,
+          false,
+          'ThoughtRef.active — как в базе',
+        );
+        const trashedTarget = targets.find(
+          (item) => item.kind === 'thought' && item.thought.id === trashed,
+        );
+        assert.ok(trashedTarget !== undefined, 'цель в корзине остаётся в привязках');
+        assert.equal(
+          trashedTarget.kind === 'thought' ? trashedTarget.thought.marked_for_deletion : null,
+          true,
+          'ThoughtRef.marked_for_deletion — как в базе',
+        );
+        const linkTarget = targets.find((item) => item.kind === 'link' && item.link.id === link);
+        assert.ok(linkTarget !== undefined, 'неактуальная связь остаётся в привязках');
+        assert.equal(
+          linkTarget.kind === 'link' ? linkTarget.link.active : null,
+          false,
+          'ChronicleTargetLink.active не фильтруется',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('findMentions gives one record row per comment even when several terms match', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const target = seedThought(ndb, 'Проект А.Закрытые ошибки');
+        const owner = seedThought(ndb, 'Дневник');
+        const record = seedThoughtComment(
+          ndb,
+          owner,
+          'Проект А и Закрытые ошибки в одной записи',
+          'chronological',
+        );
+
+        const records = recordRows(findMentions(ndb, target));
+        assert.equal(records.length, 1, 'дедупликация записей по comment_id, не по владельцу');
+        assert.equal(records[0]!.comment_id, record);
+        assert.ok(
+          (records[0]!.snippet.match(/<mark>/g) ?? []).length >= 2,
+          'оба совпавших терма подсвечены в одной строке',
+        );
       } finally {
         ndb.close();
       }
@@ -1699,7 +2205,10 @@ function referenceFindMentionsInTexts(
             re.lastIndex += 1;
             continue;
           }
-          const start = m.index + (m.index > 0 ? 1 : 0);
+          // Границы слова в матчере нулевой ширины — правка ошибки 3ebb6512
+          // (оракул повторяет текущий контракт `synonymPatternSource`, а не
+          // прежнюю компенсацию `+1`).
+          const start = m.index;
           const end = m.index + m[0].length;
           if (end > start) raw.push({ start, end, candidate, priority: pattern.priority });
         }
@@ -1756,6 +2265,55 @@ describe('findMentionsInTexts — паритет оптимизированно�
       assert.ok(
         expected.some((r) => r.length > 0),
         'синтетика реально что-то матчит (иначе паритет тривиален)',
+      );
+    } finally {
+      ndb.close();
+    }
+  });
+});
+
+/**
+ * §21 скан: `*`-синонимы обязаны находить словоформы, а `excludeThoughtId`
+ * гасит ВСЕ упоминания мысли — ровно это и воспроизвела ошибка 3ebb6512, когда
+ * лента «Дневника» передавала исключением первую привязанную мысль записи:
+ * запись, привязанная к мысли с `*`-синонимами, не подчёркивала ни её имя, ни
+ * синонимы. Здесь проверяется поведение домена (проводку клиента держат
+ * клиентские тесты): без исключения — находки, с исключением — пусто.
+ */
+describe('findMentionsInTexts — `*`-синонимы и исключение владельца (ошибка 3ebb6512)', () => {
+  it('`*`-синонимы находят словоформы и ровно вхождение, excludeThoughtId гасит их все', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const owner = seedThought(ndb, 'Пасечный Виктор Иванович');
+      seedSynonym(ndb, owner, 'Пасечн*');
+      seedSynonym(ndb, owner, 'Виктор*');
+      seedSynonym(ndb, owner, 'виктор* иванович*');
+      const text =
+        'Поздравление Пасечного 2026. Как сказал сам Пасечный, ' +
+        'встречаемся в пятницу. Созвон с Виктором Ивановичем — сроки.';
+      const found = findMentionsInTexts(ndb, [text], { showInactive: false })[0]!;
+      assert.deepEqual(
+        found.map((m) => text.slice(m.start, m.end)),
+        ['Пасечного', 'Пасечный', 'Виктором Ивановичем'],
+        'словоформы по `*`-синонимам, без завершающих знаков препинания',
+      );
+      assert.ok(
+        found.every((m) => m.thoughts.some((t) => t.id === owner)),
+        'каждая находка указывает на мысль-владельца синонимов',
+      );
+      // То, что делала лента «Дневника» для привязанной записи: исключение
+      // первой привязанной мысли убирает ВСЕ её упоминания (имя и синонимы).
+      assert.deepEqual(
+        findMentionsInTexts(ndb, [text], { showInactive: false, excludeThoughtId: owner }),
+        [[]],
+        'исключённая мысль не находится ни по одному своему термину',
+      );
+      // Исключение ЧУЖОЙ мысли находок не отнимает.
+      const other = seedThought(ndb, 'Другая мысль');
+      assert.equal(
+        findMentionsInTexts(ndb, [text], { showInactive: false, excludeThoughtId: other })[0]!
+          .length,
+        found.length,
       );
     } finally {
       ndb.close();

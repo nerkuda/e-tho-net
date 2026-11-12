@@ -2,6 +2,7 @@
   "name": "ffc173c9-links-sibling",
   "description": "Блокер круга 2 ошибки ffc173c9: меню вне холста должно передавать родителя САМОЙ мысли, а не родителя фокуса. Посев: цель T — ребёнок P1, упоминающая мысль M — ребёнок P2; фокус ставится на T (открытием из поиска). Во вкладке «Упоминания» ПКМ по чипу M → «Добавить» → «налево (родственник)»: созданная мысль обязана попасть в детей P2, а не P1. На коммите 25ada42f (до фикса) кейс красный: созданная мысль уходит в p1Children. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.ffc173c9-links-sibling.scenario.json --out .tmp/etn-ffc173c9-links/out",
   "timeout": 180000,
+  "texts": { "add": { "ru": "Добавить", "en": "Add" }, "leftSibling": { "ru": "налево (родственник)", "en": "left (sibling)" } },
   "steps": [
     { "name": "onboarding-visible", "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null" },
     { "name": "fill-server-url", "click": "input[placeholder^='http']" },
@@ -60,7 +61,7 @@
     },
     {
       "name": "open-links-tab",
-      "eval": "(() => { const tab=[...document.querySelectorAll('.editor-tabs .editor-tab')].find((e)=>(e.textContent||'').trim().startsWith('Упоминания')); tab?.click(); return tab ? 'ok' : 'no-tab'; })()"
+      "eval": "(() => { /* Упоминания — индекс 3 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab=[...document.querySelectorAll('.editor-tabs .editor-tab')][3]; tab?.click(); return tab ? 'ok' : 'no-tab'; })()"
     },
     {
       "name": "links-tab-ready",
@@ -69,16 +70,16 @@
     },
     {
       "name": "expand-mentions",
-      "eval": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find((x)=>(x.querySelector(':scope > .group-header .group-title')?.textContent||'').trim().startsWith('Упоминания в текстах')); if(!g) return 'no-group'; const h=g.querySelector(':scope > .group-header'); if(!g.querySelector('.group-body')) h.click(); return 'ok'; })()"
+      "eval": "(() => { const g=document.querySelector('[data-group-id=\"links.text-mentions\"]'); if(!g) return 'no-group'; const h=g.querySelector(':scope > .group-header'); if(!g.querySelector('.group-body')) h.click(); return 'ok'; })()"
     },
     {
       "name": "mention-cloud-ready",
       "timeout": 20000,
-      "waitFor": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find((x)=>(x.querySelector(':scope > .group-header .group-title')?.textContent||'').trim().startsWith('Упоминания в текстах')); return g ? g.querySelector('.group-body .mention-item .prop-ref-cloud[data-id=\"'+window.__ffcB.m+'\"]') !== null : false; })()"
+      "waitFor": "(() => { const g=document.querySelector('[data-group-id=\"links.text-mentions\"]'); return g ? g.querySelector('.group-body .mention-item .prop-ref-cloud[data-id=\"'+window.__ffcB.m+'\"]') !== null : false; })()"
     },
     {
       "name": "right-click-mention",
-      "eval": "(() => { const g=[...document.querySelectorAll('.links-tab .group')].find((x)=>(x.querySelector(':scope > .group-header .group-title')?.textContent||'').trim().startsWith('Упоминания в текстах')); const c=g.querySelector('.group-body .mention-item .prop-ref-cloud[data-id=\"'+window.__ffcB.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
+      "eval": "(() => { const g=document.querySelector('[data-group-id=\"links.text-mentions\"]'); const c=g.querySelector('.group-body .mention-item .prop-ref-cloud[data-id=\"'+window.__ffcB.m+'\"]'); const r=c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2})); return c.dataset.id; })()"
     },
     {
       "name": "menu-open",
@@ -87,12 +88,12 @@
     },
     {
       "name": "menu-opened-for-mention",
-      "probe": "(() => { const m=[...document.querySelectorAll('.menu')].pop(); return m !== null && [...m.querySelectorAll('.menu-item')].some((e)=>(e.textContent||'').trim().startsWith('Добавить')); })()",
+      "probe": "(() => { const m=[...document.querySelectorAll('.menu')].pop(); return m !== null && [...m.querySelectorAll('.menu-item')].some((e)=>(e.textContent||'').trim().startsWith('{{text:add}}')); })()",
       "expect": true
     },
     {
       "name": "open-add-submenu",
-      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('Добавить')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('{{text:add}}')); if(!row) return 'no-row'; row.dispatchEvent(new MouseEvent('mouseenter')); return 'ok'; })()"
     },
     {
       "name": "submenu-ready",
@@ -105,12 +106,12 @@
     },
     {
       "name": "sibling-item-enabled",
-      "probe": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); return row !== undefined && !row.classList.contains('disabled'); })()",
+      "probe": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('{{text:leftSibling}}')); return row !== undefined && !row.classList.contains('disabled'); })()",
       "expect": true
     },
     {
       "name": "click-sibling",
-      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('налево')); if(!row) return 'no-row'; if(row.classList.contains('disabled')) return 'disabled'; row.click(); return 'ok'; })()"
+      "eval": "(() => { const row=[...document.querySelectorAll('.menu > .menu-sub > .menu-item')].find((e)=>(e.textContent||'').trim().startsWith('{{text:leftSibling}}')); if(!row) return 'no-row'; if(row.classList.contains('disabled')) return 'disabled'; row.click(); return 'ok'; })()"
     },
     {
       "name": "dialog-ready",

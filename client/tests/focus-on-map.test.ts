@@ -24,7 +24,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -168,6 +168,20 @@ const SRC = {
   editor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'editor.ts'),
   miniGraph: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'mini-graph.ts'),
   valueEditor: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'value-editor.ts'),
+  thoughtCloud: resolve(import.meta.dirname, '..', 'src', 'renderer', 'lib', 'thought-cloud.ts'),
+  linksTab: resolve(import.meta.dirname, '..', 'src', 'renderer', 'editor', 'links-tab.ts'),
+  structures: resolve(
+    import.meta.dirname,
+    '..',
+    'src',
+    'renderer',
+    'screens',
+    'structures',
+    'structures.ts',
+  ),
+  pinnedBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'pinned-bar.ts'),
+  historyBar: resolve(import.meta.dirname, '..', 'src', 'renderer', 'screens', 'history-bar.ts'),
+  canvas: resolve(import.meta.dirname, '..', 'src', 'renderer', 'canvas', 'canvas.ts'),
 };
 
 function readText(path: string): string {
@@ -290,4 +304,195 @@ describe('focusThoughtOnMap — «В фокус» с любого экрана (
       );
     }
   });
+});
+
+describe('двойной клик по облачку вне карты — открыть, в фокус и на карту (задача ef085714)', () => {
+  it('фабрика даёт профилям вне карты единый жест, профиль карты его не получает', () => {
+    const cloud = readText(SRC.thoughtCloud);
+    const helper = functionBody(cloud, 'export function doubleClickFocusOnMap(');
+    assert.ok(
+      /import\('\.\.\/editor\/editor\.js'\)/.test(helper),
+      'двойной клик открывает мысль в редакторе',
+    );
+    assert.ok(
+      /import\('\.\.\/screens\/active-view\.js'\)/.test(helper),
+      'двойной клик идёт общим помощником focusThoughtOnMap, а не копией',
+    );
+    assert.ok(helper.includes('openThoughtInEditor(id)'), 'мысль открывается в редакторе');
+    assert.ok(helper.includes('focusThoughtOnMap(id)'), 'фокус и активация карты — общий путь');
+
+    // Условие дефолта: только профили вне карты, только когда своя семантика
+    // двойного клика не задана, и только для навигационных облачков.
+    assert.ok(
+      cloud.includes('(options.navigation ?? true) &&'),
+      'чипы значений формы (navigation: false) исключены из правила',
+    );
+    assert.ok(cloud.includes("profile !== 'canvas' &&"), 'карта (canvas) сохраняет свой жест');
+    assert.ok(
+      cloud.includes('options.actions.onDoubleClick === undefined'),
+      'своя семантика области побеждает дефолт',
+    );
+    assert.ok(
+      cloud.includes('onDoubleClick: doubleClickFocusOnMap'),
+      'дефолт двойного клика — единый помощник фабрики',
+    );
+  });
+
+  it('жест исполняется по-настоящему: мысль открыта, фокус и карта — общим путём', async () => {
+    shimDom();
+    const calls = stubEtn();
+    const { doubleClickFocusOnMap } = await import('../src/renderer/lib/thought-cloud.js');
+    const { store } = await import('../src/renderer/state.js');
+
+    store.update({
+      networkId: 'n1',
+      activeTabId: 'tab-1',
+      activeView: 'structures',
+      profileId: null,
+      focus: null,
+    } as any);
+
+    doubleClickFocusOnMap('t-gesture');
+    for (let i = 0; i < 50 && store.state.activeView !== 'map'; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    assert.equal(store.state.activeView, 'map', 'двойной клик обязан активировать «Карту мыслей»');
+    assert.equal(store.state.focus?.focused.id, 't-gesture', 'мысль обязана встать в фокус');
+    assert.deepEqual(calls.focusCalls, ['t-gesture'], 'фокус спрошен ровно один раз');
+
+    store.update({ activeView: 'map', focus: null, activeTabId: null, networkId: null } as any);
+  });
+
+  it('фабричный жест достаётся профилям вне карты, но не карте и чипам формы', async () => {
+    shimDom();
+    stubEtn();
+    const { createThoughtCloud } = await import('../src/renderer/lib/thought-cloud.js');
+    const { store } = await import('../src/renderer/state.js');
+    const dbl = {
+      type: 'dblclick',
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+    } as any;
+    const waitMap = async (): Promise<void> => {
+      for (let i = 0; i < 50 && store.state.activeView !== 'map'; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+
+    store.update({
+      networkId: 'n1',
+      activeTabId: 'tab-1',
+      activeView: 'structures',
+      focus: null,
+    } as any);
+    const tree = createThoughtCloud(
+      { id: 't-tree', title: 'Дерево' },
+      { profile: 'tree', actions: { onClick: () => undefined } },
+    );
+    tree.dispatchEvent(dbl);
+    await waitMap();
+    assert.equal(store.state.activeView, 'map', 'облачко вне карты переводит на «Карту мыслей»');
+    assert.equal(store.state.focus?.focused.id, 't-tree', 'облачко вне карты ставит мысль в фокус');
+
+    // Профиль карты и чипы значений формы дефолта не получают.
+    store.update({ activeView: 'structures', focus: null } as any);
+    const canvas = createThoughtCloud(
+      { id: 't-canvas', title: 'Карта' },
+      { profile: 'canvas', actions: { onClick: () => undefined } },
+    );
+    canvas.dispatchEvent(dbl);
+    const form = createThoughtCloud(
+      { id: 't-form', title: 'Значение' },
+      { profile: 'chip', navigation: false, actions: { onClick: () => undefined } },
+    );
+    form.dispatchEvent(dbl);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(store.state.activeView, 'structures', 'карта и чип формы вид не переключают');
+    assert.equal(store.state.focus, null, 'фокус не тронут');
+
+    store.update({ activeView: 'map', focus: null, activeTabId: null, networkId: null } as any);
+  });
+
+  it('потребители не собирают жест «двойной клик» вручную (любая форма обработчика)', () => {
+    // Правило (элемент 1bd47ca3 v3, задача ef085714): у потребителя двойной клик
+    // — ТОЛЬКО фабричный жест `doubleClickFocusOnMap` (открыть + фокус +
+    // активация «Карты мыслей»). Ключ `onDoubleClick` в файлах потребителей
+    // запрещён целиком: краткая и блочная формы, ссылка на функцию и
+    // многострочный обработчик с промежуточной переменной одинаково собирают
+    // жест вручную — и на другом экране дают фокус БЕЗ активации карты, то есть
+    // ровно ту ошибку, которую чинит задача. Проверка «в handler есть
+    // focusFromUi» ловила только краткую форму и обходилась блочным телом
+    // (замечание приёмки 1).
+    //
+    // Своя семантика двойного клика разрешена только владельцам жеста, и они
+    // в список потребителей не входят: `lib/thought-cloud.ts` (фабрика и
+    // профиль `canvas`), `canvas/canvas.ts` (холст и hover-превью поверх него),
+    // `editor/value-editor.ts` (чипы значения со своим путём «В фокус»).
+    const consumers = [SRC.linksTab, SRC.miniGraph, SRC.pinnedBar, SRC.historyBar, SRC.structures];
+    for (const path of consumers) {
+      const src = readText(path);
+      assert.ok(
+        !/\bonDoubleClick\b/.test(src),
+        `${path}: двойной клик отдан фабричному жесту — ключа onDoubleClick у потребителя быть не должно (краткая, блочная форма, ссылка на функцию, многострочный обработчик)`,
+      );
+      // Тот же обход «мимо фабрики»: переключение вида и фокус собраны вручную.
+      assert.ok(
+        !/setActiveView\('(?:map|structures|chronicle|activity|publications)'\);\s*(?:void\s+)?focusFromUi\(/.test(
+          src,
+        ),
+        `${path}: переключение вида и фокус собираются только общим focusThoughtOnMap`,
+      );
+    }
+
+    // «Найти на карте мыслей» в «Структурах» — общий помощник, не пара копий.
+    const structures = readText(SRC.structures);
+    assert.ok(
+      structures.includes('focusThoughtOnMap(targetId)'),
+      'структуры: команда «найти на карте» идёт общим focusThoughtOnMap',
+    );
+    assert.ok(
+      !/setActiveView\('map'\);\s*focusFromUi\(/.test(structures),
+      'структуры: пары setActiveView + focusFromUi быть не должно',
+    );
+
+    // Одиночный клик чипов закреплённых и истории фокус НЕ переводит.
+    for (const [path, fnName] of [
+      [SRC.pinnedBar, 'openPinnedEntry'],
+      [SRC.historyBar, 'openEntry'],
+    ] as const) {
+      const body = functionBody(readText(path), `function ${fnName}(`);
+      assert.ok(!body.includes('focusFromUi('), `${path}: одиночный клик фокус не переводит`);
+      assert.ok(
+        body.includes('openThoughtInEditor('),
+        `${path}: одиночный клик открывает редактор`,
+      );
+    }
+  });
+
+  it('ключ onDoubleClick есть только у владельцев жеста — новый потребитель правило не обойдёт', () => {
+    // Полнота правила: список потребителей выше не должен «устареть». Если жест
+    // вручную соберут в НОВОМ файле клиента, проверка списка его пропустит —
+    // поэтому ключ `onDoubleClick` разрешён ровно владельцам семантики:
+    //  * `lib/thought-cloud.ts` — фабрика (дефолт `doubleClickFocusOnMap` и
+    //    профиль `canvas`: фокус без переключения вида);
+    //  * `canvas/canvas.ts` — облачко холста и hover-превью поверх него;
+    //  * `editor/value-editor.ts` — чипы значения со своим путём «В фокус».
+    // Любой другой файл с этим ключом — ручная сборка жеста мимо фабрики.
+    const allowed = new Set([SRC.thoughtCloud, SRC.valueEditor, SRC.canvas]);
+    const root = resolve(import.meta.dirname, '..', 'src');
+    const offenders = readdirSync(root, { recursive: true, encoding: 'utf8' })
+      .filter((entry) => entry.endsWith('.ts'))
+      .map((entry) => resolve(root, entry))
+      .filter((path) => !allowed.has(path))
+      .filter((path) => /\bonDoubleClick\b/.test(readText(path)));
+    assert.deepEqual(
+      offenders.map((path) => path.slice(root.length + 1)),
+      [],
+      'двойной клик собирается только фабричным жестом: ключ onDoubleClick — у владельцев семантики',
+    );
+  });
+
 });

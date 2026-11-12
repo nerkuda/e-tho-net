@@ -35,6 +35,7 @@ function read(...parts: string[]): string {
 const CHRONICLE = read('screens', 'chronicle', 'chronicle.ts');
 const RECORD_BODY = read('screens', 'chronicle', 'record-body.ts');
 const MD_FIELD = read('editor', 'markdown-field.ts');
+const MENTIONS_ANNOTATE = read('editor', 'mentions-annotate.ts');
 
 /** Минимальный DOM-шим: хватает для сборки оболочки комментария. */
 function installShim(): void {
@@ -111,6 +112,55 @@ describe('сторож: подсветка упоминаний в теле за
       MD_FIELD,
       /handles\.set\(root, \{\s*\n\s*showEdit,\s*\n\s*insertMentionLink,/,
       'handle поля несёт insertMentionLink',
+    );
+  });
+
+  it('владелец записи НЕ исключается из подсветки (ошибка 3ebb6512)', () => {
+    const fill =
+      /function fillRecordCard\(card: HTMLElement, row: ChronicleRow, day: string\): void \{([\s\S]*?)\n\}/.exec(
+        CHRONICLE,
+      )?.[1] ?? '';
+    assert.ok(fill !== '', 'тело fillRecordCard найдено');
+    const code = fill.replace(/\/\/[^\n]*/g, '');
+
+    // Просмотр ленты: исключение берётся у единого решения записи, а не у чипса.
+    assert.match(
+      code,
+      /excludeThoughtId: recordMentionsExcludeThoughtId\(\)/,
+      'просмотр записи не исключает владельца привязки',
+    );
+    assert.ok(
+      !/excludeThoughtId: currentOwner\(\)/.test(code),
+      'первая привязанная мысль больше не становится исключением скана',
+    );
+    // Поле правки получает то же решение: геттер перекрывает `attachmentsOwner`.
+    assert.match(
+      code,
+      /getMentionsExcludeThoughtId: recordMentionsExcludeThoughtId/,
+      'правка записи подсвечивает владельца так же, как просмотр',
+    );
+    // Владелец ВЛОЖЕНИЯ (картинки из буфера) при этом остаётся прежним.
+    assert.match(code, /\.\.\.\(owner !== null \? \{ attachmentsOwner: owner \} : \{\}\)/);
+  });
+
+  it('решение об исключении владельца — единая точка записи', () => {
+    assert.match(
+      CHRONICLE,
+      /recordMentionsExcludeThoughtId,/,
+      'экран импортирует решение из `diary.ts`',
+    );
+    assert.match(
+      MD_FIELD,
+      /resolveMentionsExcludeThoughtId\(\s*opts\.getMentionsExcludeThoughtId,/,
+      'поле разрешает исключение через общий резолвер модуля упоминаний',
+    );
+  });
+
+  it('отказ скана упоминаний не глотается молча (класс 8ca4841b)', () => {
+    assert.match(
+      MENTIONS_ANNOTATE,
+      /catch \(error\)\s*\{[\s\S]{0,900}?console\.error\(/,
+      'сорванный скан оставляет текстовый след в консоли клиента',
     );
   });
 

@@ -995,6 +995,15 @@ export function showThoughtTypeEditor(
   let allTypes: ThoughtType[] = [];
   let applyBtn: HTMLButtonElement | null = null;
   let saveBtn: HTMLButtonElement | null = null;
+  /** «Отмена» — тоже гаснет на время записи (ошибка 8695a68c). */
+  let cancelBtn: HTMLButtonElement | null = null;
+  /**
+   * Идёт запись черновика (ошибка 8695a68c): «Применить и закрыть» и «Записать»
+   * не запускают второй параллельный apply — двойной клик давал два PATCH с одной
+   * версией (риск 409 и двойной записи), а кнопки футера на это время отключены
+   * (08-ui-spec.md, панель кнопок: на busy — все disabled).
+   */
+  let applying = false;
   /** Отписка от кэша захватов: снятие чужого захвата возвращает редактирование. */
   let unbindLock: () => void = () => undefined;
   if (type !== null) {
@@ -1245,10 +1254,24 @@ export function showThoughtTypeEditor(
       errorLine.clear();
     }
     // Чужой захват сильнее проверки имени (ошибка 4f18d9f5): асинхронная
-    // догрузка каталога не должна снова включать кнопки записи.
-    const blocked = blockedMessage !== null;
-    if (applyBtn !== null) applyBtn.disabled = blocked || clash;
-    if (saveBtn !== null) saveBtn.disabled = blocked || clash;
+    // догрузка каталога не должна снова включать кнопки записи. То же и с идущей
+    // записью (ошибка 8695a68c): пока apply не вернулся, кнопки остаются
+    // отключёнными, даже если проверка имени их «разрешает».
+    const off = blockedMessage !== null || clash || applying;
+    if (applyBtn !== null) applyBtn.disabled = off;
+    if (saveBtn !== null) saveBtn.disabled = off;
+  }
+
+  /**
+   * Переключает состояние «идёт запись» (ошибка 8695a68c). Включение гасит все
+   * кнопки футера — включая «Отмену», как в панели кнопок настроек
+   * (08-ui-spec.md: на busy — все disabled); выключение возвращает их к обычному
+   * виду, поэтому после ошибки запись можно повторить.
+   */
+  function setApplying(value: boolean): void {
+    applying = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+    revalidateName();
   }
 
   // Fresh catalogue for the live duplicate check (the server re-checks anyway).
@@ -1291,6 +1314,9 @@ export function showThoughtTypeEditor(
    * on both paths, showing the error.
    */
   async function apply(mode: 'close' | 'stay', close: () => void): Promise<void> {
+    // Повторный клик по кнопкам записи во время уже идущего apply игнорируется
+    // (ошибка 8695a68c): иначе уходили два параллельных PATCH с одной версией.
+    if (applying) return;
     // Строка ошибки в панели кнопок общая для диалога: перед новой попыткой
     // гасим прошлое сообщение (иначе оно «залипает» и видно на всех вкладках).
     errorLine.clear();
@@ -1309,6 +1335,7 @@ export function showThoughtTypeEditor(
     // них строятся факты локального уведомления открытого редактора. При
     // создании типа уведомлять нечего — его ещё никто не показывает.
     let savedTypeFields: object | null = null;
+    setApplying(true);
     try {
       if (current === null) {
         // New type: one create carries every staged field at once. The
@@ -1425,6 +1452,10 @@ export function showThoughtTypeEditor(
       if (mode === 'close') close();
     } catch (err) {
       errorLine.show(errText(err));
+    } finally {
+      // Запись закончилась (успешно или с ошибкой) — кнопки футера снова
+      // активны: после ошибки запись можно повторить (ошибка 8695a68c).
+      setApplying(false);
     }
   }
 
@@ -1518,7 +1549,12 @@ export function showThoughtTypeEditor(
         save: (close) => void apply('close', close),
       },
       buttons: [
-        { label: t('actions.cancel') },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+        },
         // «Записать» — запись без закрытия: диалог остаётся открытым, а его
         // содержимое обновляется (отборы нового типа становятся доступны,
         // «Метаданные» показывают id/даты) — ошибка 51732f9b.
@@ -2697,6 +2733,22 @@ async function openAttachDialog(opts: {
 
   return new Promise((resolve) => {
     const errorLine = footerErrorLine();
+    /**
+     * Идёт выбор строки: «Выбрать»/Enter/двойной клик по строке запускают
+     * асинхронную проверку перенимаемых привязок, и второй выбор за время
+     * первой проверки не нужен (ошибка ef89c5c8). На время проверки кнопки
+     * футера disabled — правило панели кнопок «на busy все disabled».
+     */
+    let selecting = false;
+    let selectBtn: HTMLButtonElement | null = null;
+    let createBtn: HTMLButtonElement | null = null;
+    let cancelBtn: HTMLButtonElement | null = null;
+    const setBusy = (value: boolean): void => {
+      selecting = value;
+      if (selectBtn !== null) selectBtn.disabled = value;
+      if (createBtn !== null) createBtn.disabled = value;
+      if (cancelBtn !== null) cancelBtn.disabled = value;
+    };
 
     /** Строки каталога по текущему снимку каталога типов связей. */
     const list = buildPropertyList({
@@ -2718,22 +2770,36 @@ async function openAttachDialog(opts: {
     /** Активация строки: подтверждение перенимаемых привязок потомков, затем
      *  возврат черновика привязки — выбранное имя задаёт сторону. */
     async function choose(row: PropertyListRow): Promise<void> {
-      errorLine.clear();
-      const warning = await warnDescendantBindings(networkId, row.registry, {
-        ownerType,
-        types,
-        typeId,
-        editedTypeName,
-      });
-      if (warning !== null) {
-        const ok = await confirmDialog(t('typeManager.podklyuchitProperty'), warning, true);
-        if (!ok) return;
+      if (selecting) return;
+      setBusy(true);
+      try {
+        errorLine.clear();
+        const warning = await warnDescendantBindings(networkId, row.registry, {
+          ownerType,
+          types,
+          typeId,
+          editedTypeName,
+        });
+        if (warning !== null) {
+          const ok = await confirmDialog(t('typeManager.podklyuchitProperty'), warning, true);
+          if (!ok) return;
+        }
+        close();
+        resolve({
+          draft: attachDraftFromExisting(row.registry, row.side, row.name),
+          registry: row.registry,
+        });
+      } catch (err) {
+        // Обработчик кнопки запускается через `void`: исключение проверки или
+        // подтверждения иначе ушло бы unhandled rejection, а «Выбрать» молча
+        // перестала бы работать. Показываем его в футере диалога (как ошибки
+        // записи вкладки) — диалог остаётся рабочим.
+        errorLine.show(errText(err));
+      } finally {
+        // Снятие флага и восстановление кнопок — при любом исходе (ошибка
+        // ef89c5c8): после исключения «Выбрать» снова работает.
+        setBusy(false);
       }
-      close();
-      resolve({
-        draft: attachDraftFromExisting(row.registry, row.side, row.name),
-        registry: row.registry,
-      });
     }
 
     /** Перечитывает реестр (после того как общий редактор создал свойство) и
@@ -2767,10 +2833,18 @@ async function openAttachDialog(opts: {
       // Ошибки списка/записи — в панели кнопок (требование 397c5a56).
       footerError: errorLine,
       buttons: [
-        { label: t('actions.cancel') },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+        },
         {
           label: t('typeManager.label.createProperty'),
           keepOpen: true,
+          ref: (btn) => {
+            createBtn = btn;
+          },
           onClick: () => {
             openPropertyManagerEditor(
               null,
@@ -2784,6 +2858,9 @@ async function openAttachDialog(opts: {
           label: t('actions.select'),
           primary: true,
           keepOpen: true,
+          ref: (btn) => {
+            selectBtn = btn;
+          },
           onClick: () => {
             const row = list.selected();
             if (row !== null) void choose(row);
@@ -2987,9 +3064,24 @@ function openDescriptionOverrideDialog(opts: {
   hint.style.margin = '0';
   body.append(hint, area);
 
+  // Пока PATCH ждёт сервер, кнопки футера disabled (ошибка ef89c5c8): второй
+  // клик отправлял второй запрос того же значения.
+  let applying = false;
+  let applyBtn: HTMLButtonElement | null = null;
+  let resetBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean): void => {
+    applying = value;
+    if (applyBtn !== null) applyBtn.disabled = value;
+    if (resetBtn !== null) resetBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
+
   /** Applies the override (or clears it when the field is empty). */
   async function apply(close: () => void): Promise<void> {
+    if (applying) return;
     const description = area.value.trim();
+    setBusy(true);
     try {
       await etn.types.setPropertyDescriptionOverride(
         networkId,
@@ -3002,6 +3094,8 @@ function openDescriptionOverrideDialog(opts: {
       close();
     } catch (err) {
       errorLine.show(errText(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -3018,14 +3112,24 @@ function openDescriptionOverrideDialog(opts: {
       save: (close) => void apply(close),
     },
     buttons: [
-      { label: t('actions.cancel') },
+      {
+        label: t('actions.cancel'),
+        ref: (btn) => {
+          cancelBtn = btn;
+        },
+      },
       ...(def.description_overridden
         ? [
             {
               label: t('typeManager.label.resetOverride'),
               keepOpen: true,
+              ref: (btn) => {
+                resetBtn = btn;
+              },
               onClick: (close: () => void): void => {
+                if (applying) return;
                 void (async () => {
+                  setBusy(true);
                   try {
                     await etn.types.setPropertyDescriptionOverride(
                       networkId,
@@ -3038,13 +3142,23 @@ function openDescriptionOverrideDialog(opts: {
                     close();
                   } catch (err) {
                     errorLine.show(errText(err));
+                  } finally {
+                    setBusy(false);
                   }
                 })();
               },
             } satisfies DialogButton,
           ]
         : []),
-      { label: t('actions.apply'), primary: true, keepOpen: true, onClick: (close) => void apply(close) },
+      {
+        label: t('actions.apply'),
+        primary: true,
+        keepOpen: true,
+        ref: (btn) => {
+          applyBtn = btn;
+        },
+        onClick: (close) => void apply(close),
+      },
     ],
   });
 }

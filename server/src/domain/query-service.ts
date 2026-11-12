@@ -96,7 +96,7 @@ import {
   resolveConditionPropertyRef,
 } from './property-service.js';
 import { nameTrigramMatch } from './search-service.js';
-import { rowToThoughtRef } from './thought-service.js';
+import { REF_COLUMNS, rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause, listTypeNodes } from './type-hierarchy.js';
 import { resolveGlobalDateTokens, scanStringForTokens, type TokenIssue } from './thought-type-view-tokens.js';
 
@@ -531,17 +531,11 @@ function assertAstSortNotConflicting(
 // ---------------------------------------------------------------------------
 
 /**
- * Display columns every thought-ref SELECT must carry (see `resolveThoughts`).
- *
- * `marked_for_deletion` входит в канон отображения (ошибка 8bbc9542, 0.8.2):
- * без него соседи иерархии «Структур» приезжали клиенту без признака корзины
- * и рисовались обычной строкой, хотя помеченная мысль видна (дефолт
- * `show_trash`). Флаг — такая же часть внешнего вида, как `active`.
+ * Канон колонок мысли-ссылки живёт рядом с `rowToThoughtRef`
+ * (`thought-service.ts`, 0.15.4, задача 6af1be50) и реэкспортируется здесь
+ * ради прежней поверхности SQL-движка.
  */
-export const REF_COLUMNS =
-  't.id, t.title, t.type_id, t.icon, t.icon_kind, t.icon_attachment_id, t.icon_color,' +
-  ' t.active, t.marked_for_deletion, t.fg_color, t.bg_color,' +
-  ' t.font_bold, t.font_italic, t.font_underline, t.font_strike, t.font_manual';
+export { REF_COLUMNS };
 
 /** Row shape accepted by {@link rowToThoughtRef}. */
 type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];

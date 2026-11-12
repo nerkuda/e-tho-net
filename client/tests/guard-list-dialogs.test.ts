@@ -693,8 +693,10 @@ const DIALOG_FILES = new Set([
   // вкладок-источников, на котором собраны пикер иконки (icon-dialog, теперь
   // адаптер без своего showDialog) и диалог обложки публикации.
   'editor/resource-picker.ts',
+  // `editor/wiki-link.ts` в перечне больше нет: ссылка на «Структурах» всегда
+  // открывает мысль в редакторе, диалог «переключиться на карту мыслей?»
+  // удалён (ошибка 4c2fe9b0).
   'editor/style-dialog.ts',
-  'editor/wiki-link.ts',
   'import-export/export-dialog.ts',
   'import-export/import-dialog.ts',
   'lib/date-period-dialog.ts',

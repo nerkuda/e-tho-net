@@ -2,6 +2,7 @@
   "name": "42a7c0a1-graph-refresh-class",
   "description": "GUI-проверка КЛАССА ошибки 42a7c0a1 (круг 3): вкладка «Граф» отражает любое изменение состава рёбер в той же сессии, а обычные правки несвязанных полей панель не пересобирают. Реальный сторонний актор: создание соседа через REST раннера (POST /thoughts с create_link). Остальные изменения — прямыми вызовами API из рендерера мимо UI-отражения, то есть проверяется realtime-путь: переименование соседа (thought.updated), корзина и восстановление скрытого ребра (link.updated), purge цели (thought.deleted + link.deleted), свойство-связь set/remove (link.created/link.deleted). Без пересборки: синонимы мысли и скалярное свойство — canvas сохраняет идентичность. Круг 4: «уйти на другую вкладку → стороннее изменение → вернуться» — граф показывает 4 узла/3 линии (скрытая панель инвалидируется, а не держит устаревший снимок), и realtime-переименование ЦЕНТРАЛЬНОЙ мысли из другого клиента обновляет центральную пилюлю. Инвариант в конце: массовая пара 12 рёбер → 1 линия пары + чип «+11», метки корзины нет. Прогон ОДНОЙ командой: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-graph-refresh-class.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs",
   "timeout": 120000,
+  "texts": { "trashMark": { "ru": "в корзине: 1", "en": "in basket: 1" } },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -49,7 +50,7 @@
     },
     {
       "name": "open-graph-tab",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Граф — индекс 5 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[5]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "graph-ready",
@@ -158,7 +159,7 @@
     },
     {
       "name": "realtime-trash-tooltip",
-      "probe": "(document.querySelector('.mini-graph-mass-chip title')?.textContent ?? '').includes('в корзине: 1')",
+      "probe": "(document.querySelector('.mini-graph-mass-chip title')?.textContent ?? '').includes('{{text:trashMark}}')",
       "expect": true
     },
     {
@@ -223,7 +224,7 @@
     },
     {
       "name": "switch-to-properties",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Свойства'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Свойства — индекс 1 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[1]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "graph-detached",
@@ -252,7 +253,7 @@
     },
     {
       "name": "return-to-graph",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Граф — индекс 5 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[5]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "hidden-add-applied",

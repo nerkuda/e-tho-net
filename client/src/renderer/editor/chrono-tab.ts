@@ -48,7 +48,14 @@ import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
 import { ensureLoaded, resolve as resolveUser } from '../lib/users.js';
 import { notice } from '../lib/notice.js';
-import { refreshTabCount, registerTabContent, registerTabCount, type EditorContext, type TabPaneLifecycle } from './editor.js';
+import {
+  refreshTabCount,
+  registerTabContent,
+  registerTabCount,
+  takePendingRecord,
+  type EditorContext,
+  type TabPaneLifecycle,
+} from './editor.js';
 import {
   cancelMarkdownFieldEdit,
   commitMarkdownField,
@@ -221,6 +228,12 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
     table.element.hidden = false;
     table.setRows(chrono);
     if (selectedId !== null) table.setCurrent(selectedId);
+    // Программный вход «открыть привязку с записью» (0.15.4, задача 666d1d00):
+    // отложенный выбор применяется ПОСЛЕ загрузки данных — здесь. Панель,
+    // собранная до загрузки сущности (плейсхолдер `etn.thoughts.get`), при
+    // доставке payload пересобирается (`renderRetarget`) — выбор применяет
+    // сборка из ЗАГРУЖЕННОГО контекста, иначе он потерялся бы при пересборке.
+    if (ctx.thought !== null) applyPendingRecord(chrono);
     // Производный заголовок строки может нести сырую ID-форму wiki-ссылки
     // (`[[#<id>]]`, ошибка 8b647f6c): синхронную подстановку из кеша уже сделал
     // `recordTitle` (`derivedTitleLabel`), здесь дорезолвиваем имена батчем и
@@ -242,6 +255,31 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
         }
       }
     }
+  }
+
+  /**
+   * Применяет отложенный выбор записи программного входа «открыть привязку с
+   * записью» (0.15.4, задача 666d1d00). Шагов ТРИ, а не один `table.setCurrent`:
+   * `setCurrent` подсвечивает строку, но НЕ уведомляет `onCurrentChange`
+   * (`lib/ui/table.ts:331,952-958`), а выбор и нижняя область записи живут
+   * именно в нём (`onCurrentChange` выше) — без явного `buildEditor` запись
+   * была бы подсвечена, но не показана.
+   *
+   * Pending забирается ЖИВЫМ аксессором (чтение + сброс): выбор применяется
+   * РОВНО ОДИН раз и не повторяется пересборкой панели — иначе авто-выбор
+   * верхней строки (задача 41ed99ab) нарушался бы повторным навязыванием.
+   */
+  function applyPendingRecord(rows: Comment[]): void {
+    const pending = takePendingRecord(ctx.ownerId);
+    if (pending === null) return;
+    const row = rows.find((c) => c.id === pending.commentId);
+    // Запись исчезла (удалена, недоступна) — тихий пропуск: ниже сработает
+    // штатный авто-выбор верхней строки, а pending уже сброшен.
+    if (row === undefined) return;
+    selectedId = row.id;
+    table.setCurrent(row.id);
+    buildEditor(row);
+    autoSelectDone = true;
   }
 
   /**

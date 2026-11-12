@@ -2896,11 +2896,14 @@ export class RestClient {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/search`, { query: q });
   }
 
-  /** `GET /networks/{nid}/thoughts/{id}/mentions`. */
+  /**
+   * `GET /networks/{nid}/thoughts/{id}/mentions` — union
+   * `MentionHit | RecordHit` (0.15.4, требование 012b2dc6).
+   */
   public async listMentions(
     networkId: string,
     thoughtId: string,
-  ): Promise<import('@etn/shared').MentionHit[]> {
+  ): Promise<import('@etn/shared').BacklinkHit[]> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/mentions`,
@@ -2910,12 +2913,12 @@ export class RestClient {
   /**
    * `GET /networks/{nid}/thoughts/{id}/backlinks` — explicit ID-based wiki
    * references in `body_md` (task R3, docs/03-server-api.md §13a). Returns
-   * the same `MentionHit[]` shape as `listMentions`.
+   * the same `BacklinkHit[]` union as `listMentions` (0.15.4).
    */
   public async listBacklinks(
     networkId: string,
     thoughtId: string,
-  ): Promise<import('@etn/shared').MentionHit[]> {
+  ): Promise<import('@etn/shared').BacklinkHit[]> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/backlinks`,

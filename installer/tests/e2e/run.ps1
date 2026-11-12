@@ -805,16 +805,11 @@ function Invoke-UpdateToCurrent {
 }
 
 <#
-    Пауза перед очередным запуском установщика в S1: имена журналов —
-    с точностью до секунды (TryInitLog в etn.iss). Два запуска в одну секунду
-    получают одно имя: неэлевированный не может дописать файл, созданный
-    администратором, а TryInitLog считает FileExists успехом и не уходит
-    в %TEMP% — журнал теряется (ошибка f7887a35). Разносим запуски по секундам.
+    Запуски установщика в S1 идут подряд, без разноса по секундам: журнал
+    каждого запуска получает своё имя (TryInitLog в etn.iss — метка времени
+    плюс номер попытки) и подтверждается чтением, поэтому совпадение секунды у
+    двух запусков журналы не теряет (ошибка f7887a35, проверка s1:distinct-logs).
 #>
-function Wait-InstallerLogSecond {
-    param([int]$Milliseconds = 1200)
-    Start-Sleep -Milliseconds $Milliseconds
-}
 
 <# --- S1: silent-матрица 20 ------------------------------------------------ #>
 function Invoke-ScenarioS1 {
@@ -829,14 +824,12 @@ function Invoke-ScenarioS1 {
     Add-LogCheck -Results $Results -Scenario $scenario -Name 's1:without-serveronly-reason' -Log $run1.Log `
         -Needle 'Предусловие не выполнено: /VERYSILENT без /SERVERONLY: тихая установка клиента запрещена'
 
-    Wait-InstallerLogSecond
     $run2 = Invoke-SilentInstall -Context $script:context -SetupFileName $setups['current'] `
         -InstallerArgs '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVERONLY'
     Add-CodeCheck -Results $Results -Scenario $scenario -Name 's1:serveronly-no-record-code' -Expected 20 -Actual $run2.Code
     Add-LogCheck -Results $Results -Scenario $scenario -Name 's1:serveronly-no-record-reason' -Log $run2.Log `
         -Needle 'Предусловие не выполнено: нет C:\ProgramData\ETN\install.json'
 
-    Wait-InstallerLogSecond
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     $run3 = Invoke-GuestLimitedProcess -Context $script:context -Exe "C:\e2e\$($setups['current'])" `
         -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SERVERONLY') `
@@ -848,6 +841,19 @@ function Invoke-ScenarioS1 {
         -Needle 'Предусловие не выполнено: процесс не элевирован'
     Add-E2ETiming -Timings $Timings -Scenario $scenario -Name 's1:not-elevated-duration' `
         -Value ([math]::Round($watch.Elapsed.TotalSeconds, 1)) -Note 'не дольше 120 с'
+
+    <# Три запуска подряд (возможно, в одну секунду) — три РАЗНЫХ журнала:
+      ни один запуск не потерял и не подмешал чужой (ошибка f7887a35).
+      До исправления третий журнал не создавался вовсе. #>
+    $logPaths = @(
+        [string](Get-JsonField $run1.Log 'Path'),
+        [string](Get-JsonField $run2.Log 'Path'),
+        [string]$log3.Path
+    ) | Where-Object { $_ }
+    Add-E2ECheck -Results $Results -Scenario $scenario -Name 's1:distinct-logs' `
+        -Ok (($logPaths.Count -eq 3) -and (@($logPaths | Sort-Object -Unique).Count -eq 3)) `
+        -Expected 'три разных журнала' -Actual ($logPaths -join ' | ') `
+        -Note 'журнал каждого запуска создаётся и подтверждается записью'
 
     Add-PathCheck -Results $Results -Scenario $scenario -Name 's1:no-program-files' `
         -Path 'C:\Program Files\ETN' -ExpectedPresent $false

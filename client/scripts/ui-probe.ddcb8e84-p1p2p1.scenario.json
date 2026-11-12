@@ -20,7 +20,7 @@
 
     { "name": "open-p1", "probe": "(() => { const c=document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); if(!c) return 'no-cloud'; c.click(); return 'ok'; })()", "expect": "ok" },
     { "name": "p1-opened", "waitFor": "document.querySelector('.editor-title-input')?.value === 'Проба стенда'", "timeout": 20000 },
-    { "name": "open-properties-tab", "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
+    { "name": "open-properties-tab", "probe": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()", "expect": "ok" },
 
     { "name": "panel-get-started", "probe": "(async () => { await new Promise((r)=>setTimeout(r,250)); return 'ок'; })()", "expect": "ок" },
     { "name": "panel-before", "probe": "(() => { const chips=[...document.querySelectorAll('.properties-type-body .value-chips-field .prc-title')].map((n)=>n.textContent); const ext=document.querySelector('.properties-outside-body input.prop-editor'); return JSON.stringify({ chips, outside: ext ? ext.value : null }); })()" },

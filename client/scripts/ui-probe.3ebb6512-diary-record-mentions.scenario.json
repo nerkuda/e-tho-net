@@ -1,0 +1,179 @@
+{
+  "name": "diary-record-mentions-owner",
+  "description": "Ошибка 3ebb6512: в телах дневниковых записей обязаны подчёркиваться имена и `*`-синонимы мыслей — в том числе когда запись ПРИВЯЗАНА к этой мысли (чипс). Красный прогон до фикса: у привязанной записи лента исключала владельца привязки из скана упоминаний и теряла ВСЕ его упоминания (имя, части заголовка, синонимы); непривязанная запись их показывала. Фикстура — `ui-probe.3ebb6512-seed.mjs` (мысль «Пасечный Виктор Иванович» с `*`-синонимами + две записи: с чипсом и без). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.3ebb6512-diary-record-mentions.scenario.json --scenario-seed client/scripts/ui-probe.3ebb6512-seed.mjs. Без скриншотов: доказательства — DOM-пробы и контроль скана через шаги api.",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-owner-cloud-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "diary-tab-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.view-tab[title=\"Дневник\"], .view-tab[title=\"Diary\"]') !== null"
+    },
+    {
+      "name": "open-diary",
+      "click": ".view-tab[title=\"Дневник\"], .view-tab[title=\"Diary\"]"
+    },
+    {
+      "name": "wait-add-bar",
+      "waitFor": "document.querySelector('.diary-add-btn') !== null"
+    },
+    {
+      "name": "scan-without-exclusion",
+      "api": {
+        "name": "scanNoExclude",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/mentions/scan",
+        "body": {
+          "texts": ["Поздравление Пасечного 2026. Как сказал сам Пасечный, встречаемся в пятницу."],
+          "show_inactive": false
+        },
+        "expression": "data.results[0].length"
+      },
+      "expect": 2
+    },
+    {
+      "name": "scan-with-owner-excluded",
+      "api": {
+        "name": "scanOwnerExcluded",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/mentions/scan",
+        "body": {
+          "texts": ["Поздравление Пасечного 2026. Как сказал сам Пасечный, встречаемся в пятницу."],
+          "show_inactive": false,
+          "exclude_thought_id": "{{thoughtId}}"
+        },
+        "expression": "data.results[0].length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "two-records-in-feed",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.diary-record').length >= 2"
+    },
+    {
+      "name": "control-record-annotated",
+      "timeout": 15000,
+      "waitFor": "(() => { const cards = [...document.querySelectorAll('.diary-record')]; const card = cards.find((c) => (c.textContent ?? '').includes('Созвон с Виктором Ивановичем')); return card !== undefined && card.querySelectorAll('.thought-mention').length > 0; })()"
+    },
+    {
+      "name": "control-record-mention-count",
+      "probe": {
+        "name": "detachedMentions",
+        "expression": "(() => { const cards = [...document.querySelectorAll('.diary-record')]; const card = cards.find((c) => (c.textContent ?? '').includes('Созвон с Виктором Ивановичем')); return card === undefined ? -1 : card.querySelectorAll('.thought-mention').length; })()"
+      },
+      "expect": 1
+    },
+    {
+      "name": "attached-record-mention-count",
+      "probe": {
+        "name": "attachedMentionsBefore",
+        "expression": "(() => { const cards = [...document.querySelectorAll('.diary-record')]; const card = cards.find((c) => (c.textContent ?? '').includes('Поздравление Пасечного')); return card === undefined ? -1 : card.querySelectorAll('.diary-body .thought-mention').length; })()"
+      },
+      "expect": 2
+    },
+    {
+      "name": "attached-record-mention-texts",
+      "probe": {
+        "name": "attachedMentionTexts",
+        "expression": "(() => { const cards = [...document.querySelectorAll('.diary-record')]; const card = cards.find((c) => (c.textContent ?? '').includes('Поздравление Пасечного')); return card === undefined ? [] : [...card.querySelectorAll('.diary-body .thought-mention')].map((m) => m.textContent); })()"
+      },
+      "expect": ["Пасечного", "Пасечный"]
+    },
+    {
+      "name": "mention-clickable-cursor",
+      "probe": {
+        "name": "mentionCursor",
+        "expression": "(() => { const el = document.querySelector('.diary-record .thought-mention'); return el === null ? '' : getComputedStyle(el).cursor; })()"
+      },
+      "expect": "pointer"
+    },
+    {
+      "name": "enter-body-edit",
+      "click": {
+        "selector": ".diary-record:has(.diary-chip) .diary-body",
+        "count": 2
+      }
+    },
+    {
+      "name": "editing-started",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.diary-record:has(.diary-chip) .md-field--editing') !== null"
+    },
+    {
+      "name": "save-with-ctrl-enter",
+      "key": "Enter",
+      "modifiers": ["ctrl"]
+    },
+    {
+      "name": "view-restored",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.diary-record:has(.diary-chip) .md-field--editing') === null && document.querySelector('.diary-record:has(.diary-chip) .md-field-view') !== null"
+    },
+    {
+      "name": "mentions-after-save",
+      "probe": {
+        "name": "attachedMentionsAfter",
+        "expression": "(() => { const card = document.querySelector('.diary-record:has(.diary-chip)'); return card === null ? -1 : card.querySelectorAll('.thought-mention').length; })()"
+      },
+      "expect": 2
+    },
+    {
+      "name": "feed-mention-total-after-save",
+      "probe": {
+        "name": "feedMentionsAfter",
+        "expression": "document.querySelectorAll('.diary-record .thought-mention').length"
+      },
+      "expect": 3
+    },
+    {
+      "name": "scan-exact-span",
+      "api": {
+        "name": "scanExactSpan",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/mentions/scan",
+        "body": {
+          "texts": ["Как сказал сам Пасечный, встречаемся в пятницу."],
+          "show_inactive": false
+        },
+        "expression": "(() => { const txt = 'Как сказал сам Пасечный, встречаемся в пятницу.'; return data.results[0].map((m) => txt.slice(m.start, m.end)); })()"
+      },
+      "expect": ["Пасечный"]
+    }
+  ]
+}

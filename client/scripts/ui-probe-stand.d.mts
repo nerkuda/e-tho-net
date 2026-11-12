@@ -22,6 +22,12 @@ export interface StandOptions {
   seedName: string;
   seedTitle: string;
   seedComment: string;
+  /**
+   * Язык сервера стенда (`--server-language ru`): ставится через
+   * `PUT /admin/settings/language` до запуска клиента. `null` — не трогать
+   * (текущее поведение: дефолт сервера `en`, ADR daab6ac4).
+   */
+  serverLanguage: string | null;
   /** Задержка HTTP-ответов засеянной сети, мс (0 — прокси не поднимается). */
   delaySeedMs: number;
   /** Сузить задержку до путей, содержащих подстроку ('' — вся сеть). */
@@ -68,6 +74,27 @@ export interface StandOptions {
 
 export declare function parseArgs(argv: string[]): StandOptions;
 export declare function parseInitKey(log: string): string;
+
+/**
+ * Канонический вид языкового тега флага `--server-language`: `_` → `-`
+ * (люди пишут `en_US`) и канонизация BCP-47 (`EN` = `en`, `en_US` =
+ * `en-US`).
+ * Сервер канонизирует тег сам (ADR daab6ac4 §2), поэтому сверка заказа с
+ * ответом идёт в этом виде (замечание проверки к c73bcb60).
+ */
+export declare function normalizeLanguageTag(tag: string): string;
+
+/**
+ * Задать язык сервера стенда (`--server-language`): `PUT
+ * /admin/settings/language` и сверка принятого тега с заказанным. Возвращает
+ * принятый тег; ответ сервера с другим языком — ошибка (прогон не должен молча
+ * идти не на том языке, ошибка c73bcb60).
+ */
+export declare function applyServerLanguage(
+  base: string,
+  key: string,
+  tag: string,
+): Promise<string>;
 
 /** Разобрать `--delay-seed-rule <ms>:<путь>` (путь обязателен). */
 export declare function parseDelaySeedRule(value: string): { delayMs: number; path: string };

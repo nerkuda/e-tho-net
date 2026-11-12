@@ -51,7 +51,6 @@
  *   drag dropped onto the bar (or the dropdown) opens the dragged thought.
  */
 
-import { focusFromUi } from '../app.js';
 import { button, div, clear, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { commitEntity, getEntity } from '../lib/live/index.js';
@@ -137,14 +136,24 @@ export function invalidateHistoryBar(): void {
   if (host?.isConnected === true) void render();
 }
 
-/** Opens a history entry in the way its view implies (§11.1). */
+/**
+ * Opens a history entry in the way its view implies (§11.1). Одиночный клик
+ * фокус холста НЕ переводит (элемент 1bd47ca3 v3, задача ef085714): на
+ * «Структурах»/«Дневнике» — экранный вход открытия, на остальных экранах —
+ * только редактор. Фокус и активацию «Карты мыслей» даёт двойной клик — жест
+ * фабрики облачка (`doubleClickFocusOnMap`).
+ */
 function openEntry(id: string): void {
   if (store.state.activeView === 'structures') {
     void openStructuresThought(id);
   } else if (store.state.activeView === 'chronicle') {
     void openChronicleThought(id);
   } else {
-    focusFromUi(id);
+    // Ленивый импорт: статический `editor/*` мог бы замкнуть граф импортов
+    // полосы (editor → … → history-bar).
+    void import('../editor/editor.js').then(({ openThoughtInEditor }) => {
+      openThoughtInEditor(id);
+    });
   }
 }
 

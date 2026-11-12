@@ -793,6 +793,9 @@ export async function pickEntitiesModal(
             // Ширина — по чип-полю выбора: имя обрезается многоточием по
             // нему, а не раздувает диалог (принцип ширины облачка).
             width: 'container',
+            // Чип ЗНАЧЕНИЯ диалога: двойной клик — не навигация, вид под
+            // открытым диалогом не переключается (элемент 1bd47ca3 v3).
+            navigation: false,
             actions: {
               onRemove: () => {
                 checked.delete(id);
@@ -1553,6 +1556,9 @@ export function buildEntityChipField(opts: EntityChipFieldOptions): EntityChipFi
       const chip = createThoughtCloud(cloud, {
         profile: 'chip',
         width: 'container',
+        // Чип ЗНАЧЕНИЯ поля: двойной клик — не навигация (элемент 1bd47ca3 v3),
+        // вид под открытым диалогом не переключается.
+        navigation: false,
         actions: {
           ...(opts.onOpen !== undefined ? { onClick: (id: string) => opts.onOpen?.(id) } : {}),
           // Контекстное меню — жест фабрики; правый клик уже гасит системное
@@ -2042,6 +2048,9 @@ export function buildEntityCombo(opts: EntityComboOptions): EntityCombo {
       profile: 'chip',
       // Ширина — по полю значения диалога.
       width: 'container',
+      // Чип ЗНАЧЕНИЯ поля: двойной клик — не навигация (элемент 1bd47ca3 v3),
+      // вид под открытым диалогом не переключается.
+      navigation: false,
       // Меню — навигация, а не правка: у недоступного поля оно тоже работает
       // (решение по ошибке ada6a69d); очистка значения — только у активного.
       actions: {

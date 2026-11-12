@@ -1,0 +1,205 @@
+{
+  "name": "mentions-realtime-91b8afbb",
+  "description": "Ключевой сценарий ошибки 91b8afbb (0.15.4, спека 08-ui-spec.md §6.7, ревизия 2026-11-11): realtime-свежесть вкладки «Упоминания». Проверяется: (1) внешний комментарий другого клиента (через window.etn — REST-мост того же клиента, событие возвращается realtime-эхом) с явной ID-ссылкой на показанную мысль ДОБАВЛЯЕТ строку в группу «Ссылки на мысль» без переоткрытия мысли и без переключения активной вкладки; (2) счётчик группы пересчитан волной: (22) → (23), а подпись потолка «Показано 20 из 22» НЕ меняется и не пропадает (потолок RECORD_ROWS_LIMIT относится к строкам-записям; раскрытие группы и обрезка 20 строк переживают волну — тело перечитывается на месте); (3) удаление того же комментария возвращает группу к (22), строка владельца исчезает, подпись потолка на месте; (4) вкладка «Упоминания» всё время остаётся активной и развёрнутой — «список обновится при перераскрытии» отменено. Данные засеиваются шагами eval через window.etn: мысль-владелец «Владелец РТ 91b8» и 22 дневниковые записи со ссылкой [[#thoughtId]] (потолок 20 из 22). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.91b8afbb-mentions-realtime.scenario.json --seed-name '91b8afbb mentions realtime' --seed-title 'Проба 91b8afbb'. На дофиксовой сборке (d3a7126a) вкладка не подписана на инвалидацию: счётчик остаётся (22), строка не появляется — сценарий красный на шаге «realtime-counter-bumped».",
+  "timeout": 300000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "(() => { const el = document.querySelector('.cloud[data-id=\"{{thoughtId}}\"]'); return el !== null && el.getBoundingClientRect().width > 0; })()"
+    },
+    {
+      "name": "seed-owner-and-records",
+      "timeout": 120000,
+      "expect": 22,
+      "probe": {
+        "name": "seedOwnerAndRecords",
+        "expression": "(async () => { const nid = '{{networkId}}'; const a = '{{thoughtId}}'; const home = '{{homeId}}'; const b = await window.etn.thoughts.create(nid, { title: 'Владелец РТ 91b8' }); const mk = (body) => ({ kind: 'chronological', title: null, body_md: body, use_time: false }); const ids = []; for (let i = 1; i <= 22; i += 1) { const r = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: b.id }, { owner_type: 'thought', owner_id: home }], mk('zrt91b8 запись ' + i + ' со ссылкой [[#' + a + ']].')); ids.push(r.id); } window.__rtData = { b: b.id, records: ids }; return ids.length; })()"
+      }
+    },
+    {
+      "name": "install-tab-helpers",
+      "expect": true,
+      "probe": {
+        "name": "installTabHelpers",
+        "expression": "(() => { const groups = () => [...document.querySelectorAll('.links-tab > .group')]; window.__rt = { group: (index) => groups()[index] ?? null, expand: (index) => { const g = window.__rt.group(index); if (g === null) return 'no-group'; const caret = g.querySelector(':scope > .group-header .group-caret'); if (caret !== null && caret.classList.contains('collapsed')) { g.querySelector(':scope > .group-header').click(); } return 'ok'; }, expanded: (index) => { const g = window.__rt.group(index); return g !== null && g.querySelector(':scope > .group-body') !== null; }, badge: (index) => { const g = window.__rt.group(index); if (g === null) return 'no-group'; const b = g.querySelector(':scope > .group-header .ui-badge'); return b === null ? 'no-badge' : (b.textContent || '').trim(); }, caption: (index) => { const g = window.__rt.group(index); if (g === null) return 'no-group'; const p = g.querySelector('.mentions-records > p.muted'); return p === null ? 'no-caption' : (p.textContent || '').trim(); }, recordRows: (index) => { const g = window.__rt.group(index); return g === null ? [] : [...g.querySelectorAll('.mentions-records .record-row')]; }, ownerRows: (index) => { const g = window.__rt.group(index); return g === null ? [] : [...g.querySelectorAll('.mentions-body > .mention-item')]; }, ownerTitles: (index) => window.__rt.ownerRows(index).map((r) => (r.textContent || '').trim()) }; return true; })()"
+      }
+    },
+    {
+      "name": "open-thought-editor",
+      "expect": "ok",
+      "probe": {
+        "name": "clickSeedCloud",
+        "expression": "(() => { const el = [...document.querySelectorAll('.cloud[data-id=\"{{thoughtId}}\"]')].find((c) => c.getBoundingClientRect().width > 0); if (el === undefined) return 'no-cloud'; el.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "editor-tabs-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.editor-tab').length === 7"
+    },
+    {
+      "name": "open-mentions-tab",
+      "expect": "ok",
+      "probe": {
+        "name": "openMentionsTab",
+        "expression": "(() => { const tabs = [...document.querySelectorAll('.editor-tab')]; const tab = tabs[3]; if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "mentions-tab-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.links-tab') !== null"
+    },
+    {
+      "name": "expand-backlinks",
+      "expect": "ok",
+      "probe": {
+        "name": "expandBacklinks",
+        "expression": "window.__rt.expand(0)"
+      }
+    },
+    {
+      "name": "backlinks-capped-rows-before",
+      "timeout": 60000,
+      "waitFor": "window.__rt.recordRows(0).length === 20"
+    },
+    {
+      "name": "counter-before",
+      "probe": {
+        "name": "counterBefore",
+        "expression": "window.__rt.badge(0)"
+      },
+      "expect": "(22)"
+    },
+    {
+      "name": "caption-before",
+      "probe": {
+        "name": "captionBefore",
+        "expression": "(() => { const text = window.__rt.caption(0); return typeof text === 'string' && text.includes('20') && text.includes('22'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "no-owner-rows-before",
+      "probe": {
+        "name": "noOwnerRowsBefore",
+        "expression": "window.__rt.ownerRows(0).length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "seed-external-permanent-link",
+      "expect": true,
+      "probe": {
+        "name": "seedExternalPermanentLink",
+        "expression": "(async () => { const nid = '{{networkId}}'; const a = '{{thoughtId}}'; const c = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: window.__rtData.b }], { kind: 'permanent', title: null, body_md: 'zrt91b8 внешняя ссылка [[#' + a + ']]', use_time: false }); window.__rtData.comment = c.id; return true; })()"
+      }
+    },
+    {
+      "name": "realtime-counter-bumped",
+      "timeout": 30000,
+      "waitFor": "window.__rt.badge(0) === '(23)'"
+    },
+    {
+      "name": "realtime-owner-row-appeared",
+      "timeout": 30000,
+      "waitFor": "window.__rt.ownerRows(0).length === 1 && (window.__rt.ownerTitles(0)[0] || '').includes('Владелец РТ 91b8')"
+    },
+    {
+      "name": "expansion-kept-after-wave",
+      "probe": {
+        "name": "expansionKept",
+        "expression": "window.__rt.expanded(0) && window.__rt.recordRows(0).length === 20"
+      },
+      "expect": true
+    },
+    {
+      "name": "caption-kept-after-wave",
+      "probe": {
+        "name": "captionKept",
+        "expression": "(() => { const text = window.__rt.caption(0); return typeof text === 'string' && text.includes('20') && text.includes('22'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "tab-still-active-after-wave",
+      "probe": {
+        "name": "tabStillActive",
+        "expression": "(() => { const tab = document.querySelector('.links-tab'); return tab !== null && tab.getBoundingClientRect().width > 0; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "remove-external-comment",
+      "expect": true,
+      "probe": {
+        "name": "removeExternalComment",
+        "expression": "(async () => { const nid = '{{networkId}}'; const id = window.__rtData.comment; const c = await window.etn.comments.get(nid, id); await window.etn.comments.remove(nid, id, c.version); return true; })()"
+      }
+    },
+    {
+      "name": "realtime-counter-back",
+      "timeout": 30000,
+      "waitFor": "window.__rt.badge(0) === '(22)'"
+    },
+    {
+      "name": "realtime-owner-row-gone",
+      "timeout": 30000,
+      "waitFor": "window.__rt.ownerRows(0).length === 0"
+    },
+    {
+      "name": "caption-back-after-delete",
+      "probe": {
+        "name": "captionBack",
+        "expression": "(() => { const text = window.__rt.caption(0); return typeof text === 'string' && text.includes('20') && text.includes('22'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "expansion-kept-after-delete",
+      "probe": {
+        "name": "expansionKeptAfterDelete",
+        "expression": "window.__rt.expanded(0) && window.__rt.recordRows(0).length === 20"
+      },
+      "expect": true
+    },
+    {
+      "name": "no-error-dialog",
+      "probe": "document.querySelectorAll('.dialog-backdrop').length === 0",
+      "expect": true
+    }
+  ]
+}

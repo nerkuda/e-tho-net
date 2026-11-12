@@ -1,0 +1,86 @@
+{
+  "name": "ef89c5c8: двойной клик «Создать» публикацию — ровно один POST",
+  "description": "Гейт ошибки ef89c5c8 (busy на время асинхронной записи). Ответ на POST публикации задержан (--delay-seed-rule '1500:publications'), клик по «Создать» двойной: на дофиксовой сборке уходит ДВА POST и появляются две публикации, кнопки футера не гаснут; после фикса — один POST, кнопки disabled на время запроса. Эффект проверяется на сервере (шаг api), не по DOM.",
+  "timeout": 120000,
+  "texts": {
+    "publicationsTab": { "ru": "Публикации", "en": "Publications" },
+    "newPublication": { "ru": "Публикация", "en": "Publication" }
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    {
+      "name": "server-url-value",
+      "probe": "document.querySelector(\"input[placeholder^='http']\")?.value ?? null",
+      "expect": "{{serverUrl}}"
+    },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "workspace-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.toolbar button.view-tab') !== null"
+    },
+    {
+      "name": "open-publications",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.toolbar button.view-tab')).find((e) => (e.getAttribute('title') || '') === '{{text:publicationsTab}}'); if (!b) throw new Error('нет закладки публикаций'); b.click(); return true; })()"
+    },
+    {
+      "name": "publications-ready",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.pub-toolbar') !== null"
+    },
+    {
+      "name": "open-wizard",
+      "eval": "(() => { const b = Array.from(document.querySelectorAll('.pub-toolbar button')).find((e) => (e.textContent || '').trim() === '{{text:newPublication}}'); if (!b) throw new Error('нет кнопки создания публикации'); b.click(); return true; })()"
+    },
+    {
+      "name": "wizard-ready",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('#pub-wizard-title') !== null"
+    },
+    {
+      "name": "fill-title",
+      "eval": "(() => { const i = document.querySelector('#pub-wizard-title'); if (!i) throw new Error('нет поля названия'); i.value = 'ef89c5c8 probe'; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()"
+    },
+    {
+      "name": "title-filled",
+      "probe": "document.querySelector('#pub-wizard-title')?.value ?? null",
+      "expect": "ef89c5c8 probe"
+    },
+    {
+      "name": "double-click-create",
+      "eval": "(() => { const b = document.querySelector('.dialog-footer .ui-btn--primary'); if (!b) throw new Error('нет кнопки создания в футере'); b.click(); b.click(); return true; })()"
+    },
+    {
+      "name": "footer-busy",
+      "probe": "(() => { const btns = Array.from(document.querySelectorAll('.dialog-footer button')); return { count: btns.length, everyDisabled: btns.every((b) => b.disabled === true) }; })()",
+      "expect": { "count": 2, "everyDisabled": true }
+    },
+    {
+      "name": "wizard-closed",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "publications-with-title",
+      "api": {
+        "name": "publications-count",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/publications",
+        "expression": "data.filter((p) => p.title === 'ef89c5c8 probe').length"
+      },
+      "expect": 1
+    }
+  ]
+}

@@ -392,7 +392,9 @@ describe('приёмка №5, п.1: компоновка карточки за�
     // облачков собирает компонент шапки (`createRecordChips`) — с перерисовкой
     // на месте, чтобы добавленная мысль была видна сразу (ошибка 78d600c9).
     assert.match(CHRONICLE, /chips: chips\.box/, 'оболочка привязок карточки');
-    assert.match(CHRONICLE, /createRecordChips\(\{ row, homeId: \(\) => homeId, buildChip \}\)/);
+    // 0.15.4 (задача 33ed043c): кеш HOME — общий `lib/home.ts`, геттер
+    // строки-записи читает его же (`currentHomeId`).
+    assert.match(CHRONICLE, /createRecordChips\(\{ row, homeId: currentHomeId, buildChip \}\)/);
     assert.match(CHRONICLE, /class: 'diary-record-actions'/, '«бутерброд» меню записи');
     assert.match(
       read('styles/screens/chronicle.css'),

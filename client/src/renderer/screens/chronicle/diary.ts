@@ -26,6 +26,7 @@ import {
   weekStartOffset,
 } from '../../lib/dates.js';
 import { formatDateParts, getLang } from '../../lib/i18n.js';
+import { visibleRecordTargets } from '../../lib/record-targets.js';
 
 // Общие чистые примитивы дат живут в `lib/dates.ts` (перенос календаря в
 // библиотеку, приёмка №5; резолвер токенов периода перенесён туда же — общий с
@@ -529,15 +530,19 @@ export function hasRowId(rows: readonly { id: string }[], id: string): boolean {
 /**
  * Видимые чипсы записи: все привязки, кроме первичной привязки к HOME —
  * она служебная (требование c81964c7) и крестика не имеет.
+ *
+ * Тонкая обёртка общего предиката `lib/record-targets.ts` (0.15.4, задача
+ * 33ed043c): экранная лента фильтрует ТОЛЬКО HOME, поэтому передаёт
+ * РАЗРЕШАЮЩИЕ флаги `showInactive`/`showTrash` — видимый результат прежний
+ * (граница версии «Экран «Дневник» не меняется»). Собственной копии предиката в
+ * экранах нет; сигнатура `visibleChips(targets, homeId)` сохранена для второго
+ * потребителя — `screens/chronicle/record-head.ts`.
  */
 export function visibleChips(
   targets: readonly ChronicleTarget[],
   homeId: string | null,
 ): ChronicleTarget[] {
-  if (homeId === null) return [...targets];
-  return targets.filter(
-    (target) => !(target.kind === 'thought' && target.thought.id === homeId),
-  );
+  return visibleRecordTargets(targets, { homeId, showInactive: true, showTrash: true });
 }
 
 /** Является ли привязка снятием последнего чипса (тогда нужно подтверждение). */
@@ -560,12 +565,37 @@ export function parentThoughtIds(targets: readonly ChronicleTarget[]): string[] 
 }
 
 /**
+ * Мысль, исключаемая из авто-подсветки упоминаний внутри записи «Дневника», —
+ * НИ ОДНА (`undefined`).
+ *
+ * Запись ленты — самостоятельный текст, а не постоянный комментарий мысли:
+ * правило «мысль не ссылается сама на себя» относится к странице мысли, где
+ * владелец комментария И ЕСТЬ эта мысль (элемент `8001cc85` — «подчёркиваются
+ * слова, совпадающие с названием или синонимом известной мысли», без исключения
+ * владельца). У дневниковой записи владелец привязки (первый чипс) — лишь одна
+ * из целей, поэтому и он, и HOME подчёркиваются как любая другая мысль
+ * (ошибка 3ebb6512, решение оркестратора 2026-11-10).
+ *
+ * Раньше и лента, и поле правки брали исключением `attachmentOwnerForRow(...)`
+ * (`currentOwner()` / `attachmentsOwner`) — и запись, привязанная к мысли с
+ * `*`-синонимами, теряла ВСЕ её упоминания: имя, части составного заголовка и
+ * синонимы, хотя текст записи — не её комментарий. Функция — единая точка
+ * решения для обоих путей подсветки записи.
+ */
+export function recordMentionsExcludeThoughtId(): string | undefined {
+  return undefined;
+}
+
+/**
  * Владелец файлового вложения для вставки картинки из буфера в правку
  * комментария записи (0.10.1, итерация приёмки №10, задача 197b3b05; ошибка
  * 8f090884). Паритет с постоянным комментарием мысли: цель вложения — первая
  * ПРИВЯЗАННАЯ МЫСЛЬ записи (первый thought-чипс среди видимых привязок); если
  * среди привязок мыслей нет (пусто или только чипсы-связи) — первичный
  * владелец записи HOME. `null` — ни привязок, ни HOME (вложение невозможно).
+ *
+ * ВНИМАНИЕ: это цель ВЛОЖЕНИЯ, а не владелец упоминаний записи — для подсветки
+ * упоминаний действует {@link recordMentionsExcludeThoughtId} (`undefined`).
  */
 export function attachmentOwnerForRow(
   targets: readonly ChronicleTarget[],

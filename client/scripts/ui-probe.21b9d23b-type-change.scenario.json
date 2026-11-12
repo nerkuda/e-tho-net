@@ -2,6 +2,7 @@
   "name": "21b9d23b-type-change-personal-properties",
   "description": "P2 сценария 21b9d23b: смена типа мысли с личными (внетиповыми) свойствами — скаляр и свойство-связь остаются в группе «Свойства вне типа» на типе без привязки, переезжают в типовые при типе с привязкой, у мысли без типа вкладка работает, «Перенести в типовые» скрыт, (+) открывает полный справочник.",
   "timeout": 60000,
+  "texts": { "promoteToTyped": { "ru": "Перенести в типовые свойства", "en": "Move to typed properties" } },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -60,7 +61,7 @@
     {
       "name": "open-properties-tab",
       "expect": "ok",
-      "probe": "(() => { const tab=[...document.querySelectorAll('.editor-tab')].find((b)=>b.textContent.includes('Свойства')); if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
+      "probe": "(() => { /* Вкладки мысли идут в фиксированном порядке TABS_THOUGHT (editor.ts): 0 — комментарий, 1 — свойства, 2 — вложения, 3 — упоминания, 4 — дневник, 5 — граф, 6 — метаданные. Подписи локализованы (ADR daab6ac4), поэтому вкладка ищется по позиции, а не по тексту. */ const tab=[...document.querySelectorAll('.editor-tab')][1]; if(!tab) return 'no-tab'; tab.click(); return 'ok'; })()"
     },
     {
       "name": "outside-rows-initial",
@@ -127,7 +128,7 @@
     },
     {
       "name": "clear-type-chip",
-      "probe": "(() => { const btn=document.querySelector('.editor-header-row .entity-combo [title=\"Убрать из значения\"]'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
+      "probe": "(() => { const btn=document.querySelector('.editor-header-row .entity-combo .st-f-clear-inline'); if(!btn) return 'no-button'; btn.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -151,7 +152,7 @@
     },
     {
       "name": "no-promote-item-without-type",
-      "probe": "[...document.querySelectorAll('.menu .menu-item')].map((x)=>(x.textContent||'').trim()).filter((x)=>x.includes('Перенести в типовые'))",
+      "probe": "[...document.querySelectorAll('.menu .menu-item')].map((x)=>(x.textContent||'').trim()).filter((x)=>x.includes('{{text:promoteToTyped}}'))",
       "expect": []
     },
     {

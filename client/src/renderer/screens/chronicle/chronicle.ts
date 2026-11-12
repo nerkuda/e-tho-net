@@ -47,7 +47,7 @@ import {
   type ThoughtRef,
 } from '@etn/shared';
 
-import { findRootThought, requireNetworkId } from '../../app.js';
+import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
@@ -73,6 +73,7 @@ import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
 import { markCommentPreview, markThoughtCommentPreview } from '../../lib/hover-preview.js';
 import { svgIcon } from '../../lib/ui/icon.js';
+import { cachedHomeId, getHomeId, resetHomeCache } from '../../lib/home.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
 import {
@@ -128,6 +129,7 @@ import {
   localDayStart,
   parentThoughtIds,
   periodValuesForRange,
+  recordMentionsExcludeThoughtId,
   resolvePeriodDay,
   rowDays,
   todayLocal,
@@ -233,17 +235,14 @@ let loadingMore = false;
  */
 let pendingReconcile = false;
 /**
- * Id of the HOME (root) thought — primary owner of a day record.
- *
- * HOME — идентификатор, разрешаемый ПО СЕТИ, поэтому его кэш привязан к сети
- * (`homeNetworkId`); при смене сети он недействителен (ошибка ab4e499f).
- * Смена сети/вкладки сбрасывает кэш в `ensureChronicleInitialised` вместе с
- * остальным состоянием вида; `homeNetworkId` дополнительно закрывает гонку,
- * когда промис прежней сети завершается уже после смены (см. `getHome`).
+ * Синхронно доступный HOME текущей сети (0.15.4, задача 33ed043c): резолвер и
+ * кеш вынесены в общий `lib/home.ts` — тот же HOME нужен строке дневниковой
+ * записи в результатах поиска. Здесь остаётся только чтение кеша для мест,
+ * которые рисуются до получения промиса (геттеры/обработчики).
  */
-let homeId: string | null = null;
-let homeNetworkId: string | null = null;
-let homePromise: Promise<string> | null = null;
+function currentHomeId(): string | null {
+  return cachedHomeId(store.state.networkId);
+}
 /** Stable scroll container of the feed (`.chron-table-wrap`). */
 let feedWrap: HTMLElement | null = null;
 /** Stable list element re-rendered inside the container (never rebuilt). */
@@ -619,9 +618,7 @@ export async function ensureChronicleInitialised(): Promise<void> {
   // Кэш HOME — тоже состояние сети: без сброса в сети, открытой не первой,
   // первичная привязка новой записи уходила бы с HOME прежней сети и сервер
   // отвечал `thought … not found` (ошибка ab4e499f).
-  homeId = null;
-  homeNetworkId = null;
-  homePromise = null;
+  resetHomeCache();
   // Снимок прежней сети/вкладки отбора больше не касается: ожидание переразбора
   // снимается вместе с остальным состоянием. Панель — модульный синглтон,
   // поэтому её отбор сбрасывается ДО чтения нового снимка (ошибка 58c55bb9).
@@ -666,7 +663,7 @@ export async function ensureChronicleInitialised(): Promise<void> {
   // поставит `syncCalendar` после запроса ленты; `showDate` не уведомляет
   // `onMonthChange`, поэтому счётчики нового месяца пересчитываются явно.
   const entryMonthCounts = alignEntryMonth();
-  await getHome().catch(() => undefined);
+  await getHomeId(requireNetworkId()).catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
   await loadCollapsedRecords();
@@ -910,7 +907,7 @@ async function applyFilter(): Promise<void> {
   // Ручное применение снимает подсветку перехода.
   jumpHighlightId = null;
   persistState();
-  await getHome().catch(() => undefined);
+  await getHomeId(requireNetworkId()).catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await reload();
   // Смена отбора показывает ленту с начала: reload пересобирает её с якорем,
@@ -1361,7 +1358,7 @@ async function addRecord(presetThoughtIds: string[] = []): Promise<void> {
   );
   const networkId = requireNetworkId();
   try {
-    const home = await getHome();
+    const home = await getHomeId(requireNetworkId());
     const targets: CommentTarget[] = [{ owner_type: 'thought', owner_id: home }];
     for (const id of presetThoughtIds) {
       if (id === home || targets.some((t) => t.owner_id === id)) continue;
@@ -1586,7 +1583,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
    * разрешиться позже сборки карточки, а `row.targets` — смениться к правке.
    */
   const currentOwner = (): { ownerType: 'thought'; ownerId: string } | null =>
-    attachmentOwnerForRow(row.targets, homeId);
+    attachmentOwnerForRow(row.targets, currentHomeId());
 
   // Просмотр записи — статичный `body_html` БЕЗ поля markdown (`.md-field`),
   // поэтому клик по легаси-ссылке `[[Имя]]` в ленте не находил контекста
@@ -1635,6 +1632,12 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       externalChanges: () =>
         (title !== null ? title.value().trim() : row.title ?? '') !== (row.title ?? ''),
       ...(owner !== null ? { attachmentsOwner: owner } : {}),
+      // Авто-подсветка упоминаний в правке записи — БЕЗ исключения владельца
+      // (ошибка 3ebb6512): геттер задан явно и перекрывает fallback
+      // `attachmentsOwner` выше (владелец вложения — цель картинок, а не
+      // «своя мысль» текста записи). Единая точка записи —
+      // `recordMentionsExcludeThoughtId`, паритет с просмотром ленты.
+      getMentionsExcludeThoughtId: recordMentionsExcludeThoughtId,
       // Контекст комментария (карточка 34ffbd75 + ТЗ5 «Дневник без псевдослота»):
       // флоу «создать мысль по legacy-ссылке», команды вставки ссылки/
       // трансклюзии и родители новой мысли — ВСЕ цели-чипсы записи.
@@ -1701,7 +1704,12 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   setTimeout(() => {
     if (!recordView.isConnected) return;
     annotateMentions(recordView, {
-      excludeThoughtId: currentOwner()?.ownerId,
+      // Владелец записи подсвечивается как любая мысль (ошибка 3ebb6512):
+      // запись — самостоятельная лента, а не текст мысли, поэтому правило
+      // «своё имя в своём комментарии не подчёркивается» здесь не действует.
+      // Исключением раньше шёл первый чипс (`currentOwner()`), и привязанная
+      // запись теряла ВСЕ упоминания этой мысли, включая синонимы.
+      excludeThoughtId: recordMentionsExcludeThoughtId(),
       onInsertLink: (thought, matchedText) => {
         void ensureWidget().then((w) => {
           if (w !== null) insertMentionLinkIntoField(w, thought, matchedText);
@@ -1772,7 +1780,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // единую правку, поэтому их состав догоняет модель сразу, даже пока карточка в
   // правке (ошибка 78d600c9: мысль, добавленная к несохранённой записи, была
   // видна только после её сохранения).
-  const chips = createRecordChips({ row, homeId: () => homeId, buildChip });
+  const chips = createRecordChips({ row, homeId: currentHomeId, buildChip });
 
   const head = buildRecordHead({
     dayLabel: recordDateLabel(row),
@@ -2114,7 +2122,7 @@ async function detachChip(rowId: string, target: ChronicleTarget): Promise<void>
     const fresh = await etn.comments.get(networkId, rowId);
     // HOME — служебная первичная привязка, крестика у неё нет (c81964c7).
     const meaningful = fresh.targets.filter(
-      (tg) => !(tg.owner_type === 'thought' && tg.owner_id === homeId),
+      (tg) => !(tg.owner_type === 'thought' && tg.owner_id === currentHomeId()),
     );
     // Снятие последнего содержательного чипса оставляет запись в дневнике без
     // привязок к мыслям — действие подтверждаем (требование c81964c7). Позиция
@@ -2541,7 +2549,7 @@ async function jumpToRecord(row: ChronicleRecordRef): Promise<void> {
   // 1) Дата начала записи, прочие критерии отбора сохраняются.
   setChroniclePeriod(values.from, values.to);
   persistState();
-  await getHome().catch(() => undefined);
+  await getHomeId(requireNetworkId()).catch(() => undefined);
   await reload();
   // Календарь — на месяц записи (чек-лист 8012a9b0, п.2), иначе дня записи в
   // его сетке нет и переход выглядит как «отметок нет» (ошибка ecd91c1d).
@@ -2639,28 +2647,7 @@ export async function openChronicleLinkById(id: string): Promise<void> {
 // HOME thought
 // ---------------------------------------------------------------------------
 
-async function getHome(): Promise<string> {
-  const networkId = requireNetworkId();
-  if (homeId !== null && homeNetworkId === networkId) return homeId;
-  if (homePromise === null || homeNetworkId !== networkId) {
-    homeNetworkId = networkId;
-    homePromise = findRootThought(networkId)
-      .then((root) => {
-        // Промис мог завершиться уже после смены сети: не затираем кэш HOME
-        // чужой сети (ошибка ab4e499f).
-        if (homeNetworkId === networkId) homeId = root.id;
-        return root.id;
-      })
-      .catch((err: unknown) => {
-        // Сбой разрешения HOME не кэшируем навсегда: сбрасываем промис, чтобы
-        // следующее обращение сделало новую попытку, а не осталось в fallback до
-        // перезагрузки экрана (ошибка 810520c5).
-        if (homeNetworkId === networkId) {
-          homePromise = null;
-          homeNetworkId = null;
-        }
-        throw err;
-      });
-  }
-  return homePromise;
-}
+//
+// Резолвер и кеш HOME — общий `lib/home.ts` (0.15.4, задача 33ed043c): тот же
+// HOME нужен строке дневниковой записи в результатах поиска. Экран читает кеш
+// синхронно (`currentHomeId`) и разрешает его лениво (`getHomeId`).

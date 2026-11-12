@@ -108,14 +108,14 @@ export function purgeThoughtDeletionDependants(ndb: NetworkDb, thoughtId: string
   // Former FK cascades (docs/13-layers.md §3): `thoughts.id` is no longer a
   // unique parent key, so these tables have no SQL FK any more and the app
   // owns the cleanup.
-  ndb.prepare('DELETE FROM links WHERE source_id = ? OR target_id = ?').run(thoughtId, thoughtId);
-  ndb.prepare('DELETE FROM thought_synonyms WHERE thought_id = ?').run(thoughtId);
+  ndb.prepare('DELETE FROM links WHERE source_id = ? OR target_id = ?').run(thoughtId, thoughtId); // layers:physical-write — физический каскад-вычистка владельца во всех слоях
+  ndb.prepare('DELETE FROM thought_synonyms WHERE thought_id = ?').run(thoughtId); // layers:physical-write — физический каскад-вычистка владельца во всех слоях
   // Пер-мысленный порядок внетиповых свойств (0.14.1, задача 3948af62):
   // строки — содержательное знание мысли и живут ровно столько же, сколько она.
-  ndb.prepare('DELETE FROM thought_property_order WHERE thought_id = ?').run(thoughtId);
+  ndb.prepare('DELETE FROM thought_property_order WHERE thought_id = ?').run(thoughtId); // layers:physical-write — физический каскад-вычистка владельца во всех слоях
   // Внетиповые отборы мысли (0.14.1, задача a28d444b): собственные отборы
   // мысли исчезают вместе с ней (в отличие от thought_views — меток ниже).
-  ndb.prepare('DELETE FROM thought_custom_views WHERE thought_id = ?').run(thoughtId);
+  ndb.prepare('DELETE FROM thought_custom_views WHERE thought_id = ?').run(thoughtId); // layers:physical-write — физический каскад-вычистка владельца во всех слоях
   ndb.prepare('DELETE FROM thought_views WHERE thought_id = ?').run(thoughtId);
   ndb.prepare('DELETE FROM user_focus_preferences WHERE focus_thought_id = ?').run(thoughtId);
   ndb
@@ -262,6 +262,7 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
   if (ownerIds.length === 0) return;
   const owners = ownerIds.map(() => '?').join(', ');
 
+  // layers:physical-write — физический каскад-вычистка владельца во всех слоях
   // Comments where an owner is the primary owner are deleted with all their
   // m2m targets; target rows pointing at the owner are detached (L20 §10.1).
   // layers:physical-read — суб-SELECT перечисляет логические id по ВСЕМ слоям:
@@ -273,10 +274,10 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
     )
     .run(ownerType, ...ownerIds);
   ndb
-    .prepare(`DELETE FROM comments WHERE owner_type = ? AND owner_id IN (${owners})`)
+    .prepare(`DELETE FROM comments WHERE owner_type = ? AND owner_id IN (${owners})`) // layers:physical-write — физический каскад-вычистка владельца во всех слоях
     .run(ownerType, ...ownerIds);
   ndb
-    .prepare(`DELETE FROM comment_targets WHERE owner_type = ? AND owner_id IN (${owners})`)
+    .prepare(`DELETE FROM comment_targets WHERE owner_type = ? AND owner_id IN (${owners})`) // layers:physical-write — физический каскад-вычистка владельца во всех слоях
     .run(ownerType, ...ownerIds);
 
   // Вложения: снимаем только ВЛАДЕНИЯ владельца (строки `attachment_owners`);
@@ -285,7 +286,7 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
   purgeOwnerAttachmentsChunk(ndb, ownerType, ownerIds);
 
   ndb
-    .prepare(`DELETE FROM property_values WHERE owner_type = ? AND owner_id IN (${owners})`)
+    .prepare(`DELETE FROM property_values WHERE owner_type = ? AND owner_id IN (${owners})`) // layers:physical-write — физический каскад-вычистка владельца во всех слоях
     .run(ownerType, ...ownerIds);
 }
 
@@ -334,7 +335,7 @@ function purgeOwnerAttachmentsChunk(
 
   // Снимаем ТОЛЬКО владения удаляемого объекта.
   ndb
-    .prepare(`DELETE FROM attachment_owners WHERE owner_type = ? AND owner_id IN (${owners})`)
+    .prepare(`DELETE FROM attachment_owners WHERE owner_type = ? AND owner_id IN (${owners})`) // layers:physical-write — физический каскад-вычистка владельца во всех слоях
     .run(ownerType, ...ownerIds);
 
   if (attachmentIds.length === 0) return;
@@ -362,15 +363,15 @@ function removeOrphanAttachments(ndb: NetworkDb, attachmentIds: string[]): void 
 
   // Строки владений, оставшиеся в служебных слоях, тоже убираем — иначе они
   // ссылались бы на удалённое вложение.
-  ndb.prepare(`DELETE FROM attachment_owners WHERE attachment_id IN (${ids})`).run(...attachmentIds);
-  ndb.prepare(`DELETE FROM attachments WHERE id IN (${ids})`).run(...attachmentIds);
+  ndb.prepare(`DELETE FROM attachment_owners WHERE attachment_id IN (${ids})`).run(...attachmentIds); // layers:physical-write — физический каскад-вычистка владельца во всех слоях
+  ndb.prepare(`DELETE FROM attachments WHERE id IN (${ids})`).run(...attachmentIds); // layers:physical-write — физический каскад-вычистка владельца во всех слоях
 
   // Висячих ссылок-иконок (L16) и обложек публикаций не оставляем.
   ndb
-    .prepare(`UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id IN (${ids})`)
+    .prepare(`UPDATE thoughts SET icon_attachment_id = NULL WHERE icon_attachment_id IN (${ids})`) // layers:physical-write — физический каскад-вычистка владельца во всех слоях
     .run(...attachmentIds);
   ndb
-    .prepare(`UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id IN (${ids})`)
+    .prepare(`UPDATE publications SET cover_attachment_id = NULL WHERE cover_attachment_id IN (${ids})`) // layers:physical-write — физический каскад-вычистка владельца во всех слоях
     .run(...attachmentIds);
 
   for (const row of rows) {

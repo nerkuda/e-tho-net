@@ -156,6 +156,15 @@ export async function showCreateNetworkDialog(): Promise<void> {
   );
 
   let creating = false;
+  // Пока запрос создания ждёт сервер, кнопки футера disabled (ошибка ef89c5c8):
+  // второй клик давал ВТОРУЮ мыслесеть.
+  let createBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean): void => {
+    creating = value;
+    if (createBtn !== null) createBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
   await new Promise<void>((resolve) => {
     /** Создание сети и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
     async function create(close: () => void): Promise<void> {
@@ -165,7 +174,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
         errorLine.show(t('networks.enterTitleNetwork'), { field: () => nameInput });
         return;
       }
-      creating = true;
+      setBusy(true);
       try {
         const description = descInput.value.trim() || undefined;
         const network = await etn.networks.create(name, description);
@@ -174,7 +183,7 @@ export async function showCreateNetworkDialog(): Promise<void> {
       } catch (err) {
         errorLine.show(errText(err));
       } finally {
-        creating = false;
+        setBusy(false);
         resolve();
       }
     }
@@ -192,11 +201,20 @@ export async function showCreateNetworkDialog(): Promise<void> {
         save: (close) => void create(close),
       },
       buttons: [
-        { label: t('actions.cancel'), onClick: () => resolve() },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+          onClick: () => resolve(),
+        },
         {
           label: t('admin.label.create'),
           primary: true,
           keepOpen: true,
+          ref: (btn) => {
+            createBtn = btn;
+          },
           onClick: (close) => void create(close),
         },
       ],

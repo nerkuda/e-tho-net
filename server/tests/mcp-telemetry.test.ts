@@ -801,6 +801,10 @@ describe('Progressive disclosure (940a499d, ADR b2eebf8b)', { skip: !nativeAvail
         // 0.15.1 (задача 17ff4619): `etn.types.get` + новые параметры
         // `etn.types.list` дали +1 278 Б (см. блок выше); D+I 45 759 →
         // 47 037 Б. Планка: 45 800 → 47 200 (малый запас).
+        // 0.15.4 (ошибка bb862b8d): `conventions` в `etn.networks.structure`
+        // объявлены всегда возвращаемыми, `include_conventions` убран из
+        // `inputSchema`. `tools/list` 47 016 → 47 063 Б, D+I 42 424 → 42 471 Б
+        // (+47: проза длиннее убранного параметра). Планки НЕ менялись.
         assert.ok(
           descriptionsPlusInputSchema <= 47_200,
           `descriptions+inputSchema is ${descriptionsPlusInputSchema} bytes — over the ADR b2eebf8b budget of 47200`,

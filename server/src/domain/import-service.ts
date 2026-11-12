@@ -66,6 +66,7 @@ import {
 import type { Logger } from '../logger.js';
 import { parseManifest } from './etnx-format.js';
 import { normaliseInstant } from './dates.js';
+import { ensureLinkPropertyForLinkType } from './property-service.js';
 import { normalizeTitle } from './thought-service.js';
 
 // ---------------------------------------------------------------------------
@@ -779,6 +780,7 @@ function insertOrUpdateThought(
       );
     return { id: t.id, action: 'created' };
   }
+  // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
   ndb
     .prepare(
       `UPDATE thoughts SET
@@ -947,6 +949,7 @@ function insertComment(
       )
       .get(resolvedOwnerId) as { pk: number } | undefined;
     if (existing !== undefined) {
+      // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
       ndb
         .prepare(
           `UPDATE comments SET title = ?, body_md = ?, body_html = ?, use_time = ?, version = version + 1,
@@ -1203,6 +1206,7 @@ function upsertPublication(ndb: NetworkDb, p: Publication): 'created' | 'updated
   const extraProperties = JSON.stringify(p.extra_properties ?? []);
   const existing = ndb.prepare('SELECT 1 FROM publications_v WHERE id = ? LIMIT 1').get(p.id);
   if (existing !== undefined) {
+    // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
     ndb
       .prepare(
         `UPDATE publications SET
@@ -1326,6 +1330,7 @@ function upsertShelf(ndb: NetworkDb, row: EtnxShelf): 'created' | 'updated' {
   const markedBy = row.marked_for_deletion_by ?? null;
   const existing = ndb.prepare('SELECT 1 FROM shelves_v WHERE id = ? LIMIT 1').get(row.id);
   if (existing !== undefined) {
+    // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
     ndb
       .prepare(
         `UPDATE shelves SET title = ?, title_key = ?, position = ?, version = ?,
@@ -1609,6 +1614,20 @@ export function applyManifest(
         if (inserted === prop.id) summary.properties_created += 1;
       }
 
+      // 3a. Парное свойство-связь каждому типу без свойства (ошибка 117a999a).
+      // Архив мог быть снят до исправления, когда MCP создавал «голый» тип.
+      // Идемпотентно: тип, у которого пара есть (в том числе пришедшая из
+      // манифеста), пропускается. Импорт не имеет права падать на конфликте
+      // имени — суффиксная политика, как у миграции 053.
+      const rootLinkTypeId = rootTypeId(ndb, 'link_types_v');
+      for (const t of manifest.link_types) {
+        const survivingId = linkTypeIdRemap.get(t.id) ?? t.id;
+        if (survivingId === rootLinkTypeId) continue;
+        ensureLinkPropertyForLinkType(ndb, survivingId, opts.actorUserId, {
+          on_name_conflict: 'suffix',
+        });
+      }
+
       // 4. Property bindings (type_properties) -------------------------------
       const existingPD = readExistingPropertyIds(
         ndb,
@@ -1726,6 +1745,7 @@ export function applyManifest(
           thoughtIdRemap.set(t.id, existingId);
           titleMatchIds.add(normTitle);
           const marked = markedColumns(t);
+          // layers:physical-write — импорт применяет строки снапшота по id во всех слоях
           ndb
             .prepare(
               `UPDATE thoughts SET

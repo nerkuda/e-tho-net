@@ -64,6 +64,19 @@ const HELP = `ui-probe-stand — изолированный GUI-стенд кл�
       --seed-name <s>    Имя пробной сети (по умолчанию «GUI-стенд»).
       --seed-title <s>   Заголовок пробной мысли (по умолчанию «Проба стенда»).
       --seed-comment <s> Начальный текст постоянного комментария мысли.
+      --server-language <tag>
+                         Явно задать язык сервера для прогона (ru, en):
+                         стенд ставит его через PUT /admin/settings/language ДО
+                         запуска клиента и проверяет, что сервер его принял
+                         (регистр и «_»/«-» не важны: EN = en, en_US = en-US).
+                         Без флага язык не трогается (текущее поведение стенда:
+                         дефолт сервера — en, ADR daab6ac4). Сценарии выбирают
+                         тексты ожиданий по фактическому языку интерфейса, а
+                         словарь ожиданий «texts» сегодня двуязычен — ru и en
+                         (сторож guard-scenario-language-lookup). Другой язык
+                         (zh, de…) требует добавить его тексты в «texts»
+                         сценария; без них шаг со словарём падает «у ключа нет
+                         текста для языка» (решение заказчика 2026-11-10).
       --delay-seed-ms <ms>
                          Поднять перед сервером замедляющий прокси: запросы к
                          засеянной сети идут с задержкой <ms> (проверка гонки
@@ -194,6 +207,7 @@ export function parseArgs(argv) {
     seedName: 'GUI-стенд',
     seedTitle: 'Проба стенда',
     seedComment: 'стартовый текст',
+    serverLanguage: null,
     delaySeedMs: 0,
     delaySeedPath: '',
     delaySeedRules: [],
@@ -280,6 +294,17 @@ export function parseArgs(argv) {
         opts.seedComment = need(argv[i + 1], arg);
         i += 1;
         break;
+      case '--server-language': {
+        // `_` → `-` и нижний регистр: `EN`/`Ru`/`en_US` — тот же язык, что
+        // `en`/`ru`/`en-US` (сервер канонизирует тег сам, ADR daab6ac4 §2).
+        const tag = normalizeLanguageTag(need(argv[i + 1], arg));
+        if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(tag)) {
+          throw new Error('--server-language: ожидается языковой тег (ru, en, zh, en-US)');
+        }
+        opts.serverLanguage = tag;
+        i += 1;
+        break;
+      }
       case '--delay-seed-ms':
         opts.delaySeedMs = ms(need(argv[i + 1], arg), arg);
         i += 1;
@@ -465,6 +490,57 @@ async function rest(base, key, method, apiPath, body) {
   }
   if (parsed !== null && typeof parsed === 'object' && 'data' in parsed) return parsed.data;
   return parsed;
+}
+
+/**
+ * Канонический вид языкового тега для флага `--server-language`: `_` → `-`
+ * (люди пишут `en_US`) и канонизация BCP-47 (`EN` → `en`, `en_us` →
+ * `en-US`).
+ *
+ * Сервер канонизирует тег сам (`Intl.getCanonicalLocales`, ADR daab6ac4 §2),
+ * поэтому `EN` и `en`, `Ru` и `ru` — один и тот же язык, `en_us` и `en-US` —
+ * тоже. Строгое посимвольное сравнение заказа с ответом давало ложное
+ * «сервер проигнорировал язык» на валидном флаге (замечание проверки к
+ * c73bcb60: `--server-language EN` падал на ответе «en»).
+ */
+export function normalizeLanguageTag(tag) {
+  if (typeof tag !== 'string') return '';
+  const value = tag.trim().replaceAll('_', '-');
+  if (value === '') return '';
+  try {
+    const canonical = Intl.getCanonicalLocales(value);
+    if (canonical.length === 1 && typeof canonical[0] === 'string') return canonical[0];
+  } catch {
+    // Не BCP-47 по мнению ICU — остаётся форма с «-»: мусор отвергнет
+    // проверка тега ниже, а спорный подтег — сам сервер (400).
+  }
+  return value;
+}
+
+/** Ключ сверки тегов: канонический вид без учёта регистра. */
+function languageKey(tag) {
+  return normalizeLanguageTag(tag).toLowerCase();
+}
+
+/**
+ * Явно задать язык сервера стенда (`--server-language`): `PUT
+ * /admin/settings/language` ключом стенда ДО запуска клиента. Ответ сервера
+ * сверяется с заказанным тегом в каноническом виде (см.
+ * {@link normalizeLanguageTag}) — «сервер проигнорировал язык» не должен
+ * давать молчаливый прогон не на том языке (сценарии выбирают тексты
+ * ожиданий по фактическому языку интерфейса, решение заказчика 2026-11-10).
+ * @returns {Promise<string>} принятый сервером тег (в виде, который он вернул).
+ */
+export async function applyServerLanguage(base, key, tag) {
+  const wanted = normalizeLanguageTag(tag);
+  const applied = await rest(base, key, 'PUT', '/admin/settings/language', { language: wanted });
+  const value = applied !== null && typeof applied === 'object' ? applied.language : applied;
+  if (languageKey(value) !== languageKey(wanted)) {
+    throw new Error(
+      `--server-language ${tag}: сервер сообщил язык «${value === undefined ? '—' : String(value)}»`,
+    );
+  }
+  return typeof value === 'string' && value !== '' ? value : wanted;
 }
 
 /** Извлечь API-key из вывода `etn init`. */
@@ -716,6 +792,14 @@ async function main(argv) {
       throw new Error(`сервер не поднялся на порту ${serverPort}\n${server.getLog().slice(-1000)}`);
     }
     process.stdout.write(`ui-probe-stand: сервер готов (${apiBase})\n`);
+
+    // --- 2а. Язык сервера (--server-language) ------------------------------
+    // Ставится ДО запуска клиента: клиент читает язык при подключении, поэтому
+    // «язык после старта» дал бы прогон не на заказанном языке.
+    if (opts.serverLanguage !== null) {
+      const accepted = await applyServerLanguage(apiBase, apiKey, opts.serverLanguage);
+      process.stdout.write(`ui-probe-stand: язык сервера — ${accepted}\n`);
+    }
 
     // --- 3. Сид пробной сети ----------------------------------------------
     let seed = null;

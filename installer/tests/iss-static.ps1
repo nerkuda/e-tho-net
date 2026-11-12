@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Статические проверки исходников установщика ETN (installer/etn.iss и build.ps1).
 
@@ -229,6 +229,171 @@ function Invoke-IssStaticChecks {
     # содержит GPendingKey (комментарии не считаются — общий сторож).
     $keyInLog = Test-IssCode -Text $issText -Pattern 'LogLine\([^\r\n]*GPendingKey'
     Add-StaticResult -Name 'static:key-not-logged' -Ok (-not $keyInLog) -Note 'LogLine без GPendingKey'
+
+    # f7887a35: журнал запуска не теряется. Четыре свойства обязательны вместе:
+    # (1) имя файла уникально для запуска — уже существующий файл не
+    # используется (метка времени до секунды + номер попытки);
+    # (2) успех — результат записи, а не FileExists (SaveStringsToUTF8File
+    # возвращает False, когда каталог закрыт ACL, — FileExists при этом уже
+    # истинно на чужом файле, и журнал молча пропадал);
+    # (3) факт записи подтверждается чтением файла назад;
+    # (4) запись по ходу установки тоже проверяется — при отказе строка уходит
+    # в журнал Inno, а не теряется.
+    $tryInitBody = Get-IssFunctionBody -Text $issText -Name 'TryInitLog'
+    $logProbeBody = Get-IssFunctionBody -Text $issText -Name 'LogProbeWritten'
+    $logLineBody = Get-IssFunctionBody -Text $issText -Name 'LogLine'
+    Add-StaticResult -Name 'static:log-unique-name' -Ok (
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape('if FileExists(Candidate) then Continue'))) -and
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape("Candidate := Dir + '\' + Base + '-' + IntToStr(N) + '.log'")))
+    ) -Note 'своё имя на запуск: чужой файл не используется, номер попытки в имени'
+    Add-StaticResult -Name 'static:log-write-result' -Ok (
+        (Test-IssCode -Text $logProbeBody -Pattern ([regex]::Escape('if not SaveStringsToUTF8File(FileName, Lines, True) then Exit'))) -and
+        (Test-IssCode -Text $logProbeBody -Pattern ([regex]::Escape('if not LoadStringsFromFile(FileName, Lines) then Exit'))) -and
+        (Test-IssCode -Text $logProbeBody -Pattern ([regex]::Escape('Result := Lines[Count - 1] = Marker'))) -and
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape('if not LogProbeWritten(Candidate, Marker) then Continue')))
+    ) -Note 'успех — результат записи и чтения назад, а не FileExists'
+    Add-StaticResult -Name 'static:log-append-result' -Ok (
+        (Test-IssCode -Text $logLineBody -Pattern ([regex]::Escape('if not AppendUtf8Line(GLogPath, Line) then')))
+    ) -Note 'неудачная дописка строки дублируется в журнал Inno'
+    Add-StaticResult -Name 'static:log-name-attempts' -Ok (
+        (Test-IssCode -Text $issText -Pattern ([regex]::Escape('LOG_NAME_ATTEMPTS = 100'))) -and
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape('for N := 0 to LOG_NAME_ATTEMPTS - 1 do')))
+    ) -Note 'число попыток имени — константа, цикл по ней'
+    $initLogBody = Get-IssFunctionBody -Text $issText -Name 'InitLog'
+    Add-StaticResult -Name 'static:log-fallback' -Ok (
+        (Test-IssCode -Text $initLogBody -Pattern ([regex]::Escape("TryInitLog(GDataDir + '\logs', 'install',"))) -and
+        (Test-IssCode -Text $initLogBody -Pattern ([regex]::Escape("TryInitLog(TempDir, 'install', 'ETN setup log')")))
+    ) -Note 'каталог данных, затем %TEMP% — оба пути с проверкой записи'
+    # Правило аналогов: журнал удаления строил имя так же и терялся бы так же.
+    $uninsBody = Get-IssFunctionBody -Text $issText -Name 'InitializeUninstall'
+    $uninsManualName = Test-IssCode -Text $uninsBody -Pattern ([regex]::Escape("'\uninstall-' +"))
+    Add-StaticResult -Name 'static:uninstall-log-shared' -Ok (
+        (Test-IssCode -Text $uninsBody -Pattern ([regex]::Escape("TryInitLog(GDataDir + '\logs', 'uninstall',"))) -and
+        (Test-IssCode -Text $uninsBody -Pattern ([regex]::Escape("TryInitLog(ExpandConstant('{tmp}'), 'etn-uninstall',"))) -and
+        (-not $uninsManualName)
+    ) -Note 'журнал удаления — тот же TryInitLog, имя не собирается вручную'
+
+    # a34f48da: снимок отката — перенос каталога, а не побайтовая копия. Копия
+    # дерева серверной части занимала 8,5–18,9 с, а реальный этап «Снимок
+    # отката» шёл 48–72 с в silent и больше 20 минут в GUI. Обязательные
+    # свойства: перенос первым (копия — только запасной путь), неудачный
+    # снимок возвращает уже перенесённое, откат возвращает снимок
+    # переименованием, данные пользователя в снимок не попадают.
+    $takeSnapshotBody = Get-IssFunctionBody -Text $issText -Name 'TakeSnapshot'
+    $createSnapshotBody = Get-IssFunctionBody -Text $issText -Name 'CreateRollbackSnapshot'
+    $undoMovesBody = Get-IssFunctionBody -Text $issText -Name 'UndoSnapshotMoves'
+    $replaceBody = Get-IssFunctionBody -Text $issText -Name 'ReplaceTreeFromSnapshot'
+    Add-StaticResult -Name 'static:snapshot-move-first' -Ok (
+        (Test-IssCode -Text $takeSnapshotBody -Pattern ([regex]::Escape('if MoveFileExW(Src, Dest, 0) then'))) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape("TakeSnapshot(GServerDir + '\server', Dir + '\server', 'server',"))) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape("TakeSnapshot(GServerDir + '\service', Dir + '\service', 'service',")))
+    ) -Note 'снимок server/service создаётся переносом каталога'
+    Add-StaticResult -Name 'static:snapshot-no-copy-in-create' -Ok (
+        -not (Test-IssCode -Text $createSnapshotBody -Pattern 'CopyTreeRec\(')
+    ) -Note 'в создании снимка побайтовой копии нет — только TakeSnapshot'
+    Add-StaticResult -Name 'static:snapshot-copy-fallback' -Ok (
+        (Test-IssCode -Text $takeSnapshotBody -Pattern ([regex]::Escape('if not CopyTreeRec(Src, Dest) then')))
+    ) -Note 'другой том/занятый файл: перенос не удался — прежняя копия остаётся'
+    <# Неудачный снимок обязан вернуть перенесённые каталоги, но НЕ должен
+      удалять каталог снимка, если возврат не удался: там единственная копия
+      файлов сервера (замечание приёмки 1). Поэтому вызов — под условием, а
+      DelTree идёт только после успешного возврата; флаг переноса снимается
+      только подтверждённым возвратом. #>
+    $undoGuards = @(Get-IssStrippedLines -Text $createSnapshotBody |
+        Where-Object { $_ -match [regex]::Escape('if not UndoSnapshotMoves(Dir) then') })
+    $undoBareCalls = @(Get-IssStrippedLines -Text $createSnapshotBody |
+        Where-Object { $_ -match ('^\s*UndoSnapshotMoves\(Dir\);') })
+    $delTreeAt = -1; $undoGuardAt = -1
+    $createLines = @(Get-IssStrippedLines -Text $createSnapshotBody)
+    for ($i = 0; $i -lt $createLines.Count; $i++) {
+        if (($undoGuardAt -lt 0) -and ($createLines[$i] -match [regex]::Escape('if not UndoSnapshotMoves(Dir) then'))) { $undoGuardAt = $i }
+        if (($delTreeAt -lt 0) -and ($createLines[$i] -match 'DelTree\(Dir')) { $delTreeAt = $i }
+    }
+    Add-StaticResult -Name 'static:snapshot-failure-undoes-moves' -Ok (
+        ($undoGuards.Count -ge 2) -and ($undoBareCalls.Count -eq 0) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("MoveFileExW(Dir + '\server', GServerDir + '\server', 0)"))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("MoveFileExW(Dir + '\service', GServerDir + '\service', 0)")))
+    ) -Note ('неудачный снимок возвращает перенесённые каталоги под условием (вызовов: {0}, без условия: {1})' -f $undoGuards.Count, $undoBareCalls.Count)
+    Add-StaticResult -Name 'static:snapshot-undo-keeps-snapshot' -Ok (
+        ($undoGuardAt -ge 0) -and ($delTreeAt -gt $undoGuardAt) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape('каталог снимка НЕ удалён')))
+    ) -Note 'при неудачном возврате каталог снимка не удаляется, путь сообщается в журнал'
+    $undoServerResets = @(Get-IssStrippedLines -Text $undoMovesBody |
+        Where-Object { $_ -match 'GSnapshotMovedServer := False;' })
+    $undoServiceResets = @(Get-IssStrippedLines -Text $undoMovesBody |
+        Where-Object { $_ -match 'GSnapshotMovedService := False;' })
+    Add-StaticResult -Name 'static:snapshot-undo-keeps-flag' -Ok (
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("LogLine('INFO', 'Снимок отката: server возвращён на место');"))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("LogLine('INFO', 'Снимок отката: service возвращён на место');"))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape('Result := True;'))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("LogLine('WARN', 'Снимок отката: server не удалось вернуть из ' + Dir);"))) -and
+        ($undoServerResets.Count -eq 1) -and ($undoServiceResets.Count -eq 1) -and
+        (@(Get-IssStrippedLines -Text $issText | Where-Object { $_ -match '^\s*function\s+UndoSnapshotMoves\b' }).Count -eq 1)
+    ) -Note ('флаг переноса снимается только подтверждённым возвратом (сбросов server: {0}, service: {1})' -f $undoServerResets.Count, $undoServiceResets.Count)
+    <# Каталог-приёмник создаётся ДО переноса: MoveFileExW не создаёт родителя, и
+      без ForceDirectories(Dir) перенос молча падал в побайтовую копию (блокер
+      приёмки 1). #>
+    $dirCreateAt = -1; $firstSnapshotAt = -1
+    for ($i = 0; $i -lt $createLines.Count; $i++) {
+        if (($dirCreateAt -lt 0) -and ($createLines[$i] -match [regex]::Escape('if not ForceDirectories(Dir) then'))) { $dirCreateAt = $i }
+        if (($firstSnapshotAt -lt 0) -and ($createLines[$i] -match 'TakeSnapshot\(')) { $firstSnapshotAt = $i }
+    }
+    Add-StaticResult -Name 'static:snapshot-dir-created' -Ok (
+        ($dirCreateAt -ge 0) -and ($firstSnapshotAt -gt $dirCreateAt) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape('не удалось создать каталог снимка')))
+    ) -Note ("каталог-приёмник создаётся до переноса (строка {0} < вызов снимка {1})" -f ($dirCreateAt + 1), ($firstSnapshotAt + 1))
+    Add-StaticResult -Name 'static:rollback-restores-by-move' -Ok (
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('Moved := MoveFileExW(Src, Dest, 0);'))) -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('else if not CopyTreeRec(Src, Dest) then')))
+    ) -Note 'откат файлов возвращает снимок переносом, копия — запасной путь'
+    <# Ожидаемый каталог, которого нет в снимке, — потеря снимка: откат не должен
+      удалять текущие файлы и «отчитываться успехом», ничего не вернув. #>
+    $restoreBody = Get-IssFunctionBody -Text $issText -Name 'RestoreInstallFiles'
+    <# Объявление функции разбито на две строки (Src, Dest, Tag; Expected), поэтому
+      склеиваем строку объявления со следующей. #>
+    $replaceDeclOk = $false
+    $issDeclLines = @(Get-IssStrippedLines -Text $issText)
+    for ($i = 0; $i -lt ($issDeclLines.Count - 1); $i++) {
+        if ($issDeclLines[$i] -match '^\s*function\s+ReplaceTreeFromSnapshot\b') {
+            $replaceDeclOk = (($issDeclLines[$i] + ' ' + $issDeclLines[$i + 1]) -match 'Expected:\s*Boolean')
+            break
+        }
+    }
+    Add-StaticResult -Name 'static:rollback-missing-expected' -Ok (
+        $replaceDeclOk -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('if Expected and (not DirExists(Src)) then'))) -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('текущие файлы оставлены на месте'))) -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('в снимке нет — так и было до обновления'))) -and
+        (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape("GServerDir + '\server', 'server', GSnapshotHasServer)"))) -and
+        (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape("GServerDir + '\service', 'service', GSnapshotHasService)")))
+    ) -Note 'отсутствие ожидаемого каталога в снимке — ошибка отката, текущие файлы целы'
+    Add-StaticResult -Name 'static:snapshot-excludes-user-data' -Ok (
+        -not (Test-IssCode -Text $issText -Pattern '(CopyTreeRec|TakeSnapshot)\(GDataDir')
+    ) -Note 'данные пользователя (БД, вложения) в снимок не копируются и не переносятся'
+    <# Порядок фаз делает перенос безопасным: файлы нельзя переименовывать, пока
+      служба работает. Остановка службы → бэкап БД → снимок, строго в этом
+      порядке (иначе незакрытые файлы сервера блокируют перенос, а архив БД
+      перестаёт соответствовать моменту остановки). #>
+    $phaseLines = @(Get-IssStrippedLines -Text $issText)
+    $stopAt = -1; $backupAt = -1; $snapshotAt = -1
+    for ($i = 0; $i -lt $phaseLines.Count; $i++) {
+        if (($stopAt -lt 0) -and ($phaseLines[$i] -match [regex]::Escape('if not StopServiceForUpdate(Reason, False) then'))) { $stopAt = $i }
+        if (($backupAt -lt 0) -and ($phaseLines[$i] -match [regex]::Escape('if not CreateDatabaseBackup(True) then'))) { $backupAt = $i }
+        if (($snapshotAt -lt 0) -and ($phaseLines[$i] -match [regex]::Escape('if not CreateRollbackSnapshot then'))) { $snapshotAt = $i }
+    }
+    Add-StaticResult -Name 'static:snapshot-after-service-stop' -Ok (
+        ($stopAt -ge 0) -and ($backupAt -gt $stopAt) -and ($snapshotAt -gt $backupAt)
+    ) -Note ("порядок фаз: остановка службы ({0}) → бэкап БД ({1}) → снимок ({2})" -f ($stopAt + 1), ($backupAt + 1), ($snapshotAt + 1))
+
+    # Комментарии [Code] не вкладываются: `}` закрывает `{ ... }`, поэтому
+    # `{app}` внутри такого комментария обрывает его и остаток строки
+    # становится кодом — ISCC падает с синтаксической ошибкой, а построчный
+    # сторож видит «код», которого нет. Ловится только компиляцией, поэтому
+    # проверяем исходник (нашлось на a34f48da).
+    $nestedComments = @(Test-IssNestedComment -Text $issText)
+    Add-StaticResult -Name 'static:code-comments-flat' -Ok ($nestedComments.Count -eq 0) `
+        -Note ($(if ($nestedComments.Count -eq 0) { 'комментарии [Code] без вложенных фигурных скобок' }
+            else { $nestedComments -join '; ' }))
 
     # 4dc117f5: каждый CustomMessage('X') обязан быть определён — иначе Inno
     # бросает исключение в рантайме (до компиляции сторож дешевле); дубликат имени

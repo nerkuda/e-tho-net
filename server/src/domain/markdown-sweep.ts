@@ -36,7 +36,7 @@ export function sweepCommentHtml(dataDir: string, systemDb: SystemDb, log: Logge
       const rows = ndb
         .prepare("SELECT pk, body_md FROM comments WHERE body_md <> ''") // layers:physical-read
         .all() as Array<{ pk: number; body_md: string }>;
-      const update = ndb.prepare('UPDATE comments SET body_html = ? WHERE pk = ?');
+      const update = ndb.prepare('UPDATE comments SET body_html = ? WHERE pk = ?'); // layers:physical-write — перегенерация кэша рендера по pk во всех слоях
       ndb.transaction(() => {
         for (const row of rows) {
           update.run(renderMarkdown(row.body_md), row.pk);

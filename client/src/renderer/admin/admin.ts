@@ -431,17 +431,36 @@ async function generateKey(user: User): Promise<void> {
   const limitRow = div('hint-field');
   limitRow.append(limitInput, span(t('admin.emptyServernyyLimit'), 'muted'));
   body.append(fieldRow({ label: t('admin.limitRecordsMcpMin'), control: limitRow }));
+  // Флаг записи + отключение кнопок футера на время запроса (ошибка ef89c5c8):
+  // второй клик «Создать», пока первый ещё ждёт сервер, создавал ВТОРОЙ ключ.
+  let busy = false;
+  let createBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean): void => {
+    busy = value;
+    if (createBtn !== null) createBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
   showDialog({
     title: t('admin.sgenerirovatApiKey'),
     size: 's',
     body,
     buttons: [
-      { label: t('actions.cancel') },
+      {
+        label: t('actions.cancel'),
+        ref: (btn) => {
+          cancelBtn = btn;
+        },
+      },
       {
         label: t('admin.label.create'),
         primary: true,
         keepOpen: true,
+        ref: (btn) => {
+          createBtn = btn;
+        },
         onClick: (close) => {
+          if (busy) return;
           const raw = limitInput.value.trim();
           let maxWritesPerMinute: number | null = null;
           if (raw !== '') {
@@ -453,12 +472,15 @@ async function generateKey(user: User): Promise<void> {
             maxWritesPerMinute = n;
           }
           void (async () => {
+            setBusy(true);
             try {
               const result = await etn.admin.createUserKey(user.id, 'handoff', maxWritesPerMinute);
               close();
               showApiKey(result.apiKey);
             } catch (err) {
               errorDialog(t('admin.generaciyaKey'), err);
+            } finally {
+              setBusy(false);
             }
           })();
         },

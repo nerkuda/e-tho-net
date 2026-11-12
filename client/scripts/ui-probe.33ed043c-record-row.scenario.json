@@ -1,0 +1,434 @@
+{
+  "name": "record-row-search-33ed043c",
+  "description": "Ключевой сценарий задачи 33ed043c (0.15.4, тех.проект 43329662): строка дневниковой записи в группе «Найдено в хронологии» — общая компонента lib/record-row.ts. Проверяется: (1) в группе три строки-записи с периодом, чипами привязок и сниппетом; (2) HOME среди чипов НЕ показывается (требование c81964c7); (3) сниппет проходит общий конвейер [[#id]] → имя мысли (ошибка 2a8181f4); (4) клик по строке с ДВУМЯ видимыми привязками открывает список выбора (ARIA listbox/option), ↓ двигает подсветку, Enter выбирает пункт — открывается редактор ОТКРЫВАЕМОЙ привязки (B) с активной вкладкой «Дневник» и выбранной записью, фокус холста — на B, а не на владельце записи (требование ce121e09); (5) клик по чипу ведёт в конкретную привязку (A); (6) клик по строке с ОДНОЙ видимой привязкой — прямой переход (владелец C); (7) клик по строке, где видна только HOME, ведёт к владельцу записи (HOME). Данные засеиваются шагом eval через window.etn: мысли B и C, три записи (A + HOME + B; C + HOME; только HOME) с маркером zzchrono33 в теле. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.33ed043c-record-row.scenario.json. Без скриншотов: доказательства — DOM-пробы строки, меню, заголовка записи и focus_id вкладки. До фикса строка хроно-хита показывала только период и сниппет (без .record-row и чипов), клик ничего не открывал — сценарий красный. B6 (7c380088): сценарий завершается проверкой НЕ-карты — вид переключается на «Дневник», клик по строке-записи открывает её привязку в редакторе с выбранной записью, focus_id остаётся прежним (HOME из шага focus-on-record-owner-home), вид на карту не переключается; без фикса (фокус безусловный) шаг focus-unchanged-outside-map краснеет.",
+  "timeout": 240000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seeded-cloud-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('[data-id=\"{{thoughtId}}\"]') !== null"
+    },
+    {
+      "name": "seed-record-rows",
+      "expect": 7,
+      "probe": {
+        "name": "seedRecordRows",
+        "expression": "(async () => { const nid = '{{networkId}}'; const home = '{{homeId}}'; const a = '{{thoughtId}}'; const b = await window.etn.thoughts.create(nid, { title: 'Привязка Б 33ed043c' }); const c = await window.etn.thoughts.create(nid, { title: 'Владелец В 33ed043c' }); const mk = (body) => ({ kind: 'chronological', title: null, body_md: body, use_time: false }); const r1 = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: a }, { owner_type: 'thought', owner_id: home }, { owner_type: 'thought', owner_id: b.id }], mk('zzchrono33 Запись с двумя привязками [[#' + a + ']].')); const r2 = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: c.id }, { owner_type: 'thought', owner_id: home }], mk('zzchrono33 Запись с одной привязкой.')); const r3 = await window.etn.comments.createMulti(nid, [{ owner_type: 'thought', owner_id: home }], mk('zzchrono33 Запись только на HOME.')); window.__rr = { a, b: b.id, c: c.id, home, r1: r1.id, r2: r2.id, r3: r3.id }; return Object.keys(window.__rr).length; })()"
+      }
+    },
+    {
+      "name": "row-target-b-id",
+      "probe": {
+        "name": "rowTargetB",
+        "expression": "window.__rr.b"
+      }
+    },
+    {
+      "name": "row-owner-c-id",
+      "probe": {
+        "name": "rowOwnerC",
+        "expression": "window.__rr.c"
+      }
+    },
+    {
+      "name": "open-search",
+      "expect": "ok",
+      "probe": {
+        "name": "focusSearch",
+        "expression": "(() => { const i = document.querySelector('.search-input'); if (!i) return 'no-input'; i.focus(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "type-marker",
+      "text": "zzchrono33"
+    },
+    {
+      "name": "record-rows-rendered",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.search-results .record-row').length === 3"
+    },
+    {
+      "name": "install-row-helpers",
+      "probe": {
+        "name": "installRowHelpers",
+        "expression": "(() => { window.__rrRow = (marker) => [...document.querySelectorAll('.search-results .record-row')].find((r) => (r.textContent || '').includes(marker)) ?? null; window.__rrChip = (marker, title) => { const row = window.__rrRow(marker); if (row === null) return 'no-row'; const chip = [...row.querySelectorAll('.record-row-chips .chron-chip.thought')].find((c) => (c.textContent || '').includes(title)); if (chip === undefined) return 'no-chip'; chip.click(); return 'ok'; }; window.__rrClickRow = (marker) => { const row = window.__rrRow(marker); if (row === null) return 'no-row'; row.click(); return 'ok'; }; return true; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "two-chip-row-period-visible",
+      "probe": {
+        "name": "rowPeriodVisible",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); if (row === null) return false; return (row.querySelector('.record-row-period')?.textContent || '').trim().length > 0; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "period-text-bold",
+      "probe": {
+        "name": "periodFontWeight",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); const p = row === null ? null : row.querySelector('.record-row-period'); return p === null ? -1 : parseInt(getComputedStyle(p).fontWeight, 10); })()"
+      },
+      "expect": 600
+    },
+    {
+      "name": "period-calendar-icon",
+      "probe": {
+        "name": "periodCalendarIcon",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); if (row === null) return 'no-row'; const icon = row.querySelector('.record-row-period svg.icon'); if (icon === null) return 'no-icon'; return icon.getAttribute('aria-hidden') === 'true' && icon.getAttribute('width') === '12' ? 'ok' : 'bad-icon'; })()"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "group-header-font-size",
+      "probe": {
+        "name": "groupHeaderFontSize",
+        "expression": "(() => { const t = document.querySelector('.search-results .search-group > .search-group-header .group-title'); return t === null ? 'no-header' : getComputedStyle(t).fontSize; })()"
+      },
+      "expect": "13.5px"
+    },
+    {
+      "name": "group-header-background-both-themes",
+      "probe": {
+        "name": "groupHeaderBackground",
+        "expression": "(() => { const root = document.documentElement; const prev = root.dataset.theme; const panel = document.querySelector('.search-panel'); const header = document.querySelector('.search-results .search-group > .search-group-header'); if (panel === null || header === null) return 'no-panel-header'; const prevTransition = header.style.transition; header.style.transition = 'none'; const bg = (theme) => { root.dataset.theme = theme; return [getComputedStyle(header).backgroundColor, getComputedStyle(panel).backgroundColor]; }; const light = bg('light'); const dark = bg('dark'); header.style.transition = prevTransition; if (prev === undefined) { delete root.dataset.theme; } else { root.dataset.theme = prev; } return light[0] !== light[1] && dark[0] !== dark[1] ? 'both-differ' : JSON.stringify({ light, dark }); })()"
+      },
+      "expect": "both-differ"
+    },
+    {
+      "name": "group-header-selected-preserved",
+      "probe": {
+        "name": "groupHeaderSelected",
+        "expression": "(() => { const header = document.querySelector('.search-results .search-group > .search-group-header'); if (header === null) return 'no-header'; const wasSelected = header.classList.contains('selected'); const prevTransition = header.style.transition; header.style.transition = 'none'; header.classList.remove('selected'); const base = getComputedStyle(header).backgroundColor; header.classList.add('selected'); const selected = getComputedStyle(header).backgroundColor; header.classList.remove('selected'); if (wasSelected) header.classList.add('selected'); header.style.transition = prevTransition; return base !== selected ? 'ok' : 'same-as-base:' + base + '/' + selected; })()"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "search-group-terminology-no-chronology",
+      "probe": {
+        "name": "groupTerminology",
+        "expression": "(() => { const labels = [...document.querySelectorAll('.search-results .search-group > .search-group-header .group-title')].map((e) => (e.textContent || '').trim()); return labels.some((l) => /хронологи|chronology|时间线/i.test(l)) ? labels : 'ok'; })()"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "search-areas-terminology-diaries",
+      "probe": {
+        "name": "areasTerminology",
+        "expression": "(() => { const labels = [...document.querySelectorAll('.search-settings .ui-choice-row')].map((e) => (e.textContent || '').trim()); return labels.some((l) => /хроник|chronolog|时间线/i.test(l)) ? labels : 'ok'; })()"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "two-chip-row-chip-count",
+      "probe": {
+        "name": "rowChipCount",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); return row === null ? -1 : row.querySelectorAll('.record-row-chips .chron-chip.thought').length; })()"
+      },
+      "expect": 2
+    },
+    {
+      "name": "two-chip-row-chip-titles",
+      "probe": {
+        "name": "rowChipTitles",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); if (row === null) return []; return [...row.querySelectorAll('.record-row-chips .chron-chip.thought .prc-title')].map((e) => (e.textContent || '').trim()).sort(); })()"
+      },
+      "expect": ["Привязка Б 33ed043c", "{{seedTitle}}"]
+    },
+    {
+      "name": "two-chip-row-home-hidden",
+      "probe": {
+        "name": "rowHasHomeChip",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); if (row === null) return true; return [...row.querySelectorAll('.record-row-chips .chron-chip')].some((c) => (c.textContent || '').trim() === 'HOME'); })()"
+      },
+      "expect": false
+    },
+    {
+      "name": "snippet-no-raw-wiki-id",
+      "probe": {
+        "name": "rowSnippetHasRaw",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); return row === null ? true : [...row.querySelectorAll('.record-row-snippet')].some((e) => e.innerHTML.includes('[[#')); })()"
+      },
+      "expect": false
+    },
+    {
+      "name": "snippet-no-uuid",
+      "probe": {
+        "name": "rowSnippetHasUuid",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); return row === null ? true : [...row.querySelectorAll('.record-row-snippet')].some((e) => /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(e.innerHTML)); })()"
+      },
+      "expect": false
+    },
+    {
+      "name": "snippet-shows-thought-name",
+      "probe": {
+        "name": "rowSnippetShowsName",
+        "expression": "(() => { const row = window.__rrRow('двумя привязками'); return row !== null && (row.querySelector('.record-row-snippet')?.textContent || '').includes('{{seedTitle}}'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "click-row-with-two-targets",
+      "expect": "ok",
+      "probe": {
+        "name": "clickTwoTargetRow",
+        "expression": "window.__rrClickRow('двумя привязками')"
+      }
+    },
+    {
+      "name": "selection-list-open",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.menu[role=\"listbox\"]') !== null"
+    },
+    {
+      "name": "selection-list-options",
+      "probe": {
+        "name": "selectionOptionCount",
+        "expression": "document.querySelectorAll('.menu[role=\"listbox\"] > .menu-item[role=\"option\"]').length"
+      },
+      "expect": 2
+    },
+    {
+      "name": "selection-starts-on-first",
+      "probe": {
+        "name": "selectionFirst",
+        "expression": "(document.querySelector('.menu-item[aria-selected=\"true\"]')?.textContent || '').includes('{{seedTitle}}')"
+      },
+      "expect": true
+    },
+    {
+      "name": "selection-arrow-down",
+      "key": "ArrowDown"
+    },
+    {
+      "name": "selection-moved-to-target",
+      "probe": {
+        "name": "selectionAfterDown",
+        "expression": "(document.querySelector('.menu-item[aria-selected=\"true\"]')?.textContent || '').includes('Привязка Б 33ed043c')"
+      },
+      "expect": true
+    },
+    {
+      "name": "selection-enter",
+      "key": "Enter"
+    },
+    {
+      "name": "editor-diary-tab-active",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.editor-tab')].findIndex((t) => t.classList.contains('active')) === 4"
+    },
+    {
+      "name": "record-selected-in-diary",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('Запись с двумя привязками')"
+    },
+    {
+      "name": "focus-on-opened-target-b",
+      "probe": {
+        "name": "focusAfterListChoice",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      },
+      "expectFrom": "row-target-b-id"
+    },
+    {
+      "name": "reopen-search-after-b",
+      "timeout": 15000,
+      "expect": "ok",
+      "probe": {
+        "name": "reopenSearchAfterB",
+        "expression": "(() => { const i = document.querySelector('.search-input'); if (!i) return 'no-input'; i.focus(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "rows-restored-for-chip",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.search-results .record-row').length === 3"
+    },
+    {
+      "name": "click-chip-of-thought-a",
+      "expect": "ok",
+      "probe": {
+        "name": "clickChipA",
+        "expression": "window.__rrChip('двумя привязками', '{{seedTitle}}')"
+      }
+    },
+    {
+      "name": "editor-shows-thought-a",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === '{{seedTitle}}'"
+    },
+    {
+      "name": "record-still-selected-via-chip",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('Запись с двумя привязками')"
+    },
+    {
+      "name": "focus-on-chip-target-a",
+      "probe": {
+        "name": "focusAfterChip",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      },
+      "expect": "{{thoughtId}}"
+    },
+    {
+      "name": "reopen-search-after-chip",
+      "timeout": 15000,
+      "expect": "ok",
+      "probe": {
+        "name": "reopenSearchAfterChip",
+        "expression": "(() => { const i = document.querySelector('.search-input'); if (!i) return 'no-input'; i.focus(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "rows-restored-for-single-target",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.search-results .record-row').length === 3"
+    },
+    {
+      "name": "click-row-with-one-target",
+      "expect": "ok",
+      "probe": {
+        "name": "clickOneTargetRow",
+        "expression": "window.__rrClickRow('с одной привязкой')"
+      }
+    },
+    {
+      "name": "editor-shows-record-owner-c",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Владелец В 33ed043c'"
+    },
+    {
+      "name": "single-target-record-selected",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('Запись с одной привязкой')"
+    },
+    {
+      "name": "focus-on-single-visible-target",
+      "probe": {
+        "name": "focusAfterSingleTarget",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      },
+      "expectFrom": "row-owner-c-id"
+    },
+    {
+      "name": "reopen-search-after-single",
+      "timeout": 15000,
+      "expect": "ok",
+      "probe": {
+        "name": "reopenSearchAfterSingle",
+        "expression": "(() => { const i = document.querySelector('.search-input'); if (!i) return 'no-input'; i.focus(); return 'ok'; })()"
+      }
+    },
+    {
+      "name": "rows-restored-for-home-only",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('.search-results .record-row').length === 3"
+    },
+    {
+      "name": "click-row-with-home-only",
+      "expect": "ok",
+      "probe": {
+        "name": "clickHomeOnlyRow",
+        "expression": "window.__rrClickRow('только на HOME')"
+      }
+    },
+    {
+      "name": "editor-shows-record-owner-home",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'HOME'"
+    },
+    {
+      "name": "home-only-record-selected",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('Запись только на HOME')"
+    },
+    {
+      "name": "focus-on-record-owner-home",
+      "probe": {
+        "name": "focusAfterHomeOnly",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      },
+      "expect": "{{homeId}}"
+    },
+    {
+      "name": "switch-to-diary-nonmap",
+      "click": ".view-tab[title=\"Дневник\"], .view-tab[title=\"Diary\"]"
+    },
+    {
+      "name": "diary-view-active",
+      "timeout": 20000,
+      "waitFor": "(() => { const host = document.querySelector('.chronicle.view-host'); const row = document.querySelector('.search-row'); return host !== null && !host.classList.contains('hidden') && row !== null && row.classList.contains('hidden'); })()"
+    },
+    {
+      "name": "click-row-outside-map",
+      "expect": "ok",
+      "probe": {
+        "name": "clickRowOutsideMap",
+        "expression": "window.__rrClickRow('с одной привязкой')"
+      }
+    },
+    {
+      "name": "editor-shows-owner-c-outside-map",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.editor-title-input')?.value === 'Владелец В 33ed043c'"
+    },
+    {
+      "name": "record-selected-outside-map",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.chrono-title-view')?.textContent || '').includes('Запись с одной привязкой')"
+    },
+    {
+      "name": "focus-unchanged-outside-map",
+      "probe": {
+        "name": "focusOutsideMap",
+        "expression": "(async () => { const tabs = await window.etn.tabs.list(); const t = tabs.find((x) => x.network_id === '{{networkId}}'); return t === undefined ? null : t.focus_id; })()"
+      },
+      "expectFrom": "focus-on-record-owner-home"
+    },
+    {
+      "name": "still-diary-view-outside-map",
+      "probe": {
+        "name": "stillDiaryOutsideMap",
+        "expression": "(() => { const tabs = [...document.querySelectorAll('button.view-tab')]; const diary = tabs.find((b) => /дневник|diary/i.test(b.title)); const map = tabs.find((b) => /карта мыслей|map/i.test(b.title)); return diary !== undefined && diary.classList.contains('ui-btn--active') && map !== undefined && !map.classList.contains('ui-btn--active'); })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "no-error-dialog",
+      "probe": "document.querySelectorAll('.dialog-backdrop').length === 0",
+      "expect": true
+    }
+  ]
+}

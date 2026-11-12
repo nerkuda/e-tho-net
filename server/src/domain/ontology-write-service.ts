@@ -81,11 +81,14 @@ import {
 import {
   createNetworkProperty,
   createTypeProperty,
+  ensureLinkPropertyForLinkType,
+  getLinkPropertyByLinkTypeId,
   getNetworkProperty,
   getNetworkPropertyByName,
   getTypePropertyByKey,
   resolvePropertyIdByName,
   setTypePropertyDefaultOverride,
+  syncLinkPropertyName,
   updateNetworkProperty,
   updateTypeProperty,
 } from './property-service.js';
@@ -1205,6 +1208,8 @@ export function writeOntology(
       let id = item.id;
       let version = 0;
       let action: OntologyWriteLinkTypeResult['action'] = 'unchanged';
+      /** Парное свойство-связь типа (ошибка 117a999a); `null` — пары нет. */
+      let pairPropertyId: string | null = null;
       if (id === null) {
         if (item.name_forward === undefined || item.name_reverse === undefined) {
           throw new EtnError(
@@ -1226,6 +1231,15 @@ export function writeOntology(
         id = created.id;
         version = readVersion(ndb, 'link_types', id);
         action = 'created';
+        // Ошибка 117a999a: тип связи из MCP должен быть редактируем в GUI, а
+        // GUI правит тип только через его парное свойство-связь. Создаём пару
+        // в этой же транзакции (идемпотентно); конфликт имени — DUPLICATE и
+        // откат всего батча.
+        const ensured = ensureLinkPropertyForLinkType(ndb, id, actorUserId, {
+          on_name_conflict: 'error',
+          field: `link_types[${item.index}]`,
+        });
+        pairPropertyId = ensured.property.id;
       } else {
         const existing = getLinkType(ndb, id);
         if (existing === null) {
@@ -1276,14 +1290,21 @@ export function writeOntology(
         }
         if (Object.keys(updateInput).length > 0) {
           updateLinkType(ndb, id, updateInput, undefined, actorUserId);
+          // Требование 38eaa15c: имя свойства-связи вычисляется из типа.
+          // Переименование через MCP обязано перенести его в реестр, иначе
+          // свойство не резолвится по новому имени (ошибка 117a999a).
+          if (updateInput.name_forward !== undefined || updateInput.name_reverse !== undefined) {
+            syncLinkPropertyName(ndb, id, actorUserId, `link_types[${item.index}]`);
+          }
           version = readVersion(ndb, 'link_types', id);
           action = 'updated';
         } else {
           version = readVersion(ndb, 'link_types', id);
           action = 'unchanged';
         }
+        pairPropertyId = getLinkPropertyByLinkTypeId(ndb, id)?.id ?? null;
       }
-      ltResults.push({ ref: item.ref, id, version, action });
+      ltResults.push({ ref: item.ref, id, version, action, property_id: pairPropertyId });
       if (item.ref !== null) ltIdByRef.set(item.ref, id);
     }
     for (const [i, item] of resolvedLinkTypes.entries()) {

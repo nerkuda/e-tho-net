@@ -90,7 +90,7 @@ import type {
   LinkTypeUpdateInput,
   LinkUpdateInput,
   LockRow,
-  MentionHit,
+  BacklinkHit,
   MentionsScanRequest,
   MentionsScanResponse,
   Network,
@@ -590,9 +590,10 @@ export interface EtnApi {
     copyBatch(networkId: string, input: ThoughtCopyInput): Promise<ThoughtCopyResult>;
     resolve(networkId: string, ids: string[]): Promise<ThoughtRef[]>;
     search(networkId: string, request: SearchRequest): Promise<SearchResponse>;
-    mentions(networkId: string, id: string): Promise<MentionHit[]>;
+    /** Union `MentionHit | RecordHit` — постоянные комментарии + дневниковые записи (0.15.4). */
+    mentions(networkId: string, id: string): Promise<BacklinkHit[]>;
     /** `GET /thoughts/{id}/backlinks` — comments with explicit `[[#<id>]]` references (R3). */
-    backlinks(networkId: string, id: string): Promise<MentionHit[]>;
+    backlinks(networkId: string, id: string): Promise<BacklinkHit[]>;
     /** `POST /mentions/scan` — thought mentions in caller-supplied text (§21, L24). */
     mentionsScan(networkId: string, request: MentionsScanRequest): Promise<MentionsScanResponse>;
     /** `GET /thoughts/{id}/usage` — thoughts referencing this one through link-property edges (L7). */

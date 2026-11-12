@@ -1237,17 +1237,30 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
     const body = div('form-stack');
     body.append(fieldRow({ label: t('attachments.label.rezhim'), control: tabRow }), createPanel, searchPanel);
 
+    // Пока запрос добавления ждёт сервер, кнопки футера disabled (ошибка
+    // ef89c5c8): второй клик отправлял второй запрос и повторный аплоад файла.
+    let adding = false;
+    let addBtn: HTMLButtonElement | null = null;
+    let cancelBtn: HTMLButtonElement | null = null;
+    const setBusy = (value: boolean): void => {
+      adding = value;
+      if (addBtn !== null) addBtn.disabled = value;
+      if (cancelBtn !== null) cancelBtn.disabled = value;
+    };
+
     /** Создание вложения и закрытие — общий путь кнопки и подтверждения (b58f6aad). */
     async function addNew(close: () => void): Promise<void> {
       // The «Добавить» button only applies to the «Создать новое» tab —
       // the search tab commits immediately on row click.
       if (!tabCreate.checked) return;
+      if (adding) return;
       const kind = kindFile.checked ? 'file' : 'url';
       const location = locationInput.value.trim();
       if (location === '') {
         errorLine.show(t('attachments.enterAdresPath'));
         return;
       }
+      setBusy(true);
       try {
         if (kind === 'file') {
           // Upload the content so the server keeps a copy (preview,
@@ -1274,6 +1287,8 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         refreshAttachments();
       } catch (err) {
         errorLine.show(errText(err));
+      } finally {
+        setBusy(false);
       }
     }
 
@@ -1303,11 +1318,19 @@ export function buildAttachmentsPane(opts: AttachmentsPaneOptions): HTMLElement 
         save: (close) => void addNew(close),
       },
       buttons: [
-        { label: t('actions.cancel') },
+        {
+          label: t('actions.cancel'),
+          ref: (btn) => {
+            cancelBtn = btn;
+          },
+        },
         {
           label: t('addDialog.applyLabel.add'),
           primary: true,
           keepOpen: true,
+          ref: (btn) => {
+            addBtn = btn;
+          },
           onClick: (close) => void addNew(close),
         },
       ],

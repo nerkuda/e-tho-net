@@ -1245,6 +1245,8 @@ export const en = {
   'recordSearch.results': 'Matching entries',
   /** Запись без заголовка в результатах. */
   'recordSearch.untitled': 'Entry',
+  /** Client render cap of record rows (0.15.4, задача 33ed043c): «N of M shown». */
+  'records.more': '%1 of %2 shown',
 
   // -- Общее выделение -----------------------------------------------------
   /** Добавить мысль к выделению (меню чипов хроники). */
@@ -2483,10 +2485,6 @@ export const en = {
   'wikiLink.obnovitFormatId': 'Update the format to [[#<id>]] (%1)',
   'wikiLink.notSucceededOpredelitPoziciyuLinkRefDokumente': 'Failed to determine the link position in the document.',
   'wikiLink.label.openThought': 'Open thought',
-  'wikiLink.title.thoughtNotOtobrazhaetsya': 'The thought is not displayed',
-  'wikiLink.etaThoughtNotOtobrazhaetsyaStruktureThoughts': 'This thought is not displayed in thought structures. Switch to the thought map?',
-  'wikiLink.label.no': 'No',
-  'wikiLink.label.da': 'Yes',
   'wikiLink.firstOpenNetwork': 'Open a network first.',
   'wikiLink.pokazanyPervyeUtochniteName': 'The first %1 are shown, refine the name.',
   'wikiLink.foundNeskolkoThoughts': 'Several thoughts found: “%1”',
@@ -3592,9 +3590,9 @@ export const en = {
   'search.title.foundImenam': 'Found by names',
   'search.title.foundTekstam': 'Found by texts',
   'search.title.foundLinks': 'Found links',
-  'search.title.foundHronologii': 'Found in chronology',
+  'search.title.foundHronologii': 'Found in diaries',
   'search.placesSearch': 'Search areas:',
-  'search.hroniki': 'chronology',
+  'search.hroniki': 'diaries',
 
   // -- selection ---------------------------------------------------------
   'selection.selection': 'Selection',

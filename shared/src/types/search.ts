@@ -6,6 +6,7 @@
  */
 
 import type { IconKind, SearchGroup, SearchScope } from '../enums.js';
+import type { ChronicleTarget } from './chronicle.js';
 import type { FilterAst } from './filter-ast.js';
 import type { NetworksCatalog } from './network.js';
 import type { CrossNetworkTokenIssue, TokenIssue } from './query.js';
@@ -162,8 +163,21 @@ export interface SearchChronoHit {
   comment_id: string;
   valid_from: string;
   valid_to: string | null;
+  /**
+   * Флаг «учитывать время» записи-представителя (0.15.4, требование a9f455a4):
+   * без него период не отрисуется единым отображением
+   * `formatRecordPeriod(from, to, use_time)`.
+   */
+  use_time: boolean;
   snippet: string;
   highlights: string[];
+  /**
+   * Привязки записи-представителя («мысли/связи» из `comment_targets`,
+   * первичная первой) — паритет с `POST /chronicle/query` (0.15.4,
+   * требование a9f455a4, ADR db88d819). Присутствует ВСЕГДА: строк привязок
+   * нет — пустой массив (подстановки владельца здесь нет).
+   */
+  targets: ChronicleTarget[];
 }
 
 /** Response of `GET /search` (03-server-api.md §12). */
@@ -223,8 +237,14 @@ export interface SearchResponseMeta {
   total_in_group: Record<SearchGroup, number>;
 }
 
-/** Item of `GET /thoughts/{id}/mentions` (03-server-api.md §13). */
+/**
+ * Владельческая строка `GET /thoughts/{id}/mentions`, `/backlinks`
+ * (03-server-api.md §13, §13a): ПОСТОЯННЫЙ комментарий мысли/связи, в тексте
+ * которого упомянута целевая мысль — одна строка на `(owner_type, owner_id)`.
+ */
 export interface MentionHit {
+  /** Дискриминатор union {@link BacklinkHit} (0.15.4, ADR db88d819). */
+  kind: 'mention';
   owner_type: 'thought' | 'link';
   owner_id: string;
   title: string;
@@ -233,6 +253,42 @@ export interface MentionHit {
   /** Актуальность мысли-владельца (для связей — самой связи). */
   active: boolean;
 }
+
+/**
+ * Строка дневниковой записи (хронологического комментария) в ответах
+ * `GET /thoughts/{id}/mentions` и `/backlinks` (0.15.4, требование 012b2dc6,
+ * ADR db88d819). Запись — ОТДЕЛЬНАЯ строка: схлопывание «один элемент на
+ * владельца» на неё не распространяется, у одного владельца записей может быть
+ * сколько угодно (порядок — `valid_from` по убыванию).
+ *
+ * Отдельного поля `active` нет: неактуальность видна на чипах `targets`.
+ */
+export interface RecordHit {
+  /** Дискриминатор union {@link BacklinkHit}. */
+  kind: 'record';
+  comment_id: string;
+  valid_from: string;
+  valid_to: string | null;
+  /** Флаг «учитывать время» записи (период рисуется `formatRecordPeriod`). */
+  use_time: boolean;
+  snippet: string;
+  /**
+   * Полный набор привязок записи (первичная первой). Пустой массив — строк
+   * привязок нет; владелец при этом всё равно заполнен.
+   */
+  targets: ChronicleTarget[];
+  /** Первичная привязка записи — владелец `comments.owner_*` (HOME-фолбэк). */
+  owner_type: 'thought' | 'link';
+  owner_id: string;
+}
+
+/**
+ * Ответ `GET /thoughts/{id}/mentions`, `GET /thoughts/{id}/backlinks` и парных
+ * MCP-действий `thoughts.mentions`/`thoughts.backlinks` (0.15.4):
+ * владельческие строки постоянных комментариев + строки-записи дневниковых.
+ * Сужение по дискриминатору `kind` — без приведения типов.
+ */
+export type BacklinkHit = MentionHit | RecordHit;
 
 /** Body of `POST /mentions/scan` (03-server-api.md §21). */
 export interface MentionsScanRequest {

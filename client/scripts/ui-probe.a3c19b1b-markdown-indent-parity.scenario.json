@@ -1,0 +1,222 @@
+{
+  "name": "markdown-indent-parity (a3c19b1b)",
+  "description": "Ошибка a3c19b1b «Снова отступы просмотра отличаются от отступов редактирования»: между абзацем и следующим списком в правке разрыва нет, а просмотр добавлял большой отступ. Сценарий сам заводит постоянный комментарий корневой мысли HOME (api POST, {{homeId}}) с кейсами без пустой строки: абзац → список, список → список, абзац → код, абзац → цитата, абзац → таблица, вложенный список; и с пустой строкой: список → абзац. Проверяет ПРОГРАММНО (DOM-пробы геометрии и computed-стилей, без скриншотов): (1) в просмотре зазор кейса «абзац → список» равен нулю — как в правке; тот же зазор в правке измеряется и сверяется с просмотром (expectFrom: просмотр = правка) по всем парам; вложенный список не несёт полей и стоит вплотную; (2) у блоков просмотра нет собственного вертикального поля (margin p/ul/pre/table/blockquote = 0, --wa-content-spacing = 0) — до фикса это было 20.15px; (3) пустая строка исходника остаётся ровно одной строкой (список → пустая строка → абзац). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.a3c19b1b-markdown-indent-parity.scenario.json --out .tmp/a3c19b1b",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "Абзац перед кодом\n```\nстрока кода\n```\nАбзац перед списком\n- пункт один\n- пункт два\n* второй список один\n* второй список два\n\nАбзац перед цитатой\n> цитата одна\n> цитата два\n\nСписок перед абзацем\n- пункт последний\n\nАбзац после списка\n\nАбзац перед таблицей\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nСписок с вложенностью\n- внешний один\n  - вложенный пункт\n- внешний два"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    { "name": "open-comment-owner", "click": "[data-id=\"{{homeId}}\"].cloud" },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes('Абзац перед списком') === true",
+      "timeout": 15000
+    },
+    {
+      "name": "install-view-helpers",
+      "eval": "(() => { window.__poll = async (fn, tries = 60) => { for (let i = 0; i < tries; i += 1) { const value = fn(); if (value !== null && value !== undefined && value !== false) return value; await new Promise((resolve) => setTimeout(resolve, 25)); } return fn(); }; window.__view = () => document.querySelector('.ui-comment .md-field-view'); window.__p = (text) => [...window.__view().querySelectorAll('p')].find((e) => (e.textContent || '').startsWith(text)) ?? null; window.__ul = (text) => [...window.__view().querySelectorAll('ul')].find((e) => (e.textContent || '').includes(text)) ?? null; window.__pre = () => window.__view().querySelector('pre'); window.__bq = () => window.__view().querySelector('blockquote'); window.__table = () => window.__view().querySelector('table'); window.__nested = () => window.__view().querySelector('ul ul'); window.__gap = (a, b) => (a === null || b === null ? null : Math.round(b.getBoundingClientRect().top - a.getBoundingClientRect().bottom)); window.__near = (actual, expected) => actual !== null && Math.abs(actual - expected) <= 2; window.__cs = (el, prop) => (el === null ? null : getComputedStyle(el).getPropertyValue(prop).trim()); return true; })()"
+    },
+    {
+      "name": "view-settled",
+      "waitFor": "window.__poll(() => window.__p('Абзац после списка') !== null)"
+    },
+    {
+      "name": "view-para-list-gap",
+      "probe": {
+        "name": "viewParaListGap",
+        "expression": "window.__poll(() => window.__gap(window.__p('Абзац перед списком'), window.__ul('пункт один')))"
+      },
+      "expect": 0
+    },
+    {
+      "name": "view-list-list-gap",
+      "probe": {
+        "name": "viewListListGap",
+        "expression": "window.__poll(() => window.__gap(window.__ul('пункт один'), window.__ul('второй список один')))"
+      },
+      "expect": 0
+    },
+    {
+      "name": "view-para-code-gap",
+      "probe": {
+        "name": "viewParaCodeGap",
+        "expression": "window.__poll(() => window.__gap(window.__p('Абзац перед кодом'), window.__pre()))"
+      },
+      "expect": 0
+    },
+    {
+      "name": "view-para-quote-gap",
+      "probe": {
+        "name": "viewParaQuoteGap",
+        "expression": "window.__poll(() => window.__gap(window.__p('Абзац перед цитатой'), window.__bq()))"
+      },
+      "expect": 0
+    },
+    {
+      "name": "view-list-para-gap",
+      "probe": {
+        "name": "viewListParaGap",
+        "expression": "window.__poll(() => window.__gap(window.__ul('пункт последний'), window.__p('Абзац после списка')))"
+      }
+    },
+    {
+      "name": "view-list-para-one-blank-line",
+      "probe": {
+        "name": "viewListParaOneLine",
+        "expression": "window.__poll(() => { const gap = window.__gap(window.__ul('пункт последний'), window.__p('Абзац после списка')); return window.__near(gap, Math.round(parseFloat(getComputedStyle(window.__view()).lineHeight))); })"
+      },
+      "expect": true
+    },
+    {
+      "name": "view-para-table-gap",
+      "probe": {
+        "name": "viewParaTableGap",
+        "expression": "window.__poll(() => window.__gap(window.__p('Абзац перед таблицей'), window.__table()))"
+      },
+      "expect": 0
+    },
+    {
+      "name": "view-nested-list-flush",
+      "probe": {
+        "name": "viewNestedListMargins",
+        "expression": "(() => { const nested = window.__nested(); return nested === null ? null : { start: window.__cs(nested, 'margin-block-start'), end: window.__cs(nested, 'margin-block-end') }; })()"
+      },
+      "expect": { "start": "0px", "end": "0px" }
+    },
+    {
+      "name": "view-blocks-have-no-shift",
+      "probe": {
+        "name": "viewBlockMargins",
+        "expression": "({ p: window.__cs(window.__p('Абзац перед списком'), 'margin-block-end'), ul: window.__cs(window.__ul('пункт один'), 'margin-block-end'), pre: window.__cs(window.__pre(), 'margin-block-end'), quote: window.__cs(window.__bq(), 'margin-block-start') })"
+      },
+      "expect": { "p": "0px", "ul": "0px", "pre": "0px", "quote": "0px" }
+    },
+    {
+      "name": "view-prose-spacing-off",
+      "probe": {
+        "name": "viewWaSpacing",
+        "expression": "window.__cs(window.__view(), '--wa-content-spacing')"
+      },
+      "expect": "0"
+    },
+    {
+      "name": "view-para-code-no-marker",
+      "probe": {
+        "name": "paraCodeAdjacent",
+        "expression": "(() => { const p = window.__p('Абзац перед кодом'); return p !== null && p.nextElementSibling !== null && p.nextElementSibling.tagName === 'PRE'; })()"
+      },
+      "expect": true
+    },
+    {
+      "name": "enter-edit",
+      "click": { "selector": ".ui-comment .md-field-view p", "count": 2 }
+    },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "install-edit-helpers",
+      "eval": "(() => { window.__eline = (text) => [...document.querySelectorAll('.md-field--editing .cm-line')].find((e) => (e.textContent || '').includes(text)) ?? null; window.__ewidget = () => { const pre = document.querySelector('.md-field--editing .md-widget pre'); return pre === null ? null : pre.closest('.md-widget'); }; window.__etable = () => { const table = document.querySelector('.md-field--editing .md-widget table'); return table === null ? null : table.closest('.md-widget'); }; window.__egap = (a, b) => (a === null || b === null ? null : Math.round(b.getBoundingClientRect().top - a.getBoundingClientRect().bottom)); window.__escroll = (where) => { const scroller = document.querySelector('.md-field--editing .cm-scroller'); if (scroller === null) return 'no-scroller'; scroller.scrollTop = where === 'bottom' ? scroller.scrollHeight : 0; return 'ok'; }; return true; })()"
+    },
+    {
+      "name": "edit-settled",
+      "waitFor": "window.__eline('Абзац перед списком') !== null && window.__eline('пункт один') !== null && window.__ewidget() !== null"
+    },
+    {
+      "name": "edit-para-code-gap",
+      "probe": {
+        "name": "editParaCodeGap",
+        "expression": "window.__egap(window.__eline('Абзац перед кодом'), window.__ewidget())"
+      },
+      "expectFrom": "view-para-code-gap"
+    },
+    {
+      "name": "edit-para-list-gap",
+      "probe": {
+        "name": "editParaListGap",
+        "expression": "window.__egap(window.__eline('Абзац перед списком'), window.__eline('пункт один'))"
+      },
+      "expectFrom": "view-para-list-gap"
+    },
+    {
+      "name": "edit-list-list-gap",
+      "probe": {
+        "name": "editListListGap",
+        "expression": "window.__egap(window.__eline('пункт два'), window.__eline('второй список один'))"
+      },
+      "expectFrom": "view-list-list-gap"
+    },
+    {
+      "name": "edit-para-quote-gap",
+      "probe": {
+        "name": "editParaQuoteGap",
+        "expression": "window.__egap(window.__eline('Абзац перед цитатой'), window.__eline('цитата одна'))"
+      },
+      "expectFrom": "view-para-quote-gap"
+    },
+    {
+      "name": "edit-scroll-bottom",
+      "eval": "window.__escroll('bottom')"
+    },
+    {
+      "name": "edit-bottom-settled",
+      "waitFor": "window.__eline('Абзац после списка') !== null && window.__eline('пункт последний') !== null && window.__eline('вложенный пункт') !== null && window.__etable() !== null"
+    },
+    {
+      "name": "edit-list-para-gap",
+      "probe": {
+        "name": "editListParaGap",
+        "expression": "window.__egap(window.__eline('пункт последний'), window.__eline('Абзац после списка'))"
+      },
+      "expectFrom": "view-list-para-gap"
+    },
+    {
+      "name": "edit-para-table-gap",
+      "probe": {
+        "name": "editParaTableGap",
+        "expression": "window.__egap(window.__eline('Абзац перед таблицей'), window.__etable())"
+      },
+      "expectFrom": "view-para-table-gap"
+    },
+    {
+      "name": "edit-nested-list-gap",
+      "probe": {
+        "name": "editNestedListGap",
+        "expression": "window.__egap(window.__eline('внешний один'), window.__eline('вложенный пункт'))"
+      },
+      "expect": 0
+    }
+  ]
+}

@@ -2,6 +2,18 @@
   "name": "42a7c0a1-trash-chip",
   "description": "GUI-проверка ошибки 42a7c0a1 (круги 2–3): скрытые рёбра в корзине видимы и достижимы с графа, а восстановление обновляет граф БЕЗ перезапуска клиента. Фикстура помещает одно из 11 скрытых рёбер пары в корзину. До восстановления: у массового чипа «+11» метка корзины (общий .link-trash-badge), подсказка называет «в корзине: 1», клик по метке открывает общий диалог корзины; на «Свойствах» 11 живых рёбер пары отдельными чипами. Восстановление: выбрать строку-связь → «Восстановить» → Escape → waitFor исчезновения .mini-graph-mass-trash .link-trash-badge на «Графе» (вкладку НЕ переключаем и клиент НЕ перезапускаем). После: 12 активных рёбер → 1 линия + 11 скрытых, метки нет, подсказка без «в корзине», зум/панорама и выделение пережили пересборку. Прогон ОДНОЙ командой: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.42a7c0a1-trash-chip.scenario.json --scenario-seed client/scripts/ui-probe.42a7c0a1-seed.mjs --scenario-seed-arg --trash --scenario-seed-arg 1",
   "timeout": 120000,
+  "texts": {
+    "massChip11Trashed": {
+      "ru": "связь: ещё 11 связей, в корзине: 1 (метка корзины у чипа — восстановление через корзину). Полный список живых связей — на вкладке «Свойства».",
+      "en": "link: 11 more links, in basket: 1 (the chip's basket mark means restore via the basket). The full list live links — is on the “Properties” tab."
+    },
+    "massChip11": {
+      "ru": "связь: ещё 11 связей. Полный список — на вкладке «Свойства».",
+      "en": "link: 11 more links. The full list — is on the “Properties” tab."
+    },
+    "trashMark": { "ru": "в корзине", "en": "in basket" },
+    "hiddenMass11": { "ru": "Скрыто массовых: 11", "en": "Bulk hidden: 11" }
+  },
   "steps": [
     {
       "name": "onboarding-visible",
@@ -49,7 +61,7 @@
     },
     {
       "name": "open-graph-tab",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Граф — индекс 5 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[5]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "graph-ready",
@@ -64,7 +76,7 @@
     {
       "name": "chip-tooltip-trashed",
       "probe": "document.querySelector('.mini-graph-mass-chip title')?.textContent ?? null",
-      "expect": "связь: ещё 11 связей, в корзине: 1 (метка корзины у чипа — восстановление через корзину). Полный список живых связей — на вкладке «Свойства»."
+      "expect": "{{text:massChip11Trashed}}"
     },
     {
       "name": "chip-trash-badge",
@@ -78,7 +90,7 @@
     },
     {
       "name": "open-properties-tab",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Свойства'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Свойства — индекс 1 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[1]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "properties-ready",
@@ -92,7 +104,7 @@
     },
     {
       "name": "back-to-graph",
-      "eval": "(() => { const tab = Array.from(document.querySelectorAll('.editor-tab')).find((b) => b.textContent.trim() === 'Граф'); if (tab === undefined) return false; tab.click(); return true; })()"
+      "eval": "(() => { /* Граф — индекс 5 в фиксированном наборе TABS_THOUGHT (editor.ts); подписи локализованы (ADR daab6ac4), поэтому позиция, а не текст. */ const tab = Array.from(document.querySelectorAll('.editor-tab'))[5]; if (tab === undefined) return false; tab.click(); return true; })()"
     },
     {
       "name": "chip-visible-again",
@@ -134,12 +146,12 @@
     },
     {
       "name": "restore-command",
-      "probe": "Array.from(document.querySelectorAll('.trash button')).some((b) => b.textContent.trim() === 'Восстановить')",
+      "probe": "document.querySelectorAll('.trash-toolbar button').length >= 2",
       "expect": true
     },
     {
       "name": "trashed-link-listed",
-      "probe": "(document.querySelector('.trash')?.textContent ?? '').includes('связь')",
+      "probe": "((document.querySelector('.trash vaadin-grid')?.items) ?? []).some((x) => x && x.kind === 'link')",
       "expect": true
     },
     {
@@ -149,7 +161,7 @@
     },
     {
       "name": "restore-link",
-      "probe": "(() => { const b=[...document.querySelectorAll('.trash-toolbar button')].find((x)=>x.textContent.trim()==='Восстановить'); if(!b || b.disabled) return 'no-btn'; b.click(); return 'ok'; })()",
+      "probe": "(() => { const b=document.querySelectorAll('.trash-toolbar button')[1]; if(!b || b.disabled) return 'no-btn'; b.click(); return 'ok'; })()",
       "expect": "ok"
     },
     {
@@ -206,17 +218,17 @@
     {
       "name": "restored-chip-tooltip",
       "probe": "document.querySelector('.mini-graph-mass-chip title')?.textContent ?? null",
-      "expect": "связь: ещё 11 связей. Полный список — на вкладке «Свойства»."
+      "expect": "{{text:massChip11}}"
     },
     {
       "name": "restored-chip-tooltip-has-no-trash",
-      "probe": "(document.querySelector('.mini-graph-mass-chip title')?.textContent ?? '').includes('в корзине')",
+      "probe": "(document.querySelector('.mini-graph-mass-chip title')?.textContent ?? '').includes('{{text:trashMark}}')",
       "expect": false
     },
     {
       "name": "restored-header-hidden",
-      "probe": "(() => { const s=[...document.querySelectorAll('.mini-graph-header-stat')].map((e)=>e.textContent.trim()); return s.find((t)=>t.startsWith('Скрыто массовых')) ?? null; })()",
-      "expect": "Скрыто массовых: 11"
+      "probe": "(() => { return document.querySelectorAll('.mini-graph-header-stat')[1]?.textContent.trim() ?? null; })()",
+      "expect": "{{text:hiddenMass11}}"
     },
     {
       "name": "restored-db-links",

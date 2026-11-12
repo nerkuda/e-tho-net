@@ -743,6 +743,241 @@ test('TransclusionBlockWidget.updateDOM: косметика не перенос�
   assert.ok(box.children.includes(nested), 'DOM вложенного редактора по-прежнему на месте');
 });
 
+// ---------------------------------------------------------------------------
+// Сдвиг правкой вне блока не пересобирает содержимое (ошибка 1b5378ca)
+// ---------------------------------------------------------------------------
+
+/** Окружение DOM-шима: рендер блока и его обновление на месте. */
+function installTransclusionDomShim(): void {
+  (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
+  (globalThis as unknown as { document: unknown }).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: { style: {} },
+    querySelectorAll: () => [],
+  };
+}
+
+interface WidgetProbe {
+  toDOM(v: unknown): ShimElement;
+  updateDOM(dom: unknown, v: unknown): boolean;
+  eq(other: unknown): boolean;
+}
+
+/** Виджеты блоков документа (выделение вне блоков, кэш источников задан). */
+function blockWidgetsOf(
+  src: string,
+  cache: Map<string, { title: string; exists: boolean; error: null; html: string }>,
+  activeKey: string | null = null,
+): WidgetProbe[] {
+  const { deco } = buildTransclusionDecorations(src, { from: 0, to: 0 }, cache, NET, activeKey);
+  return collect(deco, src.length).map(
+    (item) => (item.value.spec as { widget: WidgetProbe }).widget,
+  );
+}
+
+/** Фейковый view с состоянием редактора на документе `src`. */
+function viewOf(src: string, store?: NestedEditorStore): unknown {
+  return {
+    state: EditorState.create({
+      doc: src,
+      extensions:
+        store === undefined
+          ? [transclusionState]
+          : [transclusionState, blockEditorStoreFacet.of(store)],
+    }),
+  };
+}
+
+/**
+ * Счётчик childList-мутаций внутри блока: обёртки методов вставки/снятия детей
+ * на самом блоке и `remove` его детей (в шиме нет MutationObserver).
+ */
+function watchBlockMutations(box: ShimElement): () => number {
+  let mutations = 0;
+  const target = box as unknown as Record<string, unknown>;
+  for (const method of [
+    'append',
+    'prepend',
+    'appendChild',
+    'insertBefore',
+    'removeChild',
+    'replaceChildren',
+    'replaceWith',
+  ]) {
+    const original = target[method] as ((...args: unknown[]) => unknown) | undefined;
+    if (typeof original !== 'function') continue;
+    target[method] = (...args: unknown[]): unknown => {
+      mutations += 1;
+      return original.apply(box, args);
+    };
+  }
+  for (const child of [...box.children]) {
+    const original = child.remove.bind(child);
+    child.remove = (): void => {
+      mutations += 1;
+      original();
+    };
+  }
+  return () => mutations;
+}
+
+/** Счётчик присваиваний `innerHTML` элементу (пересборка содержимого). */
+function watchInnerHtml(el: ShimElement): () => number {
+  let writes = 0;
+  let value = el.innerHTML;
+  Object.defineProperty(el, 'innerHTML', {
+    configurable: true,
+    get: () => value,
+    set: (next: string) => {
+      writes += 1;
+      value = next;
+    },
+  });
+  return () => writes;
+}
+
+test('updateDOM: сдвиг правкой выше блока не пересобирает содержимое (1b5378ca)', () => {
+  installTransclusionDomShim();
+  const before = `до ${BLOCK_RAW} после`;
+  const refBefore = parseTransclusions(before)[0]!;
+  const widgetBefore = blockWidgetsOf(before, cacheFor(refBefore))[0]!;
+  const box = widgetBefore.toDOM(viewOf(before));
+
+  const childrenBefore = [...box.children];
+  const body = childrenBefore[childrenBefore.length - 1]!;
+  assert.equal(body.innerHTML, '<p>тело</p>', 'содержимое блока отрисовано');
+  const mutations = watchBlockMutations(box);
+  const htmlWrites = watchInnerHtml(body);
+
+  // Правка ВЫШЕ блока на 3 символа: абсолютные `from/to` сдвинуты, HTML тот же.
+  const after = `XXX${before}`;
+  const refAfter = parseTransclusions(after)[0]!;
+  assert.equal(refAfter.start, refBefore.start + 3, 'печать выше сдвигает смещения');
+  const shifted = blockWidgetsOf(after, cacheFor(refAfter))[0]!;
+  assert.equal(widgetBefore.eq(shifted), false, 'смещения отличают виджеты (триггер updateDOM)');
+  assert.equal(shifted.updateDOM(box, viewOf(after)), true, 'updateDOM обновляет DOM на месте');
+
+  assert.equal(mutations(), 0, 'ни одной childList-мутации внутри неактивного блока');
+  assert.equal(htmlWrites(), 0, 'innerHTML содержимого не переназначался');
+  const childrenAfter = [...box.children];
+  assert.equal(childrenAfter.length, childrenBefore.length, 'состав детей блока прежний');
+  for (let i = 0; i < childrenBefore.length; i += 1) {
+    assert.equal(childrenAfter[i], childrenBefore[i], `ребёнок #${i} — тот же DOM-узел`);
+  }
+  assert.equal(body.parent, box, 'узел содержимого остался в блоке');
+  assert.equal(box.dataset.mdFrom, String(refAfter.start), 'data-md-from обновлён');
+  assert.equal(box.dataset.mdTo, String(refAfter.end), 'data-md-to обновлён');
+});
+
+test('updateDOM: правка НИЖЕ блока виджет не меняет — перерисовки нет (1b5378ca)', () => {
+  installTransclusionDomShim();
+  const before = `до ${BLOCK_RAW} после`;
+  const refBefore = parseTransclusions(before)[0]!;
+  const widgetBefore = blockWidgetsOf(before, cacheFor(refBefore))[0]!;
+  const after = `${before}XXX`;
+  const refAfter = parseTransclusions(after)[0]!;
+  assert.equal(refAfter.start, refBefore.start, 'правка ниже смещения блока не меняет');
+  assert.equal(
+    widgetBefore.eq(blockWidgetsOf(after, cacheFor(refAfter))[0]!),
+    true,
+    'виджеты равны — CM6 не зовёт updateDOM (регресс перерисовки)',
+  );
+});
+
+test('updateDOM: смена HTML источника (realtime) пересобирает содержимое (1b5378ca)', () => {
+  installTransclusionDomShim();
+  const src = `до ${BLOCK_RAW} после`;
+  const ref = parseTransclusions(src)[0]!;
+  const box = blockWidgetsOf(src, cacheFor(ref))[0]!.toDOM(viewOf(src));
+  const stale = [...box.children][box.children.length - 1]!;
+  assert.equal(stale.innerHTML, '<p>тело</p>');
+
+  const updated = cacheFor(ref);
+  updated.set(transclusionCacheKey(NET, ref), {
+    title: 'Мысль',
+    exists: true,
+    error: null,
+    html: '<p>новое тело</p>',
+  });
+  const widget = blockWidgetsOf(src, updated)[0]!;
+  widget.updateDOM(box, viewOf(src));
+
+  const children = [...box.children];
+  const fresh = children[children.length - 1]!;
+  assert.equal(stale.parent, null, 'прежний узел содержимого снят');
+  assert.equal(fresh.innerHTML, '<p>новое тело</p>', 'содержимое обновлено по realtime источника');
+  assert.ok(box.dataset.mdFrom === String(ref.start), 'смещения блока на месте');
+});
+
+test('updateDOM: несколько трансклюзий — сдвиг выше сохраняет DOM каждого блока (1b5378ca)', () => {
+  installTransclusionDomShim();
+  // Четыре блока в одном поле: работа на сдвиг не должна зависеть от их числа.
+  const src = `до ![[#${ID_A}]] 1 ![[#${ID_B}]] 2 ![[#${ID_A}]] 3 ![[#${ID_B}]] после`;
+  const refs = parseTransclusions(src);
+  assert.equal(refs.length, 4, 'в документе четыре трансклюзии');
+  const cache = new Map<string, { title: string; exists: boolean; error: null; html: string }>([
+    ...cacheFor(refs[0]!),
+    ...cacheFor(refs[1]!),
+  ]);
+  const widgets = blockWidgetsOf(src, cache);
+  assert.equal(widgets.length, 4, 'четыре блока');
+  const boxes = widgets.map((widget) => widget.toDOM(viewOf(src)));
+  const counters = boxes.map((box) => watchBlockMutations(box));
+  const childrenBefore = boxes.map((box) => [...box.children]);
+
+  const after = `XXX${src}`;
+  const shifted = blockWidgetsOf(after, cache);
+  shifted.forEach((widget, index) => {
+    widget.updateDOM(boxes[index]!, viewOf(after));
+  });
+
+  counters.forEach((count, index) => {
+    assert.equal(count(), 0, `блок #${index}: ни одной childList-мутации`);
+    const children = [...boxes[index]!.children];
+    assert.equal(children.length, childrenBefore[index]!.length);
+    for (let i = 0; i < children.length; i += 1) {
+      assert.equal(children[i], childrenBefore[index]![i], `блок #${index}: тот же ребёнок #${i}`);
+    }
+  });
+  const shiftedRefs = parseTransclusions(after);
+  boxes.forEach((box, index) => {
+    assert.equal(box.dataset.mdFrom, String(shiftedRefs[index]!.start), `блок #${index}: data-md-from`);
+    assert.equal(box.dataset.mdTo, String(shiftedRefs[index]!.end), `блок #${index}: data-md-to`);
+  });
+});
+
+test('updateDOM: сдвиг выше АКТИВНОГО блока сохраняет DOM вложенного редактора (1b5378ca, ce46723d)', () => {
+  installTransclusionDomShim();
+  const before = `до ${BLOCK_RAW} после`;
+  const refBefore = parseTransclusions(before)[0]!;
+  const key = blockEditorKey(ID_A, null);
+  const registry = new Map<string, FakeNestedView>();
+  const store = new NestedEditorStore(fakeFactory(registry));
+  store.mount(key, 'ТЕЛО', {
+    depth: 1,
+    onDirty: () => undefined,
+    onExit: () => undefined,
+    onCommit: () => undefined,
+    onCancel: () => undefined,
+  });
+  const widgetBefore = blockWidgetsOf(before, cacheFor(refBefore), key)[0]!;
+  const box = widgetBefore.toDOM(viewOf(before, store));
+  const nested = store.dom(key)! as unknown as ShimElement;
+  assert.ok(box.children.includes(nested), 'активный блок держит DOM вложенного редактора');
+  const mutations = watchBlockMutations(box);
+
+  const after = `XXX${before}`;
+  const refAfter = parseTransclusions(after)[0]!;
+  const shifted = blockWidgetsOf(after, cacheFor(refAfter), key)[0]!;
+  shifted.updateDOM(box, viewOf(after, store));
+
+  assert.equal(mutations(), 0, 'активный блок: ни одной childList-мутации при сдвиге выше');
+  assert.ok(box.children.includes(nested), 'DOM вложенного редактора остался на месте (фокус цел)');
+  assert.equal(nested.parent, box, 'вложенный редактор не переставлен');
+  assert.equal(box.dataset.mdFrom, String(refAfter.start), 'data-md-from актуален');
+});
+
 test('createTransclusionHead: чип-кнопка словаря с подписью и гашением mousedown', () => {
   (globalThis as unknown as { HTMLElement: unknown }).HTMLElement = ShimElement;
   (globalThis as unknown as { document: unknown }).document = {

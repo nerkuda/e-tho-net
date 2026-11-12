@@ -62,12 +62,17 @@ import { createThoughtCloud, type ThoughtCloudActions } from '../lib/thought-clo
 // (статический импорт дал бы цикл `app → search → canvas/context-menu → app`),
 // а type-only импорт стирается при сборке и цикла не создаёт.
 import type { ThoughtMenuPlace } from '../canvas/context-menu.js';
-import { openLinkInEditor } from '../editor/editor.js';
-import {
-  paintWikiIdsInSnippet,
-  resolveWikiIdsInSnippet,
-} from '../editor/wiki-link-resolver.js';
+import { openLinkInEditor, openRecordInEditor } from '../editor/editor.js';
+import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from '../editor/wiki-link-resolver.js';
 import { resolveFirstDayOfWeek } from '../lib/dates.js';
+import { getHomeId } from '../lib/home.js';
+import { openRecordTarget as openRecordTargetIn } from '../lib/record-open.js';
+import {
+  createRecordRow,
+  recordRowFromChronoHit,
+  type RecordRowHandle,
+} from '../lib/record-row.js';
+import type { RecordTargetRef } from '../lib/record-targets.js';
 import { div, el, errText, renderHtml, span } from '../lib/dom.js';
 import { operationError } from '../lib/ui/messages.js';
 import { etn } from '../lib/etn.js';
@@ -114,7 +119,7 @@ import {
   type Thought,
   type TokenIssue,
 } from '@etn/shared';
-import { store } from '../state.js';
+import { isMapViewActive, store } from '../state.js';
 import { requireNetworkId } from '../app.js';
 import { iconButton, uiButton } from '../lib/ui/button.js';
 import { checkboxRow } from '../lib/ui/choice-row.js';
@@ -158,6 +163,13 @@ let restored = false;
 let lastSelectedKey: string | null = null;
 /** Flat navigation index over group headers + hits of expanded groups. */
 let cursor: number | null = null;
+/**
+ * HOME сети для чипов строк-записей (0.15.4, задача 33ed043c): один резолв через
+ * общий `lib/home.ts` на поиск; `null` — не разрешён (HOME не фильтруется).
+ */
+let chronoHomeId: string | null = null;
+/** Смонтированные строки-записи: перерисовка чипов по настройкам и снятие обвязки. */
+const mountedRecordRows = new Set<RecordRowHandle>();
 /** Счётчик монтирований строки поиска: уникальные id контекстов диспетчера. */
 let searchContextSeq = 0;
 /** Снятие контекста поля поиска (пока фокус в поле). */
@@ -205,6 +217,9 @@ function resetSearchState(): void {
   lastResults = null;
   lastSelectedKey = null;
   cursor = null;
+  chronoHomeId = null;
+  for (const handle of mountedRecordRows) handle.destroy();
+  mountedRecordRows.clear();
   searchEditor?.destroy();
   searchEditor = null;
   if (searchTimer !== null) {
@@ -257,7 +272,13 @@ export function mountSearch(next: SearchChrome): () => void {
   // Смена первого дня недели в «Все настройки» перестраивает открытую зону
   // настроек: календарь точной даты читает настройку заново (ошибка b5278f9a).
   firstDayOfWeekSeen = resolveFirstDayOfWeek(store.state.network?.first_day_of_week);
+  let visibilitySeen = `${String(store.state.showInactive)}|${String(store.state.showTrash)}`;
   const unsubscribeFirstDayOfWeek = store.subscribe(() => {
+    const visibility = `${String(store.state.showInactive)}|${String(store.state.showTrash)}`;
+    if (visibility !== visibilitySeen) {
+      visibilitySeen = visibility;
+      repaintRecordRows();
+    }
     if (chrome === null || settingsZone === null) return;
     // Выход из сети (`resetNetwork`) синхронно рассылает `networkId: null`:
     // пересобирать зону настроек не из чего — `requireNetworkId()` в
@@ -398,21 +419,23 @@ export function mountSearch(next: SearchChrome): () => void {
     if (host.classList.contains('hidden')) return;
     const target = event.target;
     if (!(target instanceof Node)) return;
-    if (!searchPanelClosesOnTap({
-      // Панель и её поле поиска (поле живёт в строке L18, вне хоста панели).
-      insidePanel: host.contains(target) || input.contains(target),
-      insideSuggest: isInsideSuggestDropdown(target),
-      insideDialog: isInsideDialog(target),
-      // Списки выбора редактора отбора (и прочие панели `lib/ui`) порталятся в
-      // `document.body` — клик по ним не закрывает строку поиска (ошибка
-      // 50d9bf4e п. B1).
-      insideFloating: isInsidePopover(target),
-      // Строка меню (`lib/menu.ts`): подменю «Добавить отбор…» порталится в
-      // `document.body`. Настоящий клик по нему (`pointerdown`) обязан не
-      // закрывать панель — иначе команда применяется «вслепую», а условия и
-      // результаты прячутся вместе с панелью (задача 4b1cc3d4, ошибка ddff7ca7).
-      insideMenu: isInsideMenu(target),
-    })) {
+    if (
+      !searchPanelClosesOnTap({
+        // Панель и её поле поиска (поле живёт в строке L18, вне хоста панели).
+        insidePanel: host.contains(target) || input.contains(target),
+        insideSuggest: isInsideSuggestDropdown(target),
+        insideDialog: isInsideDialog(target),
+        // Списки выбора редактора отбора (и прочие панели `lib/ui`) порталятся в
+        // `document.body` — клик по ним не закрывает строку поиска (ошибка
+        // 50d9bf4e п. B1).
+        insideFloating: isInsidePopover(target),
+        // Строка меню (`lib/menu.ts`): подменю «Добавить отбор…» порталится в
+        // `document.body`. Настоящий клик по нему (`pointerdown`) обязан не
+        // закрывать панель — иначе команда применяется «вслепую», а условия и
+        // результаты прячутся вместе с панелью (задача 4b1cc3d4, ошибка ddff7ca7).
+        insideMenu: isInsideMenu(target),
+      })
+    ) {
       return;
     }
     panelClosePending = true;
@@ -522,9 +545,7 @@ function applySettingsPlacement(): void {
 async function loadSettingsOpen(): Promise<void> {
   const networkId = store.state.networkId;
   if (networkId === null) return;
-  const raw = await etn.ui
-    .getState(networkId, UI_STATE_KEY.SEARCH_SETTINGS_OPEN)
-    .catch(() => null);
+  const raw = await etn.ui.getState(networkId, UI_STATE_KEY.SEARCH_SETTINGS_OPEN).catch(() => null);
   if (chrome === null) return;
   setSettingsOpen(isSearchSettingsOpenStored(raw));
 }
@@ -790,7 +811,8 @@ async function run(): Promise<void> {
   persistState();
   const resultsBox = chrome.host.querySelector('.search-results');
   if (resultsBox !== null) {
-    resultsBox.replaceChildren(el('span', 'muted', t('actions.search')));
+    clearResults(resultsBox);
+    resultsBox.append(el('span', 'muted', t('actions.search')));
   }
   const idQuery = parseThoughtIdLookupQuery(q);
   if (idQuery !== null) {
@@ -798,6 +820,12 @@ async function run(): Promise<void> {
     return;
   }
   const scopes = scopesFor(options);
+  // HOME сети — для фильтра чипов строк-записей: общий резолвер (кеш на сеть),
+  // запрос стартует ПАРАЛЛЕЛЬНО поиску. Выдача ждёт оба промиса: без HOME первый
+  // рендер показал бы чип HOME и тут же перерисовался (мигание). Дополнительного
+  // круга задержки нет — HOME разрешается один раз на сеть и кешируется, а его
+  // запрос идёт одновременно с поиском.
+  const homePromise = getHomeId(networkId).catch(() => null);
   try {
     // Гибрид (требование b91336e7, ADR 7581ac14): МЫСЛЕВЫЕ настройки —
     // скомпилированный из редактора `ast` (профиль `thoughts`, включая
@@ -824,11 +852,17 @@ async function run(): Promise<void> {
         }),
       ),
     );
+    // HOME ждём ПОСЛЕ ответов поиска (обычно уже разрешён: запрос стартовал
+    // параллельно) — см. комментарий у homePromise.
+    const home = await homePromise;
+    // Сеть могла смениться, пока шли ответы: HOME чужой сети панели не нужен.
+    if (store.state.networkId === networkId) chronoHomeId = home;
     lastResults = mergeResponses(responses);
     renderResults(lastResults);
   } catch (err) {
     if (resultsBox !== null) {
-      resultsBox.replaceChildren(operationError(err, t('search.errorSearch')));
+      clearResults(resultsBox);
+      resultsBox.append(operationError(err, t('search.errorSearch')));
     }
   }
 }
@@ -851,7 +885,8 @@ async function runById(networkId: string, id: string): Promise<void> {
     if (chrome !== null) {
       const resultsBox = chrome.host.querySelector('.search-results');
       if (resultsBox !== null) {
-        resultsBox.replaceChildren(operationError(err, t('search.errorSearch')));
+        clearResults(resultsBox);
+        resultsBox.append(operationError(err, t('search.errorSearch')));
       }
     }
   }
@@ -866,7 +901,7 @@ function renderIdResult(thought: Thought | null): void {
   if (chrome === null) return;
   const resultsBox = chrome.host.querySelector('.search-results');
   if (resultsBox === null) return;
-  resultsBox.replaceChildren();
+  clearResults(resultsBox);
   const section = div('search-group');
   const header = div('search-group-header');
   const caret = span('▾', 'group-caret');
@@ -942,6 +977,21 @@ function activateHit(key: string, open: () => void): () => void {
  */
 function currentHighlightTerms(): string[] {
   return chrome === null ? [] : searchHighlightTerms(chrome.input.value);
+}
+
+/**
+ * Перерисовать чипы смонтированных строк-записей по текущим настройкам
+ * видимости (сценарий 32b93a18: смена настройки перестраивает чипы БЕЗ
+ * перезапроса результатов).
+ */
+function repaintRecordRows(): void {
+  for (const handle of mountedRecordRows) {
+    handle.refreshVisibility({
+      homeId: chronoHomeId,
+      showInactive: store.state.showInactive,
+      showTrash: store.state.showTrash,
+    });
+  }
 }
 
 /**
@@ -1037,11 +1087,28 @@ function renderUnresolvedDiagnostics(
   box.append(block);
 }
 
+/**
+ * Снимает обвязку строк-записей и очищает коробку результатов.
+ *
+ * Инвариант (0.15.4, задача 33ed043c): обвязка переполнения живёт ровно столько
+ * же, сколько DOM строки-записи. Поэтому КАЖДАЯ ветка замены содержимого
+ * результатов идёт через этот хелпер — иначе ResizeObserver держал бы
+ * отцепленные полосы до следующего полного рендера.
+ */
+function clearResults(box: Element | null): void {
+  for (const handle of mountedRecordRows) handle.destroy();
+  mountedRecordRows.clear();
+  box?.replaceChildren();
+}
+
 /** Renders the four result groups. */
-function renderResults(response: SearchResponse | null): void {  if (chrome === null) return;
+function renderResults(response: SearchResponse | null): void {
+  if (chrome === null) return;
   const resultsBox = chrome.host.querySelector('.search-results');
   if (resultsBox === null) return;
-  resultsBox.replaceChildren();
+  // Обвязку переполнения прежних строк-записей снимаем вместе с их DOM —
+  // общий хелпер, тот же порядок обязателен во ВСЕХ ветках замены результатов.
+  clearResults(resultsBox);
   if (response === null) {
     resultsBox.append(el('p', 'muted', t('search.enterZaprosMinimumSimvola')));
     return;
@@ -1057,33 +1124,49 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
   // Термы подсветки — из текущего запроса: совпадения в названии подсвечены
   // прямо в облачке (задача a1766c7d).
   const highlightTerms = currentHighlightTerms();
+  /**
+   * Строка группы результатов: обычный хит (облачко/глиф + сниппет) либо
+   * строка-запись — общая компонента `lib/record-row.ts` (0.15.4, элемент
+   * 554e3129, ADR 8f0e9412). Строка-запись сама ведёт клики по строке/чипам и
+   * список выбора привязки; поиск даёт ей ряд, ключ и активацию Enter.
+   */
+  type ResultRow =
+    | {
+        kind: 'plain';
+        /** Фабричное облачко мысли либо глиф-иконка для не-мысленных хитов. */
+        lead: HTMLElement;
+        /** Заголовок простой строки (связи/хронология); у мыслей — в облачке. */
+        title?: string;
+        /**
+         * Хит-мысль: облачко занимает всю ширину списка (название обрезается
+         * по ней, а не по ширине холстового облачка `--cloud-width`), snippet
+         * с `<mark>` уходит под облачко (ошибка 265cdb5f).
+         */
+        isThought: boolean;
+        snippet: string;
+        /** Stable row key for selection restore + keyboard navigation. */
+        key: string;
+        /**
+         * Активация хита — одна функция на клик и на Enter (задача a1766c7d):
+         * у хита-мысли её же исполняют жесты облачка, у простой строки — её
+         * обработчик клика.
+         */
+        activate: () => void;
+        /** Stage 3: Ctrl+hover on the row shows the owner's permanent comment
+         *  (no per-indicator icons in this list). */
+        markPreview: (row: HTMLElement) => void;
+      }
+    | {
+        kind: 'record';
+        /** Ключ строки — `comment_id` записи-представителя (элемент 554e3129). */
+        key: string;
+        /** Сборка общей строки-записи (разметка, чипы, клики, выбор привязки). */
+        build: () => RecordRowHandle;
+      };
   const groups: Array<{
     key: 'names' | 'texts' | 'links' | 'chronology';
     title: string;
-    hits: Array<{
-      /** Фабричное облачко мысли либо глиф-иконка для не-мысленных хитов. */
-      lead: HTMLElement;
-      /** Заголовок простой строки (связи/хронология); у мыслей — в облачке. */
-      title?: string;
-      /**
-       * Хит-мысль: облачко занимает всю ширину списка (название обрезается
-       * по ней, а не по ширине холстового облачка `--cloud-width`), snippet
-       * с `<mark>` уходит под облачко (ошибка 265cdb5f).
-       */
-      isThought: boolean;
-      snippet: string;
-      /** Stable row key for selection restore + keyboard navigation. */
-      key: string;
-      /**
-       * Активация хита — одна функция на клик и на Enter (задача a1766c7d):
-       * у хита-мысли её же исполняют жесты облачка, у простой строки — её
-       * обработчик клика.
-       */
-      activate: () => void;
-      /** Stage 3: Ctrl+hover on the row shows the owner's permanent comment
-       *  (no per-indicator icons in this list). */
-      markPreview: (row: HTMLElement) => void;
-    }>;
+    hits: ResultRow[];
   }> = [
     {
       key: 'names',
@@ -1092,6 +1175,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
         const key = `thought:${hit.thought_id}`;
         const activate = activateHit(key, () => focusFromUi(hit.thought_id));
         return {
+          kind: 'plain',
           lead: createThoughtCloud(
             { ...hit, id: hit.thought_id },
             {
@@ -1118,6 +1202,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
         const key = `thought:${hit.thought_id}`;
         const activate = activateHit(key, () => focusFromUi(hit.thought_id));
         return {
+          kind: 'plain',
           lead: createThoughtCloud(
             { ...hit, id: hit.thought_id },
             {
@@ -1146,6 +1231,7 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
         const key = `link:${hit.link_id}`;
         const activate = activateHit(key, () => void openLinkHit(hit.link_id));
         return {
+          kind: 'plain',
           lead: span('🔗'),
           title: hit.type_name,
           isThought: false,
@@ -1160,17 +1246,30 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
       key: 'chronology',
       title: t('search.title.foundHronologii'),
       hits: response.by_chrono.map((hit) => {
-        const key = `chrono:${hit.owner}:${hit.owner_id}`;
-        const activate = activateHit(key, () => void openChronoHit(hit.owner, hit.owner_id));
+        const model = recordRowFromChronoHit(hit);
+        // Ключ — `comment_id` записи-представителя, а не владелец: при смене
+        // представителя выбор восстанавливается на ту же запись (элемент
+        // 554e3129, уточнение итерации 1).
+        const key = `chrono:${hit.comment_id}`;
         return {
-          lead: span('📅'),
-          title: hit.valid_from.slice(0, 10),
-          isThought: false,
-          snippet: hit.snippet,
+          kind: 'record',
           key,
-          activate,
-          markPreview: (row) =>
-            markCommentPreview(row, hit.owner, hit.owner_id, hit.valid_from.slice(0, 10)),
+          build: () =>
+            createRecordRow(model, {
+              networkId,
+              // Чипы видимых привязок — общий предикат `lib/record-targets.ts` и
+              // настройки видимости клиента (паритет с чипами истории посещений,
+              // сужение K4).
+              visibility: {
+                homeId: chronoHomeId,
+                showInactive: store.state.showInactive,
+                showTrash: store.state.showTrash,
+              },
+              // Переход — активация хита: подсветка/скрытие панели, затем
+              // открытие цели (фокус холста — на ОТКРЫВАЕМУЮ привязку).
+              onOpen: (target, rowModel) =>
+                activateHit(key, () => void openRecordTarget(target, rowModel.commentId))(),
+            }),
         };
       }),
     },
@@ -1196,6 +1295,22 @@ function renderResults(response: SearchResponse | null): void {  if (chrome === 
       body.append(el('p', 'muted', t('attachments.nichegoNotFound')));
     } else {
       for (const hit of group.hits) {
+        if (hit.kind === 'record') {
+          // Строка-запись: разметку, клики и список выбора привязки ведёт общая
+          // компонента; ряд получает класс/ключ/активацию поиска — клавиатура и
+          // восстановление выбора работают как у прочих строк.
+          const built = hit.build();
+          const row = built.el;
+          row.classList.add('search-hit');
+          row.dataset['key'] = hit.key;
+          rowActivations.set(row, () => {
+            lastSelectedKey = hit.key;
+            built.activate();
+          });
+          mountedRecordRows.add(built);
+          body.append(row);
+          continue;
+        }
         const row = div('search-hit');
         row.dataset['key'] = hit.key;
         // Активация строки для Enter — та же функция, что обслуживает клик
@@ -1251,6 +1366,17 @@ export interface SearchHitPort {
   setFocus(thoughtId: string): Promise<void>;
   /** Открыть связь в редакторе — только после успешной установки фокуса. */
   openLinkInEditor(link: Link): void;
+  /**
+   * Программный вход «открыть привязку с записью» (0.15.4, задача 666d1d00):
+   * редактор мысли, вкладка «Дневник», выбранная строка записи.
+   */
+  openRecordInEditor(thoughtId: string, commentId: string): void;
+  /**
+   * Поставить фокус карты с обработкой отказа (тост из словаря) — клиентский
+   * `focusFromUi`. Отдельный шов: отказ фокуса — самостоятельный класс отказа
+   * (ошибка 53d21e82), у него своё правило шума.
+   */
+  focusFromUi(thoughtId: string): Promise<void>;
 }
 
 let hitPort: SearchHitPort | null = null;
@@ -1267,6 +1393,8 @@ function searchHitPort(): SearchHitPort {
       getLink: (networkId, linkId) => etn.links.get(networkId, linkId),
       setFocus,
       openLinkInEditor,
+      openRecordInEditor,
+      focusFromUi,
     }
   );
 }
@@ -1301,19 +1429,27 @@ async function openLinkHit(linkId: string): Promise<void> {
   }
 }
 
-/** Opens a chronology hit on its owner (thought → focus, link → editor). */
-async function openChronoHit(owner: 'thought' | 'link', ownerId: string): Promise<void> {
-  if (owner === 'thought') {
-    focusFromUi(ownerId);
-    return;
-  }
-  try {
-    const port = searchHitPort();
-    const link = await port.getLink(requireNetworkId(), ownerId);
-    port.openLinkInEditor(link);
-  } catch (error) {
-    reportHitFailure(error);
-  }
+/**
+ * Открывает цель строки-записи (требование ce121e09, сценарии 55c7f9c7,
+ * eeffbc16, b87fb958): привязка-МЫСЛЬ — редактор мысли с активной вкладкой
+ * «Дневник» и выбранной строкой записи; привязка-СВЯЗЬ — редактор связи БЕЗ
+ * записи (у редактора связи нет вкладки «Дневник», решение пользователя
+ * 2026-11-10). Владелец записи приходит сюда же при нуле видимых привязок.
+ */
+async function openRecordTarget(target: RecordTargetRef, commentId: string): Promise<void> {
+  // Решение «куда ведёт строка-запись» — ОДНО на поиск и вкладку «Упоминания»
+  // (`lib/record-open.ts`, задача ae72e47e): порядок «вход редактора, затем
+  // фокус на открываемую привязку» и различие мысль/связь живут там. Порт
+  // поиска остаётся тестовым швом и источником действий.
+  await openRecordTargetIn(target, commentId, {
+    ...searchHitPort(),
+    networkId: requireNetworkId(),
+    // Фокус переводится только с активного вида «Карта мыслей» (ревизия
+    // 2026-11-11, требование ce121e09 v5): с другого экрана клик по записи
+    // открывает её в редакторе и не меняет мысль в фокусе карты.
+    isMapActive: isMapViewActive,
+    onFailure: reportHitFailure,
+  });
 }
 
 /**
@@ -1462,9 +1598,7 @@ function openQuickCommandsMenu(event: MouseEvent): void {
  * добавляется: значение-токен `$thought` осталось бы неразрешимым, и поиск шёл
  * бы с диагностикой `unresolved` вместо результата (задача 4b1cc3d4).
  */
-function runQuickCommand(
-  command: 'parentInFocus' | 'onlyActive' | 'onlyNotTrashed',
-): void {
+function runQuickCommand(command: 'parentInFocus' | 'onlyActive' | 'onlyNotTrashed'): void {
   if (command === 'parentInFocus' && (store.state.focus?.focused.id ?? null) === null) {
     notice(t('search.focusRequired'));
     return;
@@ -1494,5 +1628,5 @@ export const searchInternals = {
   MIN_QUERY_LENGTH,
   nextNavIndex,
   openLinkHit,
-  openChronoHit,
+  openRecordTarget,
 };

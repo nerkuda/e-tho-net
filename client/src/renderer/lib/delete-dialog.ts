@@ -95,23 +95,68 @@ export function openEntityDeleteDialog(opts: EntityDeleteDialogOptions): void {
   if (opts.usageLink !== undefined) body.append(usageLink);
 
   let deleteBtn: HTMLButtonElement | null = null;
+  let trashBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  /** Текущая блокировка физического удаления — её перечитывает панель использования. */
+  let blocked = opts.blocked;
+  /**
+   * Пока запрос удаления/корзины ждёт сервер, кнопки действий и «Отмена»
+   * отключены (ошибка ef89c5c8): второй клик отправлял второй запрос, и на уже
+   * удалённой сущности пользователь получал 404.
+   */
+  let applying = false;
+  const setBusy = (value: boolean): void => {
+    applying = value;
+    if (deleteBtn !== null) deleteBtn.disabled = blocked || value;
+    if (trashBtn !== null) trashBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
+  /**
+   * Запуск действия кнопки: одна операция за раз, состояние кнопок снимается в
+   * finally — после ошибки диалог снова рабочий. Потребитель сообщает об
+   * ошибке сам; здесь она не теряется молча.
+   */
+  const runAction = (
+    action: (close: () => void) => void | Promise<void>,
+    close: () => void,
+  ): void => {
+    if (applying) return;
+    setBusy(true);
+    void (async () => {
+      try {
+        await action(close);
+      } catch (err) {
+        console.error('[delete-dialog] action failed', err);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
   const buttons: DialogButton[] = [
     {
       label: t('actions.deleteForever'),
       danger: true,
       ref: (btn) => {
         deleteBtn = btn;
-        btn.disabled = opts.blocked;
+        btn.disabled = blocked;
       },
       keepOpen: true,
-      onClick: (close) => opts.onPurge(close),
+      onClick: (close) => runAction(opts.onPurge, close),
     },
     {
       label: opts.trashLabel ?? (opts.alreadyMarked ? t('actions.restore') : t('actions.toTrash')),
+      ref: (btn) => {
+        trashBtn = btn;
+      },
       keepOpen: true,
-      onClick: (close) => opts.onTrash(close),
+      onClick: (close) => runAction(opts.onTrash, close),
     },
-    { label: t('actions.cancel') },
+    {
+      label: t('actions.cancel'),
+      ref: (btn) => {
+        cancelBtn = btn;
+      },
+    },
   ];
 
   // Перечитывание блокировок по запросу панели использования (f7623077).
@@ -120,7 +165,8 @@ export function openEntityDeleteDialog(opts: EntityDeleteDialogOptions): void {
     void opts.refresh().then((state) => {
       if (state === null) return;
       fillLines(state.lines);
-      if (deleteBtn !== null) deleteBtn.disabled = state.blocked;
+      blocked = state.blocked;
+      if (deleteBtn !== null) deleteBtn.disabled = blocked || applying;
       usageLink.classList.toggle('hidden', !state.blocked);
     });
   };

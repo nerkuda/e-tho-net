@@ -84,17 +84,35 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
   }
 
   const error = footerErrorLine();
+  // Пока POST создания ждёт сервер, кнопки футера disabled (ошибка ef89c5c8):
+  // второй клик создавал ВТОРУЮ публикацию.
+  let creating = false;
+  let createBtn: HTMLButtonElement | null = null;
+  let cancelBtn: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean): void => {
+    creating = value;
+    if (createBtn !== null) createBtn.disabled = value;
+    if (cancelBtn !== null) cancelBtn.disabled = value;
+  };
   const close = showDialog({
     title: t('publications.wizard.title'),
     size: 'l',
     body: metaBody,
     footerError: error,
     buttons: [
-      { label: t('actions.cancel') },
+      {
+        label: t('actions.cancel'),
+        ref: (btn) => {
+          cancelBtn = btn;
+        },
+      },
       {
         label: t('publications.wizard.create'),
         primary: true,
         keepOpen: true,
+        ref: (btn) => {
+          createBtn = btn;
+        },
         onClick: (done) => {
           void create(done);
         },
@@ -103,6 +121,7 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
   });
 
   async function create(done: () => void): Promise<void> {
+    if (creating) return;
     error.textContent = '';
     const title = titleInput.value.trim();
     if (title === '') {
@@ -117,6 +136,7 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
       subtitle: subtitleInput.value.trim() === '' ? null : subtitleInput.value.trim(),
       authorship: authorInput.value.trim() === '' ? null : authorInput.value.trim(),
     };
+    setBusy(true);
     try {
       const created = await etn.publications.create(netId, input);
       // Полка назначения (задача 55ee3c85): серверный create её не принимает,
@@ -137,6 +157,8 @@ export function openPublicationWizard(opts: PublicationWizardOptions): void {
       if (isCurrentScreenPair(ownerPair)) opts.onCreated(created.id);
     } catch (err) {
       error.textContent = errText(err) || t('publication.error');
+    } finally {
+      setBusy(false);
     }
   }
 }

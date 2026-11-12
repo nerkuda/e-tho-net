@@ -22,6 +22,7 @@ import {
   compareVersions,
   createBackup,
   formatDbToolReport,
+  readServerVersion,
   restoreBackup,
   runBackupCli,
   runRestoreCli,
@@ -681,7 +682,10 @@ describe('db-backup: CLI и отчёт', () => {
     assert.match(stdout.join('\n'), /Backup created:/);
     const report = fs.readFileSync(reportPath, 'utf8');
     assert.match(report, /^code=0$/m);
-    assert.match(report, /^archive=.*etn-backup-0\.15\.3-\d{8}-\d{6}\.zip$/m);
+    // Версия в имени архива — из package.json; хардкод краснел на каждом bump
+    // версии на старте релиза (0.15.4, a89d8760).
+    const version = readServerVersion().replaceAll('.', '\\.');
+    assert.match(report, new RegExp(`^archive=.*etn-backup-${version}-\\d{8}-\\d{6}\\.zip$`, 'm'));
     assert.match(report, /^databases=1$/m);
   });
 

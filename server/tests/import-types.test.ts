@@ -260,5 +260,66 @@ describe(
         await closeRestContext(ctx);
       }
     });
+    it('создаёт пару голому типу связи; конфликт имени — числовой суффикс (117a999a)', async () => {
+      const ctx = await buildRestContext();
+      const outPath = path.join(tmpdir(), `etnx-pair-${randomUUID()}.zip`);
+      try {
+        const { manifest, ids } = buildManifest();
+        // В сети уже есть скаляр «Включает» — имя пары для linkA занято,
+        // импорт обязан взять числовой суффикс, а не упасть.
+        const now = new Date().toISOString();
+        ctx.ndb
+          .prepare(
+            `INSERT INTO properties (id, layer_id, deleted, base_version, name, name_key,
+                                      value_type, config, description, created_at, updated_at,
+                                      created_by, updated_by, created_at_ms, updated_at_ms)
+             VALUES (?, ?, 0, 0, 'Включает', type_name_key('Включает'), 'text', NULL, NULL,
+                     ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(randomUUID(), ctx.ndb.layerId, now, now, ctx.adminId, ctx.adminId, Date.now(), Date.now());
+
+        await writeArchive(manifest, outPath);
+        await importFromEtnx(
+          ctx.ndb,
+          readFileSync(outPath),
+          { actorUserId: ctx.adminId, parentThoughtId: ctx.homeId },
+          logger,
+        );
+
+        interface PairRow {
+          name: string;
+          layer_id: string;
+        }
+        const pairsOf = (linkTypeId: string): PairRow[] =>
+          ctx.ndb
+            .prepare(
+              `SELECT name, layer_id
+                 FROM properties
+                WHERE value_type = 'link' AND deleted = 0
+                  AND json_extract(config, '$.link_type_id') = ?`,
+            )
+            .all(linkTypeId) as PairRow[];
+
+        // Архивы до исправления не несли парных свойств — импорт достраивает их.
+        const pairA = pairsOf(ids.linkA);
+        assert.equal(pairA.length, 1, 'голому типу создана ровно одна пара');
+        assert.equal(pairA[0]!.name, 'Включает 2', 'конфликт имени — числовой суффикс');
+        assert.equal(pairA[0]!.layer_id, ctx.ndb.layerId, 'пара в слое получателя');
+
+        const pairB = pairsOf(ids.linkB);
+        assert.equal(pairB.length, 1);
+        assert.equal(pairB[0]!.name, 'Связан-с', 'свободное имя — name_forward без суффикса');
+
+        // Рутовый тип связи сети пары не получает.
+        const rootRow = ctx.ndb.prepare('SELECT id FROM link_types_v WHERE is_root = 1').get() as {
+          id: string;
+        };
+        assert.equal(pairsOf(rootRow.id).length, 0, 'рутовый тип — без пары');
+      } finally {
+        rmSync(outPath, { force: true });
+        await closeRestContext(ctx);
+      }
+    });
+
   },
 );

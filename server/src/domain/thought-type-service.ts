@@ -554,14 +554,14 @@ export function deleteThoughtType(
     // types' overrides of these properties (they reference the registry too).
     // Only THIS type's own override rows die with it.
     ndb
-      .prepare("DELETE FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?")
+      .prepare("DELETE FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?") // layers:physical-write — базовая ветка слоёного удаления типа мысли
       .run(id);
     ndb
       .prepare(
-        "DELETE FROM type_property_overrides WHERE owner_type = 'thought_type' AND type_id = ?",
+        "DELETE FROM type_property_overrides WHERE owner_type = 'thought_type' AND type_id = ?", // layers:physical-write — базовая ветка слоёного удаления типа мысли
       )
       .run(id);
-    ndb.prepare('DELETE FROM thought_types WHERE id = ?').run(id);
+    ndb.prepare('DELETE FROM thought_types WHERE id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления типа мысли
   });
 }
 
