@@ -57,11 +57,18 @@ import {
 } from './theme-css.js';
 
 /**
- * Полный перечень тем версии (ADR de24adef: 4 темы × 2 режима). Этап 1 задачи
+ * Полный перечень тем версии (ADR de24adef: 6 тем × 2 режима). Этап 1 задачи
  * — ранний срез заказчику (`current`, `blue-topaz`); этап 2 добавил
- * `catppuccin` и `nordic`.
+ * `catppuccin` и `nordic`; этап 3 (0.16.1) — характерные `retronotes` и `wasp`.
  */
-const THEME_NAMES = ['current', 'blue-topaz', 'catppuccin', 'nordic'] as const;
+const THEME_NAMES = [
+  'current',
+  'blue-topaz',
+  'catppuccin',
+  'nordic',
+  'retronotes',
+  'wasp',
+] as const;
 
 /**
  * Полный набор токенов темы: цвета + тени + радиусы + обязательный

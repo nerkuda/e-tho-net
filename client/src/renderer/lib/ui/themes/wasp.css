@@ -1,0 +1,211 @@
+/*
+ * Тема «wasp» — значения из официального референса
+ * santiyounger/Wasp-Obsidian-Theme (`theme.css`, блоки `.theme-light` и
+ * `.theme-dark`). Шрифты референса (Source Code Pro в редакторе) НЕ
+ * переносятся, easing/анимации — действующие ETN (ADR de24adef).
+ *
+ * Палитра: светлый режим — кремовая бумага `base-00` #faf6f0 с янтарным
+ * акцентом `interactive-accent` #d4922a, ржавым `text-accent` #9b3a1a,
+ * коричневыми чернилами `text-normal` #2c2419 и зелёно-бирюзовым
+ * `inline-code` #3d6b5c. Тёмный режим — характер осы: почти чёрные
+ * `base-00` #191919 / `base-10` #242424, жёлтое жало `interactive-accent`
+ * #f8c537 (референс красит им и границы: `background-modifier-border`),
+ * кремовый текст #faf2d6 и бирюзовые ссылки `text-link` #83a598.
+ *
+ * Характер темы — жёлто-чёрная геометрия: жёсткие малые радиусы, чёткие
+ * тени, жёлтый кант вместо серого в тёмном режиме.
+ *
+ * Файл значений СУЩЕСТВУЮЩИХ токенов (ADR de24adef): только объявления
+ * переменных, ни одного класса. Селекция — `data-theme='wasp'` + `data-mode`
+ * на корне документа. Состав набора токенов обязан совпадать с остальными
+ * темами (сторож `guard-ui-theme-tokens`).
+ */
+
+[data-theme='wasp'][data-mode='light'] {
+  color-scheme: light;
+
+  /* palette — светлый режим референса */
+  --bg: #faf6f0; /* base-00 — кремовый фон рабочей области */
+  --surface: #fffcf7; /* base-05 — панели светлее фона */
+  --surface-2: #f3ece1; /* производный: между base-05 и base-20 */
+  --bg-hover: #e8dfd0; /* base-20 */
+  --bg-active: #ddd4c4; /* base-25 */
+  --border: #ddd4c4; /* base-25 */
+  --border-strong: #c9b8a8; /* base-30 */
+  --text: #2c2419; /* text-normal — коричневые чернила */
+  --text-dim: #5c5044; /* text-muted */
+  --text-faint: #7a6f5f; /* base-50 */
+  --accent: #d4922a; /* interactive-accent — янтарь референса */
+  --accent-strong: #c87628; /* background-modifier-border — глубокий янтарь (hover) */
+  --accent-pressed: #a95f14; /* производный: янтарь на два шага темнее (нажатие) */
+  --accent-soft: #f7e4bd; /* производный: янтарная примесь accent на кремовом */
+  /* Надпись на янтаре — чернила text-on-accent: #d4922a/#1f1a14 = 6.53:1. */
+  --accent-fg: #1f1a14;
+  --selection-bg: rgba(212, 146, 42, 0.35); /* accent референса с альфой */
+  /* Рамка выделенных — ржавый text-accent #9b3a1a: 6.47:1 к фону, отличим от
+     янтарного акцента. */
+  --selection: #9b3a1a;
+  /* Пунктир текущего — чёрные чернила text-on-accent #1f1a14: «оса» — чёрный
+     пунктир на кремовом, самый контрастный тон палитры (16.04:1). */
+  --cursor: #1f1a14;
+  --cal-weekend: #9b3a1a; /* text-accent */
+  --danger: #a83a1f; /* производный: ржавый тон, чуть ярче text-accent */
+  --danger-soft: #f7e3de; /* производный: danger на кремовом */
+  --ok: #3d6b5c; /* inline-code — зелёно-бирюзовый референса */
+  --ok-soft: #e8eee9; /* производный: inline-code на кремовом */
+  --warn: #c87628; /* background-modifier-border — янтарный кант */
+  --warn-strong: #96550f; /* производный: warn, затемнён для мелкого текста */
+  --warn-soft: #f8ead8; /* производный: warn на кремовом */
+  --warn-glow: rgba(200, 118, 40, 0.35); /* warn с альфой */
+  --mark-bg: #e4c07a; /* text-selection референса — подсветка поиска */
+  --link-default: #b0a090; /* base-35 */
+  --ft-tone-1: #f6eee4; /* производный: кремовая примесь */
+  --ft-tone-2: #eef1e9; /* производный: inline-code, ослабленный */
+  --ft-tone-3: #f9edd9; /* производный: янтарь, ослабленный */
+  --ft-tone-4: #f2ece7; /* производный: коричневая примесь */
+  --ellipse-fill: #e8d4a6; /* производный: янтарь, разбавленный кремовым */
+  --ellipse-fill-border: #b07a2a; /* производный: янтарь, приглушённый */
+  --backdrop: rgba(44, 36, 25, 0.35); /* text-normal с альфой */
+  --canvas-dot: rgba(44, 36, 25, 0.15); /* text-normal с альфой — сетка карты */
+  --focus-band-color: #c87628; /* background-modifier-border — полоса фокуса */
+  --focus-accent: var(--accent);
+  /* Кант открытого: чернила text-normal — читается на кремовом и отделяет
+     янтарную полосу слоя от карты. */
+  --focus-ring-contrast: #2c2419;
+  --md-html-comment: #6b5e4f; /* base-60 */
+  --mark-danger: #9b3a1a; /* text-accent */
+  --mark-network: #3d6b5c; /* inline-code */
+  --mark-layer: #7a4310; /* h5-цвет референса */
+  --mark-warn: #e4c07a; /* text-selection */
+  --mark-lock-own: #6b3a0e; /* h6-цвет референса */
+  --badge-bg: #2c2419; /* text-normal */
+  --badge-fg: #faf6f0; /* base-00 */
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — заголовочные/текстовые цвета референса (h1–h6, link,
+     inline-code); для мелкого кегля тёмные тона взяты как есть. */
+  --hljs-comment: #6b5e4f; /* base-60 */
+  --hljs-keyword: #9b3a1a; /* text-accent */
+  --hljs-string: #3d6b5c; /* inline-code */
+  --hljs-number: #8f5514; /* h3-цвет референса */
+  --hljs-literal: #8f5514; /* h3-цвет референса */
+  --hljs-title: #7a4310; /* h5-цвет референса */
+  --hljs-builtin: #924e14; /* h2-цвет референса */
+  --hljs-attr: #6b3a0e; /* h6-цвет референса */
+  --hljs-type: #3d6b5c; /* inline-code */
+  --hljs-tag: #9a4e12; /* h1-цвет референса */
+  --hljs-meta: #5c5044; /* text-muted */
+  --hljs-symbol: #8f5514; /* h3-цвет референса */
+  --hljs-section: #9a4e12; /* h1-цвет референса */
+  --hljs-addition: #3d6b5c; /* inline-code */
+  --hljs-deletion: #9b3a1a; /* text-accent */
+
+  /* Тени — чёткие, коричнево-чёрные: резкая геометрия «осы». */
+  --shadow-c: rgba(44, 36, 25, 0.2); /* text-normal с альфой */
+  --shadow-sm-c: rgba(44, 36, 25, 0.1); /* text-normal с альфой */
+  --shadow-xs-c: rgba(44, 36, 25, 0.18); /* text-normal с альфой */
+  --shadow: 0 6px 20px var(--shadow-c);
+  --shadow-sm: 0 1px 3px var(--shadow-sm-c);
+  --shadow-hover: 0 2px 8px var(--shadow-c);
+  --shadow-focus: 0 2px 8px rgba(212, 146, 42, 0.16); /* янтарное свечение, умеренное */
+
+  /* Радиусы — жёсткие углы (характер референса). */
+  --radius-s: 2px;
+  --radius-m: 4px;
+  --radius-l: 6px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+}
+
+[data-theme='wasp'][data-mode='dark'] {
+  color-scheme: dark;
+
+  /* palette — тёмный режим референса (жёлто-чёрная «оса») */
+  --bg: #191919; /* base-00 */
+  --surface: #242424; /* base-10 — основной фон панелей референса */
+  --surface-2: #2a2a2a; /* base-20 */
+  --bg-hover: #2a2a2a; /* base-20 */
+  --bg-active: #323232; /* base-25 */
+  --border: #3d3d3d; /* base-30 */
+  --border-strong: #f8c537; /* background-modifier-border референса — жёлтый кант */
+  --text: #faf2d6; /* text-normal — кремовый */
+  --text-dim: #bdae93; /* text-muted */
+  --text-faint: #9a9284; /* base-50 */
+  --accent: #f8c537; /* interactive-accent — жёлтое жало */
+  --accent-strong: #daa520; /* button-hover-bg-color референса */
+  --accent-pressed: #b8860b; /* производный: жёлтый на два шага темнее (нажатие) */
+  --accent-soft: #3c3520; /* производный: жёлтая примесь accent на base-10 */
+  /* Надпись на жёлтом — тёмная text-on-accent: #f8c537/#1a2023 = 10.22:1. */
+  --accent-fg: #1a2023;
+  --selection-bg: rgba(248, 197, 55, 0.3); /* accent с альфой */
+  /* Рамка выделенных — кремовый text-normal #faf2d6: 15.69:1 к фону; на чёрной
+     карте это светлая рамка, отличимая от жёлтой полосы открытого. */
+  --selection: #faf2d6;
+  /* Пунктир текущего — янтарный h3/ховер референса #d49335: 6.72:1 к фону,
+     отличим и от жёлтого акцента, и от кремовой рамки выделения. */
+  --cursor: #d49335;
+  --cal-weekend: #d49335; /* h3-цвет референса */
+  --danger: #e8836a; /* производный: ржавый тон для ошибок (в палитре нет красного) */
+  --danger-soft: #3a241c; /* производный: danger на base-10 */
+  --ok: #83a598; /* text-link референса — единственный «спокойный» тон */
+  --ok-soft: #22302b; /* производный: text-link на base-10 */
+  --warn: #d49335; /* h3-цвет референса */
+  --warn-strong: #f0b45e; /* производный: warn светлее для мелкого текста */
+  --warn-soft: #3a2e1c; /* производный: warn на base-10 */
+  --warn-glow: rgba(212, 147, 53, 0.32); /* warn с альфой */
+  --mark-bg: rgba(248, 197, 55, 0.28); /* accent с альфой — подсветка поиска */
+  --link-default: #9a9284; /* base-50 */
+  --ft-tone-1: #2b2a22; /* производный: тёплая примесь на base-10 */
+  --ft-tone-2: #232b26; /* производный: text-link, ослабленный */
+  --ft-tone-3: #2f2a1d; /* производный: янтарь, ослабленный */
+  --ft-tone-4: #292630; /* производный: холодная примесь на base-10 */
+  --ellipse-fill: #4a3f1f; /* производный: жёлтый, приглушённый на base-10 */
+  --ellipse-fill-border: #d49335; /* h3-цвет референса */
+  --backdrop: rgba(0, 0, 0, 0.65);
+  --canvas-dot: rgba(250, 242, 214, 0.08); /* text-normal с альфой */
+  --focus-band-color: #d49335; /* h3-цвет референса — полоса фокуса */
+  --focus-accent: var(--accent);
+  /* Кант открытого: белый — на чёрной карте отделяет жёлтую полосу слоя и не
+     сливается с кремовой рамкой выделения. */
+  --focus-ring-contrast: #ffffff;
+  --md-html-comment: #9a9284; /* base-50 */
+  --mark-danger: #e8836a; /* производный: danger */
+  --mark-network: #83a598; /* text-link */
+  --mark-layer: #d49335; /* h3-цвет референса */
+  --mark-warn: #f8c537; /* interactive-accent */
+  --mark-lock-own: #83a598; /* text-link */
+  --badge-bg: #f8c537; /* interactive-accent */
+  --badge-fg: #1a2023; /* text-on-accent */
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — цвета тёмной палитры референса. */
+  --hljs-comment: #9a9284; /* base-50 */
+  --hljs-keyword: #e8836a; /* производный: ржавый тон */
+  --hljs-string: #83a598; /* text-link */
+  --hljs-number: #d49335; /* h3-цвет референса */
+  --hljs-literal: #d49335; /* h3-цвет референса */
+  --hljs-title: #f8c537; /* interactive-accent */
+  --hljs-builtin: #daa520; /* button-hover-bg-color */
+  --hljs-attr: #e0b357; /* производный: жёлтый, чуть мягче акцента */
+  --hljs-type: #83a598; /* text-link */
+  --hljs-tag: #e8836a; /* производный: ржавый тон */
+  --hljs-meta: #bdae93; /* text-muted */
+  --hljs-symbol: #d49335; /* h3-цвет референса */
+  --hljs-section: #f8c537; /* interactive-accent */
+  --hljs-addition: #83a598; /* text-link */
+  --hljs-deletion: #e8836a; /* производный: ржавый тон */
+
+  --shadow-c: rgba(0, 0, 0, 0.6);
+  --shadow-sm-c: rgba(0, 0, 0, 0.4);
+  --shadow-xs-c: rgba(0, 0, 0, 0.25);
+  --shadow: 0 6px 20px var(--shadow-c);
+  --shadow-sm: 0 1px 3px var(--shadow-sm-c);
+  --shadow-hover: 0 3px 12px var(--shadow-c);
+  --shadow-focus: 0 2px 10px rgba(248, 197, 55, 0.16); /* жёлтое свечение, умеренное */
+
+  --radius-s: 2px;
+  --radius-m: 4px;
+  --radius-l: 6px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+}

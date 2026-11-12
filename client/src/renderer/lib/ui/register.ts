@@ -34,6 +34,8 @@ import './themes/current.css';
 import './themes/blue-topaz.css';
 import './themes/catppuccin.css';
 import './themes/nordic.css';
+import './themes/retronotes.css';
+import './themes/wasp.css';
 
 // Карта маппинга токенов ETN → `--wa-*` (одна на все темы: темы меняют
 // значения ETN-токенов, маппинг не трогают).

@@ -2,7 +2,7 @@
  * ETN client stylesheet — нетематические токены оформления.
  *
  * Тематические значения (цвета, тени, радиусы) живут в файлах тем
- * `lib/ui/themes/{current,blue-topaz,catppuccin,nordic}.css` (ADR de24adef):
+ * `lib/ui/themes/{current,blue-topaz,catppuccin,nordic,retronotes,wasp}.css` (ADR de24adef):
  * тема выбирается атрибутом `data-theme`, режим — `data-mode` на корне
  * документа, и смена темы меняет только блок переменных файла темы. Прямые
  * цвета (hex/rgb/rgba/hsl) в этом каталоге и в правилах компонентов запрещены

@@ -120,7 +120,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 Нетематические токены (шкалы типографики/отступов, геометрия, длительности,
 группа `--user-*`) объявлены в `client/src/renderer/styles/tokens.css`;
 тематические значения (цвета, тени, радиусы, `--focus-accent`) — в файлах тем
-`client/src/renderer/lib/ui/themes/{current,blue-topaz,catppuccin,nordic}.css`
+`client/src/renderer/lib/ui/themes/{current,blue-topaz,catppuccin,nordic,retronotes,wasp}.css`
 по блоку на режим (ADR `de24adef`, требование `7cc0cdad`). Тема выбирается
 атрибутом `data-theme`, режим — `data-mode` на корне документа; дефолт —
 `current` (светлый блок объявлен на `:root`). Полноту набора токенов в каждой
