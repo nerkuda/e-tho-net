@@ -963,9 +963,14 @@ var
   GLastRollbackDir: String;
   { Каталоги программы, попавшие в снимок переносом, а не копией: откат
     обязан вернуть их переименованием, а неудачный снимок — так же вернуть
-    на место (a34f48da). }
+    на место (a34f48da). Флаг снимается только подтверждённым возвратом. }
   GSnapshotMovedServer: Boolean;
   GSnapshotMovedService: Boolean;
+  { Каталог программы был на месте к моменту снимка: при откате он ОБЯЗАН
+    найтись в снимке — иначе откат не трогает текущие файлы и сообщает
+    ошибку, а не «успех без возврата» (a34f48da, круг доработки 1). }
+  GSnapshotHasServer: Boolean;
+  GSnapshotHasService: Boolean;
   GHealthReason: String;
   { Код возврата и текст последней команды службы: 1061/1062 (переход) нужны
     вызывающему для повтора stop, 1072 после uninstall — для подтверждения
@@ -4770,24 +4775,42 @@ end;
 
 { Возврат каталогов, перенесённых в снимок, на место: неудачный снимок не
   должен оставить установку без файлов сервера — вызывается до удаления
-  каталога снимка. }
-procedure UndoSnapshotMoves(const Dir: String);
+  каталога снимка.
+
+  True — возвращать больше нечего (все перенесённые каталоги вернулись или их
+  не было); False — хотя бы один остался в снимке. Флаг переноса снимается
+  ТОЛЬКО подтверждённым возвратом: вызывающий по нему решает, можно ли удалять
+  каталог снимка (иначе единственная копия файлов сервера пропадёт). }
+function UndoSnapshotMoves(const Dir: String): Boolean;
 begin
-  if GSnapshotMovedService and DirExists(Dir + '\service') then
+  Result := True;
+  if GSnapshotMovedService then
   begin
-    if MoveFileExW(Dir + '\service', GServerDir + '\service', 0) then
-      LogLine('INFO', 'Снимок отката: service возвращён на место')
+    if DirExists(Dir + '\service') and
+      MoveFileExW(Dir + '\service', GServerDir + '\service', 0) then
+    begin
+      LogLine('INFO', 'Снимок отката: service возвращён на место');
+      GSnapshotMovedService := False;
+    end
     else
+    begin
       LogLine('WARN', 'Снимок отката: service не удалось вернуть из ' + Dir);
-    GSnapshotMovedService := False;
+      Result := False;
+    end;
   end;
-  if GSnapshotMovedServer and DirExists(Dir + '\server') then
+  if GSnapshotMovedServer then
   begin
-    if MoveFileExW(Dir + '\server', GServerDir + '\server', 0) then
-      LogLine('INFO', 'Снимок отката: server возвращён на место')
+    if DirExists(Dir + '\server') and
+      MoveFileExW(Dir + '\server', GServerDir + '\server', 0) then
+    begin
+      LogLine('INFO', 'Снимок отката: server возвращён на место');
+      GSnapshotMovedServer := False;
+    end
     else
+    begin
       LogLine('WARN', 'Снимок отката: server не удалось вернуть из ' + Dir);
-    GSnapshotMovedServer := False;
+      Result := False;
+    end;
   end;
 end;
 
@@ -4849,6 +4872,8 @@ begin
   GLastRollbackDir := '';
   GSnapshotMovedServer := False;
   GSnapshotMovedService := False;
+  GSnapshotHasServer := False;
+  GSnapshotHasService := False;
   if not GServerFilesPresent then
   begin
     LogLine('INFO', 'Снимок отката: файлов сервера нет — копировать нечего');
@@ -4863,6 +4888,17 @@ begin
   end;
   Name := NewRollbackDirName(RollbackRoot);
   Dir := RollbackRoot + '\' + Name;
+  { Каталог-приёмник создаётся ДО переноса: MoveFileExW не создаёт родителя, и
+    без этого перенос молча падал в побайтовую копию (блокер приёмки 1). }
+  if not ForceDirectories(Dir) then
+  begin
+    LogLine('ERROR', 'Снимок отката: не удалось создать каталог снимка ' + Dir);
+    Exit;
+  end;
+  { Что было на месте к моменту снимка: при откате эти каталоги обязаны
+    найтись в снимке, иначе откат не трогает файлы и сообщает ошибку. }
+  GSnapshotHasServer := DirExists(GServerDir + '\server');
+  GSnapshotHasService := DirExists(GServerDir + '\service');
   { Перенос, а не копия: копия серверной части (10 721 файл, 65 МБ) занимала
     8,5–18,9 с, а реальный этап «Снимок отката» шёл 48–72 с в silent и больше
     20 минут в GUI (ошибка a34f48da). }
@@ -4871,7 +4907,13 @@ begin
   begin
     LogLine('ERROR', 'Снимок отката: не удалось сохранить ' + GServerDir +
       '\server в ' + Dir);
-    UndoSnapshotMoves(Dir);
+    if not UndoSnapshotMoves(Dir) then
+    begin
+      GLastRollbackDir := Dir;
+      LogLine('ERROR', 'Снимок отката: часть каталогов осталась в ' + Dir +
+        ' — каталог снимка НЕ удалён, верните файлы из него вручную');
+      Exit;
+    end;
     DelTree(Dir, True, True, True);
     Exit;
   end;
@@ -4880,7 +4922,13 @@ begin
   begin
     LogLine('ERROR', 'Снимок отката: не удалось сохранить ' + GServerDir +
       '\service в ' + Dir);
-    UndoSnapshotMoves(Dir);
+    if not UndoSnapshotMoves(Dir) then
+    begin
+      GLastRollbackDir := Dir;
+      LogLine('ERROR', 'Снимок отката: часть каталогов осталась в ' + Dir +
+        ' — каталог снимка НЕ удалён, верните файлы из него вручную');
+      Exit;
+    end;
     DelTree(Dir, True, True, True);
     Exit;
   end;
@@ -4900,13 +4948,26 @@ end;
 
   Снимок, сделанный переносом, возвращается тоже переносом (a34f48da): байты
   не копируются, откат мгновенный. Копия — запасной путь для снимка, который
-  оказался на другом томе. }
-function ReplaceTreeFromSnapshot(const Src, Dest, Tag: String): Boolean;
+  оказался на другом томе.
+
+  Expected = True — каталог БЫЛ на месте к моменту снимка (GSnapshotHasServer/
+  GSnapshotHasService), поэтому его отсутствие в снимке — потеря снимка:
+  функция не трогает текущие файлы и возвращает False, иначе откат
+  «отчитался бы успехом», ничего не вернув. Expected = False — каталога не
+  было, и после отката его быть не должно: текущий каталог удаляется. }
+function ReplaceTreeFromSnapshot(const Src, Dest, Tag: String;
+  Expected: Boolean): Boolean;
 var
   OldDir: String;
   Swapped, Moved: Boolean;
 begin
   Result := False;
+  if Expected and (not DirExists(Src)) then
+  begin
+    LogLine('ERROR', 'Откат файлов: в снимке нет ' + Src +
+      ' — откат невозможен, текущие файлы оставлены на месте');
+    Exit;
+  end;
   OldDir := Dest + '.rollback-' + Tag;
   Swapped := False;
   if DirExists(Dest) then
@@ -4944,7 +5005,10 @@ begin
         IfStr(Swapped, '; прежний каталог сохранён как ' + OldDir, ''));
       Exit;
     end;
-  end;
+  end
+  else
+    LogLine('INFO', 'Откат файлов: каталога ' + Src +
+      ' в снимке нет — так и было до обновления');
   if Swapped and DirExists(OldDir) then
   begin
     if not DelTree(OldDir, True, True, True) then
@@ -4967,13 +5031,13 @@ begin
     Exit;
   end;
   if not ReplaceTreeFromSnapshot(GLastRollbackDir + '\server',
-    GServerDir + '\server', 'server') then
+    GServerDir + '\server', 'server', GSnapshotHasServer) then
   begin
     LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\server');
     Exit;
   end;
   if not ReplaceTreeFromSnapshot(GLastRollbackDir + '\service',
-    GServerDir + '\service', 'service') then
+    GServerDir + '\service', 'service', GSnapshotHasService) then
   begin
     LogLine('ERROR', 'Откат файлов: не удалось вернуть ' + GServerDir + '\service');
     Exit;
@@ -6961,6 +7025,8 @@ begin
   GLastRollbackDir := '';
   GSnapshotMovedServer := False;
   GSnapshotMovedService := False;
+  GSnapshotHasServer := False;
+  GSnapshotHasService := False;
   GHealthReason := '';
   GAdminLogin := '';
   GAdminDisplayName := '';

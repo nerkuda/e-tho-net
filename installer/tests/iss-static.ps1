@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Статические проверки исходников установщика ETN (installer/etn.iss и build.ps1).
 
@@ -294,17 +294,79 @@ function Invoke-IssStaticChecks {
     Add-StaticResult -Name 'static:snapshot-copy-fallback' -Ok (
         (Test-IssCode -Text $takeSnapshotBody -Pattern ([regex]::Escape('if not CopyTreeRec(Src, Dest) then')))
     ) -Note 'другой том/занятый файл: перенос не удался — прежняя копия остаётся'
-    $undoCalls = @(Get-IssStrippedLines -Text $createSnapshotBody |
-        Where-Object { $_ -match [regex]::Escape('UndoSnapshotMoves(Dir);') })
+    <# Неудачный снимок обязан вернуть перенесённые каталоги, но НЕ должен
+      удалять каталог снимка, если возврат не удался: там единственная копия
+      файлов сервера (замечание приёмки 1). Поэтому вызов — под условием, а
+      DelTree идёт только после успешного возврата; флаг переноса снимается
+      только подтверждённым возвратом. #>
+    $undoGuards = @(Get-IssStrippedLines -Text $createSnapshotBody |
+        Where-Object { $_ -match [regex]::Escape('if not UndoSnapshotMoves(Dir) then') })
+    $undoBareCalls = @(Get-IssStrippedLines -Text $createSnapshotBody |
+        Where-Object { $_ -match ('^\s*UndoSnapshotMoves\(Dir\);') })
+    $delTreeAt = -1; $undoGuardAt = -1
+    $createLines = @(Get-IssStrippedLines -Text $createSnapshotBody)
+    for ($i = 0; $i -lt $createLines.Count; $i++) {
+        if (($undoGuardAt -lt 0) -and ($createLines[$i] -match [regex]::Escape('if not UndoSnapshotMoves(Dir) then'))) { $undoGuardAt = $i }
+        if (($delTreeAt -lt 0) -and ($createLines[$i] -match 'DelTree\(Dir')) { $delTreeAt = $i }
+    }
     Add-StaticResult -Name 'static:snapshot-failure-undoes-moves' -Ok (
-        ($undoCalls.Count -ge 2) -and
+        ($undoGuards.Count -ge 2) -and ($undoBareCalls.Count -eq 0) -and
         (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("MoveFileExW(Dir + '\server', GServerDir + '\server', 0)"))) -and
         (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("MoveFileExW(Dir + '\service', GServerDir + '\service', 0)")))
-    ) -Note ('неудачный снимок возвращает перенесённые каталоги (вызовов: {0})' -f $undoCalls.Count)
+    ) -Note ('неудачный снимок возвращает перенесённые каталоги под условием (вызовов: {0}, без условия: {1})' -f $undoGuards.Count, $undoBareCalls.Count)
+    Add-StaticResult -Name 'static:snapshot-undo-keeps-snapshot' -Ok (
+        ($undoGuardAt -ge 0) -and ($delTreeAt -gt $undoGuardAt) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape('каталог снимка НЕ удалён')))
+    ) -Note 'при неудачном возврате каталог снимка не удаляется, путь сообщается в журнал'
+    $undoServerResets = @(Get-IssStrippedLines -Text $undoMovesBody |
+        Where-Object { $_ -match 'GSnapshotMovedServer := False;' })
+    $undoServiceResets = @(Get-IssStrippedLines -Text $undoMovesBody |
+        Where-Object { $_ -match 'GSnapshotMovedService := False;' })
+    Add-StaticResult -Name 'static:snapshot-undo-keeps-flag' -Ok (
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("LogLine('INFO', 'Снимок отката: server возвращён на место');"))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("LogLine('INFO', 'Снимок отката: service возвращён на место');"))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape('Result := True;'))) -and
+        (Test-IssCode -Text $undoMovesBody -Pattern ([regex]::Escape("LogLine('WARN', 'Снимок отката: server не удалось вернуть из ' + Dir);"))) -and
+        ($undoServerResets.Count -eq 1) -and ($undoServiceResets.Count -eq 1) -and
+        (@(Get-IssStrippedLines -Text $issText | Where-Object { $_ -match '^\s*function\s+UndoSnapshotMoves\b' }).Count -eq 1)
+    ) -Note ('флаг переноса снимается только подтверждённым возвратом (сбросов server: {0}, service: {1})' -f $undoServerResets.Count, $undoServiceResets.Count)
+    <# Каталог-приёмник создаётся ДО переноса: MoveFileExW не создаёт родителя, и
+      без ForceDirectories(Dir) перенос молча падал в побайтовую копию (блокер
+      приёмки 1). #>
+    $dirCreateAt = -1; $firstSnapshotAt = -1
+    for ($i = 0; $i -lt $createLines.Count; $i++) {
+        if (($dirCreateAt -lt 0) -and ($createLines[$i] -match [regex]::Escape('if not ForceDirectories(Dir) then'))) { $dirCreateAt = $i }
+        if (($firstSnapshotAt -lt 0) -and ($createLines[$i] -match 'TakeSnapshot\(')) { $firstSnapshotAt = $i }
+    }
+    Add-StaticResult -Name 'static:snapshot-dir-created' -Ok (
+        ($dirCreateAt -ge 0) -and ($firstSnapshotAt -gt $dirCreateAt) -and
+        (Test-IssCode -Text $createSnapshotBody -Pattern ([regex]::Escape('не удалось создать каталог снимка')))
+    ) -Note ("каталог-приёмник создаётся до переноса (строка {0} < вызов снимка {1})" -f ($dirCreateAt + 1), ($firstSnapshotAt + 1))
     Add-StaticResult -Name 'static:rollback-restores-by-move' -Ok (
         (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('Moved := MoveFileExW(Src, Dest, 0);'))) -and
         (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('else if not CopyTreeRec(Src, Dest) then')))
     ) -Note 'откат файлов возвращает снимок переносом, копия — запасной путь'
+    <# Ожидаемый каталог, которого нет в снимке, — потеря снимка: откат не должен
+      удалять текущие файлы и «отчитываться успехом», ничего не вернув. #>
+    $restoreBody = Get-IssFunctionBody -Text $issText -Name 'RestoreInstallFiles'
+    <# Объявление функции разбито на две строки (Src, Dest, Tag; Expected), поэтому
+      склеиваем строку объявления со следующей. #>
+    $replaceDeclOk = $false
+    $issDeclLines = @(Get-IssStrippedLines -Text $issText)
+    for ($i = 0; $i -lt ($issDeclLines.Count - 1); $i++) {
+        if ($issDeclLines[$i] -match '^\s*function\s+ReplaceTreeFromSnapshot\b') {
+            $replaceDeclOk = (($issDeclLines[$i] + ' ' + $issDeclLines[$i + 1]) -match 'Expected:\s*Boolean')
+            break
+        }
+    }
+    Add-StaticResult -Name 'static:rollback-missing-expected' -Ok (
+        $replaceDeclOk -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('if Expected and (not DirExists(Src)) then'))) -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('текущие файлы оставлены на месте'))) -and
+        (Test-IssCode -Text $replaceBody -Pattern ([regex]::Escape('в снимке нет — так и было до обновления'))) -and
+        (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape("GServerDir + '\server', 'server', GSnapshotHasServer)"))) -and
+        (Test-IssCode -Text $restoreBody -Pattern ([regex]::Escape("GServerDir + '\service', 'service', GSnapshotHasService)")))
+    ) -Note 'отсутствие ожидаемого каталога в снимке — ошибка отката, текущие файлы целы'
     Add-StaticResult -Name 'static:snapshot-excludes-user-data' -Ok (
         -not (Test-IssCode -Text $issText -Pattern '(CopyTreeRec|TakeSnapshot)\(GDataDir')
     ) -Note 'данные пользователя (БД, вложения) в снимок не копируются и не переносятся'

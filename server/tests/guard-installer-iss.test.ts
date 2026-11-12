@@ -724,11 +724,70 @@ describe('guard: исходник установщика — высокоцен�
       /TakeSnapshot\(GServerDir \+ '\\service'/,
       `${ISS}: каталог service попадает в снимок через TakeSnapshot.`,
     );
+    // Каталог-приёмник обязан создаваться продуктом: MoveFileExW родителя не
+    // создаёт, и без ForceDirectories(Dir) сервер снова уходил в побайтовую
+    // копию (блокер приёмки 1).
+    const dirAt = create.indexOf('if not ForceDirectories(Dir) then');
+    const firstTakeAt = create.indexOf('TakeSnapshot(');
+    assert.ok(
+      dirAt >= 0 && firstTakeAt > dirAt,
+      `${ISS}: каталог-приёмник снимка (ForceDirectories(Dir)) создаётся ДО первого ` +
+        'TakeSnapshot — иначе перенос всегда падает в копию (блокер приёмки 1).',
+    );
+    assert.match(
+      create,
+      /не удалось создать каталог снимка/,
+      `${ISS}: неудача создания каталога-приёмника — ERROR и выход.`,
+    );
     assert.equal(
-      (create.match(/UndoSnapshotMoves\(Dir\);/g) ?? []).length,
+      (create.match(/if not UndoSnapshotMoves\(Dir\) then/g) ?? []).length,
       2,
-      `${ISS}: обе ветки отказа снимка обязаны вернуть уже перенесённые каталоги ` +
-        '(UndoSnapshotMoves) — иначе установка остаётся без файлов сервера.',
+      `${ISS}: обе ветки отказа снимка возвращают уже перенесённые каталоги только ` +
+        'по результату UndoSnapshotMoves.',
+    );
+    assert.doesNotMatch(
+      create,
+      /^\s*UndoSnapshotMoves\(Dir\);/m,
+      `${ISS}: возврат каталогов не вызывается без проверки результата.`,
+    );
+    const undoGuardAt = create.indexOf('if not UndoSnapshotMoves(Dir) then');
+    const delTreeAt = create.indexOf('DelTree(Dir');
+    assert.ok(
+      undoGuardAt >= 0 && delTreeAt > undoGuardAt,
+      `${ISS}: каталог снимка удаляется только после успешного возврата каталогов — ` +
+        'иначе единственная копия файлов сервера пропадает.',
+    );
+    assert.match(
+      create,
+      /каталог снимка НЕ удалён/,
+      `${ISS}: при неудачном возврате путь к оставленному снимку сообщается в журнал.`,
+    );
+
+    const undo = functionBody(code, 'UndoSnapshotMoves');
+    assert.match(
+      code,
+      /function UndoSnapshotMoves\(const Dir: String\): Boolean;/,
+      `${ISS}: UndoSnapshotMoves возвращает результат возврата каталогов.`,
+    );
+    assert.equal(
+      (undo.match(/GSnapshotMovedServer := False;/g) ?? []).length,
+      1,
+      `${ISS}: флаг переноса server снимается только подтверждённым возвратом.`,
+    );
+    assert.equal(
+      (undo.match(/GSnapshotMovedService := False;/g) ?? []).length,
+      1,
+      `${ISS}: флаг переноса service снимается только подтверждённым возвратом.`,
+    );
+    assert.match(
+      undo,
+      /LogLine\('INFO', 'Снимок отката: server возвращён на место'\);\s*GSnapshotMovedServer := False;/,
+      `${ISS}: флаг server сбрасывается внутри ветки успешного переноса назад.`,
+    );
+    assert.match(
+      undo,
+      /LogLine\('WARN', 'Снимок отката: server не удалось вернуть из ' \+ Dir\);\s*Result := False;/,
+      `${ISS}: неудачный возврат server оставляет флаг и даёт Result := False.`,
     );
 
     const restore = functionBody(code, 'ReplaceTreeFromSnapshot');
@@ -736,6 +795,39 @@ describe('guard: исходник установщика — высокоцен�
       restore,
       /Moved := MoveFileExW\(Src, Dest, 0\);/,
       `${ISS}: откат возвращает снимок переименованием, а не копированием.`,
+    );
+    // Каталог, который был на месте до обновления, обязан найтись в снимке:
+    // иначе откат не трогает файлы и сообщает ошибку (а не «успех»).
+    assert.match(
+      code,
+      /function ReplaceTreeFromSnapshot\(const Src, Dest, Tag: String;\s*Expected: Boolean\): Boolean;/,
+      `${ISS}: ReplaceTreeFromSnapshot знает, обязан ли каталог быть в снимке.`,
+    );
+    assert.match(
+      restore,
+      /if Expected and \(not DirExists\(Src\)\) then/,
+      `${ISS}: отсутствие ожидаемого каталога в снимке — ошибка ДО подмены файлов.`,
+    );
+    assert.match(
+      restore,
+      /текущие файлы оставлены на месте/,
+      `${ISS}: при потерянном снимке текущие файлы остаются нетронутыми.`,
+    );
+    assert.match(
+      restore,
+      /в снимке нет — так и было до обновления/,
+      `${ISS}: отсутствие необязательного каталога в снимке — штатная ситуация с INFO.`,
+    );
+    const restoreFiles = functionBody(code, 'RestoreInstallFiles');
+    assert.match(
+      restoreFiles,
+      /GServerDir \+ '\\server', 'server', GSnapshotHasServer\)/,
+      `${ISS}: откат передаёт ожидание каталога server из снимка.`,
+    );
+    assert.match(
+      restoreFiles,
+      /GServerDir \+ '\\service', 'service', GSnapshotHasService\)/,
+      `${ISS}: откат передаёт ожидание каталога service из снимка.`,
     );
 
     assert.doesNotMatch(
