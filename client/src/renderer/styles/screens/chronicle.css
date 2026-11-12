@@ -403,7 +403,10 @@
  * 165323a7): «текущая группа дат», «текущая запись» и текущий элемент записи
  * получают видимое выделение клиента. Клик мышью делает сущность текущей. */
 .diary-day-head.diary-nav-current {
-  color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  /* Цвет текста — контрастный кант темы, а не фокус-цвет: сам фокус-цвет как
+     текст даёт 1.9–4.3:1 на подложках части тем (замечание 1 вердикта
+     136575c9), кант — минимум 5.5:1. Индикацию фокуса держит полоса слева. */
+  color: var(--focus-ring-contrast);
   box-shadow: inset 3px 0 0 var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
   padding-left: 6px;
 }

@@ -839,16 +839,26 @@
   background: var(--surface-2);
 }
 
+/* Фокус-цвет — три роли: фон и кант берут сам фокус-цвет (цепочка слоя/темы),
+   а ЦВЕТ ТЕКСТА — контрастный кант темы `--focus-ring-contrast` (замечание 1
+   вердикта 136575c9). Причина: фокус-цвет перенесён 1:1 из полосы карты и как
+   текст даёт 1.9–4.3:1 на подложках части тем (current dark 2.92, nordic light
+   2.34, wasp light 3.38), а кант в каждой теме контрастен к фону — минимум
+   5.5:1 на всех подложках, включая мягкую заливку 18% фокуса. Поэтому фон
+   строки остаётся мягким фокусом, а текст читаем. */
 .pub-toc-line.pub-toc-current {
   background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
-  color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  color: var(--focus-ring-contrast);
 }
 
 /* Выбранная клавиатурой строка оглавления (общий компонент списка): ручка
-   ручного порядка видна всегда, не только на hover (задача d13fd645). */
+   ручного порядка видна всегда, не только на hover (задача d13fd645).
+   Фокус показывает полоса слева (цвет слоя/темы), текст — контрастный кант
+   темы: как цвет текста фокус-цвет нечитаем в части тем (см. выше). */
 .pub-toc-line.pub-toc-selected {
   background: var(--surface-2);
-  color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  box-shadow: inset 2px 0 0 var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  color: var(--focus-ring-contrast);
 }
 
 .pub-toc-line.pub-toc-selected .ui-drag-handle,

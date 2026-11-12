@@ -16,6 +16,13 @@
  * выделение перестаёт следовать слою. Мягкий фон выделения — `color-mix` от
  * той же цепочки.
  *
+ * Текстовые роли (`role: 'text'`). Фокус-цвет — цвет ФОНА и КАНТА, но не
+ * текста: как текст он даёт 1.9–4.3:1 на подложках части тем (замечание 1
+ * вердикта проверки 136575c9, current dark 2.92:1). Цвет текста поэтому берётся
+ * контрастным кантом темы `--focus-ring-contrast` — он в каждой теме контрастен
+ * к фону (числовой тест ниже требует ≥ 4.5:1 на `--bg`/`--surface`/`--surface-2`
+ * во всех темах и режимах).
+ *
  * `FOCUS_CONSUMERS` — реестр потребителей: новое правило выделения
  * регистрируется здесь, иначе его цвет никто не стережёт. Сознательные
  * исключения (не выделение текущего элемента): кольца `:focus-visible`
@@ -34,7 +41,9 @@ import { listSourceFiles } from './guard-helpers.js';
 import { RENDERER_ROOT } from './renderer-css.js';
 import {
   THEME_MODES,
+  contrastRatio,
   declaredTokens,
+  parseThemeColor,
   readTheme,
   stripCssComments,
   themeBlockBody,
@@ -50,11 +59,22 @@ const ACCENT_VAR = /var\(\s*--accent(?:-[a-z]+)?\s*[,)]/;
 /** Прямой цвет: hex или функция цвета. */
 const COLOR_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|oklch|oklab|lab|lch)\(/i;
 
+/** Тема интерфейса, в которой объявлен токен-набор. */
+const THEME_NAMES = ['current', 'blue-topaz', 'catppuccin', 'nordic', 'retronotes', 'wasp'];
+
+/** Контрастный кант темы — цвет текста для текстовых ролей фокуса. */
+const TEXT_CONTRAST_VAR = '--focus-ring-contrast';
+
+/** Минимальный контраст мелкого текста (WCAG AA). */
+const MIN_TEXT_CONTRAST = 4.5;
+
 interface FocusConsumer {
   /** Путь от `client/src/renderer`. */
   file: string;
   /** Селекторы одного правила (группа через запятую — по частям). */
   selectors: string[];
+  /** `text` — правило задаёт ЦВЕТ ТЕКСТА текущего элемента (см. шапку). */
+  role?: 'text';
 }
 
 /**
@@ -69,11 +89,18 @@ export const FOCUS_CONSUMERS: readonly FocusConsumer[] = [
   // (3) публикации
   { file: 'styles/screens/publications.css', selectors: ['.pub-open'] },
   { file: 'styles/screens/publications.css', selectors: ['.pub-doc-editor'] },
-  { file: 'styles/screens/publications.css', selectors: ['.pub-toc-line.pub-toc-current'] },
-  { file: 'styles/screens/publications.css', selectors: ['.pub-toc-line.pub-toc-selected'] },
-  // (3) отбор: сохранённые отборы и строки выбора
-  { file: 'styles/filter-panel.css', selectors: ['.sfd-row.cursor'] },
-  { file: 'styles/filter-panel.css', selectors: ['.sfd-row.active'] },
+  {
+    file: 'styles/screens/publications.css',
+    selectors: ['.pub-toc-line.pub-toc-current'],
+    role: 'text',
+  },
+  {
+    file: 'styles/screens/publications.css',
+    selectors: ['.pub-toc-line.pub-toc-selected'],
+    role: 'text',
+  },
+  // (3) отбор: строки выбора в дереве отбора (сохранённые отборы рисует
+  // ui-table в shadow DOM Vaadin — их текущая строка в реестре ниже)
   { file: 'styles/filter-tree.css', selectors: ['.ft-choice__item--cursor'] },
   // (3) дневник: календарь и клавиатурная навигация ленты
   { file: 'styles/screens/chronicle.css', selectors: ['.cal-day.is-selected'] },
@@ -82,7 +109,12 @@ export const FOCUS_CONSUMERS: readonly FocusConsumer[] = [
     selectors: ['.cal-day.is-selected-from', '.cal-day.is-selected-to'],
   },
   { file: 'styles/screens/chronicle.css', selectors: ['.diary-record-target'] },
-  { file: 'styles/screens/chronicle.css', selectors: ['.diary-day-head.diary-nav-current'] },
+  // текущая группа дат: текст — контрастный кант темы, полоса слева — фокус
+  {
+    file: 'styles/screens/chronicle.css',
+    selectors: ['.diary-day-head.diary-nav-current'],
+    role: 'text',
+  },
   { file: 'styles/screens/chronicle.css', selectors: ['.diary-record.diary-nav-current'] },
   { file: 'styles/screens/chronicle.css', selectors: ['.diary-record .diary-nav-el'] },
   // (3) поиск и события: выбранный результат/строка
@@ -145,11 +177,18 @@ export function ruleBodyOf(css: string, selectors: readonly string[]): string | 
   return match === null ? null : (match[1] ?? '');
 }
 
+/** Значение объявления `color:` (не `background-color`/`border-color`). */
+export function textColorValue(body: string): string | null {
+  const match = /(?:^|[;{\s])color\s*:\s*([^;]+);/i.exec(body);
+  return match === null ? null : match[1]!.trim();
+}
+
 /**
  * Нарушения правила в теле одного потребителя: нет цепочки, голый токен
- * акцента, прямой цвет. Пустой список — тело соответствует требованию.
+ * акцента, прямой цвет; для текстовой роли — текст не контрастным кантом.
+ * Пустой список — тело соответствует требованию.
  */
-export function consumerProblems(body: string): string[] {
+export function consumerProblems(body: string, role?: 'text'): string[] {
   const problems: string[] = [];
   if (!CHAIN.test(body)) {
     problems.push('цвет взят не цепочкой фокуса (--layer-focus-stripe → --focus-accent)');
@@ -162,6 +201,16 @@ export function consumerProblems(body: string): string[] {
   const literal = COLOR_LITERAL.exec(rest);
   if (literal !== null) {
     problems.push(`прямой цвет вместо токена: ${literal[0]}`);
+  }
+  if (role === 'text') {
+    const value = textColorValue(body);
+    if (value === null) {
+      problems.push('текстовая роль не задаёт цвет текста');
+    } else if (!new RegExp(`var\\(\\s*${TEXT_CONTRAST_VAR}\\s*[,)]`).test(value)) {
+      problems.push(
+        `цвет текста взят не контрастным кантом темы (${TEXT_CONTRAST_VAR}): ${value}`,
+      );
+    }
   }
   return problems;
 }
@@ -186,11 +235,26 @@ export function focusConsumerProblems(
       problems.push(`${consumer.file}: нет правила ${consumer.selectors.join(', ')}`);
       continue;
     }
-    for (const problem of consumerProblems(body)) {
+    for (const problem of consumerProblems(body, consumer.role)) {
       problems.push(`${consumer.file} ${consumer.selectors.join(', ')}: ${problem}`);
     }
   }
   return problems;
+}
+
+/** Значение токена темы; `var(--x)` резолвится на один уровень вложенности. */
+function resolveToken(tokens: ReadonlyMap<string, string>, name: string): string | null {
+  const seen = new Set<string>();
+  let current = name;
+  for (;;) {
+    if (seen.has(current)) return null;
+    seen.add(current);
+    const raw = tokens.get(current);
+    if (raw === undefined) return null;
+    const ref = /^var\(\s*(--[a-z0-9-]+)\s*\)$/i.exec(raw.trim());
+    if (ref === null) return raw.trim();
+    current = ref[1]!;
+  }
 }
 
 describe('guard: фокус-цвет — только цепочка токенов (c19cbb81)', () => {
@@ -235,7 +299,7 @@ describe('guard: фокус-цвет — только цепочка токен�
   });
 
   it('каждая тема и режим объявляет --focus-accent', () => {
-    for (const name of ['current', 'blue-topaz', 'catppuccin', 'nordic', 'retronotes', 'wasp']) {
+    for (const name of THEME_NAMES) {
       const css = readTheme(name);
       for (const mode of THEME_MODES) {
         const tokens = declaredTokens(themeBlockBody(css, name, mode) ?? '');
@@ -282,6 +346,63 @@ describe('guard: фокус-цвет — только цепочка токен�
       consumerProblems(
         'background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);',
       ),
+      [],
+    );
+  });
+
+  it('контрастный кант читаем как текст во всех темах и режимах (≥ 4.5:1)', () => {
+    const BACKDROPS = ['--bg', '--surface', '--surface-2'];
+    const problems: string[] = [];
+    for (const name of THEME_NAMES) {
+      const css = readTheme(name);
+      for (const mode of THEME_MODES) {
+        const tokens = declaredTokens(themeBlockBody(css, name, mode) ?? '');
+        const ink = resolveToken(tokens, TEXT_CONTRAST_VAR);
+        const fg = ink === null ? null : parseThemeColor(ink);
+        if (ink === null || fg === null) {
+          problems.push(`${name}/${mode}: нет ${TEXT_CONTRAST_VAR}`);
+          continue;
+        }
+        for (const token of BACKDROPS) {
+          const raw = resolveToken(tokens, token);
+          const bg = raw === null ? null : parseThemeColor(raw);
+          if (raw === null || bg === null) {
+            problems.push(`${name}/${mode}: нет ${token}`);
+            continue;
+          }
+          const ratio = contrastRatio(fg, bg);
+          if (ratio < MIN_TEXT_CONTRAST) {
+            problems.push(
+              `${name}/${mode}: ${TEXT_CONTRAST_VAR} на ${token} — ${ratio.toFixed(2)}:1`,
+            );
+          }
+        }
+      }
+    }
+    assert.deepEqual(problems, [], problems.join('\n'));
+  });
+
+  it('сторож краснеет на фокус-цвете и литерале в текстовой роли', () => {
+    const chain = 'var(--layer-focus-stripe, var(--focus-accent, var(--accent)))';
+    const soft = `background: color-mix(in srgb, ${chain} 18%, transparent);`;
+    // Мутация: текст фокус-цветом (низкий контраст).
+    assert.ok(
+      consumerProblems(`${soft} color: ${chain};`, 'text').length > 0,
+      'текст цепочкой фокуса обязан краснить',
+    );
+    // Мутация: текст литералом.
+    assert.ok(
+      consumerProblems(`${soft} color: #1e62be;`, 'text').length > 0,
+      'литерал в текстовой роли обязан краснить',
+    );
+    // Мутация: текстовая роль без объявленного цвета.
+    assert.ok(
+      consumerProblems(soft, 'text').length > 0,
+      'текстовая роль без color обязана краснить',
+    );
+    // Контроль: кант темы — чистая текстовая роль.
+    assert.deepEqual(
+      consumerProblems(`${soft} color: var(--focus-ring-contrast);`, 'text'),
       [],
     );
   });

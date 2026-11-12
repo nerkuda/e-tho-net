@@ -216,33 +216,6 @@
   overflow-y: auto;
 }
 
-.sfd-row {
-  text-align: left;
-  padding: 5px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.sfd-row:hover {
-  background: var(--surface-2);
-}
-
-.sfd-row.cursor {
-  outline: 1px solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
-  outline-offset: -1px;
-}
-
-.sfd-row.active {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
-  color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
-  font-weight: 600;
-}
-
 /* Right: results tree on the same dot-grid backdrop as the canvas. */
 .st-results {
   position: relative;
