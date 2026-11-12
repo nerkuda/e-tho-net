@@ -324,11 +324,19 @@ export interface FocusHistoryEntry {
  * Result of the system image picker (workplan L16): the ORIGINAL file as a
  * `data:` URL plus its meta, so the caller can upload it as an attachment and
  * derive an icon-sized preview from it.
+ *
+ * Отказ несёт КОД причины, а не готовый текст: тексты интерфейса живут только
+ * в словаре рендерера (требование 0e5ff1c6), а главный процесс языка интерфейса
+ * не знает. Русская строка из main показывалась как есть в en/zh (вердикт
+ * проверки задачи 80324150).
  */
 export type PickImageResult =
   | { status: 'ok'; dataUrl: string; name: string; mime: string; size: number }
   | { status: 'cancel' }
-  | { status: 'error'; message: string };
+  /** Файл больше потолка `max_bytes` (байты) — лимит зависит от потребителя. */
+  | { status: 'error'; code: 'image_too_large'; max_bytes: number }
+  /** Файл не читается с диска. */
+  | { status: 'error'; code: 'image_unreadable' };
 
 /**
  * Состояние фоновой картинки карты для рендерера (0.16.1, задача 80324150;

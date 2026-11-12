@@ -75,7 +75,11 @@ import { uiButton } from '../lib/ui/button.js';
 import { fieldInput, fieldRow, fieldSelect } from '../lib/ui/field.js';
 import { checkboxRow, radioRow, choiceGroup } from '../lib/ui/choice-row.js';
 import { chooseImageFile } from '../lib/image-source.js';
-import { wallpaperPrepareError, wallpaperUploadError } from '../lib/wallpaper-errors.js';
+import {
+  imagePickErrorText,
+  wallpaperPrepareError,
+  wallpaperUploadError,
+} from '../lib/wallpaper-errors.js';
 import { WALLPAPER_SOURCE_MAX_BYTES } from '../lib/wallpaper-image.js';
 import { prepareWallpaper } from '../lib/wallpaper-prepare.js';
 import {
@@ -850,7 +854,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       const picked = await chooseImageFile({ maxBytes: WALLPAPER_SOURCE_MAX_BYTES });
       if (picked.status === 'cancel') return;
       if (picked.status === 'error') {
-        errorLine.show(picked.message);
+        errorLine.show(imagePickErrorText(picked));
         return;
       }
       wallpaperBusy = true;

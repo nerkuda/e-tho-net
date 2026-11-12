@@ -15,8 +15,12 @@
 
 import { EtnError } from '@etn/shared';
 
+import type { PickImageResult } from '../../main/ipc/contract.js';
 import { errText } from './dom.js';
 import { t, type MessageKey } from './i18n.js';
+
+/** Вариант отказа системного выбора изображения. */
+export type PickImageError = Extract<PickImageResult, { status: 'error' }>;
 
 /**
  * Текст отказа подготовки картинки. Строка без префикса `wallpaperError`
@@ -29,6 +33,19 @@ export function wallpaperPrepareError(message: string): string {
   // живёт в разделе настроек — префикс добавляется здесь, в одном месте.
   const fullKey = `settings.${key}` as MessageKey;
   return arg === undefined ? t(fullKey) : t(fullKey, [arg]);
+}
+
+/**
+ * Текст отказа системного выбора изображения. Главный процесс отдаёт код
+ * (`image_too_large` + потолок, `image_unreadable`) — здесь он переводится через
+ * словарь, поэтому в en/zh больше не показывается русская строка из main
+ * (вердикт проверки 80324150).
+ */
+export function imagePickErrorText(err: PickImageError): string {
+  if (err.code === 'image_unreadable') return t('settings.wallpaperErrorNotImage');
+  return t('settings.wallpaperErrorSourceLimit', [
+    String(Math.round(err.max_bytes / (1024 * 1024))),
+  ]);
 }
 
 /**

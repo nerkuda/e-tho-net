@@ -1,6 +1,6 @@
 {
   "name": "80324150-wallpaper",
-  "description": "Задача 80324150 «Фоновая картинка: клиент — настройки, метаданные, холст, кэш» (этап 1; элемент ef8112b0, требование e6d586d3, сценарии 88a8879d / 3fe62610 / 0ec86f0b). Стенд: язык сервера ru. Проверено: раздел «Оформление» — «Загрузить…» + мини-превью 16:9 + «Убрать картинку», кнопки футера не активны (картинка применяется сразу, вне draft-модели); загрузка через IPC `me.uploadWallpaper` (системный диалог выбора файла сценарию недоступен) → после перезагрузки страницы (штатный путь «картинка на всех устройствах») холст карты получает подложку: `data-canvas-wallpaper=on`, url картинки, тинт, background-attachment fixed / cover, точечной сетки НЕТ; серверная копия подтверждена шагом api; `me.removeWallpaper` возвращает сетку и прячет превью; повторная загрузка оставляет локальный кэш — второй прогон клиента с тем же профилем при погашенном сервере (см. отчёт) доказывает офлайн-старт из кэша. Пороги даунскейла и сведение альфы — юнит-тесты wallpaper-image.test.ts (не зависят от браузера). Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper.scenario.json --keep --out .tmp/80324150/out",
+  "description": "Задача 80324150 «Фоновая картинка: клиент — настройки, метаданные, холст, кэш» (этап 1; элемент ef8112b0, требование e6d586d3, сценарии 88a8879d / 3fe62610 / 0ec86f0b). Стенд: язык сервера ru. Проверено: раздел «Оформление» — «Загрузить…» + мини-превью 16:9 + «Убрать картинку», кнопки футера не активны (картинка применяется сразу, вне draft-модели); загрузка через IPC `me.uploadWallpaper` (системный диалог выбора файла сценарию недоступен) → после перезагрузки страницы (штатный путь «картинка на всех устройствах») холст карты получает подложку: `data-canvas-wallpaper=on`, url картинки, тинт, background-attachment fixed / cover, точечной сетки НЕТ; серверная копия подтверждена шагом api; `me.removeWallpaper` возвращает сетку и прячет превью; повторная загрузка оставляет локальный кэш — второй прогон клиента с тем же профилем при погашенном сервере (см. отчёт) доказывает офлайн-старт из кэша. Пороги даунскейла и сведение альфы — юнит-тесты wallpaper-image.test.ts (не зависят от браузера). Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper.scenario.json --keep --out .tmp/80324150/out. Дополнительно (вердикт этапа 1): переключение темы на blue-topaz в светлом режиме и проба тинта — --bg темы в hsla-форме, тинт — rgba(244, 248, 251, α), полупрозрачный слой на холсте остаётся, сетки нет",
   "timeout": 300000,
   "texts": {
     "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
@@ -162,6 +162,26 @@
     {
       "name": "open-client-section-2",
       "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "pick-blue-topaz",
+      "probe": "(() => { const select = Array.from(document.querySelectorAll('.settings-section select')).find((element) => Array.from(element.options).some((option) => option.value === 'blue-topaz')); if (!select) throw new Error('нет селекта темы оформления'); select.value = 'blue-topaz'; select.dispatchEvent(new Event('change', { bubbles: true })); return select.value; })()",
+      "expect": "blue-topaz"
+    },
+    {
+      "name": "pick-light-mode",
+      "probe": "(() => { const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]'); if (!radio) throw new Error('нет режима light'); radio.click(); return radio.checked; })()",
+      "expect": true
+    },
+    {
+      "name": "theme-blue-topaz-light-applied",
+      "timeout": 15000,
+      "waitFor": "document.documentElement.dataset.theme === 'blue-topaz' && document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "blue-topaz-light-tint",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const bg = rootStyle.getPropertyValue('--bg').trim(); const alpha = Number((/,\\s*([\\d.]+)\\)$/.exec(tint) || [])[1]); const canvasBackground = getComputedStyle(document.querySelector('.canvas')).backgroundImage; return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg_is_hsl: bg.startsWith('hsla(') || bg.startsWith('hsl('), tint_present: tint.length > 0, tint_is_theme_bg: /^rgba\\(244, 248, 251, [\\d.]+\\)$/.test(tint), alpha_in_range: Number.isFinite(alpha) && alpha >= 0.45 && alpha <= 0.8, attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_tint_layer: canvasBackground.includes('linear-gradient'), has_grid: canvasBackground.includes('radial-gradient') }; })()",
+      "expect": { "theme": "blue-topaz", "mode": "light", "bg_is_hsl": true, "tint_present": true, "tint_is_theme_bg": true, "alpha_in_range": true, "attr": "on", "has_tint_layer": true, "has_grid": false }
     },
     {
       "name": "preview-visible-after-reload",

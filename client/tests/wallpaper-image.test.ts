@@ -225,3 +225,38 @@ describe('parseCssColor: токены темы', () => {
     assert.deepEqual(parseCssColor('#ABCDEF'), [171, 205, 239]);
   });
 });
+
+describe('parseCssColor: hsl-формы тем (вердикт 80324150)', () => {
+  it('blue-topaz light: hsla(204, 45%, 97%, 1) — фон темы разбирается', () => {
+    // Именно это значение молча снимало тинт: parseCssColor понимал только
+    // #hex и rgb(), а тема задаёт фон в hsl-форме.
+    assert.deepEqual(parseCssColor('hsla(204, 45%, 97%, 1)'), [244, 248, 251]);
+    assert.deepEqual(parseCssColor('hsl(204, 45%, 97%)'), [244, 248, 251]);
+  });
+
+  it('основные тона: классический синтаксис с запятыми', () => {
+    assert.deepEqual(parseCssColor('hsl(0, 100%, 50%)'), [255, 0, 0]);
+    assert.deepEqual(parseCssColor('hsl(120, 100%, 50%)'), [0, 255, 0]);
+    assert.deepEqual(parseCssColor('hsl(240, 100%, 50%)'), [0, 0, 255]);
+    assert.deepEqual(parseCssColor('hsl(0, 0%, 50%)'), [128, 128, 128], 'серая середина');
+  });
+
+  it('современный синтаксис: пробелы, «/» перед альфой, единица deg', () => {
+    assert.deepEqual(parseCssColor('hsl(120 100% 50%)'), [0, 255, 0]);
+    assert.deepEqual(parseCssColor('hsl(204 45% 97% / 1)'), [244, 248, 251]);
+    assert.deepEqual(parseCssColor('hsl(204deg 45% 97%)'), [244, 248, 251]);
+    assert.deepEqual(parseCssColor('hsl(240, 100%, 50%, 0.5)'), [0, 0, 255]);
+  });
+
+  it('тон нормализуется: 360 и отрицательные значения', () => {
+    assert.deepEqual(parseCssColor('hsl(360, 100%, 50%)'), [255, 0, 0]);
+    assert.deepEqual(parseCssColor('hsl(-120, 100%, 50%)'), [0, 0, 255]);
+  });
+
+  it('неполные/нечисловые аргументы — null (тинт не ставится)', () => {
+    assert.equal(parseCssColor('hsl(204, 45%)'), null);
+    assert.equal(parseCssColor('hsl(red, 45%, 97%)'), null);
+    assert.equal(parseCssColor('hsl()'), null);
+    assert.equal(parseCssColor('hsl(none)'), null);
+  });
+});

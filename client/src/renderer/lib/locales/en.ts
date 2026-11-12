@@ -1006,6 +1006,8 @@ export const en = {
     'The image is stored in your server-side user profile and applied to all your clients on this server. Preparation (size, luminance) runs in the client.',
   'settings.wallpaperErrorTooLargeSource':
     'The file is larger than %1 MB — choose a smaller image.',
+  /** Потолок ИСХОДНОГО файла при системном выборе картинки (код из main). */
+  'settings.wallpaperErrorSourceLimit': 'The file is larger than %1 MB — limit.',
   'settings.wallpaperErrorNotImage': 'The file could not be read as an image.',
   'settings.wallpaperErrorTooLargeResult':
     'After preparation the image is still larger than %1 MB — choose another one.',

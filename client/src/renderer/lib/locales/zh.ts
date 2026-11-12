@@ -492,6 +492,8 @@ export const zh = {
   'settings.wallpaperNone': '未选择图片：地图显示主题背景和点阵网格。',
   'settings.wallpaperHint': '图片保存在服务器上的用户配置中，并应用于此服务器上您的所有客户端。尺寸与亮度的处理在客户端完成。',
   'settings.wallpaperErrorTooLargeSource': '文件大于 %1 MB — 请选择更小的图片。',
+  /** Потолок ИСХОДНОГО файла при системном выборе картинки (код из main). */
+  'settings.wallpaperErrorSourceLimit': '文件大于 %1 MB — 超出限制。',
   'settings.wallpaperErrorNotImage': '无法将文件读取为图片。',
   'settings.wallpaperErrorTooLargeResult': '处理后图片仍大于 %1 MB — 请选择其他图片。',
   'settings.wallpaperErrorFileSize': '服务器拒绝了图片：文件超过 5 MB 限制。',

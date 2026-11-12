@@ -312,9 +312,66 @@ export function wallpaperTintColor(base: [number, number, number], alpha: number
 }
 
 /**
+ * HSL → sRGB-каналы 0..255. `hue` — градусы (нормализуется, в том числе
+ * отрицательные значения), `sat`/`light` — доли 0..1. Формула CSS Color 4
+ * (HSL → RGB через хрому и светлоту).
+ */
+function hslToRgb(hue: number, sat: number, light: number): [number, number, number] {
+  const h = ((hue % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * light - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = light - c / 2;
+  const sectors: [number, number, number] =
+    h < 60
+      ? [c, x, 0]
+      : h < 120
+        ? [x, c, 0]
+        : h < 180
+          ? [0, c, x]
+          : h < 240
+            ? [0, x, c]
+            : h < 300
+              ? [x, 0, c]
+              : [c, 0, x];
+  return [
+    Math.round((sectors[0] + m) * 255),
+    Math.round((sectors[1] + m) * 255),
+    Math.round((sectors[2] + m) * 255),
+  ];
+}
+
+/**
+ * Аргументы `hsl()/hsla()` → тон в градусах, насыщенность и светлота 0..1.
+ * Понимает оба синтаксиса: классический через запятую (`hsl(204, 45%, 97%)`)
+ * и современный через пробел с `/` перед альфой
+ * (`hsl(204 45% 97% / 1)`). Альфа отбрасывается: тинт сравнивает чистые тона.
+ * `null` — аргументы не разобраны (не число, меньше трёх компонент).
+ */
+function parseHslArgs(raw: string): [number, number, number] | null {
+  const parts = raw
+    .replace(/\//g, ' ')
+    .split(/[\s,]+/)
+    .filter((part) => part !== '');
+  if (parts.length < 3) return null;
+  const fraction = (part: string): number => {
+    const value = Number.parseFloat(part);
+    return part.endsWith('%') ? value / 100 : value;
+  };
+  const hue = Number.parseFloat(parts[0]!);
+  const sat = fraction(parts[1]!);
+  const light = fraction(parts[2]!);
+  if (!Number.isFinite(hue) || !Number.isFinite(sat) || !Number.isFinite(light)) return null;
+  return [hue, clamp(sat, 0, 1), clamp(light, 0, 1)];
+}
+
+/**
  * Разобрать CSS-цвет токена темы в каналы 0..255. Поддерживает `#rgb`,
- * `#rrggbb` и `rgb()/rgba()`; `null` — цвет не распознан (тинт тогда не
- * ставится, холст остаётся с картинкой без вуали).
+ * `#rrggbb`, `rgb()/rgba()` и `hsl()/hsla()`; `null` — цвет не распознан
+ * (тинт тогда не ставится, холст остаётся с картинкой без вуали).
+ *
+ * HSL обязателен: темы оформления задают фон и в hsl-форме (blue-topaz light —
+ * `hsla(204, 45%, 97%, 1)`), и без него тинт подложки молча исчезал
+ * (вердикт проверки 80324150; сторож `guard-theme-bg-color.test.ts`).
  */
 export function parseCssColor(value: string): [number, number, number] | null {
   const trimmed = value.trim();
@@ -334,6 +391,11 @@ export function parseCssColor(value: string): [number, number, number] | null {
       return Number.isNaN(r + g + b) ? null : [r, g, b];
     }
     return null;
+  }
+  const hsl = /^hsla?\(([^)]+)\)$/i.exec(trimmed);
+  if (hsl !== null) {
+    const args = parseHslArgs(hsl[1]!);
+    return args === null ? null : hslToRgb(args[0], args[1], args[2]);
   }
   const match = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(trimmed);
   if (match === null) return null;

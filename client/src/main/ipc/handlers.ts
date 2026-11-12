@@ -2514,7 +2514,9 @@ async function readSystemClipboard(): Promise<ClipboardReadResult> {
  * `maxBytes` — потолок размера ИСХОДНОГО файла; по умолчанию — лимит вложения
  * (10 МиБ). Фоновая картинка карты передаёт свой, больший потолок: фото-исходник
  * даунскейлится клиентом перед отправкой (задача 80324150), поэтому файл-
- * источник может быть крупным. Файл крупнее/unreadable — сообщение об ошибке.
+ * источник может быть крупным. Отказ — КОД причины (`image_too_large` +
+ * потолок, `image_unreadable`): текст подбирает рендерер по языку интерфейса,
+ * главный процесс пользовательских строк не порождает (вердикт 80324150).
  */
 async function pickImageFile(options?: { maxBytes?: number }): Promise<PickImageResult> {
   // electron is imported lazily so this module stays loadable in the Node test
@@ -2541,10 +2543,8 @@ async function pickImageFile(options?: { maxBytes?: number }): Promise<PickImage
     const size = statSync(filePath).size;
     const maxBytes = options?.maxBytes ?? PICK_IMAGE_MAX_BYTES;
     if (size > maxBytes) {
-      return {
-        status: 'error',
-        message: `Файл больше ${Math.round(maxBytes / (1024 * 1024))} МБ — лимит.`,
-      };
+      // Код + потолок: текст выбирает рендерер по языку интерфейса (80324150).
+      return { status: 'error', code: 'image_too_large', max_bytes: maxBytes };
     }
     const buf = readFileSync(filePath);
     const ext = filePath.toLowerCase().split('.').pop() ?? '';
@@ -2558,7 +2558,7 @@ async function pickImageFile(options?: { maxBytes?: number }): Promise<PickImage
       size,
     };
   } catch {
-    return { status: 'error', message: 'Не удалось прочитать файл.' };
+    return { status: 'error', code: 'image_unreadable' };
   }
 }
 
