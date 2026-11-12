@@ -2,7 +2,8 @@
 .SYNOPSIS
     Прогон настоящего кода снимка отката установщика ETN: каталог-приёмник
     создаётся продуктом, сервер и служба ПЕРЕНОСЯТСЯ, неудачный возврат не
-    теряет флаг переноса (ошибка a34f48da, круг доработки 1).
+    теряет флаг переноса и не теряет снимок (ошибка a34f48da, круги доработки
+    1–2).
 
 .DESCRIPTION
     Скрипт не запускает продуктовый установщик: он собирает harness-инсталлятор
@@ -19,9 +20,12 @@
                «не перенесён»/«скопирован»; исходные каталоги после снимка
                отсутствуют, содержимое снимка совпадает с исходным;
       undo   — вызвать UndoSnapshotMoves, когда вернуть каталог невозможно
-               (цель уже существует): флаг переноса обязан остаться True, а
-               каталог снимка — на месте (иначе единственная копия файлов
-               сервера удаляется вызывающим).
+               (цель уже существует): флаг переноса обязан остаться True.
+      Тот же режим create используется и для отказа ПОСЛЕ переноса: service
+      нельзя ни перенести, ни скопировать (файл занят эксклюзивно), а возврат
+      уже перенесённого server запрещён (нет права создавать подкаталоги в
+      app). Снимок с файлами сервера обязан остаться — иначе вызывающий
+      удаляет единственную копию.
 
     Проверки:
       snapshot-probe:created            — снимок создан, каталог снимка есть;
@@ -30,7 +34,9 @@
       snapshot-probe:tree               — снимок совпадает с исходным деревом,
                                           исходные каталоги отсутствуют;
       snapshot-probe:undo-keeps-flag    — неудачный возврат не сбрасывает флаг;
-      snapshot-probe:undo-keeps-snapshot — каталог снимка после неудачи цел.
+      snapshot-probe:fail-after-move-keeps-snapshot — падение после успешного
+                                          переноса server и неудачный возврат
+                                          оставляют снимок с файлами сервера.
 
     Нужен Inno Setup 6 (ISCC.exe). Запуск:
 
@@ -331,7 +337,7 @@ Add-ProbeResult -Name 'snapshot-probe:tree' -Ok $snapshotOk `
         $(if ($snapshotServer -and (Test-Path -LiteralPath $snapshotServer)) { (Get-TreeHashLines -Root $snapshotServer).Count } else { -1 }), `
         (Test-Path -LiteralPath (Join-Path $appDir 'server')), (Test-Path -LiteralPath (Join-Path $appDir 'service')))
 
-# --- undo: неудачный возврат не сбрасывает флаг и не теряет снимок ---
+# --- undo: неудачный возврат не сбрасывает флаг переноса ---
 $undoRoot = Join-Path $workRoot 'undo'
 if (Test-Path -LiteralPath $undoRoot) { Remove-Item -LiteralPath $undoRoot -Recurse -Force }
 $undoApp = Join-Path $undoRoot 'app'
@@ -348,10 +354,64 @@ $undoResult = Read-ProbeOut -Path $undoOut
 Add-ProbeResult -Name 'snapshot-probe:undo-keeps-flag' -Ok (
     ($undoCode -eq 0) -and ($undoResult['moved_server'] -eq '1')
 ) -Note ("код {0}, флаг переноса после неудачи: {1}" -f $undoCode, $undoResult['moved_server'])
-$snapshotKept = (Test-Path -LiteralPath (Join-Path $undoSnapshot 'server')) -and
-    ((Get-ChildItem -LiteralPath (Join-Path $undoSnapshot 'server') -Recurse -File -Force | Measure-Object).Count -gt 0)
-Add-ProbeResult -Name 'snapshot-probe:undo-keeps-snapshot' -Ok $snapshotKept `
-    -Note ("каталог снимка цел: {0}" -f $snapshotKept)
+
+# --- fail: отказ ПОСЛЕ успешного переноса; снимок с файлами обязан остаться ---
+# Прежний кейс просто вызывал UndoSnapshotMoves и проверял, что каталог снимка
+# цел: он был зелёным и на 07187d4f, где продуктовый вызывающий удалял снимок
+# сам. Здесь отказ приходит из настоящей CreateRollbackSnapshot.
+$failRoot = Join-Path $workRoot 'fail'
+if (Test-Path -LiteralPath $failRoot) { Remove-Item -LiteralPath $failRoot -Recurse -Force }
+$failApp = Join-Path $failRoot 'app'
+$failData = Join-Path $failRoot 'data'
+New-SmallTree -Root (Join-Path $failApp 'server') -Files 25
+New-SmallTree -Root (Join-Path $failApp 'service') -Files 3
+$lockedFile = Join-Path $failApp 'service\locked.bin'
+[System.IO.File]::WriteAllText($lockedFile, 'locked by probe')
+$hashFailServer = Get-TreeHashLines -Root (Join-Path $failApp 'server')
+$failLog = Join-Path $failRoot 'probe.log'
+$failOut = Join-Path $failRoot 'probe.out'
+# Возврат уже перенесённого server обязан не удаться: в app запрещено создавать
+# подкаталоги. Без этого UndoSnapshotMoves вернул бы server, снимок опустел бы и
+# был бы удалён даже новым кодом — кейс перестал бы различать контракт.
+& icacls $failApp /deny "$($env:USERNAME):(AD)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls не смог запретить создание подкаталогов в $failApp." }
+$lock = $null
+$failCode = -1
+try {
+    # service нельзя ни перенести (rename каталога с занятым файлом падает), ни
+    # скопировать (чтение занятого файла запрещено) — TakeSnapshot вернёт False
+    # уже ПОСЛЕ успешного переноса server.
+    $lock = [System.IO.File]::Open($lockedFile, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+    $failCode = Invoke-Probe -Arguments @{
+        MODE = 'create'; APPDIR = $failApp; DATADIR = $failData; PROBELOG = $failLog
+        OUT = $failOut; SNAPSHOT = ''
+    }
+} finally {
+    if ($lock) { $lock.Dispose() }
+    & icacls $failApp /remove:d "$($env:USERNAME)" | Out-Null
+}
+$failLogText = Read-ProbeLog -Path $failLog
+$failOutMap = Read-ProbeOut -Path $failOut
+$failRollbackRoot = Join-Path $failData '.install\rollback'
+$failSnapshots = @(if (Test-Path -LiteralPath $failRollbackRoot) {
+        Get-ChildItem -LiteralPath $failRollbackRoot -Directory -Force
+    })
+$failSnapshot = if ($failSnapshots.Count -eq 1) { $failSnapshots[0].FullName } else { '' }
+$failServer = if ($failSnapshot) { Join-Path $failSnapshot 'server' } else { '' }
+$failServerKept = $failServer -and (Test-Path -LiteralPath $failServer) -and
+    (((Get-TreeHashLines -Root $failServer) -join "`n") -eq ($hashFailServer -join "`n"))
+Add-ProbeResult -Name 'snapshot-probe:fail-after-move-keeps-snapshot' -Ok (
+    ($failCode -ne 0) -and $failServerKept -and
+    ($failLogText -match 'INFO: Снимок отката: server перенесён') -and
+    ($failLogText -match 'server не удалось вернуть') -and
+    ($failLogText -match 'каталог снимка НЕ удалён') -and
+    ($failSnapshot -and ($failOutMap['last'] -eq $failSnapshot))
+) -Note ("код {0}; снимков в rollback: {1}; server перенесён: {2}; возврат не удался: {3}; файлов в снимке server: {4}" -f `
+    $failCode, $failSnapshots.Count,
+    ($failLogText -match 'INFO: Снимок отката: server перенесён'),
+    ($failLogText -match 'server не удалось вернуть'),
+    $(if ($failServerKept) { (Get-TreeHashLines -Root $failServer).Count } else { -1 }))
 
 $failed = @($results | Where-Object { -not $_.Ok })
 Write-Host ''
