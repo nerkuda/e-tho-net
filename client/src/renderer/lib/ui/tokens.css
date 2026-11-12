@@ -38,7 +38,9 @@
   --wa-color-shadow: var(--shadow-c);
   --wa-color-overlay-modal: var(--backdrop);
 
-  /* brand ↔ акцент ETN (primary-роль кнопок, активные поля). */
+  /* brand ↔ акцент ETN (primary-роль кнопок, активные поля). Надпись на
+     loud-заливке — тематическая пара контраста `--accent-fg` (ADR de24adef):
+     на светлом акценте blue-topaz/nordic она тёмная. */
   --wa-color-brand-fill-quiet: var(--accent-soft);
   --wa-color-brand-fill-normal: var(--accent-soft);
   --wa-color-brand-fill-loud: var(--accent);
@@ -47,7 +49,7 @@
   --wa-color-brand-border-loud: var(--accent-strong);
   --wa-color-brand-on-quiet: var(--accent);
   --wa-color-brand-on-normal: var(--accent-strong);
-  --wa-color-brand-on-loud: var(--overlay-fg);
+  --wa-color-brand-on-loud: var(--accent-fg);
 
   /* success ↔ «успех» ETN. */
   --wa-color-success-fill-quiet: var(--ok-soft);
