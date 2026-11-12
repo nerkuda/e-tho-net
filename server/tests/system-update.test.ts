@@ -31,6 +31,8 @@ import { after, describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 
+import { parseSemver } from '@etn/shared';
+
 import { createServer } from '../src/http/server.js';
 import { DEFAULT_UPDATE_CONFIG } from '../src/config.js';
 import { runMigrations } from '../src/db/migrator.js';
@@ -57,10 +59,7 @@ import {
   type InstallerRunnerOptions,
   type SpawnInstaller,
 } from '../src/update/installer-runner.js';
-import {
-  DOCKER_UPDATE_COMMAND,
-  DOCKER_UPDATE_INSTRUCTION,
-} from '../src/update/deployment.js';
+import { DOCKER_UPDATE_COMMAND, DOCKER_UPDATE_INSTRUCTION } from '../src/update/deployment.js';
 import { INSTALLER_HTTPS_WARNING } from '../src/routes/system-update.js';
 import {
   authHeaders,
@@ -73,8 +72,21 @@ import {
   type RestTestContext,
 } from './rest-helpers.js';
 
-/** Версия обновления в тестах — строго новее текущей версии сервера. */
-const TARGET_VERSION = '0.16.0';
+/**
+ * Следующий патч версии (`X.Y.Z` → `X.Y.(Z+1)`): цель обновления в тестах
+ * обязана быть строго новее `SERVER_VERSION`.
+ */
+function nextPatchVersion(version: string): string {
+  const parsed = parseSemver(version);
+  assert.ok(parsed !== null, `SERVER_VERSION ${version} is not semver`);
+  return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+}
+
+/**
+ * Версия обновления в тестах — строго новее текущей версии сервера. Считается
+ * от `SERVER_VERSION`, а не литералом: при бампе версии ожидания не устаревают.
+ */
+const TARGET_VERSION = nextPatchVersion(SERVER_VERSION);
 
 /** Ссылка на ассет в тестовом фиде. */
 const DOWNLOAD_URL = `https://feed.test/download/v${TARGET_VERSION}/ETN-Setup-${TARGET_VERSION}.exe`;
@@ -210,10 +222,7 @@ async function withFeed<T>(downloadUrl: string, fn: () => Promise<T>): Promise<T
  * Наполнить кеш проверки через `POST /system/update/check` (реальный checker с
  * подменённым fetch).
  */
-async function primeCache(
-  ctx: RestTestContext,
-  downloadUrl: string = DOWNLOAD_URL,
-): Promise<void> {
+async function primeCache(ctx: RestTestContext, downloadUrl: string = DOWNLOAD_URL): Promise<void> {
   await withFeed(downloadUrl, async () => {
     const res = await ctx.app.inject({
       method: 'POST',
@@ -388,7 +397,11 @@ describe('system/update — администратор и статус', { skip:
         assert.equal(anon.statusCode, 401, `${route.method} ${route.url}: anon`);
         const forbidden = await ctx.app.inject(
           route.payload === undefined
-            ? { method: route.method, url: route.url, headers: { authorization: `Bearer ${plain.key}` } }
+            ? {
+                method: route.method,
+                url: route.url,
+                headers: { authorization: `Bearer ${plain.key}` },
+              }
             : {
                 method: route.method,
                 url: route.url,
@@ -474,12 +487,19 @@ describe('system/update — администратор и статус', { skip:
       assert.match(data.instruction!, /database schema is updated automatically/i);
       assert.match(data.instruction!, /back up/i);
       // Точная формулировка тома: имя тома и путь внутри, без смешения с переменной.
-      assert.match(data.instruction!, /`etn_data` volume, inside — `\/data` \(also `ETN_DATA_DIR`\)/i);
+      assert.match(
+        data.instruction!,
+        /`etn_data` volume, inside — `\/data` \(also `ETN_DATA_DIR`\)/i,
+      );
       // Оговорка про build-only compose: `pull` не обещает скачивание образа.
       assert.match(data.instruction!, /docker compose build/i);
       assert.match(data.instruction!, /`pull` downloads nothing/i);
       // Инструкция — про сервер: автообновления клиента не обещает.
-      assert.doesNotMatch(data.instruction!, /update the client|client update/i, 'инструкция не обещает обновление клиента');
+      assert.doesNotMatch(
+        data.instruction!,
+        /update the client|client update/i,
+        'инструкция не обещает обновление клиента',
+      );
     } finally {
       await closeRestContext(docker);
     }
@@ -1157,7 +1177,8 @@ describe('задание обновления — виды 502', { skip: !native
     },
     {
       name: 'хеш',
-      harness: () => makeRunnerHarness({ fetchImpl: async () => okResponse(Buffer.from('другое')) }),
+      harness: () =>
+        makeRunnerHarness({ fetchImpl: async () => okResponse(Buffer.from('другое')) }),
       cache: () => makeCache(),
       expected: 'installer-hash',
       expectedStage: 'preparing',
@@ -1254,11 +1275,16 @@ describe('задание обновления — конфликты верси�
     try {
       await assert.rejects(
         service.apply({ targetVersion: '0.15.0' }),
-        (err: unknown) =>
-          err instanceof UpdateApplyConflictError && err.reason === 'downgrade',
+        (err: unknown) => err instanceof UpdateApplyConflictError && err.reason === 'downgrade',
       );
+      // Кеш успел смениться: запрошенная версия новее текущей, но уже не
+      // предлагается — отказ `version-mismatch`, а не запуск установщика.
+      const stale = makeService(harness, {
+        sys,
+        cache: makeCache({ available_version: nextPatchVersion(TARGET_VERSION) }),
+      });
       await assert.rejects(
-        service.apply({ targetVersion: '0.16.1' }),
+        stale.service.apply({ targetVersion: TARGET_VERSION }),
         (err: unknown) =>
           err instanceof UpdateApplyConflictError && err.reason === 'version-mismatch',
       );
