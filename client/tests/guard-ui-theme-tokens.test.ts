@@ -415,7 +415,9 @@ export function stateFrameProblems(sources: ReadonlyMap<string, string>): string
       continue;
     }
     for (const token of frame.tokens) {
-      if (!body.includes(`var(${token}`)) {
+      // Целый `var(--token)` (или `var(--token, fallback)`): сравнение по
+      // префиксу принимало бы `var(--selection-bg)` за `var(--selection)`.
+      if (!new RegExp(`var\\(\\s*${token}\\s*[,)]`).test(body)) {
         problems.push(`${frame.selector}: рамка не использует токен темы ${token}`);
       }
     }
@@ -717,6 +719,27 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
     assert.ok(
       lostFrame.some((p) => p.includes('--selection')),
       `рамка выделения без --selection обязана краснить: ${lostFrame.join(' | ')}`,
+    );
+
+    // Соседний токен с тем же префиксом (`--selection-bg`) не считается
+    // рамкой выделения: сравнение идёт по целому `var(--selection)`.
+    const prefixTwin = stateFrameProblems(
+      new Map([
+        [
+          'styles/canvas.css',
+          canvas.css.replace(
+            'outline: 2px solid var(--selection);',
+            'outline: 2px solid var(--selection-bg);',
+          ),
+        ],
+        ...rendererCssFiles()
+          .filter((file) => file.rel !== 'styles/canvas.css')
+          .map((file) => [file.rel, file.css] as const),
+      ]),
+    );
+    assert.ok(
+      prefixTwin.some((p) => p.includes('--selection')),
+      `var(--selection-bg) вместо var(--selection) обязана краснить: ${prefixTwin.join(' | ')}`,
     );
 
     // Совпадение состояний внутри темы — красное.
