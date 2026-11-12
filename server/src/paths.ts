@@ -7,10 +7,17 @@
  * <ETN_DATA_DIR>/                 ← absolute, from env
  * ├── _system.db
  * ├── _system.db-wal / -shm
+ * ├── users/                      ← server-level user files (ADR a5888535)
+ * │   └── <user-uuid>/
+ * │       └── files/              ← e.g. map_wallpaper
  * └── networks/
  *     └── <network-uuid>/
  *         └── data.db
  * ```
+ *
+ * `users/` holds files of the server-level user (table `user_files`, entity
+ * 62fd29b5): outside any network, NOT part of the automatic DB backup — the
+ * source stays with the user and the server copy is restored by re-uploading.
  *
  * `dataDir` is always passed in explicitly (resolved by `config.ts`) so this
  * module stays free of process-env reads and is trivially testable. The bundled
@@ -78,6 +85,28 @@ export function networkDir(dataDir: string, networkId: string): string {
 /** Absolute path to a single network's `data.db` file. */
 export function networkDbPath(dataDir: string, networkId: string): string {
   return path.join(networkDir(dataDir, networkId), NETWORK_DB_FILENAME);
+}
+
+/** Subdirectory holding server-level user files (outside any network). */
+export const USERS_DIRNAME = 'users';
+
+/** Absolute path to the `users/` root under the given data directory. */
+export function usersRoot(dataDir: string): string {
+  return path.join(dataDir, USERS_DIRNAME);
+}
+
+/** Absolute path to a single user's directory (`users/<user-uuid>`). */
+export function userDir(dataDir: string, userId: string): string {
+  return path.join(usersRoot(dataDir), userId);
+}
+
+/**
+ * Absolute path to a user's files directory (`users/<user-uuid>/files`), where
+ * `user_files` rows of this server keep their bytes (entity 62fd29b5,
+ * ADR a5888535).
+ */
+export function userFilesDir(dataDir: string, userId: string): string {
+  return path.join(userDir(dataDir, userId), 'files');
 }
 
 /** Absolute path to the bundled `_system.db` migrations directory. */

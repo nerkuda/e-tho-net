@@ -45,6 +45,7 @@ import { languageRoutes } from '../routes/language.js';
 import { systemUpdateRoutes } from '../routes/system-update.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
+import { createUserFilesRoutes } from '../routes/user-files.js';
 import { createNetworksRoutes } from '../routes/networks.js';
 import { createInstructionsRoutes } from '../routes/instructions.js';
 import { auditRoutes } from '../routes/audit.js';
@@ -476,6 +477,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Comment and attachment routes (task D5, 03-server-api.md §10–11).
   await app.register(createCommentsRoutes(routeDeps), { prefix: '/api/v1' });
   await app.register(createAttachmentsRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Файлы пользователя серверного уровня (0.16.1, задача 8e007e63): фоновая
+  // картинка карты — `user_files` в _system.db и `/users/me/wallpaper`
+  // (операция 31ef478a, ADR a5888535). Вне сетей, real-time-событий нет.
+  await app.register(createUserFilesRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Object-lock routes (task 2031df5e, 03-server-api.md §13c):
   // acquire/release/clear/list поверх таблицы object_locks.

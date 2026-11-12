@@ -53,6 +53,22 @@ import {
  */
 const COUNT_FIRST_USER_SQL = 'SELECT COUNT(*) AS c FROM users WHERE is_first_user = 1';
 
+/** Raw `user_files` row — server-level user file (entity 62fd29b5, ADR a5888535). */
+export interface UserFileRow {
+  user_id: string;
+  kind: string;
+  /** Absolute path under `ETN_DATA_DIR/users/<user_id>/files/`. */
+  file_path: string;
+  /** SHA-256 of the stored bytes. */
+  content_hash: string;
+  file_size: number;
+  mime_type: string;
+  /** JSON metadata computed by the client, stored as is. */
+  meta: string;
+  /** Epoch ms of the last overwrite. */
+  updated_at: number;
+}
+
 /** Raw `users` row shape (INTEGER booleans). */
 interface UserRow {
   id: string;
@@ -374,6 +390,10 @@ export class SystemDb {
   private readonly stGetUserSetting: Database.Statement;
   private readonly stUpsertUserSetting: Database.Statement;
   private readonly stListUserSettings: Database.Statement;
+  private readonly stGetUserFile: Database.Statement;
+  private readonly stListUserFiles: Database.Statement;
+  private readonly stUpsertUserFile: Database.Statement;
+  private readonly stDeleteUserFile: Database.Statement;
   private readonly stGetSetting: Database.Statement;
   private readonly stSetSetting: Database.Statement;
   private readonly stListNetworkIds: Database.Statement;
@@ -514,6 +534,16 @@ export class SystemDb {
     this.stListUserSettings = db.prepare(
       'SELECT key, value, updated_at FROM user_settings WHERE user_id = ? ORDER BY key',
     );
+    this.stGetUserFile = db.prepare(
+      'SELECT user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at FROM user_files WHERE user_id = ? AND kind = ? LIMIT 1',
+    );
+    this.stListUserFiles = db.prepare(
+      'SELECT user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at FROM user_files WHERE user_id = ? ORDER BY kind',
+    );
+    this.stUpsertUserFile = db.prepare(
+      'INSERT INTO user_files (user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, kind) DO UPDATE SET file_path = excluded.file_path, content_hash = excluded.content_hash, file_size = excluded.file_size, mime_type = excluded.mime_type, meta = excluded.meta, updated_at = excluded.updated_at',
+    );
+    this.stDeleteUserFile = db.prepare('DELETE FROM user_files WHERE user_id = ? AND kind = ?');
     this.stGetSetting = db.prepare('SELECT value FROM settings WHERE key = ? LIMIT 1');
     this.stSetSetting = db.prepare(
       'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
@@ -1242,6 +1272,44 @@ export class SystemDb {
       updated_at: string;
     }>;
     return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value), updated_at: r.updated_at }));
+  }
+
+  // -------------------------------------------------------------------------
+  // user_files — server-level user files outside any network (entity 62fd29b5,
+  // ADR a5888535; API operation 31ef478a)
+  // -------------------------------------------------------------------------
+
+  /** The single file row of a (user, kind) pair, or `null` when absent. */
+  getUserFile(userId: string, kind: string): UserFileRow | null {
+    const row = this.stGetUserFile.get(userId, kind) as UserFileRow | undefined;
+    return row ?? null;
+  }
+
+  /** All file rows of a user — used by the physical cleanup on user deletion. */
+  listUserFiles(userId: string): UserFileRow[] {
+    return this.stListUserFiles.all(userId) as UserFileRow[];
+  }
+
+  /**
+   * Insert or overwrite the single row of a (user, kind) pair. UNIQUE
+   * (user_id, kind) is the primary key: a re-upload keeps one row per kind.
+   */
+  upsertUserFile(row: UserFileRow): void {
+    this.stUpsertUserFile.run(
+      row.user_id,
+      row.kind,
+      row.file_path,
+      row.content_hash,
+      row.file_size,
+      row.mime_type,
+      row.meta,
+      row.updated_at,
+    );
+  }
+
+  /** Delete the row of a (user, kind) pair; `true` when a row existed. */
+  deleteUserFile(userId: string, kind: string): boolean {
+    return this.stDeleteUserFile.run(userId, kind).changes > 0;
   }
 
   // -------------------------------------------------------------------------

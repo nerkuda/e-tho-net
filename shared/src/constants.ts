@@ -230,6 +230,26 @@ export const USER_SETTING_KEY = {
 export type UserSettingKey = (typeof USER_SETTING_KEY)[keyof typeof USER_SETTING_KEY];
 
 /**
+ * Вид файла пользователя серверного уровня (таблица `user_files` в
+ * `_system.db`, сущность 62fd29b5, ADR a5888535). Набор расширяемый; сейчас
+ * единственное значение — фоновая картинка карты (операция 31ef478a).
+ */
+export const USER_FILE_KIND = {
+  MAP_WALLPAPER: 'map_wallpaper',
+} as const satisfies Record<string, string>;
+export type UserFileKind = (typeof USER_FILE_KIND)[keyof typeof USER_FILE_KIND];
+
+/**
+ * Предел размера файла пользователя — 5 МиБ (операция 31ef478a; сервер отвечает
+ * 422 при превышении). Файлы не входят в автоматический бэкап БД (ADR a5888535).
+ */
+export const USER_FILE_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Белый список mime фоновой картинки: форматы, которые поддерживают все целевые клиенты. */
+export const USER_FILE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export type UserFileMimeType = (typeof USER_FILE_MIME_TYPES)[number];
+
+/**
  * L4 client-side UI-state keys stored in the local `ui_state` table
  * (11-settings-and-state.md §2.1 L4). Per (client × user × network), never
  * synced between clients.

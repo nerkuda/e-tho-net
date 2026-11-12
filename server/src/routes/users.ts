@@ -32,6 +32,7 @@ import type {
 import { EtnError } from '@etn/shared';
 
 import { generateApiKey } from '../auth/api-key.js';
+import { removeUserFiles } from '../domain/user-file-service.js';
 import { sendCreated, sendList, sendSuccess } from '../http/responses.js';
 import { parseMaxWritesPerMinute } from './me.js';
 
@@ -311,6 +312,18 @@ export const usersRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
       // FK ON DELETE CASCADE removes api_keys & network_members automatically.
       app.systemDb.deleteUser(user.id);
+      // Файлы пользователя серверного уровня (ревизия итерации 1 к задаче
+      // 8e007e63): строки `user_files` ушли каскадом, каталог
+      // `users/<id>/` удаляется физически. Сбой ФС не отменяет удаление
+      // пользователя — он лишь логируется, каталог останется сиротой.
+      try {
+        removeUserFiles(app.dataDir, user.id);
+      } catch (err) {
+        app.appLogger.warn(
+          { err, user_id: user.id },
+          'user deleted, but the user files directory was not removed',
+        );
+      }
       reply.code(204).send();
     },
   );

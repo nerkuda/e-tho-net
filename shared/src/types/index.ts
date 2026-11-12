@@ -4,6 +4,7 @@
  */
 
 export * from './user.js';
+export * from './user-file.js';
 export * from './network.js';
 export * from './thought.js';
 export * from './link.js';

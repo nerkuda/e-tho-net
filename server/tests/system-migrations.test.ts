@@ -33,6 +33,7 @@ const EXPECTED_FILES = [
   '016_update_jobs.sql',
   '017_networks_language.sql',
   '018_update_jobs_failure_fields.sql',
+  '019_user_files.sql',
 ];
 
 /** All `_system.db` tables that must exist after migration. */
@@ -51,6 +52,7 @@ const EXPECTED_TABLES = [
   'network_seq',
   'mcp_tool_call_metrics',
   'update_jobs',
+  'user_files',
 ];
 
 /** True when the `better-sqlite3` native binding loads. */
@@ -111,6 +113,65 @@ describe(
         for (const column of ['reason', 'failed_stage', 'exit_code', 'log_path']) {
           assert.ok(jobCols.includes(column), `update_jobs.${column} missing`);
         }
+
+        // user_files — файлы пользователя серверного уровня (миграция 019,
+        // задача 8e007e63, сущность 62fd29b5): состав колонок, PK по
+        // (user_id, kind) как UNIQUE-инвариант и каскадное удаление строк.
+        const fileCols = db.prepare('PRAGMA table_info(user_files)').all() as {
+          name: string;
+          notnull: number;
+          pk: number;
+        }[];
+        assert.deepEqual(
+          fileCols.map((c) => c.name),
+          [
+            'user_id',
+            'kind',
+            'file_path',
+            'content_hash',
+            'file_size',
+            'mime_type',
+            'meta',
+            'updated_at',
+          ],
+        );
+        for (const column of fileCols) {
+          assert.equal(column.notnull, 1, `user_files.${column.name} must be NOT NULL`);
+        }
+        assert.deepEqual(
+          fileCols.filter((c) => c.pk > 0).map((c) => c.name),
+          ['user_id', 'kind'],
+          'user_files PK must be (user_id, kind)',
+        );
+
+        const fileFks = db.prepare('PRAGMA foreign_key_list(user_files)').all() as {
+          table: string;
+          from: string;
+          to: string;
+          on_delete: string;
+        }[];
+        assert.equal(fileFks.length, 1, 'user_files must have exactly one FK');
+        const fileFk = fileFks.at(0);
+        assert.ok(fileFk !== undefined);
+        assert.deepEqual(
+          { table: fileFk.table, from: fileFk.from, to: fileFk.to, on_delete: fileFk.on_delete },
+          { table: 'users', from: 'user_id', to: 'id', on_delete: 'CASCADE' },
+        );
+
+        // Каскад работает: удаление пользователя уносит его файловые строки
+        // (ревизия итерации 1 к задаче 8e007e63).
+        db.prepare(
+          "INSERT INTO users (id, username, is_admin, is_first_user, disabled, created_at, updated_at) VALUES ('u-cascade', 'cascade', 0, 0, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        ).run();
+        db.prepare(
+          "INSERT INTO user_files (user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at) VALUES ('u-cascade', 'map_wallpaper', '/tmp/x.jpg', 'hash', 1, 'image/jpeg', '{\"width\":1,\"height\":1,\"avg_luminance\":0}', 1)",
+        ).run();
+        db.prepare("DELETE FROM users WHERE id = 'u-cascade'").run();
+        assert.equal(
+          (db.prepare('SELECT COUNT(*) AS c FROM user_files').get() as { c: number }).c,
+          0,
+          'user_files rows must cascade on user deletion',
+        );
 
         // Settings seeded with all 7 defaults (5 SETTING_KEY + 2 traversal.*).
         const n = (db.prepare('SELECT COUNT(*) AS c FROM settings').get() as { c: number }).c;
