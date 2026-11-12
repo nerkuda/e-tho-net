@@ -230,6 +230,49 @@ function Invoke-IssStaticChecks {
     $keyInLog = Test-IssCode -Text $issText -Pattern 'LogLine\([^\r\n]*GPendingKey'
     Add-StaticResult -Name 'static:key-not-logged' -Ok (-not $keyInLog) -Note 'LogLine без GPendingKey'
 
+    # f7887a35: журнал запуска не теряется. Четыре свойства обязательны вместе:
+    # (1) имя файла уникально для запуска — уже существующий файл не
+    # используется (метка времени до секунды + номер попытки);
+    # (2) успех — результат записи, а не FileExists (SaveStringsToUTF8File
+    # возвращает False, когда каталог закрыт ACL, — FileExists при этом уже
+    # истинно на чужом файле, и журнал молча пропадал);
+    # (3) факт записи подтверждается чтением файла назад;
+    # (4) запись по ходу установки тоже проверяется — при отказе строка уходит
+    # в журнал Inno, а не теряется.
+    $tryInitBody = Get-IssFunctionBody -Text $issText -Name 'TryInitLog'
+    $logProbeBody = Get-IssFunctionBody -Text $issText -Name 'LogProbeWritten'
+    $logLineBody = Get-IssFunctionBody -Text $issText -Name 'LogLine'
+    Add-StaticResult -Name 'static:log-unique-name' -Ok (
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape('if FileExists(Candidate) then Continue'))) -and
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape("Candidate := Dir + '\' + Base + '-' + IntToStr(N) + '.log'")))
+    ) -Note 'своё имя на запуск: чужой файл не используется, номер попытки в имени'
+    Add-StaticResult -Name 'static:log-write-result' -Ok (
+        (Test-IssCode -Text $logProbeBody -Pattern ([regex]::Escape('if not SaveStringsToUTF8File(FileName, Lines, True) then Exit'))) -and
+        (Test-IssCode -Text $logProbeBody -Pattern ([regex]::Escape('if not LoadStringsFromFile(FileName, Lines) then Exit'))) -and
+        (Test-IssCode -Text $logProbeBody -Pattern ([regex]::Escape('Result := Lines[Count - 1] = Marker'))) -and
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape('if not LogProbeWritten(Candidate, Marker) then Continue')))
+    ) -Note 'успех — результат записи и чтения назад, а не FileExists'
+    Add-StaticResult -Name 'static:log-append-result' -Ok (
+        (Test-IssCode -Text $logLineBody -Pattern ([regex]::Escape('if not AppendUtf8Line(GLogPath, Line) then')))
+    ) -Note 'неудачная дописка строки дублируется в журнал Inno'
+    Add-StaticResult -Name 'static:log-name-attempts' -Ok (
+        (Test-IssCode -Text $issText -Pattern ([regex]::Escape('LOG_NAME_ATTEMPTS = 100'))) -and
+        (Test-IssCode -Text $tryInitBody -Pattern ([regex]::Escape('for N := 0 to LOG_NAME_ATTEMPTS - 1 do')))
+    ) -Note 'число попыток имени — константа, цикл по ней'
+    $initLogBody = Get-IssFunctionBody -Text $issText -Name 'InitLog'
+    Add-StaticResult -Name 'static:log-fallback' -Ok (
+        (Test-IssCode -Text $initLogBody -Pattern ([regex]::Escape("TryInitLog(GDataDir + '\logs', 'install',"))) -and
+        (Test-IssCode -Text $initLogBody -Pattern ([regex]::Escape("TryInitLog(TempDir, 'install', 'ETN setup log')")))
+    ) -Note 'каталог данных, затем %TEMP% — оба пути с проверкой записи'
+    # Правило аналогов: журнал удаления строил имя так же и терялся бы так же.
+    $uninsBody = Get-IssFunctionBody -Text $issText -Name 'InitializeUninstall'
+    $uninsManualName = Test-IssCode -Text $uninsBody -Pattern ([regex]::Escape("'\uninstall-' +"))
+    Add-StaticResult -Name 'static:uninstall-log-shared' -Ok (
+        (Test-IssCode -Text $uninsBody -Pattern ([regex]::Escape("TryInitLog(GDataDir + '\logs', 'uninstall',"))) -and
+        (Test-IssCode -Text $uninsBody -Pattern ([regex]::Escape("TryInitLog(ExpandConstant('{tmp}'), 'etn-uninstall',"))) -and
+        (-not $uninsManualName)
+    ) -Note 'журнал удаления — тот же TryInitLog, имя не собирается вручную'
+
     # 4dc117f5: каждый CustomMessage('X') обязан быть определён — иначе Inno
     # бросает исключение в рантайме (до компиляции сторож дешевле); дубликат имени
     # в [CustomMessages] — ошибка компиляции.

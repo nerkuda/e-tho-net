@@ -752,6 +752,10 @@ const
   EXIT_PRECONDITION = 20;
   MOVEFILE_REPLACE_EXISTING = 1;
   MOVEFILE_WRITE_THROUGH = 8;
+  { Журнал: имя файла уникально для запуска (ошибка f7887a35). Метка времени
+    в имени — до секунды, поэтому два запуска в одну секунду различаются
+    номером попытки: install-<метка>.log, install-<метка>-1.log и т. д. }
+  LOG_NAME_ATTEMPTS = 100;
   { Правило брандмауэра: имя постоянное (удаление ищет по имени, а не по
     порту), профили — домен и частная сеть; публичные сети правилом не
     открываются (требование 15a1d3e4). }
@@ -1163,6 +1167,10 @@ end;
   Журнал установщика: UTF-8 (с BOM в начале файла — его добавляет первая
   запись), по строке на событие, без MsgBox. Значения «секретных» параметров
   (ключ, токен, пароль) в журнал не попадают никогда.
+  Файл журнала свой у каждого запуска: имя install-<метка>-<номер>.log, уже
+  существующий файл не используется, факт записи подтверждается чтением
+  (f7887a35). Не удалось записать ни в один каталог — строки идут в журнал
+  Inno, а не теряются молча.
   --------------------------------------------------------------------------- }
 function RedactLine(const S: String): String;
 var
@@ -1178,29 +1186,37 @@ begin
     Result := Copy(S, 1, P) + '***';
 end;
 
-procedure AppendUtf8Line(const FileName, Text: String);
+function AppendUtf8Line(const FileName, Text: String): Boolean;
 var
   Lines: TArrayOfString;
 begin
   SetArrayLength(Lines, 1);
   Lines[0] := Text;
-  SaveStringsToUTF8File(FileName, Lines, True);
+  { Результат обязан проверяться вызывающим: запись в каталог может быть
+    запрещена (ACL) или файл занят — тогда строки молча не будет (f7887a35). }
+  Result := SaveStringsToUTF8File(FileName, Lines, True);
 end;
 
 procedure LogLine(const Level, Msg: String);
+var
+  Line: String;
 begin
+  Line := GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + '  [' + Level + ']  ' +
+    RedactLine(Msg);
   if GLogPath = '' then
   begin
     { Журнал установщика ещё не создан (InitializeSetup) или это
       деинсталлятор, где InitializeSetup не вызывается и свой журнал создать
       не удалось: строка уходит в журнал Inno (Log), иначе причина отказа
       снятия службы при удалении теряется. }
-    Log(RedactLine(Msg));
+    Log(Line);
     Exit;
   end;
-  AppendUtf8Line(GLogPath,
-    GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + '  [' + Level + ']  ' +
-    RedactLine(Msg));
+  { Файл журнала мог стать недоступен по ходу установки (ACL каталога,
+    занятый файл, диск): AppendUtf8Line возвращает False, и строка не должна
+    пропасть молча — дублируем её в журнал Inno (ведётся при /LOG). }
+  if not AppendUtf8Line(GLogPath, Line) then
+    Log(Line);
 end;
 
 { Запись в журнал до его создания: строки копятся в буфере и выводятся после
@@ -1248,19 +1264,56 @@ begin
   GDeferredLog := '';
 end;
 
-function TryInitLog(const Dir: String): Boolean;
+{ Запись в файл с подтверждением результата: SaveStringsToUTF8File возвращает
+  False, если файл не удалось создать или дописать (ACL каталога, занятый
+  файл, диск). FileExists признаком успеха не является — именно на этом
+  терялся журнал неэлевированного запуска (ошибка f7887a35): файл с чужим
+  именем уже существовал, дописать его прав не было, и все строки молча
+  пропадали. Дополнительно строка перечитывается: подтверждается не только
+  отсутствие ошибки, но и факт записи. }
+function LogProbeWritten(const FileName, Marker: String): Boolean;
 var
-  Candidate: String;
+  Lines: TArrayOfString;
+  Count: Integer;
+begin
+  Result := False;
+  SetArrayLength(Lines, 1);
+  Lines[0] := Marker;
+  if not SaveStringsToUTF8File(FileName, Lines, True) then Exit;
+  if not LoadStringsFromFile(FileName, Lines) then Exit;
+  Count := GetArrayLength(Lines);
+  if Count = 0 then Exit;
+  Result := Lines[Count - 1] = Marker;
+end;
+
+{ Журнал в указанном каталоге: имя уникально для запуска. Метка времени в
+  имени — до секунды, поэтому два запуска в одну секунду различаются номером
+  попытки (install-<метка>.log, install-<метка>-1.log, …), а уже существующий
+  файл никогда не используется: записи разных запусков не смешиваются и чужие
+  права на файл не мешают создать свой. Ни одна попытка не удалась — False,
+  вызывающий уходит на следующий каталог (f7887a35). }
+function TryInitLog(const Dir, Prefix, FirstLine: String): Boolean;
+var
+  Base, Candidate, Marker: String;
+  N: Integer;
 begin
   Result := False;
   if Dir = '' then Exit;
   if not ForceDirectories(Dir) then Exit;
-  Candidate := Dir + '\install-' +
-    GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
-  AppendUtf8Line(Candidate, 'ETN setup log');
-  if not FileExists(Candidate) then Exit;
-  GLogPath := Candidate;
-  Result := True;
+  Base := Prefix + '-' + GetDateTimeString('yyyymmdd-hhnnss', '-', '-');
+  for N := 0 to LOG_NAME_ATTEMPTS - 1 do
+  begin
+    if N = 0 then
+      Candidate := Dir + '\' + Base + '.log'
+    else
+      Candidate := Dir + '\' + Base + '-' + IntToStr(N) + '.log';
+    if FileExists(Candidate) then Continue;
+    Marker := FirstLine + ' ' + Base + IfStr(N = 0, '', '-' + IntToStr(N));
+    if not LogProbeWritten(Candidate, Marker) then Continue;
+    GLogPath := Candidate;
+    Result := True;
+    Exit;
+  end;
 end;
 
 { Журнал установщика по контракту — %ProgramData%\ETN\logs, но этот каталог
@@ -1276,12 +1329,15 @@ var
   TempDir: String;
 begin
   GLogPath := '';
-  { Основной путь по контракту: %ProgramData%\ETN\logs. }
-  if DataDirLogAllowed and TryInitLog(GDataDir + '\logs') then Exit;
+  { Основной путь по контракту: %ProgramData%\ETN\logs. Неэлевированный
+    запуск может не иметь прав на каталог, созданный администратором, —
+    тогда TryInitLog честно вернёт False и журнал уйдёт в %TEMP%. }
+  if DataDirLogAllowed and TryInitLog(GDataDir + '\logs', 'install',
+    'ETN setup log') then Exit;
   { Fallback по контракту: %TEMP%. }
   TempDir := GetEnv('TEMP');
   if TempDir = '' then TempDir := GetEnv('TMP');
-  if TryInitLog(TempDir) then
+  if TryInitLog(TempDir, 'install', 'ETN setup log') then
     LogLine('WARN', 'Журнал в %TEMP%: каталог ' + GDataDir + '\logs не используется')
   else
     GLogPath := '';
@@ -7587,8 +7643,8 @@ end;
   лишь при /LOG. *)
 function InitializeUninstall: Boolean;
 var
-  JsonPath, Text, Dir, Candidate: String;
-  JsonPresent: Boolean;
+  JsonPath, Text: String;
+  JsonPresent, LogReady: Boolean;
 begin
   Result := True;
   GDataDir := ExpandConstant('{#DataDir}');
@@ -7603,20 +7659,16 @@ begin
       GServerMode := JsonGetRaw(Text, 'mode');
   end;
   { Журнал — в каталоге данных только у серверной установки (install.json);
-    удаление клиента без сервера не должно создавать %ProgramData%\ETN. }
-  Dir := GDataDir + '\logs';
-  Candidate := Dir + '\uninstall-' +
-    GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
-  if JsonPresent and ForceDirectories(Dir) then
-    AppendUtf8Line(Candidate, 'ETN uninstall log');
-  if not FileExists(Candidate) then
-  begin
-    Dir := ExpandConstant('{tmp}');
-    Candidate := Dir + '\etn-uninstall-' +
-      GetDateTimeString('yyyymmdd-hhnnss', '-', '-') + '.log';
-    AppendUtf8Line(Candidate, 'ETN uninstall log');
-  end;
-  if FileExists(Candidate) then GLogPath := Candidate;
+    удаление клиента без сервера не должно создавать %ProgramData%\ETN.
+    Имя и проверка записи — общий TryInitLog: журнал удаления того же класса,
+    что и установочный, и терялся бы так же при совпадении секунды у двух
+    запусков (f7887a35). }
+  if JsonPresent then
+    LogReady := TryInitLog(GDataDir + '\logs', 'uninstall', 'ETN uninstall log')
+  else
+    LogReady := False;
+  if not LogReady then
+    TryInitLog(ExpandConstant('{tmp}'), 'etn-uninstall', 'ETN uninstall log');
   LogLine('INFO', 'Удаление ETN: каталог данных ' + GDataDir + ', режим ' +
     IfStr(GServerMode = '', '—', GServerMode));
 end;
