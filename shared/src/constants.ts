@@ -216,9 +216,9 @@ export const USER_SETTING_KEY = {
   APP_LANGUAGE: 'app_language',
   /**
    * Тема интерфейса пользователя (требование 219d030c, задача 0e4a52cd):
-   * имя файла темы `current | blue-topaz | catppuccin | nordic | retronotes |
-   * wasp`. Живёт на уровне «пользователь × сервер» (L3s) и действует на всех
-   * клиентах пользователя; `client_meta.ui_theme` — только кэш для офлайн-старта.
+   * имя файла темы из {@link UI_THEME_NAMES}. Живёт на уровне «пользователь ×
+   * сервер» (L3s) и действует на всех клиентах пользователя;
+   * `client_meta.ui_theme` — только кэш для офлайн-старта.
    */
   UI_THEME: 'ui_theme',
   /**

@@ -39,6 +39,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { UI_THEME_NAMES } from '@etn/shared';
+
 import { listSourceFiles } from './guard-helpers.js';
 import { RENDERER_ROOT } from './renderer-css.js';
 import {
@@ -57,18 +59,12 @@ import {
 } from './theme-css.js';
 
 /**
- * Полный перечень тем версии (ADR de24adef: 6 тем × 2 режима). Этап 1 задачи
- * — ранний срез заказчику (`current`, `blue-topaz`); этап 2 добавил
- * `catppuccin` и `nordic`; этап 3 (0.16.1) — характерные `retronotes` и `wasp`.
+ * Перечень тем версии — из единственного источника `@etn/shared`
+ * (`UI_THEME_NAMES`, ADR de24adef: 6 тем × 2 режима). Новая тема добавляется в
+ * shared и обязана получить файл `lib/ui/themes/<тема>.css` и импорт в
+ * `lib/ui/register.ts` — иначе сторож краснеет.
  */
-const THEME_NAMES = [
-  'current',
-  'blue-topaz',
-  'catppuccin',
-  'nordic',
-  'retronotes',
-  'wasp',
-] as const;
+const THEME_NAMES = UI_THEME_NAMES;
 
 /**
  * Полный набор токенов темы: цвета + тени + радиусы + обязательный
@@ -511,26 +507,52 @@ function rendererCssFiles(): Array<{ rel: string; css: string }> {
     .sort((a, b) => a.rel.localeCompare(b.rel));
 }
 
+/**
+ * Проблемы каталога тем: у каждого имени перечня обязан быть файл
+ * `lib/ui/themes/<тема>.css` и импорт в `lib/ui/register.ts`, а лишних файлов
+ * в каталоге быть не должно.
+ */
+function themeCatalogProblems(names: readonly string[]): string[] {
+  const register = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'register.ts'), 'utf8');
+  const problems: string[] = [];
+  for (const name of names) {
+    if (!fs.existsSync(themeFile(name))) problems.push(`нет файла lib/ui/themes/${name}.css`);
+    if (!register.includes(`import './themes/${name}.css';`)) {
+      problems.push(`нет импорта './themes/${name}.css' в lib/ui/register.ts`);
+    }
+  }
+  const onDisk = fs
+    .readdirSync(THEMES_DIR)
+    .filter((file) => file.endsWith('.css'))
+    .map((file) => file.replace(/\.css$/, ''))
+    .sort();
+  if (onDisk.join('\n') !== [...names].sort().join('\n')) {
+    problems.push(
+      `каталог тем и перечень THEME_NAMES разошлись: незарегистрированный файл темы (${onDisk.join(', ')})`,
+    );
+  }
+  return problems;
+}
+
 describe('guard: токен-наборы тем интерфейса (aaeb6761)', () => {
   it('все темы версии заведены файлами и подключены импортом в register.ts', () => {
-    const register = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'register.ts'), 'utf8');
-    const problems: string[] = [];
-    for (const name of THEME_NAMES) {
-      if (!fs.existsSync(themeFile(name))) problems.push(`нет файла lib/ui/themes/${name}.css`);
-      if (!register.includes(`import './themes/${name}.css';`)) {
-        problems.push(`нет импорта './themes/${name}.css' в lib/ui/register.ts`);
-      }
-    }
+    const problems = themeCatalogProblems(THEME_NAMES);
     assert.deepEqual(problems, [], problems.join('\n'));
-    const onDisk = fs
-      .readdirSync(THEMES_DIR)
-      .filter((file) => file.endsWith('.css'))
-      .map((file) => file.replace(/\.css$/, ''))
-      .sort();
-    assert.deepEqual(
-      onDisk,
-      [...THEME_NAMES].sort(),
-      'каталог тем и перечень THEME_NAMES разошлись: незарегистрированный файл темы',
+  });
+
+  it('сторож краснеет на теме из shared без файла CSS и импорта', () => {
+    const problems = themeCatalogProblems([...THEME_NAMES, 'demo-missing']);
+    assert.ok(
+      problems.some((p) => p.includes('нет файла lib/ui/themes/demo-missing.css')),
+      'отсутствующий файл темы обязан обнаруживаться',
+    );
+    assert.ok(
+      problems.some((p) => p.includes("нет импорта './themes/demo-missing.css'")),
+      'отсутствующий импорт темы обязан обнаруживаться',
+    );
+    assert.ok(
+      problems.some((p) => p.includes('разошлись')),
+      'расхождение перечня и каталога обязано обнаруживаться',
     );
   });
 
