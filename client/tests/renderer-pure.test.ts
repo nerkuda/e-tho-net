@@ -59,6 +59,7 @@ import {
   planHistoryChips,
   shortenCompoundName,
   splitCompoundName,
+  zoneCountTextColor,
   zoomStep,
   TYPE_EDITOR_SPLIT_DEFAULT,
   TYPE_EDITOR_SPLIT_MAX,
@@ -514,6 +515,36 @@ describe('contrastText (L12: readable text on a custom cloud background)', () =>
     assert.equal(contrastText('#fff'), '#1f242d');
     assert.equal(contrastText('#03c'), '#ffffff');
     assert.equal(contrastText('not-a-color'), '#ffffff');
+  });
+
+  it('понимает hsl()/hsla()/rgb() — фон темы задан не только hex', () => {
+    // Вердикт проверки 80324150 (круг 2): blue-topaz light задаёт `--bg` как
+    // `hsla(204, 45%, 97%, 1)`, и прежний hex-only разбор отдавал белый текст.
+    assert.equal(contrastText('hsla(204, 45%, 97%, 1)'), '#1f242d');
+    assert.equal(contrastText('hsl(204 45% 97% / 1)'), '#1f242d');
+    assert.equal(contrastText('hsl(210, 20%, 12%)'), '#ffffff');
+    assert.equal(contrastText('rgb(255, 255, 255)'), '#1f242d');
+    assert.equal(contrastText('rgba(14, 17, 22, 0.9)'), '#ffffff');
+  });
+});
+
+describe('zoneCountTextColor (цвет счётчика зоны от фактической плашки)', () => {
+  it('с картинкой считает от непрозрачного --surface, а не от --bg', () => {
+    // blue-topaz light: --surface #ffffff, --bg hsla(204,45%,97%,1) — прежний
+    // расчёт давал белый текст на белой плашке (1.00 : 1).
+    assert.equal(zoneCountTextColor('#ffffff', 'hsla(204, 45%, 97%, 1)', true), '#1f242d');
+    assert.equal(zoneCountTextColor('#151515', 'hsla(204, 45%, 97%, 1)', true), '#ffffff');
+  });
+
+  it('без картинки считает от композиции --surface 78 % над --bg', () => {
+    // Светлая тема — тёмный текст; тёмная тема — светлый.
+    assert.equal(zoneCountTextColor('#ffffff', '#eef0f4', false), '#1f242d');
+    assert.equal(zoneCountTextColor('#151515', '#0e1116', false), '#ffffff');
+  });
+
+  it('нечитаемые токены — штатный fallback по фону темы', () => {
+    assert.equal(zoneCountTextColor('', '#ffffff', true), '#1f242d');
+    assert.equal(zoneCountTextColor('', '#0e1116', true), '#ffffff');
   });
 });
 

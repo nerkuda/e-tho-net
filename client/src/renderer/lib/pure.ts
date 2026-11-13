@@ -46,6 +46,7 @@ import {
   type RealtimeEventType,
 } from '@etn/shared';
 
+import { mixColors, parseCssColor, relativeLuminance } from './css-color.js';
 import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
@@ -146,27 +147,59 @@ export function cloudHeight(width: number, zoom = 1, lines = CLOUD_TITLE_LINES):
 /** Near-black readable text colour for {@link contrastText} (L12). */
 const CONTRAST_DARK = '#1f242d';
 
+/** Порог переключения «тёмный/светлый текст» по относительной яркости (L12). */
+const CONTRAST_LUMINANCE_THRESHOLD = 0.35;
+
+/** Порог контраста WCAG AA для крупного текста; счётчик крупный и полужирный. */
+export const ZONE_COUNT_CONTRAST_MIN = 7;
+
+/**
+ * Доля непрозрачности плашки счётчика зоны в основе: `color-mix(--surface 78%,
+ * transparent)` в `styles/canvas.css`. При активной картинке плашка становится
+ * непрозрачным `--surface`, поэтому константа действует только без картинки.
+ * Дублируется в CSS — сверяется сторожем `guard-canvas-overlay-layers`.
+ */
+export const ZONE_COUNT_PLATE_SURFACE_SHARE = 0.78;
+
 /**
  * Picks a readable text colour for an arbitrary user-picked cloud background
  * (08-ui-spec.md §2.2): white on dark backgrounds, near-black on light ones.
- * Relative luminance with sRGB linearisation (WCAG). Unparseable input falls
- * back to white (dark custom backgrounds are the more common case).
+ * Relative luminance with sRGB linearisation (WCAG). Цвет разбирается общим
+ * хелпером `lib/css-color.ts`, поэтому понимаются `#rgb`, `#rrggbb`,
+ * `rgb()/rgba()` и `hsl()/hsla()` (темы задают фон и в hsl-форме —
+ * blue-topaz light). Unparseable input falls back to white (dark custom
+ * backgrounds are the more common case).
  */
 export function contrastText(bg: string): string {
-  const hex = bg.trim().replace(/^#/, '');
-  const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
-  if (!/^[0-9a-fA-F]{6}$/.test(full)) {
-    return '#ffffff';
+  const rgb = parseCssColor(bg);
+  if (rgb === null) return '#ffffff';
+  const luminance = relativeLuminance(rgb[0], rgb[1], rgb[2]);
+  return luminance > CONTRAST_LUMINANCE_THRESHOLD ? CONTRAST_DARK : '#ffffff';
+}
+
+/**
+ * Цвет текста счётчика зоны (задача c8fa74ba; вердикт проверки 80324150, круг
+ * 2): считается от ФАКТИЧЕСКОГО фона плашки под цифрой, а не от фона темы —
+ * иначе на светлой теме (blue-topaz light, `--bg: hsla(204, 45%, 97%, 1)`)
+ * получался белый текст на белой плашке `--surface` (1.00 : 1).
+ *
+ *  • картинка активна (`data-canvas-wallpaper='on'`): плашка — непрозрачный
+ *    `--surface` (правило в `canvas.css`);
+ *  • картинки нет: плашка — `--surface` с альфой
+ *    {@link ZONE_COUNT_PLATE_SURFACE_SHARE} над фоном канвы `--bg`.
+ *
+ * Неразборчивый `--surface` — штатный fallback `contrastText` по фону темы.
+ */
+export function zoneCountTextColor(surface: string, themeBg: string, wallpaperOn: boolean): string {
+  const plate = parseCssColor(surface);
+  if (plate === null) return contrastText(themeBg);
+  let under = plate;
+  if (!wallpaperOn) {
+    const bg = parseCssColor(themeBg);
+    if (bg !== null) under = mixColors(plate, bg, ZONE_COUNT_PLATE_SURFACE_SHARE);
   }
-  const channel = (part: string): number => {
-    const c = Number.parseInt(part, 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  const luminance =
-    0.2126 * channel(full.slice(0, 2)) +
-    0.7152 * channel(full.slice(2, 4)) +
-    0.0722 * channel(full.slice(4, 6));
-  return luminance > 0.35 ? CONTRAST_DARK : '#ffffff';
+  const luminance = relativeLuminance(under[0], under[1], under[2]);
+  return luminance > CONTRAST_LUMINANCE_THRESHOLD ? CONTRAST_DARK : '#ffffff';
 }
 
 /** Effective cloud sizes applied by the renderer (zoom-multiplied, px-rounded). */

@@ -59,9 +59,10 @@
  * as ::before it sits under the zones, clouds and all link layers.
  * --layer-focus-stripe (0.6.4, 13-layers.md §2.2a) recolours the band while
  * a non-base layer with explicit colours is active; absent — theme default.
- * Доработка среза 2026-11-13 (задача 80324150, замечание 2): видимая высота
- * полосы уменьшена вдвое (fade 180px → 90px, токен `--focus-band-fade`), а
- * плотность снижена на 30 % — `--focus-band-opacity: 0.7` на весь слой полосы
+ * Доработка среза 2026-11-13 (задача 80324150, замечание 2), круг 2: видимая
+ * протяжённость полосы доведена до честного ÷2. Она равна ядру (высота строки
+ * фокуса, на стенде 67px) + 2 × fade: 67 + 2×180 = 427px → 67 + 2×73 = 213px.
+ * Плотность снижена на 30 % — `--focus-band-opacity: 0.7` на весь слой полосы
  * (затухание сохраняется: прозрачность умножает и его). */
 .canvas::before {
   content: '';
@@ -72,10 +73,10 @@
   opacity: var(--focus-band-opacity, 0.7);
   background: linear-gradient(
     to bottom,
-    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 90px)),
+    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 73px)),
     var(--layer-focus-stripe, var(--focus-accent, var(--accent))) var(--focus-band-top, 9999px),
     var(--layer-focus-stripe, var(--focus-accent, var(--accent))) var(--focus-band-bottom, 0px),
-    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 90px))
+    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 73px))
   );
 }
 

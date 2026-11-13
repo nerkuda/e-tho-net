@@ -1,6 +1,6 @@
 {
   "name": "80324150-wallpaper-tint",
-  "description": "Задача 80324150 «Фоновая картинка: клиент», ЭТАП 2 (срез заказчика 2026-11-13; элемент ef8112b0, требование e6d586d3, сценарий 3fe62610). Проверено на живом стенде: 1) без картинки фон экранов «Дневник», «События», «Публикации» и сетки «Структур» НЕ тонирован (переменная --wallpaper-screen-tint пуста, градиентный слой прозрачен); 2) после загрузки светлой картинки (avg_luminance 0.94) плотность тинта карты в диапазоне 0.12–0.30, тинт экранов в 0.072–0.18, слабее карты ровно в 0.6 раза (WALLPAPER_SCREEN_TINT_FACTOR), и каждый из 4 экранов реально получает слой linear-gradient этого цвета (структуры сохраняют точечную сетку); 3) после загрузки тёмной картинки (0.05) инварианты те же (тинт экранов слабее карты); 4) после «Убрать картинку» переменная снята, градиентные слои экранов прозрачны — возврат к фону темы/слоя; 5) доработка круга 2 по замечаниям заказчика: счётчик зоны лежит поверх всех слоёв (z=12) с непрозрачной тематической плашкой, подпись пустой зоны — выше сетки (z=2) с контуром цвета фона, полоса фокуса — плотность 0.7 (на 30 % прозрачнее) при fade 90px (видимая высота вдвое меньше). Для счётчика сценарий засеивает трёх детей фокусной мысли через API. Раздел «Оформление» проверяется через словарь ожиданий (ru/en), поиск UI — без русских литералов (сторож c73bcb60). Плотность ниже 0.12 и различимость картинки — юнит-тесты wallpaper-image.test.ts, сторожа guard-wallpaper-tint.test.ts и guard-canvas-overlay-layers.test.ts. «Слой слабее основы» живьём не проверяется: на стенде нет сети с собственными цветами слоя (initLayerTheme стирает ручной --layer-bg при каждом изменении стора) — покрыто юнит-тестом canvas-wallpaper.test.ts. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper-tint.scenario.json --server-language ru --keep --out .tmp/80324150/out-stage2",
+  "description": "Задача 80324150 «Фоновая картинка: клиент», ЭТАП 2 (срез заказчика 2026-11-13; элемент ef8112b0, требование e6d586d3, сценарий 3fe62610). Проверено на живом стенде: 1) без картинки фон экранов «Дневник», «События», «Публикации» и сетки «Структур» НЕ тонирован (переменная --wallpaper-screen-tint пуста, градиентный слой прозрачен); 2) после загрузки светлой картинки (avg_luminance 0.94) плотность тинта карты в диапазоне 0.12–0.30, тинт экранов в 0.072–0.18, слабее карты ровно в 0.6 раза (WALLPAPER_SCREEN_TINT_FACTOR), и каждый из 4 экранов реально получает слой linear-gradient этого цвета (структуры сохраняют точечную сетку); 3) после загрузки тёмной картинки (0.05) инварианты те же (тинт экранов слабее карты); 4) после «Убрать картинку» переменная снята, градиентные слои экранов прозрачны — возврат к фону темы/слоя; 5) доработка круга 2 по замечаниям заказчика: счётчик зоны лежит поверх всех слоёв (z=12) с непрозрачной тематической плашкой, подпись пустой зоны — выше сетки (z=2) с контуром цвета фона, полоса фокуса — плотность 0.7 (на 30 % прозрачнее) при fade 73px (честный ÷2 видимой протяжённости: ядро 67px + 2×73 = 213px вместо прежних 427px). Для счётчика сценарий засеивает трёх детей фокусной мысли через API. 6) блокер круга 2 закрыт пробой: клиент переключается в blue-topaz light с активной картинкой и перезагружается, затем проверяется счётчик зоны — плашка непрозрачная и равна --surface темы, текст тёмный, контраст ≥ 7 : 1 (прежний расчёт по --bg давал белый текст на белой плашке 1.00 : 1). Юнит-инвариант 12 блоков (6 тем × 2 режима) — сторож guard-canvas-overlay-layers.test.ts. Раздел «Оформление» проверяется через словарь ожиданий (ru/en), поиск UI — без русских литералов (сторож c73bcb60). Плотность ниже 0.12 и различимость картинки — юнит-тесты wallpaper-image.test.ts, сторожа guard-wallpaper-tint.test.ts и guard-canvas-overlay-layers.test.ts. «Слой слабее основы» живьём не проверяется: на стенде нет сети с собственными цветами слоя (initLayerTheme стирает ручной --layer-bg при каждом изменении стора) — покрыто юнит-тестом canvas-wallpaper.test.ts. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper-tint.scenario.json --server-language ru --keep --out .tmp/80324150/out-stage2",
   "timeout": 300000,
   "texts": {
     "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
@@ -131,7 +131,7 @@
     },
     {
       "name": "overlays-and-band",
-      "probe": "(() => { const canvas = document.querySelector('.canvas'); const bandStyle = getComputedStyle(canvas, '::before'); const parse = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const counter = counters[0] ?? null; const counterStyle = counter === null ? null : getComputedStyle(counter); const counterBg = counterStyle === null ? null : parse(counterStyle.backgroundColor); const counterFg = counterStyle === null ? null : parse(counterStyle.color); const empty = [...document.querySelectorAll('.zone-empty')].find((el) => !el.classList.contains('hidden')) ?? null; const emptyStyle = empty === null ? null : getComputedStyle(empty); const fade = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-fade').trim(); const opacity = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-opacity').trim(); return { counters_visible: counters.length > 0, all_counters_on_top: counters.length > 0 && counters.every((el) => getComputedStyle(el).zIndex === '12'), all_counters_opaque: counters.length > 0 && counters.every((el) => { const bg = parse(getComputedStyle(el).backgroundColor); return bg !== null && bg.alpha === 1; }), all_counters_contrast_ok: counters.length > 0 && counters.every((el) => { const s = getComputedStyle(el); const bg = parse(s.backgroundColor); const fg = parse(s.color); return bg !== null && fg !== null && ratio(fg.rgb, bg.rgb) >= 7; }), empty_present: empty !== null, empty_z: emptyStyle === null ? null : emptyStyle.zIndex, empty_shadow_ok: emptyStyle !== null && emptyStyle.textShadow.includes('rgb'), band_opacity: bandStyle.opacity, band_fade_token: fade, band_opacity_token: opacity, band_has_gradient: bandStyle.backgroundImage.includes('linear-gradient'), band_anchored: getComputedStyle(canvas).getPropertyValue('--focus-band-top').trim() !== '' && getComputedStyle(canvas).getPropertyValue('--focus-band-bottom').trim() !== '' }; })()",
+      "probe": "(() => { const canvas = document.querySelector('.canvas'); const bandStyle = getComputedStyle(canvas, '::before'); const parse = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const counter = counters[0] ?? null; const counterStyle = counter === null ? null : getComputedStyle(counter); const counterBg = counterStyle === null ? null : parse(counterStyle.backgroundColor); const counterFg = counterStyle === null ? null : parse(counterStyle.color); const empty = [...document.querySelectorAll('.zone-empty')].find((el) => !el.classList.contains('hidden')) ?? null; const emptyStyle = empty === null ? null : getComputedStyle(empty); const fade = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-fade').trim(); const bandTopPx = Number.parseFloat(getComputedStyle(canvas).getPropertyValue('--focus-band-top')); const bandBottomPx = Number.parseFloat(getComputedStyle(canvas).getPropertyValue('--focus-band-bottom')); const bandFadePx = Number.parseFloat(fade); const bandCore = Math.round(bandBottomPx - bandTopPx); const bandExtent = Math.round(bandCore + 2 * bandFadePx); const bandHalfOk = Number.isFinite(bandCore) && Math.abs(bandExtent * 2 - 427) <= 4; const opacity = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-opacity').trim(); return { counters_visible: counters.length > 0, all_counters_on_top: counters.length > 0 && counters.every((el) => getComputedStyle(el).zIndex === '12'), all_counters_opaque: counters.length > 0 && counters.every((el) => { const bg = parse(getComputedStyle(el).backgroundColor); return bg !== null && bg.alpha === 1; }), all_counters_contrast_ok: counters.length > 0 && counters.every((el) => { const s = getComputedStyle(el); const bg = parse(s.backgroundColor); const fg = parse(s.color); return bg !== null && fg !== null && ratio(fg.rgb, bg.rgb) >= 7; }), empty_present: empty !== null, empty_z: emptyStyle === null ? null : emptyStyle.zIndex, empty_shadow_ok: emptyStyle !== null && emptyStyle.textShadow.includes('rgb'), band_opacity: bandStyle.opacity, band_fade_token: fade, band_opacity_token: opacity, band_has_gradient: bandStyle.backgroundImage.includes('linear-gradient'), band_anchored: getComputedStyle(canvas).getPropertyValue('--focus-band-top').trim() !== '' && getComputedStyle(canvas).getPropertyValue('--focus-band-bottom').trim() !== '', band_core_px: bandCore, band_extent_px: bandExtent, band_half_ok: bandHalfOk }; })()",
       "expect": {
         "counters_visible": true,
         "all_counters_on_top": true,
@@ -141,10 +141,13 @@
         "empty_z": "2",
         "empty_shadow_ok": true,
         "band_opacity": "0.7",
-        "band_fade_token": "90px",
+        "band_fade_token": "73px",
         "band_opacity_token": "0.7",
         "band_has_gradient": true,
-        "band_anchored": true
+        "band_anchored": true,
+        "band_core_px": 67,
+        "band_extent_px": 213,
+        "band_half_ok": true
       }
     },
     {
@@ -175,12 +178,68 @@
       "probe": "Array.from(document.querySelectorAll('.settings-section .ui-field-label')).map((e) => (e.textContent || '').trim()).filter((s) => s === '{{text:wallpaperField}}')",
       "expect": ["{{text:wallpaperField}}"]
     },
+      {
+        "name": "pick-blue-topaz",
+        "expect": "blue-topaz",
+        "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); if (s === undefined) throw new Error('theme select not found'); s.value = 'blue-topaz'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+      },
+      {
+        "name": "pick-light-mode",
+        "expect": true,
+        "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]'); if (r === null) throw new Error('light mode radio not found'); r.click(); return r.checked; })()"
+      },
+      {
+        "name": "blue-topaz-light-applied",
+        "timeout": 10000,
+        "waitFor": "document.documentElement.dataset.theme === 'blue-topaz' && document.documentElement.dataset.mode === 'light'"
+      },
     { "name": "close-settings", "key": "Escape" },
     {
       "name": "settings-closed",
       "timeout": 10000,
       "waitFor": "document.querySelector('.dialog-backdrop') === null"
     },
+      {
+        "name": "reload-blue-topaz",
+        "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+      },
+      {
+        "name": "app-ready-blue-topaz",
+        "timeout": 60000,
+        "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      },
+      {
+        "name": "ensure-network-open-blue-topaz",
+        "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+      },
+      {
+        "name": "canvas-blue-topaz-on",
+        "timeout": 25000,
+        "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on' && document.documentElement.dataset.theme === 'blue-topaz' && document.documentElement.dataset.mode === 'light'"
+      },
+      {
+        "name": "counter-visible-blue-topaz",
+        "timeout": 20000,
+        "waitFor": "document.querySelector('.zone-count:not(.hidden)') !== null"
+      },
+      {
+        "name": "counter-blue-topaz-light",
+        "probe": "(() => { const parseRgba = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value.trim()); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const parseAny = (value) => { const v = value.trim().toLowerCase(); if (!v.startsWith('#')) return parseRgba(v); const hex = v.slice(1); const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex; return { rgb: [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)), alpha: 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const root = getComputedStyle(document.documentElement); const surfaceToken = root.getPropertyValue('--surface').trim(); const bgToken = root.getPropertyValue('--bg').trim(); const surface = parseAny(surfaceToken); const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const facts = counters.map((el) => { const s = getComputedStyle(el); const plate = parseRgba(s.backgroundColor); const fg = parseRgba(s.color); return { z: s.zIndex, plate, fg, contrast: plate === null || fg === null ? 0 : ratio(fg.rgb, plate.rgb) }; }); const samePlate = (plate) => plate !== null && surface !== null && plate.rgb.join(',') === surface.rgb.join(','); return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'), bg_is_hsl: bgToken.toLowerCase().startsWith('hsl'), surface_token: surfaceToken, has_counters: counters.length > 0, all_on_top: facts.length > 0 && facts.every((f) => f.z === '12'), all_opaque: facts.length > 0 && facts.every((f) => f.plate !== null && f.plate.alpha === 1), all_plate_is_surface: facts.length > 0 && facts.every((f) => samePlate(f.plate)), all_dark_text: facts.length > 0 && facts.every((f) => f.fg !== null && f.plate !== null && lum(f.fg.rgb) < lum(f.plate.rgb)), min_contrast: facts.length === 0 ? 0 : Number(Math.min(...facts.map((f) => f.contrast)).toFixed(2)), contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7) }; })()",
+        "expect": {
+          "theme": "blue-topaz",
+          "mode": "light",
+          "wallpaper": "on",
+          "bg_is_hsl": true,
+          "surface_token": "#ffffff",
+          "has_counters": true,
+          "all_on_top": true,
+          "all_opaque": true,
+          "all_plate_is_surface": true,
+          "all_dark_text": true,
+          "min_contrast": 15.57,
+          "contrast_ok": true
+        }
+      },
 
     {
       "name": "upload-dark",

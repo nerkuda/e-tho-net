@@ -61,7 +61,6 @@ import {
   CLOUD_TITLE_LINES_MIN,
   cloudGeom,
   cloudHeight,
-  contrastText,
   neighborsDirForEllipse,
   neighborsPreviewBounds,
   neighborsPreviewHeading,
@@ -69,6 +68,7 @@ import {
   sortRefsByTitle,
   ZONE_ANCHOR_BY_DIR,
   zoneContentWidth,
+  zoneCountTextColor,
 } from '../lib/pure.js';
 import {
   createZonePaging,
@@ -1900,17 +1900,24 @@ function paintZoneIndicators(): void {
 }
 
 /**
- * Pins each count overlay to the top-right corner of its zone (canvas-space),
- * reading the theme background under it so the number stays readable on any
- * backdrop (contrast text colour). Called from {@link updateFocusBand} on every
- * render, host resize and splitter drag.
+ * Pins each count overlay to the top-right corner of its zone (canvas-space) and
+ * picks the number colour from the ACTUAL plate under it (вердикт проверки
+ * 80324150, круг 2): with a wallpaper the plate is opaque `--surface`, without
+ * one — `--surface` mixed 78 % over the theme `--bg`. Reading `--bg` alone gave
+ * white text on the white plate in blue-topaz light (1.00 : 1).
+ * Called from {@link updateFocusBand} on every render, host resize and splitter
+ * drag.
  */
 function positionZoneIndicators(): void {
   if (host === null) return;
   const hostRect = host.getBoundingClientRect();
-  const bg =
-    getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#eef0f4';
-  const color = contrastText(bg);
+  const rootStyle = getComputedStyle(document.documentElement);
+  const surface = rootStyle.getPropertyValue('--surface').trim();
+  const themeBg = rootStyle.getPropertyValue('--bg').trim();
+  // DOM-заглушки тестов могут не иметь getAttribute — состояние картинки тогда
+  // считается выключенным (плашка в основе); рабочая ветка с картинкой — ниже.
+  const wallpaperOn = document.documentElement.getAttribute?.('data-canvas-wallpaper') === 'on';
+  const color = zoneCountTextColor(surface, themeBg, wallpaperOn);
   for (const dir of ZONE_DIRS) {
     const el = zoneCountEls[dir];
     const zone = zones?.[dir];
