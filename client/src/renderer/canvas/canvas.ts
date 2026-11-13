@@ -81,6 +81,8 @@ import {
 } from '../lib/zone-paging.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
 import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
+import { subscribeWallpaper } from '../lib/wallpaper-state.js';
+import { WALLPAPER_ATTR } from './wallpaper.js';
 import { store } from '../state.js';
 import {
   releaseCloudIndicatorInterest,
@@ -452,6 +454,20 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     // The label follows layer/theme changes even when the canvas data itself
     // is unchanged (the fast path below skips the full rebuild).
     updateLayerLabel();
+    // Счётчики зон перекрашиваются при смене темы/режима/слоя (ошибка
+    // f245c5ac). Их inline-цвет считается из ЖИВЫХ токенов (`--surface` +
+    // фактический фон зоны), но `positionZoneIndicators` звался только из
+    // `updateFocusBand` (рендер/ресайз): после переключения светлый↔тёмный
+    // плашка перекрашивалась CSS, а цвет цифр оставался от прежней темы до
+    // ближайшего рендера. Тема/режим/слой в `canvasRenderKey` НЕ входят
+    // намеренно — полный рендер канвы на каждый переключатель дорог и ломает
+    // прокрутку зон; здесь пересчёт точечный (getComputedStyle + позиции трёх
+    // индикаторов). Ключ включает `--layer-bg`: слой с собственными цветами
+    // меняет фактический фон под плашкой без смены данных.
+    const chromeKey = zoneChromeKey();
+    if (chromeKey !== lastZoneChromeKey) {
+      refreshZoneCounterChrome();
+    }
     // Свежий ответ фокуса мог не изменить ничего рисуемого: мысль, добавленная
     // за уже загруженной порцией сектора, в ответе не видна, а индикатор-число
     // и порция обязаны обновиться сразу (ошибка ec5ba58c). Поэтому сверка
@@ -522,6 +538,12 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
   const resizeObserver = new ResizeObserver(() => {
     if (host?.isConnected === true) updateFocusBand();
   });
+  // Асинхронная смена картинки меняет плашку под счётчиком (композиция 78 %
+  // `--surface` над фоном → непрозрачный `--surface`) без тика store: цифры
+  // перекрашиваются сразу, не дожидаясь рендера/ресайза.
+  const wallpaperUnsubscribe = subscribeWallpaper(() => {
+    if (host?.isConnected === true) refreshZoneCounterChrome();
+  });
   resizeObserver.observe(host);
   scheduleRender();
 
@@ -533,6 +555,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     storeUnsubscribe?.();
     storeUnsubscribe = null;
     invalidationUnsubscribe();
+    wallpaperUnsubscribe();
     lockBadgeUnsubscribe?.();
     lockBadgeUnsubscribe = null;
     lockBadgeRefreshWired = false;
@@ -1142,6 +1165,9 @@ let lastFocusResponse: FocusResponse | null = null;
  *  selection-only fast path (2e418bc3). */
 let lastRenderKey: string | null = null;
 let lastSelectionKey = '';
+/** Подпись «внешнего вида» счётчиков (тема/режим/слой/картинка) — гейт
+ *  точечной перекраски в подписке на store (ошибка f245c5ac). */
+let lastZoneChromeKey = '';
 /** Id of the cloud currently carrying the `.halo` class (task ff82809a).
  *  Used to repaint the halo in the selection-only fast path without
  *  rebuilding any zone. */
@@ -1900,20 +1926,49 @@ function paintZoneIndicators(): void {
 }
 
 /**
+ * Подпись внешнего вида счётчиков: тема, режим, активный слой и наличие
+ * картинки. Всё, от чего зависит плашка под цифрой и её цвет, но что НЕ
+ * входит в {@link canvasRenderKey} — смена любой части требует пересчёта
+ * inline-цвета немедленно (ошибка f245c5ac). Смена слоя меняет `--layer-bg`
+ * (13-layers.md §2.2a), а с ней — фактический фон под полупрозрачной плашкой.
+ */
+function zoneChromeKey(): string {
+  const s = store.state;
+  const wallpaper = document.documentElement.getAttribute?.(WALLPAPER_ATTR) ?? '';
+  return `${s.uiTheme}|${s.theme}|${s.currentLayer?.id ?? ''}|${wallpaper}`;
+}
+
+/**
+ * Немедленная перекраска счётчиков зон: запоминает текущую подпись внешнего
+ * вида и пересчитывает inline-цвет/позиции всех индикаторов. Точка входа для
+ * событий, которые меняют плашку под цифрой без полного рендера канвы —
+ * смена темы/режима/слоя (store) и асинхронная смена картинки.
+ */
+function refreshZoneCounterChrome(): void {
+  lastZoneChromeKey = zoneChromeKey();
+  positionZoneIndicators();
+}
+
+/**
  * Pins each count overlay to the top-right corner of its zone (canvas-space) and
  * picks the number colour from the ACTUAL plate under it (вердикт проверки
  * 80324150, круг 2): with a wallpaper the plate is opaque `--surface`, without
- * one — `--surface` mixed 78 % over the theme `--bg`. Reading `--bg` alone gave
- * white text on the white plate in blue-topaz light (1.00 : 1).
+ * one — `--surface` mixed 78 % over the effective zone background. The
+ * background is the LAYER's own colour when the active layer carries one
+ * (`--layer-bg`, 13-layers.md §2.2a) and the theme `--bg` otherwise: reading
+ * `--bg` alone gave white text on the white plate in blue-topaz light
+ * (1.00 : 1) and a colour picked against a background the counter does not sit
+ * on in a coloured layer.
  * Called from {@link updateFocusBand} on every render, host resize and splitter
- * drag.
+ * drag, and from the store subscription on theme/mode/layer changes.
  */
 function positionZoneIndicators(): void {
   if (host === null) return;
   const hostRect = host.getBoundingClientRect();
   const rootStyle = getComputedStyle(document.documentElement);
   const surface = rootStyle.getPropertyValue('--surface').trim();
-  const themeBg = rootStyle.getPropertyValue('--bg').trim();
+  const layerBg = rootStyle.getPropertyValue('--layer-bg').trim();
+  const themeBg = layerBg !== '' ? layerBg : rootStyle.getPropertyValue('--bg').trim();
   // DOM-заглушки тестов могут не иметь getAttribute — состояние картинки тогда
   // считается выключенным (плашка в основе); рабочая ветка с картинкой — ниже.
   const wallpaperOn = document.documentElement.getAttribute?.('data-canvas-wallpaper') === 'on';
