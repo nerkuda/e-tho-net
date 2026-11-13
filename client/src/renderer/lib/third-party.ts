@@ -8,9 +8,13 @@
  *    строит по нему `THIRD-PARTY-NOTICES.txt` (перечень всех пакетов — прямых
  *    и транзитивных — с версиями и полными текстами ключевых лицензий).
  *
- * `packages` перечисляет npm-имена, которые запись покрывает: сторож
- * `guard-ui-facades.test.ts` и сам генератор падают, если у клиента появилась
- * прямая зависимость, не описанная здесь, — список не протухает.
+ * Запись описывает либо библиотеку из npm (`packages` перечисляет имена,
+ * которые она покрывает), либо вендоренный ассет поставки (`asset: true` +
+ * `licenseFile` — путь к тексту лицензии в `src/renderer/public/`). Сторож
+ * `guard-third-party-notices.test.ts` и генератор падают, если у клиента
+ * появилась прямая зависимость, не описанная здесь, или в
+ * `public/licenses/` лежит файл, на который не ссылается ни одна запись, —
+ * списки не протухают.
  *
  * Собственные пакеты (`@etn/*`) сторонними не считаются и сюда не входят.
  */
@@ -25,8 +29,18 @@ export interface ThirdPartyComponent {
   copyright: string;
   /** Домашняя страница или репозиторий. */
   url: string;
-  /** npm-имена пакетов, которые покрывает эта запись. */
-  packages: readonly string[];
+  /** npm-имена пакетов, которые покрывает эта запись (у ассета — пусто). */
+  packages?: readonly string[];
+  /**
+   * Вендоренный ассет поставки (шрифты и т. п.) — не npm-пакет. У такой записи
+   * `packages` пусто, а `licenseFile` указывает на текст лицензии.
+   */
+  asset?: boolean;
+  /**
+   * Путь к файлу лицензии относительно `src/renderer/public/` (например
+   * `licenses/inter-OFL-1.1.txt`). Файл едет в поставку вместе с ассетом.
+   */
+  licenseFile?: string;
 }
 
 /** Сторонние библиотеки, попадающие в дистрибутив клиента. */
@@ -110,9 +124,32 @@ export const THIRD_PARTY_COMPONENTS: readonly ThirdPartyComponent[] = [
     url: 'https://github.com/WiseLibs/better-sqlite3',
     packages: ['better-sqlite3'],
   },
+  // Вендоренные шрифты (задача e622824e): не npm-пакеты, а файлы поставки.
+  // Текст OFL 1.1 лежит в public/licenses и попадает в THIRD-PARTY-NOTICES.
+  {
+    title: 'Inter',
+    license: 'OFL-1.1',
+    copyright: 'The Inter Project Authors',
+    url: 'https://github.com/rsms/inter',
+    asset: true,
+    licenseFile: 'licenses/inter-OFL-1.1.txt',
+  },
+  {
+    title: 'JetBrains Mono',
+    license: 'OFL-1.1',
+    copyright: 'The JetBrains Mono Project Authors',
+    url: 'https://github.com/JetBrains/JetBrainsMono',
+    asset: true,
+    licenseFile: 'licenses/jetbrains-mono-OFL-1.1.txt',
+  },
 ];
 
 /** Все npm-имена, покрытые каталогом (для проверок и генератора). */
 export function coveredPackageNames(): string[] {
-  return THIRD_PARTY_COMPONENTS.flatMap((c) => [...c.packages]);
+  return THIRD_PARTY_COMPONENTS.flatMap((c) => [...(c.packages ?? [])]);
+}
+
+/** Записи-ассеты каталога: вендоренные файлы поставки, а не npm-пакеты. */
+export function assetComponents(): readonly ThirdPartyComponent[] {
+  return THIRD_PARTY_COMPONENTS.filter((c) => c.asset === true);
 }

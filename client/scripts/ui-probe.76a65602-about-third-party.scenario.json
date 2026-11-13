@@ -1,0 +1,95 @@
+{
+  "name": "76a65602-about-third-party",
+  "description": "Задача 76a65602 «Лицензии вендоренных ассетов в «О программе» и THIRD-PARTY-NOTICES» (версия 0.16.1). Проба диалога «О программе» после подключения и открытия сети: меню пользователя → «О программе»; блок «Сторонние компоненты» обязан показать все записи каталога `lib/third-party.ts`, включая вендоренные шрифты Inter и JetBrains Mono с лицензией OFL-1.1 (задача e622824e): 10 строк, ни одной с пустой лицензией, обе шрифтовые записи на месте, а подсказка ссылается на THIRD-PARTY-NOTICES.txt. Проверка — пробой DOM (не скриншотом). Запуск: npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.76a65602-about-third-party.scenario.json --server-language ru",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": {
+          "language": "ru"
+        },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "open-user-menu",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-about",
+      "eval": "(() => {\n      const item = Array.from(document.querySelectorAll('.menu-item')).find(\n        (node) => (node.textContent ?? '').trim() === 'О программе',\n      );\n      if (!item) throw new Error('нет пункта «О программе» в меню пользователя');\n      item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n      item.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n      return true;\n    })()"
+    },
+    {
+      "name": "about-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-about .about-third-row') !== null"
+    },
+    {
+      "name": "third-party-rows",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-about .about-third-row')).map((row) => ({\n    name: (row.querySelector('.about-third-name')?.textContent ?? '').trim(),\n    license: (row.querySelector('.about-third-license')?.textContent ?? '').trim(),\n  }));\n  const hint = (document.querySelector('.dialog-about .about-third-hint')?.textContent ?? '').trim();\n  return {\n    rows: rows.length,\n    emptyLicenses: rows.filter((r) => r.license === '').length,\n    inter: rows.filter((r) => r.name === 'Inter' && r.license === 'OFL-1.1').length,\n    jetbrains: rows.filter((r) => r.name === 'JetBrains Mono' && r.license === 'OFL-1.1').length,\n    hint: hint.includes('THIRD-PARTY-NOTICES'),\n  };\n})()",
+      "expect": {
+        "rows": 10,
+        "emptyLicenses": 0,
+        "inter": 1,
+        "jetbrains": 1,
+        "hint": true
+      }
+    },
+    {
+      "name": "close-about",
+      "key": "Escape"
+    },
+    {
+      "name": "about-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-about') === null"
+    }
+  ]
+}

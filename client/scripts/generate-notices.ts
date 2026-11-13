@@ -3,8 +3,10 @@
  * 35b9cc05, ADR 03eb2c61).
  *
  * Источники:
- *  • каталог сторонних библиотек `src/renderer/lib/third-party.ts` (единый с
- *    диалогом «О программе» источник — перечень семейств и ключевые лицензии);
+ *  • каталог сторонних компонентов `src/renderer/lib/third-party.ts` (единый с
+ *    диалогом «О программе» источник — перечень семейств и ключевые лицензии),
+ *    включая вендоренные ассеты: у записи-ассета `licenseFile` указывает на
+ *    текст лицензии в `src/renderer/public/`, и он попадает в файл целиком;
  *  • фактические зависимости клиента из `package.json` и установленные пакеты
  *    в `node_modules` — перечень строится обходом дерева ПРОИЗВОДСТВЕННЫХ
  *    зависимостей (прямые + транзитивные), а не ручным списком, поэтому он не
@@ -22,7 +24,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { coveredPackageNames } from '../src/renderer/lib/third-party.ts';
+import {
+  assetComponents,
+  coveredPackageNames,
+  type ThirdPartyComponent,
+} from '../src/renderer/lib/third-party.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_ROOT = path.resolve(here, '..');
@@ -30,6 +36,9 @@ const REPO_ROOT = path.resolve(CLIENT_ROOT, '..');
 
 /** Собственные пакеты монорепозитория — не сторонние. */
 const OWN_SCOPE = '@etn/';
+
+/** Корень ассетов поставки рендерера: `public/` попадает в asar как есть. */
+const PUBLIC_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer', 'public');
 
 interface PackageRecord {
   name: string;
@@ -173,6 +182,21 @@ function readLicenseFile(dir: string): string | null {
 /** Известные свободные лицензии, полный текст которых кладём в файл. */
 const KNOWN_LICENSE = /^(?:MIT|ISC|Apache-2\.0|BSD-2-Clause|BSD-3-Clause|0BSD|CC0-1\.0|Unlicense|Python-2\.0)\b/;
 
+/** Полный текст лицензии вендоренного ассета из поставки (`public/<licenseFile>`). */
+function assetLicenseText(component: ThirdPartyComponent): string {
+  const rel = component.licenseFile ?? '';
+  if (rel === '') {
+    throw new Error(`[notices] у ассета «${component.title}» не указан licenseFile`);
+  }
+  const abs = path.join(PUBLIC_ROOT, rel);
+  if (!fs.existsSync(abs)) {
+    throw new Error(
+      `[notices] лицензия ассета «${component.title}» не найдена в поставке: ${rel}`,
+    );
+  }
+  return fs.readFileSync(abs, 'utf8').trim();
+}
+
 /** Полные тексты лицензий: по одному представителю на каждый идентификатор. */
 function keyLicenseTexts(packages: PackageRecord[]): Array<{ id: string; text: string }> {
   const ids = [...new Set(packages.map((p) => p.license))]
@@ -187,7 +211,7 @@ function keyLicenseTexts(packages: PackageRecord[]): Array<{ id: string; text: s
   return result;
 }
 
-function buildNotices(): string {
+export function buildNotices(): string {
   const clientPkg = JSON.parse(
     fs.readFileSync(path.join(CLIENT_ROOT, 'package.json'), 'utf8'),
   ) as { version?: string };
@@ -230,6 +254,22 @@ function buildNotices(): string {
     out.push('');
   }
 
+  const assets = assetComponents();
+  if (assets.length > 0) {
+    out.push('='.repeat(72));
+    out.push(`ВЕНДОРЕННЫЕ АССЕТЫ (${assets.length})`);
+    out.push('='.repeat(72));
+    out.push('');
+    for (const asset of assets) {
+      out.push(asset.title);
+      out.push(`  Лицензия: ${asset.license}`);
+      if (asset.copyright !== '') out.push(`  Copyright: ${asset.copyright}`);
+      out.push(`  Ссылка: ${asset.url}`);
+      out.push(`  Файл лицензии в поставке: ${asset.licenseFile ?? '—'}`);
+      out.push('');
+    }
+  }
+
   const keyLicenses = keyLicenseTexts(packages);
   if (keyLicenses.length > 0) {
     out.push('='.repeat(72));
@@ -246,10 +286,35 @@ function buildNotices(): string {
     }
   }
 
+  if (assets.length > 0) {
+    out.push('='.repeat(72));
+    out.push('ПОЛНЫЕ ТЕКСТЫ ЛИЦЕНЗИЙ ВЕНДОРЕННЫХ АССЕТОВ');
+    out.push('='.repeat(72));
+    out.push('');
+    for (const asset of assets) {
+      out.push('-'.repeat(72));
+      out.push(`${asset.title} — ${asset.license}`);
+      out.push('-'.repeat(72));
+      out.push('');
+      out.push(assetLicenseText(asset));
+      out.push('');
+    }
+  }
+
   return `${out.join('\n').trimEnd()}\n`;
 }
 
-const target = path.join(CLIENT_ROOT, 'build', 'THIRD-PARTY-NOTICES.txt');
-fs.mkdirSync(path.dirname(target), { recursive: true });
-fs.writeFileSync(target, buildNotices(), 'utf8');
-process.stdout.write(`[notices] записан ${path.relative(REPO_ROOT, target)}\n`);
+/**
+ * Запись файла — только при прямом запуске скрипта (`npm -w @etn/client run
+ * notices`). Модуль экспортирует `buildNotices` для сторожа
+ * `guard-third-party-notices.test.ts`: импорт из теста ничего не пишет.
+ */
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  const target = path.join(CLIENT_ROOT, 'build', 'THIRD-PARTY-NOTICES.txt');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, buildNotices(), 'utf8');
+  process.stdout.write(`[notices] записан ${path.relative(REPO_ROOT, target)}\n`);
+}
