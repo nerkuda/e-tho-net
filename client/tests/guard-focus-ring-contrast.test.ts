@@ -103,7 +103,7 @@ describe('guard: двойная рамка открытого — единый �
       const body = ruleBody(PUBLICATIONS, selector);
       assert.match(
         body,
-        /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
+        /var\(--layer-focus-ring-screen,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
         `${selector}: внутренняя полоса — цвет фокуса слоя`,
       );
       assert.match(body, /var\(--focus-ring-contrast\)/, `${selector}: внешний кант — общий токен`);

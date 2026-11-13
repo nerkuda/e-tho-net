@@ -32,9 +32,10 @@
  * не разгоняется в чистые #000/#fff: светлота производной ограничена
  * [{@link ADAPT_LIGHT_MIN}, {@link ADAPT_LIGHT_MAX}], иначе сетка холста,
  * подписи и свечение выделения перестают различаться (сценарий 2b86c983).
- * Исключение — ПОЛОСА фокуса: у неё диапазон полный ({@link BAND_LIGHT_MIN}…
- * {@link BAND_LIGHT_MAX}), иначе полупрозрачная полоса (α = 0.7) на средней
- * подложке не добирает 3 : 1 ни при какой светлоте (круг 2).
+ * У ПОЛОСЫ фокуса диапазон двухступенчатый: сначала узкий (цвет и тон
+ * сохраняются), а полный [{@link BAND_LIGHT_MIN}…{@link BAND_LIGHT_MAX}]
+ * включается только когда в узком 3 : 1 недостижимы — так полупрозрачная
+ * полоса (α = 0.7) на средней подложке всё равно читается.
  *
  * **Исходники не меняются.** Модуль чистый: получает цвет строкой и возвращает
  * производную, ничего не персистя. Пара слотов `layers.colors` (тёмная/светлая)
@@ -70,13 +71,19 @@ export const ADAPT_LIGHT_MIN = 0.06;
 export const ADAPT_LIGHT_MAX = 0.94;
 
 /**
- * Диапазон светлоты ПОЛОСЫ фокуса — полный. Полоса полупрозрачна (α = 0.7),
- * поэтому на средней подложке (например, композит rgb(116, 116, 116) при
- * плотной вуали) 3 : 1 в границах [{@link ADAPT_LIGHT_MIN}, {@link
- * ADAPT_LIGHT_MAX}] недостижимы: предел 2.95 при любой светлоте и
- * насыщенности, а чистый чёрный даёт 3.36. Полоса — акцент под подписями и
- * облачками, сетку холста и свечение выделения она не закрывает, поэтому её
- * ограничение — ровно порог контраста, а не «не уходить в #000/#fff».
+ * ВТОРАЯ ступень диапазона светлоты ПОЛОСЫ фокуса — полный [0, 1]. Порог
+ * 3 : 1 ищется сначала в узком диапазоне ({@link ADAPT_LIGHT_MIN}…{@link
+ * ADAPT_LIGHT_MAX}): там полоса сохраняет цвет и тон. Полный диапазон
+ * включается ТОЛЬКО когда в узком порог недостижим — иначе пастельная полоса
+ * без нужды уезжала бы в чистый #fff.
+ *
+ * Недостижимость — свойство НЕЙТРАЛЬНЫХ полос: при α = 0.7 и средней
+ * подложке rgb(116, 116, 116) предел в узком диапазоне 2.95, а светлота 0
+ * даёт 3.36. Это НЕ «при любой насыщенности»: цветная полоса #00001f на той
+ * же подложке проходит порог уже в узком диапазоне (3.277). Полоса — акцент
+ * под подписями и облачками, сетку холста и свечение выделения она не
+ * закрывает, поэтому её ограничение — ровно порог контраста, а не «не
+ * уходить в #000/#fff».
  */
 export const BAND_LIGHT_MIN = 0;
 export const BAND_LIGHT_MAX = 1;
@@ -305,6 +312,20 @@ function searchAdaptation(
         if (contrast >= target) return candidate;
       }
     }
+    // Сама ГРАНИЦА диапазона: сетка шагов привязана к исходной светлоте и
+    // может не попасть ровно в край (из L = 0.727 шаг 0.01 даёт 0.937, а
+    // 0.94 — нет). Без этого узкий поиск «недобирает» до 0.01 и полоса зря
+    // уезжает в полный диапазон, теряя цвет (круг 3).
+    for (const edge of [lightMax, lightMin]) {
+      if (edge < lightMin || edge > lightMax) continue;
+      const candidate = rounded(hslToRgb(hue, candidateSat, edge));
+      const contrast = measure(candidate);
+      if (contrast > bestContrast) {
+        best = candidate;
+        bestContrast = contrast;
+      }
+      if (contrast >= target) return candidate;
+    }
   }
   return best;
 }
@@ -356,19 +377,33 @@ export function adaptiveBandColor(
   const rgb = parseCssColor(source);
   const parsed = parseCssColor(backdrop);
   if (rgb === null || parsed === null) return source;
-  if (bandContrast(rgb, parsed, opacity) >= FRAME_CONTRAST_MIN) return source;
-  // Диапазон светлоты у полосы полный ({@link BAND_LIGHT_MIN}…{@link
-  // BAND_LIGHT_MAX}): на средней подложке иначе 3 : 1 недостижимы (см.
-  // докблок констант), а полоса не текст — сетку и выделение она не закрывает.
-  const candidate = searchAdaptation(
+  const measure = (value: [number, number, number]): number =>
+    bandContrast(value, parsed, opacity);
+  if (measure([rgb[0]!, rgb[1]!, rgb[2]!]) >= FRAME_CONTRAST_MIN) return source;
+  const backdropLuminance = relativeLuminance(parsed[0], parsed[1], parsed[2]);
+  // Ступень 1 — узкий диапазон: полоса сохраняет цвет и тон.
+  const narrow = searchAdaptation(
     rgb,
-    relativeLuminance(parsed[0], parsed[1], parsed[2]),
-    (value) => bandContrast(value, parsed, opacity),
+    backdropLuminance,
+    measure,
+    FRAME_CONTRAST_MIN,
+    ADAPT_LIGHT_MIN,
+    ADAPT_LIGHT_MAX,
+  );
+  if (measure([narrow[0]!, narrow[1]!, narrow[2]!]) >= FRAME_CONTRAST_MIN) {
+    return hexOf(narrow);
+  }
+  // Ступень 2 — полный диапазон: только если в узком порог недостижим (см.
+  // докблок {@link BAND_LIGHT_MIN}).
+  const wide = searchAdaptation(
+    rgb,
+    backdropLuminance,
+    measure,
     FRAME_CONTRAST_MIN,
     BAND_LIGHT_MIN,
     BAND_LIGHT_MAX,
   );
-  return hexOf(candidate);
+  return hexOf(wide);
 }
 
 // ---------------------------------------------------------------------------

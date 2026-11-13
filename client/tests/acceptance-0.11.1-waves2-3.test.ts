@@ -93,7 +93,7 @@ describe('77cce0ba п.2 (волна 3): подсветка открытой в �
     assert.match(CSS, /\.pub-doc-current\s*\{[^}]*outline:\s*2px dashed/s, 'текущий — пунктир');
     assert.match(
       CSS,
-      /\.pub-doc-editor\s*\{[^}]*outline:\s*2px solid var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/s,
+      /\.pub-doc-editor\s*\{[^}]*outline:\s*2px solid var\(--layer-focus-ring-screen,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/s,
       'открытый в редакторе — сплошная рамка фокуса',
     );
     assert.match(WS, /function paintEditorHighlight\(\)/, 'подсветка пересчитывается');

@@ -47,10 +47,17 @@ export interface AdaptiveContext {
   backdrop: string | null;
 }
 
-/** Пара цветов слоя в форме `LayerThemeVars` (структурно, без импорта). */
+/** Цвета слоя в форме `LayerThemeVars` (структурно, без импорта). */
 export interface LayerColorInputs {
+  /** Полоса фокуса КАРТЫ (`.canvas::before`, полупрозрачная). */
   focusStripe: string | null;
   background: string | null;
+  /**
+   * Кольцо фокуса ЭКРАНОВ (таблицы, редактор, дневник): непрозрачный контур
+   * 1–2 px на поверхности экрана, а не на холсте карты. Поэтому адаптируется
+   * к `--surface` и поверхности слоя; у основы источник — `--focus-accent`.
+   */
+  focusRing: string | null;
 }
 
 /** Производные цвета слоя и контекст, в котором они посчитаны. */
@@ -145,9 +152,23 @@ export function adaptLayerColors(colors: LayerColorInputs, scope: string): Adapt
     colors.focusStripe === null || backdrop === null
       ? colors.focusStripe
       : cachedAdaptiveBandColor(colors.focusStripe, backdrop, scope);
+  // Кольцо экранов живёт на поверхности, а не на холсте: контур непрозрачен,
+  // поэтому порог 3 : 1 считается напрямую — и к `--surface` темы, и к
+  // фактической поверхности слоя (`--layer-bg` на экранах структур/дневника).
+  // Источник кольца — полоса слоя, а на основе — фокус-акцент темы
+  // (`--focus-accent`): у основы своей полосы нет, но экранные кольца у неё
+  // есть, и 3 : 1 обязаны держаться и там (nordic light даёт 2.47 : 1 на
+  // `--surface` без подгонки).
+  const accent = styles.getPropertyValue('--focus-accent').trim();
+  const ringSource = colors.focusStripe ?? accent;
+  const ringSurfaces = [surface, base].filter((value) => value !== '');
+  const focusRing =
+    ringSource === '' || ringSurfaces.length === 0
+      ? null
+      : cachedAdaptiveColor(ringSource, ringSurfaces, FRAME_CONTRAST_MIN, scope);
 
   current = { scope, text, surface, backdrop };
-  return { colors: { focusStripe, background }, context: current };
+  return { colors: { focusStripe, background, focusRing }, context: current };
 }
 
 /** Цвета мысли/типа в форме, которую применяет `applyCloudStyle`. */

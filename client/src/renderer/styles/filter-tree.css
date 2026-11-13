@@ -544,7 +544,7 @@
 
 /* Выделенная клавиатурой строка списка (навигация ↑/↓, выбор Enter). */
 .ft-choice__item--cursor {
-  outline: 1px solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: 1px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -1px;
 }
 

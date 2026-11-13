@@ -79,9 +79,11 @@
   /* Canvas dot-grid colour. */
   --canvas-dot: rgba(24, 32, 48, 0.14);
   /* Focus accent of the base layer (requirement c19cbb81): the focus band
-     stripe and the selection accent on every screen. Value — the former
-     band colour of the theme; a layer overrides it in runtime
-     `--layer-focus-stripe` (`lib/layer-colors.ts`). */
+     stripe on the map and the screen focus rings. Value — the former band
+     colour of the theme; a layer overrides it in runtime:
+     `--layer-focus-stripe` on the canvas, and separately
+     `--layer-focus-ring-screen` for screen rings, adapted to `--surface`
+     (`lib/layer-colors.ts`, round 3 of task 6e171b39). */
   --focus-accent: #1e62be;
   /* Контрастный кант двойной рамки открытого элемента: тёмный чернильный тон
      палитры — читается на светлом фоне и отделяет полосу слоя от карты. */

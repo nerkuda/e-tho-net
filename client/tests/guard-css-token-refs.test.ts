@@ -44,6 +44,8 @@ const RUNTIME_TOKENS = new Set([
   // lib/layer-colors.ts
   '--layer-bg',
   '--layer-focus-stripe',
+  // кольца фокуса экранов — производное от --surface, пишет тот же модуль
+  '--layer-focus-ring-screen',
   // lib/cloud-frames.ts (через lib/layer-colors.ts) — рамки трёх состояний
   // мысли: открытая/текущая/выделенная, производные от темы и полосы слоя
   // (задача c6d74fd4).

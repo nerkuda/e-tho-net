@@ -871,13 +871,13 @@
 .emoji-cell-current,
 .icon-library-cell-current {
   background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
-  outline: 2px solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -2px;
 }
 
 .icon-preview-current {
   border-style: solid;
-  border-color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
 }
 
@@ -2804,7 +2804,7 @@ input.task-list-item-checkbox:checked,
 }
 
 .att-pick-preview-current {
-  border-color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
 }
 

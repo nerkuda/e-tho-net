@@ -108,12 +108,12 @@
 }
 
 .ui-table-cell-current {
-  outline: var(--focus-ring-width) solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: var(--focus-ring-width) solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: calc(-1 * var(--focus-ring-width));
 }
 
 .ui-table-focusable-current {
-  outline: var(--focus-ring-width) solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: var(--focus-ring-width) solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: 1px;
 }
 

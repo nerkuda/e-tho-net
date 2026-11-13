@@ -187,7 +187,7 @@
 }
 
 .cal-day.is-selected {
-  outline: 1px solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: 1px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -1px;
 }
 
@@ -401,7 +401,7 @@
 
 /* Запись, к которой выполнен переход поиска (T7): подсветка рамкой и фоном. */
 .diary-record-target {
-  border-color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
 }
 
@@ -418,12 +418,12 @@
 }
 
 .diary-record.diary-nav-current {
-  border-color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
 }
 
 .diary-record .diary-nav-el {
-  outline: 1px dashed var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: 1px dashed var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: 2px;
   border-radius: 4px;
 }

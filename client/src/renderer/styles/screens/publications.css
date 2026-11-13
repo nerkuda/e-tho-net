@@ -379,7 +379,7 @@
 }
 
 .pub-open {
-  outline: 2px solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -2px;
   box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
   border-radius: var(--radius-s);
@@ -1166,12 +1166,14 @@
 }
 
 /* Мысль, открытая в редакторе, — сплошная рамка цвета фокуса, как гало облачка
-   на карте мыслей (`.cloud.halo` — `--layer-focus-stripe`; задача 77cce0ba,
-   п.2). Идёт после `.pub-doc-current`, поэтому у совпавшего блока выигрывает
+   на карте мыслей (там `.cloud.halo` берёт `--layer-focus-stripe`, а здесь
+   экранное кольцо — `--layer-focus-ring-screen`, адаптированное к
+   поверхности; задача 77cce0ba, п.2 и круг 3 задачи 6e171b39). Идёт после
+   `.pub-doc-current`, поэтому у совпавшего блока выигрывает
    сплошная рамка. Второй тонкий кант — общий токен двойной рамки открытого
    (`--focus-ring-contrast`, как у гало и `.pub-open`; задача 3af98e31). */
 .pub-doc-editor {
-  outline: 2px solid var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -2px;
   box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
   border-radius: var(--radius-s);

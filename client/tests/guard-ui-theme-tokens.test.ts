@@ -394,12 +394,12 @@ const STATE_FRAMES = [
   {
     file: 'styles/screens/publications.css',
     selector: '.pub-open',
-    tokens: ['--layer-focus-stripe', '--focus-ring-contrast'],
+    tokens: ['--layer-focus-ring-screen', '--focus-ring-contrast'],
   },
   {
     file: 'styles/screens/publications.css',
     selector: '.pub-doc-editor',
-    tokens: ['--layer-focus-stripe', '--focus-ring-contrast'],
+    tokens: ['--layer-focus-ring-screen', '--focus-ring-contrast'],
   },
 ] as const;
 

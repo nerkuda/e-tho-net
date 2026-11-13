@@ -14,6 +14,8 @@
  *   • пара «цвет мысли × её фон» — ≥ 4.5 : 1;
  *   • граничные цвета (чёрный, белый, насыщенные жёлтый/красный/синий, пастель)
  *     не разгоняются в чистые #000/#fff: светлота производной ограничена;
+ *     у полосы фокуса диапазон двухступенчатый — полный включается только при
+ *     недостижимости порога в узком, поэтому пастель сохраняет цвет и тон;
  *   • исходные значения не меняются — модуль ничего не персистит и не мутирует
  *     входные данные;
  *   • повторный вызов с теми же входами не пересчитывает (кэш).
@@ -42,7 +44,12 @@ import {
   parseAlpha,
   wallpaperBackdrop,
 } from '../src/renderer/lib/adaptive-color.js';
-import { parseCssColor, relativeLuminance, rgbToHsl } from '../src/renderer/lib/css-color.js';
+import {
+  hslToRgb,
+  parseCssColor,
+  relativeLuminance,
+  rgbToHsl,
+} from '../src/renderer/lib/css-color.js';
 import {
   WALLPAPER_TINT_ALPHA_MAX,
   WALLPAPER_TINT_ALPHA_MIN,
@@ -454,5 +461,78 @@ describe('адаптация цветов: кэш производных и не
     );
     cachedAdaptiveColor('#00ff00', backdrops, TEXT_CONTRAST_MIN, 'current|light');
     assert.equal(adaptiveCacheStats.computes, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Круг 3: диапазон полосы — узкий первым, полный только при недостижимости
+// ---------------------------------------------------------------------------
+
+/**
+ * Независимый перебор УЗКОГО диапазона: тон и насыщенность полосы
+ * сохраняются, светлота — абсолютная 0.06…0.94. Возвращает максимальный
+ * видимый контраст. Считается в тесте, а не модулем: иначе инвариант мерил бы
+ * тот же алгоритм, что и код.
+ */
+function narrowReach(stripe: string, backdrop: string): number {
+  const source = rgb(stripe);
+  const back = rgb(backdrop);
+  const [hue, sat] = rgbToHsl(source);
+  let best = bandContrast(source, back);
+  for (const scale of [1, 0.75, 0.5, 0.25, 0]) {
+    for (let i = 6; i <= 94; i += 1) {
+      const candidate = hslToRgb(hue, sat * scale, i / 100).map(Math.round) as [
+        number,
+        number,
+        number,
+      ];
+      const value = bandContrast(candidate, back);
+      if (value > best) best = value;
+    }
+  }
+  return best;
+}
+
+describe('диапазон полосы: узкий первым, полный — только при недостижимости', () => {
+  it('пастель сохраняет цвет и тон на средней подложке (не уезжает в #fff)', () => {
+    const backdrop = 'rgb(116, 116, 116)';
+    const adapted = adaptiveBandColor('#ffd1dc', backdrop);
+    assert.notEqual(adapted, '#ffffff', `пастель уехала в чистый белый: ${adapted}`);
+    assert.ok(narrowReach('#ffd1dc', backdrop) >= FRAME_CONTRAST_MIN, 'проба выбрана неверно: узкий диапазон недостижим');
+    const [hue, sat, light] = rgbToHsl(rgb(adapted));
+    assert.ok(
+      light >= ADAPT_LIGHT_MIN - 1e-9 && light <= ADAPT_LIGHT_MAX + 1e-9,
+      `светлота производной ${light.toFixed(3)} вне узкого диапазона`,
+    );
+    assert.ok(sat > 0.5, `тон полосы обесцвечен (s=${sat.toFixed(2)}, h=${hue})`);
+    assert.ok(bandContrast(rgb(adapted), rgb(backdrop)) >= FRAME_CONTRAST_MIN);
+    // Значение продукта на этой паре (тон сохранён, полоса тёмно-вишнёвая).
+    assert.equal(adapted, '#29000a');
+  });
+
+  it('полный диапазон включается, когда в узком порог недостижим', () => {
+    const backdrop = 'rgb(116, 116, 116)';
+    assert.ok(narrowReach('#808080', backdrop) < FRAME_CONTRAST_MIN, 'проба выбрана неверно');
+    const adapted = adaptiveBandColor('#808080', backdrop);
+    assert.ok(
+      bandContrast(rgb(adapted), rgb(backdrop)) >= FRAME_CONTRAST_MIN,
+      `полоса не дотянула порог: ${adapted}`,
+    );
+    assert.ok(
+      rgbToHsl(rgb(adapted))[2] < ADAPT_LIGHT_MIN - 1e-9,
+      `полоса осталась в узком диапазоне: ${adapted}`,
+    );
+  });
+
+  it('проводка сторожа: чёрная полоса на rgb(61, 61, 61) → #a6a6a6', () => {
+    // Ровно значение живой проводки (светлый слой + чёрная картинка).
+    assert.equal(adaptiveBandColor('#000000', 'rgb(61, 61, 61)'), '#a6a6a6');
+  });
+
+  it('поправка формулировки: «предел 2.95» — про НЕЙТРАЛЬНЫЕ полосы', () => {
+    // Нейтральная серая упирается в 2.95 — расширение диапазона обязательно.
+    assert.ok(narrowReach('#808080', 'rgb(116, 116, 116)') < FRAME_CONTRAST_MIN);
+    // Цветная #00001f на той же подложке проходит порог уже как есть (3.277).
+    assert.ok(bandContrast(rgb('#00001f'), rgb('rgb(116, 116, 116)')) >= FRAME_CONTRAST_MIN);
   });
 });

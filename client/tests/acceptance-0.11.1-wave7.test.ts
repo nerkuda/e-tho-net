@@ -133,7 +133,7 @@ describe('волна 7, п.1: клик по разделу/тексту — по
     assert.match(CSS, /\.pub-doc-current\s*\{[^}]*outline:\s*2px dashed/s, 'текущий — пунктир');
     assert.match(
       CSS,
-      /\.pub-doc-editor\s*\{[^}]*outline:\s*2px solid var\(--layer-focus-stripe/s,
+      /\.pub-doc-editor\s*\{[^}]*outline:\s*2px solid var\(--layer-focus-ring-screen/s,
       'открытый в редакторе — сплошная рамка фокуса',
     );
     assert.match(

@@ -62,6 +62,9 @@ const DEFAULT_BACKGROUND_DARK = '#191327';
 export interface LayerThemeVars {
   focusStripe: string | null;
   background: string | null;
+  /** Кольцо фокуса экранов (`--layer-focus-ring-screen`): адаптировано к
+   *  `--surface`/поверхности слоя, а не к холсту карты (круг 3). */
+  focusRing: string | null;
 }
 
 /** Minimal style-declaration surface (CSSStyleDeclaration in the renderer). */
@@ -199,22 +202,28 @@ export function currentLayerColors(layers: Layer[], current: LayerEcho | null): 
 
 /** The current theme's variant of a layer's colours; `null` → theme defaults. */
 export function resolveLayerTheme(colors: LayerColors | null, theme: Theme): LayerThemeVars {
-  if (colors === null) return { focusStripe: null, background: null };
+  if (colors === null) return { focusStripe: null, background: null, focusRing: null };
   return {
     focusStripe: colors.focus_stripe[theme],
     background: colors.background[theme],
+    // Производное экранов считает `adaptLayerColors`: кольцо зависит от
+    // поверхности темы, слой о ней ничего не знает.
+    focusRing: null,
   };
 }
 
 /**
  * Writes (or clears) the layer CSS variables on a style target:
- * `--layer-focus-stripe` / `--layer-bg`. Absent variables fall back to the
- * theme tokens in styles.css (`.canvas`, `.canvas::before`, `.cloud.halo`,
+ * `--layer-focus-stripe` (полоса карты), `--layer-focus-ring-screen` (кольца
+ * фокуса экранов) / `--layer-bg`. Absent variables fall back to the theme
+ * tokens in styles.css (`.canvas`, `.canvas::before`, `.cloud.halo`,
  * `.st-results`, `.chronicle`), so the base layer keeps the current look.
  */
 export function applyLayerThemeStyle(style: LayerStyleTarget, vars: LayerThemeVars): void {
   if (vars.focusStripe === null) style.removeProperty('--layer-focus-stripe');
   else style.setProperty('--layer-focus-stripe', vars.focusStripe);
+  if (vars.focusRing === null) style.removeProperty('--layer-focus-ring-screen');
+  else style.setProperty('--layer-focus-ring-screen', vars.focusRing);
   if (vars.background === null) style.removeProperty('--layer-bg');
   else style.setProperty('--layer-bg', vars.background);
 }

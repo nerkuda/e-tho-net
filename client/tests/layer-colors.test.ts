@@ -199,7 +199,11 @@ describe('invertThemeColor + defaultLayerColors', () => {
 
 describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => {
   it('null colors (base layer / layer without colours) resolve to theme defaults', () => {
-    assert.deepEqual(resolveLayerTheme(null, 'dark'), { focusStripe: null, background: null });
+    assert.deepEqual(resolveLayerTheme(null, 'dark'), {
+      focusStripe: null,
+      background: null,
+      focusRing: null,
+    });
     assert.deepEqual(currentLayerColors([], null), null);
 
     const base = layer({ id: BASE_LAYER_ID, title: 'Основа', is_base: true, current: true });
@@ -221,6 +225,8 @@ describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => 
     assert.deepEqual(vars, {
       focusStripe: defaultLayerColors().focus_stripe.dark,
       background: defaultLayerColors().background.dark,
+      // Кольцо экранов считает контекст адаптации, слой о нём не знает.
+      focusRing: null,
     });
   });
 
@@ -232,21 +238,29 @@ describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => 
     assert.deepEqual(resolveLayerTheme(colors, 'dark'), {
       focusStripe: '#7e57c2',
       background: '#191327',
+      focusRing: null,
     });
     assert.deepEqual(resolveLayerTheme(colors, 'light'), {
       focusStripe: colors.focus_stripe.light,
       background: colors.background.light,
+      focusRing: null,
     });
   });
 
   it('writes and clears the --layer-* CSS variables', () => {
     const style = shimStyle();
-    applyLayerThemeStyle(style, { focusStripe: '#7e57c2', background: '#191327' });
+    applyLayerThemeStyle(style, {
+      focusStripe: '#7e57c2',
+      background: '#191327',
+      focusRing: '#643da8',
+    });
     assert.equal(style.vars.get('--layer-focus-stripe'), '#7e57c2');
+    assert.equal(style.vars.get('--layer-focus-ring-screen'), '#643da8');
     assert.equal(style.vars.get('--layer-bg'), '#191327');
 
-    applyLayerThemeStyle(style, { focusStripe: null, background: null });
+    applyLayerThemeStyle(style, { focusStripe: null, background: null, focusRing: null });
     assert.equal(style.vars.has('--layer-focus-stripe'), false);
+    assert.equal(style.vars.has('--layer-focus-ring-screen'), false);
     assert.equal(style.vars.has('--layer-bg'), false);
   });
 });

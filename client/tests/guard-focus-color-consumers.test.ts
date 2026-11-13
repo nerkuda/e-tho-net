@@ -15,11 +15,13 @@
  *   3. акцент выделения текущего элемента на всех прочих экранах (отбор,
  *      таблицы, дневник, события, публикации, модалки).
  *
- * Правило: цвет фокуса и выделения берётся ТОЛЬКО цепочкой
- * `var(--layer-focus-stripe, var(--focus-accent, var(--accent)))`. Прямой
+ * Правило: цвет фокуса и выделения берётся ТОЛЬКО цепочкой токенов. На карте —
+ * `var(--layer-focus-stripe, var(--focus-accent, var(--accent)))` (полоса слоя);
+ * на экранах — `var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)))`
+ * (кольцо, адаптированное к `--surface`, круг 3 задачи 6e171b39). Прямой
  * литерал или голый токен семейства `--accent*` вне цепочки — красный:
  * выделение перестаёт следовать слою. Мягкий фон выделения — `color-mix` от
- * той же цепочки.
+ * цепочки полосы.
  *
  * Текстовые роли (`role: 'text'`). Фокус-цвет — цвет ФОНА и КАНТА, но не
  * текста: как текст он даёт 1.9–4.3:1 на подложках части тем (замечание 1
@@ -54,9 +56,17 @@ import {
   themeBlockBody,
 } from './theme-css.js';
 
-/** Цепочка фокуса — единственный допустимый источник цвета потребителя. */
+/** Цепочка фокуса карты — источник цвета полосы слоя. */
 const CHAIN =
   /var\(\s*--layer-focus-stripe\s*,\s*var\(\s*--focus-accent\s*,\s*var\(\s*--accent\s*\)\s*\)\s*\)/;
+
+/**
+ * Цепочка ЭКРАННЫХ колец (круг 3 задачи 6e171b39): контур 1–2 px на
+ * поверхности экрана адаптирован к `--surface`, а не к холсту карты. Тот же
+ * фолбэк `--focus-accent`, поэтому семантика темы сохраняется.
+ */
+const SCREEN_CHAIN =
+  /var\(\s*--layer-focus-ring-screen\s*,\s*var\(\s*--focus-accent\s*,\s*var\(\s*--accent\s*\)\s*\)\s*\)/;
 
 /**
  * Рамка открытой на карте: `--frame-open` считает `lib/cloud-frames.ts`
@@ -204,12 +214,15 @@ export function textColorValue(body: string): string | null {
  */
 export function consumerProblems(body: string, role?: 'text'): string[] {
   const problems: string[] = [];
-  if (!CHAIN.test(body) && !FRAME_CHAIN.test(body)) {
-    problems.push('цвет взят не цепочкой фокуса (--layer-focus-stripe → --focus-accent)');
+  if (!CHAIN.test(body) && !FRAME_CHAIN.test(body) && !SCREEN_CHAIN.test(body)) {
+    problems.push(
+      'цвет взят не цепочкой фокуса (--layer-focus-stripe/--layer-focus-ring-screen → --focus-accent)',
+    );
   }
   const rest = body
     .replace(new RegExp(CHAIN.source, 'g'), '')
-    .replace(new RegExp(FRAME_CHAIN.source, 'g'), '');
+    .replace(new RegExp(FRAME_CHAIN.source, 'g'), '')
+    .replace(new RegExp(SCREEN_CHAIN.source, 'g'), '');
   const accent = ACCENT_VAR.exec(rest);
   if (accent !== null) {
     problems.push(`голый токен акцента вне цепочки: ${accent[0]}`);
@@ -223,9 +236,7 @@ export function consumerProblems(body: string, role?: 'text'): string[] {
     if (value === null) {
       problems.push('текстовая роль не задаёт цвет текста');
     } else if (!new RegExp(`var\\(\\s*${TEXT_CONTRAST_VAR}\\s*[,)]`).test(value)) {
-      problems.push(
-        `цвет текста взят не контрастным кантом темы (${TEXT_CONTRAST_VAR}): ${value}`,
-      );
+      problems.push(`цвет текста взят не контрастным кантом темы (${TEXT_CONTRAST_VAR}): ${value}`);
     }
   }
   return problems;
@@ -295,7 +306,7 @@ describe('guard: фокус-цвет — только цепочка токен�
 
     const pub = ruleBodyOf(sources.get('styles/screens/publications.css') ?? '', ['.pub-open']);
     assert.ok(pub !== null, 'рамка открытой публикации объявлена');
-    assert.match(pub!, CHAIN, 'рамка открытой публикации — цвет фокуса слоя/темы');
+    assert.match(pub!, SCREEN_CHAIN, 'рамка открытой публикации — кольцо поверхностей (круг 3)');
 
     const canvas = ruleBodyOf(sources.get('styles/canvas.css') ?? '', ['.canvas']);
     assert.match(
@@ -376,6 +387,13 @@ describe('guard: фокус-цвет — только цепочка токен�
       [],
       'рамка открытой карты через --frame-open — допустимая форма',
     );
+    assert.deepEqual(
+      consumerProblems(
+        'outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));',
+      ),
+      [],
+      'кольцо фокуса экранов — допустимая форма (круг 3)',
+    );
   });
 
   it('контрастный кант читаем как текст во всех темах и режимах (≥ 4.5:1)', () => {
@@ -429,10 +447,7 @@ describe('guard: фокус-цвет — только цепочка токен�
       'текстовая роль без color обязана краснить',
     );
     // Контроль: кант темы — чистая текстовая роль.
-    assert.deepEqual(
-      consumerProblems(`${soft} color: var(--focus-ring-contrast);`, 'text'),
-      [],
-    );
+    assert.deepEqual(consumerProblems(`${soft} color: var(--focus-ring-contrast);`, 'text'), []);
   });
 
   it('сторож краснеет на пропавшем правиле потребителя', () => {
