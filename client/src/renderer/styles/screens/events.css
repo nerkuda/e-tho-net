@@ -263,7 +263,7 @@
 /* «КРИТЕРИИ ОТБОРА» — заголовок секции в диалоге отбора (e8365d29). */
 .view-editor-section-title {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -273,7 +273,7 @@
 /* Маркер «группа заполнена» — звёздочка в заголовке группы. */
 .st-f-star {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* Отступ между группами конструктора условий (половина кегля заголовка —

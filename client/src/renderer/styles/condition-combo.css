@@ -493,7 +493,7 @@
  * base `.st-f-title` regardless of rule order. */
 .st-f-title.st-f-title-active {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .st-f-body {

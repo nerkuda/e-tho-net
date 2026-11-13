@@ -241,7 +241,7 @@
      защищают от проза-стилей Web Awesome (`@layer wa-native`), которые иначе
      протекают в `.comment-view` (blockquote/strong/заголовки). */
   --md-line-height: 1.55;
-  --md-strong-weight: 700;
+  --md-strong-weight: 600;
   /* Метрики цитаты: отступ слева, толщина рамки, вертикальный зазор. */
   --md-quote-indent: 10px;
   --md-quote-border-width: 3px;

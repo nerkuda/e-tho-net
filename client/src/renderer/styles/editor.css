@@ -28,7 +28,7 @@
 }
 
 .editor-title {
-  font-weight: 700;
+  font-weight: 600;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -160,7 +160,7 @@
 
 .editor-tab.active {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
@@ -632,7 +632,7 @@
 .editor-title-input {
   flex: 1 1 auto;
   font-size: 1.5em;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
   resize: none;
   overflow: hidden;
@@ -1139,7 +1139,7 @@
 .cm-editor .cm-line.cm-md-h5,
 .comment-view h6,
 .cm-editor .cm-line.cm-md-h6 {
-  font-weight: 700;
+  font-weight: 600;
   line-height: var(--md-line-height);
   /* Семейство/перенос — как у текста редактора, а не заголовочный шрифт и
      `text-wrap: balance` проза-стилей Web Awesome (`@layer wa-native`): иначе
@@ -1830,7 +1830,7 @@ input.task-list-item-checkbox:checked,
 }
 
 .comment-view .hljs-strong {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* Markdown view/edit field (08-ui-spec.md §6.4): height follows the content
@@ -2533,7 +2533,7 @@ input.task-list-item-checkbox:checked,
 
 /* Начертание мысли — тот же набор классов, что у облачка холста. */
 .prop-ref-cloud.font-bold .prc-title {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .prop-ref-cloud.font-italic .prc-title {

@@ -195,11 +195,11 @@
 .cal-day.is-selected-from,
 .cal-day.is-selected-to {
   background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .cal-day.is-today {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* Точки-индикаторы записей дня: вертикальный столбик из 1–3 точек. */

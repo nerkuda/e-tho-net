@@ -110,6 +110,28 @@ function nonEmptyFile(file: string): boolean {
   return fs.existsSync(file) && fs.statSync(file).isFile() && fs.statSync(file).size > 0;
 }
 
+/** Сигнатура контейнера woff2 — первые 4 байта файла. */
+const WOFF2_SIGNATURE = 'wOF2';
+
+/**
+ * Проблема файла шрифта или `null`: файл существует, непуст и это ДЕЙСТВИТЕЛЬНО
+ * контейнер woff2 (первые 4 байта `wOF2`). Существования и непустоты мало:
+ * подменённый/обкусанный файл ломал бы загрузку молча.
+ */
+function woff2Problem(file: string): string | null {
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return 'файл не найден';
+  if (fs.statSync(file).size === 0) return 'файл пуст';
+  const head = Buffer.alloc(4);
+  const fd = fs.openSync(file, 'r');
+  try {
+    fs.readSync(fd, head, 0, 4, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (head.toString('latin1') !== WOFF2_SIGNATURE) return 'нет сигнатуры wOF2 (это не woff2)';
+  return null;
+}
+
 /**
  * Строка начинается внутри блочного комментария `/* … *\/`?
  * Однострочной проверки мало: перенесённая строка комментария начинается с
@@ -211,8 +233,9 @@ function faceViolations(css: string, fontDir: string): string[] {
       }
       const name = path.basename(url);
       const abs = path.join(fontDir, name);
-      if (!nonEmptyFile(abs)) {
-        out.push(`файл шрифта не найден или пуст: ${name}`);
+      const fileProblem = woff2Problem(abs);
+      if (fileProblem !== null) {
+        out.push(`шрифт ${name}: ${fileProblem}`);
       }
       const target = ALLOWED_FAMILIES.find((f) => f.family === face.family);
       const parsed = /^(inter|jetbrains-mono)-(latin|cyrillic)-(\d+)-normal\.woff2$/.exec(name);
@@ -324,10 +347,15 @@ function cspViolations(html: string): string[] {
     out.push('в CSP нет директивы font-src: источники шрифтов не ограничены явно (ADR)');
     return out;
   }
-  const allowed = new Set(["'self'", 'file:']);
+  // Замер на собранном клиенте (задача e622824e, доработка по приёмке):
+  // `font-src 'self'` покрывает и файлы `file://` — бандл грузится 8/8 без
+  // ослабления политики; `font-src 'none'` даёт DOMException, то есть директива
+  // действительно действует. Платформы, где 'self' не покрывает file://, не
+  // воспроизвелось — `file:` в политику не возвращаем.
+  const allowed = new Set(["'self'"]);
   for (const value of fontSrc) {
     if (!allowed.has(value)) {
-      out.push(`CSP font-src допускает «${value}»: только 'self' и file: (локальные файлы)`);
+      out.push(`CSP font-src допускает «${value}»: достаточно 'self' (локальные файлы сборки)`);
     }
   }
   if (fontSrc.length === 0) out.push('CSP font-src пуст');
@@ -402,6 +430,38 @@ function literalFontFamilyViolations(root: string): string[] {
   );
 }
 
+/**
+ * Нарушения жирности: решение заказчика (приёмка задачи e622824e) — максимум
+ * 600. Бандл не везёт начертание 700, поэтому `font-weight: 700` всё равно
+ * рисуется шестым весом, но остаётся ложным намерением в CSS. Дополнительно
+ * проверяется токен `--md-strong-weight` — он задаёт жирность markdown-«strong».
+ */
+function fontWeightViolations(root: string): string[] {
+  const rules: GuardRule[] = [
+    {
+      name: 'no-font-weight-700',
+      description:
+        'font-weight: 700 в CSS рендерера запрещён: максимум 600 (начертания 700 ' +
+        'в бандле нет, решение заказчика приёмки e622824e).',
+      pattern: /font-weight\s*:\s*700\b/,
+      include: (rel) => rel.endsWith('.css'),
+      allow: (_rel, line, lineNo, content) => commentLine(line, lineNo, content),
+    },
+    {
+      name: 'no-strong-weight-700',
+      description:
+        'Токен --md-strong-weight не задаёт 700: жирность markdown — не выше 600 ' +
+        '(решение заказчика приёмки e622824e).',
+      pattern: /--md-strong-weight\s*:\s*700\b/,
+      include: (rel) => rel.endsWith('.css'),
+      allow: (_rel, line, lineNo, content) => commentLine(line, lineNo, content),
+    },
+  ];
+  return collectViolations(root, rules, { extensions: ['.css'] }).map(
+    (v) => `${v.file}:${v.line} [${v.rule}] — ${v.text}`,
+  );
+}
+
 /** Временный каталог для мутаций — как у соседних сторожей: без гонок путей. */
 function withTempDir<T>(prefix: string, run: (dir: string) => T): T {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -424,6 +484,25 @@ describe('guard: шрифтовой бандл клиента (e622824e)', () =>
     assert.deepEqual(licenseViolations(LICENSES_DIR), []);
   });
 
+  it('все файлы бандла — настоящие woff2 (сигнатура wOF2)', () => {
+    const faces = parseFaces(fontsCss);
+    const files = [...new Set(faces.flatMap((face) => face.urls.map((url) => path.basename(url))))];
+    assert.equal(files.length, 8, `файлов бандла ${files.length}, ожидалось 8`);
+    for (const name of files) {
+      assert.equal(woff2Problem(path.join(FONT_DIR, name)), null, `битый файл ${name}`);
+    }
+    withTempDir('etn-guard-fonts-signature-', (dir) => {
+      fs.cpSync(FONT_DIR, dir, { recursive: true });
+      assert.deepEqual(faceViolations(fontsCss, dir), []);
+      fs.writeFileSync(path.join(dir, 'inter-latin-400-normal.woff2'), 'not a woff2 file', 'utf8');
+      const violations = faceViolations(fontsCss, dir);
+      assert.ok(
+        violations.some((v) => v.includes('wOF2')),
+        `подмена файла обязана краснить: ${violations.join('; ')}`,
+      );
+    });
+  });
+
   it('в исходниках нет внешних шрифтовых источников и второго @font-face', () => {
     const violations = sourceViolations(RENDERER_ROOT);
     assert.deepEqual(
@@ -435,6 +514,20 @@ describe('guard: шрифтовой бандл клиента (e622824e)', () =>
 
   it('CSP font-src допускает только локальные источники', () => {
     assert.deepEqual(cspViolations(fs.readFileSync(INDEX_HTML, 'utf8')), []);
+    // Ослабление политики `file:` (замер приёмки: не нужно) и внешний хост —
+    // обе формы обязаны краснить.
+    assert.notDeepEqual(
+      cspViolations(
+        '<meta http-equiv="Content-Security-Policy" content="font-src \'self\' file:;">',
+      ),
+      [],
+    );
+    assert.notDeepEqual(
+      cspViolations(
+        '<meta http-equiv="Content-Security-Policy" content="font-src \'self\' https://fonts.gstatic.com;">',
+      ),
+      [],
+    );
   });
 
   it('шрифты подключены токенами, системный фолбэк сохранён', () => {
@@ -454,6 +547,26 @@ describe('guard: шрифтовой бандл клиента (e622824e)', () =>
       [],
       `Литеральные гарнитуры в CSS:\n${violations.map((v) => `  • ${v}`).join('\n')}`,
     );
+  });
+
+  it('жирность не выше 600: нет font-weight: 700 и токена strong 700', () => {
+    const violations = fontWeightViolations(RENDERER_ROOT);
+    assert.deepEqual(
+      violations,
+      [],
+      `Жирность выше 600:\n${violations.map((v) => `  • ${v}`).join('\n')}`,
+    );
+    withTempDir('etn-guard-fonts-weight-', (dir) => {
+      fs.mkdirSync(path.join(dir, 'styles'));
+      fs.writeFileSync(path.join(dir, 'styles', 'x.css'), '.x { font-weight: 700; }\n', 'utf8');
+      assert.notDeepEqual(fontWeightViolations(dir), [], 'font-weight: 700 обязан краснить');
+      fs.writeFileSync(
+        path.join(dir, 'styles', 'x.css'),
+        ':root { --md-strong-weight: 700; }\n',
+        'utf8',
+      );
+      assert.notDeepEqual(fontWeightViolations(dir), [], 'токен strong 700 обязан краснить');
+    });
   });
 
   it('сторож краснеет на внешнем src, лишнем весе и пропавшем файле', () => {
