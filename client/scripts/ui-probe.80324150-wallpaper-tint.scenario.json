@@ -1,6 +1,6 @@
 {
   "name": "80324150-wallpaper-tint",
-  "description": "Задача 80324150 «Фоновая картинка: клиент», ЭТАП 2 (срез заказчика 2026-11-13; элемент ef8112b0, требование e6d586d3, сценарий 3fe62610). Проверено на живом стенде: 1) без картинки фон экранов «Дневник», «События», «Публикации» и сетки «Структур» НЕ тонирован (переменная --wallpaper-screen-tint пуста, градиентный слой прозрачен); 2) после загрузки светлой картинки (avg_luminance 0.94) плотность тинта карты в новом диапазоне 0.25–0.55, тинт экранов в 0.15–0.33, слабее карты ровно в 0.6 раза (WALLPAPER_SCREEN_TINT_FACTOR), и каждый из 4 экранов реально получает слой linear-gradient этого цвета (структуры сохраняют точечную сетку); 3) после загрузки тёмной картинки (0.05) инварианты те же (тинт экранов слабее карты); 4) после «Убрать картинку» переменная снята, градиентные слои экранов прозрачны — возврат к фону темы/слоя. Раздел «Оформление» проверяется через словарь ожиданий (ru/en), поиск UI — без русских литералов (сторож c73bcb60). Плотность карты ниже 0.25 и различимость картинки — юнит-тесты wallpaper-image.test.ts и сторож guard-wallpaper-tint.test.ts. «Слой слабее основы» живьём не проверяется: на стенде нет сети с собственными цветами слоя (initLayerTheme стирает ручной --layer-bg при каждом изменении стора) — покрыто юнит-тестом canvas-wallpaper.test.ts. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper-tint.scenario.json --server-language ru --keep --out .tmp/80324150/out-stage2",
+  "description": "Задача 80324150 «Фоновая картинка: клиент», ЭТАП 2 (срез заказчика 2026-11-13; элемент ef8112b0, требование e6d586d3, сценарий 3fe62610). Проверено на живом стенде: 1) без картинки фон экранов «Дневник», «События», «Публикации» и сетки «Структур» НЕ тонирован (переменная --wallpaper-screen-tint пуста, градиентный слой прозрачен); 2) после загрузки светлой картинки (avg_luminance 0.94) плотность тинта карты в диапазоне 0.12–0.30, тинт экранов в 0.072–0.18, слабее карты ровно в 0.6 раза (WALLPAPER_SCREEN_TINT_FACTOR), и каждый из 4 экранов реально получает слой linear-gradient этого цвета (структуры сохраняют точечную сетку); 3) после загрузки тёмной картинки (0.05) инварианты те же (тинт экранов слабее карты); 4) после «Убрать картинку» переменная снята, градиентные слои экранов прозрачны — возврат к фону темы/слоя; 5) доработка круга 2 по замечаниям заказчика: счётчик зоны лежит поверх всех слоёв (z=12) с непрозрачной тематической плашкой, подпись пустой зоны — выше сетки (z=2) с контуром цвета фона, полоса фокуса — плотность 0.7 (на 30 % прозрачнее) при fade 90px (видимая высота вдвое меньше). Для счётчика сценарий засеивает трёх детей фокусной мысли через API. Раздел «Оформление» проверяется через словарь ожиданий (ru/en), поиск UI — без русских литералов (сторож c73bcb60). Плотность ниже 0.12 и различимость картинки — юнит-тесты wallpaper-image.test.ts, сторожа guard-wallpaper-tint.test.ts и guard-canvas-overlay-layers.test.ts. «Слой слабее основы» живьём не проверяется: на стенде нет сети с собственными цветами слоя (initLayerTheme стирает ручной --layer-bg при каждом изменении стора) — покрыто юнит-тестом canvas-wallpaper.test.ts. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper-tint.scenario.json --server-language ru --keep --out .tmp/80324150/out-stage2",
   "timeout": 300000,
   "texts": {
     "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
@@ -19,6 +19,39 @@
         "expression": "data.language"
       },
       "expect": "ru"
+    },
+    {
+      "name": "seed-child-1",
+      "api": {
+        "name": "seed-child-1",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Проба счётчика 1", "parent_id": "{{thoughtId}}" },
+        "expression": "data.title"
+      },
+      "expect": "Проба счётчика 1"
+    },
+    {
+      "name": "seed-child-2",
+      "api": {
+        "name": "seed-child-2",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Проба счётчика 2", "parent_id": "{{thoughtId}}" },
+        "expression": "data.title"
+      },
+      "expect": "Проба счётчика 2"
+    },
+    {
+      "name": "seed-child-3",
+      "api": {
+        "name": "seed-child-3",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Проба счётчика 3", "parent_id": "{{thoughtId}}" },
+        "expression": "data.title"
+      },
+      "expect": "Проба счётчика 3"
     },
     {
       "name": "onboarding-visible",
@@ -76,7 +109,7 @@
     },
     {
       "name": "tint-light",
-      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const mapAlpha = alphaOf(tint); const screenAlpha = alphaOf(screenTint); const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); if (element === null) return { selector, present: false }; const image = getComputedStyle(element).backgroundImage; return { selector, present: true, has_linear: image.includes('linear-gradient'), alpha: alphaOf(image) }; }); const structuresImage = getComputedStyle(document.querySelector('.st-results')).backgroundImage; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), tint_present: tint.length > 0, screen_present: screenTint.length > 0, map_in_range: Number.isFinite(mapAlpha) && mapAlpha >= 0.25 && mapAlpha <= 0.55, screen_in_range: Number.isFinite(screenAlpha) && screenAlpha >= 0.15 && screenAlpha <= 0.33, screen_weaker: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && screenAlpha < mapAlpha, screen_factor_ok: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && Math.abs(screenAlpha - mapAlpha * 0.6) < 0.011, screens_missing: screens.filter((s) => s.present === false).map((s) => s.selector), screens_tinted: screens.every((s) => s.present === true && s.has_linear === true && Math.abs((s.alpha ?? 0) - (screenAlpha ?? 0)) < 0.001), structures_grid: structuresImage.includes('radial-gradient') }; })()",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const mapAlpha = alphaOf(tint); const screenAlpha = alphaOf(screenTint); const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); if (element === null) return { selector, present: false }; const image = getComputedStyle(element).backgroundImage; return { selector, present: true, has_linear: image.includes('linear-gradient'), alpha: alphaOf(image) }; }); const structuresImage = getComputedStyle(document.querySelector('.st-results')).backgroundImage; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), tint_present: tint.length > 0, screen_present: screenTint.length > 0, map_in_range: Number.isFinite(mapAlpha) && mapAlpha >= 0.12 && mapAlpha <= 0.3, screen_in_range: Number.isFinite(screenAlpha) && screenAlpha >= 0.07 && screenAlpha <= 0.18, screen_weaker: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && screenAlpha < mapAlpha, screen_factor_ok: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && Math.abs(screenAlpha - mapAlpha * 0.6) < 0.011, screens_missing: screens.filter((s) => s.present === false).map((s) => s.selector), screens_tinted: screens.every((s) => s.present === true && s.has_linear === true && Math.abs((s.alpha ?? 0) - (screenAlpha ?? 0)) < 0.001), structures_grid: structuresImage.includes('radial-gradient') }; })()",
       "expect": {
         "attr": "on",
         "tint_present": true,
@@ -91,6 +124,29 @@
       }
     },
 
+    {
+      "name": "counter-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.zone-count:not(.hidden)') !== null"
+    },
+    {
+      "name": "overlays-and-band",
+      "probe": "(() => { const canvas = document.querySelector('.canvas'); const bandStyle = getComputedStyle(canvas, '::before'); const parse = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const counter = counters[0] ?? null; const counterStyle = counter === null ? null : getComputedStyle(counter); const counterBg = counterStyle === null ? null : parse(counterStyle.backgroundColor); const counterFg = counterStyle === null ? null : parse(counterStyle.color); const empty = [...document.querySelectorAll('.zone-empty')].find((el) => !el.classList.contains('hidden')) ?? null; const emptyStyle = empty === null ? null : getComputedStyle(empty); const fade = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-fade').trim(); const opacity = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-opacity').trim(); return { counters_visible: counters.length > 0, all_counters_on_top: counters.length > 0 && counters.every((el) => getComputedStyle(el).zIndex === '12'), all_counters_opaque: counters.length > 0 && counters.every((el) => { const bg = parse(getComputedStyle(el).backgroundColor); return bg !== null && bg.alpha === 1; }), all_counters_contrast_ok: counters.length > 0 && counters.every((el) => { const s = getComputedStyle(el); const bg = parse(s.backgroundColor); const fg = parse(s.color); return bg !== null && fg !== null && ratio(fg.rgb, bg.rgb) >= 7; }), empty_present: empty !== null, empty_z: emptyStyle === null ? null : emptyStyle.zIndex, empty_shadow_ok: emptyStyle !== null && emptyStyle.textShadow.includes('rgb'), band_opacity: bandStyle.opacity, band_fade_token: fade, band_opacity_token: opacity, band_has_gradient: bandStyle.backgroundImage.includes('linear-gradient'), band_anchored: getComputedStyle(canvas).getPropertyValue('--focus-band-top').trim() !== '' && getComputedStyle(canvas).getPropertyValue('--focus-band-bottom').trim() !== '' }; })()",
+      "expect": {
+        "counters_visible": true,
+        "all_counters_on_top": true,
+        "all_counters_opaque": true,
+        "all_counters_contrast_ok": true,
+        "empty_present": true,
+        "empty_z": "2",
+        "empty_shadow_ok": true,
+        "band_opacity": "0.7",
+        "band_fade_token": "90px",
+        "band_opacity_token": "0.7",
+        "band_has_gradient": true,
+        "band_anchored": true
+      }
+    },
     {
       "name": "open-user-menu",
       "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
@@ -151,7 +207,7 @@
     },
     {
       "name": "tint-dark",
-      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const mapAlpha = alphaOf(tint); const screenAlpha = alphaOf(screenTint); const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); if (element === null) return { selector, present: false }; const image = getComputedStyle(element).backgroundImage; return { selector, present: true, has_linear: image.includes('linear-gradient'), alpha: alphaOf(image) }; }); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), map_in_range: Number.isFinite(mapAlpha) && mapAlpha >= 0.25 && mapAlpha <= 0.55, screen_in_range: Number.isFinite(screenAlpha) && screenAlpha >= 0.15 && screenAlpha <= 0.33, screen_weaker: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && screenAlpha < mapAlpha, screen_factor_ok: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && Math.abs(screenAlpha - mapAlpha * 0.6) < 0.011, screens_tinted: screens.every((s) => s.present === true && s.has_linear === true && Math.abs((s.alpha ?? 0) - (screenAlpha ?? 0)) < 0.001) }; })()",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const mapAlpha = alphaOf(tint); const screenAlpha = alphaOf(screenTint); const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); if (element === null) return { selector, present: false }; const image = getComputedStyle(element).backgroundImage; return { selector, present: true, has_linear: image.includes('linear-gradient'), alpha: alphaOf(image) }; }); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), map_in_range: Number.isFinite(mapAlpha) && mapAlpha >= 0.12 && mapAlpha <= 0.3, screen_in_range: Number.isFinite(screenAlpha) && screenAlpha >= 0.07 && screenAlpha <= 0.18, screen_weaker: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && screenAlpha < mapAlpha, screen_factor_ok: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && Math.abs(screenAlpha - mapAlpha * 0.6) < 0.011, screens_tinted: screens.every((s) => s.present === true && s.has_linear === true && Math.abs((s.alpha ?? 0) - (screenAlpha ?? 0)) < 0.001) }; })()",
       "expect": {
         "attr": "on",
         "map_in_range": true,

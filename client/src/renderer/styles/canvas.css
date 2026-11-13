@@ -58,19 +58,24 @@
  * canvas.ts); the off-screen defaults keep it invisible until then. Painted
  * as ::before it sits under the zones, clouds and all link layers.
  * --layer-focus-stripe (0.6.4, 13-layers.md §2.2a) recolours the band while
- * a non-base layer with explicit colours is active; absent — theme default. */
+ * a non-base layer with explicit colours is active; absent — theme default.
+ * Доработка среза 2026-11-13 (задача 80324150, замечание 2): видимая высота
+ * полосы уменьшена вдвое (fade 180px → 90px, токен `--focus-band-fade`), а
+ * плотность снижена на 30 % — `--focus-band-opacity: 0.7` на весь слой полосы
+ * (затухание сохраняется: прозрачность умножает и его). */
 .canvas::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  opacity: var(--focus-band-opacity, 0.7);
   background: linear-gradient(
     to bottom,
-    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 180px)),
+    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 90px)),
     var(--layer-focus-stripe, var(--focus-accent, var(--accent))) var(--focus-band-top, 9999px),
     var(--layer-focus-stripe, var(--focus-accent, var(--accent))) var(--focus-band-bottom, 0px),
-    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 180px))
+    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 90px))
   );
 }
 
@@ -221,16 +226,39 @@ body.resizing-h {
   color: var(--text-faint);
   font-size: 12px;
   pointer-events: none;
+  /* z-index 2 — подпись канвы обязана быть поверх фонов и сетки зоны
+   * (`.zone-grid` — 1), доработка среза 2026-11-13, замечание 3. */
+  z-index: 2;
+}
+
+/* Подписи канвы поверх фоновой картинки (доработка среза 2026-11-13,
+ * замечание 3): подпись лежит над картинкой и тинтом, но её цвет
+ * (`--text-faint`) подобран под однотонный фон темы — на фотографии она
+ * «тонет». Контур из цвета фона темы возвращает ровно штатный контраст
+ * «подпись к фону» в любой точке картинки; компоновка (полоса загрузки,
+ * состояние отказа) не меняется — плашка и отступы не вводятся. */
+:root[data-canvas-wallpaper='on'] .zone-empty,
+:root[data-canvas-wallpaper='on'] .canvas-empty {
+  text-shadow:
+    0 0 2px var(--bg),
+    0 0 6px var(--bg),
+    0 0 10px var(--bg);
 }
 
 /* Floating per-zone count (задача c8fa74ba): overlay on the canvas host,
  * pinned to the zone's top-right corner by inline `top`/`left` (canvas-space)
  * + `translateX(-100%)`. Text colour is set inline to stay contrast against
- * the theme backdrop; the faint pill keeps it legible over clouds. */
+ * the theme backdrop; the faint pill keeps it legible over clouds.
+ *
+ * z-index 12 — верхний слой канвы (доработка среза 2026-11-13, задача 80324150,
+ * замечание 1): счётчик обязан быть поверх ВСЕХ фонов и слоёв канвы — полосы
+ * фокуса (0), облачков/сетки (1), верхних слоёв связей (6/7) и анимационных
+ * копий облачков (8). Прежние 4 оставляли его под анимационным слоем, а на
+ * фоновой картинке полупрозрачная плашка терялась — см. правило плашки ниже. */
 .zone-count {
   position: absolute;
   transform: translateX(-100%);
-  z-index: 4;
+  z-index: 12;
   pointer-events: none;
   padding: 1px 7px;
   border-radius: 999px;
@@ -244,6 +272,18 @@ body.resizing-h {
 
 .zone-count.hidden {
   display: none;
+}
+
+/* Счётчик поверх фоновой картинки (доработка среза 2026-11-13, замечание 1):
+ * полупрозрачная плашка 78 % над фотографией «плавает» и номер теряется.
+ * При активной картинке плашка становится непрозрачной тематической
+ * (`--surface` + тонкая рамка), а цвет текста остаётся инлайновым — он уже
+ * подобран под `--surface` темы, поэтому контраст возвращается к штатному. */
+:root[data-canvas-wallpaper='on'] .zone-count {
+  background: var(--surface);
+  box-shadow:
+    0 1px 2px var(--shadow-xs-c),
+    0 0 0 1px var(--border);
 }
 
 .zone-spacer {

@@ -65,17 +65,17 @@ describe('applyWallpaperState: картинка включает подложк�
     applyWallpaperState(root, OK_STATE, { color: '#0e1116', in_layer: false });
     assert.equal(root.vars.get(WALLPAPER_IMAGE_VAR), 'url("data:image/jpeg;base64,AQID")');
     // Светлая картинка (0.95) на тёмном фоне: расхождение максимальное →
-    // верхняя граница этапа 2 (0.55), а экраны — 0.6 от неё (0.33).
-    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(14, 17, 22, 0.55)');
-    assert.equal(root.vars.get(WALLPAPER_SCREEN_TINT_VAR), 'rgba(14, 17, 22, 0.33)');
+    // верхняя граница круга 2 (0.30), а экраны — 0.6 от неё (0.18).
+    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(14, 17, 22, 0.3)');
+    assert.equal(root.vars.get(WALLPAPER_SCREEN_TINT_VAR), 'rgba(14, 17, 22, 0.18)');
     assert.equal(root.attrs.get(WALLPAPER_ATTR), 'on');
   });
 
   it('в слое тинт — цвет слоя с повышенной прозрачностью', () => {
     const root = fakeRoot();
     applyWallpaperState(root, OK_STATE, { color: '#191327', in_layer: true });
-    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(25, 19, 39, 0.44)');
-    assert.equal(root.vars.get(WALLPAPER_SCREEN_TINT_VAR), 'rgba(25, 19, 39, 0.26)');
+    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(25, 19, 39, 0.24)');
+    assert.equal(root.vars.get(WALLPAPER_SCREEN_TINT_VAR), 'rgba(25, 19, 39, 0.14)');
   });
 
   it('картинка той же светлоты, что фон, — минимальная вуаль', () => {
@@ -89,7 +89,7 @@ describe('applyWallpaperState: картинка включает подложк�
       const tint = root.vars.get(name) ?? '';
       const alpha = Number(/,\s([\d.]+)\)$/.exec(tint)?.[1] ?? 'NaN');
       assert.ok(Number.isFinite(alpha));
-      assert.ok(alpha >= 0.15 && alpha <= 0.33, `лёгкая вуаль ${name}, получено ${alpha}`);
+      assert.ok(alpha >= 0.07 && alpha <= 0.18, `лёгкая вуаль ${name}, получено ${alpha}`);
     }
   });
 
