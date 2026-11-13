@@ -16,8 +16,15 @@
  *    обоих режимов — и с картинкой, и без неё; класс ошибок, который дал
  *    невидимый счётчик в blue-topaz light (белый текст на белой плашке,
  *    1.00 : 1, вердикт круга 2);
- *  • подписи канвы (`.zone-empty`, `.canvas-empty`) — выше сетки зоны (z ≥ 2),
- *    при активной картинке — с контуром цвета фона темы;
+ *  • подписи канвы (`.zone-empty`, `.canvas-empty`) — выше сетки зоны (z ≥ 2);
+ *    при активной картинке — непрозрачная тематическая плашка `--surface` и
+ *    текст `--text` (круг 3: контур цвета `--bg` не контрастировал на светлой
+ *    картинке, `--text-faint` бледен по замыслу). Вложенные состояния подписи
+ *    (`loadingState`/`errorState`) наследуют цвет плашки — их собственные
+ *    `--text-dim`/`--danger` не дают контраста на `--surface` во всех темах;
+ *  • текст подписей читается на плашке: `--text` к `--surface` ≥ 7 : 1 во всех
+ *    12 блоках (тот же порог, что у счётчика; по факту 7.99…19.30 : 1),
+ *    без картинки вид канвы не меняется (плашки и перекраски нет);
  *  • полоса фокуса — честный ÷2 видимой протяжённости (ядро 67px + 2 × fade
  *    73px = 213px вместо 427px), плотность −30 % (`--focus-band-opacity: 0.7`),
  *    затухание сохранено;
@@ -102,6 +109,20 @@ function declaration(body: string | null, property: string): string | null {
 const canvasCss = fs.readFileSync(CANVAS_CSS, 'utf8');
 const tokensCss = fs.readFileSync(TOKENS_CSS, 'utf8');
 
+/** Пара цветов (каналы 0..255) → коэффициент контраста WCAG. */
+function contrastRatio(left: number[], right: number[]): number {
+  const first = relativeLuminance(left[0]!, left[1]!, left[2]!);
+  const second = relativeLuminance(right[0]!, right[1]!, right[2]!);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+/** Токены одного блока темы; ассерт, если блока режима нет. */
+function themeTokens(theme: string, mode: (typeof THEME_MODES)[number]): Map<string, string> {
+  const body = themeBlockBody(readTheme(theme), theme, mode);
+  assert.ok(body !== null, `тема ${theme} (${mode}): нет блока режима`);
+  return declaredTokens(body);
+}
+
 /**
  * Нарушения слоёв наложения канвы в переданном CSS (счётчик и подписи).
  * Вынесено функцией, чтобы ТА ЖЕ проверка гонялась по мутированной копии
@@ -120,15 +141,49 @@ function overlayProblems(css: string): string[] {
     problems.push(`плашка счётчика при картинке: ${plate ?? '(нет)'}`);
   const emptyZ = declaration(ruleBody(css, '.zone-empty'), 'z-index');
   if (emptyZ !== '2') problems.push(`z-index подписи зоны: ${emptyZ ?? '(нет правила)'}`);
-  const shadow = declaration(
-    ruleBody(css, ":root[data-canvas-wallpaper='on'] .zone-empty"),
-    'text-shadow',
+  // Круг 3: подпись читается за счёт непрозрачной плашки и токена текста.
+  const labelPlate = ruleBody(css, ":root[data-canvas-wallpaper='on'] .zone-empty");
+  if (labelPlate === null) {
+    problems.push('нет правила плашки подписи при картинке');
+  } else {
+    const background = declaration(labelPlate, 'background');
+    if (background !== 'var(--surface)') {
+      problems.push(`плашка подписи при картинке: ${background ?? '(нет)'}`);
+    }
+    const color = declaration(labelPlate, 'color');
+    if (color !== 'var(--text)') {
+      problems.push(`цвет текста подписи на плашке: ${color ?? '(нет)'}`);
+    }
+    if (declaration(labelPlate, 'text-shadow') !== null) {
+      problems.push('у плашки подписи остался text-shadow — механизм круга 1');
+    }
+    // Плашка обнимает надпись: подпись сжимается до содержимого и центрируется
+    // в зоне. Без этого плашка красила бы половину холста.
+    if (declaration(labelPlate, 'position') !== 'absolute') {
+      problems.push(
+        `подпись на картинке не сжата до содержимого: ${declaration(labelPlate, 'position')}`,
+      );
+    }
+  }
+  const labelInherit = ruleBody(
+    css,
+    ":root[data-canvas-wallpaper='on'] .zone-empty *:not(.ui-btn):not(.ui-btn *)",
   );
-  if (shadow === null || !shadow.includes('var(--bg)')) {
-    problems.push(`контур подписи при картинке: ${shadow ?? '(нет)'}`);
+  if (labelInherit === null) {
+    problems.push('вложенные состояния подписи не наследуют цвет плашки');
+  } else {
+    if (declaration(labelInherit, 'color') !== 'inherit') {
+      problems.push(`цвет вложенного состояния подписи: ${declaration(labelInherit, 'color')}`);
+    }
+    if (declaration(labelInherit, 'text-shadow') !== 'none') {
+      problems.push('у вложенного состояния подписи остался text-shadow');
+    }
+  }
+  if (/text-shadow\s*:[^;]*var\(--bg\)/.test(stripCssComments(css))) {
+    problems.push('в canvas.css вернулся контур подписи цвета --bg');
   }
   if (!css.includes(":root[data-canvas-wallpaper='on'] .canvas-empty")) {
-    problems.push('пустое состояние холста не покрыто правилом контура');
+    problems.push('пустое состояние холста не покрыто правилом плашки');
   }
   return problems;
 }
@@ -170,18 +225,47 @@ describe('сторож: счётчики и подписи канвы повер
     );
   });
 
-  it('подписи канвы выше сетки зоны и читаемы на картинке', () => {
+  it('подписи канвы выше сетки зоны и читаемы на картинке плашкой', () => {
     const z = declaration(ruleBody(canvasCss, '.zone-empty'), 'z-index');
     assert.equal(z, '2', 'подпись обязана быть выше сетки зоны (z=1)');
     const body = ruleBody(canvasCss, ":root[data-canvas-wallpaper='on'] .zone-empty");
-    assert.ok(body !== null, 'нет правила подписи при картинке');
-    const shadow = declaration(body, 'text-shadow');
-    assert.ok(shadow !== null && shadow.includes('var(--bg)'), 'контур подписи — цвет фона темы');
+    assert.ok(body !== null, 'нет правила плашки подписи при картинке');
+    assert.equal(
+      declaration(body, 'background'),
+      'var(--surface)',
+      'плашка — непрозрачный --surface',
+    );
+    assert.equal(declaration(body, 'color'), 'var(--text)', 'текст подписи — токен --text');
+    assert.equal(declaration(body, 'text-shadow'), null, 'контура круга 1 быть не должно');
+    // Плашка обнимает надпись: подпись сжимается до содержимого и центрируется
+    // (иначе фон плашки растянулся бы на всю зону и «съел» картинку).
+    assert.equal(declaration(body, 'position'), 'absolute', 'подпись сжимается до содержимого');
+    assert.equal(
+      declaration(body, 'inset'),
+      '50% auto auto 50%',
+      'подпись центрируется в зоне, а не растягивается',
+    );
+    // Без картинки вид тематический: плашки и перекраски у подписи нет.
+    assert.equal(declaration(ruleBody(canvasCss, '.zone-empty'), 'background'), null);
+    assert.equal(declaration(ruleBody(canvasCss, '.canvas-empty'), 'background'), null);
     // Пустое состояние всего холста закрыто тем же правилом (список селекторов).
     assert.ok(
       canvasCss.includes(":root[data-canvas-wallpaper='on'] .canvas-empty"),
       'пустое состояние холста обязано читаться на картинке так же',
     );
+  });
+
+  it('вложенные состояния подписи (загрузка/ошибка) наследуют цвет плашки', () => {
+    // `--text-dim` на `--surface` даёт 4.00 : 1 (blue-topaz light), `--danger`
+    // на `--surface` — 2.46 : 1 (nordic dark): собственные цвета состояний на
+    // плашке не проходят даже AA, поэтому цвет наследуется от плашки.
+    const body = ruleBody(
+      canvasCss,
+      ":root[data-canvas-wallpaper='on'] .zone-empty *:not(.ui-btn):not(.ui-btn *)",
+    );
+    assert.ok(body !== null, 'нет правила наследования цвета для состояний');
+    assert.equal(declaration(body, 'color'), 'inherit');
+    assert.equal(declaration(body, 'text-shadow'), 'none');
   });
 
   it('доля плашки в CSS совпадает с константой цвета счётчика', () => {
@@ -212,14 +296,52 @@ describe('сторож: счётчики и подписи канвы повер
       'color-mix(in srgb, var(--surface) 78%, transparent)',
     );
     assert.ok(overlayProblems(stalePlate).length > 0, 'полупрозрачная плашка обязана ловиться');
-    // 3. Прежняя подпись без контура.
-    const staleShadow = mutateFirstDeclaration(
+    // 3. Откат механизма подписи: плашка подписи становится прозрачной.
+    const staleLabelPlate = mutateFirstDeclaration(
       canvasCss,
       ":root[data-canvas-wallpaper='on'] .zone-empty,",
-      'text-shadow',
-      'none',
+      'background',
+      'transparent',
     );
-    assert.ok(overlayProblems(staleShadow).length > 0, 'подпись без контура обязана ловиться');
+    assert.ok(overlayProblems(staleLabelPlate).length > 0, 'прозрачная плашка обязана ловиться');
+    // 4. Прежний бледный цвет текста подписи на плашке.
+    const staleLabelColor = mutateFirstDeclaration(
+      canvasCss,
+      ":root[data-canvas-wallpaper='on'] .zone-empty,",
+      'color',
+      'var(--text-faint)',
+    );
+    assert.ok(
+      overlayProblems(staleLabelColor).length > 0,
+      'бледный текст на плашке обязан ловиться',
+    );
+    // 5. Возврат контура круга 1 у вложенных состояний.
+    const staleLabelShadow = mutateFirstDeclaration(
+      canvasCss,
+      ":root[data-canvas-wallpaper='on'] .zone-empty *:not(.ui-btn):not(.ui-btn *),",
+      'text-shadow',
+      '0 0 6px var(--bg)',
+    );
+    assert.ok(overlayProblems(staleLabelShadow).length > 0, 'контур цвета --bg обязан ловиться');
+    // 6. Потеря наследования цвета вложенными состояниями.
+    const staleInherit = mutateFirstDeclaration(
+      canvasCss,
+      ":root[data-canvas-wallpaper='on'] .zone-empty *:not(.ui-btn):not(.ui-btn *),",
+      'color',
+      'var(--text-dim)',
+    );
+    assert.ok(
+      overlayProblems(staleInherit).length > 0,
+      'собственный цвет состояния обязан ловиться',
+    );
+    // 7. Плашка перестала сжиматься до надписи (растянулась на зону).
+    const stalePosition = mutateFirstDeclaration(
+      canvasCss,
+      ":root[data-canvas-wallpaper='on'] .zone-empty,",
+      'position',
+      'static',
+    );
+    assert.ok(overlayProblems(stalePosition).length > 0, 'растянутая плашка обязана ловиться');
   });
 });
 
@@ -244,20 +366,6 @@ describe('сторож: текст счётчика читается на фак
     return luminance > 0.35 ? '#1f242d' : '#ffffff';
   }
 
-  /** Пара цветов → коэффициент контраста WCAG. */
-  function ratio(left: number[], right: number[]): number {
-    const first = relativeLuminance(left[0]!, left[1]!, left[2]!);
-    const second = relativeLuminance(right[0]!, right[1]!, right[2]!);
-    return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
-  }
-
-  /** Токены одного блока темы; ассерт, если блок или токены не читаются. */
-  function blockTokens(theme: string, mode: (typeof THEME_MODES)[number]): Map<string, string> {
-    const body = themeBlockBody(readTheme(theme), theme, mode);
-    assert.ok(body !== null, `тема ${theme} (${mode}): нет блока режима`);
-    return declaredTokens(body);
-  }
-
   it('все 12 блоков (6 тем × 2 режима): с картинкой и без неё ≥ 7 : 1', () => {
     // Класс ошибок, не покрытый до этого: цвет текста считался от `--bg`, а
     // плашка — `--surface` (с картинкой — непрозрачная). В blue-topaz light
@@ -266,7 +374,7 @@ describe('сторож: текст счётчика читается на фак
     let checked = 0;
     for (const theme of THEMES) {
       for (const mode of THEME_MODES) {
-        const tokens = blockTokens(theme, mode);
+        const tokens = themeTokens(theme, mode);
         const surface = tokens.get('--surface') ?? '';
         const bg = tokens.get('--bg') ?? '';
         const plateOn = parseCssColor(surface);
@@ -286,7 +394,7 @@ describe('сторож: текст счётчика читается на фак
         for (const [label, color, plate, wallpaper] of cases) {
           const fg = parseCssColor(color);
           assert.ok(fg !== null, `${theme} (${mode}, ${label}): цвет текста не цвет: ${color}`);
-          const value = ratio(fg!, plate);
+          const value = contrastRatio(fg!, plate);
           checked += 1;
           if (value < ZONE_COUNT_CONTRAST_MIN) {
             problems.push(
@@ -317,21 +425,59 @@ describe('сторож: текст счётчика читается на фак
     // Именно так выглядел баг: текст считался по фону темы, а не по плашке.
     // В blue-topaz light это давало белый текст на белой плашке — сторож обязан
     // такой расчёт отвергать.
-    const tokens = blockTokens('blue-topaz', 'light');
+    const tokens = themeTokens('blue-topaz', 'light');
     const surface = tokens.get('--surface') ?? '';
     const bg = tokens.get('--bg') ?? '';
     const plate = parseCssColor(surface)!;
     const staleColor = legacyContrastText(bg);
     assert.equal(staleColor, '#ffffff', 'прежний расчёт по --bg даёт белый текст');
     assert.ok(
-      ratio(parseCssColor(staleColor)!, plate) < ZONE_COUNT_CONTRAST_MIN,
+      contrastRatio(parseCssColor(staleColor)!, plate) < ZONE_COUNT_CONTRAST_MIN,
       'прежний расчёт обязан не проходить порог 7 : 1',
     );
     // Новый расчёт на той же теме — проходит.
     assert.ok(
-      ratio(parseCssColor(zoneCountTextColor(surface, bg, true))!, plate) >=
+      contrastRatio(parseCssColor(zoneCountTextColor(surface, bg, true))!, plate) >=
         ZONE_COUNT_CONTRAST_MIN,
       'новый расчёт от плашки обязан проходить порог',
+    );
+  });
+});
+
+describe('сторож: подписи канвы читаются на плашке (круг 3)', () => {
+  it('все 12 блоков (6 тем × 2 режима): --text к --surface ≥ 7 : 1', () => {
+    // Порог 7 : 1 — тот же, что у счётчика зоны: подпись на плашке читается
+    // уверенно при любом тоне картинки, а не только на пороге AA (4.5) для
+    // мелкого текста. Унаследованный цвет вложенных состояний (`color: inherit`)
+    // проверяется отдельно выше — значит, этим инвариантом покрыт весь текст
+    // подписи, включая «Загрузка…» и сообщение об ошибке.
+    const problems: string[] = [];
+    for (const theme of THEMES) {
+      for (const mode of THEME_MODES) {
+        const tokens = themeTokens(theme, mode);
+        const text = parseCssColor(tokens.get('--text') ?? '');
+        const surface = parseCssColor(tokens.get('--surface') ?? '');
+        assert.ok(text !== null, `${theme} (${mode}): --text не цвет`);
+        assert.ok(surface !== null, `${theme} (${mode}): --surface не цвет`);
+        const value = contrastRatio(text!, surface!);
+        if (value < ZONE_COUNT_CONTRAST_MIN) {
+          problems.push(`${theme} (${mode}): ${value.toFixed(2)} : 1`);
+        }
+      }
+    }
+    assert.deepEqual(
+      problems,
+      [],
+      `текст подписи на плашке обязан читаться (≥ ${ZONE_COUNT_CONTRAST_MIN} : 1):\n  ${problems.join('\n  ')}`,
+    );
+  });
+
+  it('контур круга 1 в canvas.css не остался нигде', () => {
+    // Старый механизм — `text-shadow` цвета `--bg`: на светлой картинке он не
+    // контрастирует, поэтому заменён плашкой целиком.
+    assert.ok(
+      !/text-shadow\s*:[^;]*var\(--bg\)/.test(stripCssComments(canvasCss)),
+      'в canvas.css вернулся контур подписи цвета --bg',
     );
   });
 });

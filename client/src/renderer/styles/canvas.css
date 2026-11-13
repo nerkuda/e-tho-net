@@ -232,18 +232,59 @@ body.resizing-h {
   z-index: 2;
 }
 
-/* Подписи канвы поверх фоновой картинки (доработка среза 2026-11-13,
- * замечание 3): подпись лежит над картинкой и тинтом, но её цвет
- * (`--text-faint`) подобран под однотонный фон темы — на фотографии она
- * «тонет». Контур из цвета фона темы возвращает ровно штатный контраст
- * «подпись к фону» в любой точке картинки; компоновка (полоса загрузки,
- * состояние отказа) не меняется — плашка и отступы не вводятся. */
+/* Подписи канвы поверх фоновой картинки (доработка по срезу 2026-11-13,
+ * круг 3; замечание заказчика «надписи не читаются»).
+ *
+ * Круг 1 давал z=2 и контур `text-shadow` цвета `--bg` — на СВЕТЛОЙ картинке
+ * светлый контур сливается с фоном, а сам текст `--text-faint` полупрозрачен
+ * по замыслу и на пёстром фоне не читается. Механизм заменён на непрозрачную
+ * тематическую плашку `--surface` (та же, что у счётчика зоны) и цвет `--text`.
+ * Замер контраста `--text` к `--surface` по 6 темам × 2 режимам: 7.99…19.30 : 1
+ * (минимум — catppuccin light; blue-topaz light 19.30) — порог сторожа 7 : 1,
+ * как у счётчика. Цвет берётся CSS-токеном, а не inline-расчётом: плашка и
+ * текст перекрашиваются браузером при смене темы/режима без перерисовки канвы
+ * (ошибка f245c5ac про canvasRenderKey остаётся отдельной и здесь не
+ * воспроизводится).
+ *
+ * Геометрия: в основе `.zone-empty`/`.canvas-empty` растянуты на зону и
+ * центрируют текст; с картинкой они сжимаются до содержимого (`inset: 50%` +
+ * `translate`), поэтому плашка обнимает надпись, а не весь холст. Без картинки
+ * блок ниже не действует — вид канвы тематический, как раньше. */
 :root[data-canvas-wallpaper='on'] .zone-empty,
 :root[data-canvas-wallpaper='on'] .canvas-empty {
-  text-shadow:
-    0 0 2px var(--bg),
-    0 0 6px var(--bg),
-    0 0 10px var(--bg);
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  box-sizing: border-box;
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px var(--border),
+    0 1px 2px var(--shadow-xs-c);
+  color: var(--text);
+  text-align: center;
+}
+
+/* Вложенные состояния подписи (`loadingState`/`errorState` из `lib/ui`) несут
+ * собственные цвета (`--text-dim`, `--danger`) — на плашке они не гарантируют
+ * контраст (blue-topaz light `--text-dim` 4.00 : 1, nordic dark `--danger`
+ * 2.46 : 1). На картинке весь текст подписи берёт цвет плашки: читаемость
+ * важнее оттенка, а состояние ошибки остаётся различимым текстом и `role`.
+ * Кнопки действий (`ui-btn`) исключены — у них собственные поверхности и
+ * цвета, плашка их не перекрашивает. Отступы состояний внутри плашки лишние —
+ * плашка уже даёт их сама. */
+:root[data-canvas-wallpaper='on'] .zone-empty *:not(.ui-btn):not(.ui-btn *),
+:root[data-canvas-wallpaper='on'] .canvas-empty *:not(.ui-btn):not(.ui-btn *) {
+  color: inherit;
+  text-shadow: none;
+}
+
+:root[data-canvas-wallpaper='on'] .zone-empty > .ui-state-loading,
+:root[data-canvas-wallpaper='on'] .zone-empty > .ui-state-error {
+  padding: 0;
 }
 
 /* Floating per-zone count (задача c8fa74ba): overlay on the canvas host,
