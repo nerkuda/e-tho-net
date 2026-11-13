@@ -49,7 +49,7 @@ import { emptyState, errorState, loadingState } from '../lib/ui/empty-state.js';
 import { reconcileKeyed } from '../lib/ui/keyed-list.js';
 import {
   defaultLayerColors,
-  invertThemeColor,
+  layerColorPair,
 } from '../lib/layer-colors.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
 import { resyncAfterLayerSwitch } from '../app.js';
@@ -412,17 +412,15 @@ function showLayerPropsDialog(networkId: string, layer: Layer): void {
     const comment = commentInput.value.trim();
     if (!layer.is_base && title.length === 0) return;
     // Colours: `undefined` — untouched, an object — the picked pair
-    // plus the inverted opposite theme (§2.2a). There is no «off»
-    // switch anymore: the shown pair is always what gets saved, so a
-    // layer without stored colours picks up the shown defaults.
+    // plus the opposite mode's slot computed by the adaptive module
+    // (0.16.1, задача 6e171b39). There is no «off» switch anymore: the
+    // shown pair is always what gets saved, so a layer without stored
+    // colours picks up the shown defaults.
     let colors: LayerColors | undefined;
     if (stripeRow !== null && bgRow !== null) {
       const next: LayerColors = {
-        focus_stripe: invertThemeColor(
-          { dark: stripeRow.get(), light: stripeRow.get() },
-          theme,
-        ),
-        background: invertThemeColor({ dark: bgRow.get(), light: bgRow.get() }, theme),
+        focus_stripe: layerColorPair(stripeRow.get(), 'focus_stripe', theme),
+        background: layerColorPair(bgRow.get(), 'background', theme),
       };
       if (JSON.stringify(next) !== JSON.stringify(layer.colors)) colors = next;
     }

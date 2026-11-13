@@ -42,6 +42,7 @@ import { div, el, renderHighlightedText, setTooltip, span } from './dom.js';
 import { noteFocusOrigin } from './focus-origin.js';
 import { renderLibraryIcon, svgIcon } from './ui/icon.js';
 import { renderDefaultThoughtIcon } from './ui/thought-default-icon.js';
+import { adaptThoughtColors } from './adaptive-context.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
 import { logUiEvent } from './ui-log.js';
@@ -91,18 +92,28 @@ export function resolveCloudStyle(
   };
 }
 
-/** Applies a resolved style to a cloud element. */
+/**
+ * Applies a resolved style to a cloud element.
+ *
+ * Цвета — производные под фактическую подложку (0.16.1, требование 26d53c26):
+ * `lib/adaptive-context.ts::adaptThoughtColors` подгоняет текст под поверхность
+ * облачка, а при нечитаемой паре «фон + авто-текст» сдвигает фон. Исходные
+ * значения пользователя при этом не меняются — адаптация живёт только здесь,
+ * на отрисовке. Шрифтовые флаги остаются данными пользователя: различимость в
+ * светлых темах держат вес и начертание (сценарий 5797c15c).
+ */
 export function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
-  if (style.fg !== null) {
-    cloud.style.color = style.fg;
-  } else if (style.bg !== null) {
+  const adapted = adaptThoughtColors({ fg: style.fg, bg: style.bg });
+  if (adapted.fg !== null) {
+    cloud.style.color = adapted.fg;
+  } else if (adapted.bg !== null) {
     // Only the background is set — pick a readable text colour for it
     // (L12); an explicit fg always wins.
-    cloud.style.color = contrastText(style.bg);
+    cloud.style.color = contrastText(adapted.bg);
   } else {
     cloud.style.color = '';
   }
-  if (style.bg !== null) cloud.style.background = style.bg;
+  if (adapted.bg !== null) cloud.style.background = adapted.bg;
   cloud.classList.toggle('font-bold', style.bold);
   cloud.classList.toggle('font-italic', style.italic);
   cloud.classList.toggle('font-underline', style.underline);

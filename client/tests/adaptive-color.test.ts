@@ -1,0 +1,390 @@
+/**
+ * Адаптация пользовательских цветов под подложку темы (0.16.1, требование
+ * 26d53c26, задача 6e171b39).
+ *
+ * Проверяется ЧИСЛАМИ и на РЕАЛЬНЫХ темах проекта (12 блоков тема × режим из
+ * `lib/ui/themes/*.css`), а не на синтетических цветах:
+ *
+ *   • текст пользователя на подложке темы — ≥ 4.5 : 1 (WCAG AA);
+ *   • фон слоя как поверхность — текст темы на нём ≥ 4.5 : 1 (этот же цвет
+ *     уходит на экраны «Структуры»/«Дневник», где другого текста нет);
+ *   • полоса фокуса — ≥ 3 : 1 у ВИДИМОЙ полосы (композит с
+ *     `--focus-band-opacity`), в том числе поверх композита «тинт × картинка»
+ *     при максимальной плотности тинта;
+ *   • пара «цвет мысли × её фон» — ≥ 4.5 : 1;
+ *   • граничные цвета (чёрный, белый, насыщенные жёлтый/красный/синий, пастель)
+ *     не разгоняются в чистые #000/#fff: светлота производной ограничена;
+ *   • исходные значения не меняются — модуль ничего не персистит и не мутирует
+ *     входные данные;
+ *   • повторный вызов с теми же входами не пересчитывает (кэш).
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { beforeEach, describe, it } from 'node:test';
+
+import {
+  ADAPT_LIGHT_MAX,
+  ADAPT_LIGHT_MIN,
+  FRAME_CONTRAST_MIN,
+  FOCUS_BAND_OPACITY,
+  TEXT_CONTRAST_MIN,
+  adaptiveBandColor,
+  adaptiveCacheStats,
+  adaptiveColor,
+  bandColor,
+  bandContrast,
+  cachedAdaptiveBandColor,
+  cachedAdaptiveColor,
+  canvasBackdrop,
+  clearAdaptiveColorCache,
+  contrastRatio,
+  parseAlpha,
+  wallpaperBackdrop,
+} from '../src/renderer/lib/adaptive-color.js';
+import { parseCssColor, relativeLuminance, rgbToHsl } from '../src/renderer/lib/css-color.js';
+import {
+  WALLPAPER_TINT_ALPHA_MAX,
+  WALLPAPER_TINT_ALPHA_MIN,
+  wallpaperTintAlpha,
+  wallpaperTintColor,
+} from '../src/renderer/lib/wallpaper-image.js';
+import {
+  THEMES_DIR,
+  THEME_MODES,
+  declaredTokens,
+  readTheme,
+  themeBlockBody,
+  type ThemeMode,
+} from './theme-css.js';
+
+const THEMES = fs
+  .readdirSync(THEMES_DIR)
+  .filter((file) => file.endsWith('.css'))
+  .map((file) => file.replace(/\.css$/, ''))
+  .sort();
+
+/** Граничные пользовательские цвета: крайние и насыщенные. */
+const USER_COLORS = ['#000000', '#ffffff', '#ff0000', '#ffff00', '#0000ff', '#ffd1dc'] as const;
+
+/** Реалистичные пары «текст мысли × фон мысли» (пользователь задаёт обе). */
+const CLOUD_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ['#000000', '#ffffff'],
+  ['#ffffff', '#000000'],
+  ['#ff0000', '#ffff00'],
+  ['#ffff00', '#0000ff'],
+  ['#0000ff', '#ffd1dc'],
+  ['#ffd1dc', '#ff0000'],
+];
+
+interface ThemeBlock {
+  theme: string;
+  mode: ThemeMode;
+  tokens: Map<string, string>;
+}
+
+function themeBlocks(): ThemeBlock[] {
+  const blocks: ThemeBlock[] = [];
+  for (const theme of THEMES) {
+    const css = readTheme(theme);
+    for (const mode of THEME_MODES) {
+      const body = themeBlockBody(css, theme, mode);
+      assert.ok(body !== null, `${theme} (${mode}): нет блока режима`);
+      blocks.push({ theme, mode, tokens: declaredTokens(body) });
+    }
+  }
+  return blocks;
+}
+
+function rgb(value: string): [number, number, number] {
+  const parsed = parseCssColor(value);
+  assert.ok(parsed !== null, `не цвет: ${value}`);
+  return parsed;
+}
+
+function ratio(a: string, b: string): number {
+  return contrastRatio(rgb(a), rgb(b));
+}
+
+/**
+ * Подложка холста при ХУДШЕЙ для читаемости картинке: её светлота на
+ * противоположном конце шкалы от фона темы, поэтому тинт максимально плотный.
+ */
+function worstBackdrop(bg: string, inLayer: boolean): string {
+  const base = rgb(bg);
+  const baseLuminance = relativeLuminance(base[0], base[1], base[2]);
+  const picture = baseLuminance > 0.5 ? 0.03 : 0.97;
+  const tint = wallpaperTintColor(base, wallpaperTintAlpha(picture, baseLuminance, inLayer));
+  const backdrop = canvasBackdrop(bg, tint);
+  assert.ok(backdrop !== null, `подложка не посчитана (${bg})`);
+  return backdrop;
+}
+
+// ---------------------------------------------------------------------------
+// Арифметика и модель подложки
+// ---------------------------------------------------------------------------
+
+describe('адаптация цветов: арифметика и модель подложки', () => {
+  it('контраст по WCAG: чёрный на белом — 21 : 1', () => {
+    assert.equal(contrastRatio([0, 0, 0], [255, 255, 255]), 21);
+    assert.equal(contrastRatio([255, 255, 255], [255, 255, 255]), 1);
+  });
+
+  it('альфа разбирается из rgba/hsla/#rrggbbaa, из непрозрачного — null', () => {
+    assert.equal(parseAlpha('rgba(20, 30, 40, 0.3)'), 0.3);
+    assert.equal(parseAlpha('rgba(20, 30, 40, 30%)'), 0.3);
+    assert.ok(Math.abs((parseAlpha('#11223380') ?? 0) - 0x80 / 255) < 1e-9);
+    assert.equal(parseAlpha('#ffffff'), null);
+    assert.equal(parseAlpha(''), null);
+  });
+
+  it('тинт не складывается с фоном: с картинкой подложка — композит, без неё — фон', () => {
+    // Без тинта подложка равна фону.
+    assert.equal(canvasBackdrop('#eef0f4', null), '#eef0f4');
+    // С тинтом — композит между фоном и средней светлотой картинки.
+    const backdrop = wallpaperBackdrop('#eef0f4', 'rgba(238, 240, 244, 0.3)');
+    assert.ok(backdrop !== null);
+    const pictureLuminance = relativeLuminance(...rgb(backdrop));
+    const baseLuminance = relativeLuminance(...rgb('#eef0f4'));
+    assert.ok(
+      pictureLuminance < baseLuminance,
+      'светлая подложка под плотной вуалью обязана темнеть',
+    );
+    // Вуаль отсутствует (тинт не разобран) — подложка остаётся фоном.
+    assert.equal(wallpaperBackdrop('#eef0f4', 'transparent'), null);
+  });
+
+  it('полоса полупрозрачна: видимый цвет — композит с подложкой, контраст ниже «в цвете»', () => {
+    const backdrop = rgb('#eef0f4');
+    const stripe = rgb('#643da8');
+    const raw = contrastRatio(stripe, backdrop);
+    const visible = bandContrast(stripe, backdrop);
+    assert.ok(visible < raw, `видимая полоса контрастнее цвета (${visible} vs ${raw})`);
+    assert.equal(
+      visible,
+      contrastRatio(bandColor(stripe, backdrop, FOCUS_BAND_OPACITY), backdrop),
+      'видимая полоса считается как альфа-композит',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DoD: 12 комбинаций тема × режим
+// ---------------------------------------------------------------------------
+
+describe('адаптация цветов: контраст во всех 12 комбинациях тема × режим', () => {
+  it('текст пользователя на подложке темы ≥ 4.5 : 1', () => {
+    const failures: string[] = [];
+    let worst = { value: Number.POSITIVE_INFINITY, key: '' };
+    for (const block of themeBlocks()) {
+      const bg = block.tokens.get('--bg') ?? '';
+      for (const color of USER_COLORS) {
+        const adapted = adaptiveColor(color, [bg], TEXT_CONTRAST_MIN);
+        const value = ratio(adapted, bg);
+        if (value < worst.value) worst = { value, key: `${block.theme} ${block.mode} ${color}` };
+        if (value < TEXT_CONTRAST_MIN) {
+          failures.push(`${block.theme} ${block.mode} ${color} → ${adapted} ${value.toFixed(2)}`);
+        }
+      }
+    }
+    assert.deepEqual(failures, [], `провалы контраста текста:\n  ${failures.join('\n  ')}`);
+    assert.ok(worst.value >= TEXT_CONTRAST_MIN, `худший ${worst.value.toFixed(2)} (${worst.key})`);
+  });
+
+  it('фон слоя как поверхность: текст темы на нём ≥ 4.5 : 1', () => {
+    const failures: string[] = [];
+    for (const block of themeBlocks()) {
+      const text = block.tokens.get('--text') ?? '';
+      for (const color of USER_COLORS) {
+        const adapted = adaptiveColor(color, [text], TEXT_CONTRAST_MIN);
+        const value = ratio(adapted, text);
+        if (value < TEXT_CONTRAST_MIN) {
+          failures.push(`${block.theme} ${block.mode} ${color} → ${adapted} ${value.toFixed(2)}`);
+        }
+      }
+    }
+    assert.deepEqual(failures, [], `провалы контраста поверхности:\n  ${failures.join('\n  ')}`);
+  });
+
+  it('полоса фокуса ≥ 3 : 1 у видимой полосы, включая композит с картинкой', () => {
+    const failures: string[] = [];
+    let worst = { value: Number.POSITIVE_INFINITY, key: '' };
+    for (const block of themeBlocks()) {
+      const bg = block.tokens.get('--bg') ?? '';
+      // Основа — тинт 0.12…0.30, слой — тот же тинт на 0.8 (WALLPAPER_TINT_LAYER_FACTOR).
+      for (const inLayer of [false, true]) {
+        const backdrop = worstBackdrop(bg, inLayer);
+        for (const color of USER_COLORS) {
+          const stripe = adaptiveBandColor(color, backdrop);
+          const value = bandContrast(rgb(stripe), rgb(backdrop));
+          const key = `${block.theme} ${block.mode} ${color} ${inLayer ? 'слой' : 'основа'}`;
+          if (value < worst.value) worst = { value, key };
+          if (value < FRAME_CONTRAST_MIN) {
+            failures.push(`${key} → ${stripe} ${value.toFixed(2)}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(failures, [], `провалы контраста полосы:\n  ${failures.join('\n  ')}`);
+    assert.ok(
+      worst.value >= FRAME_CONTRAST_MIN,
+      `худшая полоса ${worst.value.toFixed(2)} : 1 (${worst.key})`,
+    );
+  });
+
+  it('пара «цвет мысли × её фон» ≥ 4.5 : 1', () => {
+    const failures: string[] = [];
+    for (const block of themeBlocks()) {
+      for (const [fg, bg] of CLOUD_PAIRS) {
+        const adapted = adaptiveColor(fg, [bg], TEXT_CONTRAST_MIN);
+        const value = ratio(adapted, bg);
+        if (value < TEXT_CONTRAST_MIN) {
+          failures.push(
+            `${block.theme} ${block.mode} ${fg}/${bg} → ${adapted} ${value.toFixed(2)}`,
+          );
+        }
+      }
+    }
+    assert.deepEqual(failures, [], `провалы контраста мысли:\n  ${failures.join('\n  ')}`);
+  });
+
+  it('тинт доходит до максимальной плотности, а не «где-то рядом»', () => {
+    for (const block of themeBlocks()) {
+      const bg = rgb(block.tokens.get('--bg') ?? '');
+      const baseLuminance = relativeLuminance(bg[0], bg[1], bg[2]);
+      const picture = baseLuminance > 0.5 ? 0 : 1;
+      assert.equal(
+        wallpaperTintAlpha(picture, baseLuminance, false),
+        WALLPAPER_TINT_ALPHA_MAX,
+        `${block.theme} (${block.mode}): худший тинт обязан быть максимальным`,
+      );
+      assert.ok(WALLPAPER_TINT_ALPHA_MIN > 0, 'вуаль не может исчезать совсем');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Граничные цвета и диапазон производных
+// ---------------------------------------------------------------------------
+
+describe('адаптация цветов: граничные цвета и диапазон производных', () => {
+  it('цвет, уже читаемый на подложке, возвращается без изменений', () => {
+    for (const block of themeBlocks()) {
+      const bg = block.tokens.get('--bg') ?? '';
+      const text = block.tokens.get('--text') ?? '';
+      assert.equal(
+        adaptiveColor(text, [bg], TEXT_CONTRAST_MIN),
+        text,
+        `${block.theme} (${block.mode}): читаемый текст перекрашен`,
+      );
+    }
+  });
+
+  it('производная не уходит в чистые #000/#fff: светлота в допустимом диапазоне', () => {
+    let adaptedCount = 0;
+    for (const color of USER_COLORS) {
+      for (const backdrop of ['#ffffff', '#000000', '#808080']) {
+        for (const target of [TEXT_CONTRAST_MIN, FRAME_CONTRAST_MIN]) {
+          const adapted = adaptiveColor(color, [backdrop], target);
+          // Уже читаемый цвет не перекрашивается — диапазон проверяем только у
+          // тех цветов, которые алгоритм действительно сдвинул.
+          if (adapted === color) continue;
+          adaptedCount += 1;
+          const lightness = rgbToHsl(rgb(adapted))[2];
+          assert.ok(
+            lightness >= ADAPT_LIGHT_MIN - 1e-9 && lightness <= ADAPT_LIGHT_MAX + 1e-9,
+            `${color} на ${backdrop}: светлота ${lightness.toFixed(3)} вне диапазона`,
+          );
+        }
+      }
+    }
+    assert.ok(adaptedCount >= 10, `диапазон проверен на ${adaptedCount} производных`);
+  });
+
+  it('насыщенность сохраняется, пока читаемость достижима без обесцвечивания', () => {
+    // Насыщенный жёлтый на светлой подложке: светлота спускается, тон остаётся.
+    const adapted = adaptiveColor('#ffff00', ['#eef0f4'], TEXT_CONTRAST_MIN);
+    const [hue, sat] = rgbToHsl(rgb(adapted));
+    assert.ok(Math.abs(hue - 60) < 1, `тон уехал: ${hue.toFixed(1)}°`);
+    assert.ok(sat > 0.9, `насыщенность потеряна: ${sat.toFixed(2)}`);
+  });
+
+  it('нечитаемый вход (не цвет) возвращается как есть — без выдуманных подстановок', () => {
+    assert.equal(adaptiveColor('не цвет', ['#ffffff'], TEXT_CONTRAST_MIN), 'не цвет');
+    assert.equal(adaptiveColor('#ff0000', [], TEXT_CONTRAST_MIN), '#ff0000');
+    assert.equal(adaptiveBandColor('#ff0000', 'не цвет'), '#ff0000');
+  });
+
+  it('полоса: на подложке без запаса контраста цвет уводится от неё, а не «в цвет»', () => {
+    const adapted = adaptiveBandColor('#000000', '#101010');
+    assert.ok(
+      bandContrast(rgb(adapted), rgb('#101010')) >= FRAME_CONTRAST_MIN,
+      `чёрная полоса на тёмном холсте осталась нечитаемой (${adapted})`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Кэш и неизменность исходников
+// ---------------------------------------------------------------------------
+
+describe('адаптация цветов: кэш производных и неизменность исходников', () => {
+  beforeEach(() => {
+    clearAdaptiveColorCache();
+  });
+
+  it('повторный вызов с теми же входами не пересчитывает', () => {
+    const backdrops = ['#eef0f4'];
+    const first = cachedAdaptiveColor('#ff0000', backdrops, TEXT_CONTRAST_MIN, 'current|light');
+    const second = cachedAdaptiveColor('#ff0000', backdrops, TEXT_CONTRAST_MIN, 'current|light');
+    assert.equal(second, first);
+    assert.deepEqual(
+      { computes: adaptiveCacheStats.computes, hits: adaptiveCacheStats.hits },
+      { computes: 1, hits: 1 },
+    );
+  });
+
+  it('другая тема/режим — другой ключ: производная считается заново', () => {
+    const backdrops = ['#1a1d23'];
+    cachedAdaptiveColor('#ff0000', backdrops, TEXT_CONTRAST_MIN, 'current|dark');
+    assert.equal(adaptiveCacheStats.computes, 1);
+    cachedAdaptiveColor('#ff0000', backdrops, TEXT_CONTRAST_MIN, 'nordic|dark');
+    assert.equal(adaptiveCacheStats.computes, 2);
+    assert.equal(adaptiveCacheStats.hits, 0);
+  });
+
+  it('кэш полосы отделён от кэша текста: разные пороги — разные ключи', () => {
+    const band = cachedAdaptiveBandColor('#ffffff', '#eef0f4', 'current|light');
+    const text = cachedAdaptiveColor('#ffffff', ['#eef0f4'], TEXT_CONTRAST_MIN, 'current|light');
+    assert.ok(
+      bandContrast(rgb(band), rgb('#eef0f4')) >= FRAME_CONTRAST_MIN,
+      `видимая полоса не читается (${band})`,
+    );
+    assert.ok(ratio(text, '#eef0f4') >= TEXT_CONTRAST_MIN, `текст не читается (${text})`);
+    // Общий ключ дал бы попадание на втором вызове — здесь его быть не может.
+    assert.equal(adaptiveCacheStats.computes, 2);
+    assert.equal(adaptiveCacheStats.hits, 0);
+  });
+
+  it('исходные данные не мутируются: ни строки, ни массив подложек', () => {
+    const backdrops = ['#eef0f4', '#101010'];
+    const snapshot = [...backdrops];
+    const source = '#ff0000';
+    const adapted = adaptiveColor(source, backdrops, TEXT_CONTRAST_MIN);
+    assert.equal(source, '#ff0000');
+    assert.deepEqual(backdrops, snapshot);
+    assert.notEqual(adapted, source, 'адаптация обязана вернуть производную, а не вход');
+  });
+
+  it('очистка кэша сбрасывает счётчики и пересчитывает', () => {
+    const backdrops = ['#eef0f4'];
+    cachedAdaptiveColor('#00ff00', backdrops, TEXT_CONTRAST_MIN, 'current|light');
+    clearAdaptiveColorCache();
+    assert.deepEqual(
+      { computes: adaptiveCacheStats.computes, hits: adaptiveCacheStats.hits },
+      { computes: 0, hits: 0 },
+    );
+    cachedAdaptiveColor('#00ff00', backdrops, TEXT_CONTRAST_MIN, 'current|light');
+    assert.equal(adaptiveCacheStats.computes, 1);
+  });
+});

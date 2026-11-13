@@ -2115,7 +2115,8 @@ export const zh = {
   'layers.light': '浅色',
   'layers.polosaFocus': '焦点条',
   'layers.fonHolsta': '画布背景',
-  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey': '用于%1主题的颜色；第二个变体通过亮度反转计算。',
+  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey':
+    '用于%1主题的颜色；第二个变体按第二主题的底色调整。',
   'layers.notSucceededSaveLayer': '无法保存层',
   'layers.propertiesBase': '基础层属性',
   'layers.propertiesLayer2': '层「%1」属性',

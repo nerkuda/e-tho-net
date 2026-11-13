@@ -80,7 +80,12 @@ import {
   type ZonePagingCounters,
 } from '../lib/zone-paging.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
-import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
+import {
+  LABEL_OPACITY,
+  currentLayerColors,
+  effectiveLayerStripe,
+  layerLabelView,
+} from '../lib/layer-colors.js';
 import { subscribeWallpaper } from '../lib/wallpaper-state.js';
 import { WALLPAPER_ATTR } from './wallpaper.js';
 import { store } from '../state.js';
@@ -1210,6 +1215,7 @@ function updateLayerLabel(): void {
     s.theme,
     Math.round(focusRow.getBoundingClientRect().height),
     Math.round(host.getBoundingClientRect().width),
+    effectiveLayerStripe(),
   );
   const key = `${view.visible}|${view.title}|${view.color}|${view.fontPx}`;
   if (key !== lastLabelKey) {

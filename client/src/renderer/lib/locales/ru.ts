@@ -3353,7 +3353,8 @@ export const ru = {
   'layers.light': 'светлой',
   'layers.polosaFocus': 'Полоса фокуса',
   'layers.fonHolsta': 'Фон холста',
-  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey': 'Цвета для %1 темы; второй вариант вычисляется инверсией светлоты.',
+  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey':
+    'Цвета для %1 темы; второй вариант подгоняется под подложку второй темы.',
   'layers.notSucceededSaveLayer': 'Не удалось сохранить слой',
   'layers.propertiesBase': 'Свойства основы',
   'layers.propertiesLayer2': 'Свойства слоя «%1»',

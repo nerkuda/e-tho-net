@@ -3263,7 +3263,8 @@ export const en = {
   'layers.light': 'light',
   'layers.polosaFocus': 'Focus strip',
   'layers.fonHolsta': 'Canvas background',
-  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey': 'Colors for the %1 theme; the second variant is computed by inverting lightness.',
+  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey':
+    'Colors for the %1 theme; the second variant is fitted to the second theme backdrop.',
   'layers.notSucceededSaveLayer': 'Failed to save the layer',
   'layers.propertiesBase': 'Base properties',
   'layers.propertiesLayer2': 'Properties of layer “%1”',
