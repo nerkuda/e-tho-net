@@ -1,5 +1,11 @@
 -- user_files (0.16.1, tasks 8e007e63 + 5db41abf; entity 62fd29b5, ADR a5888535).
 --
+-- ВНИМАНИЕ (задача 5db41abf). Эта миграция ПЕРЕПИСАНА НА МЕСТЕ (0.16.1 ещё не
+-- выпущена), а migrator учитывает только имя файла и не видит изменения
+-- содержимого. Стенды и рабочие каталоги, созданные до коммита 83cfc20c, НЕ
+-- стартуют («no such column: network_id»): сбросьте `_system.db` или пересоздайте
+-- таблицу `user_files`.
+--
 -- Files of the server-level user IN A NETWORK: the stored file belongs to the
 -- pair (user, network) — every network has its own map wallpaper (API operation
 -- 31ef478a, revision 2026-11-13). At the moment the single kind is

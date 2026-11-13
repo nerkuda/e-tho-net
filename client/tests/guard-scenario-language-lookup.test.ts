@@ -55,6 +55,7 @@ const LANGUAGE_CLEAN_SCENARIOS = [
   'ui-probe.42a7c0a1-mass-links.scenario.json',
   'ui-probe.42a7c0a1-trash-chip.scenario.json',
   'ui-probe.45248206-outside-removal.scenario.json',
+  'ui-probe.5db41abf-wallpaper-networks.scenario.json',
   'ui-probe.626b29bd-properties-add.scenario.json',
   'ui-probe.92172035-property-lifecycle.scenario.json',
   'ui-probe.bfe1bc24-reload-window.scenario.json',

@@ -326,7 +326,11 @@ describe(
         assert.equal(created['mime_type'], 'image/png');
         assert.equal(created['file_size'], bytes.length);
         assert.deepEqual(created['meta'], META);
-        assert.equal(created['url'], '/api/v1/users/me/wallpaper/raw');
+        assert.equal(
+          created['url'],
+          `/api/v1/users/me/wallpaper/raw?network_id=${ctx.networkA}`,
+          'url ведёт на байты ИМЕННО этой сети (иначе ссылка нерабочая)',
+        );
 
         const meta = await getMeta(ctx, ctx.alice);
         assert.equal(meta.statusCode, 200, meta.body);

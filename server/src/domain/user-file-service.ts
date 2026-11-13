@@ -31,7 +31,12 @@ import {
 import type { SystemDb, UserFileRow } from '../db/system-db.js';
 import { userFilesDir, usersRoot } from '../paths.js';
 
-/** Относительный путь байтов картинки в ответе `GET …/wallpaper` (поле `url`). */
+/**
+ * Относительный путь байтов картинки в ответе `GET …/wallpaper` (поле `url`).
+ * Без `?network_id=…` ссылка нерабочая: байты адресуются парой
+ * «пользователь × сеть», и сервер требует network_id у всех методов (ревизия
+ * 2026-11-13, задача 5db41abf).
+ */
 export const WALLPAPER_RAW_PATH = '/api/v1/users/me/wallpaper/raw';
 
 /** Расширение файла по mime — часть имени в каталоге и в `content-disposition`. */
@@ -187,7 +192,7 @@ export function wallpaperInfo(row: UserFileRow): WallpaperInfo {
     mime_type: row.mime_type,
     file_size: row.file_size,
     meta: parseStoredMeta(row.meta),
-    url: WALLPAPER_RAW_PATH,
+    url: `${WALLPAPER_RAW_PATH}?network_id=${encodeURIComponent(row.network_id)}`,
   };
 }
 

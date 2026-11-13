@@ -88,11 +88,11 @@
 
     {
       "name": "upload-wallpaper",
-      "eval": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 320, 180); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#e6e6e6'); ctx.fillStyle = g; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); await window.etn.me.uploadWallpaper({ data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return true; })()"
+      "eval": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 320, 180); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#e6e6e6'); ctx.fillStyle = g; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return true; })()"
     },
     {
       "name": "uploaded-state",
-      "probe": "(async () => { const s = await window.etn.me.getWallpaper(); return { status: s.status, source: s.source, data_url_ok: (s.data_url || '').startsWith('data:image/jpeg;base64,'), size_ok: (s.file_size || 0) > 0, hash_ok: (s.content_hash || '').length === 64 }; })()",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { status: s.status, source: s.source, data_url_ok: (s.data_url || '').startsWith('data:image/jpeg;base64,'), size_ok: (s.file_size || 0) > 0, hash_ok: (s.content_hash || '').length === 64 }; })()",
       "expect": {
         "status": "ok",
         "source": "server",
@@ -106,10 +106,10 @@
       "api": {
         "name": "wallpaper-on-server",
         "method": "GET",
-        "path": "/users/me/wallpaper",
-        "expression": "({ mime: data.mime_type, size_ok: data.file_size > 0, lum: data.meta.avg_luminance, width: data.meta.width, height: data.meta.height })"
+        "path": "/users/me/wallpaper?network_id={{networkId}}",
+        "expression": "({ mime: data.mime_type, size_ok: data.file_size > 0, lum: data.meta.avg_luminance, width: data.meta.width, height: data.meta.height, url_has_network: typeof data.url === 'string' && data.url.includes('network_id={{networkId}}') })"
       },
-      "expect": { "mime": "image/jpeg", "size_ok": true, "lum": 0.94, "width": 320, "height": 180 }
+      "expect": { "mime": "image/jpeg", "size_ok": true, "lum": 0.94, "width": 320, "height": 180, "url_has_network": true }
     },
 
     {
@@ -201,11 +201,11 @@
 
     {
       "name": "remove-wallpaper",
-      "eval": "window.etn.me.removeWallpaper()"
+      "eval": "window.etn.me.removeWallpaper('{{networkId}}')"
     },
     {
       "name": "removed-state",
-      "probe": "(async () => { const s = await window.etn.me.getWallpaper(); return { status: s.status }; })()",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { status: s.status }; })()",
       "expect": { "status": "none" }
     },
     {
@@ -257,7 +257,7 @@
 
     {
       "name": "reupload-for-cache",
-      "eval": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 320, 180); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#e6e6e6'); ctx.fillStyle = g; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); await window.etn.me.uploadWallpaper({ data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return true; })()"
+      "eval": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 320, 180); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#e6e6e6'); ctx.fillStyle = g; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return true; })()"
     },
     {
       "name": "reload-for-cache",
@@ -270,7 +270,7 @@
     },
     {
       "name": "wallpaper-from-cache-at-boot",
-      "probe": "(async () => { const s = await window.etn.me.getWallpaper(); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), state: s.status, source: s.source, image_var_nonempty: getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim().length > 0 }; })()",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), state: s.status, source: s.source, image_var_nonempty: getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim().length > 0 }; })()",
       "expect": { "attr": "on", "state": "ok", "source": "server", "image_var_nonempty": true }
     }
   ]
