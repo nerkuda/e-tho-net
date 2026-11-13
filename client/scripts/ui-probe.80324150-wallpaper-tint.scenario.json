@@ -1,12 +1,18 @@
 {
   "name": "80324150-wallpaper-tint",
-  "description": "Задача 80324150 «Фоновая картинка: клиент», ЭТАП 2 (срез заказчика 2026-11-13; элемент ef8112b0, требование e6d586d3, сценарий 3fe62610). Проверено на живом стенде: 1) без картинки фон экранов «Дневник», «События», «Публикации» и сетки «Структур» НЕ тонирован (переменная --wallpaper-screen-tint пуста, градиентный слой прозрачен); 2) после загрузки светлой картинки (avg_luminance 0.94) плотность тинта карты в диапазоне 0.12–0.30, тинт экранов в 0.072–0.18, слабее карты ровно в 0.6 раза (WALLPAPER_SCREEN_TINT_FACTOR), и каждый из 4 экранов реально получает слой linear-gradient этого цвета (структуры сохраняют точечную сетку); 3) после загрузки тёмной картинки (0.05) инварианты те же (тинт экранов слабее карты); 4) после «Убрать картинку» переменная снята, градиентные слои экранов прозрачны — возврат к фону темы/слоя; 5) доработка круга 2 по замечаниям заказчика: счётчик зоны лежит поверх всех слоёв (z=12) с непрозрачной тематической плашкой, подпись пустой зоны — выше сетки (z=2) с контуром цвета фона, полоса фокуса — плотность 0.7 (на 30 % прозрачнее) при fade 73px (честный ÷2 видимой протяжённости: ядро 67px + 2×73 = 213px вместо прежних 427px). Для счётчика сценарий засеивает трёх детей фокусной мысли через API. 6) блокер круга 2 закрыт пробой: клиент переключается в blue-topaz light с активной картинкой и перезагружается, затем проверяется счётчик зоны — плашка непрозрачная и равна --surface темы, текст тёмный, контраст ≥ 7 : 1 (прежний расчёт по --bg давал белый текст на белой плашке 1.00 : 1). Юнит-инвариант 12 блоков (6 тем × 2 режима) — сторож guard-canvas-overlay-layers.test.ts. 7) круг 3 среза (надписи не читались): подписи канвы (.zone-empty и .canvas-empty, включая вложенные состояния загрузки/ошибки) на картинке получают непрозрачную плашку --surface и текст --text; без картинки вид тематический (проба baseline-labels-plain: плашки и контура нет, цвет --text-faint). Пробы проверяют непрозрачность плашки, её совпадение с --surface темы, отсутствие text-shadow и контраст текста ≥ 7 : 1; в blue-topaz light с картинкой контраст подписи 19.3 : 1. Контраст --text/--surface в 12 блоках — сторож guard-canvas-overlay-layers.test.ts. Раздел «Оформление» проверяется через словарь ожиданий (ru/en), поиск UI — без русских литералов (сторож c73bcb60). Плотность ниже 0.12 и различимость картинки — юнит-тесты wallpaper-image.test.ts, сторожа guard-wallpaper-tint.test.ts и guard-canvas-overlay-layers.test.ts. «Слой слабее основы» живьём не проверяется: на стенде нет сети с собственными цветами слоя (initLayerTheme стирает ручной --layer-bg при каждом изменении стора) — покрыто юнит-тестом canvas-wallpaper.test.ts. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper-tint.scenario.json --server-language ru --keep --out .tmp/80324150/out-stage2",
+  "description": "Задача 80324150 «Фоновая картинка: клиент», ЭТАП 2 (срез заказчика 2026-11-13; элемент ef8112b0, требование e6d586d3, сценарий 3fe62610). Проверено на живом стенде: 1) без картинки фон экранов «Дневник», «События», «Публикации» и сетки «Структур» НЕ тонирован (переменная --wallpaper-screen-tint пуста, градиентный слой прозрачен); 2) после загрузки светлой картинки (avg_luminance 0.94) плотность тинта карты в диапазоне 0.12–0.30, тинт экранов в 0.072–0.18, слабее карты ровно в 0.6 раза (WALLPAPER_SCREEN_TINT_FACTOR), и каждый из 4 экранов реально получает слой linear-gradient этого цвета (структуры сохраняют точечную сетку); 3) после загрузки тёмной картинки (0.05) инварианты те же (тинт экранов слабее карты); 4) после «Убрать картинку» переменная снята, градиентные слои экранов прозрачны — возврат к фону темы/слоя; 5) доработка круга 2 по замечаниям заказчика: счётчик зоны лежит поверх всех слоёв (z=12) с непрозрачной тематической плашкой, подпись пустой зоны — выше сетки (z=2) с контуром цвета фона, полоса фокуса — плотность 0.7 (на 30 % прозрачнее) при fade 73px (честный ÷2 видимой протяжённости: ядро 67px + 2×73 = 213px вместо прежних 427px). Для счётчика сценарий засеивает трёх детей фокусной мысли через API. 6) блокер круга 2 закрыт пробой: клиент переключается в blue-topaz light с активной картинкой и перезагружается, затем проверяется счётчик зоны — плашка непрозрачная и равна --surface темы, текст тёмный, контраст ≥ 7 : 1 (прежний расчёт по --bg давал белый текст на белой плашке 1.00 : 1). Юнит-инвариант 12 блоков (6 тем × 2 режима) — сторож guard-canvas-overlay-layers.test.ts. 7) круг 3 среза (надписи не читались): подписи канвы (.zone-empty и .canvas-empty, включая вложенные состояния загрузки/ошибки) на картинке получают непрозрачную плашку --surface и текст --text; без картинки вид тематический (проба baseline-labels-plain: плашки и контура нет, цвет --text-faint). Пробы проверяют непрозрачность плашки, её совпадение с --surface темы, отсутствие text-shadow и контраст текста ≥ 7 : 1; в blue-topaz light с картинкой контраст подписи 19.3 : 1. Контраст --text/--surface в 12 блоках — сторож guard-canvas-overlay-layers.test.ts. Раздел «Оформление» проверяется через словарь ожиданий (ru/en), поиск UI — без русских литералов (сторож c73bcb60). Плотность ниже 0.12 и различимость картинки — юнит-тесты wallpaper-image.test.ts, сторожа guard-wallpaper-tint.test.ts и guard-canvas-overlay-layers.test.ts. «Слой слабее основы» живьём не проверяется: на стенде нет сети с собственными цветами слоя (initLayerTheme стирает ручной --layer-bg при каждом изменении стора) — покрыто юнит-тестом canvas-wallpaper.test.ts. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper-tint.scenario.json --server-language ru --keep --out .tmp/80324150/out-stage2 8) круг 6 (блокер проверки fef9350f, смена цвета фона слоя без смены id): обои выключены, создан и выбран слой с собственными цветами — счётчики зон считаются от --layer-bg (плашка 78 % --surface над фоном слоя); затем в «Свойствах слоя» меняется «Фон холста» при том же id — inline-цвет каждого .zone-count пересчитан от нового фона, контраст ≥ 7 : 1.",
   "timeout": 300000,
   "texts": {
     "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
     "userMenuTitle": { "ru": "Меню пользователя", "en": "User menu" },
     "userMenuSettings": { "ru": "Настройки", "en": "Settings" },
-    "settingsClientSection": { "ru": "Клиент", "en": "Client" }
+    "settingsClientSection": { "ru": "Клиент", "en": "Client" },
+    "layerMenuBase": { "ru": "Основа", "en": "Base" },
+    "layerCreate": { "ru": "Создать новый слой…", "en": "Create new layer…" },
+    "layerProps": { "ru": "Свойства слоя…", "en": "Layer properties…" },
+    "layerCreatePlaceholder": { "ru": "Например: Правки августа", "en": "e.g. August edits" },
+    "layersCanvasBg": { "ru": "Фон холста", "en": "Canvas background" },
+    "probeLayerTitle": { "ru": "Проба фона слоя", "en": "Layer background probe" }
   },
   "steps": [
     {
@@ -484,6 +490,152 @@
       "name": "state-none",
       "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { status: s.status }; })()",
       "expect": { "status": "none" }
+    },
+
+    {
+      "name": "layer-menu-open",
+      "click": "button[title=\"{{text:layerMenuBase}}\"], button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+
+    {
+      "name": "layer-menu-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+
+    {
+      "name": "layer-create-item",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerCreate}}'); if (row === undefined) throw new Error('create-layer item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+
+    {
+      "name": "layer-create-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop input[placeholder=\"{{text:layerCreatePlaceholder}}\"]') !== null"
+    },
+
+    {
+      "name": "fill-layer-title",
+      "click": "input[placeholder=\"{{text:layerCreatePlaceholder}}\"]"
+    },
+
+    {
+      "name": "layer-title-typed",
+      "text": "Проба фона слоя"
+    },
+
+    {
+      "name": "layer-title-value",
+      "probe": "document.querySelector('.dialog-backdrop input[placeholder=\"{{text:layerCreatePlaceholder}}\"]').value",
+      "expect": "Проба фона слоя"
+    },
+
+    {
+      "name": "create-layer",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+
+    {
+      "name": "layer-created",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null && document.querySelector('.canvas') !== null"
+    },
+
+    {
+      "name": "layer-bg-applied",
+      "timeout": 30000,
+      "waitFor": "getComputedStyle(document.documentElement).getPropertyValue('--layer-bg').trim() !== ''"
+    },
+
+    {
+      "name": "layer-id-before",
+      "probe": "(async () => {\n  const list = await window.etn.layers.list('{{networkId}}');\n  const current = list.find((l) => l.current === true) ?? null;\n  return current === null ? null : current.id;\n})()"
+    },
+
+    {
+      "name": "counter-layer-bg-branch",
+      "probe": "(() => { const parseCss = (value) => {\n    const raw = String(value).trim().toLowerCase();\n    if (raw.startsWith('#')) {\n      const hex = raw.length === 4 ? raw.slice(1).split('').map((c) => c + c).join('') : raw.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(raw);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const expectedText = (surfaceRgb, bgRgb, wallpaperOn) => {\n    const under = wallpaperOn ? surfaceRgb : surfaceRgb.map((c, i) => SHARE * c + (1 - SHARE) * bgRgb[i]);\n    return lum(under) > 0.35 ? '#1f242d' : '#ffffff';\n  };\n  const root = getComputedStyle(document.documentElement);\n  const surface = parseCss(root.getPropertyValue('--surface').trim());\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const bg = parseCss(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const expected = surface === null || bg === null ? null : expectedText(surface.rgb, bg.rgb, wallpaper);\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = parseCss(st.backgroundColor);\n    const fg = parseCss(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(getComputedStyle(el).color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  return {\n    wallpaper_off: wallpaper === false,\n    layer_bg: layerBgText.toLowerCase(),\n    layer_bg_own: layerBgText !== '' && layerBgText !== themeBgText,\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => { const actual = parseCss(f.color); const want = parseCss(expected); return actual !== null && want !== null && actual.rgb.every((v, i) => Math.abs(v - want.rgb[i]) < 1); }),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "layer_bg": "#ded8ec",
+        "layer_bg_own": true,
+        "expected_text": "#1f242d",
+        "counter_present": true,
+        "all_expected_text": true,
+        "all_plate_share": true,
+        "min_contrast": 14.54,
+        "contrast_ok": true
+      }
+    },
+
+    {
+      "name": "layer-menu-open-props",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+
+    {
+      "name": "layer-menu-visible-props",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+
+    {
+      "name": "layer-props-item",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+
+    {
+      "name": "layer-props-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+
+    {
+      "name": "set-layer-bg-white",
+      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); if (row === undefined) throw new Error('canvas background row not found'); const hex = row.querySelector('input.ui-color-hex'); if (hex === null) throw new Error('hex input not found'); hex.value = '#ffffff'; hex.dispatchEvent(new Event('change', { bubbles: true })); return hex.value; })()"
+    },
+
+    {
+      "name": "layer-bg-hex-value",
+      "probe": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); return row === undefined ? null : (row.querySelector('input.ui-color-hex') || {}).value; })()",
+      "expect": "#ffffff"
+    },
+
+    {
+      "name": "save-layer-props",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+
+    {
+      "name": "layer-props-saved",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+
+    {
+      "name": "layer-bg-white-applied",
+      "timeout": 30000,
+      "waitFor": "(() => { const v = getComputedStyle(document.documentElement).getPropertyValue('--layer-bg').trim().toLowerCase(); return v === '#ffffff' || v === 'rgb(255, 255, 255)'; })()"
+    },
+
+    {
+      "name": "layer-id-after",
+      "probe": "(async () => {\n  const list = await window.etn.layers.list('{{networkId}}');\n  const current = list.find((l) => l.current === true) ?? null;\n  return current === null ? null : current.id;\n})()",
+      "expectFrom": "layer-id-before"
+    },
+
+    {
+      "name": "counter-layer-bg-changed",
+      "probe": "(() => { const parseCss = (value) => {\n    const raw = String(value).trim().toLowerCase();\n    if (raw.startsWith('#')) {\n      const hex = raw.length === 4 ? raw.slice(1).split('').map((c) => c + c).join('') : raw.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(raw);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const expectedText = (surfaceRgb, bgRgb, wallpaperOn) => {\n    const under = wallpaperOn ? surfaceRgb : surfaceRgb.map((c, i) => SHARE * c + (1 - SHARE) * bgRgb[i]);\n    return lum(under) > 0.35 ? '#1f242d' : '#ffffff';\n  };\n  const root = getComputedStyle(document.documentElement);\n  const surface = parseCss(root.getPropertyValue('--surface').trim());\n  const layerBgText = root.getPropertyValue('--layer-bg').trim().toLowerCase();\n  const bg = parseCss(layerBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const expected = surface === null || bg === null ? null : expectedText(surface.rgb, bg.rgb, wallpaper);\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = parseCss(st.backgroundColor);\n    const fg = parseCss(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(getComputedStyle(el).color || '').toLowerCase(),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  return {\n    wallpaper_off: wallpaper === false,\n    layer_bg_is_white: layerBgText === '#ffffff' || layerBgText === 'rgb(255, 255, 255)',\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => { const actual = parseCss(f.color); const want = parseCss(expected); return actual !== null && want !== null && actual.rgb.every((v, i) => Math.abs(v - want.rgb[i]) < 1); }),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "layer_bg_is_white": true,
+        "expected_text": "#1f242d",
+        "counter_present": true,
+        "all_expected_text": true,
+        "min_contrast": 15.57,
+        "contrast_ok": true
+      }
     }
   ]
 }

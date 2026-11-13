@@ -283,7 +283,7 @@
     {
       "name": "app-ready-for-cache",
       "timeout": 60000,
-      "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      "waitFor": "document.readyState === 'complete' && window.etn !== undefined && document.querySelector('#app > .workspace, #app > .screen') !== null"
     },
     {
       "name": "wallpaper-from-cache-at-boot",

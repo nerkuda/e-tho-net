@@ -462,8 +462,9 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     // ближайшего рендера. Тема/режим/слой в `canvasRenderKey` НЕ входят
     // намеренно — полный рендер канвы на каждый переключатель дорог и ломает
     // прокрутку зон; здесь пересчёт точечный (getComputedStyle + позиции трёх
-    // индикаторов). Ключ включает `--layer-bg`: слой с собственными цветами
-    // меняет фактический фон под плашкой без смены данных.
+    // индикаторов). Ключ строится по ФАКТИЧЕСКОМУ фону (`--layer-bg` либо
+    // `--bg`), а не по id слоя: правка цвета активного слоя меняет фон, не
+    // меняя id (блокер проверки fef9350f).
     const chromeKey = zoneChromeKey();
     if (chromeKey !== lastZoneChromeKey) {
       refreshZoneCounterChrome();
@@ -1926,16 +1927,25 @@ function paintZoneIndicators(): void {
 }
 
 /**
- * Подпись внешнего вида счётчиков: тема, режим, активный слой и наличие
- * картинки. Всё, от чего зависит плашка под цифрой и её цвет, но что НЕ
+ * Подпись внешнего вида счётчиков: тема, режим, активный слой, картинка и
+ * ФАКТИЧЕСКИЙ фон под плашкой. Всё, от чего зависит цвет цифры, но что НЕ
  * входит в {@link canvasRenderKey} — смена любой части требует пересчёта
- * inline-цвета немедленно (ошибка f245c5ac). Смена слоя меняет `--layer-bg`
- * (13-layers.md §2.2a), а с ней — фактический фон под полупрозрачной плашкой.
+ * inline-цвета немедленно (ошибка f245c5ac).
+ *
+ * Фон читается из живых CSS-переменных (`--layer-bg` слоя, иначе `--bg`
+ * темы), а не выводится из id слоя: правка цвета активного слоя («Свойства
+ * слоя» → «Фон холста» → Сохранить) перезаписывает `--layer-bg`, оставляя id
+ * прежним (блокер проверки fef9350f), поэтому ключ по id такую правку не
+ * видел. То же чтение ловит смену фона без тика store (hot-reload темы/CSS).
+ * Одно чтение стиля на тик store — как в `refreshWallpaperBackdrop`.
  */
 function zoneChromeKey(): string {
   const s = store.state;
+  const rootStyle = getComputedStyle(document.documentElement);
+  const layerBg = rootStyle.getPropertyValue('--layer-bg').trim();
+  const background = layerBg !== '' ? layerBg : rootStyle.getPropertyValue('--bg').trim();
   const wallpaper = document.documentElement.getAttribute?.(WALLPAPER_ATTR) ?? '';
-  return `${s.uiTheme}|${s.theme}|${s.currentLayer?.id ?? ''}|${wallpaper}`;
+  return `${s.uiTheme}|${s.theme}|${s.currentLayer?.id ?? ''}|${wallpaper}|${background}`;
 }
 
 /**

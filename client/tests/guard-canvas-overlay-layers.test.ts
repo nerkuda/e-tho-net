@@ -1041,4 +1041,58 @@ describe('сторож: смена режима перекрашивает те�
     dispose();
     mountHost = null;
   });
+
+  it('правка цвета фона активного слоя (id тот же) перекрашивает каждый счётчик', async () => {
+    // Блокер проверки fef9350f: путь продукта «Свойства слоя» → «Фон холста» →
+    // Сохранить кладёт `currentLayer` с ПРЕЖНИМ id (`screens/layers.ts`), а
+    // `refreshLayerTheme` перезаписывает `--layer-bg` (`lib/layer-colors.ts`).
+    // Ключ по id такой правки не видел — цифры оставались от старого фона
+    // (белые на светлой плашке, ≈1.9 : 1) до ближайшего рендера. Ключ по
+    // ФАКТИЧЕСКОМУ фону ловит её сразу, без рендера и без смены id.
+    const LAYER = { id: 'layer-own', title: 'Свой слой' };
+    const layerEcho = (background: string): Record<string, unknown> => ({
+      id: LAYER.id,
+      title: LAYER.title,
+      is_base: false,
+      colors: {
+        background: { light: background, dark: background },
+        focus_stripe: { light: '#7e57c2', dark: '#7e57c2' },
+      },
+    });
+    const dispose = await mount('current', 'light', {
+      '--surface': '#aaaaaa',
+      '--bg': '#101010',
+    });
+    store.update({ layers: [layerEcho('#101010')] as never, currentLayer: { ...LAYER } });
+    setRootTokens({ '--layer-bg': '#101010' });
+    await settle(2);
+    const darkLayerColors = counters().map((element) => String(element.style.color));
+    assert.ok(
+      darkLayerColors.length > 0 && darkLayerColors.every((color) => color === '#ffffff'),
+      `тёмный фон слоя — белые цифры, получено: ${darkLayerColors.join(', ')}`,
+    );
+    assert.deepEqual(counterColorProblems(false), []);
+
+    // Правка цвета «Фон холста» = #ffffff при том же id слоя.
+    setRootTokens({ '--layer-bg': '#ffffff' });
+    store.update({ layers: [layerEcho('#ffffff')] as never, currentLayer: { ...LAYER } });
+    await settle(2);
+    const afterEditColors = counters().map((element) => String(element.style.color));
+    assert.notDeepEqual(
+      afterEditColors,
+      darkLayerColors,
+      'смена фона слоя при неизменном id обязана перекрасить счётчики',
+    );
+    assert.ok(
+      afterEditColors.every((color) => color === '#1f242d'),
+      `светлый фон слоя — тёмные цифры, получено: ${afterEditColors.join(', ')}`,
+    );
+    assert.deepEqual(
+      counterColorProblems(false),
+      [],
+      'после правки фон читается как --layer-bg, а не прежний',
+    );
+    dispose();
+    mountHost = null;
+  });
 });
