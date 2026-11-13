@@ -874,7 +874,7 @@
    темы: как цвет текста фокус-цвет нечитаем в части тем (см. выше). */
 .pub-toc-line.pub-toc-selected {
   background: var(--surface-2);
-  box-shadow: inset 2px 0 0 var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  box-shadow: inset 2px 0 0 var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   color: var(--focus-ring-contrast);
 }
 

@@ -258,7 +258,7 @@
 }
 
 .search-hit.selected {
-  box-shadow: inset 2px 0 0 var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  box-shadow: inset 2px 0 0 var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
 }
 
 /* Подсветка совпадений запроса: `<mark>` серверных сниппетов и такая же

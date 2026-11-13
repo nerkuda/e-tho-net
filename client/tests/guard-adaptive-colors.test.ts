@@ -124,6 +124,7 @@ const SCREEN_RING_CSS = [
   path.join(RENDERER_ROOT, 'styles', 'editor.css'),
   path.join(RENDERER_ROOT, 'styles', 'filter-tree.css'),
   path.join(RENDERER_ROOT, 'styles', 'screens', 'chronicle.css'),
+  path.join(RENDERER_ROOT, 'styles', 'screens', 'search.css'),
   path.join(RENDERER_ROOT, 'styles', 'screens', 'publications.css'),
   path.join(RENDERER_ROOT, 'styles', 'screens', 'onboarding-networks.css'),
 ]
@@ -454,20 +455,28 @@ function ringProblems(
   blocks: readonly ThemeBlock[],
   adapt: (source: string, surfaces: readonly string[]) => string = (source, surfaces) =>
     adaptiveColor(source, surfaces, FRAME_CONTRAST_MIN),
+  adaptWithoutSurface2 = false,
 ): string[] {
   const problems: string[] = [];
   for (const block of blocks) {
     const label = `${block.theme} (${block.mode})`;
     const surface = block.tokens.get('--surface') ?? '';
+    const surface2 = block.tokens.get('--surface-2') ?? '';
     const text = block.tokens.get('--text') ?? '';
     const accent = block.tokens.get('--focus-accent') ?? block.tokens.get('--accent') ?? '';
     // Источники кольца: пользовательские цвета полосы и фокус-акцент основы.
     const sources = [...USER_COLORS, accent];
     for (const rawBase of backdropBases(block)) {
       const base = adaptiveColor(rawBase, [text], TEXT_CONTRAST_MIN);
-      const surfaces = [surface, base].filter((value) => value !== '');
+      const surfaces = [surface, surface2, base].filter((value) => value !== '');
+      // Полоса-индикатор 2–3 px стоит на строках списков, закрашенных
+      // `--surface-2`, поэтому кольцо обязано читаться и на ней. Мутация
+      // `adaptWithoutSurface2` возвращает прежнюю подгонку — скан краснеет.
+      const adaptSurfaces = adaptWithoutSurface2
+        ? [surface, base].filter((value) => value !== '')
+        : surfaces;
       for (const source of sources) {
-        const ring = adapt(source, surfaces);
+        const ring = adapt(source, adaptSurfaces);
         for (const target of surfaces) {
           const value = contrastRatio(rgb(ring), rgb(target));
           if (value < FRAME_CONTRAST_MIN) {
@@ -514,6 +523,12 @@ describe('сторож: адаптация цветов — контраст н�
     const blocks = themeBlocks();
     const failures = ringProblems(blocks);
     assert.deepEqual(failures, [], `кольца экранов:\n  ${failures.join('\n  ')}`);
+    // Кольцо, подогнанное без --surface-2 (прежняя модель), не дотягивает
+    // 3 : 1 на строках списков — обязано краснить.
+    assert.ok(
+      ringProblems(blocks, undefined, true).length > 0,
+      'кольцо без --surface-2 обязано ловиться',
+    );
     // 1. Кольцо без адаптации (белая полоса на белой поверхности — 1 : 1).
     assert.ok(
       ringProblems(blocks, (source) => source).length > 0,
@@ -728,6 +743,30 @@ function sourceProblems(files: {
   if (files.canvasCss.includes('--layer-focus-ring-screen')) {
     problems.push('полоса карты переведена на экранное кольцо — на карте нужна полоса');
   }
+  // Inset-полоски 2–3 px (строки хроники, поиска, публикаций) — индикатор
+  // активного элемента на поверхности: тот же экранный токен кольца, не полоса
+  // карты. Мягкие 18 %-фоны по-прежнему на --layer-focus-stripe (их не трогаем).
+  const stripeInset = /(?:^|[;{\s])box-shadow\s*:[^;{}]*inset[^;{}]*var\(--layer-focus-stripe/;
+  if (stripeInset.test(files.screenCss)) {
+    problems.push(
+      'inset-полоска экрана берёт полосу карты (--layer-focus-stripe) вместо кольца поверхностей',
+    );
+  }
+  const insetRules = [...files.screenCss.matchAll(/box-shadow\s*:[^;{}]*inset[^;{}]*/g)].map(
+    (match) => match[0],
+  );
+  const ringInsets = insetRules.filter((rule) => rule.includes('var(--layer-focus-ring-screen'));
+  if (ringInsets.length < 3) {
+    problems.push(
+      `inset-полосок на кольце поверхностей ${ringInsets.length}, ожидалось не меньше 3`,
+    );
+  }
+  if (
+    !files.adaptiveContext.includes("getPropertyValue('--surface-2')") ||
+    !/ringSurfaces\s*=\s*\[surface,\s*surface2,\s*base\]/.test(files.adaptiveContext)
+  ) {
+    problems.push('adaptive-context.ts: экранное кольцо считается без --surface-2');
+  }
 
   // Диалог «Свойства слоя»: пара слотов — общий модуль, прямая инверсия запрещена.
   if (!files.layerDialog.includes('layerColorPair(')) {
@@ -861,6 +900,34 @@ describe('сторож: адаптация цветов — оформление
     };
     assert.notEqual(noRingWrite.layerColors, files.layerColors, 'мутация записи не применилась');
     assert.ok(sourceProblems(noRingWrite).length > 0, 'отсутствие записи кольца обязано ловиться');
+    // 11. Inset-полоска снова берёт полосу карты — индикатор на поверхности
+    //     должен краснеть (доработка по приёмке: chronicle/search/publications).
+    const insetOnStripe = {
+      ...files,
+      screenCss: files.screenCss.replace(
+        'box-shadow: inset 2px 0 0 var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));',
+        'box-shadow: inset 2px 0 0 var(--layer-focus-stripe, var(--focus-accent, var(--accent)));',
+      ),
+    };
+    assert.notEqual(insetOnStripe.screenCss, files.screenCss, 'мутация inset-полоски не применилась');
+    assert.ok(
+      sourceProblems(insetOnStripe).length > 0,
+      'inset-полоска на полосе карты обязана ловиться',
+    );
+    // 12. Кольцо адаптировано к --surface и слою, но не к --surface-2 (прежнее
+    //     поведение): строки списков дают < 3 : 1.
+    const insetNoSurface2 = {
+      ...files,
+      adaptiveContext: files.adaptiveContext.replace(
+        "[surface, surface2, base]",
+        '[surface, base]',
+      ),
+    };
+    assert.notEqual(insetNoSurface2.adaptiveContext, files.adaptiveContext);
+    assert.ok(
+      sourceProblems(insetNoSurface2).length > 0,
+      'кольцо без --surface-2 обязано ловиться',
+    );
   });
 });
 
@@ -886,6 +953,7 @@ describe('сторож: refreshLayerTheme пишет производные, и�
       '--bg',
       '--text',
       '--surface',
+      '--surface-2',
       '--cursor',
       '--selection',
       '--focus-accent',
@@ -1021,6 +1089,12 @@ describe('сторож: refreshLayerTheme пишет производные, и�
     assert.ok(
       contrastRatio(rgb(ring), rgb(bg)) >= FRAME_CONTRAST_MIN,
       `кольцо не читается на поверхности слоя: ${ring} / ${bg}`,
+    );
+    // Строки списков закрашены `--surface-2`: inset-полоска на них читается.
+    assert.ok(
+      contrastRatio(rgb(ring), rgb(root.style.getPropertyValue('--surface-2'))) >=
+        FRAME_CONTRAST_MIN,
+      `кольцо не читается на --surface-2: ${ring}`,
     );
     // Исходники пользователя в сторе не тронуты.
     assert.deepEqual(

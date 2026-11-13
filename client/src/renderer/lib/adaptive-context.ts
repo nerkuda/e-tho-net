@@ -127,6 +127,7 @@ export function adaptLayerColors(colors: LayerColorInputs, scope: string): Adapt
   const styles = getComputedStyle(document.documentElement);
   const text = styles.getPropertyValue('--text').trim();
   const surface = styles.getPropertyValue('--surface').trim();
+  const surface2 = styles.getPropertyValue('--surface-2').trim();
   const themeBg = styles.getPropertyValue('--bg').trim();
   if (text === '' || themeBg === '') {
     // Тема ещё не применена — производные не считаем, действуют фолбэки CSS.
@@ -153,15 +154,17 @@ export function adaptLayerColors(colors: LayerColorInputs, scope: string): Adapt
       ? colors.focusStripe
       : cachedAdaptiveBandColor(colors.focusStripe, backdrop, scope);
   // Кольцо экранов живёт на поверхности, а не на холсте: контур непрозрачен,
-  // поэтому порог 3 : 1 считается напрямую — и к `--surface` темы, и к
-  // фактической поверхности слоя (`--layer-bg` на экранах структур/дневника).
+  // поэтому порог 3 : 1 считается напрямую — к `--surface` и `--surface-2`
+  // темы, и к фактической поверхности слоя (`--layer-bg` на экранах
+  // структур/дневника). `--surface-2` обязателен: он закрашивает строки
+  // списков (хроника, поиск, публикации), где inset-полоска 2–3 px и стоит.
   // Источник кольца — полоса слоя, а на основе — фокус-акцент темы
   // (`--focus-accent`): у основы своей полосы нет, но экранные кольца у неё
   // есть, и 3 : 1 обязаны держаться и там (nordic light даёт 2.47 : 1 на
   // `--surface` без подгонки).
   const accent = styles.getPropertyValue('--focus-accent').trim();
   const ringSource = colors.focusStripe ?? accent;
-  const ringSurfaces = [surface, base].filter((value) => value !== '');
+  const ringSurfaces = [surface, surface2, base].filter((value) => value !== '');
   const focusRing =
     ringSource === '' || ringSurfaces.length === 0
       ? null
