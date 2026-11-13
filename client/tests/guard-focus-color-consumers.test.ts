@@ -44,6 +44,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { UI_THEME_NAMES } from '@etn/shared';
+
 import { listSourceFiles } from './guard-helpers.js';
 import { RENDERER_ROOT } from './renderer-css.js';
 import {
@@ -83,8 +85,12 @@ const ACCENT_VAR = /var\(\s*--accent(?:-[a-z]+)?\s*[,)]/;
 /** Прямой цвет: hex или функция цвета. */
 const COLOR_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|oklch|oklab|lab|lch)\(/i;
 
-/** Тема интерфейса, в которой объявлен токен-набор. */
-const THEME_NAMES = ['current', 'blue-topaz', 'catppuccin', 'nordic', 'retronotes', 'wasp'];
+/**
+ * Темы версии — из единственного источника `@etn/shared` (ADR de24adef:
+ * 6 тем × 2 режима). Локальный список запрещён: новая тема обязана попадать
+ * в проверку сама, а не после правки сторожа (задача 2bf4b53e).
+ */
+const THEME_NAMES = UI_THEME_NAMES;
 
 /** Контрастный кант темы — цвет текста для текстовых ролей фокуса. */
 const TEXT_CONTRAST_VAR = '--focus-ring-contrast';

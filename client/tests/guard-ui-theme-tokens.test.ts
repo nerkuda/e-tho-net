@@ -507,6 +507,82 @@ export function colorLiteralsOutsideThemes(
   return out;
 }
 
+/**
+ * Токены ВЕРСИИ вне наборов тем (0.16.1): рантайм-производные и
+ * пользовательские. В файлах тем они не объявляются — иначе тема перебила бы
+ * расчёт или пользовательскую настройку. Поэтому их полнота проверяется
+ * отдельно: у каждого рантайм-токена есть ПРОИЗВОДИТЕЛЬ в TS и ПОТРЕБИТЕЛЬ в
+ * CSS, у каждого пользовательского — объявление в `styles/tokens.css`;
+ * ни один из них не объявлен в теме.
+ */
+const VERSION_RUNTIME_TOKENS = [
+  // кольцо фокуса экранов — производное от --surface/--surface-2 и поверхности
+  // слоя (задачи 136575c9, 6e171b39)
+  { token: '--layer-focus-ring-screen', producer: 'lib/layer-colors.ts' },
+  // рамки трёх состояний мысли (задача c6d74fd4)
+  { token: '--frame-open', producer: 'lib/cloud-frames.ts' },
+  { token: '--frame-current', producer: 'lib/cloud-frames.ts' },
+  { token: '--frame-selected', producer: 'lib/cloud-frames.ts' },
+] as const;
+
+/** Пользовательские токены версии: шрифты бандла и сетка холста. */
+const VERSION_USER_TOKENS = ['--user-font-ui', '--user-font-mono', '--user-canvas-dot'] as const;
+
+/**
+ * Нарушения полноты токенов версии. `tsFiles` — TS рендерера (относительный
+ * путь → содержимое), `cssFiles` — CSS рендерера, `themes` — файлы тем.
+ */
+export function versionTokenProblems(
+  tsFiles: ReadonlyMap<string, string>,
+  cssFiles: ReadonlyMap<string, string>,
+  themes: ReadonlyArray<{ name: string; css: string }>,
+): string[] {
+  const problems: string[] = [];
+  const allCss = [...cssFiles.values()].join('\n');
+  const themeBodies = themes.map((theme) => ({
+    name: theme.name,
+    body: stripCssComments(theme.css),
+  }));
+  for (const { token, producer } of VERSION_RUNTIME_TOKENS) {
+    const source = tsFiles.get(producer);
+    if (source === undefined) {
+      problems.push(`${token}: нет файла-производителя ${producer}`);
+    } else if (!source.includes(`setProperty('${token}'`)) {
+      problems.push(`${token}: ${producer} не выставляет токен (setProperty)`);
+    }
+    if (!new RegExp(`var\\(\\s*${token}\\s*[,)]`).test(allCss)) {
+      problems.push(`${token}: токен никем не потребляется в CSS`);
+    }
+    for (const theme of themeBodies) {
+      if (new RegExp(`${token}\\s*:`).test(theme.body)) {
+        problems.push(`${token}: объявлен в теме ${theme.name} — перебьёт рантайм-расчёт`);
+      }
+    }
+  }
+  const tokensCss = cssFiles.get('styles/tokens.css') ?? '';
+  for (const token of VERSION_USER_TOKENS) {
+    if (!new RegExp(`${token}\\s*:`).test(tokensCss)) {
+      problems.push(`${token}: не объявлен в styles/tokens.css`);
+    }
+    for (const theme of themeBodies) {
+      if (new RegExp(`${token}\\s*:`).test(theme.body)) {
+        problems.push(`${token}: объявлен в теме ${theme.name} — это пользовательская настройка`);
+      }
+    }
+  }
+  return problems;
+}
+
+/** TS рендерера: относительный путь `/` → содержимое. */
+function rendererTsFiles(): Map<string, string> {
+  const files = new Map<string, string>();
+  for (const abs of listSourceFiles(RENDERER_ROOT, { extensions: ['.ts'] })) {
+    const rel = path.relative(RENDERER_ROOT, abs).split(path.sep).join('/');
+    files.set(rel, fs.readFileSync(abs, 'utf8'));
+  }
+  return files;
+}
+
 /** CSS рендерера (относительный путь с `/` + содержимое). */
 function rendererCssFiles(): Array<{ rel: string; css: string }> {
   return listSourceFiles(RENDERER_ROOT, { extensions: ['.css'] })
@@ -577,6 +653,46 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
       }
     }
     assert.deepEqual(problems, [], problems.join('\n'));
+  });
+
+  it('токены версии вне тем замкнуты: производитель в TS, потребитель в CSS, не в теме', () => {
+    const themes = THEME_NAMES.map((name) => ({ name, css: readTheme(name) }));
+    const cssFiles = new Map(rendererCssFiles().map((file) => [file.rel, file.css] as const));
+    const problems = versionTokenProblems(rendererTsFiles(), cssFiles, themes);
+    assert.deepEqual(problems, [], `токены версии:\n${problems.join('\n')}`);
+
+    // Негативная проба на РЕАЛЬНОМ производителе: строка setProperty пропала.
+    const ts = rendererTsFiles();
+    const producer = 'lib/layer-colors.ts';
+    const withoutRing = new Map(ts);
+    withoutRing.set(
+      producer,
+      (ts.get(producer) ?? '').replace(
+        "style.setProperty('--layer-focus-ring-screen', vars.focusRing)",
+        'void vars.focusRing',
+      ),
+    );
+    assert.notEqual(withoutRing.get(producer), ts.get(producer), 'мутация производителя не применилась');
+    assert.ok(
+      versionTokenProblems(withoutRing, cssFiles, themes).some((p) =>
+        p.includes('--layer-focus-ring-screen'),
+      ),
+      'токен без производителя обязан краснить',
+    );
+
+    // Негативная проба: рантайм-токен объявили в теме — тема перебьёт расчёт.
+    const themeWithRuntime = [
+      {
+        name: 'demo',
+        css: "[data-theme='demo'][data-mode='light'] { --frame-open: #112233; }",
+      },
+    ];
+    assert.ok(
+      versionTokenProblems(ts, cssFiles, themeWithRuntime).some((p) =>
+        p.includes('--frame-open'),
+      ),
+      'токен версии в файле темы обязан краснить',
+    );
   });
 
   it('файлы тем содержат только блоки значений своей темы (ни классов, ни правил)', () => {

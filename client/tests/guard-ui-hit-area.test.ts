@@ -43,9 +43,15 @@ const read = (rel: string): string =>
 
 const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Значение токена-длины из `:root` styles.css. */
+/**
+ * Значение токена-длины из `:root` токенов.
+ *
+ * Срез — до блока reduced-motion: прежний маркер `[data-theme='dark'] {` в
+ * собранном бандле больше не встречается (темы живут отдельными файлами,
+ * ADR de24adef), и срез молча перестал работать (ревизия задачи 2bf4b53e).
+ */
 function rootLength(css: string, name: string): number | null {
-  const rootEnd = css.indexOf("[data-theme='dark'] {");
+  const rootEnd = css.indexOf('@media (prefers-reduced-motion: reduce)');
   const root = css.slice(0, rootEnd === -1 ? css.length : rootEnd);
   const m = new RegExp(`${escapeRe(name)}\\s*:\\s*(\\d+)px`).exec(root);
   return m === null ? null : Number(m[1]);

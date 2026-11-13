@@ -164,3 +164,102 @@ describe('сторож: тинт картинки доходит до фона �
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// 2. Сетка холста — только без картинки (требование b8719e86, задача 2bf4b53e)
+// ---------------------------------------------------------------------------
+
+/** Тело правила по селектору в переданном CSS (без чтения с диска). */
+function ruleBodyInCss(css: string, selector: string): string | null {
+  const wanted = normalizeSelector(selector);
+  const block = topLevelBlocks(css).find((item) =>
+    item.prelude.split(',').some((part) => normalizeSelector(part) === wanted),
+  );
+  return block?.body ?? null;
+}
+
+/**
+ * Нарушения правила «сетка только без картинки»:
+ *   • базовое правило `.canvas` обязано рисовать точечную сетку
+ *     (`radial-gradient` с `--canvas-dot`): без неё пропадает ориентир масштаба;
+ *   • фон с активной картинкой (`:root[data-canvas-wallpaper='on'] .canvas`)
+ *     обязан её показывать (`--canvas-wallpaper-image`) и НЕ рисовать сетку —
+ *     картинка и точки вместе дают грязный фон.
+ */
+export function gridProblems(css: string): string[] {
+  const problems: string[] = [];
+  const base = ruleBodyInCss(css, '.canvas');
+  if (base === null) {
+    problems.push('нет правила .canvas');
+  } else {
+    const background = backgroundOf(base);
+    if (background === null) {
+      problems.push('.canvas: нет объявления background');
+    } else {
+      if (!background.includes('radial-gradient')) {
+        problems.push('.canvas: потеряна точечная сетка (radial-gradient)');
+      }
+      if (!background.includes('var(--canvas-dot)')) {
+        problems.push('.canvas: цвет сетки не из токена --canvas-dot');
+      }
+    }
+  }
+  const wallpaper = ruleBodyInCss(css, ":root[data-canvas-wallpaper='on'] .canvas");
+  if (wallpaper === null) {
+    problems.push("нет правила :root[data-canvas-wallpaper='on'] .canvas");
+  } else {
+    const background = backgroundOf(wallpaper);
+    if (background === null) {
+      problems.push('фон с картинкой: нет объявления background');
+    } else {
+      if (!background.includes('var(--canvas-wallpaper-image)')) {
+        problems.push('фон с картинкой не показывает --canvas-wallpaper-image');
+      }
+      if (background.includes('--canvas-dot') || /radial-gradient/i.test(background)) {
+        problems.push('сетка холста показана поверх картинки (сетка — только без картинки)');
+      }
+      if (!background.replace(/\s+/g, '').includes('var(--layer-bg')) {
+        problems.push('фон с картинкой потерял подложку слоя/темы (--layer-bg)');
+      }
+    }
+  }
+  return problems;
+}
+
+describe('сторож: сетка холста — только при отсутствии картинки', () => {
+  const canvasCss = fs.readFileSync(path.join(RENDERER_ROOT, 'styles', 'canvas.css'), 'utf8');
+
+  it('базовый холст рисует сетку, фон с картинкой — нет', () => {
+    const problems = gridProblems(canvasCss);
+    assert.deepEqual(problems, [], problems.join('\n'));
+  });
+
+  it('сторож краснеет на сетке поверх картинки и на пропавшей сетке', () => {
+    const wallpaperSelector = ":root[data-canvas-wallpaper='on'] .canvas";
+    // Негативная проба на РЕАЛЬНОМ файле: сетка вернулась в правило картинки.
+    const dotOnWallpaper = canvasCss.replace(
+      'var(--canvas-wallpaper-image) center / cover no-repeat fixed,',
+      'radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,\n    var(--canvas-wallpaper-image) center / cover no-repeat fixed,',
+    );
+    assert.notEqual(dotOnWallpaper, canvasCss, 'мутация «сетка поверх картинки» не применилась');
+    assert.ok(
+      ruleBodyInCss(dotOnWallpaper, wallpaperSelector) !== null,
+      'правило фона с картинкой обязано читаться после мутации',
+    );
+    assert.ok(
+      gridProblems(dotOnWallpaper).some((p) => p.includes('поверх картинки')),
+      'сетка поверх картинки обязана краснить',
+    );
+
+    // Негативная проба: базовая сетка пропала.
+    const noGrid = canvasCss.replace(
+      '    radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,\n',
+      '',
+    );
+    assert.notEqual(noGrid, canvasCss, 'мутация «сетка пропала» не применилась');
+    assert.ok(
+      gridProblems(noGrid).some((p) => p.includes('потеряна точечная сетка')),
+      'пропавшая сетка обязана краснить',
+    );
+  });
+});

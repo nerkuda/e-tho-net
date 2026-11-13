@@ -1006,7 +1006,7 @@ function drawTopLine(
     const text = document.createElementNS(SVG_NS, 'text');
     text.classList.add('link-label-text');
     text.setAttribute('fill', 'var(--warn, #c98a06)');
-    text.setAttribute('font-weight', '700');
+    text.setAttribute('font-weight', '600');
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + BADGE_TEXT_DY * zoom));
     text.setAttribute('dominant-baseline', 'middle');
@@ -1020,7 +1020,7 @@ function drawTopLine(
     const text = document.createElementNS(SVG_NS, 'text');
     text.classList.add('link-label-text');
     text.setAttribute('fill', 'var(--warn, #c98a06)');
-    text.setAttribute('font-weight', '700');
+    text.setAttribute('font-weight', '600');
     const offset = (from.y < to.y ? LABEL_OFFSET : -LABEL_OFFSET) * zoom;
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));

@@ -435,29 +435,61 @@ function literalFontFamilyViolations(root: string): string[] {
  * 600. Бандл не везёт начертание 700, поэтому `font-weight: 700` всё равно
  * рисуется шестым весом, но остаётся ложным намерением в CSS. Дополнительно
  * проверяется токен `--md-strong-weight` — он задаёт жирность markdown-«strong».
+ *
+ * Правило «максимум 600» шире одного значения: запрещены `bold`/`bolder`
+ * (синонимы 700) и веса 700/800/900 — в любой форме CSS-объявления.
  */
+const WEIGHT_ABOVE_600 = '(?:bold|bolder|[7-9]00)';
+
 function fontWeightViolations(root: string): string[] {
   const rules: GuardRule[] = [
     {
-      name: 'no-font-weight-700',
+      name: 'no-font-weight-above-600',
       description:
-        'font-weight: 700 в CSS рендерера запрещён: максимум 600 (начертания 700 ' +
-        'в бандле нет, решение заказчика приёмки e622824e).',
-      pattern: /font-weight\s*:\s*700\b/,
+        'font-weight выше 600 (700/800/900, bold, bolder) в CSS рендерера запрещён: ' +
+        'максимум 600 (начертаний выше 600 в бандле нет, решение заказчика приёмки e622824e).',
+      pattern: new RegExp(`font-weight\\s*:\\s*${WEIGHT_ABOVE_600}\\b`, 'i'),
       include: (rel) => rel.endsWith('.css'),
       allow: (_rel, line, lineNo, content) => commentLine(line, lineNo, content),
     },
     {
-      name: 'no-strong-weight-700',
+      name: 'no-strong-weight-above-600',
       description:
-        'Токен --md-strong-weight не задаёт 700: жирность markdown — не выше 600 ' +
+        'Токен --md-strong-weight не задаёт вес выше 600: жирность markdown — не выше 600 ' +
         '(решение заказчика приёмки e622824e).',
-      pattern: /--md-strong-weight\s*:\s*700\b/,
+      pattern: new RegExp(`--md-strong-weight\\s*:\\s*${WEIGHT_ABOVE_600}\\b`, 'i'),
       include: (rel) => rel.endsWith('.css'),
       allow: (_rel, line, lineNo, content) => commentLine(line, lineNo, content),
     },
   ];
   return collectViolations(root, rules, { extensions: ['.css'] }).map(
+    (v) => `${v.file}:${v.line} [${v.rule}] — ${v.text}`,
+  );
+}
+
+/**
+ * Жирность выше 600, заданная СТРОКОЙ в TypeScript: inline-стили
+ * (`style.fontWeight = 'bold'`), SVG-атрибуты (`setAttribute('font-weight', '700')`)
+ * и объекты стилей редактора. CSS-сторож такие значения не видит, а на экране
+ * они дают то же ложное намерение веса 700.
+ */
+function fontWeightLiteralViolations(root: string): string[] {
+  const rules: GuardRule[] = [
+    {
+      name: 'no-ts-font-weight-above-600',
+      description:
+        'Строковый литерал жирности выше 600 (700/800/900, bold, bolder) в исходниках ' +
+        'рендерера запрещён: inline-стиль и SVG-атрибут подчиняются тому же правилу ' +
+        '«максимум 600» (приёмка e622824e).',
+      pattern: new RegExp(
+        `(?:font-weight|fontWeight)['"]?\\s*[:=,]\\s*['"]${WEIGHT_ABOVE_600}['"]`,
+        'i',
+      ),
+      include: (rel) => rel.endsWith('.ts'),
+      allow: (_rel, line, lineNo, content) => commentLine(line, lineNo, content),
+    },
+  ];
+  return collectViolations(root, rules, { extensions: ['.ts'] }).map(
     (v) => `${v.file}:${v.line} [${v.rule}] — ${v.text}`,
   );
 }
@@ -549,8 +581,8 @@ describe('guard: шрифтовой бандл клиента (e622824e)', () =>
     );
   });
 
-  it('жирность не выше 600: нет font-weight: 700 и токена strong 700', () => {
-    const violations = fontWeightViolations(RENDERER_ROOT);
+  it('жирность не выше 600: CSS, токен strong и строки TS', () => {
+    const violations = [...fontWeightViolations(RENDERER_ROOT), ...fontWeightLiteralViolations(RENDERER_ROOT)];
     assert.deepEqual(
       violations,
       [],
@@ -558,14 +590,43 @@ describe('guard: шрифтовой бандл клиента (e622824e)', () =>
     );
     withTempDir('etn-guard-fonts-weight-', (dir) => {
       fs.mkdirSync(path.join(dir, 'styles'));
-      fs.writeFileSync(path.join(dir, 'styles', 'x.css'), '.x { font-weight: 700; }\n', 'utf8');
-      assert.notDeepEqual(fontWeightViolations(dir), [], 'font-weight: 700 обязан краснить');
+      // Каждая форма запрещённого веса обязана краснить: 700/800/900/bold/bolder.
+      for (const css of [
+        '.x { font-weight: 700; }\n',
+        '.x { font-weight: 800; }\n',
+        '.x { font-weight: 900; }\n',
+        '.x { font-weight: bold; }\n',
+        '.x { font-weight: bolder; }\n',
+      ]) {
+        fs.writeFileSync(path.join(dir, 'styles', 'x.css'), css, 'utf8');
+        assert.notDeepEqual(fontWeightViolations(dir), [], `обязано краснить: ${css.trim()}`);
+      }
+      // 500/600 — разрешённый диапазон, ложных срабатываний нет.
+      fs.writeFileSync(path.join(dir, 'styles', 'x.css'), '.x { font-weight: 600; }\n', 'utf8');
+      assert.deepEqual(fontWeightViolations(dir), [], 'вес 600 обязан быть чистым');
       fs.writeFileSync(
         path.join(dir, 'styles', 'x.css'),
         ':root { --md-strong-weight: 700; }\n',
         'utf8',
       );
       assert.notDeepEqual(fontWeightViolations(dir), [], 'токен strong 700 обязан краснить');
+      // Строковые литералы в TS: inline-стиль, SVG-атрибут, объект стилей.
+      fs.mkdirSync(path.join(dir, 'lib'));
+      const tsCases = [
+        "el.style.fontWeight = 'bold';\n",
+        "text.setAttribute('font-weight', '700');\n",
+        "render({ fontWeight: '800' });\n",
+      ];
+      for (const ts of tsCases) {
+        fs.writeFileSync(path.join(dir, 'lib', 'x.ts'), ts, 'utf8');
+        assert.notDeepEqual(
+          fontWeightLiteralViolations(dir),
+          [],
+          `литерал в TS обязан краснить: ${ts.trim()}`,
+        );
+      }
+      fs.writeFileSync(path.join(dir, 'lib', 'x.ts'), "el.style.fontWeight = '600';\n", 'utf8');
+      assert.deepEqual(fontWeightLiteralViolations(dir), [], 'литерал 600 обязан быть чистым');
     });
   });
 

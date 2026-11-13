@@ -330,7 +330,7 @@ export interface FontFlags {
  * exactly like their colours do.
  */
 export function applyFontFlags(target: HTMLElement, flags: FontFlags): void {
-  target.style.fontWeight = flags.bold ? 'bold' : '';
+  target.style.fontWeight = flags.bold ? '600' : '';
   target.style.fontStyle = flags.italic ? 'italic' : '';
   target.style.textDecorationLine =
     flags.underline && flags.strike

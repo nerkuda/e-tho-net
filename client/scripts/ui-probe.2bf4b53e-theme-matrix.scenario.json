@@ -1,0 +1,140 @@
+{
+  "name": "2bf4b53e-theme-matrix",
+  "description": "Задача 2bf4b53e «Сторожа и приёмка тем оформления» (ТП 2122be30). Приёмочная матрица тем: 6 тем (current, blue-topaz, catppuccin, nordic, retronotes, wasp) × 2 режима (light, dark) = 12 комбинаций на трёх экранах — карта (`.canvas`), дневник с отбором (`.chronicle`/`.chron-filter`/`.cal-day`) и модалка (`.dialog-box`). Для каждой комбинации: (1) `data-theme`/`data-mode` применились, `color-scheme` совпал с режимом; (2) текст темы читается ≥ 4.5 : 1 к `--bg`, `--surface`, `--surface-2`; (3) пара `--accent-fg`/`--accent` ≥ 4.5 : 1; (4) контрастный кант `--focus-ring-contrast` ≥ 4.5 : 1 к `--surface` и `--surface-2`; (5) поверхность экрана взяла значения темы: холст и полотно дневника — `--bg`, модалка — `--surface`, текст — `--text`, у холста без картинки есть точечная сетка. Всё — пробами computed-стилей (не скриншотами). Запуск: npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.2bf4b53e-theme-matrix.scenario.json --server-language ru",
+  "timeout": 60000,
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": {
+          "language": "ru"
+        },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "canvas-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.canvas') !== null"
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => {\n  const raw = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();\n  const parse = (value) => {\n    const v = raw(value);\n    if (v === '' || v === 'none') return null;\n    if (v.startsWith('#')) {\n      const hex = v.length === 4 ? v.slice(1).split('').map((c) => c + c).join('') : v.slice(1);\n      if (hex.length < 6) return null;\n      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));\n    }\n    if (v.startsWith('color(srgb')) {\n      const body = v.slice(v.indexOf('(') + 1, v.indexOf(')'));\n      const parts = body.split(' ').filter((x) => x !== '');\n      if (parts.length < 4) return null;\n      return [1, 2, 3].map((i) => Math.round(Number(parts[i]) * 255));\n    }\n    if (v.startsWith('hsl')) {\n      const inner = v.slice(v.indexOf('(') + 1, v.indexOf(')'));\n      const parts = inner.split(',').map((x) => x.trim());\n      if (parts.length < 3) return null;\n      const h = Number.parseFloat(parts[0]);\n      const s = Number.parseFloat(parts[1]) / 100;\n      const l = Number.parseFloat(parts[2]) / 100;\n      if ([h, s, l].some((n) => Number.isNaN(n))) return null;\n      const c = (1 - Math.abs(2 * l - 1)) * s;\n      const x = c * (1 - Math.abs(((h / 60) % 2) - 1));\n      const m = l - c / 2;\n      let rgb;\n      if (h < 60) rgb = [c, x, 0];\n      else if (h < 120) rgb = [x, c, 0];\n      else if (h < 180) rgb = [0, c, x];\n      else if (h < 240) rgb = [0, x, c];\n      else if (h < 300) rgb = [x, 0, c];\n      else rgb = [c, 0, x];\n      return rgb.map((ch) => Math.round((ch + m) * 255));\n    }\n    if (!v.startsWith('rgb')) return null;\n    const inner = v.slice(v.indexOf('(') + 1, v.indexOf(')'));\n    return inner.split(',').map((x) => Number.parseFloat(x)).slice(0, 3).map((x) => Math.round(x));\n  };\n  const lin = (x) => {\n    const v = x / 255;\n    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;\n  };\n  const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n  const ratio = (a, b) => {\n    if (a === null || b === null) return 0;\n    const x = lum(a);\n    const y = lum(b);\n    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);\n  };\n  const dist = (a, b) => (a === null || b === null ? 0 : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));\n  const prop = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();\n  window.__ac = { parse, ratio, dist, prop };\n\n  const THEMES = ['current', 'blue-topaz', 'catppuccin', 'nordic', 'retronotes', 'wasp'];\n  const MODES = ['light', 'dark'];\n  const MIN_TEXT = 4.5;\n  const run = (surface) => {\n    const root = document.documentElement;\n    const started = { theme: root.dataset.theme, mode: root.dataset.mode };\n    const rows = [];\n    const failures = [];\n    const el = (sel) => document.querySelector(sel);\n    const css = (node, name) => (node === null ? '' : getComputedStyle(node)[name]);\n    const same = (a, b) => {\n      const x = parse(a);\n      const y = parse(b);\n      return x !== null && y !== null && dist(x, y) === 0;\n    };\n    for (const theme of THEMES) {\n      for (const mode of MODES) {\n        root.dataset.theme = theme;\n        root.dataset.mode = mode;\n        void document.body.offsetHeight;\n        const label = theme + '/' + mode;\n        const t = {\n          bg: prop('--bg'),\n          surface: prop('--surface'),\n          surface2: prop('--surface-2'),\n          text: prop('--text'),\n          accent: prop('--accent'),\n          accentFg: prop('--accent-fg'),\n          ringContrast: prop('--focus-ring-contrast'),\n          focusAccent: prop('--focus-accent'),\n        };\n        const pairs = {\n          text_bg: Number(ratio(parse(t.text), parse(t.bg)).toFixed(3)),\n          text_surface: Number(ratio(parse(t.text), parse(t.surface)).toFixed(3)),\n          text_surface2: Number(ratio(parse(t.text), parse(t.surface2)).toFixed(3)),\n          accent_pair: Number(ratio(parse(t.accentFg), parse(t.accent)).toFixed(3)),\n          ring_on_surface: Number(ratio(parse(t.ringContrast), parse(t.surface)).toFixed(3)),\n          ring_on_surface2: Number(ratio(parse(t.ringContrast), parse(t.surface2)).toFixed(3)),\n        };\n        const row = { theme, mode, scheme: getComputedStyle(root).colorScheme, tokens: t, pairs, surface: {} };\n        if (row.scheme !== mode) failures.push(label + ': color-scheme=' + row.scheme);\n        for (const key of Object.keys(pairs)) {\n          if (!(pairs[key] >= MIN_TEXT)) failures.push(label + ': ' + key + '=' + pairs[key]);\n        }\n        if (t.focusAccent === '') failures.push(label + ': нет --focus-accent');\n        if (surface === 'map') {\n          const canvas = el('.canvas');\n          if (canvas === null) {\n            failures.push(label + ': нет .canvas');\n          } else {\n            row.surface = {\n              background: css(canvas, 'backgroundColor'),\n              image: css(canvas, 'backgroundImage').includes('radial-gradient') ? 'grid' : 'none',\n              color: css(canvas, 'color'),\n            };\n            if (!same(row.surface.background, t.bg)) {\n              failures.push(label + ': холст не в цвете --bg (' + row.surface.background + ' ≠ ' + t.bg + ')');\n            }\n            if (row.surface.image !== 'grid') failures.push(label + ': у холста нет сетки без картинки');\n          }\n        } else if (surface === 'diary') {\n          const screen = el('.chronicle');\n          const filter = el('.chron-filter');\n          const day = el('.cal-day');\n          if (screen === null || filter === null || day === null) {\n            failures.push(label + ': нет .chronicle/.chron-filter/.cal-day');\n          } else {\n            row.surface = {\n              background: css(screen, 'backgroundColor'),\n              color: css(screen, 'color'),\n              filter_items: filter.children.length,\n              day_cells: document.querySelectorAll('.cal-day').length,\n            };\n            if (!same(row.surface.background, t.bg)) {\n              failures.push(label + ': полотно дневника не в цвете --bg (' + row.surface.background + ')');\n            }\n            if (!same(row.surface.color, t.text)) {\n              failures.push(label + ': текст дневника не --text (' + row.surface.color + ')');\n            }\n            if (row.surface.filter_items < 1) failures.push(label + ': отбор пуст');\n          }\n        } else {\n          const dialog = el('.dialog-box');\n          if (dialog === null) {\n            failures.push(label + ': нет .dialog-box');\n          } else {\n            row.surface = {\n              background: css(dialog, 'backgroundColor'),\n              color: css(dialog, 'color'),\n            };\n            row.surface.contrast = Number(\n              ratio(parse(row.surface.color), parse(row.surface.background)).toFixed(3),\n            );\n            if (!same(row.surface.background, t.surface)) {\n              failures.push(label + ': модалка не в цвете --surface (' + row.surface.background + ')');\n            }\n            if (!(row.surface.contrast >= MIN_TEXT)) {\n              failures.push(label + ': текст модалки ' + row.surface.contrast);\n            }\n          }\n        }\n        rows.push(row);\n      }\n    }\n    root.dataset.theme = started.theme;\n    root.dataset.mode = started.mode;\n    window.__mx.lastRows = rows;\n    return {\n      ok: failures.length === 0,\n      surface,\n      combos: rows.length,\n      themes: THEMES.length,\n      modes: MODES.length,\n      failures: failures.slice(0, 10),\n    };\n  };\n  window.__mx = { run };\n  return true;\n})()"
+    },
+    {
+      "name": "matrix-map",
+      "probe": "window.__mx.run('map')",
+      "expect": {
+        "ok": true,
+        "surface": "map",
+        "combos": 12,
+        "themes": 6,
+        "modes": 2,
+        "failures": []
+      }
+    },
+    {
+      "name": "matrix-map-evidence",
+      "probe": "window.__mx.lastRows.map((r) => ({ theme: r.theme, mode: r.mode, pairs: r.pairs, surface: r.surface }))"
+    },
+    {
+      "name": "open-diary",
+      "click": "button.view-tab[title=\"Дневник\"]"
+    },
+    {
+      "name": "diary-panel",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.chron-filter') !== null && document.querySelector('.cal-day') !== null"
+    },
+    {
+      "name": "matrix-diary",
+      "probe": "window.__mx.run('diary')",
+      "expect": {
+        "ok": true,
+        "surface": "diary",
+        "combos": 12,
+        "themes": 6,
+        "modes": 2,
+        "failures": []
+      }
+    },
+    {
+      "name": "matrix-diary-evidence",
+      "probe": "window.__mx.lastRows.map((r) => ({ theme: r.theme, mode: r.mode, pairs: r.pairs, surface: r.surface }))"
+    },
+    {
+      "name": "open-user-menu",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-box') !== null"
+    },
+    {
+      "name": "matrix-dialog",
+      "probe": "window.__mx.run('dialog')",
+      "expect": {
+        "ok": true,
+        "surface": "dialog",
+        "combos": 12,
+        "themes": 6,
+        "modes": 2,
+        "failures": []
+      }
+    },
+    {
+      "name": "matrix-dialog-evidence",
+      "probe": "window.__mx.lastRows.map((r) => ({ theme: r.theme, mode: r.mode, pairs: r.pairs, surface: r.surface }))"
+    }
+  ]
+}
