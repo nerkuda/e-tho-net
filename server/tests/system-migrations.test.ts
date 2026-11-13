@@ -114,9 +114,9 @@ describe(
           assert.ok(jobCols.includes(column), `update_jobs.${column} missing`);
         }
 
-        // user_files — файлы пользователя серверного уровня (миграция 019,
-        // задача 8e007e63, сущность 62fd29b5): состав колонок, PK по
-        // (user_id, kind) как UNIQUE-инвариант и каскадное удаление строк.
+        // user_files — файлы пользователя в сети (миграция 019, задачи
+        // 8e007e63 + 5db41abf, сущность 62fd29b5): состав колонок, PK по
+        // (user_id, network_id, kind) как UNIQUE-инвариант и каскад по user_id.
         const fileCols = db.prepare('PRAGMA table_info(user_files)').all() as {
           name: string;
           notnull: number;
@@ -126,6 +126,7 @@ describe(
           fileCols.map((c) => c.name),
           [
             'user_id',
+            'network_id',
             'kind',
             'file_path',
             'content_hash',
@@ -140,8 +141,18 @@ describe(
         }
         assert.deepEqual(
           fileCols.filter((c) => c.pk > 0).map((c) => c.name),
-          ['user_id', 'kind'],
-          'user_files PK must be (user_id, kind)',
+          ['user_id', 'network_id', 'kind'],
+          'user_files PK must be (user_id, network_id, kind)',
+        );
+
+        // Поиск строк удаляемой сети идёт по network_id без префикса user_id —
+        // первичный ключ такой запрос не обслуживает (задача 5db41abf).
+        const fileIndexes = db
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'user_files'")
+          .all() as { name: string }[];
+        assert.ok(
+          fileIndexes.some((index) => index.name === 'idx_user_files_network'),
+          'user_files must have an index on network_id',
         );
 
         const fileFks = db.prepare('PRAGMA foreign_key_list(user_files)').all() as {
@@ -164,7 +175,7 @@ describe(
           "INSERT INTO users (id, username, is_admin, is_first_user, disabled, created_at, updated_at) VALUES ('u-cascade', 'cascade', 0, 0, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
         ).run();
         db.prepare(
-          "INSERT INTO user_files (user_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at) VALUES ('u-cascade', 'map_wallpaper', '/tmp/x.jpg', 'hash', 1, 'image/jpeg', '{\"width\":1,\"height\":1,\"avg_luminance\":0}', 1)",
+          "INSERT INTO user_files (user_id, network_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at) VALUES ('u-cascade', 'n-1', 'map_wallpaper', '/tmp/x.jpg', 'hash', 1, 'image/jpeg', '{\"width\":1,\"height\":1,\"avg_luminance\":0}', 1)",
         ).run();
         db.prepare("DELETE FROM users WHERE id = 'u-cascade'").run();
         assert.equal(

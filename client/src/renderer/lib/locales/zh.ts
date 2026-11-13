@@ -490,7 +490,10 @@ export const zh = {
   'settings.wallpaperRemove': '移除图片',
   'settings.wallpaperPreviewAlt': '当前地图背景图片',
   'settings.wallpaperNone': '未选择图片：地图显示主题背景和点阵网格。',
-  'settings.wallpaperHint': '图片保存在服务器上的用户配置中，并应用于此服务器上您的所有客户端。尺寸与亮度的处理在客户端完成。',
+  'settings.wallpaperHint': '图片在服务器上按网络分别保存，并应用于此服务器上您的所有客户端。尺寸与亮度的处理在客户端完成。',
+  /** 图片属于「用户 × 网络」组合（任务 5db41abf）。 */
+  'settings.wallpaperHintNetwork': '图片属于网络「%1」。',
+  'settings.wallpaperHintNoNetwork': '请先打开一个网络：图片是为当前网络选择的。',
   'settings.wallpaperErrorTooLargeSource': '文件大于 %1 MB — 请选择更小的图片。',
   /** Потолок ИСХОДНОГО файла при системном выборе картинки (код из main). */
   'settings.wallpaperErrorSourceLimit': '文件大于 %1 MB — 超出限制。',

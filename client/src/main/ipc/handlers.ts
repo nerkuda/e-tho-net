@@ -1898,34 +1898,64 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
    * последнюю известную картинку (сценарий 0ec86f0b). Без профиля и без
    * подключения картинки нет.
    */
-  const wallpaperServiceDeps = (): WallpaperServiceDeps | null => {
+  /**
+   * Ключ `client_meta` последней сети, для которой читали/писали картинку:
+   * офлайн-старт ещё не знает активной сети (сессия не восстановлена), но
+   * картинка кэша её сети должна быть видна (сценарий 0ec86f0b, задача
+   * 5db41abf).
+   */
+  const wallpaperNetworkKey = (profileId: string): string => `wallpaper_network:${profileId}`;
+
+  /**
+   * Сеть картинки: активная сеть рендерера, а если её ещё нет — последняя сеть
+   * этого профиля из `client_meta`. `null` — профиля/сети нет вовсе.
+   */
+  const wallpaperNetworkId = (requested: unknown): string | null => {
+    if (typeof requested === 'string' && requested !== '') return requested;
     const profile = deps.getProfile() ?? deps.localDb.getActiveProfile();
     if (profile === null) return null;
+    const remembered = deps.localDb.getMeta(wallpaperNetworkKey(profile.id));
+    return remembered !== null && remembered !== '' ? remembered : null;
+  };
+
+  const wallpaperServiceDeps = (networkId: string): WallpaperServiceDeps | null => {
+    const profile = deps.getProfile() ?? deps.localDb.getActiveProfile();
+    if (profile === null) return null;
+    // Активная сеть профиля запоминается: офлайн-старт возьмёт её кэш.
+    deps.localDb.setMeta(wallpaperNetworkKey(profile.id), networkId);
     return {
       remote: deps.getRest(),
-      cacheDir: wallpaperCacheDir(deps.userDataDir, profile.id, profile.user_id),
+      networkId,
+      cacheDir: wallpaperCacheDir(deps.userDataDir, profile.id, profile.user_id, networkId),
     };
   };
   handlers.set(
     'me.getWallpaper',
-    bind(async () => {
-      const wpDeps = wallpaperServiceDeps();
+    bind(async (requestedNetworkId?: unknown) => {
+      const networkId = wallpaperNetworkId(requestedNetworkId);
+      const wpDeps = networkId === null ? null : wallpaperServiceDeps(networkId);
       if (wpDeps === null) return { status: 'none' as const };
       return loadWallpaper(wpDeps);
     }),
   );
   handlers.set(
     'me.uploadWallpaper',
-    bind(async (input: WallpaperUploadInput) => {
-      const wpDeps = wallpaperServiceDeps();
-      if (wpDeps === null) throw new Error(NOT_CONNECTED_ERROR_TEXT);
+    bind(async (input: WallpaperUploadInput & { networkId?: unknown }) => {
+      const networkId =
+        typeof input.networkId === 'string' && input.networkId !== '' ? input.networkId : null;
+      const wpDeps = networkId === null ? null : wallpaperServiceDeps(networkId);
+      if (wpDeps === null) throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
       return uploadWallpaper(wpDeps, input);
     }),
   );
   handlers.set(
     'me.removeWallpaper',
-    bind(async () => {
-      const wpDeps = wallpaperServiceDeps();
+    bind(async (requestedNetworkId?: unknown) => {
+      const networkId =
+        typeof requestedNetworkId === 'string' && requestedNetworkId !== ''
+          ? requestedNetworkId
+          : null;
+      const wpDeps = networkId === null ? null : wallpaperServiceDeps(networkId);
       if (wpDeps === null) return { status: 'none' as const };
       await removeWallpaper(wpDeps);
       return { status: 'none' as const };

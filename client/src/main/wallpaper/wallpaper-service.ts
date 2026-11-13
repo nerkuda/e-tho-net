@@ -36,6 +36,8 @@ export type WallpaperView =
   | { status: 'none' }
   | {
       status: 'ok';
+      /** Сеть, к которой относится картинка (ревизия 2026-11-13). */
+      network_id: string;
       /** Готовый `data:`-URL для превью и подложки холста. */
       data_url: string;
       mime_type: string;
@@ -57,21 +59,28 @@ export interface WallpaperUploadInput {
  * отдельный интерфейс оставляет сервис тестируемым без сети.
  */
 export interface WallpaperRemote {
-  getWallpaper(): Promise<WallpaperInfo>;
-  getWallpaperRaw(): Promise<{ contentType: string; body: Buffer; etag: string | null }>;
-  uploadWallpaper(input: {
-    data_base64: string;
-    mime_type: string;
-    meta: WallpaperMeta;
-  }): Promise<WallpaperInfo>;
-  deleteWallpaper(): Promise<void>;
+  getWallpaper(networkId: string): Promise<WallpaperInfo>;
+  getWallpaperRaw(
+    networkId: string,
+  ): Promise<{ contentType: string; body: Buffer; etag: string | null }>;
+  uploadWallpaper(
+    networkId: string,
+    input: {
+      data_base64: string;
+      mime_type: string;
+      meta: WallpaperMeta;
+    },
+  ): Promise<WallpaperInfo>;
+  deleteWallpaper(networkId: string): Promise<void>;
 }
 
 /** Зависимости сервиса. */
 export interface WallpaperServiceDeps {
   /** Активное подключение, `null` — клиент офлайн. */
   remote: WallpaperRemote | null;
-  /** Каталог локального кэша этого профиля/пользователя. */
+  /** Сеть, в контексте которой работает картинка (задача 5db41abf). */
+  networkId: string;
+  /** Каталог локального кэша этой тройки профиль/пользователь/сеть. */
   cacheDir: string;
   /** Часы (для тестов); по умолчанию `Date.now`. */
   now?: () => number;
@@ -91,9 +100,10 @@ function sha256Hex(bytes: Buffer): string {
 type WallpaperOk = Extract<WallpaperView, { status: 'ok' }>;
 
 /** Запись кэша → состояние для рендерера. */
-function cacheView(entry: WallpaperCacheEntry): WallpaperOk {
+function cacheView(entry: WallpaperCacheEntry, networkId: string): WallpaperOk {
   return {
     status: 'ok',
+    network_id: networkId,
     data_url: `data:${entry.mime_type};base64,${entry.bytes.toString('base64')}`,
     mime_type: entry.mime_type,
     file_size: entry.file_size,
@@ -111,12 +121,12 @@ export async function loadWallpaper(deps: WallpaperServiceDeps): Promise<Wallpap
   const now = deps.now ?? Date.now;
   if (deps.remote === null) {
     const cached = readWallpaperCache(deps.cacheDir);
-    return cached === null ? { status: 'none' } : cacheView(cached);
+    return cached === null ? { status: 'none' } : cacheView(cached, deps.networkId);
   }
 
   try {
-    const info = await deps.remote.getWallpaper();
-    const raw = await deps.remote.getWallpaperRaw();
+    const info = await deps.remote.getWallpaper(deps.networkId);
+    const raw = await deps.remote.getWallpaperRaw(deps.networkId);
     const bytes = raw.body;
     const entry: WallpaperCacheEntry = {
       bytes,
@@ -131,7 +141,7 @@ export async function loadWallpaper(deps: WallpaperServiceDeps): Promise<Wallpap
     } catch {
       // Кэш — оптимизация для офлайна; сбой диска не должен ломать показ.
     }
-    return { ...cacheView(entry), source: 'server' };
+    return { ...cacheView(entry, deps.networkId), source: 'server' };
   } catch (err) {
     if (isNotFound(err)) {
       clearWallpaperCache(deps.cacheDir);
@@ -140,7 +150,7 @@ export async function loadWallpaper(deps: WallpaperServiceDeps): Promise<Wallpap
     // Сеть/сервер недоступны или ответ неожиданный — последняя известная
     // картинка лучше, чем цветовой фон (сценарий 0ec86f0b).
     const cached = readWallpaperCache(deps.cacheDir);
-    return cached === null ? { status: 'none' } : cacheView(cached);
+    return cached === null ? { status: 'none' } : cacheView(cached, deps.networkId);
   }
 }
 
@@ -157,7 +167,7 @@ export async function uploadWallpaper(
   if (deps.remote === null) {
     throw new Error('the server is not connected: connect and try again later.');
   }
-  const info = await deps.remote.uploadWallpaper({
+  const info = await deps.remote.uploadWallpaper(deps.networkId, {
     data_base64: input.data_base64,
     mime_type: input.mime_type,
     meta: input.meta,
@@ -176,17 +186,18 @@ export async function uploadWallpaper(
   } catch {
     // Сбой кэша не отменяет успешную загрузку: сервер уже хранит картинку.
   }
-  return { ...cacheView(entry), source: 'server' };
+  return { ...cacheView(entry, deps.networkId), source: 'server' };
 }
 
 /**
- * Убрать картинку: `DELETE /users/me/wallpaper` (идемпотентен, сервер всегда
- * 204), затем очистить кэш. Ошибка сети пробрасывается — картинка на сервере
- * не удалена, и UI честно сообщает «повторите позже».
+ * Убрать картинку этой сети: `DELETE /users/me/wallpaper?network_id=…`
+ * (идемпотентен, сервер всегда 204), затем очистить кэш сети. Ошибка сети
+ * пробрасывается — картинка на сервере не удалена, и UI честно сообщает
+ * «повторите позже».
  */
 export async function removeWallpaper(deps: WallpaperServiceDeps): Promise<void> {
   if (deps.remote !== null) {
-    await deps.remote.deleteWallpaper();
+    await deps.remote.deleteWallpaper(deps.networkId);
   }
   clearWallpaperCache(deps.cacheDir);
 }

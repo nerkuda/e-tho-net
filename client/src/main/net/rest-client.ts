@@ -1163,12 +1163,13 @@ export class RestClient {
   // -------------------------------------------------------------------------
 
   /**
-   * `GET /users/me/wallpaper` — метаданные фоновой картинки пользователя
-   * (сущность user_files, ADR a5888535). `404` — картинки нет (штатное
+   * `GET /users/me/wallpaper?network_id=<uuid>` — метаданные фоновой картинки
+   * пользователя В ЗАДАННОЙ СЕТИ (сущность user_files, ADR a5888535; ревизия
+   * 2026-11-13, задача 5db41abf). `404` — в этой сети картинки нет (штатное
    * состояние «без картинки», не ошибка клиента).
    */
-  public async getWallpaper(): Promise<import('@etn/shared').WallpaperInfo> {
-    return this.request('GET', '/users/me/wallpaper');
+  public async getWallpaper(networkId: string): Promise<import('@etn/shared').WallpaperInfo> {
+    return this.request('GET', `/users/me/wallpaper?network_id=${encodeURIComponent(networkId)}`);
   }
 
   /**
@@ -1177,12 +1178,14 @@ export class RestClient {
    * серверный `content_hash` в кавычках (для локального кэша); заголовок
    * может отсутствовать — тогда хеш считает вызывающий.
    */
-  public async getWallpaperRaw(): Promise<{
+  public async getWallpaperRaw(networkId: string): Promise<{
     contentType: string;
     body: Buffer;
     etag: string | null;
   }> {
-    const url = `${this.baseUrl}/api/v1/users/me/wallpaper/raw`;
+    const url =
+      `${this.baseUrl}/api/v1/users/me/wallpaper/raw` +
+      `?network_id=${encodeURIComponent(networkId)}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${await this.getApiKey()}`,
       ...this.clientHeaders(),
@@ -1209,17 +1212,30 @@ export class RestClient {
    * контракта: `{data_base64, mime_type, meta}`). Клиент готовит байты сам
    * (даунскейл, метаданные светлоты — задача 80324150), сервер их валидирует.
    */
-  public async uploadWallpaper(input: {
-    data_base64: string;
-    mime_type: string;
-    meta: import('@etn/shared').WallpaperMeta;
-  }): Promise<import('@etn/shared').WallpaperInfo> {
-    return this.request('PUT', '/users/me/wallpaper', { body: input });
+  public async uploadWallpaper(
+    networkId: string,
+    input: {
+      data_base64: string;
+      mime_type: string;
+      meta: import('@etn/shared').WallpaperMeta;
+    },
+  ): Promise<import('@etn/shared').WallpaperInfo> {
+    return this.request(
+      'PUT',
+      `/users/me/wallpaper?network_id=${encodeURIComponent(networkId)}`,
+      { body: input },
+    );
   }
 
-  /** `DELETE /users/me/wallpaper` — отказ от картинки (идемпотентен, 204). */
-  public async deleteWallpaper(): Promise<void> {
-    await this.request('DELETE', '/users/me/wallpaper');
+  /**
+   * `DELETE /users/me/wallpaper?network_id=<uuid>` — отказ от картинки в этой
+   * сети (идемпотентен, 204); картинки других сетей не трогает.
+   */
+  public async deleteWallpaper(networkId: string): Promise<void> {
+    await this.request(
+      'DELETE',
+      `/users/me/wallpaper?network_id=${encodeURIComponent(networkId)}`,
+    );
   }
 
   /**

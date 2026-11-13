@@ -1,11 +1,16 @@
 /**
- * Фоновая картинка пользователя серверного уровня (0.16.1, задача 8e007e63;
+ * Фоновая картинка пользователя В СЕТИ (0.16.1, задачи 8e007e63 + 5db41abf;
  * операция API 31ef478a, сущность 62fd29b5, ADR a5888535).
  *
- *   GET    /api/v1/users/me/wallpaper      — метаданные картинки (404 — нет)
- *   GET    /api/v1/users/me/wallpaper/raw  — байты: ETag + nosniff (404 — нет)
- *   PUT    /api/v1/users/me/wallpaper      — загрузка/перезапись (201/200)
- *   DELETE /api/v1/users/me/wallpaper      — удаление (204 всегда, идемпотентно)
+ *   GET    /api/v1/users/me/wallpaper?network_id=<uuid>      — метаданные (404 — нет)
+ *   GET    /api/v1/users/me/wallpaper/raw?network_id=<uuid>  — байты: ETag + nosniff (404 — нет)
+ *   PUT    /api/v1/users/me/wallpaper?network_id=<uuid>      — загрузка/перезапись (201/200)
+ *   DELETE /api/v1/users/me/wallpaper?network_id=<uuid>      — удаление (204 всегда, идемпотентно)
+ *
+ * `network_id` — обязательный query-параметр ВСЕХ методов (ревизия 2026-11-13):
+ * картинка своя на пару «пользователь × сеть». Пользователь должен быть
+ * участником сети, иначе 403; неизвестная сеть — 404 (как гвард
+ * `requireNetworkMember`, ошибка 2c3a42cd).
  *
  * Особенности контракта:
  *   * PUT принимает `multipart/form-data` (часть `file` + JSON-поле `meta`) либо
@@ -24,7 +29,7 @@ import { createReadStream } from 'node:fs';
 
 import { EtnError, USER_FILE_KIND, USER_FILE_MAX_BYTES } from '@etn/shared';
 
-import { RestUserWallpaperUpload, parseRest } from '../contracts.js';
+import { RestUserWallpaperQuery, RestUserWallpaperUpload, parseRest } from '../contracts.js';
 import { buildErrorBody, isPayloadTooLargeError, sendNormalisedError } from '../http/errors.js';
 import { buildContentDisposition } from '../http/content-disposition.js';
 import { sendSuccess } from '../http/responses.js';
@@ -160,6 +165,35 @@ function matchesEtag(ifNoneMatch: string | undefined, etag: string): boolean {
     .some((part) => part === '*' || part === etag || part === `W/${etag}`);
 }
 
+/**
+ * `network_id` из query + проверка участия (ревизия операции 31ef478a
+ * 2026-11-13). Сеть проверяется до любой работы с файлами: чужой файл не
+ * читается и не перезаписывается.
+ */
+function wallpaperNetworkId(app: FastifyInstance, req: FastifyRequest): string {
+  const { network_id: networkId } = parseRest(RestUserWallpaperQuery, req);
+  if (!app.members.networkExists(networkId)) {
+    throw new EtnError(
+      'NOT_FOUND',
+      'Network not found.',
+      { entity: 'network', id: networkId },
+      req.id,
+    );
+  }
+  // Глобальный администратор держит права владельца в любой существующей сети
+  // (06-auth.md §4.1) — та же семантика, что у гварда модуля доступа.
+  if (req.auth!.user.is_admin) return networkId;
+  if (app.members.getMemberRole(req.auth!.user.id, networkId) === null) {
+    throw new EtnError(
+      'FORBIDDEN',
+      'You are not a member of this network.',
+      undefined,
+      req.id,
+    );
+  }
+  return networkId;
+}
+
 /** `/api/v1/users/me/wallpaper` routes plugin factory. */
 export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
   return async (app: FastifyInstance) => {
@@ -197,7 +231,8 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/users/me/wallpaper',
       { preHandler: [app.authPreHandler] },
       async (req: FastifyRequest, reply) => {
-        const row = app.systemDb.getUserFile(req.auth!.user.id, kind);
+        const networkId = wallpaperNetworkId(app, req);
+        const row = app.systemDb.getUserFile(req.auth!.user.id, networkId, kind);
         if (row === null) {
           throw new EtnError('NOT_FOUND', 'no wallpaper uploaded.', undefined, req.id);
         }
@@ -209,7 +244,8 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/users/me/wallpaper/raw',
       { preHandler: [app.authPreHandler] },
       async (req: FastifyRequest, reply) => {
-        const file = readUserFile(app.systemDb, req.auth!.user.id, kind);
+        const networkId = wallpaperNetworkId(app, req);
+        const file = readUserFile(app.systemDb, req.auth!.user.id, networkId, kind);
         if (file === null) {
           // «Строка есть, файла нет» — штатная деградация клиента (ADR a5888535).
           throw new EtnError('NOT_FOUND', 'no wallpaper file on this server.', undefined, req.id);
@@ -241,6 +277,8 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
         bodyLimit: JSON_BODY_LIMIT_BYTES,
       },
       async (req: FastifyRequest, reply) => {
+        // Сеть проверяется ДО чтения тела: чужой запрос не тратит разбор файла.
+        const networkId = wallpaperNetworkId(app, req);
         const upload = req.isMultipart()
           ? await readMultipartUpload(req)
           : buildJsonUpload(parseRest(RestUserWallpaperUpload, req));
@@ -248,6 +286,7 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
           app.systemDb,
           deps.dataDir,
           req.auth!.user.id,
+          networkId,
           kind,
           upload,
           req.id,
@@ -260,7 +299,8 @@ export function createUserFilesRoutes(deps: RouteDeps): FastifyPluginAsync {
       '/users/me/wallpaper',
       { preHandler: [app.authPreHandler, app.idempotency.preHandler] },
       async (req: FastifyRequest, reply) => {
-        deleteUserFile(app.systemDb, req.auth!.user.id, kind);
+        const networkId = wallpaperNetworkId(app, req);
+        deleteUserFile(app.systemDb, req.auth!.user.id, networkId, kind);
         reply.code(204).send();
       },
     );

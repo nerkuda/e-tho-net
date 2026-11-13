@@ -3194,6 +3194,31 @@ export const RestUserWallpaperUpload = defineContract(
   },
 );
 
+/** Формат идентификатора сети в query операции картинки (uuid). */
+const WALLPAPER_NETWORK_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Query-параметр ВСЕХ методов `/users/me/wallpaper*` (0.16.1, задача 5db41abf;
+ * ревизия операции 31ef478a 2026-11-13): картинка — своя на пару
+ * «пользователь × сеть», поэтому `network_id` обязателен и проверяется по
+ * формату uuid. Участие пользователя в сети проверяет сам роут (403).
+ */
+export const RestUserWallpaperQuery = defineContract(
+  'rest:users.me.wallpaper.query',
+  z.object({ network_id: NetworkId }),
+  {
+    network_id: {
+      from: { kind: 'query' },
+      msg: 'network_id is required.',
+      check: (value) =>
+        typeof value === 'string' && WALLPAPER_NETWORK_ID_RE.test(value)
+          ? null
+          : 'network_id must be a UUID.',
+    },
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Языковые настройки (REST — routes/language.ts; ADR daab6ac4, задача f99f0542)
 // ---------------------------------------------------------------------------

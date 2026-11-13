@@ -6,10 +6,10 @@
  * `RestClient`, а не только сервиса: ошибка в пути или в поле тела проявилась бы
  * лишь на живом сервере.
  *
- *   GET    /api/v1/users/me/wallpaper
- *   GET    /api/v1/users/me/wallpaper/raw      (бинарный ответ + ETag)
- *   PUT    /api/v1/users/me/wallpaper          ({data_base64, mime_type, meta})
- *   DELETE /api/v1/users/me/wallpaper
+ *   GET    /api/v1/users/me/wallpaper?network_id=…
+ *   GET    /api/v1/users/me/wallpaper/raw?network_id=…      (бинарный ответ + ETag)
+ *   PUT    /api/v1/users/me/wallpaper?network_id=…          ({data_base64, mime_type, meta})
+ *   DELETE /api/v1/users/me/wallpaper?network_id=…
  */
 
 import assert from 'node:assert/strict';
@@ -71,8 +71,12 @@ function makeClient(fetchImpl: typeof fetch): RestClient {
   });
 }
 
+/** Сеть сценария: сервер проверяет формат network_id (uuid). */
+const NET = '11111111-1111-1111-1111-111111111111';
+
 const INFO = {
   kind: 'map_wallpaper',
+  network_id: NET,
   mime_type: 'image/jpeg',
   file_size: 4,
   meta: { width: 2, height: 2, avg_luminance: 0.5 },
@@ -84,10 +88,13 @@ describe('RestClient: фоновая картинка', () => {
     const { fetch, calls } = makeJsonFetch({ data: INFO });
     const client = makeClient(fetch);
 
-    const result = await client.getWallpaper();
+    const result = await client.getWallpaper(NET);
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/users/me/wallpaper');
+    assert.equal(
+      calls[0]!.url,
+      `http://localhost:3000/api/v1/users/me/wallpaper?network_id=${NET}`,
+    );
     assert.equal((calls[0]!.init.method ?? 'GET').toUpperCase(), 'GET');
     assert.deepEqual(result, INFO);
   });
@@ -99,9 +106,12 @@ describe('RestClient: фоновая картинка', () => {
     });
     const client = makeClient(fetch);
 
-    const raw = await client.getWallpaperRaw();
+    const raw = await client.getWallpaperRaw(NET);
 
-    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/users/me/wallpaper/raw');
+    assert.equal(
+      calls[0]!.url,
+      `http://localhost:3000/api/v1/users/me/wallpaper/raw?network_id=${NET}`,
+    );
     assert.equal(raw.contentType, 'image/jpeg');
     assert.equal(raw.etag, '"abc"');
     assert.deepEqual([...raw.body], [1, 2, 3, 4]);
@@ -111,7 +121,7 @@ describe('RestClient: фоновая картинка', () => {
     const { fetch } = makeRawFetch(new Uint8Array([9]), { 'content-type': 'image/png' });
     const client = makeClient(fetch);
 
-    const raw = await client.getWallpaperRaw();
+    const raw = await client.getWallpaperRaw(NET);
 
     assert.equal(raw.etag, null);
     assert.equal(raw.contentType, 'image/png');
@@ -121,13 +131,16 @@ describe('RestClient: фоновая картинка', () => {
     const { fetch, calls } = makeJsonFetch({ data: INFO });
     const client = makeClient(fetch);
 
-    const result = await client.uploadWallpaper({
+    const result = await client.uploadWallpaper(NET, {
       data_base64: 'AQIDBA==',
       mime_type: 'image/jpeg',
       meta: { width: 2, height: 2, avg_luminance: 0.5, dominant_hue: 200 },
     });
 
-    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/users/me/wallpaper');
+    assert.equal(
+      calls[0]!.url,
+      `http://localhost:3000/api/v1/users/me/wallpaper?network_id=${NET}`,
+    );
     assert.equal(calls[0]!.init.method, 'PUT');
     assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), {
       data_base64: 'AQIDBA==',
@@ -141,9 +154,12 @@ describe('RestClient: фоновая картинка', () => {
     const { fetch, calls } = makeJsonFetch({ data: { status: 'ok' } });
     const client = makeClient(fetch);
 
-    await client.deleteWallpaper();
+    await client.deleteWallpaper(NET);
 
-    assert.equal(calls[0]!.url, 'http://localhost:3000/api/v1/users/me/wallpaper');
+    assert.equal(
+      calls[0]!.url,
+      `http://localhost:3000/api/v1/users/me/wallpaper?network_id=${NET}`,
+    );
     assert.equal(calls[0]!.init.method, 'DELETE');
   });
 });

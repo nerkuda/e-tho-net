@@ -819,6 +819,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     const wallpaperPreview = el('img', 'settings-wallpaper-preview');
     wallpaperPreview.alt = t('settings.wallpaperPreviewAlt');
     const wallpaperEmptyNote = el('p', 'muted', t('settings.wallpaperNone'));
+    // Подпись «для какой сети картинка» (задача 5db41abf): картинка — своя на
+    // пару «пользователь × сеть», контролы работают с активной сетью.
+    const wallpaperNetworkNote = el('p', 'muted', '');
     const wallpaperUploadBtn = uiButton({
       label: t('settings.wallpaperUpload'),
       role: 'secondary',
@@ -834,15 +837,26 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     const wallpaperBlock = div('settings-wallpaper');
     wallpaperBlock.append(wallpaperUploadBtn, wallpaperPreview, wallpaperRemoveBtn);
 
+    /** Подпись картинки: имя активной сети (в каждой сети картинка своя). */
+    function wallpaperNetworkHint(): string {
+      const name = store.state.network?.display_name ?? null;
+      return name === null
+        ? t('settings.wallpaperHintNoNetwork')
+        : t('settings.wallpaperHintNetwork', [name]);
+    }
+
     function refreshWallpaperBlock(): void {
       const state = getWallpaperState();
       const has = state.status === 'ok';
+      // Без открытой сети картинку не для чего выбирать: контролы недоступны.
+      const hasNetwork = store.state.networkId !== null;
       wallpaperPreview.hidden = !has;
       wallpaperEmptyNote.hidden = has;
-      wallpaperRemoveBtn.disabled = wallpaperBusy || !has;
-      wallpaperUploadBtn.disabled = wallpaperBusy;
+      wallpaperRemoveBtn.disabled = wallpaperBusy || !has || !hasNetwork;
+      wallpaperUploadBtn.disabled = wallpaperBusy || !hasNetwork;
       if (has) wallpaperPreview.src = state.data_url;
       else wallpaperPreview.removeAttribute('src');
+      wallpaperNetworkNote.textContent = wallpaperNetworkHint();
     }
     refreshWallpaperSection = refreshWallpaperBlock;
     refreshWallpaperBlock();
@@ -946,6 +960,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       fieldRow({ label: t('settings.uiMode'), control: modeGroup }),
       el('p', 'muted', t('settings.uiThemeLiveHint')),
       fieldRow({ label: t('settings.wallpaper'), control: wallpaperBlock }),
+      wallpaperNetworkNote,
       wallpaperEmptyNote,
       el('p', 'muted', t('settings.wallpaperHint')),
       el('h3', 'settings-section-title settings-section-title-spaced', t('settings.razmerOblachka')),

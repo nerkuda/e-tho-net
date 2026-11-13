@@ -1,12 +1,13 @@
 /**
- * Файлы пользователя серверного уровня (0.16.1, задача 8e007e63; сущность
+ * Файлы пользователя в сети (0.16.1, задачи 8e007e63 + 5db41abf; сущность
  * 62fd29b5, операция API 31ef478a, ADR a5888535).
  *
  * Хранилище: `<ETN_DATA_DIR>/users/<user_id>/files/<name>` — файлы уровня
- * «пользователь × сервер», вне сетей, НЕ входят в автоматический бэкап БД
- * (исходник остаётся у пользователя, серверная копия восстанавливается повторной
- * загрузкой). Одна строка на пару (пользователь, вид файла); новая загрузка
- * перезаписывает строку и файл, прежний файл удаляется физически.
+ * «пользователь × сеть × вид», НЕ входят в автоматический бэкап БД (исходник
+ * остаётся у пользователя, серверная копия восстанавливается повторной
+ * загрузкой). Одна строка на тройку (пользователь, сеть, вид файла); новая
+ * загрузка перезаписывает строку и файл в этой паре, прежний файл удаляется
+ * физически. Удаление сети чистит её строки и файлы ({@link removeNetworkUserFiles}).
  *
  * Здесь же — валидация содержимого и метаданных: сервер НЕ обрабатывает
  * изображения (никаких image-зависимостей), он лишь проверяет магические байты
@@ -182,6 +183,7 @@ function parseStoredMeta(raw: string): WallpaperMeta {
 export function wallpaperInfo(row: UserFileRow): WallpaperInfo {
   return {
     kind: row.kind as UserFileKind,
+    network_id: row.network_id,
     mime_type: row.mime_type,
     file_size: row.file_size,
     meta: parseStoredMeta(row.meta),
@@ -209,6 +211,7 @@ export function putUserFile(
   sys: SystemDb,
   dataDir: string,
   userId: string,
+  networkId: string,
   kind: UserFileKind,
   upload: UserFileUpload,
   requestId?: string,
@@ -259,7 +262,10 @@ export function putUserFile(
   const extension = fileExtensionForMime(mimeType) ?? 'bin';
   const dir = userFilesDir(dataDir, userId);
   mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, `${kind}-${contentHash.slice(0, 16)}.${extension}`);
+  // Сеть в имени файла обязательна: одна и та же картинка, загруженная в две
+  // сети, дала бы одинаковый хеш — без network_id второй файл лёг бы поверх
+  // первого, и удаление в одной сети стёрло бы картинку другой.
+  const filePath = path.join(dir, `${kind}-${networkId}-${contentHash.slice(0, 16)}.${extension}`);
 
   // Атомарная подмена: пишем во временный файл рядом и переименовываем поверх.
   const tempPath = path.join(dir, `.upload-${randomUUID()}.tmp`);
@@ -271,9 +277,10 @@ export function putUserFile(
     throw err;
   }
 
-  const previous = sys.getUserFile(userId, kind);
+  const previous = sys.getUserFile(userId, networkId, kind);
   const row: UserFileRow = {
     user_id: userId,
+    network_id: networkId,
     kind,
     file_path: filePath,
     content_hash: contentHash,
@@ -303,9 +310,10 @@ export function putUserFile(
 export function readUserFile(
   sys: SystemDb,
   userId: string,
+  networkId: string,
   kind: UserFileKind,
 ): StoredUserFile | null {
-  const row = sys.getUserFile(userId, kind);
+  const row = sys.getUserFile(userId, networkId, kind);
   if (row === null) return null;
   try {
     const stats = statSync(row.file_path);
@@ -321,12 +329,29 @@ export function readUserFile(
  * Идемпотентно — отсутствие строки/файла не ошибка; возвращает `true`, если
  * строка была.
  */
-export function deleteUserFile(sys: SystemDb, userId: string, kind: UserFileKind): boolean {
-  const row = sys.getUserFile(userId, kind);
+export function deleteUserFile(
+  sys: SystemDb,
+  userId: string,
+  networkId: string,
+  kind: UserFileKind,
+): boolean {
+  const row = sys.getUserFile(userId, networkId, kind);
   if (row === null) return false;
-  const removed = sys.deleteUserFile(userId, kind);
+  const removed = sys.deleteUserFile(userId, networkId, kind);
   removeStoredFile(row.file_path);
   return removed;
+}
+
+/**
+ * Очистка файлов удаляемой сети (0.16.1, задача 5db41abf): строки `user_files`
+ * этой сети и их байты на диске. FK-каскада нет — сети живут в отдельных БД
+ * (сущность 62fd29b5: «удаление СЕТИ чистит её строки user_files… кодом при
+ * удалении сети»). Возвращает число удалённых файлов (для журнала удаления).
+ */
+export function removeNetworkUserFiles(sys: SystemDb, networkId: string): number {
+  const rows = sys.takeUserFilesByNetwork(networkId);
+  for (const row of rows) removeStoredFile(row.file_path);
+  return rows.length;
 }
 
 /**

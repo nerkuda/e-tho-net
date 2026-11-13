@@ -122,6 +122,45 @@ describe(
       assert.equal(systemDb.getMemberRole(ownerId, network.id), null, 'membership cascaded away');
     });
 
+    it('deleteNetwork чистит картинки сети: строки user_files и файлы на диске', async () => {
+      const ownerId = createUser();
+      const svc = new NetworkServiceImpl(systemDb, dataDir);
+      const doomed = await svc.createNetwork(ownerId, 'With wallpaper');
+      const survivor = await svc.createNetwork(ownerId, 'Keeps wallpaper');
+
+      /** Строка user_files + реальный файл в каталоге пользователя. */
+      const writeWallpaper = (networkId: string, name: string): string => {
+        const filePath = path.join(dataDir, 'users', ownerId, 'files', name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, 'bytes');
+        systemDb.upsertUserFile({
+          user_id: ownerId,
+          network_id: networkId,
+          kind: 'map_wallpaper',
+          file_path: filePath,
+          content_hash: name,
+          file_size: 5,
+          mime_type: 'image/png',
+          meta: '{"width":1,"height":1,"avg_luminance":0}',
+          updated_at: 1,
+        });
+        return filePath;
+      };
+      const doomedFile = writeWallpaper(doomed.id, 'doomed.png');
+      const survivorFile = writeWallpaper(survivor.id, 'survivor.png');
+
+      await svc.deleteNetwork(doomed.id);
+
+      // FK-каскада из сетей нет (отдельные БД): строки и файлы удаляет код.
+      assert.equal(systemDb.getUserFile(ownerId, doomed.id, 'map_wallpaper'), null);
+      assert.equal(fs.existsSync(doomedFile), false, 'файл удалённой сети удалён');
+      assert.ok(
+        systemDb.getUserFile(ownerId, survivor.id, 'map_wallpaper') !== null,
+        'строка другой сети цела',
+      );
+      assert.ok(fs.existsSync(survivorFile), 'файл другой сети цел');
+    });
+
     it('reopening a created network reuses migrations idempotently', async () => {
       const ownerId = createUser();
       const svc = new NetworkServiceImpl(systemDb, dataDir);

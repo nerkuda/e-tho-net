@@ -388,9 +388,9 @@ function buildApi(): EtnBridgeApi {
       getSettings: () => invoke('me.getSettings'),
       setSetting: (key, value) => invoke('me.setSetting', key, value),
       getLanguageSettings: () => invoke('me.getLanguageSettings'),
-      getWallpaper: () => invoke('me.getWallpaper'),
+      getWallpaper: (networkId) => invoke('me.getWallpaper', networkId),
       uploadWallpaper: (input) => invoke('me.uploadWallpaper', input),
-      removeWallpaper: () => invoke('me.removeWallpaper'),
+      removeWallpaper: (networkId) => invoke('me.removeWallpaper', networkId),
     },
     locks: {
       acquire: (networkId, entityType, entityId) =>

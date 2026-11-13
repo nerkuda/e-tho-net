@@ -26,6 +26,7 @@ import {
 /** Состояние «картинка есть»: светлота 0.95 (очень светлая картинка). */
 const OK_STATE = {
   status: 'ok' as const,
+  network_id: 'n-1',
   data_url: 'data:image/jpeg;base64,AQID',
   mime_type: 'image/jpeg',
   file_size: 3,

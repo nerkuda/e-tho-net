@@ -1,0 +1,28 @@
+{
+  "name": "5db41abf-wallpaper-offline",
+  "description": "Офлайн-старт из кэша активной сети (задача 5db41abf, сценарий 0ec86f0b): сервер погашен, профиль и локальный кэш остались от прогона ui-probe.5db41abf-wallpaper-networks.scenario.json. Активной сети нет (сессия не восстановлена), главный процесс берёт ПОСЛЕДНЮЮ сеть профиля — B, — и отдаёт её картинку из кэша (source=cache); картинка A была удалена в основном прогоне, поэтому её кэш пуст (status=none). Запуск: node client/scripts/ui-probe-launch.mjs --port <cdp> --profile <стенд>/profile, затем node client/scripts/ui-probe.mjs --scenario client/scripts/ui-probe.5db41abf-wallpaper-offline.scenario.json --port <cdp> --var networkId=<A> --var networkB=<B> --out .tmp/5db41abf/out-offline",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible-offline",
+      "timeout": 60000,
+      "waitFor": "document.readyState === 'complete' && document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "wallpaper-from-cache",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper(null); const imageVar = getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim(); return { status: s.status, source: s.source, network_id: s.network_id, attr: document.documentElement.getAttribute('data-canvas-wallpaper'), image_var_nonempty: imageVar.length > 0 }; })()",
+      "expect": {
+        "status": "ok",
+        "source": "cache",
+        "network_id": "{{networkB}}",
+        "attr": "on",
+        "image_var_nonempty": true
+      }
+    },
+    {
+      "name": "removed-network-has-no-cache",
+      "probe": "(async () => { const a = await window.etn.me.getWallpaper('{{networkId}}'); return { status: a.status }; })()",
+      "expect": { "status": "none" }
+    }
+  ]
+}

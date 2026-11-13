@@ -352,6 +352,8 @@ export type WallpaperState =
   | { status: 'none' }
   | {
       status: 'ok';
+      /** Сеть, к которой относится картинка (ревизия 2026-11-13). */
+      network_id: string;
       data_url: string;
       mime_type: string;
       file_size: number;
@@ -1443,23 +1445,35 @@ export interface EtnApi {
      */
     getLanguageSettings(): Promise<UserLanguageSettings>;
     /**
-     * `GET /users/me/wallpaper` + байты: текущая фоновая картинка карты.
-     * Онлайн — свежая с сервера (и кэш обновляется), офлайн — последняя из
-     * локального кэша, иначе `none` (цветовой фон и сетка).
+     * `GET /users/me/wallpaper?network_id=…` + байты: фоновая картинка карты
+     * ЗАДАННОЙ сети (ревизия 2026-11-13, задача 5db41abf). Онлайн — свежая с
+     * сервера (и кэш обновляется), офлайн — последняя из локального кэша этой
+     * сети, иначе `none` (цветовой фон и сетка).
+     *
+     * `null` — активной сети ещё нет (старт/восстановление сессии): главный
+     * процесс берёт последнюю сеть, для которой картинку читали или писали, —
+     * так офлайн-старт показывает картинку активной сети из кэша (сценарий
+     * 0ec86f0b).
      */
-    getWallpaper(): Promise<WallpaperState>;
+    getWallpaper(networkId: string | null): Promise<WallpaperState>;
     /**
-     * `PUT /users/me/wallpaper` — загрузить/перезаписать картинку. Клиент
-     * готовит байты сам (даунскейл до 3840 px / 5 МиБ, метаданные светлоты —
-     * задача 80324150); ответ и локальный кэш обновляются сразу.
+     * `PUT /users/me/wallpaper?network_id=…` — загрузить/перезаписать картинку
+     * В СЕТИ. Клиент готовит байты сам (даунскейл до 3840 px / 5 МиБ,
+     * метаданные светлоты — задача 80324150); ответ и локальный кэш сети
+     * обновляются сразу.
      */
     uploadWallpaper(input: {
+      /** Сеть, для которой выбирается картинка (активная сеть). */
+      networkId: string;
       data_base64: string;
       mime_type: string;
       meta: import('@etn/shared').WallpaperMeta;
     }): Promise<WallpaperState>;
-    /** `DELETE /users/me/wallpaper` — отказ от картинки; кэш очищается. */
-    removeWallpaper(): Promise<{ status: 'none' }>;
+    /**
+     * `DELETE /users/me/wallpaper?network_id=…` — отказ от картинки в этой
+     * сети; кэш именно этой сети очищается.
+     */
+    removeWallpaper(networkId: string): Promise<{ status: 'none' }>;
   };
   /**
    * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,

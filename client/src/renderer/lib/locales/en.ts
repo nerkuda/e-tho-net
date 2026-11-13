@@ -1003,7 +1003,10 @@ export const en = {
   'settings.wallpaperPreviewAlt': 'Current map background image',
   'settings.wallpaperNone': 'No image selected: the map shows the theme background and the dot grid.',
   'settings.wallpaperHint':
-    'The image is stored in your server-side user profile and applied to all your clients on this server. Preparation (size, luminance) runs in the client.',
+    'The image is stored on the server separately for each network and applied to all your clients on this server. Preparation (size, luminance) runs in the client.',
+  /** Image belongs to the pair "user × network" (task 5db41abf). */
+  'settings.wallpaperHintNetwork': 'The image belongs to the network “%1”.',
+  'settings.wallpaperHintNoNetwork': 'Open a network: the image is chosen for the current one.',
   'settings.wallpaperErrorTooLargeSource':
     'The file is larger than %1 MB — choose a smaller image.',
   /** Потолок ИСХОДНОГО файла при системном выборе картинки (код из main). */

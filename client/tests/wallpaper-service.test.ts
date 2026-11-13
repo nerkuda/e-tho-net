@@ -2,7 +2,8 @@
  * Оркестрация фоновой картинки в главном процессе (0.16.1, задача 80324150;
  * операции 31ef478a, сценарии 88a8879d и 0ec86f0b).
  *
- * Контракт сервиса:
+ * Контракт сервиса (картинка — своя на пару «пользователь × сеть», задача
+ * 5db41abf: каждый вызов несёт network_id активной сети):
  *   * онлайн — свежая картинка с сервера, локальный кэш обновляется;
  *   * `404` на метаданные/байты — картинки нет: кэш чистится, ошибки
  *     пользователю нет (штатное «без картинки»);
@@ -35,6 +36,7 @@ const BYTES = Buffer.from([7, 8, 9, 10, 11]);
 function info(overrides: Partial<WallpaperInfo> = {}): WallpaperInfo {
   return {
     kind: 'map_wallpaper',
+    network_id: 'net-a',
     mime_type: 'image/jpeg',
     file_size: BYTES.length,
     meta: { width: 4, height: 3, avg_luminance: 0.2 },
@@ -63,6 +65,7 @@ function setup(net: WallpaperRemote | null): WallpaperServiceDeps & { userData: 
   const userData = mkdtempSync(path.join(os.tmpdir(), 'etn-wallpaper-service-'));
   return {
     remote: net,
+    networkId: 'net-a',
     cacheDir: path.join(userData, 'wallpaper', 'test'),
     now: () => 1_700_000_000_000,
     userData,
@@ -212,8 +215,8 @@ describe('uploadWallpaper: загрузка и перезапись', () => {
     const sent: unknown[] = [];
     const deps = setup(
       remote({
-        uploadWallpaper: async (input) => {
-          sent.push(input);
+        uploadWallpaper: async (networkId, input) => {
+          sent.push({ networkId, input });
           return info({ mime_type: input.mime_type, meta: input.meta });
         },
       }),
@@ -225,9 +228,12 @@ describe('uploadWallpaper: загрузка и перезапись', () => {
     });
     assert.equal(sent.length, 1, 'один PUT на загрузку');
     assert.deepEqual(sent[0], {
-      data_base64: BYTES.toString('base64'),
-      mime_type: 'image/jpeg',
-      meta: { width: 1920, height: 1080, avg_luminance: 0.4, dominant_hue: 210 },
+      networkId: 'net-a',
+      input: {
+        data_base64: BYTES.toString('base64'),
+        mime_type: 'image/jpeg',
+        meta: { width: 1920, height: 1080, avg_luminance: 0.4, dominant_hue: 210 },
+      },
     });
     assert.ok(view.status === 'ok');
     assert.equal(view.source, 'server');
@@ -272,6 +278,60 @@ describe('uploadWallpaper: загрузка и перезапись', () => {
         err.code === 'VALIDATION_ERROR' &&
         (err.details as { field?: string }).field === 'file_size',
     );
+    rmSync(deps.userData, { recursive: true, force: true });
+  });
+});
+
+describe('картинка — на каждую сеть (задача 5db41abf)', () => {
+  it('состояние называет сеть, а remote получает её network_id', async () => {
+    const seen: string[] = [];
+    const deps = setup(
+      remote({
+        getWallpaper: async (networkId) => {
+          seen.push(`meta:${networkId}`);
+          return info();
+        },
+        getWallpaperRaw: async (networkId) => {
+          seen.push(`raw:${networkId}`);
+          return { contentType: 'image/jpeg', body: BYTES, etag: '"h"' };
+        },
+      }),
+    );
+    const view = await loadWallpaper(deps);
+    assert.deepEqual(seen, ['meta:net-a', 'raw:net-a'], 'метаданные и байты — одной сети');
+    assert.ok(view.status === 'ok');
+    assert.equal(view.network_id, 'net-a', 'состояние принадлежит запрошенной сети');
+    rmSync(deps.userData, { recursive: true, force: true });
+  });
+
+  it('офлайн: состояние из кэша тоже называет сеть (офлайн-старт)', async () => {
+    const deps = setup(null);
+    writeWallpaperCache(deps.cacheDir, {
+      bytes: BYTES,
+      mime_type: 'image/png',
+      file_size: BYTES.length,
+      content_hash: 'cached',
+      meta: { width: 2, height: 2, avg_luminance: 0.7 },
+      updated_at: 5,
+    });
+    const view = await loadWallpaper(deps);
+    assert.ok(view.status === 'ok');
+    assert.equal(view.source, 'cache');
+    assert.equal(view.network_id, 'net-a');
+    rmSync(deps.userData, { recursive: true, force: true });
+  });
+
+  it('removeWallpaper удаляет картинку именно активной сети', async () => {
+    const deleted: string[] = [];
+    const deps = setup(
+      remote({
+        deleteWallpaper: async (networkId) => {
+          deleted.push(networkId);
+        },
+      }),
+    );
+    await removeWallpaper(deps);
+    assert.deepEqual(deleted, ['net-a']);
     rmSync(deps.userData, { recursive: true, force: true });
   });
 });

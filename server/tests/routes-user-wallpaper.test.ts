@@ -1,18 +1,21 @@
 /**
- * Integration tests for the server-level user files API
- * `/api/v1/users/me/wallpaper` (0.16.1, задача 8e007e63; операция API 31ef478a,
- * сущность 62fd29b5, ADR a5888535).
+ * Integration tests for the per-network user files API
+ * `/api/v1/users/me/wallpaper?network_id=…` (0.16.1, задачи 8e007e63 +
+ * 5db41abf; операция API 31ef478a, сущность 62fd29b5, ADR a5888535).
  *
- *   GET    /api/v1/users/me/wallpaper      — метаданные (404 — картинки нет)
- *   GET    /api/v1/users/me/wallpaper/raw  — байты: ETag, nosniff (404 — нет файла)
- *   PUT    /api/v1/users/me/wallpaper      — загрузка/перезапись (201/200)
- *   DELETE /api/v1/users/me/wallpaper      — удаление (204 всегда)
+ *   GET    …/wallpaper?network_id=<uuid>      — метаданные (404 — картинки нет)
+ *   GET    …/wallpaper/raw?network_id=<uuid>  — байты: ETag, nosniff (404 — нет файла)
+ *   PUT    …/wallpaper?network_id=<uuid>      — загрузка/перезапись (201/200)
+ *   DELETE …/wallpaper?network_id=<uuid>      — удаление (204 всегда)
  *
- * Покрытие критериев приёмки: контракт операции целиком; перезапись удаляет
- * прежний файл с диска; отказ (лимит, mime, магические байты, битые метаданные)
- * отвечает 422 и не портит уже загруженную картинку — повтор отказа идемпотентен;
- * DELETE идемпотентен; файлы изолированы по пользователям; удаление
- * пользователя чистит его каталог.
+ * Покрытие критериев приёмки: контракт операции целиком; картинка своя на пару
+ * «пользователь × сеть» — сети изолированы и не делят файлы на диске (в том
+ * числе при одинаковых байтах); перезапись удаляет прежний файл с диска; отказ
+ * (лимит, mime, магические байты, битые метаданные) отвечает 422 и не портит уже
+ * загруженную картинку — повтор отказа идемпотентен; DELETE идемпотентен; файлы
+ * изолированы по пользователям; удаление пользователя чистит его каталог;
+ * `network_id` обязателен и проверяется по формату, не-участник получает 403,
+ * неизвестная сеть — 404.
  *
  * Требует нативную сборку `better-sqlite3` и настоящий временный `dataDir`
  * (файлы пишутся на диск); без нативной сборки группа пропускается.
@@ -35,6 +38,7 @@ import { DEFAULT_MCP_SESSION_IDLE_TTL_MS, DEFAULT_UPDATE_CONFIG } from '../src/c
 import type { ServerConfig } from '../src/config.js';
 import { resolveClientChannel } from '../src/version.js';
 import { SystemDb } from '../src/db/system-db.js';
+import { closeAll } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { systemMigrationsDir, userFilesDir } from '../src/paths.js';
 import { createServer } from '../src/http/server.js';
@@ -79,6 +83,10 @@ interface TestContext {
   alice: SeededUser;
   bob: SeededUser;
   admin: SeededUser;
+  /** Сеть A: alice (владелец) и bob. */
+  networkA: string;
+  /** Сеть B: только alice; bob — не участник (403). */
+  networkB: string;
 }
 
 /** Seed a user + one API key; returns the plaintext key for Authorization. */
@@ -96,6 +104,17 @@ function seedUser(sys: SystemDb, username: string, isAdmin = false): SeededUser 
   return { userId, key: gen.key };
 }
 
+/**
+ * Сеть в реестре + владелец. Картинке нужен только реестр `networks` и
+ * `network_members`: сетевые данные (data.db) не открываются.
+ */
+function seedNetwork(sys: SystemDb, owner: SeededUser, name: string): string {
+  const networkId = randomUUID();
+  sys.createNetworkRow(networkId, owner.userId, name, null);
+  sys.addNetworkMember(networkId, owner.userId, 'owner', owner.userId);
+  return networkId;
+}
+
 /** Build the app on an isolated temp data directory with three users. */
 async function setup(): Promise<TestContext> {
   const dataDir = mkdtempSync(join(tmpdir(), 'etn-wallpaper-'));
@@ -106,18 +125,26 @@ async function setup(): Promise<TestContext> {
   const admin = seedUser(sys, 'admin', true);
   const alice = seedUser(sys, 'alice');
   const bob = seedUser(sys, 'bob');
+  // Картинка — своя на пару «пользователь × сеть» (задача 5db41abf): две сети,
+  // bob — участник только A.
+  const networkA = seedNetwork(sys, alice, 'wallpaper-a');
+  const networkB = seedNetwork(sys, alice, 'wallpaper-b');
+  sys.addNetworkMember(networkA, bob.userId, 'member', alice.userId);
   const app = await createServer({
     config: { ...BASE_CONFIG, dataDir },
     systemDb: sys,
     logger: createLogger('silent'),
   });
-  return { app, sys, db, dataDir, alice, bob, admin };
+  return { app, sys, db, dataDir, alice, bob, admin, networkA, networkB };
 }
 
 /** Закрыть приложение, БД и убрать временный каталог данных. */
 async function teardown(ctx: TestContext): Promise<void> {
   await ctx.app.close();
   ctx.db.close();
+  // Удаление пользователя прогоняет поиск авторства по его сетям и открывает
+  // их data.db; на Windows открытое соединение не даёт удалить каталог (EBUSY).
+  closeAll();
   rmSync(ctx.dataDir, { recursive: true, force: true });
 }
 
@@ -151,6 +178,11 @@ function authHeaders(user: SeededUser): Record<string, string> {
   return { authorization: `Bearer ${user.key}` };
 }
 
+/** URL метода картинки: `network_id` обязателен для всех методов. */
+function wallpaperUrl(networkId: string, raw = false): string {
+  return `/api/v1/users/me/wallpaper${raw ? '/raw' : ''}?network_id=${encodeURIComponent(networkId)}`;
+}
+
 /** JSON-загрузка: `{data_base64, meta}` (+ необязательный `mime_type`). */
 async function putJson(
   ctx: TestContext,
@@ -158,39 +190,45 @@ async function putJson(
   bytes: Buffer,
   meta: unknown,
   mimeType?: string,
+  networkId: string = ctx.networkA,
 ) {
   const payload: Record<string, unknown> = { data_base64: bytes.toString('base64'), meta };
   if (mimeType !== undefined) payload['mime_type'] = mimeType;
   return ctx.app.inject({
     method: 'PUT',
-    url: '/api/v1/users/me/wallpaper',
+    url: wallpaperUrl(networkId),
     headers: authHeaders(user),
     payload,
   });
 }
 
-async function getMeta(ctx: TestContext, user: SeededUser) {
+async function getMeta(ctx: TestContext, user: SeededUser, networkId: string = ctx.networkA) {
   return ctx.app.inject({
     method: 'GET',
-    url: '/api/v1/users/me/wallpaper',
+    url: wallpaperUrl(networkId),
     headers: authHeaders(user),
   });
 }
 
-async function getRaw(ctx: TestContext, user: SeededUser, ifNoneMatch?: string) {
+async function getRaw(
+  ctx: TestContext,
+  user: SeededUser,
+  ifNoneMatch?: string,
+  networkId: string = ctx.networkA,
+) {
   const headers: Record<string, string> = authHeaders(user);
   if (ifNoneMatch !== undefined) headers['if-none-match'] = ifNoneMatch;
   return ctx.app.inject({
     method: 'GET',
-    url: '/api/v1/users/me/wallpaper/raw',
+    url: wallpaperUrl(networkId, true),
     headers,
   });
 }
 
-async function delWallpaper(ctx: TestContext, user: SeededUser) {
+async function delWallpaper(ctx: TestContext, user: SeededUser, networkId: string = ctx.networkA) {
   return ctx.app.inject({
     method: 'DELETE',
-    url: '/api/v1/users/me/wallpaper',
+    url: wallpaperUrl(networkId),
     headers: authHeaders(user),
   });
 }
@@ -238,11 +276,16 @@ function multipartPayload(parts: readonly MultipartPart[]): {
 }
 
 /** PUT `multipart/form-data` с частью `file` и текстовыми полями. */
-async function putMultipart(ctx: TestContext, user: SeededUser, parts: readonly MultipartPart[]) {
+async function putMultipart(
+  ctx: TestContext,
+  user: SeededUser,
+  parts: readonly MultipartPart[],
+  networkId: string = ctx.networkA,
+) {
   const { payload, contentType } = multipartPayload(parts);
   return ctx.app.inject({
     method: 'PUT',
-    url: '/api/v1/users/me/wallpaper',
+    url: wallpaperUrl(networkId),
     headers: { ...authHeaders(user), 'content-type': contentType },
     payload,
   });
@@ -279,6 +322,7 @@ describe(
         assert.equal(put.statusCode, 201, put.body);
         const created = put.json().data as Record<string, unknown>;
         assert.equal(created['kind'], 'map_wallpaper');
+        assert.equal(created['network_id'], ctx.networkA, 'ответ называет сеть картинки');
         assert.equal(created['mime_type'], 'image/png');
         assert.equal(created['file_size'], bytes.length);
         assert.deepEqual(created['meta'], META);
@@ -415,7 +459,7 @@ describe(
         // 5. Битые метаданные: нет meta, не число, вне диапазона.
         const noMeta = await ctx.app.inject({
           method: 'PUT',
-          url: '/api/v1/users/me/wallpaper',
+          url: wallpaperUrl(ctx.networkA),
           headers: authHeaders(ctx.alice),
           payload: { data_base64: pngBytes('no-meta').toString('base64') },
         });
@@ -538,7 +582,7 @@ describe(
         assert.equal((await delWallpaper(ctx, ctx.alice)).statusCode, 204);
         assert.equal((await getMeta(ctx, ctx.alice)).statusCode, 404);
         assert.equal((await getRaw(ctx, ctx.alice)).statusCode, 404);
-        assert.equal(ctx.sys.getUserFile(ctx.alice.userId, 'map_wallpaper'), null);
+        assert.equal(ctx.sys.getUserFile(ctx.alice.userId, ctx.networkA, 'map_wallpaper'), null);
         assert.deepEqual(storedFileNames(ctx.dataDir, ctx.alice.userId), []);
 
         assert.equal((await delWallpaper(ctx, ctx.alice)).statusCode, 204);
@@ -551,7 +595,7 @@ describe(
       const ctx = await setup();
       try {
         assert.equal((await putJson(ctx, ctx.alice, pngBytes('lost'), META)).statusCode, 201);
-        const row = ctx.sys.getUserFile(ctx.alice.userId, 'map_wallpaper');
+        const row = ctx.sys.getUserFile(ctx.alice.userId, ctx.networkA, 'map_wallpaper');
         assert.ok(row !== null);
         rmSync(row.file_path, { force: true });
 
@@ -579,7 +623,7 @@ describe(
           headers: authHeaders(ctx.admin),
         });
         assert.equal(res.statusCode, 204, res.body);
-        assert.equal(ctx.sys.getUserFile(ctx.bob.userId, 'map_wallpaper'), null);
+        assert.equal(ctx.sys.getUserFile(ctx.bob.userId, ctx.networkA, 'map_wallpaper'), null);
         assert.equal(existsSync(bobDir), false, 'каталог пользователя должен быть удалён');
       } finally {
         await teardown(ctx);
@@ -592,12 +636,15 @@ describe(
         for (const method of ['GET', 'PUT', 'DELETE'] as const) {
           const res = await ctx.app.inject({
             method,
-            url: '/api/v1/users/me/wallpaper',
+            url: wallpaperUrl(ctx.networkA),
             ...(method === 'PUT' ? { payload: {} } : {}),
           });
           assert.equal(res.statusCode, 401, `${method} → ${res.statusCode}`);
         }
-        const raw = await ctx.app.inject({ method: 'GET', url: '/api/v1/users/me/wallpaper/raw' });
+        const raw = await ctx.app.inject({
+          method: 'GET',
+          url: wallpaperUrl(ctx.networkA, true),
+        });
         assert.equal(raw.statusCode, 401);
       } finally {
         await teardown(ctx);
@@ -653,7 +700,7 @@ describe(
         // тот же 422 и та же форма details.
         const json = await ctx.app.inject({
           method: 'PUT',
-          url: '/api/v1/users/me/wallpaper',
+          url: wallpaperUrl(ctx.networkA),
           headers: authHeaders(ctx.alice),
           payload: { data_base64: 'A'.repeat(9 * 1024 * 1024), meta: META },
         });
@@ -663,6 +710,139 @@ describe(
 
         // После отказов картинки нет — запись не появилась.
         assert.equal((await getMeta(ctx, ctx.alice)).statusCode, 404);
+      } finally {
+        await teardown(ctx);
+      }
+    });
+
+    it('network_id обязателен: без него и в не-uuid форме — 422, неизвестная сеть — 404', async () => {
+      const ctx = await setup();
+      try {
+        const missing = await ctx.app.inject({
+          method: 'GET',
+          url: '/api/v1/users/me/wallpaper',
+          headers: authHeaders(ctx.alice),
+        });
+        assert.equal(missing.statusCode, 422, missing.body);
+        assert.equal(missing.json().error.details.field, 'network_id');
+
+        for (const bad of ['net-1', 'not-a-uuid', '00000000-0000-0000-0000-00000000000']) {
+          const res = await ctx.app.inject({
+            method: 'GET',
+            url: `/api/v1/users/me/wallpaper?network_id=${encodeURIComponent(bad)}`,
+            headers: authHeaders(ctx.alice),
+          });
+          assert.equal(res.statusCode, 422, `${bad} → ${res.statusCode} ${res.body}`);
+          assert.equal(res.json().error.details.field, 'network_id');
+        }
+
+        // Формат верный, сети нет — 404, как у гварда requireNetworkMember.
+        const unknown = await getMeta(ctx, ctx.alice, randomUUID());
+        assert.equal(unknown.statusCode, 404, unknown.body);
+      } finally {
+        await teardown(ctx);
+      }
+    });
+
+    it('не участник сети — 403 на всех методах, картинка не создаётся', async () => {
+      const ctx = await setup();
+      try {
+        const put = await putJson(ctx, ctx.bob, pngBytes('intruder'), META, undefined, ctx.networkB);
+        assert.equal(put.statusCode, 403, put.body);
+        assert.equal(put.json().error.code, 'FORBIDDEN');
+
+        assert.equal((await getMeta(ctx, ctx.bob, ctx.networkB)).statusCode, 403);
+        assert.equal((await getRaw(ctx, ctx.bob, undefined, ctx.networkB)).statusCode, 403);
+        assert.equal((await delWallpaper(ctx, ctx.bob, ctx.networkB)).statusCode, 403);
+
+        // Чужой запрос не оставил ни строки, ни файла.
+        assert.equal(ctx.sys.getUserFile(ctx.bob.userId, ctx.networkB, 'map_wallpaper'), null);
+        assert.deepEqual(storedFileNames(ctx.dataDir, ctx.bob.userId), []);
+      } finally {
+        await teardown(ctx);
+      }
+    });
+
+    it('глобальный администратор проходит в любую существующую сеть (06-auth.md §4.1)', async () => {
+      const ctx = await setup();
+      try {
+        const bytes = pngBytes('admin');
+        const put = await putJson(ctx, ctx.admin, bytes, META, undefined, ctx.networkB);
+        assert.equal(put.statusCode, 201, put.body);
+        const raw = await getRaw(ctx, ctx.admin, undefined, ctx.networkB);
+        assert.equal(raw.statusCode, 200);
+        assert.deepEqual(raw.rawPayload, bytes);
+      } finally {
+        await teardown(ctx);
+      }
+    });
+
+    it('картинки двух сетей не пересекаются: свои метаданные, байты и файлы', async () => {
+      const ctx = await setup();
+      try {
+        const bytesA = pngBytes('network-a');
+        const bytesB = jpegBytes('network-b');
+        assert.equal(
+          (await putJson(ctx, ctx.alice, bytesA, META, undefined, ctx.networkA)).statusCode,
+          201,
+        );
+        const putB = await putJson(
+          ctx,
+          ctx.alice,
+          bytesB,
+          { ...META, avg_luminance: 0.8 },
+          undefined,
+          ctx.networkB,
+        );
+        assert.equal(putB.statusCode, 201, putB.body);
+
+        const metaA = await getMeta(ctx, ctx.alice, ctx.networkA);
+        const metaB = await getMeta(ctx, ctx.alice, ctx.networkB);
+        assert.equal(metaA.statusCode, 200, metaA.body);
+        assert.equal(metaB.statusCode, 200, metaB.body);
+        assert.equal((metaA.json().data as { network_id: string }).network_id, ctx.networkA);
+        assert.equal((metaB.json().data as { network_id: string }).network_id, ctx.networkB);
+        assert.deepEqual((await getRaw(ctx, ctx.alice, undefined, ctx.networkA)).rawPayload, bytesA);
+        assert.deepEqual((await getRaw(ctx, ctx.alice, undefined, ctx.networkB)).rawPayload, bytesB);
+        assert.equal(
+          storedFileNames(ctx.dataDir, ctx.alice.userId).length,
+          2,
+          'у каждой сети свой файл',
+        );
+
+        // Удаление в одной сети не трогает картинку другой.
+        assert.equal((await delWallpaper(ctx, ctx.alice, ctx.networkA)).statusCode, 204);
+        assert.equal((await getMeta(ctx, ctx.alice, ctx.networkA)).statusCode, 404);
+        assert.equal((await getMeta(ctx, ctx.alice, ctx.networkB)).statusCode, 200);
+        assert.deepEqual((await getRaw(ctx, ctx.alice, undefined, ctx.networkB)).rawPayload, bytesB);
+      } finally {
+        await teardown(ctx);
+      }
+    });
+
+    it('одни и те же байты в двух сетях — два файла: удаление одной сети не стирает другую', async () => {
+      const ctx = await setup();
+      try {
+        const bytes = pngBytes('same-bytes');
+        assert.equal(
+          (await putJson(ctx, ctx.alice, bytes, META, undefined, ctx.networkA)).statusCode,
+          201,
+        );
+        assert.equal(
+          (await putJson(ctx, ctx.alice, bytes, META, undefined, ctx.networkB)).statusCode,
+          201,
+        );
+        // Хеш одинаков, но в имени файла есть сеть — файлы не делятся.
+        const files = storedFileNames(ctx.dataDir, ctx.alice.userId);
+        assert.equal(files.length, 2, `файлы сетей: ${files.join(', ')}`);
+        // Порядок имён зависит от случайных uuid сетей — проверяем состав.
+        assert.ok(files.some((name) => name.includes(ctx.networkA)), 'имя файла сети A');
+        assert.ok(files.some((name) => name.includes(ctx.networkB)), 'имя файла сети B');
+
+        assert.equal((await delWallpaper(ctx, ctx.alice, ctx.networkA)).statusCode, 204);
+        const survived = await getRaw(ctx, ctx.alice, undefined, ctx.networkB);
+        assert.equal(survived.statusCode, 200, 'картинка второй сети цела');
+        assert.deepEqual(survived.rawPayload, bytes);
       } finally {
         await teardown(ctx);
       }

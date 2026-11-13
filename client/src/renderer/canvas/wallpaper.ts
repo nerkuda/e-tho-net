@@ -26,7 +26,12 @@ import {
   wallpaperTintAlpha,
   wallpaperTintColor,
 } from '../lib/wallpaper-image.js';
-import { getWallpaperState, refreshWallpaper, subscribeWallpaper } from '../lib/wallpaper-state.js';
+import {
+  getWallpaperState,
+  refreshWallpaper,
+  subscribeWallpaper,
+  syncWallpaperNetwork,
+} from '../lib/wallpaper-state.js';
 import { store } from '../state.js';
 
 /** Атрибут корня документа, включающий подложку на холсте карты. */
@@ -135,12 +140,19 @@ export function refreshWallpaperBackdrop(): void {
  * загрузке/удалении/перечитывании, тема и слой — через store. Первый вызов
  * сразу читает картинку у главного процесса: офлайн-старт получает кэш
  * (сценарий 0ec86f0b).
+ *
+ * Смена активной сети — смена картинки (задача 5db41abf): store-подписка
+ * сбрасывает состояние прежней сети и читает картинку новой (в том числе
+ * после восстановления сессии на старте), затем пересчитывает подложку.
  */
 export function initWallpaperBackdrop(): void {
   if (wired) return;
   wired = true;
   subscribeWallpaper(() => refreshWallpaperBackdrop());
-  store.subscribe(() => refreshWallpaperBackdrop());
+  store.subscribe(() => {
+    syncWallpaperNetwork();
+    refreshWallpaperBackdrop();
+  });
   refreshWallpaperBackdrop();
   void refreshWallpaper();
 }
