@@ -28,8 +28,15 @@
   overflow: hidden;
   /* --layer-bg (ошибка f24fbef0): полотно «Публикаций» следует фону активного
    * слоя, как холст, «Дневник» и «События». Без правила хост был прозрачен и
-   * наследовал фон `body` — смена слоя не была видна. */
-  background: var(--layer-bg, var(--bg));
+   * наследовал фон `body` — смена слоя не была видна. Сверху — лёгкий тинт
+   * активной картинки карты (этап 2, задача 80324150): переменная пуста без
+   * картинки, слой прозрачен. */
+  background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
+    var(--layer-bg, var(--bg));
 }
 
 .pub-toolbar {
@@ -632,8 +639,14 @@
   display: flex;
   /* --layer-bg (задача 77cce0ba, п.1): полотно рабочей области чтения тоже
    * следует фону активного слоя — библиотека (.publications) правило имела, а
-   * область чтения была прозрачной и показывала фон body при смене слоя. */
-  background: var(--layer-bg, var(--bg));
+   * область чтения была прозрачной и показывала фон body при смене слоя.
+   * Тинт картинки (этап 2, 80324150) — тот же, первым слоем. */
+  background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
+    var(--layer-bg, var(--bg));
 }
 
 .pub-ws {
@@ -847,7 +860,11 @@
    5.5:1 на всех подложках, включая мягкую заливку 18% фокуса. Поэтому фон
    строки остаётся мягким фокусом, а текст читаем. */
 .pub-toc-line.pub-toc-current {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
   color: var(--focus-ring-contrast);
 }
 

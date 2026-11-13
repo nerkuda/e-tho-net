@@ -10,8 +10,14 @@
   flex-direction: column;
   overflow: hidden;
   /* --layer-bg (0.6.4, 13-layers.md §2.2a): полотно «Дневника» следует фону
-   * активного слоя, как карта. */
-  background: var(--layer-bg, var(--bg));
+   * активного слоя, как карта. Сверху — лёгкий тинт активной картинки (этап 2,
+   * задача 80324150): переменная пуста без картинки, слой прозрачный. */
+  background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
+    var(--layer-bg, var(--bg));
 }
 
 /* Область панели отбора: размер и скрытость ведёт общий каркас

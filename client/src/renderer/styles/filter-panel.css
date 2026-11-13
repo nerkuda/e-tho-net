@@ -224,8 +224,14 @@
   overflow-y: auto;
   padding: 16px 18px 60px;
   /* --layer-bg (0.6.4, 13-layers.md §2.2a): the structures canvas follows the
-   * active layer's background colour like the map does. */
+   * active layer's background colour like the map does. Сверху — лёгкий тинт
+   * активной картинки карты (этап 2, задача 80324150): без картинки переменная
+   * пуста, а сетка структур остаётся как была. */
   background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
     radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
     var(--layer-bg, var(--bg));
 }

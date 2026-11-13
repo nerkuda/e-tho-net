@@ -36,7 +36,11 @@ describe('7cfaba7c п.1: мастер создания — только титу
 describe('7cfaba7c п.2: пустой отбор — пустое состояние с подсказкой', () => {
   it('клиент читает серверный маркер и показывает подсказку', () => {
     assert.match(WS, /PUBLICATION_EMPTY_RECIPE_WARNING/, 'маркер предупреждения сборки');
-    assert.match(WS, /emptyState\(\{ title: t\('publications\.ws\.emptyRecipe'\)/, 'подсказка пустого отбора');
+    assert.match(
+      WS,
+      /emptyState\(\{ title: t\('publications\.ws\.emptyRecipe'\)/,
+      'подсказка пустого отбора',
+    );
     assert.ok(RU.includes("'publications.ws.emptyRecipe'"), 'строка словаря есть');
   });
 });
@@ -61,7 +65,11 @@ describe('7cfaba7c п.3: варианты свойств показывают с
 
 describe('7cfaba7c п.4: контекстное меню «В публикации»', () => {
   it('раздельные команды раздела и без общего подменю «Добавить»', () => {
-    assert.match(WS, /createChild\(block\.parentThoughtId, 'section'\)/, 'раздел на этом уровне — родитель блока');
+    assert.match(
+      WS,
+      /createChild\(block\.parentThoughtId, 'section'\)/,
+      'раздел на этом уровне — родитель блока',
+    );
     assert.match(WS, /createChild\(block\.thoughtId, 'section'\)/, 'подчинённый раздел — сам блок');
     assert.match(WS, /hideAddCommand:\s*true/, 'общее подменю «Добавить» скрыто');
     assert.match(DIALOG_CM, /hideAddCommand/, 'опция прокинута в общий конструктор меню');
@@ -74,7 +82,7 @@ describe('77cce0ba п.1 (волна 3): фон области чтения сл�
   it('.pub-ws-host полотно берёт --layer-bg', () => {
     assert.match(
       CSS,
-      /\.pub-ws-host\s*\{[^}]*background:\s*var\(--layer-bg,\s*var\(--bg\)\)/s,
+      /\.pub-ws-host\s*\{[^}]*background:[^;]*var\(--layer-bg,\s*var\(--bg\)\)/s,
       'область чтения тоже следует фону активного слоя',
     );
   });
@@ -89,7 +97,11 @@ describe('77cce0ba п.2 (волна 3): подсветка открытой в �
       'открытый в редакторе — сплошная рамка фокуса',
     );
     assert.match(WS, /function paintEditorHighlight\(\)/, 'подсветка пересчитывается');
-    assert.match(WS, /store\.subscribe\(paintEditorHighlight\)/, 'реагирует на смену цели редактора');
+    assert.match(
+      WS,
+      /store\.subscribe\(paintEditorHighlight\)/,
+      'реагирует на смену цели редактора',
+    );
     assert.match(WS, /editorHighlightUnsub\(\)/, 'подписка снимается при разборе');
   });
 });

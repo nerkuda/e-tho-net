@@ -6,6 +6,10 @@
  * подложка по средней светлоте (≥0.5 → белая), тинт от расхождения светлоты
  * картинки и фона темы/слоя. Тесты — сторожа: изменение константы без правки
  * спеки роняет прогон.
+ *
+ * Этап 2 (срез заказчика 2026-11-13): плотность тинта снижена до 0.25–0.55 —
+ * картинка остаётся различимой; фон прочих экранов получает ту же вуаль цвета
+ * фона, но слабее карты (фактор 0.6).
  */
 
 import assert from 'node:assert/strict';
@@ -16,6 +20,7 @@ import {
   WALLPAPER_JPEG_QUALITY,
   WALLPAPER_MAX_BYTES,
   WALLPAPER_MAX_EDGE,
+  WALLPAPER_SCREEN_TINT_FACTOR,
   WALLPAPER_TINT_ALPHA_MAX,
   WALLPAPER_TINT_ALPHA_MIN,
   WALLPAPER_TINT_LAYER_FACTOR,
@@ -27,6 +32,7 @@ import {
   planWallpaper,
   relativeLuminance,
   wallpaperMeta,
+  wallpaperScreenTintAlpha,
   wallpaperTargetSize,
   wallpaperTintAlpha,
   wallpaperTintColor,
@@ -184,6 +190,23 @@ describe('метаданные светлоты и тона', () => {
 });
 
 describe('тинт подложки (сценарий 3fe62610)', () => {
+  it('границы и факторы закреплены числами (этап 2)', () => {
+    // Ориентир заказчика — ~0.25–0.55; выход за диапазон означает, что картинка
+    // либо забита вуалью, либо подписи на подложке перестают читаться вовсе.
+    assert.equal(WALLPAPER_TINT_ALPHA_MIN, 0.25, 'нижняя граница — 0.25');
+    assert.equal(WALLPAPER_TINT_ALPHA_MAX, 0.55, 'верхняя граница — 0.55');
+    assert.equal(WALLPAPER_TINT_LAYER_FACTOR, 0.8, 'в слое — 0.8 от основы');
+    assert.equal(WALLPAPER_SCREEN_TINT_FACTOR, 0.6, 'экраны — 0.6 от карты');
+  });
+
+  it('лёгкая вуаль: картинка сохраняет не меньше 40 % диапазона яркости', () => {
+    // α — доля цвета темы поверх картинки, поэтому до глаза доходит (1 − α)
+    // исходного диапазона: 0.25 → 75 %, 0.55 → 45 %. Ниже 40 % картинка
+    // превращается в ровный фон — косяк среза заказчика 2026-11-13.
+    assert.ok(1 - WALLPAPER_TINT_ALPHA_MIN >= 0.7, 'минимум сохраняет 75 % диапазона');
+    assert.ok(1 - WALLPAPER_TINT_ALPHA_MAX >= 0.4, 'максимум сохраняет не меньше 40 %');
+  });
+
   it('светлая картинка на тёмном фоне — плотнее, чем совпадающая по светлоте', () => {
     const same = wallpaperTintAlpha(0.1, 0.05, false);
     const contrast = wallpaperTintAlpha(0.95, 0.05, false);
@@ -192,11 +215,40 @@ describe('тинт подложки (сценарий 3fe62610)', () => {
     assert.ok(contrast <= WALLPAPER_TINT_ALPHA_MAX + 1e-9);
   });
 
+  it('плотность интерполируется по расхождению светлоты', () => {
+    // |0.35 − 0| / 0.7 = 0.5 → ровно середина диапазона.
+    assert.ok(Math.abs(wallpaperTintAlpha(0.35, 0, false) - 0.4) < 1e-9);
+    // Расхождение больше WALLPAPER_TINT_DELTA_FULL упирается в верхнюю границу.
+    assert.equal(wallpaperTintAlpha(1, 0, false), WALLPAPER_TINT_ALPHA_MAX);
+  });
+
   it('в слое тинт прозрачнее основы', () => {
     const base = wallpaperTintAlpha(0.95, 0.05, false);
     const layer = wallpaperTintAlpha(0.95, 0.05, true);
     assert.ok(Math.abs(layer - base * WALLPAPER_TINT_LAYER_FACTOR) < 1e-9);
     assert.ok(layer < base);
+    // Новый диапазон в слое: 0.25 × 0.8 = 0.2 … 0.55 × 0.8 = 0.44.
+    assert.ok(Math.abs(wallpaperTintAlpha(0.05, 0.05, true) - 0.2) < 1e-9);
+    assert.ok(Math.abs(layer - 0.44) < 1e-9);
+  });
+
+  it('прочие экраны: та же вуаль, но слабее карты', () => {
+    for (const [img, base] of [
+      [0.1, 0.05],
+      [0.35, 0],
+      [0.95, 0.05],
+      [1, 1],
+    ] as const) {
+      for (const inLayer of [false, true]) {
+        const map = wallpaperTintAlpha(img, base, inLayer);
+        const screen = wallpaperScreenTintAlpha(img, base, inLayer);
+        assert.ok(Math.abs(screen - map * WALLPAPER_SCREEN_TINT_FACTOR) < 1e-9, 'фактор экранов');
+        assert.ok(screen < map, 'фон экрана тонируется слабее карты');
+      }
+    }
+    // 0.25 × 0.6 = 0.15 … 0.55 × 0.6 = 0.33.
+    assert.ok(Math.abs(wallpaperScreenTintAlpha(0.05, 0.05, false) - 0.15) < 1e-9);
+    assert.ok(Math.abs(wallpaperScreenTintAlpha(0.95, 0.05, false) - 0.33) < 1e-9);
   });
 
   it('тинт — rgba()-строка цвета фона темы', () => {

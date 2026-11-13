@@ -1,6 +1,6 @@
 {
   "name": "80324150-wallpaper",
-  "description": "Задача 80324150 «Фоновая картинка: клиент — настройки, метаданные, холст, кэш» (этап 1; элемент ef8112b0, требование e6d586d3, сценарии 88a8879d / 3fe62610 / 0ec86f0b). Стенд: язык сервера ru. Проверено: раздел «Оформление» — «Загрузить…» + мини-превью 16:9 + «Убрать картинку», кнопки футера не активны (картинка применяется сразу, вне draft-модели); загрузка через IPC `me.uploadWallpaper` (системный диалог выбора файла сценарию недоступен) → после перезагрузки страницы (штатный путь «картинка на всех устройствах») холст карты получает подложку: `data-canvas-wallpaper=on`, url картинки, тинт, background-attachment fixed / cover, точечной сетки НЕТ; серверная копия подтверждена шагом api; `me.removeWallpaper` возвращает сетку и прячет превью; повторная загрузка оставляет локальный кэш — второй прогон клиента с тем же профилем при погашенном сервере (см. отчёт) доказывает офлайн-старт из кэша. Пороги даунскейла и сведение альфы — юнит-тесты wallpaper-image.test.ts (не зависят от браузера). Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper.scenario.json --keep --out .tmp/80324150/out. Дополнительно (вердикт этапа 1): переключение темы на blue-topaz в светлом режиме и проба тинта — --bg темы в hsla-форме, тинт — rgba(244, 248, 251, α), полупрозрачный слой на холсте остаётся, сетки нет",
+  "description": "Задача 80324150 «Фоновая картинка: клиент — настройки, метаданные, холст, кэш» (этап 1; элемент ef8112b0, требование e6d586d3, сценарии 88a8879d / 3fe62610 / 0ec86f0b). Стенд: язык сервера ru. Проверено: раздел «Оформление» — «Загрузить…» + мини-превью 16:9 + «Убрать картинку», кнопки футера не активны (картинка применяется сразу, вне draft-модели); загрузка через IPC `me.uploadWallpaper` (системный диалог выбора файла сценарию недоступен) → после перезагрузки страницы (штатный путь «картинка на всех устройствах») холст карты получает подложку: `data-canvas-wallpaper=on`, url картинки, тинт, background-attachment fixed / cover, точечной сетки НЕТ; серверная копия подтверждена шагом api; `me.removeWallpaper` возвращает сетку и прячет превью; повторная загрузка оставляет локальный кэш — второй прогон клиента с тем же профилем при погашенном сервере (см. отчёт) доказывает офлайн-старт из кэша. Пороги даунскейла и сведение альфы — юнит-тесты wallpaper-image.test.ts (не зависят от браузера). Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper.scenario.json --keep --out .tmp/80324150/out. Дополнительно (вердикт этапа 1): переключение темы на blue-topaz в светлом режиме и проба тинта — --bg темы в hsla-форме, тинт — rgba(244, 248, 251, α), полупрозрачный слой на холсте остаётся, сетки нет. Этап 2 (срез 2026-11-13): диапазон плотности 0.25–0.55; фон прочих экранов и возврат к --bg без картинки проверяет отдельный сценарий ui-probe.80324150-wallpaper-tint.scenario.json",
   "timeout": 300000,
   "texts": {
     "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
@@ -109,7 +109,14 @@
         "path": "/users/me/wallpaper?network_id={{networkId}}",
         "expression": "({ mime: data.mime_type, size_ok: data.file_size > 0, lum: data.meta.avg_luminance, width: data.meta.width, height: data.meta.height, url_has_network: typeof data.url === 'string' && data.url.includes('network_id={{networkId}}') })"
       },
-      "expect": { "mime": "image/jpeg", "size_ok": true, "lum": 0.94, "width": 320, "height": 180, "url_has_network": true }
+      "expect": {
+        "mime": "image/jpeg",
+        "size_ok": true,
+        "lum": 0.94,
+        "width": 320,
+        "height": 180,
+        "url_has_network": true
+      }
     },
 
     {
@@ -132,7 +139,7 @@
     },
     {
       "name": "after-upload-canvas",
-      "probe": "(() => { const canvas = document.querySelector('.canvas'); const style = getComputedStyle(canvas); const bg = style.backgroundImage; const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const alpha = Number((/,\\s*([\\d.]+)\\)$/.exec(tint) || [])[1]); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_image: bg.includes('data:image/jpeg;base64,'), has_grid: bg.includes('radial-gradient'), has_tint_layer: bg.includes('linear-gradient'), tint_present: tint.length > 0, alpha_in_range: Number.isFinite(alpha) && alpha >= 0.45 && alpha <= 0.8, attachment_fixed: style.backgroundAttachment.includes('fixed'), size_cover: style.backgroundSize.includes('cover') }; })()",
+      "probe": "(() => { const canvas = document.querySelector('.canvas'); const style = getComputedStyle(canvas); const bg = style.backgroundImage; const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const alpha = Number((/,\\s*([\\d.]+)\\)$/.exec(tint) || [])[1]); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_image: bg.includes('data:image/jpeg;base64,'), has_grid: bg.includes('radial-gradient'), has_tint_layer: bg.includes('linear-gradient'), tint_present: tint.length > 0, alpha_in_range: Number.isFinite(alpha) && alpha >= 0.25 && alpha <= 0.55, attachment_fixed: style.backgroundAttachment.includes('fixed'), size_cover: style.backgroundSize.includes('cover') }; })()",
       "expect": {
         "attr": "on",
         "has_image": true,
@@ -180,8 +187,18 @@
     },
     {
       "name": "blue-topaz-light-tint",
-      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const bg = rootStyle.getPropertyValue('--bg').trim(); const alpha = Number((/,\\s*([\\d.]+)\\)$/.exec(tint) || [])[1]); const canvasBackground = getComputedStyle(document.querySelector('.canvas')).backgroundImage; return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg_is_hsl: bg.startsWith('hsla(') || bg.startsWith('hsl('), tint_present: tint.length > 0, tint_is_theme_bg: /^rgba\\(244, 248, 251, [\\d.]+\\)$/.test(tint), alpha_in_range: Number.isFinite(alpha) && alpha >= 0.45 && alpha <= 0.8, attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_tint_layer: canvasBackground.includes('linear-gradient'), has_grid: canvasBackground.includes('radial-gradient') }; })()",
-      "expect": { "theme": "blue-topaz", "mode": "light", "bg_is_hsl": true, "tint_present": true, "tint_is_theme_bg": true, "alpha_in_range": true, "attr": "on", "has_tint_layer": true, "has_grid": false }
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const bg = rootStyle.getPropertyValue('--bg').trim(); const alpha = Number((/,\\s*([\\d.]+)\\)$/.exec(tint) || [])[1]); const canvasBackground = getComputedStyle(document.querySelector('.canvas')).backgroundImage; return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg_is_hsl: bg.startsWith('hsla(') || bg.startsWith('hsl('), tint_present: tint.length > 0, tint_is_theme_bg: /^rgba\\(244, 248, 251, [\\d.]+\\)$/.test(tint), alpha_in_range: Number.isFinite(alpha) && alpha >= 0.25 && alpha <= 0.55, attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_tint_layer: canvasBackground.includes('linear-gradient'), has_grid: canvasBackground.includes('radial-gradient') }; })()",
+      "expect": {
+        "theme": "blue-topaz",
+        "mode": "light",
+        "bg_is_hsl": true,
+        "tint_present": true,
+        "tint_is_theme_bg": true,
+        "alpha_in_range": true,
+        "attr": "on",
+        "has_tint_layer": true,
+        "has_grid": false
+      }
     },
     {
       "name": "preview-visible-after-reload",

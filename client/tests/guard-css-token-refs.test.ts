@@ -74,6 +74,10 @@ const RUNTIME_TOKENS = new Set([
   // только читает.
   '--canvas-wallpaper-image',
   '--canvas-wallpaper-tint',
+  // canvas/wallpaper.ts — лёгкий тинт картинки на фоне прочих экранов
+  // (этап 2, 80324150): тот же rgba-расчёт, но слабее карты; CSS экранов
+  // подмешивает его первым слоем фона.
+  '--wallpaper-screen-tint',
 ]);
 
 /** Файл значений темы по умолчанию: там живут цветовые токены (ADR de24adef). */

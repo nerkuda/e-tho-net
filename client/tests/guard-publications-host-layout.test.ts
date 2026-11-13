@@ -46,7 +46,7 @@ describe('layout: хост экрана «Публикации» (fea20bd1, f24f
     const body = ruleBody(CSS, '.publications');
     assert.match(
       body,
-      /background:\s*var\(--layer-bg,\s*var\(--bg\)\)\s*;/,
+      /background:[^;]*var\(--layer-bg,\s*var\(--bg\)\)\s*;/,
       'полотно «Публикаций» обязано следовать фону слоя: без правила смена слоя не видна (ошибка f24fbef0)',
     );
   });

@@ -17,6 +17,7 @@ import { describe, it } from 'node:test';
 import {
   WALLPAPER_ATTR,
   WALLPAPER_IMAGE_VAR,
+  WALLPAPER_SCREEN_TINT_VAR,
   WALLPAPER_TINT_VAR,
   applyWallpaperState,
   readWallpaperBase,
@@ -59,19 +60,22 @@ function fakeRoot(): WallpaperRootTarget & {
 }
 
 describe('applyWallpaperState: картинка включает подложку', () => {
-  it('ставит url картинки, тинт цвета темы и атрибут сетки', () => {
+  it('ставит url картинки, тинт цвета темы, тинт экранов и атрибут сетки', () => {
     const root = fakeRoot();
     applyWallpaperState(root, OK_STATE, { color: '#0e1116', in_layer: false });
     assert.equal(root.vars.get(WALLPAPER_IMAGE_VAR), 'url("data:image/jpeg;base64,AQID")');
-    // Светлая картинка (0.95) на тёмном фоне: расхождение максимальное → плотный тинт.
-    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(14, 17, 22, 0.8)');
+    // Светлая картинка (0.95) на тёмном фоне: расхождение максимальное →
+    // верхняя граница этапа 2 (0.55), а экраны — 0.6 от неё (0.33).
+    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(14, 17, 22, 0.55)');
+    assert.equal(root.vars.get(WALLPAPER_SCREEN_TINT_VAR), 'rgba(14, 17, 22, 0.33)');
     assert.equal(root.attrs.get(WALLPAPER_ATTR), 'on');
   });
 
   it('в слое тинт — цвет слоя с повышенной прозрачностью', () => {
     const root = fakeRoot();
     applyWallpaperState(root, OK_STATE, { color: '#191327', in_layer: true });
-    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(25, 19, 39, 0.68)');
+    assert.equal(root.vars.get(WALLPAPER_TINT_VAR), 'rgba(25, 19, 39, 0.44)');
+    assert.equal(root.vars.get(WALLPAPER_SCREEN_TINT_VAR), 'rgba(25, 19, 39, 0.26)');
   });
 
   it('картинка той же светлоты, что фон, — минимальная вуаль', () => {
@@ -81,16 +85,19 @@ describe('applyWallpaperState: картинка включает подложк�
       { ...OK_STATE, meta: { ...OK_STATE.meta, avg_luminance: 0.95 } },
       { color: '#f2f2f2', in_layer: false },
     );
-    const tint = root.vars.get(WALLPAPER_TINT_VAR) ?? '';
-    const alpha = Number(/,\s([\d.]+)\)$/.exec(tint)?.[1] ?? 'NaN');
-    assert.ok(Number.isFinite(alpha));
-    assert.ok(alpha >= 0.45 && alpha <= 0.55, `лёгкая вуаль, получено ${alpha}`);
+    for (const name of [WALLPAPER_TINT_VAR, WALLPAPER_SCREEN_TINT_VAR]) {
+      const tint = root.vars.get(name) ?? '';
+      const alpha = Number(/,\s([\d.]+)\)$/.exec(tint)?.[1] ?? 'NaN');
+      assert.ok(Number.isFinite(alpha));
+      assert.ok(alpha >= 0.15 && alpha <= 0.33, `лёгкая вуаль ${name}, получено ${alpha}`);
+    }
   });
 
   it('нечитаемый токен цвета — картинка без вуали, сетка всё равно скрыта', () => {
     const root = fakeRoot();
     applyWallpaperState(root, OK_STATE, { color: null, in_layer: false });
     assert.equal(root.vars.has(WALLPAPER_TINT_VAR), false);
+    assert.equal(root.vars.has(WALLPAPER_SCREEN_TINT_VAR), false);
     assert.equal(root.attrs.get(WALLPAPER_ATTR), 'on');
   });
 });
@@ -102,6 +109,7 @@ describe('applyWallpaperState: картинки нет', () => {
     applyWallpaperState(root, { status: 'none' }, { color: '#0e1116', in_layer: false });
     assert.equal(root.vars.has(WALLPAPER_IMAGE_VAR), false);
     assert.equal(root.vars.has(WALLPAPER_TINT_VAR), false);
+    assert.equal(root.vars.has(WALLPAPER_SCREEN_TINT_VAR), false, 'фон экранов — обычный');
     assert.equal(root.attrs.has(WALLPAPER_ATTR), false, 'базовое правило с сеткой активно');
   });
 });

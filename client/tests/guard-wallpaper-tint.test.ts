@@ -1,0 +1,165 @@
+/**
+ * Сторож: лёгкий тинт подложки и его распространение на экраны (0.16.1, задача
+ * 80324150, этап 2; требование e6d586d3, сценарий 3fe62610).
+ *
+ * Зачем. Срез заказчика 2026-11-13: тинт 0.45–0.8 забивал картинку — она
+ * «почти не видна». Этап 2 снизил плотность до 0.25–0.55 и размножил лёгкую
+ * вуаль цвета фона темы на фон прочих экранов, чтобы клиент был тонально связан
+ * с картой. Правило, которое можно нарушить незаметно для глаза разработчика:
+ *
+ *  1. вернуть плотный диапазон (константы в `lib/wallpaper-image.ts`);
+ *  2. потерять тинт-слой у одного из экранов — он выпадет из общей тональности;
+ *  3. затащить тинт на НЕПРОЗРАЧНЫЕ контентные поверхности (облачка, панели,
+ *     модалки) — там картинки нет, а требование «карточки остаются
+ *     тематическими» нарушится.
+ *
+ * Проверки:
+ *  • числовые инварианты диапазона и факторов (мутация константы краснит);
+ *  • фон каждого из 5 экранов содержит `var(--wallpaper-screen-tint, transparent)`
+ *    первым слоем и сохраняет `var(--layer-bg, var(--bg))` последним;
+ *  • тинт-переменная встречается РОВНО в этих правилах (whitelist селекторов) —
+ *    новая поверхность обязана попасть в список осознанно;
+ *  • негативная проба: правило без тинт-слоя проверкой не проходит.
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, it } from 'node:test';
+
+import {
+  WALLPAPER_SCREEN_TINT_FACTOR,
+  WALLPAPER_TINT_ALPHA_MAX,
+  WALLPAPER_TINT_ALPHA_MIN,
+  WALLPAPER_TINT_LAYER_FACTOR,
+  wallpaperScreenTintAlpha,
+  wallpaperTintAlpha,
+} from '../src/renderer/lib/wallpaper-image.js';
+import { RENDERER_ROOT, readRendererCss } from './renderer-css.js';
+import { stripCssComments, topLevelBlocks } from './theme-css.js';
+
+/** Ссылка на тинт экранов: пустая переменная = прозрачный слой. */
+const SCREEN_TINT_REF = 'var(--wallpaper-screen-tint, transparent)';
+
+/** Экраны, чей фон обязан тонироваться активной картинкой карты. */
+const SCREEN_RULES: Array<{ file: string; selector: string }> = [
+  { file: 'styles/screens/chronicle.css', selector: '.chronicle' },
+  { file: 'styles/screens/events.css', selector: '.activity' },
+  { file: 'styles/screens/publications.css', selector: '.publications' },
+  { file: 'styles/screens/publications.css', selector: '.pub-ws-host' },
+  { file: 'styles/filter-panel.css', selector: '.st-results' },
+];
+
+/** Нормализованный селектор: убрать пробелы (в т.ч. переводы строк в списках). */
+function normalizeSelector(selector: string): string {
+  return selector.replace(/\s+/g, '');
+}
+
+/** Тело правила по селектору или `null`, если правила нет. */
+function ruleBody(file: string, selector: string): string | null {
+  const css = fs.readFileSync(path.join(RENDERER_ROOT, file), 'utf8');
+  const wanted = normalizeSelector(selector);
+  const block = topLevelBlocks(css).find((item) =>
+    item.prelude.split(',').some((part) => normalizeSelector(part) === wanted),
+  );
+  return block?.body ?? null;
+}
+
+/** Значение объявления `background` (до `;`, комментарии убраны). */
+function backgroundOf(body: string): string | null {
+  const match = /(?:^|[;{\s])background\s*:\s*([\s\S]*?);/.exec(stripCssComments(body));
+  return match ? match[1]!.replace(/\s+/g, ' ').trim() : null;
+}
+
+/** Блоки собранного CSS рендерера, в фоне которых есть тинт экранов. */
+function tintedPreludes(css: string): string[] {
+  return topLevelBlocks(css)
+    .filter((block) => block.body.includes('--wallpaper-screen-tint'))
+    .map((block) => block.prelude)
+    .sort();
+}
+
+describe('сторож: плотность тинта — лёгкая, экраны слабее карты (этап 2)', () => {
+  it('диапазон карты удерживает различимость картинки', () => {
+    // Ориентир заказчика ~0.25–0.55: α — доля цвета темы поверх картинки,
+    // поэтому до глаза доходит (1 − α) её диапазона яркости.
+    assert.ok(
+      WALLPAPER_TINT_ALPHA_MIN >= 0.2 && WALLPAPER_TINT_ALPHA_MIN <= 0.3,
+      `нижняя граница вне ориентира 0.2–0.3: ${WALLPAPER_TINT_ALPHA_MIN}`,
+    );
+    assert.ok(
+      WALLPAPER_TINT_ALPHA_MAX <= 0.6,
+      `верхняя граница выше 0.6 — картинка снова забита: ${WALLPAPER_TINT_ALPHA_MAX}`,
+    );
+    assert.ok(WALLPAPER_TINT_ALPHA_MAX > WALLPAPER_TINT_ALPHA_MIN, 'диапазон не вырожден');
+    assert.ok(1 - WALLPAPER_TINT_ALPHA_MIN >= 0.7, 'минимум сохраняет ≥ 70 % диапазона');
+    assert.ok(1 - WALLPAPER_TINT_ALPHA_MAX >= 0.4, 'максимум сохраняет ≥ 40 % диапазона');
+  });
+
+  it('слой и экраны слабее основы карты', () => {
+    assert.ok(WALLPAPER_TINT_LAYER_FACTOR < 1, 'тинт слоя прозрачнее основы');
+    assert.ok(WALLPAPER_SCREEN_TINT_FACTOR < 1, 'тинт экранов слабее карты');
+    for (const baseLuminance of [0, 0.15, 0.5, 0.9]) {
+      for (let imageLuminance = 0; imageLuminance <= 1; imageLuminance += 0.1) {
+        const map = wallpaperTintAlpha(imageLuminance, baseLuminance, false);
+        const screen = wallpaperScreenTintAlpha(imageLuminance, baseLuminance, false);
+        assert.ok(
+          screen < map,
+          `экран (${screen.toFixed(3)}) не слабее карты (${map.toFixed(3)}) ` +
+            `при светлоте картинки ${imageLuminance.toFixed(1)}`,
+        );
+      }
+    }
+  });
+});
+
+describe('сторож: тинт картинки доходит до фона остальных экранов', () => {
+  it('фон каждого экрана подмешивает тинт первым слоем', () => {
+    for (const { file, selector } of SCREEN_RULES) {
+      const body = ruleBody(file, selector);
+      assert.ok(body !== null, `${file}: нет правила ${selector}`);
+      const background = backgroundOf(body);
+      assert.ok(background !== null, `${file} ${selector}: нет объявления background`);
+      assert.ok(
+        background!.includes(SCREEN_TINT_REF),
+        `${file} ${selector}: фон не тонируется картинкой (${background})`,
+      );
+      assert.ok(
+        background!
+          .replace(/\s+/g, '')
+          .startsWith(`linear-gradient(${SCREEN_TINT_REF}`.replace(/\s+/g, '')),
+        `${file} ${selector}: тинт должен быть ПЕРВЫМ слоем фона (${background})`,
+      );
+      assert.ok(
+        background!.replace(/\s+/g, '').endsWith('var(--layer-bg,var(--bg))'),
+        `${file} ${selector}: фон слоя/темы потерян (${background})`,
+      );
+    }
+  });
+
+  it('тинт встречается только в правилах экранов — не на контентных поверхностях', () => {
+    const expected = SCREEN_RULES.map((rule) => rule.selector).sort();
+    const actual = tintedPreludes(readRendererCss());
+    assert.deepEqual(
+      actual,
+      expected,
+      'тинт экранов обязан жить только на фонах экранов; облачка, панели и ' +
+        'модалки остаются непрозрачными тематическими (требование e6d586d3).\n' +
+        `Найдено: ${actual.join(', ')}`,
+    );
+  });
+
+  it('негативная проба: правило без тинт-слоя сторож замечает', () => {
+    const css = `.chronicle {
+  background: var(--layer-bg, var(--bg));
+}`;
+    const body = topLevelBlocks(css)[0]?.body;
+    assert.ok(body !== undefined);
+    const background = backgroundOf(body);
+    assert.equal(
+      background?.includes(SCREEN_TINT_REF),
+      false,
+      'именно такое правило сторож и обязан отбраковывать',
+    );
+  });
+});
