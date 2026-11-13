@@ -36,6 +36,7 @@ const STYLES_ROOT = path.join(RENDERER_ROOT, 'styles');
  * вместе с `@import` в манифесте — молча выпасть из порядка он не может.
  */
 const EXPECTED_MODULES = [
+  'styles/fonts.css',
   'styles/tokens.css',
   'styles/base.css',
   'styles/screens/onboarding-networks.css',

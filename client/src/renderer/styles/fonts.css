@@ -1,0 +1,103 @@
+/*
+ * Шрифтовой бандл клиента — ЕДИНСТВЕННОЕ место объявления `@font-face`
+ * (ADR 7f1f924f «Шрифты клиента — бандл woff2 в поставке»).
+ *
+ * Источник файлов — официальные пакеты Fontsource (`@fontsource/inter@5.3.0`,
+ * `@fontsource/jetbrains-mono@5.3.0`), байты woff2 скопированы в
+ * `src/renderer/assets/fonts/` и поставляются ВНУТРИ клиента: внешних
+ * источников (CDN, fonts.googleapis/gstatic) нет — требование ADR. Файлы
+ * лицензий SIL OFL 1.1 рядом с поставкой: `public/licenses/*-OFL-1.1.txt`.
+ *
+ * Состав зафиксирован перечнем ADR и проверяется сторожем
+ * `tests/guard-fonts.test.ts`: Inter — веса 400/500/600, JetBrains Mono — 400,
+ * подмножества latin + cyrillic. Лишние веса и подсемейства запрещены:
+ * `unicode-range` разделяет подмножества, поэтому браузер берёт только нужный
+ * файл (без разделения второй `@font-face` того же начертания перекрыл бы
+ * первый). Подключение к интерфейсу — токены `--user-font-ui` /
+ * `--user-font-mono` (`styles/tokens.css`), системные стеки остаются фолбэком.
+ */
+
+/* Inter — UI. Латинское подмножество. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('../assets/fonts/inter-latin-400-normal.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Inter — UI. Кириллическое подмножество. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('../assets/fonts/inter-cyrillic-400-normal.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* Inter — UI, средняя насыщенность. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('../assets/fonts/inter-latin-500-normal.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('../assets/fonts/inter-cyrillic-500-normal.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* Inter — UI, полужирная насыщенность. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('../assets/fonts/inter-latin-600-normal.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('../assets/fonts/inter-cyrillic-600-normal.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* JetBrains Mono — моноширинный (код, значения, технические подписи). */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('../assets/fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('../assets/fonts/jetbrains-mono-cyrillic-400-normal.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}

@@ -260,7 +260,7 @@
 }
 
 .metadata-id-value {
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-family: var(--md-mono);
   font-size: 12px;
   background: var(--surface);
   border: 1px solid var(--border);

@@ -524,7 +524,7 @@
 /* Thought id in the header row: pinned right, click copies it. */
 .thought-id-label {
   margin-left: auto;
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-family: var(--md-mono);
   font-size: 11px;
   color: var(--text-faint);
   background: none;
@@ -2313,7 +2313,7 @@ input.task-list-item-checkbox:checked,
   text-align: left;
   white-space: pre-wrap;
   overflow-wrap: break-word;
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--md-mono);
   font-size: 12px;
   line-height: 1.45;
   background: var(--surface-2);

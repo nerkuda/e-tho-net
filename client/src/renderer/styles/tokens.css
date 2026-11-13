@@ -229,8 +229,11 @@
 
   /* базовый размер шрифта markdown-полей; меняется Ctrl+колесом (M9) */
   --md-font-size: var(--font-size-s);
-  /* моноширинный шрифт кода — один и для просмотра, и для редактора */
-  --md-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  /* моноширинный шрифт кода — один и для просмотра, и для редактора.
+     Первым идёт JetBrains Mono из бандла клиента (ADR 7f1f924f, `styles/fonts.css`),
+     дальше — системные моноширинные стеки как фолбэк: на системе без
+     установленного JetBrains Mono вид тот же самый, потому что файл едет в поставке. */
+  --md-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
   /* Единый источник внутриблочной типографики markdown-комментария: просмотр
      (`.comment-view`), документ публикации и живое редактирование CodeMirror
      берут размеры отсюда (парные правила `styles/editor.css`, тема
@@ -275,8 +278,11 @@
      Значение по умолчанию ссылается на токен темы, чтобы все темы работали без
      дублирования. */
 
-  /* Шрифты интерфейса и кода. */
-  --user-font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Шрифты интерфейса и кода. Интерфейс — Inter из бандла клиента
+     (`styles/fonts.css`, ADR 7f1f924f), фолбэк — прежний системный стек:
+     вид не зависит от установленных в ОС шрифтов. */
+  --user-font-ui:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --user-font-mono: var(--md-mono);
   --user-font-size: var(--font-size-s);
 

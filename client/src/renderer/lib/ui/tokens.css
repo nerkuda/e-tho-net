@@ -102,6 +102,13 @@
 
   /* Типографика кода и радиусы: держим плотность и скругления ETN. */
   --wa-font-family-code: var(--md-mono);
+  /* Гарнитуры вендора — из шрифтового бандла клиента (ADR 7f1f924f). Без этой
+     связки Web Awesome ставит `body`/заголовкам/длинному тексту собственный
+     системный стек (`ui-sans-serif, system-ui, sans-serif`) и Inter из
+     поставки не применяется, хотя `@font-face` и загружен. */
+  --wa-font-family-body: var(--user-font-ui);
+  --wa-font-family-heading: var(--user-font-ui);
+  --wa-font-family-longform: var(--user-font-ui);
   --wa-border-radius-s: var(--radius-s);
   --wa-border-radius-m: var(--radius-sm);
   --wa-border-radius-l: var(--radius);
