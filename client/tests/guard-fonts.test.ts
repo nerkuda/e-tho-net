@@ -468,23 +468,37 @@ function fontWeightViolations(root: string): string[] {
 }
 
 /**
- * Жирность выше 600, заданная СТРОКОЙ в TypeScript: inline-стили
- * (`style.fontWeight = 'bold'`), SVG-атрибуты (`setAttribute('font-weight', '700')`)
- * и объекты стилей редактора. CSS-сторож такие значения не видит, а на экране
- * они дают то же ложное намерение веса 700.
+ * Жирность выше 600 в TypeScript: inline-стили, SVG-атрибуты, объекты стилей и
+ * тернарники. CSS-сторож такие значения не видит, а на экране они дают то же
+ * ложное намерение веса 700.
+ *
+ * Литерал ищется в ЛЮБОМ контексте после свойства: прямой присваиваемый
+ * литерал (`= '700'`), объект стилей (`{ fontWeight: 700 }`), SVG-атрибут
+ * (`setAttribute('font-weight', '700')`), тернарник
+ * (`flags.bold ? 'bold' : ''`) — между свойством и литералом допускается
+ * выражение до конца инструкции. Строковая и числовая формы проверяются
+ * отдельно: числовая без кавычек — `fontWeight: 700`, `fontWeight = 800`.
  */
 function fontWeightLiteralViolations(root: string): string[] {
+  const property = '(?:font-weight|fontWeight)[\'"]?\\s*[:=,]\\s*';
   const rules: GuardRule[] = [
     {
       name: 'no-ts-font-weight-above-600',
       description:
         'Строковый литерал жирности выше 600 (700/800/900, bold, bolder) в исходниках ' +
-        'рендерера запрещён: inline-стиль и SVG-атрибут подчиняются тому же правилу ' +
+        'рендерера запрещён в любом контексте (inline-стиль, SVG-атрибут, объект стилей, ' +
+        'тернарник): подчиняется правилу «максимум 600» (приёмка e622824e).',
+      pattern: new RegExp(`${property}[^;{}\\n]*?['"]${WEIGHT_ABOVE_600}['"]`, 'i'),
+      include: (rel) => rel.endsWith('.ts'),
+      allow: (_rel, line, lineNo, content) => commentLine(line, lineNo, content),
+    },
+    {
+      name: 'no-ts-font-weight-number-above-600',
+      description:
+        'Числовой литерал жирности выше 600 (700/800/900) в исходниках рендерера ' +
+        'запрещён в любом контексте (inline-стиль, объект стилей): подчиняется правилу ' +
         '«максимум 600» (приёмка e622824e).',
-      pattern: new RegExp(
-        `(?:font-weight|fontWeight)['"]?\\s*[:=,]\\s*['"]${WEIGHT_ABOVE_600}['"]`,
-        'i',
-      ),
+      pattern: new RegExp(`${property}${WEIGHT_ABOVE_600}\\b`, 'i'),
       include: (rel) => rel.endsWith('.ts'),
       allow: (_rel, line, lineNo, content) => commentLine(line, lineNo, content),
     },
@@ -610,12 +624,15 @@ describe('guard: шрифтовой бандл клиента (e622824e)', () =>
         'utf8',
       );
       assert.notDeepEqual(fontWeightViolations(dir), [], 'токен strong 700 обязан краснить');
-      // Строковые литералы в TS: inline-стиль, SVG-атрибут, объект стилей.
+      // Литералы в TS: inline-стиль, SVG-атрибут, объект стилей, тернарник.
       fs.mkdirSync(path.join(dir, 'lib'));
       const tsCases = [
         "el.style.fontWeight = 'bold';\n",
         "text.setAttribute('font-weight', '700');\n",
         "render({ fontWeight: '800' });\n",
+        "target.style.fontWeight = flags.bold ? 'bold' : '';\n",
+        'render({ fontWeight: 700 });\n',
+        'el.style.fontWeight = 800;\n',
       ];
       for (const ts of tsCases) {
         fs.writeFileSync(path.join(dir, 'lib', 'x.ts'), ts, 'utf8');
@@ -625,8 +642,32 @@ describe('guard: шрифтовой бандл клиента (e622824e)', () =>
           `литерал в TS обязан краснить: ${ts.trim()}`,
         );
       }
-      fs.writeFileSync(path.join(dir, 'lib', 'x.ts'), "el.style.fontWeight = '600';\n", 'utf8');
-      assert.deepEqual(fontWeightLiteralViolations(dir), [], 'литерал 600 обязан быть чистым');
+      // Разрешённые формы — без ложных срабатываний.
+      for (const ts of [
+        "el.style.fontWeight = '600';\n",
+        "render({ fontWeight: 600 });\n",
+        "render({ tag: tags.strong, fontWeight: 'var(--md-strong-weight)' });\n",
+      ]) {
+        fs.writeFileSync(path.join(dir, 'lib', 'x.ts'), ts, 'utf8');
+        assert.deepEqual(
+          fontWeightLiteralViolations(dir),
+          [],
+          `разрешённая форма обязана быть чистой: ${ts.trim()}`,
+        );
+      }
+      // Негативная проба на РЕАЛЬНОМ файле: тернарник с 'bold' вернулся в dom.ts.
+      const domSource = fs.readFileSync(path.join(RENDERER_ROOT, 'lib', 'dom.ts'), 'utf8');
+      const boldTernary = domSource.replace(
+        "flags.bold ? '600' : ''",
+        "flags.bold ? 'bold' : ''",
+      );
+      assert.notEqual(boldTernary, domSource, 'мутация dom.ts не применилась');
+      fs.writeFileSync(path.join(dir, 'lib', 'dom.ts'), boldTernary, 'utf8');
+      assert.notDeepEqual(
+        fontWeightLiteralViolations(dir),
+        [],
+        "тернарник flags.bold ? 'bold' : '' в dom.ts обязан краснить",
+      );
     });
   });
 

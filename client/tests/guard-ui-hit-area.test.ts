@@ -46,9 +46,11 @@ const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g,
 /**
  * Значение токена-длины из `:root` токенов.
  *
- * Срез — до блока reduced-motion: прежний маркер `[data-theme='dark'] {` в
- * собранном бандле больше не встречается (темы живут отдельными файлами,
- * ADR de24adef), и срез молча перестал работать (ревизия задачи 2bf4b53e).
+ * Срез — до блока reduced-motion: блоки тем в Vite-ассете ЕСТЬ
+ * (`[data-theme='current']`, `[data-mode='light'|'dark']`), а старой
+ * однотемной формы `[data-theme='dark'] {` в нём нет (ADR de24adef) —
+ * прежний срез по этому маркеру молча перестал работать (ревизия задачи
+ * 2bf4b53e).
  */
 function rootLength(css: string, name: string): number | null {
   const rootEnd = css.indexOf('@media (prefers-reduced-motion: reduce)');

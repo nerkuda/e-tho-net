@@ -39,11 +39,24 @@ const MAP_TOKEN = '--layer-focus-stripe';
 const SCREEN_TOKEN = '--layer-focus-ring-screen';
 
 /**
- * Минимум жёстких колец на экранном токене. Значение-снимок (на момент
- * введения — 17 объявлений): массовая потеря колец краснит, новые кольца
- * порог не нарушают.
+ * Снимок жёстких колец на экранном токене: файл → число объявлений-колец
+ * (`outline*`, `border-color`, `border`, `box-shadow` с жёсткой ссылкой на
+ * токен). Сумма — 16 (замер ревизии задачи 2bf4b53e).
+ *
+ * Почему снимок, а не числовой порог: порог 12 не краснел на потерю 1–4 колец —
+ * ровно так экранное выделение тихо сползает в мягкие заливки. Снимок требует
+ * осознанного обновления при ЛЮБОМ изменении состава: потеря кольца, лишнее
+ * кольцо, новый файл, пропавший файл — всё краснит.
  */
-const MIN_SCREEN_RINGS = 12;
+const SCREEN_RING_SNAPSHOT: Readonly<Record<string, number>> = {
+  'lib/ui/table.css': 2,
+  'styles/editor.css': 3,
+  'styles/filter-tree.css': 1,
+  'styles/screens/chronicle.css': 5,
+  'styles/screens/onboarding-networks.css': 1,
+  'styles/screens/publications.css': 3,
+  'styles/screens/search.css': 1,
+};
 
 /**
  * Объявления роли «кольцо»: `outline*`, `border-color`, `border` и `box-shadow`
@@ -148,6 +161,57 @@ export function screenRingCount(files: ReadonlyMap<string, string>): number {
   return count;
 }
 
+/** Кольца экранов по файлам: относительный путь → число объявлений-колец. */
+export function screenRingCountByFile(files: ReadonlyMap<string, string>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const [rel, css] of files) {
+    let count = 0;
+    for (const declaration of ringDeclarations(css)) {
+      if (usesToken(declaration, SCREEN_TOKEN)) count += 1;
+    }
+    if (count > 0) counts.set(rel, count);
+  }
+  return counts;
+}
+
+/**
+ * Сверка факта со снимком колец. Нарушения:
+ *   • файл снимка отсутствует среди CSS рендерера (переименовали/удалили модуль);
+ *   • число колец файла не совпало со снимком (потеря или добавление кольца);
+ *   • кольца появились в файле вне снимка (файл не учли);
+ *   • сумма колец не совпала со снимком.
+ */
+export function screenRingSnapshotProblems(
+  files: ReadonlyMap<string, string>,
+  snapshot: Readonly<Record<string, number>>,
+): string[] {
+  const problems: string[] = [];
+  const actual = screenRingCountByFile(files);
+  const total = (values: Iterable<number>): number =>
+    [...values].reduce((sum, value) => sum + value, 0);
+  for (const [rel, expected] of Object.entries(snapshot)) {
+    if (!files.has(rel)) {
+      problems.push(`${rel}: файла со снимком колец нет среди CSS рендерера`);
+      continue;
+    }
+    const found = actual.get(rel) ?? 0;
+    if (found !== expected) {
+      problems.push(`${rel}: колец ${found}, в снимке ${expected}`);
+    }
+  }
+  for (const rel of actual.keys()) {
+    if (!Object.hasOwn(snapshot, rel)) {
+      problems.push(`${rel}: кольца на экранном токене вне снимка (${actual.get(rel)})`);
+    }
+  }
+  const expectedTotal = total(Object.values(snapshot));
+  const actualTotal = total(actual.values());
+  if (actualTotal !== expectedTotal) {
+    problems.push(`всего колец ${actualTotal}, в снимке ${expectedTotal}`);
+  }
+  return problems;
+}
+
 /** CSS рендерера: относительный путь с `/` → содержимое. */
 function rendererCss(): Map<string, string> {
   const files = new Map<string, string>();
@@ -179,12 +243,53 @@ describe('guard: роли токена фокуса — карта и экран
     assert.deepEqual(problems, [], `кольца карты:\n${problems.join('\n')}`);
   });
 
-  it('жёсткие кольца экранов не потеряны массово', () => {
-    const count = screenRingCount(screens);
+  it('снимок жёстких колец экранов совпадает с фактом: потеря одного кольца краснит', () => {
+    const problems = screenRingSnapshotProblems(screens, SCREEN_RING_SNAPSHOT);
+    assert.deepEqual(problems, [], `снимок колец экранов:\n${problems.join('\n')}`);
+    const snapshotTotal = Object.values(SCREEN_RING_SNAPSHOT).reduce((sum, n) => sum + n, 0);
+    assert.equal(snapshotTotal, 16, 'снимок колец: ожидалось 16 объявлений на экранном токене');
+
+    // Мутация на РЕАЛЬНОМ файле: убрали ОДНО кольцо из хроники — снимок обязан
+    // покраснеть (прежний порог 12 такую потерю не замечал).
+    const chronicle = screens.get('styles/screens/chronicle.css') ?? '';
+    const withoutRing = chronicle.replace(
+      'box-shadow: inset 3px 0 0 var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));',
+      'box-shadow: none;',
+    );
+    assert.notEqual(withoutRing, chronicle, 'мутация «убрано одно кольцо» не применилась');
+    const mutated = new Map(screens);
+    mutated.set('styles/screens/chronicle.css', withoutRing);
+    const oneLess = screenRingSnapshotProblems(mutated, SCREEN_RING_SNAPSHOT);
     assert.ok(
-      count >= MIN_SCREEN_RINGS,
-      `жёстких колец на ${SCREEN_TOKEN} найдено ${count}, ожидалось не меньше ` +
-        `${MIN_SCREEN_RINGS}: экранное выделение не должно схлопнуться в мягкие заливки`,
+      oneLess.some((p) => p.includes('chronicle.css') && p.includes('в снимке 5')),
+      `потеря одного кольца обязана краснить: ${oneLess.join(' | ') || 'нарушений нет'}`,
+    );
+    assert.ok(
+      oneLess.some((p) => p.includes('всего колец 15')),
+      `сумма колец обязана покраснеть: ${oneLess.join(' | ') || 'нарушений нет'}`,
+    );
+
+    // Мутация перечня: файл пропал из снимка — кольца «вне снимка» и сумма не сходится.
+    const withoutFile: Record<string, number> = { ...SCREEN_RING_SNAPSHOT };
+    delete withoutFile['styles/screens/chronicle.css'];
+    const missingFile = screenRingSnapshotProblems(screens, withoutFile);
+    assert.ok(
+      missingFile.some((p) => p.includes('chronicle.css') && p.includes('вне снимка')),
+      `кольца файла вне снимка обязаны краснить: ${missingFile.join(' | ') || 'нарушений нет'}`,
+    );
+    assert.ok(
+      missingFile.some((p) => p.includes('всего колец 16, в снимке 11')),
+      `рассинхрон суммы обязан краснить: ${missingFile.join(' | ') || 'нарушений нет'}`,
+    );
+
+    // Мутация снимка: в перечне фиктивный файл — его нет среди CSS рендерера.
+    const phantom = screenRingSnapshotProblems(screens, {
+      ...SCREEN_RING_SNAPSHOT,
+      'styles/screens/phantom.css': 1,
+    });
+    assert.ok(
+      phantom.some((p) => p.includes('phantom.css') && p.includes('нет среди CSS')),
+      `фиктивный файл в снимке обязан краснить: ${phantom.join(' | ') || 'нарушений нет'}`,
     );
   });
 
