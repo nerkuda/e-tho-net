@@ -121,12 +121,12 @@
 
     {
       "name": "reload-after-upload",
-      "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
     },
     {
       "name": "app-ready-after-upload",
       "timeout": 60000,
-      "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
     },
     {
       "name": "ensure-network-open",
@@ -227,12 +227,12 @@
     },
     {
       "name": "reload-after-remove",
-      "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
     },
     {
       "name": "app-ready-after-remove",
       "timeout": 60000,
-      "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
     },
     {
       "name": "ensure-network-open-2",
@@ -278,12 +278,12 @@
     },
     {
       "name": "reload-for-cache",
-      "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
     },
     {
       "name": "app-ready-for-cache",
       "timeout": 60000,
-      "waitFor": "document.readyState === 'complete' && window.etn !== undefined && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
     },
     {
       "name": "wallpaper-from-cache-at-boot",

@@ -108,12 +108,12 @@
     },
     {
       "name": "reload-after-light",
-      "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
     },
     {
       "name": "app-ready-after-light",
       "timeout": 60000,
-      "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
     },
     {
       "name": "ensure-network-open-light",
@@ -272,12 +272,12 @@
     },
       {
         "name": "reload-blue-topaz",
-        "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+        "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
       },
       {
         "name": "app-ready-blue-topaz",
         "timeout": 60000,
-        "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+        "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
       },
       {
         "name": "ensure-network-open-blue-topaz",
@@ -412,12 +412,12 @@
     },
     {
       "name": "reload-after-dark",
-      "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
     },
     {
       "name": "app-ready-after-dark",
       "timeout": 60000,
-      "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
     },
     {
       "name": "ensure-network-open-dark",
@@ -447,12 +447,12 @@
     },
     {
       "name": "reload-after-remove",
-      "eval": "(() => { setTimeout(() => location.reload(), 0); return true; })()"
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
     },
     {
       "name": "app-ready-after-remove",
       "timeout": 60000,
-      "waitFor": "document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
     },
     {
       "name": "ensure-network-open-removed",
@@ -569,53 +569,146 @@
     },
 
     {
-      "name": "layer-menu-open-props",
+      "name": "discriminator-surface",
+      "eval": "(() => { document.documentElement.style.setProperty('--surface', '#aaaaaa'); return getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(); })()"
+    },
+
+    {
+      "name": "discriminator-surface-value",
+      "probe": "getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()",
+      "expect": "#aaaaaa"
+    },
+
+    {
+      "name": "layer-menu-open-props-dark",
       "click": "button[title=\"{{text:probeLayerTitle}}\"]"
     },
 
     {
-      "name": "layer-menu-visible-props",
+      "name": "layer-menu-visible-props-dark",
       "timeout": 10000,
       "waitFor": "document.querySelector('.menu-item') !== null"
     },
 
     {
-      "name": "layer-props-item",
+      "name": "layer-props-item-dark",
       "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
     },
 
     {
-      "name": "layer-props-dialog",
+      "name": "layer-props-dialog-dark",
       "timeout": 15000,
       "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
     },
 
     {
-      "name": "set-layer-bg-white",
-      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); if (row === undefined) throw new Error('canvas background row not found'); const hex = row.querySelector('input.ui-color-hex'); if (hex === null) throw new Error('hex input not found'); hex.value = '#ffffff'; hex.dispatchEvent(new Event('change', { bubbles: true })); return hex.value; })()"
+      "name": "set-layer-bg-dark",
+      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); if (row === undefined) throw new Error('canvas background row not found'); const hex = row.querySelector('input.ui-color-hex'); if (hex === null) throw new Error('hex input not found'); hex.value = '#101010'; hex.dispatchEvent(new Event('change', { bubbles: true })); return hex.value; })()"
     },
 
     {
-      "name": "layer-bg-hex-value",
+      "name": "layer-bg-hex-dark",
       "probe": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); return row === undefined ? null : (row.querySelector('input.ui-color-hex') || {}).value; })()",
-      "expect": "#ffffff"
+      "expect": "#101010"
     },
 
     {
-      "name": "save-layer-props",
+      "name": "save-layer-props-dark",
       "click": ".dialog-backdrop .ui-btn--primary"
     },
 
     {
-      "name": "layer-props-saved",
+      "name": "layer-props-saved-dark",
       "timeout": 30000,
       "waitFor": "document.querySelector('.dialog-backdrop') === null"
     },
 
     {
-      "name": "layer-bg-white-applied",
+      "name": "layer-bg-applied-dark",
+      "timeout": 30000,
+      "waitFor": "(() => { const v = getComputedStyle(document.documentElement).getPropertyValue('--layer-bg').trim().toLowerCase(); return v === '#101010' || v === 'rgb(16, 16, 16)'; })()"
+    },
+
+    {
+      "name": "counter-layer-bg-dark",
+      "probe": "(() => {\n  const raw = (value) => {\n    const text = String(value).trim().toLowerCase();\n    if (text.startsWith('#')) {\n      const hex = text.length === 4 ? text.slice(1).split('').map((c) => c + c).join('') : text.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(text);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(text);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const root = getComputedStyle(document.documentElement);\n  const surfaceText = root.getPropertyValue('--surface').trim();\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const surface = raw(surfaceText);\n  const bg = raw(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const under = surface === null || bg === null ? null : (wallpaper ? surface.rgb : surface.rgb.map((c, i) => SHARE * c + (1 - SHARE) * bg.rgb[i]));\n  const expected = under === null ? null : (lum(under) > 0.35 ? '#1f242d' : '#ffffff');\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = raw(st.backgroundColor);\n    const fg = raw(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(st.color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  const same = (actual, want) => {\n    const a = raw(actual);\n    const w = raw(want);\n    return a !== null && w !== null && a.rgb.every((v, i) => Math.abs(v - w.rgb[i]) < 1);\n  };\n  return {\n    wallpaper_off: wallpaper === false,\n    surface: surfaceText.toLowerCase(),\n    layer_bg: layerBgText.toLowerCase(),\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => same(f.color, expected)),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "surface": "#aaaaaa",
+        "layer_bg": "#101010",
+        "expected_text": "#ffffff",
+        "counter_present": true,
+        "all_expected_text": true,
+        "all_plate_share": true,
+        "min_contrast": 3.54,
+        "contrast_ok": false
+      }
+    },
+
+    {
+      "name": "layer-menu-open-props-light",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+
+    {
+      "name": "layer-menu-visible-props-light",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+
+    {
+      "name": "layer-props-item-light",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+
+    {
+      "name": "layer-props-dialog-light",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+
+    {
+      "name": "set-layer-bg-light",
+      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); if (row === undefined) throw new Error('canvas background row not found'); const hex = row.querySelector('input.ui-color-hex'); if (hex === null) throw new Error('hex input not found'); hex.value = '#ffffff'; hex.dispatchEvent(new Event('change', { bubbles: true })); return hex.value; })()"
+    },
+
+    {
+      "name": "layer-bg-hex-light",
+      "probe": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); return row === undefined ? null : (row.querySelector('input.ui-color-hex') || {}).value; })()",
+      "expect": "#ffffff"
+    },
+
+    {
+      "name": "save-layer-props-light",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+
+    {
+      "name": "layer-props-saved-light",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+
+    {
+      "name": "layer-bg-applied-light",
       "timeout": 30000,
       "waitFor": "(() => { const v = getComputedStyle(document.documentElement).getPropertyValue('--layer-bg').trim().toLowerCase(); return v === '#ffffff' || v === 'rgb(255, 255, 255)'; })()"
+    },
+
+    {
+      "name": "counter-layer-bg-light",
+      "probe": "(() => {\n  const raw = (value) => {\n    const text = String(value).trim().toLowerCase();\n    if (text.startsWith('#')) {\n      const hex = text.length === 4 ? text.slice(1).split('').map((c) => c + c).join('') : text.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(text);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(text);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const root = getComputedStyle(document.documentElement);\n  const surfaceText = root.getPropertyValue('--surface').trim();\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const surface = raw(surfaceText);\n  const bg = raw(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const under = surface === null || bg === null ? null : (wallpaper ? surface.rgb : surface.rgb.map((c, i) => SHARE * c + (1 - SHARE) * bg.rgb[i]));\n  const expected = under === null ? null : (lum(under) > 0.35 ? '#1f242d' : '#ffffff');\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = raw(st.backgroundColor);\n    const fg = raw(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(st.color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  const same = (actual, want) => {\n    const a = raw(actual);\n    const w = raw(want);\n    return a !== null && w !== null && a.rgb.every((v, i) => Math.abs(v - w.rgb[i]) < 1);\n  };\n  return {\n    wallpaper_off: wallpaper === false,\n    surface: surfaceText.toLowerCase(),\n    layer_bg: layerBgText.toLowerCase(),\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => same(f.color, expected)),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "surface": "#aaaaaa",
+        "layer_bg": "#ffffff",
+        "expected_text": "#1f242d",
+        "counter_present": true,
+        "all_expected_text": true,
+        "all_plate_share": true,
+        "min_contrast": 8.26,
+        "contrast_ok": true
+      }
     },
 
     {
@@ -625,14 +718,27 @@
     },
 
     {
-      "name": "counter-layer-bg-changed",
-      "probe": "(() => { const parseCss = (value) => {\n    const raw = String(value).trim().toLowerCase();\n    if (raw.startsWith('#')) {\n      const hex = raw.length === 4 ? raw.slice(1).split('').map((c) => c + c).join('') : raw.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(raw);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const expectedText = (surfaceRgb, bgRgb, wallpaperOn) => {\n    const under = wallpaperOn ? surfaceRgb : surfaceRgb.map((c, i) => SHARE * c + (1 - SHARE) * bgRgb[i]);\n    return lum(under) > 0.35 ? '#1f242d' : '#ffffff';\n  };\n  const root = getComputedStyle(document.documentElement);\n  const surface = parseCss(root.getPropertyValue('--surface').trim());\n  const layerBgText = root.getPropertyValue('--layer-bg').trim().toLowerCase();\n  const bg = parseCss(layerBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const expected = surface === null || bg === null ? null : expectedText(surface.rgb, bg.rgb, wallpaper);\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = parseCss(st.backgroundColor);\n    const fg = parseCss(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(getComputedStyle(el).color || '').toLowerCase(),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  return {\n    wallpaper_off: wallpaper === false,\n    layer_bg_is_white: layerBgText === '#ffffff' || layerBgText === 'rgb(255, 255, 255)',\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => { const actual = parseCss(f.color); const want = parseCss(expected); return actual !== null && want !== null && actual.rgb.every((v, i) => Math.abs(v - want.rgb[i]) < 1); }),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "name": "discriminator-restore-surface",
+      "eval": "(() => { document.documentElement.style.removeProperty('--surface'); return getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(); })()"
+    },
+
+    {
+      "name": "discriminator-surface-restored",
+      "probe": "getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()",
+      "expect": "#ffffff"
+    },
+
+    {
+      "name": "counter-layer-bg-restored",
+      "probe": "(() => {\n  const raw = (value) => {\n    const text = String(value).trim().toLowerCase();\n    if (text.startsWith('#')) {\n      const hex = text.length === 4 ? text.slice(1).split('').map((c) => c + c).join('') : text.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(text);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(text);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const root = getComputedStyle(document.documentElement);\n  const surfaceText = root.getPropertyValue('--surface').trim();\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const surface = raw(surfaceText);\n  const bg = raw(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const under = surface === null || bg === null ? null : (wallpaper ? surface.rgb : surface.rgb.map((c, i) => SHARE * c + (1 - SHARE) * bg.rgb[i]));\n  const expected = under === null ? null : (lum(under) > 0.35 ? '#1f242d' : '#ffffff');\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = raw(st.backgroundColor);\n    const fg = raw(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(st.color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  const same = (actual, want) => {\n    const a = raw(actual);\n    const w = raw(want);\n    return a !== null && w !== null && a.rgb.every((v, i) => Math.abs(v - w.rgb[i]) < 1);\n  };\n  return {\n    wallpaper_off: wallpaper === false,\n    surface: surfaceText.toLowerCase(),\n    layer_bg: layerBgText.toLowerCase(),\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => same(f.color, expected)),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
       "expect": {
         "wallpaper_off": true,
-        "layer_bg_is_white": true,
+        "surface": "#ffffff",
+        "layer_bg": "#ffffff",
         "expected_text": "#1f242d",
         "counter_present": true,
         "all_expected_text": true,
+        "all_plate_share": true,
         "min_contrast": 15.57,
         "contrast_ok": true
       }
