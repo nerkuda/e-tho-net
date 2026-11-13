@@ -24,7 +24,7 @@ function clamp(value: number, min: number, max: number): number {
  * отрицательные значения), `sat`/`light` — доли 0..1. Формула CSS Color 4
  * (HSL → RGB через хрому и светлоту).
  */
-function hslToRgb(hue: number, sat: number, light: number): [number, number, number] {
+export function hslToRgb(hue: number, sat: number, light: number): [number, number, number] {
   const h = ((hue % 360) + 360) % 360;
   const c = (1 - Math.abs(2 * light - 1)) * sat;
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
@@ -46,6 +46,29 @@ function hslToRgb(hue: number, sat: number, light: number): [number, number, num
     Math.round((sectors[1] + m) * 255),
     Math.round((sectors[2] + m) * 255),
   ];
+}
+
+/**
+ * sRGB-каналы 0..255 → HSL: тон в градусах 0..360, насыщенность и светлота
+ * 0..1. Обратное к {@link hslToRgb}; нужно там, где цвет темы/слоя
+ * ПЕРЕКРАШИВАЕТСЯ (рамки состояний мысли — `lib/cloud-frames.ts`): подъём
+ * светлоты и поворот тона задаются в HSL, а не подбором каналов.
+ */
+export function rgbToHsl(rgb: readonly number[]): [number, number, number] {
+  const r = rgb[0]! / 255;
+  const g = rgb[1]! / 255;
+  const b = rgb[2]! / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const light = (max + min) / 2;
+  if (max === min) return [0, 0, light];
+  const delta = max - min;
+  const sat = light > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+  let hue: number;
+  if (max === r) hue = ((g - b) / delta + (g < b ? 6 : 0)) * 60;
+  else if (max === g) hue = ((b - r) / delta + 2) * 60;
+  else hue = ((r - g) / delta + 4) * 60;
+  return [hue, sat, light];
 }
 
 /**

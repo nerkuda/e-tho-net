@@ -364,19 +364,30 @@ export function shapeProblems(css: string, name: string): string[] {
 }
 
 /**
- * Связка «рамка состояния → токены темы» (задача 7a652ce8). Один механизм на
- * карту (`.cloud.*`), структуры (переиспользуют те же классы) и публикации:
- * состояние «выделен» — `--selection`, «текущий (курсор)» — `--cursor`,
- * «открыт в редакторе» — полоса `--layer-focus-stripe` (на основе — акцент) и
- * кант `--focus-ring-contrast`.
+ * Связка «рамка состояния → токены темы» (задачи 7a652ce8, c6d74fd4). Один
+ * механизм на карту (`.cloud.*`), структуры (переиспользуют те же классы) и
+ * публикации. На карте цвета трёх состояний считает `lib/cloud-frames.ts` и
+ * кладёт в `--frame-*` (тема + полоса активного слоя), тема остаётся
+ * фолбэком: «выделен» — `--frame-selected`/`--selection`, «текущий
+ * (курсор)» — `--frame-current`/`--cursor`, «открыт в редакторе» —
+ * `--frame-open`/`--focus-accent` и кант `--focus-ring-contrast`. В
+ * публикациях рамки по-прежнему прямо от токенов темы.
  */
 const STATE_FRAMES = [
-  { file: 'styles/canvas.css', selector: '.cloud.selected', tokens: ['--selection'] },
-  { file: 'styles/canvas.css', selector: '.cloud.kbd-cursor', tokens: ['--cursor'] },
+  {
+    file: 'styles/canvas.css',
+    selector: '.cloud.selected',
+    tokens: ['--frame-selected', '--selection'],
+  },
+  {
+    file: 'styles/canvas.css',
+    selector: '.cloud.kbd-cursor',
+    tokens: ['--frame-current', '--cursor'],
+  },
   {
     file: 'styles/canvas.css',
     selector: '.cloud.halo',
-    tokens: ['--layer-focus-stripe', '--focus-ring-contrast'],
+    tokens: ['--frame-open', '--focus-ring-contrast'],
   },
   { file: 'styles/screens/publications.css', selector: '.pub-current', tokens: ['--cursor'] },
   { file: 'styles/screens/publications.css', selector: '.pub-doc-current', tokens: ['--cursor'] },
@@ -718,7 +729,10 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
       new Map([
         [
           'styles/canvas.css',
-          canvas.css.replace('outline: 2px dashed var(--cursor);', 'outline: 2px dashed #ff00ff;'),
+          canvas.css.replace(
+            'outline: 2px dashed var(--frame-current, var(--cursor));',
+            'outline: 2px dashed #ff00ff;',
+          ),
         ],
         ...rendererCssFiles()
           .filter((file) => file.rel !== 'styles/canvas.css')
@@ -735,7 +749,7 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
         [
           'styles/canvas.css',
           canvas.css.replace(
-            'outline: 2px solid var(--selection);',
+            'outline: 2px solid var(--frame-selected, var(--selection));',
             'outline: 2px solid var(--accent);',
           ),
         ],
@@ -756,7 +770,7 @@ describe('guard: токен-наборы тем интерфейса (aaeb6761)'
         [
           'styles/canvas.css',
           canvas.css.replace(
-            'outline: 2px solid var(--selection);',
+            'outline: 2px solid var(--frame-selected, var(--selection));',
             'outline: 2px solid var(--selection-bg);',
           ),
         ],

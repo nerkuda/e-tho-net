@@ -103,8 +103,11 @@ function layer(overrides: Partial<Layer> & { id: string; title: string }): Layer
 }
 
 /** Recording style-declaration shim for the CSS-variable application. */
-function shimStyle(): LayerStyleTarget & { vars: Map<string, string> } {
-  const vars = new Map<string, string>();
+function shimStyle(tokens: Record<string, string> = {}): LayerStyleTarget & {
+  vars: Map<string, string>;
+  getPropertyValue(name: string): string;
+} {
+  const vars = new Map<string, string>(Object.entries(tokens));
   return {
     vars,
     setProperty(name: string, value: string): void {
@@ -113,6 +116,19 @@ function shimStyle(): LayerStyleTarget & { vars: Map<string, string> } {
     removeProperty(name: string): void {
       vars.delete(name);
     },
+    getPropertyValue(name: string): string {
+      return vars.get(name) ?? '';
+    },
+  };
+}
+
+/** Корневые токены темы для фейкового документа: пайплайн читает их для --frame-*. */
+function rootThemeTokens(): Record<string, string> {
+  return {
+    '--bg': '#eef0f4',
+    '--cursor': '#c02f77',
+    '--selection': '#0f8f86',
+    '--focus-ring-contrast': '#1b2436',
   };
 }
 
@@ -237,9 +253,11 @@ describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => 
 
 describe('layer theme pipeline (store → document root)', () => {
   it('applies, re-themes and resets the variables as the store changes', () => {
-    const style = shimStyle();
+    const style = shimStyle(rootThemeTokens());
     const originalDocument = (globalThis as any).document;
+    const originalComputed = (globalThis as any).getComputedStyle;
     (globalThis as any).document = { documentElement: { style } };
+    (globalThis as any).getComputedStyle = (element: { style: unknown }) => element.style;
     try {
       initLayerTheme();
 
@@ -276,6 +294,8 @@ describe('layer theme pipeline (store → document root)', () => {
     } finally {
       if (originalDocument === undefined) delete (globalThis as any).document;
       else (globalThis as any).document = originalDocument;
+      if (originalComputed === undefined) delete (globalThis as any).getComputedStyle;
+      else (globalThis as any).getComputedStyle = originalComputed;
       // Leave the store on the base for the other suites.
       store.update({
         layers: [],
@@ -289,9 +309,11 @@ describe('layer theme pipeline (store → document root)', () => {
     // MCP-created layers carry no `colors`; the client must still write the
     // creation defaults so the active layer is visually distinct from the
     // base regardless of how the layer was created.
-    const style = shimStyle();
+    const style = shimStyle(rootThemeTokens());
     const originalDocument = (globalThis as any).document;
+    const originalComputed = (globalThis as any).getComputedStyle;
     (globalThis as any).document = { documentElement: { style } };
+    (globalThis as any).getComputedStyle = (element: { style: unknown }) => element.style;
     try {
       initLayerTheme();
       store.update({
@@ -307,6 +329,8 @@ describe('layer theme pipeline (store → document root)', () => {
     } finally {
       if (originalDocument === undefined) delete (globalThis as any).document;
       else (globalThis as any).document = originalDocument;
+      if (originalComputed === undefined) delete (globalThis as any).getComputedStyle;
+      else (globalThis as any).getComputedStyle = originalComputed;
       store.update({
         layers: [],
         currentLayer: null,
@@ -407,13 +431,15 @@ describe('styles.css rules the runtime relies on', () => {
   });
 
   it('the focus band and the editor halo follow the focus token chain', () => {
+    // Полоса фокуса — в CSS от цепочки токенов; кольцо открытой считает
+    // lib/cloud-frames.ts (задача c6d74fd4), тема остаётся фолбэком.
     assert.match(
       css.match(/\.canvas::before\s*\{[^}]*\}/)?.[0] ?? '',
       /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
     );
     assert.match(
       css.match(/\.cloud\.halo\s*\{[^}]*\}/)?.[0] ?? '',
-      /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
+      /var\(--frame-open,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
     );
   });
 });

@@ -643,36 +643,44 @@ body.resizing-h {
   box-shadow: var(--shadow-hover);
 }
 
-/* Clouds picked into the selection panel (§5): a teal outline, clearly
- * distinct from the editor halo of the opened thought (.cloud.halo below). */
+/* Clouds picked into the selection panel (§5): сплошная рамка состояния
+ * «выделенная», отличная от гало открытой (.cloud.halo ниже) и от пунктира
+ * текущей (.cloud.kbd-cursor). Цвет считает lib/cloud-frames.ts и кладёт в
+ * --frame-selected: на базовом слое это токен темы --selection, на слое с
+ * собственной полосой фокуса — полоса, повёрнутая по тону (задача c6d74fd4:
+ * рамки трёх состояний производны от слоя). */
 .cloud.selected {
-  outline: 2px solid var(--selection);
+  outline: 2px solid var(--frame-selected, var(--selection));
   outline-offset: 1px;
 }
 
 /* Halo (§2.2.4): the thought is open in the editor — single click, Enter or a
- * pick from another view. A double ring around the cloud: the inner band takes
- * the layer's focus-stripe colour (0.6.4, 13-layers.md §2.2a) — the border of
- * the edited thought is part of the layer indication — and the outer thin
- * contrast band (`--focus-ring-contrast`) keeps it readable on the focus band,
- * which is painted in the SAME stripe colour (задача 3af98e31). Единый механизм
- * двойной рамки открытого: тот же токен канта используют `.pub-open` и
+ * pick from another view. Рамка — 2px цветное кольцо (1px border + 1px
+ * box-shadow) цвета --frame-open и 1px контрастный кант --focus-ring-contrast.
+ * Цвет кольца считает lib/cloud-frames.ts: на базовом слое это тон пунктира
+ * (--cursor), поднятый по светлоте («в тон, но ярче»), на слое с собственной
+ * полосой — производное от --layer-focus-stripe (задача c6d74fd4). Кант
+ * оставлен 1px вместо прежних 4px почти чёрного цвета темы: он держит
+ * читаемость на полосе фокуса того же цвета (задача 3af98e31), но не давит.
+ * Единый механизм рамки открытого: тот же токен канта используют `.pub-open` и
  * `.pub-doc-editor`; «Структуры» переиспользуют этот класс. */
 .cloud.halo {
-  border-color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  border-color: var(--frame-open, var(--focus-accent, var(--accent)));
   box-shadow:
-    0 0 0 1px var(--layer-focus-stripe, var(--focus-accent, var(--accent))),
-    0 0 0 4px var(--focus-ring-contrast),
+    0 0 0 1px var(--frame-open, var(--focus-accent, var(--accent))),
+    0 0 0 2px var(--focus-ring-contrast),
     var(--shadow-focus);
 }
 
 /* Keyboard cursor frame (§2.9): the cloud the arrow navigation points at.
  * Dashed and offset further than the selection outline so both stay visible
- * when they combine. Цвет — отдельный токен темы `--cursor`: состояние
- * «текущий элемент» не является предупреждением, `--warn-strong` был чужой
- * семантикой (задача 7a652ce8). */
+ * when they combine. Цвет — `--frame-current` (lib/cloud-frames.ts): на
+ * базовом слое это токен темы `--cursor`, на слое с собственной полосой —
+ * полоса, повёрнутая по тону (задача c6d74fd4). Состояние «текущий элемент»
+ * не является предупреждением, `--warn-strong` был чужой семантикой
+ * (задача 7a652ce8). */
 .cloud.kbd-cursor {
-  outline: 2px dashed var(--cursor);
+  outline: 2px dashed var(--frame-current, var(--cursor));
   outline-offset: 3px;
 }
 
@@ -1158,15 +1166,15 @@ body.cloud-dragging * {
  * focus (`editorTarget=null`, the default) — and it is the case the halo is
  * usually seen in. `.cloud.focus-cloud` (below `.cloud.halo` in this module,
  * equal specificity) would otherwise override the halo's border and box-shadow
- * and the double ring would silently disappear. Re-assert it here (specificity
- * 0,3,0 wins). The inner band keeps the layer focus colour — per spec the
- * opened thought's frame IS the focus-stripe colour (13-layers.md §2.2a),
- * so a layer recolours it; the outer contrast band stays (задача 3af98e31). */
+ * and the ring would silently disappear. Re-assert it here (specificity
+ * 0,3,0 wins). Кольцо и кант — те же, что у `.cloud.halo`: цвет открытой
+ * производен от полосы слоя внутри lib/cloud-frames.ts (задача c6d74fd4),
+ * кант темы остаётся 1px (задача 3af98e31). */
 .cloud.focus-cloud.halo {
-  border-color: var(--layer-focus-stripe, var(--focus-accent, var(--accent)));
+  border-color: var(--frame-open, var(--focus-accent, var(--accent)));
   box-shadow:
-    0 0 0 1px var(--layer-focus-stripe, var(--focus-accent, var(--accent))),
-    0 0 0 4px var(--focus-ring-contrast),
+    0 0 0 1px var(--frame-open, var(--focus-accent, var(--accent))),
+    0 0 0 2px var(--focus-ring-contrast),
     var(--shadow-focus);
 }
 

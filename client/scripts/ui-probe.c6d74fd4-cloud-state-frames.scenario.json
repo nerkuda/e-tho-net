@@ -1,0 +1,707 @@
+{
+  "name": "c6d74fd4-cloud-state-frames",
+  "description": "Задача c6d74fd4 «Доработка рамок состояний: открытая, текущая и выделенная мысли». Стенд: язык сервера ru. Проверено: (1) рамка открытой — 2px кольцо цвета --frame-open (тон курсора, но светлее) + 1px кант темы; (2) три состояния одновременно на карте — разные облачка, цвета попарно ≥ 40 sRGB; (3) на слое ВСЕ три рамки производны от полосы фокуса (создан слой → цвета сменились; правка «Полоса фокуса» #ffd400 → сменились все три); (5) смена режима без перезагрузки — рамки и гало перекрашены тем же тиком store; возврат на «Основу» — снова от токенов темы; (6) со светлыми обоями рамки те же, хотя бы одно кольцо читается ≥ 3 : 1 на подложке из картинки с тинтом. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c6d74fd4-cloud-state-frames.scenario.json --server-language ru --out .tmp/c6d74fd4/out",
+  "timeout": 300000,
+  "texts": {
+    "userMenuTitle": {
+      "ru": "Меню пользователя",
+      "en": "User menu"
+    },
+    "userMenuSettings": {
+      "ru": "Настройки",
+      "en": "Settings"
+    },
+    "settingsClientSection": {
+      "ru": "Клиент",
+      "en": "Client"
+    },
+    "layerMenuBase": {
+      "ru": "Основа",
+      "en": "Base"
+    },
+    "layerCreate": {
+      "ru": "Создать новый слой…",
+      "en": "Create new layer…"
+    },
+    "layerProps": {
+      "ru": "Свойства слоя…",
+      "en": "Layer properties…"
+    },
+    "layerCreatePlaceholder": {
+      "ru": "Например: Правки августа",
+      "en": "e.g. August edits"
+    },
+    "layersFocusStripe": {
+      "ru": "Полоса фокуса",
+      "en": "Focus strip"
+    },
+    "probeLayerTitle": {
+      "ru": "Проба рамок",
+      "en": "Frame probe"
+    }
+  },
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": {
+          "language": "ru"
+        },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "seed-child-1",
+      "api": {
+        "name": "seed-child-1",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Рамки 1",
+          "parent_id": "{{homeId}}"
+        },
+        "expression": "data.title"
+      },
+      "expect": "Рамки 1"
+    },
+    {
+      "name": "seed-child-2",
+      "api": {
+        "name": "seed-child-2",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Рамки 2",
+          "parent_id": "{{homeId}}"
+        },
+        "expression": "data.title"
+      },
+      "expect": "Рамки 2"
+    },
+    {
+      "name": "seed-child-3",
+      "api": {
+        "name": "seed-child-3",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Рамки 3",
+          "parent_id": "{{homeId}}"
+        },
+        "expression": "data.title"
+      },
+      "expect": "Рамки 3"
+    },
+    {
+      "name": "seed-child-4",
+      "api": {
+        "name": "seed-child-4",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Рамки 4",
+          "parent_id": "{{homeId}}"
+        },
+        "expression": "data.title"
+      },
+      "expect": "Рамки 4"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.canvas') !== null"
+    },
+    {
+      "name": "clouds-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.cloud').length >= 5"
+    },
+    {
+      "name": "install-color-helpers",
+      "eval": "(() => {\n  const rootStyle = () => getComputedStyle(document.documentElement);\n  const raw = (value) => String(value === undefined || value === null ? '' : value).trim().toLowerCase();\n  const parse = (value) => {\n    const v = raw(value);\n    if (v === '' || v === 'none') return null;\n    if (v.startsWith('#')) {\n      const hex = v.length === 4 ? v.slice(1).split('').map((c) => c + c).join('') : v.slice(1);\n      if (hex.length < 6) return null;\n      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/.exec(v);\n    if (cs !== null) return [1, 2, 3].map((i) => Math.round(Number(cs[i]) * 255));\n    const m = /^rgba?\\(([^)]+)\\)/.exec(v);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((p) => Number.parseFloat(p));\n    return parts.slice(0, 3).map((c) => Math.round(c));\n  };\n  const alphaOf = (value) => {\n    const v = raw(value);\n    const cs = /^color\\(srgb\\s+[\\d.]+\\s+[\\d.]+\\s+[\\d.]+\\s*\\/\\s*([\\d.]+%?)\\)$/.exec(v);\n    if (cs !== null) return cs[1].endsWith('%') ? Number.parseFloat(cs[1]) / 100 : Number(cs[1]);\n    const m = /^rgba?\\(([^)]+)\\)$/.exec(v);\n    if (m === null) return 1;\n    const parts = m[1].split(',').map((p) => p.trim());\n    return parts.length === 4 ? Number.parseFloat(parts[3]) : 1;\n  };\n  const lum = (c) => {\n    const lin = (x) => { const v = x / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n  };\n  const ratio = (a, b) => {\n    if (a === null || b === null) return 0;\n    const x = lum(a); const y = lum(b);\n    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);\n  };\n  const dist = (a, b) => (a === null || b === null ? 0 : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));\n  const hsl = (c) => {\n    const [r0, g0, b0] = c.map((x) => x / 255);\n    const max = Math.max(r0, g0, b0); const min = Math.min(r0, g0, b0);\n    const l = (max + min) / 2; const d = max - min;\n    if (d === 0) return [0, 0, l];\n    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);\n    let h;\n    if (max === r0) h = ((g0 - b0) / d + (g0 < b0 ? 6 : 0)) * 60;\n    else if (max === g0) h = ((b0 - r0) / d + 2) * 60;\n    else h = ((r0 - g0) / d + 4) * 60;\n    return [h, s, l];\n  };\n  const prop = (name) => raw(rootStyle().getPropertyValue(name));\n  const colour = (name) => parse(prop(name));\n  const background = () => colour('--layer-bg') || colour('--bg');\n  const trio = () => [colour('--frame-open'), colour('--frame-current'), colour('--frame-selected')];\n  const frames = () => ({ open: prop('--frame-open'), current: prop('--frame-current'), selected: prop('--frame-selected') });\n  const pairMin = () => { const t = trio(); return Math.min(dist(t[0], t[1]), dist(t[0], t[2]), dist(t[1], t[2])); };\n  const minContrast = () => Math.min(...trio().map((c) => ratio(c, background())));\n  const elementColour = (element, propName) => parse(getComputedStyle(element)[propName]);\n  window.__pc = { raw, parse, alphaOf, lum, ratio, dist, hsl, prop, colour, background, trio, frames, pairMin, minContrast, elementColour };\n  return true;\n})()"
+    },
+    {
+      "name": "open-user-menu",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}');\n  if (row === undefined) throw new Error('settings menu item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+    },
+    {
+      "name": "pick-current-theme",
+      "probe": "(() => {\n  const select = Array.from(document.querySelectorAll('.settings-section select')).find((s) =>\n    Array.from(s.options).some((option) => option.value === 'current'),\n  );\n  if (select === undefined) throw new Error('theme select not found');\n  select.value = 'current';\n  select.dispatchEvent(new Event('change', { bubbles: true }));\n  return select.value;\n})()",
+      "expect": "current"
+    },
+    {
+      "name": "pick-light-mode",
+      "probe": "(() => {\n  const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]');\n  if (radio === null) throw new Error('light mode radio not found');\n  radio.click();\n  return radio.checked;\n})()",
+      "expect": true
+    },
+    {
+      "name": "current-light-applied",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.theme === 'current' && document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "close-settings",
+      "key": "Escape"
+    },
+    {
+      "name": "settings-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "base-frames",
+      "probe": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  const t = p.trio();\n  return {\n    stripe: p.prop('--layer-focus-stripe'),\n    open: f.open,\n    current: f.current,\n    selected: f.selected,\n    pairwise_min_ge_40: p.pairMin() >= 40,\n    min_contrast: Number(p.minContrast().toFixed(1)),\n    current_is_cursor: p.dist(t[1], p.colour('--cursor')) < 1,\n    selected_is_selection: p.dist(t[2], p.colour('--selection')) < 1,\n    open_lighter_than_cursor: p.hsl(t[0])[2] > p.hsl(p.colour('--cursor'))[2],\n  };\n})()",
+      "expect": {
+        "stripe": "",
+        "open": "#e04c96",
+        "current": "#c02f77",
+        "selected": "#0f8f86",
+        "pairwise_min_ge_40": true,
+        "min_contrast": 3.3,
+        "current_is_cursor": true,
+        "selected_is_selection": true,
+        "open_lighter_than_cursor": true
+      }
+    },
+    {
+      "name": "remember-base-frames",
+      "eval": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  window.__framesBefore = [f.open, f.current, f.selected];\n  return window.__framesBefore;\n})()"
+    },
+    {
+      "name": "open-clicked-cloud",
+      "click": {
+        "selector": ".cloud:not(.focus-cloud)",
+        "at": [
+          30,
+          12
+        ]
+      }
+    },
+    {
+      "name": "halo-on-clicked",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.cloud.halo:not(.focus-cloud)') !== null"
+    },
+    {
+      "name": "press-arrow-right",
+      "key": "ArrowRight"
+    },
+    {
+      "name": "cursor-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.cloud.kbd-cursor') !== null"
+    },
+    {
+      "name": "ctrl-select-third",
+      "eval": "(() => {\n  const blocked = (cloud) =>\n    cloud.classList.contains('halo') ||\n    cloud.classList.contains('kbd-cursor') ||\n    cloud.classList.contains('focus-cloud');\n  const candidates = [...document.querySelectorAll('.cloud')].filter((cloud) => !blocked(cloud));\n  if (candidates.length === 0) throw new Error('нет свободного облачка для выделения');\n  // Выделение не сбрасывается между блоками сценария: Ctrl+клик по уже\n  // выделенному облачку снял бы выделение и панель закрылась бы. Берём\n  // свободное и ещё не выделенное; если выделены все — клик по любому оставит\n  // выделение непустым.\n  const target = candidates.find((cloud) => !cloud.classList.contains('selected')) ?? candidates[0];\n  target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));\n  return target.dataset.id;\n})()"
+    },
+    {
+      "name": "selection-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.cloud.selected') !== null"
+    },
+    {
+      "name": "halo-matches-open-three-states-base",
+      "timeout": 15000,
+      "waitFor": "(() => { const h = document.querySelector('.cloud.halo'); return h !== null && window.__pc.dist(window.__pc.elementColour(h, 'borderTopColor'), window.__pc.trio()[0]) < 1; })()"
+    },
+    {
+      "name": "three-states-base",
+      "probe": "(() => {\n  const p = window.__pc;\n  const halo = document.querySelector('.cloud.halo');\n  const cursor = document.querySelector('.cloud.kbd-cursor');\n  const selected = document.querySelector('.cloud.selected');\n  const ids = [halo, cursor, selected].filter((e) => e !== null).map((e) => e.dataset.id);\n  const f = p.trio();\n  const open = halo === null ? null : p.elementColour(halo, 'borderTopColor');\n  const current = cursor === null ? null : p.elementColour(cursor, 'outlineColor');\n  const sel = selected === null ? null : p.elementColour(selected, 'outlineColor');\n  return {\n    halo: halo !== null,\n    cursor: cursor !== null,\n    selected: selected !== null,\n    distinct_clouds: ids.length === 3 && new Set(ids).size === 3,\n    halo_not_focus_cloud: halo === null ? false : !halo.classList.contains('focus-cloud'),\n    halo_matches_open: p.dist(open, f[0]) < 1,\n    cursor_matches_current: p.dist(current, f[1]) < 1,\n    selected_matches_selected: p.dist(sel, f[2]) < 1,\n    cloud_colours_pairwise_ge_40:\n      Math.min(p.dist(open, current), p.dist(open, sel), p.dist(current, sel)) >= 40,\n  };\n})()",
+      "expect": {
+        "halo": true,
+        "cursor": true,
+        "selected": true,
+        "distinct_clouds": true,
+        "halo_not_focus_cloud": true,
+        "halo_matches_open": true,
+        "cursor_matches_current": true,
+        "selected_matches_selected": true,
+        "cloud_colours_pairwise_ge_40": true
+      }
+    },
+    {
+      "name": "layer-menu-open",
+      "click": "button[title=\"{{text:layerMenuBase}}\"], button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+    {
+      "name": "layer-menu-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "layer-create-item",
+      "eval": "(() => {\n      const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerCreate}}');\n      if (row === undefined) throw new Error('create-layer item not found');\n      row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n      row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n      return true;\n    })()"
+    },
+    {
+      "name": "layer-create-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop input[placeholder=\"{{text:layerCreatePlaceholder}}\"]') !== null"
+    },
+    {
+      "name": "fill-layer-title",
+      "click": "input[placeholder=\"{{text:layerCreatePlaceholder}}\"]"
+    },
+    {
+      "name": "layer-title-typed",
+      "text": "Проба рамок"
+    },
+    {
+      "name": "layer-title-value",
+      "probe": "document.querySelector('.dialog-backdrop input[placeholder=\"{{text:layerCreatePlaceholder}}\"]').value",
+      "expect": "Проба рамок"
+    },
+    {
+      "name": "create-layer",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+    {
+      "name": "layer-created",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null && document.querySelector('.canvas') !== null"
+    },
+    {
+      "name": "layer-stripe-applied",
+      "timeout": 20000,
+      "waitFor": "window.__pc.prop('--layer-focus-stripe') !== ''"
+    },
+    {
+      "name": "layer-frames-violet",
+      "probe": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  const before = window.__framesBefore || [];\n  const now = [f.open, f.current, f.selected];\n  return {\n    all_three_changed: before.length === 3 && now.every((value, index) => value !== before[index]),\n    pairwise_min_ge_40: p.pairMin() >= 40,\n    open_contrast: Number(p.ratio(p.trio()[0], p.background()).toFixed(1)),\n    stripe: p.prop('--layer-focus-stripe'),\n    open: f.open,\n    current: f.current,\n    selected: f.selected,\n  };\n})()",
+      "expect": {
+        "all_three_changed": true,
+        "pairwise_min_ge_40": true,
+        "open_contrast": 9.4,
+        "stripe": "#643da8",
+        "open": "#3b2168",
+        "current": "#a83da1",
+        "selected": "#3d61a8"
+      }
+    },
+    {
+      "name": "remember-violet-frames",
+      "eval": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  window.__framesBefore = [f.open, f.current, f.selected];\n  return window.__framesBefore;\n})()"
+    },
+    {
+      "name": "open-user-menu-dark",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible-dark",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-dark",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}');\n  if (row === undefined) throw new Error('settings menu item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "settings-dialog-dark",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section-dark",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+    },
+    {
+      "name": "pick-dark-mode",
+      "probe": "(() => {\n  const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"dark\"]');\n  if (radio === null) throw new Error('dark mode radio not found');\n  radio.click();\n  return radio.checked;\n})()",
+      "expect": true
+    },
+    {
+      "name": "dark-mode-applied",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.mode === 'dark'"
+    },
+    {
+      "name": "halo-repainted-dark",
+      "timeout": 15000,
+      "waitFor": "(() => { const h = document.querySelector('.cloud.halo'); return h !== null && window.__pc.dist(window.__pc.elementColour(h, 'borderTopColor'), window.__pc.trio()[0]) < 1; })()"
+    },
+    {
+      "name": "dark-frames-live",
+      "probe": "(() => {\n      const p = window.__pc;\n      const f = p.frames();\n      const halo = document.querySelector('.cloud.halo');\n      return {\n        stripe: p.prop('--layer-focus-stripe'),\n        open: f.open,\n        current: f.current,\n        selected: f.selected,\n        pairwise_min_ge_40: p.pairMin() >= 40,\n        open_contrast: Number(p.ratio(p.trio()[0], p.background()).toFixed(1)),\n        halo_present: halo !== null,\n        halo_matches_open: halo === null ? false : p.dist(p.elementColour(halo, 'borderTopColor'), p.trio()[0]) < 1,\n      };\n    })()",
+      "expect": {
+        "stripe": "#7e57c2",
+        "open": "#b197de",
+        "current": "#c257bb",
+        "selected": "#577bc2",
+        "pairwise_min_ge_40": true,
+        "open_contrast": 7.2,
+        "halo_present": true,
+        "halo_matches_open": true
+      }
+    },
+    {
+      "name": "remember-dark-frames",
+      "eval": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  window.__framesBefore = [f.open, f.current, f.selected];\n  return window.__framesBefore;\n})()"
+    },
+    {
+      "name": "close-settings-dark",
+      "key": "Escape"
+    },
+    {
+      "name": "settings-closed-dark",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-user-menu-light",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible-light",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-light",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}');\n  if (row === undefined) throw new Error('settings menu item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "settings-dialog-light",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section-light",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+    },
+    {
+      "name": "pick-light-mode-back",
+      "probe": "(() => {\n  const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]');\n  if (radio === null) throw new Error('light mode radio not found');\n  radio.click();\n  return radio.checked;\n})()",
+      "expect": true
+    },
+    {
+      "name": "light-mode-applied",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "light-frames-back",
+      "probe": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  const before = window.__framesBefore || [];\n  const now = [f.open, f.current, f.selected];\n  return {\n    all_three_changed: before.length === 3 && now.every((value, index) => value !== before[index]),\n    pairwise_min_ge_40: p.pairMin() >= 40,\n    open_contrast: Number(p.ratio(p.trio()[0], p.background()).toFixed(1)),\n    stripe: p.prop('--layer-focus-stripe'),\n    open: f.open,\n    current: f.current,\n    selected: f.selected,\n  };\n})()",
+      "expect": {
+        "all_three_changed": true,
+        "pairwise_min_ge_40": true,
+        "open_contrast": 9.4,
+        "stripe": "#643da8",
+        "open": "#3b2168",
+        "current": "#a83da1",
+        "selected": "#3d61a8"
+      }
+    },
+    {
+      "name": "close-settings-light",
+      "key": "Escape"
+    },
+    {
+      "name": "settings-closed-light",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "layer-menu-open-props",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+    {
+      "name": "layer-menu-visible-props",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "layer-props-item",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}');\n  if (row === undefined) throw new Error('layer properties item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "layer-props-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+    {
+      "name": "set-stripe-yellow",
+      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\nconst row = rows.find((r) => {\n  const scope = r.closest('.ui-field') || r.parentElement;\n  const caption = scope === null ? null : scope.querySelector('label');\n  return ((caption === null ? '' : caption.textContent) || '').trim() === '{{text:layersFocusStripe}}';\n});\n  if (row === undefined) throw new Error('color row not found: layersFocusStripe');\n  const hex = row.querySelector('input.ui-color-hex');\n  if (hex === null) throw new Error('hex input not found');\n  hex.value = '#ffd400';\n  hex.dispatchEvent(new Event('change', { bubbles: true }));\n  return hex.value;\n})()"
+    },
+    {
+      "name": "stripe-hex-value",
+      "probe": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\nconst row = rows.find((r) => {\n  const scope = r.closest('.ui-field') || r.parentElement;\n  const caption = scope === null ? null : scope.querySelector('label');\n  return ((caption === null ? '' : caption.textContent) || '').trim() === '{{text:layersFocusStripe}}';\n});\n  return row === undefined ? null : (row.querySelector('input.ui-color-hex') || {}).value;\n})()",
+      "expect": "#ffd400"
+    },
+    {
+      "name": "save-layer-props",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+    {
+      "name": "layer-props-saved",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "stripe-yellow-applied",
+      "timeout": 30000,
+      "waitFor": "(() => { const v = window.__pc.prop('--layer-focus-stripe'); return v === '#ffd400' || v === 'rgb(' + [1, 3, 5].map((i) => parseInt('#ffd400'.slice(i, i + 2), 16)).join(', ') + ')'; })()"
+    },
+    {
+      "name": "layer-frames-yellow",
+      "probe": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  const before = window.__framesBefore || [];\n  const now = [f.open, f.current, f.selected];\n  return {\n    all_three_changed: before.length === 3 && now.every((value, index) => value !== before[index]),\n    pairwise_min_ge_40: p.pairMin() >= 40,\n    open_contrast: Number(p.ratio(p.trio()[0], p.background()).toFixed(1)),\n    stripe: p.prop('--layer-focus-stripe'),\n    open: f.open,\n    current: f.current,\n    selected: f.selected,\n  };\n})()",
+      "expect": {
+        "all_three_changed": true,
+        "pairwise_min_ge_40": true,
+        "open_contrast": 3.1,
+        "stripe": "#ffd400",
+        "open": "#8f7700",
+        "current": "#78ff00",
+        "selected": "#ff2100"
+      }
+    },
+    {
+      "name": "open-clicked-cloud-layer",
+      "click": {
+        "selector": ".cloud:not(.focus-cloud)",
+        "at": [
+          30,
+          12
+        ]
+      }
+    },
+    {
+      "name": "halo-on-clicked-layer",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.cloud.halo:not(.focus-cloud)') !== null"
+    },
+    {
+      "name": "press-arrow-layer",
+      "key": "ArrowRight"
+    },
+    {
+      "name": "cursor-visible-layer",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.cloud.kbd-cursor') !== null"
+    },
+    {
+      "name": "ctrl-select-layer",
+      "eval": "(() => {\n  const blocked = (cloud) =>\n    cloud.classList.contains('halo') ||\n    cloud.classList.contains('kbd-cursor') ||\n    cloud.classList.contains('focus-cloud');\n  const candidates = [...document.querySelectorAll('.cloud')].filter((cloud) => !blocked(cloud));\n  if (candidates.length === 0) throw new Error('нет свободного облачка для выделения');\n  // Выделение не сбрасывается между блоками сценария: Ctrl+клик по уже\n  // выделенному облачку снял бы выделение и панель закрылась бы. Берём\n  // свободное и ещё не выделенное; если выделены все — клик по любому оставит\n  // выделение непустым.\n  const target = candidates.find((cloud) => !cloud.classList.contains('selected')) ?? candidates[0];\n  target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));\n  return target.dataset.id;\n})()"
+    },
+    {
+      "name": "selection-visible-layer",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.cloud.selected') !== null"
+    },
+    {
+      "name": "halo-matches-open-three-states-layer",
+      "timeout": 15000,
+      "waitFor": "(() => { const h = document.querySelector('.cloud.halo'); return h !== null && window.__pc.dist(window.__pc.elementColour(h, 'borderTopColor'), window.__pc.trio()[0]) < 1; })()"
+    },
+    {
+      "name": "three-states-layer",
+      "probe": "(() => {\n  const p = window.__pc;\n  const halo = document.querySelector('.cloud.halo');\n  const cursor = document.querySelector('.cloud.kbd-cursor');\n  const selected = document.querySelector('.cloud.selected');\n  const ids = [halo, cursor, selected].filter((e) => e !== null).map((e) => e.dataset.id);\n  const f = p.trio();\n  const open = halo === null ? null : p.elementColour(halo, 'borderTopColor');\n  const current = cursor === null ? null : p.elementColour(cursor, 'outlineColor');\n  const sel = selected === null ? null : p.elementColour(selected, 'outlineColor');\n  return {\n    halo: halo !== null,\n    cursor: cursor !== null,\n    selected: selected !== null,\n    distinct_clouds: ids.length === 3 && new Set(ids).size === 3,\n    halo_not_focus_cloud: halo === null ? false : !halo.classList.contains('focus-cloud'),\n    halo_matches_open: p.dist(open, f[0]) < 1,\n    cursor_matches_current: p.dist(current, f[1]) < 1,\n    selected_matches_selected: p.dist(sel, f[2]) < 1,\n    cloud_colours_pairwise_ge_40:\n      Math.min(p.dist(open, current), p.dist(open, sel), p.dist(current, sel)) >= 40,\n  };\n})()",
+      "expect": {
+        "halo": true,
+        "cursor": true,
+        "selected": true,
+        "distinct_clouds": true,
+        "halo_not_focus_cloud": true,
+        "halo_matches_open": true,
+        "cursor_matches_current": true,
+        "selected_matches_selected": true,
+        "cloud_colours_pairwise_ge_40": true
+      }
+    },
+    {
+      "name": "layer-menu-open-base",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+    {
+      "name": "layer-menu-visible-base",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "switch-to-base",
+      "eval": "(() => {\n      const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerMenuBase}}');\n      if (row === undefined) throw new Error('base layer item not found');\n      row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n      row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n      return true;\n    })()"
+    },
+    {
+      "name": "base-layer-applied",
+      "timeout": 30000,
+      "waitFor": "window.__pc.prop('--layer-focus-stripe') === ''"
+    },
+    {
+      "name": "base-frames-after-layer",
+      "probe": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  const t = p.trio();\n  return {\n    stripe: p.prop('--layer-focus-stripe'),\n    open: f.open,\n    current: f.current,\n    selected: f.selected,\n    pairwise_min_ge_40: p.pairMin() >= 40,\n    min_contrast: Number(p.minContrast().toFixed(1)),\n    current_is_cursor: p.dist(t[1], p.colour('--cursor')) < 1,\n    selected_is_selection: p.dist(t[2], p.colour('--selection')) < 1,\n    open_lighter_than_cursor: p.hsl(t[0])[2] > p.hsl(p.colour('--cursor'))[2],\n  };\n})()",
+      "expect": {
+        "stripe": "",
+        "open": "#e04c96",
+        "current": "#c02f77",
+        "selected": "#0f8f86",
+        "pairwise_min_ge_40": true,
+        "min_contrast": 3.3,
+        "current_is_cursor": true,
+        "selected_is_selection": true,
+        "open_lighter_than_cursor": true
+      }
+    },
+    {
+      "name": "open-user-menu-wall",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible-wall",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-wall",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}');\n  if (row === undefined) throw new Error('settings menu item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "settings-dialog-wall",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section-wall",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+    },
+    {
+      "name": "pick-light-mode-wall",
+      "probe": "(() => {\n  const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]');\n  if (radio === null) throw new Error('light mode radio not found');\n  radio.click();\n  return radio.checked;\n})()",
+      "expect": true
+    },
+    {
+      "name": "current-light-again",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "close-settings-wall",
+      "key": "Escape"
+    },
+    {
+      "name": "settings-closed-wall",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "upload-light-wallpaper",
+      "eval": "(async () => {\n      const canvas = document.createElement('canvas');\n      canvas.width = 320;\n      canvas.height = 180;\n      const ctx = canvas.getContext('2d');\n      const gradient = ctx.createLinearGradient(0, 0, 320, 180);\n      gradient.addColorStop(0, '#ffffff');\n      gradient.addColorStop(1, '#e6e6e6');\n      ctx.fillStyle = gradient;\n      ctx.fillRect(0, 0, 320, 180);\n      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);\n      await window.etn.me.uploadWallpaper({\n        networkId: '{{networkId}}',\n        data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),\n        mime_type: 'image/jpeg',\n        meta: { width: 320, height: 180, avg_luminance: 0.94 },\n      });\n      return true;\n    })()"
+    },
+    {
+      "name": "reload-for-wallpaper",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-wallpaper",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-wall",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-wallpaper-on",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "install-color-helpers-wall",
+      "eval": "(() => {\n  const rootStyle = () => getComputedStyle(document.documentElement);\n  const raw = (value) => String(value === undefined || value === null ? '' : value).trim().toLowerCase();\n  const parse = (value) => {\n    const v = raw(value);\n    if (v === '' || v === 'none') return null;\n    if (v.startsWith('#')) {\n      const hex = v.length === 4 ? v.slice(1).split('').map((c) => c + c).join('') : v.slice(1);\n      if (hex.length < 6) return null;\n      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/.exec(v);\n    if (cs !== null) return [1, 2, 3].map((i) => Math.round(Number(cs[i]) * 255));\n    const m = /^rgba?\\(([^)]+)\\)/.exec(v);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((p) => Number.parseFloat(p));\n    return parts.slice(0, 3).map((c) => Math.round(c));\n  };\n  const alphaOf = (value) => {\n    const v = raw(value);\n    const cs = /^color\\(srgb\\s+[\\d.]+\\s+[\\d.]+\\s+[\\d.]+\\s*\\/\\s*([\\d.]+%?)\\)$/.exec(v);\n    if (cs !== null) return cs[1].endsWith('%') ? Number.parseFloat(cs[1]) / 100 : Number(cs[1]);\n    const m = /^rgba?\\(([^)]+)\\)$/.exec(v);\n    if (m === null) return 1;\n    const parts = m[1].split(',').map((p) => p.trim());\n    return parts.length === 4 ? Number.parseFloat(parts[3]) : 1;\n  };\n  const lum = (c) => {\n    const lin = (x) => { const v = x / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n  };\n  const ratio = (a, b) => {\n    if (a === null || b === null) return 0;\n    const x = lum(a); const y = lum(b);\n    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);\n  };\n  const dist = (a, b) => (a === null || b === null ? 0 : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));\n  const hsl = (c) => {\n    const [r0, g0, b0] = c.map((x) => x / 255);\n    const max = Math.max(r0, g0, b0); const min = Math.min(r0, g0, b0);\n    const l = (max + min) / 2; const d = max - min;\n    if (d === 0) return [0, 0, l];\n    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);\n    let h;\n    if (max === r0) h = ((g0 - b0) / d + (g0 < b0 ? 6 : 0)) * 60;\n    else if (max === g0) h = ((b0 - r0) / d + 2) * 60;\n    else h = ((r0 - g0) / d + 4) * 60;\n    return [h, s, l];\n  };\n  const prop = (name) => raw(rootStyle().getPropertyValue(name));\n  const colour = (name) => parse(prop(name));\n  const background = () => colour('--layer-bg') || colour('--bg');\n  const trio = () => [colour('--frame-open'), colour('--frame-current'), colour('--frame-selected')];\n  const frames = () => ({ open: prop('--frame-open'), current: prop('--frame-current'), selected: prop('--frame-selected') });\n  const pairMin = () => { const t = trio(); return Math.min(dist(t[0], t[1]), dist(t[0], t[2]), dist(t[1], t[2])); };\n  const minContrast = () => Math.min(...trio().map((c) => ratio(c, background())));\n  const elementColour = (element, propName) => parse(getComputedStyle(element)[propName]);\n  window.__pc = { raw, parse, alphaOf, lum, ratio, dist, hsl, prop, colour, background, trio, frames, pairMin, minContrast, elementColour };\n  return true;\n})()"
+    },
+    {
+      "name": "clouds-wall-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.cloud:not(.focus-cloud)') !== null"
+    },
+    {
+      "name": "open-cloud-wall",
+      "click": {
+        "selector": ".cloud:not(.focus-cloud)",
+        "at": [
+          30,
+          12
+        ]
+      }
+    },
+    {
+      "name": "halo-wall-visible",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.cloud.halo:not(.focus-cloud)') !== null"
+    },
+    {
+      "name": "halo-wall-repainted",
+      "timeout": 15000,
+      "waitFor": "(() => { const h = document.querySelector('.cloud.halo:not(.focus-cloud)'); return h !== null && window.__pc.dist(window.__pc.elementColour(h, 'borderTopColor'), window.__pc.trio()[0]) < 1; })()"
+    },
+    {
+      "name": "wallpaper-frames",
+      "probe": "(() => {\n      const p = window.__pc;\n      const f = p.frames();\n      const halo = document.querySelector('.cloud.halo');\n      const tint = p.prop('--canvas-wallpaper-tint');\n      const alpha = p.alphaOf(tint);\n      const tintRgb = p.parse(tint);\n      const picture = [247, 247, 247];\n      const backdrop = tintRgb === null ? picture : tintRgb.map((c, i) => alpha * c + (1 - alpha) * picture[i]);\n      const open = p.colour('--frame-open');\n      const hairline = p.colour('--focus-ring-contrast');\n      const openRatio = p.ratio(open, backdrop);\n      const hairlineRatio = p.ratio(hairline, backdrop);\n      return {\n        attr: document.documentElement.getAttribute('data-canvas-wallpaper'),\n        open: f.open,\n        current: f.current,\n        selected: f.selected,\n        tint_alpha: Number(alpha.toFixed(2)),\n        open_on_image: Number(openRatio.toFixed(1)),\n        hairline_on_image: Number(hairlineRatio.toFixed(1)),\n        at_least_one_ring_reads: Math.max(openRatio, hairlineRatio) >= 3,\n        open_reads: openRatio >= 3,\n        halo_present: halo !== null,\n        halo_matches_open: halo === null ? false : p.dist(p.elementColour(halo, 'borderTopColor'), open) < 1,\n      };\n    })()",
+      "expect": {
+        "attr": "on",
+        "open": "#e04c96",
+        "current": "#c02f77",
+        "selected": "#0f8f86",
+        "tint_alpha": 0.14,
+        "open_on_image": 3.4,
+        "hairline_on_image": 14.4,
+        "at_least_one_ring_reads": true,
+        "open_reads": true,
+        "halo_present": true,
+        "halo_matches_open": true
+      }
+    },
+    {
+      "name": "remove-wallpaper",
+      "eval": "window.etn.me.removeWallpaper('{{networkId}}')"
+    }
+  ]
+}

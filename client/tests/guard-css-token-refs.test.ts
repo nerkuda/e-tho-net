@@ -44,6 +44,12 @@ const RUNTIME_TOKENS = new Set([
   // lib/layer-colors.ts
   '--layer-bg',
   '--layer-focus-stripe',
+  // lib/cloud-frames.ts (через lib/layer-colors.ts) — рамки трёх состояний
+  // мысли: открытая/текущая/выделенная, производные от темы и полосы слоя
+  // (задача c6d74fd4).
+  '--frame-open',
+  '--frame-current',
+  '--frame-selected',
   // lib/ui/popover.ts
   '--ui-popover-arrow-left',
   // lib/ui/tree.ts

@@ -3,7 +3,12 @@
  * c19cbb81, ревизия итерации 2; задача 136575c9).
  *
  * Один семантический токен фокуса с тремя ролями:
- *   1. полоса фокуса карты и рамка мысли, открытой в редакторе;
+ *   1. полоса фокуса карты (и рамка открытого в списках публикаций). Рамку
+ *      мысли, открытой на карте, с 0.16.1 считает отдельный расчёт
+ *      `lib/cloud-frames.ts` (задача c6d74fd4): по решению заказчика она — в
+ *      семействе токена курсора (`--cursor`, но ярче), а на слое — производное
+ *      от полосы слоя. В CSS она приходит токеном `--frame-open`, чей фолбэк —
+ *      та же цепочка фокуса;
  *   2. пара «основа/слой»: на основе — `--focus-accent` файла темы, в
  *      не-основном слое — runtime `--layer-focus-stripe` из `layers.colors`
  *      (пишет `lib/layer-colors.ts`); фон холста — `var(--layer-bg, var(--bg))`;
@@ -52,6 +57,15 @@ import {
 /** Цепочка фокуса — единственный допустимый источник цвета потребителя. */
 const CHAIN =
   /var\(\s*--layer-focus-stripe\s*,\s*var\(\s*--focus-accent\s*,\s*var\(\s*--accent\s*\)\s*\)\s*\)/;
+
+/**
+ * Рамка открытой на карте: `--frame-open` считает `lib/cloud-frames.ts`
+ * (задача c6d74fd4) — на базовом слое от тона курсора темы, на слое от его
+ * полосы. Фолбэк в CSS остаётся той же цепочкой фокуса, поэтому потребитель
+ * этой формы допустим, но голый токен без фолбэка — нет.
+ */
+const FRAME_CHAIN =
+  /var\(\s*--frame-open\s*,\s*var\(\s*--focus-accent\s*,\s*var\(\s*--accent\s*\)\s*\)\s*\)/;
 
 /** Голый токен акцента (в т. ч. `--accent-soft`/`--accent-strong`) вне цепочки. */
 const ACCENT_VAR = /var\(\s*--accent(?:-[a-z]+)?\s*[,)]/;
@@ -190,10 +204,12 @@ export function textColorValue(body: string): string | null {
  */
 export function consumerProblems(body: string, role?: 'text'): string[] {
   const problems: string[] = [];
-  if (!CHAIN.test(body)) {
+  if (!CHAIN.test(body) && !FRAME_CHAIN.test(body)) {
     problems.push('цвет взят не цепочкой фокуса (--layer-focus-stripe → --focus-accent)');
   }
-  const rest = body.replace(new RegExp(CHAIN.source, 'g'), '');
+  const rest = body
+    .replace(new RegExp(CHAIN.source, 'g'), '')
+    .replace(new RegExp(FRAME_CHAIN.source, 'g'), '');
   const accent = ACCENT_VAR.exec(rest);
   if (accent !== null) {
     problems.push(`голый токен акцента вне цепочки: ${accent[0]}`);
@@ -272,7 +288,9 @@ describe('guard: фокус-цвет — только цепочка токен�
 
     const halo = ruleBodyOf(sources.get('styles/canvas.css') ?? '', ['.cloud.halo']);
     assert.ok(halo !== null, 'гало открытого объявлено');
-    assert.match(halo!, CHAIN, 'рамка открытого — цвет фокуса слоя/темы');
+    // Задача c6d74fd4: рамка открытой на карте — производное семейства курсора
+    // (или полосы слоя), фолбэк — та же цепочка фокуса.
+    assert.match(halo!, FRAME_CHAIN, 'рамка открытого — --frame-open с фолбэком на цепочку');
     assert.match(halo!, /var\(--focus-ring-contrast\)/, 'второй контур — контрастный кант');
 
     const pub = ruleBodyOf(sources.get('styles/screens/publications.css') ?? '', ['.pub-open']);
@@ -327,6 +345,11 @@ describe('guard: фокус-цвет — только цепочка токен�
       consumerProblems('border-color: #1e62be;').length > 0,
       'литерал цвета обязан краснить',
     );
+    // Мутация 3б: --frame-open без фолбэка-цепочки — источник цвета не прослежен.
+    assert.ok(
+      consumerProblems('border-color: var(--frame-open);').length > 0,
+      'голый --frame-open обязан краснить',
+    );
     // Мутация 4: цепочка на месте, но рядом затёк акцент темы.
     assert.ok(
       consumerProblems(
@@ -347,6 +370,11 @@ describe('guard: фокус-цвет — только цепочка токен�
         'background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);',
       ),
       [],
+    );
+    assert.deepEqual(
+      consumerProblems('border-color: var(--frame-open, var(--focus-accent, var(--accent)));'),
+      [],
+      'рамка открытой карты через --frame-open — допустимая форма',
     );
   });
 

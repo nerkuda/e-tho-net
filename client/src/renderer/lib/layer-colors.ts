@@ -27,6 +27,7 @@
 import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerEcho } from '@etn/shared';
 
 import { store, type Theme } from '../state.js';
+import { applyCloudFrameStyle, cloudFrameColors } from './cloud-frames.js';
 
 /** Focus accent of the `current` theme (`--focus-accent`, requirement
  *  c19cbb81) — the label contrast fallback for a layer without explicit
@@ -192,18 +193,42 @@ export function applyLayerThemeStyle(style: LayerStyleTarget, vars: LayerThemeVa
 let lastAppliedKey = '';
 let themeWired = false;
 
+/**
+ * Перекраска рамок трёх состояний мысли (`--frame-open` / `--frame-current` /
+ * `--frame-selected`, задача c6d74fd4). Источники — токены применённой темы и
+ * полоса активного слоя; цвета считает `lib/cloud-frames.ts`. Вызывается
+ * ТОЛЬКО при смене ключа (тема, режим, слой), поэтому computed-стиль читается
+ * на смену темы/слоя, а не на каждый тик store.
+ */
+function applyCloudFrames(vars: LayerThemeVars): void {
+  const rootStyle = getComputedStyle(document.documentElement);
+  const frames = cloudFrameColors({
+    stripe: vars.focusStripe,
+    cursor: rootStyle.getPropertyValue('--cursor'),
+    selection: rootStyle.getPropertyValue('--selection'),
+    // Фон холста: у слоя свой (--layer-bg), на базовом — темы (--bg).
+    background: vars.background ?? rootStyle.getPropertyValue('--bg'),
+  });
+  if (frames !== null) applyCloudFrameStyle(document.documentElement.style, frames);
+}
+
 /** Reads the store and applies the current layer's theme variables to the
- *  document root. Cheap enough to call on every store change (layer switch,
- *  theme toggle, network close) thanks to the change-detection key. */
+ *  document root: `--layer-focus-stripe`/`--layer-bg` и производные от них
+ *  `--frame-*` (рамки трёх состояний). Cheap enough to call on every store
+ *  change (layer switch, theme toggle, network close) thanks to the
+ *  change-detection key. */
 export function refreshLayerTheme(): void {
   if (typeof document === 'undefined') return;
   const s = store.state;
   const colors = currentLayerColors(s.layers, s.currentLayer);
   const vars = resolveLayerTheme(colors, s.theme);
-  const key = `${s.theme}|${vars.focusStripe ?? ''}|${vars.background ?? ''}`;
+  // Тема входит в ключ: цвета токенов темы меняются вместе с ней (--cursor,
+  // --selection, --bg), и рамки обязаны пересчитаться тем же тиком.
+  const key = `${s.uiTheme}|${s.theme}|${vars.focusStripe ?? ''}|${vars.background ?? ''}`;
   if (key === lastAppliedKey) return;
   lastAppliedKey = key;
   applyLayerThemeStyle(document.documentElement.style, vars);
+  applyCloudFrames(vars);
 }
 
 /**
