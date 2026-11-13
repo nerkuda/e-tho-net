@@ -16,10 +16,11 @@
  * `linear-gradient(тинт), картинка` (`styles/canvas.css`). Подложки не
  * складываются: картинка с тинтом перекрывает фон, поэтому цвет проверяется
  * против ТОЙ подложки, которая сейчас видна ({@link canvasBackdrop}). Композит
- * «тинт над картинкой» берётся в средней светлоте изображения; она
- * восстанавливается из плотности тинта, потому что плотность посчитана ровно от
- * расхождения светлоты картинки и фона (`wallpaperTintAlpha`) —
- * {@link wallpaperBackdrop}. Отдельные метаданные картинки модулю не нужны.
+ * «тинт над средней точкой картинки» считается ОТ ФАКТА: средняя светлота
+ * берётся из метаданных картинки (`meta.avg_luminance`), плотность вуали — из
+ * фактической CSS-переменной (с множителем слоя `WALLPAPER_TINT_LAYER_FACTOR`) —
+ * {@link wallpaperBackdrop}. Обратный ход «восстановить светлоту из α» убран:
+ * он ошибался до 0.51 по светлоте и не знал про множитель слоя (круг 2).
  *
  * **Полоса фокуса полупрозрачна.** `.canvas::before` рисуется с
  * `--focus-band-opacity` (0.7, `styles/tokens.css`), поэтому контраст
@@ -31,6 +32,9 @@
  * не разгоняется в чистые #000/#fff: светлота производной ограничена
  * [{@link ADAPT_LIGHT_MIN}, {@link ADAPT_LIGHT_MAX}], иначе сетка холста,
  * подписи и свечение выделения перестают различаться (сценарий 2b86c983).
+ * Исключение — ПОЛОСА фокуса: у неё диапазон полный ({@link BAND_LIGHT_MIN}…
+ * {@link BAND_LIGHT_MAX}), иначе полупрозрачная полоса (α = 0.7) на средней
+ * подложке не добирает 3 : 1 ни при какой светлоте (круг 2).
  *
  * **Исходники не меняются.** Модуль чистый: получает цвет строкой и возвращает
  * производную, ничего не персистя. Пара слотов `layers.colors` (тёмная/светлая)
@@ -43,11 +47,6 @@
  */
 
 import { hslToRgb, mixColors, parseCssColor, relativeLuminance, rgbToHsl } from './css-color.js';
-import {
-  WALLPAPER_TINT_ALPHA_MAX,
-  WALLPAPER_TINT_ALPHA_MIN,
-  WALLPAPER_TINT_DELTA_FULL,
-} from './wallpaper-image.js';
 
 /** Минимальный контраст текста с подложкой (WCAG AA, обычный текст). */
 export const TEXT_CONTRAST_MIN = 4.5;
@@ -70,11 +69,36 @@ export const FOCUS_BAND_OPACITY = 0.7;
 export const ADAPT_LIGHT_MIN = 0.06;
 export const ADAPT_LIGHT_MAX = 0.94;
 
+/**
+ * Диапазон светлоты ПОЛОСЫ фокуса — полный. Полоса полупрозрачна (α = 0.7),
+ * поэтому на средней подложке (например, композит rgb(116, 116, 116) при
+ * плотной вуали) 3 : 1 в границах [{@link ADAPT_LIGHT_MIN}, {@link
+ * ADAPT_LIGHT_MAX}] недостижимы: предел 2.95 при любой светлоте и
+ * насыщенности, а чистый чёрный даёт 3.36. Полоса — акцент под подписями и
+ * облачками, сетку холста и свечение выделения она не закрывает, поэтому её
+ * ограничение — ровно порог контраста, а не «не уходить в #000/#fff».
+ */
+export const BAND_LIGHT_MIN = 0;
+export const BAND_LIGHT_MAX = 1;
+
 /** Шаг подгонки светлоты (доля HSL L): 0.01 ≈ 2.6 канала sRGB. */
 export const ADAPT_STEP = 0.01;
 
-/** Сколько шагов подгонки допускается — покрывает весь диапазон. */
-const ADAPT_MAX_STEPS = Math.ceil((ADAPT_LIGHT_MAX - ADAPT_LIGHT_MIN) / ADAPT_STEP);
+/**
+ * Шаги подгонки от исходной светлоты ДО ГРАНИЦЫ диапазона (в каждом
+ * направлении своё число). Поиск обязан дойти до самого края [{@link
+ * ADAPT_LIGHT_MIN}, {@link ADAPT_LIGHT_MAX}]: из L=0 чёрный цвет иначе
+ * упирается в 0.88 и не добирает контраст (дефект круга 2 — полоса 2.97 : 1).
+ * Границы передаются параметрами: у текста и поверхностей они свои
+ * ({@link ADAPT_LIGHT_MIN}…{@link ADAPT_LIGHT_MAX}), у полосы — полные
+ * ({@link BAND_LIGHT_MIN}…{@link BAND_LIGHT_MAX}).
+ */
+function stepBudget(light: number, min: number, max: number): { up: number; down: number } {
+  return {
+    up: Math.max(0, Math.ceil((max - light) / ADAPT_STEP)),
+    down: Math.max(0, Math.ceil((light - min) / ADAPT_STEP)),
+  };
+}
 
 /**
  * Округление каналов до целых. Подбор светлоты считает контраст уже
@@ -133,55 +157,61 @@ export function parseAlpha(value: string): number | null {
   return null;
 }
 
-/** Нейтральный серый (0..255) с заданной относительной яркостью WCAG. */
-function grayForLuminance(luminance: number): [number, number, number] {
+/**
+ * Средняя точка картинки заданной светлоты: нейтральный серый (0..255). Для
+ * контраста по WCAG важна только относительная яркость (она считается по
+ * каналам), поэтому хрома средней точки на результат не влияет.
+ */
+export function averageWallpaperColor(luminance: number): [number, number, number] {
+  const clamped = Math.min(1, Math.max(0, luminance));
   const channel =
-    luminance <= 0.0031308 ? luminance * 12.92 : 1.055 * luminance ** (1 / 2.4) - 0.055;
-  const value = Math.round(Math.min(1, Math.max(0, channel)) * 255);
-  return [value, value, value];
+    clamped <= 0.0031308 ? clamped * 12.92 : 1.055 * clamped ** (1 / 2.4) - 0.055;
+  const gray = Math.round(Math.min(1, Math.max(0, channel)) * 255);
+  return [gray, gray, gray];
 }
 
 /**
- * Композит «тинт над картинкой» в СРЕДНЕЙ светлоте изображения — та подложка,
- * которую видит пользователь на карте при активной картинке.
+ * Композит «тинт над картинкой» в СРЕДНЕЙ светлоте изображения — фактическая
+ * подложка карты при активной картинке.
  *
- * Средняя светлота картинки не передаётся: плотность тинта посчитана от
- * расхождения светлоты картинки и фона (`wallpaperTintAlpha`:
- * `|image − base| / WALLPAPER_TINT_DELTA_FULL` → α из
- * [{@link WALLPAPER_TINT_ALPHA_MIN}, {@link WALLPAPER_TINT_ALPHA_MAX}]), поэтому
- * она восстанавливается обратным ходом: светлая подложка темнеет, тёмная
- * светлеет ровно на столько, на сколько указывает плотность вуали. `null` —
- * фон не разобран или вуали нет.
+ * Считается ОТ ФАКТА, а не обратным ходом из плотности тинта: `imageLuminance` —
+ * средняя светлота картинки из её метаданных (`meta.avg_luminance`, считается по
+ * пикселям в `lib/wallpaper-image.ts`), `tint` — та самая CSS-переменная вуали,
+ * которую рисует браузер (плотность уже включает множитель слоя
+ * `WALLPAPER_TINT_LAYER_FACTOR` и округление до сотых). Обратный ход из α ошибался
+ * до 0.51 по светлоте в упоре α и не знал про множитель слоя — отсюда провал
+ * гарантии 3 : 1 у видимой полосы (дефект круга 2: чёрная картинка под светлым
+ * слоем давала фактическую подложку rgb(61, 61, 61) и полосу 1.72 : 1).
+ *
+ * `null` — фон или вуаль не разобраны либо средней светлоты нет (адаптация под
+ * картинку невозможна, действует подложка без неё).
  */
-export function wallpaperBackdrop(base: string, tint: string | null): string | null {
+export function wallpaperBackdrop(
+  base: string,
+  tint: string | null,
+  imageLuminance: number | null,
+): string | null {
   const rgb = parseCssColor(base);
   const alpha = tint === null ? null : parseAlpha(tint);
-  if (rgb === null || alpha === null) return null;
-  const baseLuminance = relativeLuminance(rgb[0], rgb[1], rgb[2]);
-  const delta =
-    Math.min(
-      1,
-      Math.max(
-        0,
-        (alpha - WALLPAPER_TINT_ALPHA_MIN) / (WALLPAPER_TINT_ALPHA_MAX - WALLPAPER_TINT_ALPHA_MIN),
-      ),
-    ) * WALLPAPER_TINT_DELTA_FULL;
-  // Тинт плотнее, когда картинка противоположна подложке по светлоте: светлая
-  // подложка → картинка темнее, тёмная → светлее.
-  const imageLuminance =
-    baseLuminance > 0.5 ? Math.max(0, baseLuminance - delta) : Math.min(1, baseLuminance + delta);
-  return hexOf(mixColors(rgb, grayForLuminance(imageLuminance), alpha));
+  if (rgb === null || alpha === null || imageLuminance === null) return null;
+  if (!Number.isFinite(imageLuminance)) return null;
+  return hexOf(mixColors(rgb, averageWallpaperColor(imageLuminance), alpha));
 }
-
 /**
  * Итоговая подложка холста: с картинкой — композит «тинт над картинкой»
- * ({@link wallpaperBackdrop}), без картинки — цвет фона. `null` — цвет фона не
- * разобран (адаптация не выполняется, действуют фолбэки CSS).
+ * ({@link wallpaperBackdrop}), без картинки — цвет фона. `imageLuminance` —
+ * средняя светлота картинки из метаданных (`null` без картинки). `null` в
+ * результате — цвет фона не разобран (адаптация не выполняется, действуют
+ * фолбэки CSS).
  */
-export function canvasBackdrop(base: string, tint: string | null): string | null {
+export function canvasBackdrop(
+  base: string,
+  tint: string | null,
+  imageLuminance: number | null,
+): string | null {
   const rgb = parseCssColor(base);
   if (rgb === null) return null;
-  return wallpaperBackdrop(base, tint) ?? hexOf(rgb);
+  return wallpaperBackdrop(base, tint, imageLuminance) ?? hexOf(rgb);
 }
 
 /**
@@ -234,8 +264,9 @@ function parseBackdrops(backdrops: readonly string[]): number[][] {
 const SAT_SCALES = [1, 0.75, 0.5, 0.25, 0] as const;
 
 /**
- * Подбор производной: шаг светлоты {@link ADAPT_STEP} в диапазоне
- * [{@link ADAPT_LIGHT_MIN}, {@link ADAPT_LIGHT_MAX}], первым — направление
+ * Подбор производной: шаг светлоты {@link ADAPT_STEP} по ВСЕМУ диапазону
+ * [{@link ADAPT_LIGHT_MIN}, {@link ADAPT_LIGHT_MAX}] — от исходной светлоты до
+ * каждой из границ (число шагов считает {@link stepBudget}), первым — направление
  * «прочь от подложки» (на светлой подложке темнее, на тёмной светлее), затем
  * обратное; насыщенность — по лестнице {@link SAT_SCALES}. `measure`
  * возвращает контраст кандидата; первое значение ≥ `target` побеждает. Если
@@ -247,19 +278,24 @@ function searchAdaptation(
   backdropLuminance: number,
   measure: (candidate: [number, number, number]) => number,
   target: number,
+  lightMin: number = ADAPT_LIGHT_MIN,
+  lightMax: number = ADAPT_LIGHT_MAX,
 ): number[] {
   const [hue, sat, light] = rgbToHsl([rgb[0]!, rgb[1]!, rgb[2]!]);
   const preferred: 1 | -1 = backdropLuminance > 0.5 ? -1 : 1;
   const order: Array<1 | -1> = [preferred, preferred === 1 ? -1 : 1];
+  const budget = stepBudget(light, lightMin, lightMax);
+  const maxSteps = Math.max(budget.up, budget.down);
 
   let best: number[] = [rgb[0]!, rgb[1]!, rgb[2]!];
   let bestContrast = measure([rgb[0]!, rgb[1]!, rgb[2]!]);
   for (const scale of SAT_SCALES) {
     const candidateSat = sat * scale;
-    for (let step = 1; step <= ADAPT_MAX_STEPS; step += 1) {
+    for (let step = 1; step <= maxSteps; step += 1) {
       for (const direction of order) {
+        if (step > (direction === 1 ? budget.up : budget.down)) continue;
         const candidateLight = light + direction * step * ADAPT_STEP;
-        if (candidateLight < ADAPT_LIGHT_MIN || candidateLight > ADAPT_LIGHT_MAX) continue;
+        if (candidateLight < lightMin || candidateLight > lightMax) continue;
         const candidate = rounded(hslToRgb(hue, candidateSat, candidateLight));
         const contrast = measure(candidate);
         if (contrast > bestContrast) {
@@ -321,11 +357,16 @@ export function adaptiveBandColor(
   const parsed = parseCssColor(backdrop);
   if (rgb === null || parsed === null) return source;
   if (bandContrast(rgb, parsed, opacity) >= FRAME_CONTRAST_MIN) return source;
+  // Диапазон светлоты у полосы полный ({@link BAND_LIGHT_MIN}…{@link
+  // BAND_LIGHT_MAX}): на средней подложке иначе 3 : 1 недостижимы (см.
+  // докблок констант), а полоса не текст — сетку и выделение она не закрывает.
   const candidate = searchAdaptation(
     rgb,
     relativeLuminance(parsed[0], parsed[1], parsed[2]),
     (value) => bandContrast(value, parsed, opacity),
     FRAME_CONTRAST_MIN,
+    BAND_LIGHT_MIN,
+    BAND_LIGHT_MAX,
   );
   return hexOf(candidate);
 }

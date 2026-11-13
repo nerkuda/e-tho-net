@@ -50,9 +50,17 @@ import {
   bandContrast,
   canvasBackdrop,
   clearAdaptiveColorCache,
+  parseAlpha,
 } from '../src/renderer/lib/adaptive-color.js';
+import { defaultLayerColors } from '../src/renderer/lib/layer-colors.js';
 import { parseCssColor, relativeLuminance, rgbToHsl } from '../src/renderer/lib/css-color.js';
-import { wallpaperTintAlpha, wallpaperTintColor } from '../src/renderer/lib/wallpaper-image.js';
+import {
+  WALLPAPER_TINT_ALPHA_MAX,
+  WALLPAPER_TINT_ALPHA_MIN,
+  WALLPAPER_TINT_DELTA_FULL,
+  wallpaperTintAlpha,
+  wallpaperTintColor,
+} from '../src/renderer/lib/wallpaper-image.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 import { RENDERER_ROOT } from './renderer-css.js';
@@ -81,6 +89,14 @@ const THOUGHT_CLOUD_TS = fs.readFileSync(
 );
 const SCREEN_LAYERS_TS = fs.readFileSync(path.join(RENDERER_ROOT, 'screens', 'layers.ts'), 'utf8');
 const LINKS_TS = fs.readFileSync(path.join(RENDERER_ROOT, 'canvas', 'links.ts'), 'utf8');
+const ADAPTIVE_COLOR_TS = fs.readFileSync(
+  path.join(RENDERER_ROOT, 'lib', 'adaptive-color.ts'),
+  'utf8',
+);
+const ADAPTIVE_CONTEXT_TS = fs.readFileSync(
+  path.join(RENDERER_ROOT, 'lib', 'adaptive-context.ts'),
+  'utf8',
+);
 
 /** Граничные пользовательские цвета. */
 const USER_COLORS = ['#000000', '#ffffff', '#ff0000', '#ffff00', '#0000ff', '#ffd1dc'] as const;
@@ -110,15 +126,117 @@ function rgb(value: string): [number, number, number] {
   return parsed;
 }
 
-/** Подложка холста при картинке, противоположной фону (тинт максимальной плотности). */
-function worstBackdrop(themeBg: string, inLayer: boolean): string {
-  const base = rgb(themeBg);
+/** Светлоты картинок для скана: от чёрной до белой. */
+const IMAGE_LUMINANCES = [0, 0.05, 0.2, 0.5, 0.8, 1] as const;
+
+/** Средняя точка картинки — локальная формула (в тесте, не из модуля). */
+function averageColor(luminance: number): [number, number, number] {
+  const v = Math.min(1, Math.max(0, luminance));
+  const channel = v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055;
+  const gray = Math.round(Math.min(1, Math.max(0, channel)) * 255);
+  return [gray, gray, gray];
+}
+
+/**
+ * ФАКТИЧЕСКАЯ подложка карты: тинт над средней точкой картинки. Считается
+ * ЗДЕСЬ, независимо от `wallpaperBackdrop`: иначе инвариант мерил бы ту же
+ * модель, что и код, и не поймал бы её ошибку (круг 2 — обратный ход из α).
+ */
+function actualBackdrop(baseColor: string, imageLuminance: number, inLayer: boolean): string {
+  const base = rgb(baseColor);
   const baseLuminance = relativeLuminance(base[0], base[1], base[2]);
-  const picture = baseLuminance > 0.5 ? 0.03 : 0.97;
-  const tint = wallpaperTintColor(base, wallpaperTintAlpha(picture, baseLuminance, inLayer));
-  const backdrop = canvasBackdrop(themeBg, tint);
-  assert.ok(backdrop !== null, `подложка не посчитана (${themeBg})`);
-  return backdrop;
+  const tint = wallpaperTintColor(
+    base,
+    wallpaperTintAlpha(imageLuminance, baseLuminance, inLayer),
+  );
+  const alpha = parseAlpha(tint);
+  assert.ok(alpha !== null, `тинт не разобран: ${tint}`);
+  const under = averageColor(imageLuminance);
+  const composite = base.map((channel, i) =>
+    Math.round(alpha * channel + (1 - alpha) * under[i]!),
+  );
+  return `rgb(${composite.join(", ")})`;
+}
+
+/**
+ * ПРЕЖНЯЯ (дефектная) модель круга 1: средняя светлота картинки
+ * восстанавливалась обратным ходом из плотности тинта. Живёт только как
+ * негативная проба: она обязана краснеть.
+ */
+function reverseBackdrop(baseColor: string, imageLuminance: number, inLayer: boolean): string {
+  const base = rgb(baseColor);
+  const baseLuminance = relativeLuminance(base[0], base[1], base[2]);
+  const tint = wallpaperTintColor(
+    base,
+    wallpaperTintAlpha(imageLuminance, baseLuminance, inLayer),
+  );
+  const alpha = parseAlpha(tint);
+  assert.ok(alpha !== null, `тинт не разобран: ${tint}`);
+  const delta =
+    Math.min(
+      1,
+      Math.max(
+        0,
+        (alpha - WALLPAPER_TINT_ALPHA_MIN) /
+          (WALLPAPER_TINT_ALPHA_MAX - WALLPAPER_TINT_ALPHA_MIN),
+      ),
+    ) * WALLPAPER_TINT_DELTA_FULL;
+  const derived =
+    baseLuminance > 0.5
+      ? Math.max(0, baseLuminance - delta)
+      : Math.min(1, baseLuminance + delta);
+  const under = averageColor(derived);
+  const composite = base.map((channel, i) =>
+    Math.round(alpha * channel + (1 - alpha) * under[i]!),
+  );
+  return `rgb(${composite.join(", ")})`;
+}
+
+/**
+ * Модель подложки для негативных проб: `reverse` — обратный ход из α,
+ * `no-layer-factor` — множитель слоя `WALLPAPER_TINT_LAYER_FACTOR` забыт.
+ */
+type BackdropModel = "actual" | "reverse" | "no-layer-factor";
+
+function backdropByModel(
+  model: BackdropModel,
+  baseColor: string,
+  imageLuminance: number,
+  inLayer: boolean,
+): string {
+  if (model === "reverse") return reverseBackdrop(baseColor, imageLuminance, inLayer);
+  if (model === "no-layer-factor") return actualBackdrop(baseColor, imageLuminance, false);
+  return actualBackdrop(baseColor, imageLuminance, inLayer);
+}
+
+/** Дефолтные цвета слоя (0.6.4) — их получает каждый новый слой. */
+const LAYER_DEFAULTS = defaultLayerColors();
+
+/** Цвета полосы для блока темы: граничные пользовательские + дефолтные слоя. */
+function bandColors(mode: ThemeMode): readonly string[] {
+  const slot = mode === "dark" ? "dark" : "light";
+  return [
+    ...USER_COLORS,
+    LAYER_DEFAULTS.focus_stripe[slot],
+    LAYER_DEFAULTS.background[slot],
+  ];
+}
+
+/**
+ * ФОНЫ, которые становятся базой тинта: фон темы и пользовательские фоны слоя
+ * (дефолтные цвета создания и граничные #ffffff/#000000/#808080). Продукт
+ * сначала подгоняет фон под текст темы — ровно это и делает скан ниже.
+ */
+function backdropBases(block: ThemeBlock): readonly string[] {
+  const themeBg = block.tokens.get('--bg') ?? '';
+  return [
+    themeBg,
+    '#ffffff',
+    '#000000',
+    '#808080',
+    LAYER_DEFAULTS.background.dark,
+    LAYER_DEFAULTS.background.light,
+  ];
 }
 
 /** Тело правила CSS по нормализованному селектору; `null` — правила нет. */
@@ -196,27 +314,43 @@ function textProblems(
   return problems;
 }
 
-/** Нарушения контраста полосы. `opacity` подменяется негативной пробой. */
+/**
+ * Нарушения контраста полосы на ФАКТИЧЕСКОМ композите. `adapt` и `opacity`
+ * подменяются негативными пробами, `model` — моделью подложки: инвариант
+ * обязан краснеть и от обратного хода из α, и от забытого множителя слоя.
+ */
 function bandProblems(
   blocks: readonly ThemeBlock[],
   adapt: (color: string, backdrop: string) => string = (color, backdrop) =>
     adaptiveBandColor(color, backdrop),
   opacity = FOCUS_BAND_OPACITY,
+  model: BackdropModel = "actual",
 ): string[] {
   const problems: string[] = [];
   for (const block of blocks) {
     const label = `${block.theme} (${block.mode})`;
-    const bg = block.tokens.get('--bg') ?? '';
-    for (const inLayer of [false, true]) {
-      const backdrop = worstBackdrop(bg, inLayer);
-      for (const color of USER_COLORS) {
-        const stripe = adapt(color, backdrop);
-        const value = bandContrast(rgb(stripe), rgb(backdrop), opacity);
-        if (value < FRAME_CONTRAST_MIN) {
-          problems.push(
-            `${label} ${inLayer ? 'слой' : 'основа'}: полоса ${color} → ${stripe} ` +
-              `${value.toFixed(2)} : 1`,
-          );
+    const text = block.tokens.get('--text') ?? '';
+    for (const rawBase of backdropBases(block)) {
+      // Фон — поверхность: продукт подгоняет его под текст темы, и уже он
+      // становится базой тинта (`--layer-bg`).
+      const base = adaptiveColor(rawBase, [text], TEXT_CONTRAST_MIN);
+      for (const inLayer of [false, true]) {
+        for (const imageLuminance of IMAGE_LUMINANCES) {
+          const actual = actualBackdrop(base, imageLuminance, inLayer);
+          // Адаптация верит модели, а проверка идёт по ФАКТИЧЕСКОМУ композиту:
+          // так мутация модели (обратный ход, забытый множитель слоя) краснеет.
+          const backdrop = backdropByModel(model, base, imageLuminance, inLayer);
+          for (const color of bandColors(block.mode)) {
+            const stripe = adapt(color, backdrop);
+            const value = bandContrast(rgb(stripe), rgb(actual), opacity);
+            if (value < FRAME_CONTRAST_MIN) {
+              problems.push(
+                `${label} фон ${rawBase} ${inLayer ? 'слой' : 'основа'} ` +
+                  `картинка ${imageLuminance}: полоса ${color} → ${stripe} ` +
+                  `${value.toFixed(2)} : 1`,
+              );
+            }
+          }
         }
       }
     }
@@ -262,6 +396,66 @@ describe('сторож: адаптация цветов — контраст н�
       bandProblems(blocks, (color) => color).length > 0,
       'отсутствие адаптации полосы обязано ловиться',
     );
+    // 5. Подложка посчитана обратным ходом из α (дефект круга 1).
+    assert.ok(
+      bandProblems(blocks, undefined, FOCUS_BAND_OPACITY, "reverse").length > 0,
+      'обратный ход из α обязан краснеть',
+    );
+    // 6. Множитель слоя WALLPAPER_TINT_LAYER_FACTOR забыт.
+    assert.ok(
+      bandProblems(blocks, undefined, FOCUS_BAND_OPACITY, "no-layer-factor").length > 0,
+      'игнорирование множителя слоя обязано краснеть',
+    );
+  });
+
+  it('оба направления: светлый слой + чёрная картинка опасен, тёмный + светлая — нет', () => {
+    // Направление 1 — ОПАСНОЕ: светлый слой, чёрная картинка. Обратный ход из α
+    // «видит» среднюю светлоту 0.5 и светлую подложку, чёрная полоса на ней
+    // читается и не адаптируется — на фактическом композите 1.72 : 1.
+    const lightBase = actualBackdrop("#ffffff", 0, true);
+    const lightWrong = reverseBackdrop("#ffffff", 0, true);
+    assert.equal(lightBase, "rgb(61, 61, 61)");
+    assert.ok(
+      rgb(lightWrong)[0] - rgb(lightBase)[0] >= 100,
+      `обратный ход обязан "видеть" светлую подложку (${lightWrong} / ${lightBase})`,
+    );
+    assert.ok(
+      bandContrast(rgb(adaptiveBandColor("#000000", lightWrong)), rgb(lightBase)) <
+        FRAME_CONTRAST_MIN,
+      "обратный ход на светлом слое обязан давать провал",
+    );
+    assert.ok(
+      bandContrast(rgb(adaptiveBandColor("#000000", lightBase)), rgb(lightBase)) >=
+        FRAME_CONTRAST_MIN,
+      "фактическая модель обязана вылечить полосу на светлом слое",
+    );
+
+    // Направление 2: тёмный слой, светлая картинка. Обратный ход ошибается в
+    // ДРУГУЮ сторону — его подложка темнее фактической (173 против 198), а для
+    // тёмной полосы это «безопасно»: контраст на факте только растёт. Поэтому
+    // проба фиксирует САМУ ошибку модели (≥ 15 каналов) и то, что модуль считает
+    // факт, а не подложку-обманку.
+    const darkBase = actualBackdrop("#101010", 1, true);
+    const darkWrong = reverseBackdrop("#101010", 1, true);
+    assert.ok(
+      Math.abs(rgb(darkBase)[0] - rgb(darkWrong)[0]) >= 15,
+      `обратный ход на тёмном слое обязан расходиться с фактом (${darkWrong} / ${darkBase})`,
+    );
+    assert.ok(
+      bandContrast(rgb(adaptiveBandColor("#000000", darkBase)), rgb(darkBase)) >=
+        FRAME_CONTRAST_MIN,
+      "тёмная полоса на светлой картинке обязана читаться",
+    );
+    // Репро проверяющего числом: подложка rgb(61, 61, 61), полоса 1.72 : 1 без
+    // адаптации, а с фактической моделью — адаптируется и проходит порог.
+    const repro = actualBackdrop('#ffffff', 0, true);
+    assert.equal(repro, 'rgb(61, 61, 61)');
+    assert.ok(bandContrast(rgb('#000000'), rgb(repro)) < FRAME_CONTRAST_MIN);
+    assert.ok(
+      bandContrast(rgb(adaptiveBandColor("#000000", repro)), rgb(repro)) >=
+        FRAME_CONTRAST_MIN,
+      `репро не вылечено: ${adaptiveBandColor("#000000", repro)} на ${repro}`,
+    );
   });
 });
 
@@ -280,6 +474,8 @@ function sourceProblems(files: {
   thoughtCloud: string;
   layerDialog: string;
   links: string;
+  adaptiveColor: string;
+  adaptiveContext: string;
 }): string[] {
   const problems: string[] = [];
 
@@ -333,6 +529,22 @@ function sourceProblems(files: {
     problems.push('links.ts: цвет линии считается без адаптации к подложке холста');
   }
 
+  // Модель подложки — ОТ ФАКТА: средняя светлота картинки и фактическая α.
+  if (files.adaptiveColor.includes("WALLPAPER_TINT_ALPHA_MIN")) {
+    problems.push(
+      "adaptive-color.ts: вернулся обратный ход из плотности тинта — подложка не фактическая",
+    );
+  }
+  if (!files.adaptiveColor.includes("imageLuminance: number | null")) {
+    problems.push("adaptive-color.ts: композит не принимает среднюю светлоту картинки");
+  }
+  const metaUses = files.adaptiveContext.split('state.meta.avg_luminance').length - 1;
+  if (metaUses < 2) {
+    problems.push(
+      "adaptive-context.ts: подложка считается без метаданных картинки (avg_luminance)",
+    );
+  }
+
   // Диалог «Свойства слоя»: пара слотов — общий модуль, прямая инверсия запрещена.
   if (!files.layerDialog.includes('layerColorPair(')) {
     problems.push('screens/layers.ts: пара слотов считается не общим модулем');
@@ -360,6 +572,8 @@ describe('сторож: адаптация цветов — оформление
     thoughtCloud: THOUGHT_CLOUD_TS,
     layerDialog: SCREEN_LAYERS_TS,
     links: LINKS_TS,
+    adaptiveColor: ADAPTIVE_COLOR_TS,
+    adaptiveContext: ADAPTIVE_CONTEXT_TS,
   };
 
   it('модель подложки и единый алгоритм на месте', () => {
@@ -410,6 +624,24 @@ describe('сторож: адаптация цветов — оформление
       thoughtCloud: files.thoughtCloud.replace('adaptThoughtColors(', 'passthrough('),
     };
     assert.ok(sourceProblems(noThoughtAdapt).length > 0, 'мысль без адаптации обязана ловиться');
+    // 6. Возврат обратного хода из плотности тинта.
+    const reverse = {
+      ...files,
+      adaptiveColor: files.adaptiveColor.replace(
+        "export function wallpaperBackdrop(",
+        "const WALLPAPER_TINT_ALPHA_MIN = 0.12;\nexport function wallpaperBackdrop(",
+      ),
+    };
+    assert.ok(sourceProblems(reverse).length > 0, 'обратный ход из α обязан ловиться');
+    // 7. Подложка без метаданных картинки.
+    const noMeta = {
+      ...files,
+      adaptiveContext: files.adaptiveContext.replace(
+        "state.status === 'ok' ? state.meta.avg_luminance : null",
+        'null',
+      ),
+    };
+    assert.ok(sourceProblems(noMeta).length > 0, 'подложка без avg_luminance обязана ловиться');
   });
 });
 
@@ -487,7 +719,7 @@ describe('сторож: refreshLayerTheme пишет производные, и�
       colors.focus_stripe.light,
       'на корень ушёл исходный цвет полосы',
     );
-    const backdrop = canvasBackdrop(appliedBg, null);
+    const backdrop = canvasBackdrop(appliedBg, null, null);
     assert.ok(backdrop !== null);
     assert.ok(
       bandContrast(rgb(appliedStripe), rgb(backdrop)) >= FRAME_CONTRAST_MIN,

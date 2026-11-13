@@ -132,7 +132,15 @@ export function adaptLayerColors(colors: LayerColorInputs, scope: string): Adapt
       : cachedAdaptiveColor(colors.background, [text], TEXT_CONTRAST_MIN, scope);
   const base = background ?? themeBg;
   const state = getWallpaperState();
-  const backdrop = canvasBackdrop(base, canvasTint(state, base, background !== null));
+  // Подложка холста — композит «тинт над средней точкой картинки»: и средняя
+  // светлота, и плотность вуали берутся фактические (метаданные картинки и
+  // CSS-переменная, которую выставит `canvas/wallpaper.ts`), обратного хода из α
+  // нет — он ошибался до 0.51 по светлоте (круг 2).
+  const backdrop = canvasBackdrop(
+    base,
+    canvasTint(state, base, background !== null),
+    state.status === 'ok' ? state.meta.avg_luminance : null,
+  );
   const focusStripe =
     colors.focusStripe === null || backdrop === null
       ? colors.focusStripe

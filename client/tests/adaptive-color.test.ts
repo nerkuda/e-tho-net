@@ -67,6 +67,24 @@ const THEMES = fs
 /** Граничные пользовательские цвета: крайние и насыщенные. */
 const USER_COLORS = ['#000000', '#ffffff', '#ff0000', '#ffff00', '#0000ff', '#ffd1dc'] as const;
 
+/**
+ * Цвета полосы для скана: граничные пользовательские и ДЕФОЛТНЫЕ цвета слоя
+ * (`defaultLayerColors`, 0.6.4 — их получает каждый новый слой). Дефолты
+ * сверяются сторожем `guard-adaptive-colors`, чтобы набор не разъехался.
+ */
+const BAND_COLORS = [
+  '#000000',
+  '#ffffff',
+  '#ff0000',
+  '#ffff00',
+  '#0000ff',
+  '#ffd1dc',
+  '#7e57c2',
+  '#191327',
+  '#d1c2a2',
+  '#e6d8f2',
+] as const;
+
 /** Реалистичные пары «текст мысли × фон мысли» (пользователь задаёт обе). */
 const CLOUD_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['#000000', '#ffffff'],
@@ -106,18 +124,36 @@ function ratio(a: string, b: string): number {
   return contrastRatio(rgb(a), rgb(b));
 }
 
+/** Светлоты картинок, на которых проверяется полоса: от чёрной до белой. */
+const IMAGE_LUMINANCES = [0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 0.95, 1] as const;
+
 /**
- * Подложка холста при ХУДШЕЙ для читаемости картинке: её светлота на
- * противоположном конце шкалы от фона темы, поэтому тинт максимально плотный.
+ * Средняя точка картинки — локальная копия формулы яркость→канал. Считается в
+ * ТЕСТЕ, а не берётся из модуля: иначе инвариант мерил бы ту же модель, что и
+ * код, и не поймал бы её ошибку (круг 2 — обратный ход из α).
  */
-function worstBackdrop(bg: string, inLayer: boolean): string {
-  const base = rgb(bg);
+function averageColor(luminance: number): [number, number, number] {
+  const v = Math.min(1, Math.max(0, luminance));
+  const channel = v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055;
+  const gray = Math.round(Math.min(1, Math.max(0, channel)) * 255);
+  return [gray, gray, gray];
+}
+
+/**
+ * ФАКТИЧЕСКАЯ подложка карты: тинт цвета фона поверх средней точки картинки.
+ * Плотность вуали — из той же CSS-переменной, что выставит продукт (с
+ * множителем слоя `WALLPAPER_TINT_LAYER_FACTOR`), композит — обычная
+ * альфа-смесь каналов, посчитанная здесь независимо от `wallpaperBackdrop`.
+ */
+function actualBackdrop(baseColor: string, imageLuminance: number, inLayer: boolean): string {
+  const base = rgb(baseColor);
   const baseLuminance = relativeLuminance(base[0], base[1], base[2]);
-  const picture = baseLuminance > 0.5 ? 0.03 : 0.97;
-  const tint = wallpaperTintColor(base, wallpaperTintAlpha(picture, baseLuminance, inLayer));
-  const backdrop = canvasBackdrop(bg, tint);
-  assert.ok(backdrop !== null, `подложка не посчитана (${bg})`);
-  return backdrop;
+  const tint = wallpaperTintColor(base, wallpaperTintAlpha(imageLuminance, baseLuminance, inLayer));
+  const alpha = parseAlpha(tint);
+  assert.ok(alpha !== null, `тинт не разобран: ${tint}`);
+  const under = averageColor(imageLuminance);
+  const composite = base.map((channel, i) => Math.round(alpha * channel + (1 - alpha) * under[i]!));
+  return `rgb(${composite.join(", ")})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +176,9 @@ describe('адаптация цветов: арифметика и модель 
 
   it('тинт не складывается с фоном: с картинкой подложка — композит, без неё — фон', () => {
     // Без тинта подложка равна фону.
-    assert.equal(canvasBackdrop('#eef0f4', null), '#eef0f4');
+    assert.equal(canvasBackdrop('#eef0f4', null, null), '#eef0f4');
     // С тинтом — композит между фоном и средней светлотой картинки.
-    const backdrop = wallpaperBackdrop('#eef0f4', 'rgba(238, 240, 244, 0.3)');
+    const backdrop = wallpaperBackdrop('#eef0f4', 'rgba(238, 240, 244, 0.3)', 0.08);
     assert.ok(backdrop !== null);
     const pictureLuminance = relativeLuminance(...rgb(backdrop));
     const baseLuminance = relativeLuminance(...rgb('#eef0f4'));
@@ -151,7 +187,18 @@ describe('адаптация цветов: арифметика и модель 
       'светлая подложка под плотной вуалью обязана темнеть',
     );
     // Вуаль отсутствует (тинт не разобран) — подложка остаётся фоном.
-    assert.equal(wallpaperBackdrop('#eef0f4', 'transparent'), null);
+    assert.equal(wallpaperBackdrop('#eef0f4', 'transparent', 0.5), null);
+    // Без средней светлоты картинки композит не выдумывается.
+    assert.equal(wallpaperBackdrop('#eef0f4', 'rgba(238, 240, 244, 0.3)', null), null);
+  });
+
+  it('репро круга 2: белый фон слоя + чёрная картинка дают подложку rgb(61, 61, 61)', () => {
+    // Плотность вуали слоя: 0.30 × WALLPAPER_TINT_LAYER_FACTOR = 0.24.
+    const tint = wallpaperTintColor(rgb('#ffffff'), 0.24);
+    assert.equal(wallpaperBackdrop('#ffffff', tint, 0), '#3d3d3d');
+    // Обратный ход из α (прежняя модель) давал 0.5 светлоты картинки и светлую
+    // подложку — на ней чёрная полоса «читалась» и не адаптировалась (1.72 : 1).
+    assert.notEqual(wallpaperBackdrop('#ffffff', tint, 0), actualBackdrop('#ffffff', 0.5, true));
   });
 
   it('полоса полупрозрачна: видимый цвет — композит с подложкой, контраст ниже «в цвете»', () => {
@@ -206,25 +253,31 @@ describe('адаптация цветов: контраст во всех 12 к�
     assert.deepEqual(failures, [], `провалы контраста поверхности:\n  ${failures.join('\n  ')}`);
   });
 
-  it('полоса фокуса ≥ 3 : 1 у видимой полосы, включая композит с картинкой', () => {
+  it('полоса фокуса ≥ 3 : 1 у видимой полосы на ФАКТИЧЕСКОМ композите (картинки 0…1)', () => {
     const failures: string[] = [];
     let worst = { value: Number.POSITIVE_INFINITY, key: '' };
+    let checks = 0;
     for (const block of themeBlocks()) {
       const bg = block.tokens.get('--bg') ?? '';
-      // Основа — тинт 0.12…0.30, слой — тот же тинт на 0.8 (WALLPAPER_TINT_LAYER_FACTOR).
       for (const inLayer of [false, true]) {
-        const backdrop = worstBackdrop(bg, inLayer);
-        for (const color of USER_COLORS) {
-          const stripe = adaptiveBandColor(color, backdrop);
-          const value = bandContrast(rgb(stripe), rgb(backdrop));
-          const key = `${block.theme} ${block.mode} ${color} ${inLayer ? 'слой' : 'основа'}`;
-          if (value < worst.value) worst = { value, key };
-          if (value < FRAME_CONTRAST_MIN) {
-            failures.push(`${key} → ${stripe} ${value.toFixed(2)}`);
+        for (const imageLuminance of IMAGE_LUMINANCES) {
+          const backdrop = actualBackdrop(bg, imageLuminance, inLayer);
+          for (const color of BAND_COLORS) {
+            const stripe = adaptiveBandColor(color, backdrop);
+            const value = bandContrast(rgb(stripe), rgb(backdrop));
+            checks += 1;
+            const key =
+              `${block.theme} ${block.mode} ${color} ${inLayer ? 'слой' : 'основа'} ` +
+              `картинка ${imageLuminance}`;
+            if (value < worst.value) worst = { value, key };
+            if (value < FRAME_CONTRAST_MIN) {
+              failures.push(`${key} → ${stripe} ${value.toFixed(2)}`);
+            }
           }
         }
       }
     }
+    assert.ok(checks >= 12 * 2 * IMAGE_LUMINANCES.length * BAND_COLORS.length);
     assert.deepEqual(failures, [], `провалы контраста полосы:\n  ${failures.join('\n  ')}`);
     assert.ok(
       worst.value >= FRAME_CONTRAST_MIN,
@@ -313,6 +366,21 @@ describe('адаптация цветов: граничные цвета и ди
     assert.equal(adaptiveColor('не цвет', ['#ffffff'], TEXT_CONTRAST_MIN), 'не цвет');
     assert.equal(adaptiveColor('#ff0000', [], TEXT_CONTRAST_MIN), '#ff0000');
     assert.equal(adaptiveBandColor('#ff0000', 'не цвет'), '#ff0000');
+  });
+
+  it('граничная подложка: чёрная полоса и #e0e0e0 вытягиваются до 3 : 1 (блокер 2)', () => {
+    // Прежний фиксированный бюджет шагов упирался в L=0.88 и давал 2.97 : 1.
+    for (const [stripe, backdrop] of [
+      ['#000000', 'rgb(104, 105, 107)'],
+      ['#e0e0e0', 'rgb(104, 103, 107)'],
+    ] as const) {
+      const adapted = adaptiveBandColor(stripe, backdrop);
+      const value = bandContrast(rgb(adapted), rgb(backdrop));
+      assert.ok(
+        value >= FRAME_CONTRAST_MIN,
+        `${stripe} на ${backdrop} → ${adapted} ${value.toFixed(3)} : 1`,
+      );
+    }
   });
 
   it('полоса: на подложке без запаса контраста цвет уводится от неё, а не «в цвет»', () => {
