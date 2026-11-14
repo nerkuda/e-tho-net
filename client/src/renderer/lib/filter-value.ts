@@ -275,6 +275,9 @@ const DATE_OPERANDS: ReadonlySet<string> = new Set([
   'updated_at',
   'record_time',
   'occurred_at',
+  // «Дата напоминания» — ближайшее next_at напоминаний запросившего
+  // (0.16.1, задача 4cfc6257): ячейка даты/периода, как у прочих дат.
+  'reminder_at',
 ]);
 
 /** Операторы двух границ. */

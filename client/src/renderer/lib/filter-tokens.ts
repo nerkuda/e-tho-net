@@ -149,6 +149,9 @@ const OPERAND_NATURE: Readonly<Record<string, FilterTokenNature>> = {
   updated_at: 'date',
   record_time: 'date',
   occurred_at: 'date',
+  // «Дата напоминания» (0.16.1, задача 4cfc6257): природа значения — дата,
+  // поэтому ячейка принимает датовые токены и перетаскивание даты.
+  reminder_at: 'date',
   // Ссылочные на мысли: значение — id мысли, поэтому естественный токен `$thought`.
   id: 'thought-id',
   parents: 'thought-id',

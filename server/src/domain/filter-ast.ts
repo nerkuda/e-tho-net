@@ -97,6 +97,11 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   attachments: ['kind'],
   chronology: ['kind'],
   comment: ['kind'],
+  // Задачи и напоминания мысли (0.16.1, задача 4cfc6257): предикаты наличия
+  // и датовый операнд «Дата напоминания» — без дополнительных ключей операнда.
+  tasks: ['kind'],
+  reminders: ['kind'],
+  reminder_at: ['kind'],
   targets: ['kind'],
   active: ['kind'],
   trashed: ['kind'],

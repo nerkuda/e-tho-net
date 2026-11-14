@@ -104,6 +104,10 @@ describe('реестр профилей контекста (задача 7a798b1
       attachments: true,
       chronology: true,
       comment: true,
+      // Задачи и напоминания мысли (0.16.1, задача 4cfc6257).
+      tasks: true,
+      reminders: true,
+      reminder_at: true,
       targets: true,
       active: true,
       trashed: true,

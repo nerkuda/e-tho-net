@@ -732,7 +732,15 @@ export function filterTreeQuickPeriodValue(period: FilterTreeQuickPeriod): Filte
 export function filterTreeIsDateLeaf(leaf: FilterTreeLeaf, valueType?: PropertyValueType): boolean {
   if (valueType === 'date') return true;
   const kind = leaf.entity.kind;
-  return kind === 'created_at' || kind === 'updated_at' || kind === 'record_time' || kind === 'occurred_at';
+  return (
+    kind === 'created_at' ||
+    kind === 'updated_at' ||
+    kind === 'record_time' ||
+    kind === 'occurred_at' ||
+    // «Дата напоминания» — датовый операнд (0.16.1, задача 4cfc6257):
+    // датовые пары границ и подменю быстрых периодов как у прочих дат.
+    kind === 'reminder_at'
+  );
 }
 
 /** Ключ пункта «Задать вручную…» подменю периодов (обычный выбор оператора). */
@@ -914,6 +922,11 @@ const OPERAND_ICONS: Readonly<Record<string, IconName>> = {
   attachments: 'copy-text',
   chronology: 'quote',
   comment: 'html-comment',
+  // Задачи и напоминания мысли (0.16.1): задачи — флажок списка,
+  // напоминание — календарь (ближайшее вхождение), дата — датовый реквизит.
+  tasks: 'list-task',
+  reminders: 'calendar-month',
+  reminder_at: 'value-date',
   active: 'check-check',
   trashed: 'trash',
   keywords: 'search',

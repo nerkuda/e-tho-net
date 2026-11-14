@@ -39,6 +39,7 @@
  */
 
 import {
+  BASE_LAYER_ID,
   EtnError,
   FILTER_AST_VERSION,
   FILTER_LINK_EDGE_STATES,
@@ -2241,6 +2242,17 @@ export interface AstExecContextOptions {
 /** Опции исполнения AST-листьев: контекст токенов и коллектор неразрешимых. */
 interface AstExecOptions extends AstExecContextOptions {
   ctx?: AstTokenContext;
+  /**
+   * Пользователь, от имени которого исполняется отбор (запросивший). Нужен
+   * per-user условиям (0.16.1, задача 4cfc6257): «Есть напоминание»/«Дата
+   * напоминания» читают напоминания ЗАПРОСИВШЕГО, а не всех участников сети.
+   * Значение берётся из аргумента `userId` точки (`queryThoughts`/
+   * `buildThoughtIdSelect`) — он есть у любого входа, в отличие от
+   * `ctx.userId` (контекст токенов передают не все встраивающие вызовы).
+   * Пустая строка — «пользователь неизвестен»: напоминаний у такого владельца
+   * нет, условие даёт ложь (а не молча расширяет выборку).
+   */
+  requesterId?: string;
   unresolved?: TokenIssue[];
   /**
    * Кэш поддерева «в иерархии» в пределах одного исполнения запроса
@@ -2526,6 +2538,16 @@ function filterAstLeafClause(
         path,
         requestId,
       );
+
+    // Задачи и напоминания мысли (0.16.1, задача 4cfc6257, требование daf152d8).
+    case 'tasks':
+      return boolPresenceClause(TASKS_LEAF_EXISTS_SQL, leaf, path, requestId, [BASE_LAYER_ID]);
+    case 'reminders':
+      return boolPresenceClause(REMINDERS_LEAF_EXISTS_SQL, leaf, path, requestId, [
+        astRequesterId(astOpts),
+      ]);
+    case 'reminder_at':
+      return reminderAtLeafClause(leaf, path, requestId, astOpts);
 
     case 'active':
       return boolColumnClause('t.active', leaf, path, requestId);
@@ -2875,8 +2897,18 @@ function boolColumnClause(column: string, leaf: FilterAstLeaf, path: string, req
   return { sql: `${column} = ${want ? 1 : 0}`, params: [] };
 }
 
-/** Наличие/отсутствие коллекции (вложения, дневниковые записи, комментарий). */
-function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+/**
+ * Наличие/отсутствие коллекции (вложения, дневниковые записи, комментарий,
+ * задачи, напоминания). `existsParams` — параметры подзапроса существования
+ * (у задач — основа для видимости строки проекции, у напоминаний — владелец).
+ */
+function boolPresenceClause(
+  existsSql: string,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  existsParams: readonly unknown[] = [],
+): Clause {
   let want: boolean;
   if (leaf.operator === 'not_empty') want = true;
   else if (leaf.operator === 'is_empty') want = false;
@@ -2885,7 +2917,72 @@ function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string
   } else {
     astUnsupported(`Operator "${leaf.operator}" for a presence predicate`, path, requestId);
   }
-  return want ? { sql: existsSql, params: [] } : { sql: `NOT (${existsSql})`, params: [] };
+  return want
+    ? { sql: existsSql, params: [...existsParams] }
+    : { sql: `NOT (${existsSql})`, params: [...existsParams] };
+}
+
+/**
+ * Пользователь-запросивший для per-user условий (0.16.1, задача 4cfc6257).
+ * Приоритет — `requesterId` точки (есть у любого входа отбора); `ctx.userId`
+ * (контекст токенов) — запасной источник для встраивающих вызовов, которые
+ * передают только его. Пустая строка — «неизвестен»: напоминаний нет.
+ */
+function astRequesterId(astOpts: AstExecOptions | undefined): string {
+  return astOpts?.requesterId ?? astOpts?.ctx?.userId ?? '';
+}
+
+/**
+ * Подзапрос существования НЕЗАКРЫТОЙ субъектной задачи мысли (0.16.1, задача
+ * 4cfc6257): строка проекции `task_rows` (`is_task = 1`, `done = 0`), у которой
+ * мысль — субъект (`task_row_subjects`), а комментарий-источник ВИДИМ в текущем
+ * контексте слоя. Видимость строки проекции — та же, что в панели «Задачи»
+ * (`task-service.ts`, `buildFilter`): строка живёт вместе с редакцией своего
+ * комментария, `layer_id = NULL` — основа, иначе слой победившей редакции.
+ * Исключение задач из постоянных комментариев помеченных на удаление владельцев
+ * — забота панели (она перечисляет все задачи сети); условие отбора судит
+ * субъектные задачи мысли, а корзину мысли отсекает собственный лист `trashed`.
+ */
+const TASKS_LEAF_EXISTS_SQL = `EXISTS (
+  SELECT 1 FROM task_row_subjects s
+    JOIN task_rows tr
+      ON tr.comment_id = s.comment_id
+     AND tr.line_no = s.line_no
+     AND COALESCE(tr.layer_id, '') = COALESCE(s.layer_id, '')
+    JOIN comments_v v
+      ON v.id = tr.comment_id
+     AND ((tr.layer_id IS NULL AND v.layer_id = ?) OR tr.layer_id = v.layer_id)
+   WHERE s.thought_id = t.id AND tr.is_task = 1 AND tr.done = 0)`;
+
+/**
+ * Подзапрос существования АКТИВНОГО напоминания ЗАПРОСИВШЕГО на мысль
+ * (0.16.1, задача 4cfc6257): per-user область — `user_id` владельца, а не все
+ * напоминания сети. `removed` (удалённые владельцем) не считаются.
+ */
+const REMINDERS_LEAF_EXISTS_SQL = `EXISTS (
+  SELECT 1 FROM reminders r
+   WHERE r.user_id = ? AND r.state = 'active'
+     AND r.subject_type = 'thought' AND r.subject_id = t.id)`;
+
+/**
+ * Лист «Дата напоминания» (0.16.1, задача 4cfc6257): сравнение БЛИЖАЙШЕГО
+ * `next_at` активных напоминаний запросившего с границей/периодом. Семантика
+ * дат — общая с датами создания/изменения (равенство «голой даты» = её сутки,
+ * включительная верхняя граница разворачивается до конца суток UTC, токены
+ * `$today`… раскрыты резолвером до сравнения). `next_at` = NULL (нет вхождений)
+ * не проходит ни одно сравнение — «нет значения» выражает отдельное условие
+ * «Есть напоминание».
+ */
+function reminderAtLeafClause(
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  const nextAtSql = `(SELECT MIN(r.next_at) FROM reminders r
+     WHERE r.user_id = ? AND r.state = 'active'
+       AND r.subject_type = 'thought' AND r.subject_id = t.id)`;
+  return dateLeafClause(nextAtSql, leaf, path, requestId, [astRequesterId(astOpts)]);
 }
 
 /**
@@ -2971,8 +3068,20 @@ function expandInclusiveDateUpper(value: string): string {
   return normaliseInstant(value, 'date', 'end') ?? value;
 }
 
-/** Лист по дате создания/изменения: равно/не равно, сравнения и «между» (границы включительны). */
-function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+/**
+ * Лист по датовому скалярному выражению (дата создания/изменения, ближайшее
+ * напоминание): равно/не равно, сравнения и «между» (границы включительны).
+ * `baseParams` — параметры самого выражения, когда это подзапрос
+ * (`reminder_at`): они идут ПЕРЕД каждой границей, потому что выражение
+ * подставляется в SQL столько раз, сколько у него границ.
+ */
+function dateLeafClause(
+  column: string,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  baseParams: readonly unknown[] = [],
+): Clause {
   const one = (op: string, value: unknown): Clause => {
     if (typeof value !== 'string' || value.trim() === '') {
       throw new EtnError('VALIDATION_ERROR', "Date bound must be a non-empty ISO-8601 string.", { field: path }, requestId);
@@ -2981,7 +3090,7 @@ function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, reque
     // Включительная верхняя граница-«голая дата» — конец суток UTC (469d8d69).
     const bound = op === 'lte' ? expandInclusiveDateUpper(raw) : raw;
     const sql = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : '<=';
-    return { sql: `${column} ${sql} ?`, params: [bound] };
+    return { sql: `${column} ${sql} ?`, params: [...baseParams, bound] };
   };
   if (leaf.operator === 'gt' || leaf.operator === 'gte' || leaf.operator === 'lt' || leaf.operator === 'lte') {
     return one(leaf.operator, leaf.value);
@@ -4012,6 +4121,7 @@ function buildQuery(
   const unresolved: TokenIssue[] = [];
   // Кэш поддеревьев «в иерархии» живёт в пределах одного исполнения запроса.
   const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map(), subqueryBudget: { ids: 0 } };
+  astOpts.requesterId = userId;
   if (tokenContext !== undefined) astOpts.ctx = tokenContext;
   if (astContext?.keywordCommentIncludesLinkComments === true) {
     astOpts.keywordCommentIncludesLinkComments = true;

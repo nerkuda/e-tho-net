@@ -690,6 +690,11 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   get attachments() { return t('filter.attachments.hasAttachments'); },
   get chronology() { return t('filter.chronology.hasDnevnikovyeRecords'); },
   get comment() { return t('filter.comment.hasKommentariy'); },
+  // Задачи и напоминания мысли (0.16.1, задача 4cfc6257): наличие незакрытых
+  // субъектных задач, наличие и дата напоминаний запросившего.
+  get tasks() { return t('filter.tasks.hasTasks'); },
+  get reminders() { return t('filter.reminders.hasReminders'); },
+  get reminder_at() { return t('filter.reminder_at.dateReminder'); },
   get active() { return t('filter.active.active'); },
   get trashed() { return t('filter.trashed.markedDelete'); },
   get keywords() { return t('filter.keywords.findSlova'); },
@@ -1973,6 +1978,10 @@ export const FILTER_COLLECTION_PREDICATE_KINDS: ReadonlySet<string> = new Set([
   'comment',
   'attachments',
   'chronology',
+  // Задачи и напоминания мысли (0.16.1, задача 4cfc6257): «Есть задачи»/
+  // «Есть напоминание» — та же триада «(да) (нет)», что у коллекций.
+  'tasks',
+  'reminders',
   // Наличие рёбер любого типа (требование 60db9614): «да/нет» — это оператор
   // `not_empty`/`is_empty`, плюс полоса состояний ребра под строкой.
   'incoming_links',
@@ -2042,7 +2051,14 @@ function operatorNeedsValue(operator: FilterAstOperator): boolean {
 
 /** Датовые ОПЕРАНДЫ листа — вид значения которых «дата» без реестра свойств. */
 function isDateOperandKind(kind: FilterAstEntityKind): boolean {
-  return kind === 'created_at' || kind === 'updated_at' || kind === 'record_time' || kind === 'occurred_at';
+  return (
+    kind === 'created_at' ||
+    kind === 'updated_at' ||
+    kind === 'record_time' ||
+    kind === 'occurred_at' ||
+    // «Дата напоминания» — датовый операнд (0.16.1, задача 4cfc6257).
+    kind === 'reminder_at'
+  );
 }
 
 /** True — у дерева есть хотя бы одно условие (пустые группы не считаются). */
