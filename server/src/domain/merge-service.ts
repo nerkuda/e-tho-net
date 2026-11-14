@@ -65,6 +65,7 @@ import type { NetworkDb } from '../db/network-db.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
 import { autoRollupLayerActivity } from './activity-service.js';
+import { deleteProjectionRows, dropTaskProjectionLayer, queueTaskReparse } from './task-projection.js';
 import { purgeTrash } from './trash-service.js';
 
 /** Subset selection of a partial merge: logical row ids per branchable table. */
@@ -518,6 +519,11 @@ export function resetLayerOverride(
       ndb
         .prepare('UPDATE layers SET last_activity_at = ? WHERE id = ?')
         .run(new Date().toISOString(), layerId);
+    }
+    // Проекция задач (0.16.1): тексты не изменились, но перекрытие принято —
+    // пере-парс подтверждает, что строки слоя собраны из текущей редакции.
+    for (const { table, row } of merged) {
+      if (table === 'comments') queueTaskReparse(ndb, row.id as string);
     }
     return {
       layer: { id: layer.id, title: layer.title },
@@ -1092,6 +1098,16 @@ function mergeLayerInner(
       .run(now, layerId, target.id);
   }
 
+  // Проекция задач (0.16.1): таблицы проекции не ветвятся и не мержатся —
+  // строки слитого слоя удаляются целиком, а тексты, приехавшие в цель,
+  // пере-парсятся хуком записи после коммита.
+  dropTaskProjectionLayer(ndb, layerId);
+  for (const entry of merged) {
+    if (entry.table === 'comments' && entry.row.deleted !== 1) {
+      queueTaskReparse(ndb, entry.row.id as string);
+    }
+  }
+
   // --- Phase E2: исчезновение вложений (0.12.1, ADR 9f90b010) -------------
   // Вложение живёт, пока в ЛЮБОМ рабочем слое остаётся живое владение. Слияние
   // сводит слои — здесь и проверяется «последний владелец»: для вложений,
@@ -1653,6 +1669,12 @@ export function discardLayerThought(
       ndb
         .prepare('UPDATE layers SET last_activity_at = ? WHERE id = ?')
         .run(new Date().toISOString(), layerId);
+    }
+    // Проекция задач (0.16.1): строки слоя отброшенных комментариев убираются
+    // вместе с редакциями, основа пере-парсится хуком записи после коммита.
+    for (const commentId of selection.comments ?? []) {
+      deleteProjectionRows(ndb, commentId, layerId);
+      queueTaskReparse(ndb, commentId);
     }
     return {
       layer: { id: layer.id, title: layer.title },

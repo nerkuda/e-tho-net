@@ -50,6 +50,7 @@ import path from 'node:path';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { materializeTombstone } from '../db/layer-write.js';
+import { deleteTaskProjectionOfComments, queueTaskReparse } from './task-projection.js';
 import { hasLiveOwnershipAnywhere, removeStoredFile, storedFileInUse } from './attachment-service.js';
 
 /** Polymorphic owner of comments/attachments/property values. */
@@ -164,6 +165,9 @@ function tombstoneChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]
     ).map((r) => r.id);
     for (const targetId of targetIds) materializeTombstone(ndb, 'comment_targets', targetId);
     materializeTombstone(ndb, 'comments', commentId);
+    // Проекция задач (0.16.1): комментарий пропал из текущего слоя — строки
+    // слоя уберёт пере-парс после коммита (события thoughts.delete и др.).
+    queueTaskReparse(ndb, commentId);
   }
 
   // Вторичные привязки чужих комментариев к этому владельцу — отвязываются
@@ -267,6 +271,14 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
   // m2m targets; target rows pointing at the owner are detached (L20 §10.1).
   // layers:physical-read — суб-SELECT перечисляет логические id по ВСЕМ слоям:
   // физический DELETE ниже выметает строки каждого слоя, включая надгробия.
+  const commentIds = (
+    ndb
+      .prepare(
+        `SELECT id FROM comments WHERE owner_type = ? AND owner_id IN (${owners})`, // layers:physical-read
+      )
+      .all(ownerType, ...ownerIds) as { id: string }[]
+  ).map((row) => row.id);
+  // layers:physical-write — физический каскад-вычистка владельца во всех слоях
   ndb
     .prepare(
       `DELETE FROM comment_targets WHERE comment_id IN
@@ -279,6 +291,10 @@ function purgeChunk(ndb: NetworkDb, ownerType: OwnerType, ownerIds: string[]): v
   ndb
     .prepare(`DELETE FROM comment_targets WHERE owner_type = ? AND owner_id IN (${owners})`) // layers:physical-write — физический каскад-вычистка владельца во всех слоях
     .run(ownerType, ...ownerIds);
+
+  // Проекция задач (0.16.1): строки навсегда удалённых комментариев не должны
+  // жить в материализованной проекции (все слои — `comment_id` исчез).
+  deleteTaskProjectionOfComments(ndb, commentIds);
 
   // Вложения: снимаем только ВЛАДЕНИЯ владельца (строки `attachment_owners`);
   // вложение и файл уходят по исчезновению последнего живого владельца (ADR

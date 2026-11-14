@@ -67,6 +67,7 @@ import type { Logger } from '../logger.js';
 import { parseManifest } from './etnx-format.js';
 import { normaliseInstant } from './dates.js';
 import { ensureLinkPropertyForLinkType } from './property-service.js';
+import { queueTaskReparse } from './task-projection.js';
 import { normalizeTitle } from './thought-service.js';
 
 // ---------------------------------------------------------------------------
@@ -956,6 +957,8 @@ function insertComment(
              updated_at = ?, updated_by = ? WHERE pk = ?`,
         )
         .run(c.title, c.body_md, c.body_html, useTime, now, actorUserId, existing.pk);
+      // Проекция задач (0.16.1): импорт мог изменить строки `- [ ]`.
+      queueTaskReparse(ndb, c.id);
       return 'updated';
     }
     ndb
@@ -981,6 +984,9 @@ function insertComment(
         c.updated_at,
         actorUserId,
       );
+    // Проекция задач (0.16.1): тело импортированного комментария разбирается
+    // хуком записи после коммита.
+    queueTaskReparse(ndb, c.id);
     return 'created';
   }
   // Chronological — INSERT OR IGNORE so re-importing the same archive is a
@@ -1009,6 +1015,7 @@ function insertComment(
       c.updated_at,
       actorUserId,
     );
+  queueTaskReparse(ndb, c.id);
   return result.changes > 0 ? 'created' : 'updated';
 }
 

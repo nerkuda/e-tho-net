@@ -20,6 +20,7 @@ import {
   type WalCheckpointScheduler,
 } from './db/wal-checkpoint.js';
 import { sweepCommentHtml } from './domain/markdown-sweep.js';
+import { sweepTaskProjection } from './domain/task-projection.js';
 import { createServer } from './http/server.js';
 import { logger } from './logger.js';
 import { handleMcpNodeRequest } from './mcp/http.js';
@@ -91,6 +92,10 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
   // Re-render the cached comment HTML once when the rendering pipeline version
   // changed (task M1, @etn/markdown).
   sweepCommentHtml(config.dataDir, systemDb, logger);
+
+  // Разово достроить материализованную проекцию задач в сетях, созданных до
+  // 0.16.1 (задача 632eca85): задачи уже написаны, строк проекции ещё нет.
+  sweepTaskProjection(config.dataDir, systemDb, logger);
 
   const app = await createServer({ config, systemDb, logger });
   const fileLog = app.fileLog;

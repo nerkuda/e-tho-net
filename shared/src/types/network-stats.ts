@@ -25,6 +25,24 @@ export interface StatsBreakdown {
   trashed: number;
 }
 
+/**
+ * Задачи сети (0.16.1): счётчики строк материализованной проекции
+ * `task_rows`. Считаются физические строки всех слоёв — как у остальных
+ * «объёмных» показателей статистики.
+ */
+export interface StatsTasks {
+  /** Всего строк-задач (`is_task = 1`) во всех слоях. */
+  total: number;
+  /** Незакрытые задачи (`done = 0`). */
+  open: number;
+  /** Выполненные задачи (`done = 1`). */
+  done: number;
+  /** Задачи, у которых владелец и все субъекты актуальны. */
+  subjects_active: number;
+  /** Задачи хотя бы с одним неактуальным/удалённым/помеченным субъектом. */
+  subjects_inactive: number;
+}
+
 /** Вложения сети (только чтение). */
 export interface StatsAttachments {
   /** Всего вложений (ссылок и файловых), `deleted = 0`. */
@@ -54,6 +72,10 @@ export interface NetworkStats {
   publications: StatsBreakdown;
   /** Полки библиотеки (без разбивки — как слои). */
   shelves: number;
+  /** Задачи: строки проекции `task_rows` (0.16.1). */
+  tasks: StatsTasks;
+  /** Напоминания: активные строки `reminders` сети (0.16.1). */
+  reminders: number;
   /** Слои сети (основа + пользовательские; сервисные/резервные не считаются). */
   layers: number;
   /** Вложения. */

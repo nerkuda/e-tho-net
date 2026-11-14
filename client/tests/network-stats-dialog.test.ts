@@ -35,6 +35,8 @@ const FIXTURE: NetworkStats = {
   links: { total: 20, active: 18, inactive: 1, trashed: 1 },
   publications: { total: 6, active: 4, inactive: 1, trashed: 1 },
   shelves: 3,
+  tasks: { total: 4, open: 3, done: 1, subjects_active: 3, subjects_inactive: 1 },
+  reminders: 2,
   layers: 2,
   attachments: { total: 5, files: 2, file_size_bytes: 1536 },
 };

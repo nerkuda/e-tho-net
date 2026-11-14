@@ -42,6 +42,7 @@ import type {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { bumpNetworkDataVersion } from './view-result-cache.js';
+import { discardTaskProjectionQueue, flushTaskProjection } from './task-projection.js';
 import {
   recordAttachmentActivity,
   recordCommentActivity,
@@ -266,6 +267,13 @@ function applyActivityEntry(
  * Сбой записи журнала не отменяет бизнес-операцию — `record*Activity`
  * поглощают ошибки сами (требование b0c7a57c, 05 §6.1).
  */
+/**
+ * Глубина вложенности обёртки на соединении: пере-парс проекции задач
+ * выполняется ровно один раз — после коммита САМОЙ ВНЕШНЕЙ транзакции
+ * (внутренняя может быть откачена внешним savepoint).
+ */
+const writeDepth = new WeakMap<NetworkDb, number>();
+
 export function runWriteCore<T>(
   ndb: NetworkDb,
   ctx: WriteJournalContext,
@@ -278,9 +286,20 @@ export function runWriteCore<T>(
   // инвалидировался бы собственным прогоном отбора. Журнал активности пишется
   // НИЖЕ, после снимка, и тоже не учитывается: это не данные отборов.
   const changesBefore = ndb.totalChanges();
-  ndb.transaction(() => {
-    outcome = fn();
-  });
+  const depth = (writeDepth.get(ndb) ?? 0) + 1;
+  writeDepth.set(ndb, depth);
+  try {
+    ndb.transaction(() => {
+      outcome = fn();
+    });
+  } catch (err) {
+    // Транзакция откатилась: отложенный пере-парс проекции задач не нужен.
+    if (depth === 1) discardTaskProjectionQueue(ndb);
+    throw err;
+  } finally {
+    if (depth === 1) writeDepth.delete(ndb);
+    else writeDepth.set(ndb, depth - 1);
+  }
   if (ndb.totalChanges() !== changesBefore) {
     bumpNetworkDataVersion(ctx.networkId);
   }
@@ -295,6 +314,10 @@ export function runWriteCore<T>(
       applyActivityEntry(ndb, ctx, activityEntries[i]!, baseMs + i);
     }
   }
+  // Проекция задач (0.16.1, ADR d0c07f33): пере-парс отложенных комментариев
+  // идёт ПОСЛЕ коммита, своей транзакцией. Сбой разбора запись не отменяет —
+  // актуальность страхуют маркер и свип.
+  if (depth === 1) flushTaskProjection(ndb);
   return outcome;
 }
 

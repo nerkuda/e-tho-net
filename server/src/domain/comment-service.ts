@@ -59,6 +59,7 @@ import {
   materializeShadow,
   materializeTombstone,
 } from '../db/layer-write.js';
+import { queueTaskReparse } from './task-projection.js';
 
 /** Raw `comments` row shape (dates as strings, no booleans). */
 interface CommentRow {
@@ -868,6 +869,9 @@ export function createCommentWithTargets(
     for (const t of targets) {
       touchOwnerActivity(ndb, t.owner_type, t.owner_id, actorUserId);
     }
+    // Проекция задач (0.16.1): тело нового комментария могло принести строки
+    // `- [ ]`; пере-парс — после коммита обёртки записи.
+    queueTaskReparse(ndb, id);
     return getCommentOrThrow(ndb, id);
   });
 }
@@ -998,6 +1002,9 @@ export function updateComment(
     for (const t of current.targets) {
       touchOwnerActivity(ndb, t.owner_type, t.owner_id, actorUserId);
     }
+    // Проекция задач (0.16.1): строки `- [ ]` могли появиться, исчезнуть или
+    // сменить состояние чекбокса.
+    queueTaskReparse(ndb, id);
     return getCommentOrThrow(ndb, id);
   });
 }
@@ -1130,6 +1137,9 @@ export function deleteComment(
     for (const t of current.targets) {
       touchOwnerActivity(ndb, t.owner_type, t.owner_id, actorUserId);
     }
+    // Проекция задач (0.16.1): удалённый комментарий в текущем слое невидим —
+    // строки слоя убираются пере-парсом.
+    queueTaskReparse(ndb, id);
   });
 }
 

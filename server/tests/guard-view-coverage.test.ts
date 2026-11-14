@@ -258,6 +258,11 @@ const READ_ONLY_VIEWS: readonly { contract: string; field: string; note: string 
     field: 'kind',
     note: 'GET /attachments — только чтение',
   },
+  {
+    contract: 'RestTaskList',
+    field: 'scope',
+    note: 'GET /networks/:id/tasks — только чтение',
+  },
 ];
 
 /** Минимальная длина обоснования исключения — «не тестируемо» без причины не принимается. */

@@ -72,6 +72,9 @@ import {
   REALTIME_DEFAULTS,
   SAVED_FILTER_VIEWS,
   SEARCH_SCOPES,
+  TASK_MASS_ACTIONS,
+  TASK_OPS,
+  TASK_SCOPES,
   TRAVERSAL_DEFAULTS,
   TYPES_LIST_SCOPES,
   TYPE_OWNER_TYPES,
@@ -103,6 +106,7 @@ import {
   summaryHasMarkdownHeadings,
 } from './domain/publication-validation.js';
 import { validateLayerColors } from './domain/layer-service.js';
+import { TASKS_MAX_LIMIT } from './domain/task-service.js';
 import type { TraversalBounds, TraverseDirection } from './domain/graph-traversal.js';
 import type {
   AstTokenContext,
@@ -111,6 +115,7 @@ import type {
   ThoughtQueryRequest,
 } from './domain/query-service.js';
 import type { NeighborOptions } from './domain/thought-service.js';
+import type { TaskListOptions } from './domain/task-service.js';
 
 // ---------------------------------------------------------------------------
 // Общие zod-куски (до вехи 8 — `mcp/tools/shared.ts`)
@@ -4682,6 +4687,7 @@ export type ReaderOp =
   | 'comments.presented'
   | 'comments.permanentPresented'
   | 'comments.previewBatch'
+  | 'tasks.list'
   | 'db.ping';
 
 /** Payload `thoughts.query` / `thoughts.queryIds`. */
@@ -4816,6 +4822,14 @@ export interface ReaderDbPingResult {
   schema_version: number;
 }
 
+/**
+ * Payload `tasks.list` — выборка задач из материализованной проекции
+ * (операция e6d65f51). Плоский объект: переживает structured clone до воркера.
+ */
+export interface ReaderTasksListPayload {
+  options: TaskListOptions;
+}
+
 /** Одна задача reader-пула (op + payload, общий контекст). */
 export type ReaderTask =
   | ({ context: ReaderTaskContext } & (
@@ -4833,6 +4847,7 @@ export type ReaderTask =
       | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
       | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
       | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
+      | { op: 'tasks.list'; payload: ReaderTasksListPayload }
     ))
   | { context: ReaderDbPingContext; op: 'db.ping'; payload: ReaderDbPingPayload };
 
@@ -6015,4 +6030,111 @@ export const McpReminderDismiss = defineContract(
   'etn.reminders.dismiss',
   RestReminderDismiss.schema,
   RestReminderDismiss.rest,
+);
+
+// ---------------------------------------------------------------------------
+// Задачи (0.16.1, задача 632eca85): операции e6d65f51 / de4cee18
+// ---------------------------------------------------------------------------
+//
+// Задача — строка `- [ ]` в body_md комментария; текст — источник истины,
+// проекция `task_rows` пере-создаётся хук записи. Собственных MCP-контрактов у
+// 0.16.1 нет: действия `tasks.*` исполнителя etn.ops — задача 11 версии.
+
+/**
+ * Одна операция PATCH /tasks над строкой задачи.
+ *
+ * `line_no` — номер строки body_md С НУЛЯ (операция de4cee18), строка
+ * содержимого пункта: там стоит маркер.
+ */
+const TaskOpSchema = z.object({
+  comment_id: z.string().min(1),
+  line_no: z.number().int().min(0),
+  action: z.enum(TASK_OPS),
+  done: z.boolean().optional(),
+  days: z.number().int().optional(),
+  months: z.number().int().optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * GET /networks/:networkId/tasks — выборка задач из материализованной проекции
+ * (операция e6d65f51): scope + период + thought_id/comment_id + keyset + count.
+ */
+export const RestTaskList = defineContract(
+  'rest:tasks.list',
+  z.object({
+    network_id: NetworkId,
+    scope: z.enum(TASK_SCOPES).optional(),
+    from: z.string().min(1).optional(),
+    to: z.string().min(1).optional(),
+    thought_id: ThoughtId.optional(),
+    comment_id: z.string().min(1).optional(),
+    today: z.string().min(1).optional(),
+    cursor: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(TASKS_MAX_LIMIT).optional(),
+    count: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    scope: { from: { kind: 'query' }, parse: singleQueryValue },
+    from: { from: { kind: 'query' }, parse: singleQueryValue },
+    to: { from: { kind: 'query' }, parse: singleQueryValue },
+    thought_id: { from: { kind: 'query' }, parse: singleQueryValue },
+    comment_id: { from: { kind: 'query' }, parse: singleQueryValue },
+    today: { from: { kind: 'query' }, parse: singleQueryValue },
+    cursor: { from: { kind: 'query' }, parse: singleQueryValue },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    count: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/**
+ * PATCH /networks/:networkId/tasks — правка строк задач (операция de4cee18):
+ * либо `ops` (toggle/move/cancel), либо массовая команда `action`
+ * (cancel-all/move-all) по фильтру.
+ */
+export const RestTaskPatch = defineContract(
+  'rest:tasks.patch',
+  z
+    .object({
+      network_id: NetworkId,
+      ops: z.array(TaskOpSchema).min(1).optional(),
+      action: z.enum(TASK_MASS_ACTIONS).optional(),
+      filter: z
+        .object({
+          scope: z.enum(TASK_SCOPES).optional(),
+          from: z.string().min(1).optional(),
+          to: z.string().min(1).optional(),
+          thought_id: ThoughtId.optional(),
+          comment_id: z.string().min(1).optional(),
+          today: z.string().min(1).optional(),
+        })
+        .optional(),
+      days: z.number().int().optional(),
+      months: z.number().int().optional(),
+    })
+    .refine((v) => (v.ops === undefined) !== (v.action === undefined), {
+      message: 'provide either ops or action.',
+      path: ['ops'],
+    })
+    .refine((v) => v.action === undefined || v.filter !== undefined, {
+      message: 'a mass action requires filter.',
+      path: ['filter'],
+    })
+    .refine((v) => v.action !== 'move-all' || (v.days === undefined) !== (v.months === undefined), {
+      message: 'move-all requires exactly one of days or months.',
+      path: ['days'],
+    })
+    .refine((v) => v.action !== 'cancel-all' || (v.days === undefined && v.months === undefined), {
+      message: 'cancel-all does not take a shift.',
+      path: ['days'],
+    }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    ops: { from: { kind: 'body' } },
+    action: { from: { kind: 'body' } },
+    filter: { from: { kind: 'body' } },
+    days: { from: { kind: 'body' } },
+    months: { from: { kind: 'body' } },
+  },
 );

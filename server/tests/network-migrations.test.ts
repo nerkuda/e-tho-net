@@ -66,6 +66,13 @@ const EXPECTED_TABLES = [
   'user_pinned_thoughts',
   // 054_reminders: сервисная per-user таблица, по слоям НЕ ветвится (0.16.1).
   'reminders',
+  // 055_task_projection: материализованная проекция задач (0.16.1). Таблицы по
+  // слоям НЕ ветвятся: слой — атрибут строки (`layer_id`), маркер — сервисная
+  // одна строка.
+  'task_rows',
+  'task_row_dates',
+  'task_row_subjects',
+  'task_projection_state',
   'embeddings',
   'thought_read_metrics',
   'object_locks',

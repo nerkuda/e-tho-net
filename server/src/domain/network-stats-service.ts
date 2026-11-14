@@ -28,7 +28,13 @@
  * действует.
  */
 
-import type { NetworkStats, StatsAttachments, StatsBreakdown } from '@etn/shared';
+import {
+  BASE_LAYER_ID,
+  type NetworkStats,
+  type StatsAttachments,
+  type StatsBreakdown,
+  type StatsTasks,
+} from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
 
@@ -68,6 +74,61 @@ function attachmentStats(ndb: NetworkDb): StatsAttachments {
     total,
     files: files?.c ?? 0,
     file_size_bytes: files?.bytes ?? 0,
+  };
+}
+
+/**
+ * Задачи: счётчики материализованной проекции (0.16.1). Строки считаются по
+ * всем слоям (объём), а состояние субъектов оценивается по видимым редакциям
+ * основы (`*_v`): владелец комментария + мысли из ID-ссылок строки.
+ */
+function taskStats(ndb: NetworkDb): StatsTasks {
+  const inactive = `(
+    (c.owner_type = 'thought' AND EXISTS (
+       SELECT 1 FROM thoughts_v t WHERE t.id = c.owner_id
+        AND (t.active = 0 OR t.marked_for_deletion = 1)))
+    OR (c.owner_type = 'link' AND EXISTS (
+       SELECT 1 FROM links_v l WHERE l.id = c.owner_id
+        AND (l.active = 0 OR l.marked_for_deletion = 1)))
+    OR (c.owner_type = 'publication' AND EXISTS (
+       SELECT 1 FROM publications_v p WHERE p.id = c.owner_id
+        AND (p.active = 0 OR p.marked_for_deletion = 1)))
+    OR EXISTS (
+       SELECT 1 FROM task_row_subjects s
+         JOIN thoughts_v st ON st.id = s.thought_id
+        WHERE s.comment_id = tr.comment_id
+          AND COALESCE(s.layer_id, '') = COALESCE(tr.layer_id, '')
+          AND s.line_no = tr.line_no
+          AND (st.active = 0 OR st.marked_for_deletion = 1))
+  )`;
+  const row = ndb
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(tr.done = 0), 0) AS open,
+              COALESCE(SUM(tr.done = 1), 0) AS done,
+              COALESCE(SUM(CASE WHEN ${inactive} THEN 0 ELSE 1 END), 0) AS subjects_active,
+              COALESCE(SUM(CASE WHEN ${inactive} THEN 1 ELSE 0 END), 0) AS subjects_inactive
+         FROM task_rows tr -- layers:physical-read
+         JOIN comments c -- layers:physical-read
+              ON c.id = tr.comment_id
+             AND c.layer_id IS COALESCE(tr.layer_id, ?)
+        WHERE tr.is_task = 1`,
+    )
+    .get(BASE_LAYER_ID) as
+    | {
+        total: number;
+        open: number;
+        done: number;
+        subjects_active: number;
+        subjects_inactive: number;
+      }
+    | undefined;
+  return {
+    total: row?.total ?? 0,
+    open: row?.open ?? 0,
+    done: row?.done ?? 0,
+    subjects_active: row?.subjects_active ?? 0,
+    subjects_inactive: row?.subjects_inactive ?? 0,
   };
 }
 
@@ -132,5 +193,7 @@ export function networkStatistics(ndb: NetworkDb): NetworkStats {
     ),
     layers: count(ndb, 'SELECT COUNT(*) AS c FROM layers WHERE is_service = 0'),
     attachments: attachmentStats(ndb),
+    tasks: taskStats(ndb),
+    reminders: count(ndb, "SELECT COUNT(*) AS c FROM reminders WHERE state = 'active'"),
   };
 }

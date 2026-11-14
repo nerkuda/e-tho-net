@@ -19,6 +19,11 @@
  *      единого рендерера (`contains-task-list`, `task-list-item-checkbox`) и
  *      рукописные `replace`-преобразования `==…==`→`<mark>`,
  *      `<u>…</u>`→`<u>`, `<!--…-->`→пусто;
+ *   3a. **собственной грамматике маркера пункта задачи** (`- [ ]`/`[x]`) —
+ *      регэксп или литерал маркера вне пакета запрещён (замечание
+ *      верификатора задачи парсера: проба файла в `client/src` с регэкспом
+ *      маркера обязана краснить сторож). Клиент собирает свои регэкспы из
+ *      `TASK_MARKER_PATTERN`/`TASK_MARKER_PREFIX` пакета;
  *   4. **собственной функции-рендерере** (`renderMarkdown`/`parseMarkdown`/
  *      `markdownToHtml`/`mdToHtml`) вне пакета;
  *   5. **собственном разборе/развёртке трансклюзий `![[…]]`** вне пакета —
@@ -41,12 +46,19 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { renderMarkdown } from '@etn/markdown';
 
-import { assertGuardClean, type GuardRule, type GuardScanOptions } from './guard-helpers.js';
+import {
+  assertGuardClean,
+  collectViolations,
+  formatViolations,
+  type GuardRule,
+  type GuardScanOptions,
+} from './guard-helpers.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 
@@ -115,6 +127,36 @@ const RULE_TASK_LIST_HTML: GuardRule = {
   pattern: /contains-task-list|task-list-item-checkbox/,
   include: inSrc,
   allow: (rel) => inMarkdownPackage(rel),
+};
+
+/**
+ * 3a. Грамматика маркера пункта задачи (`- [ ]` / `- [x]`) — только в пакете.
+ *
+ * Вне `markdown/` запрещены регэксп маркера (`\\[[ xX]\\]`) и литерал пункта
+ * задачи в кавычках (`'- [ ] '`). Редактор комментария собирает собственные
+ * регэкспы из `TASK_MARKER_PATTERN`/`TASK_MARKER_PREFIX` пакета. Строки-
+ * комментарии, где маркер упомянут словами, нарушением не считаются: сторож
+ * сканирует текст файла, а не AST.
+ */
+const TASK_MARKER_SIGNATURE =
+  /(?:\\\[\s*(?:\[\s*[xX ]+\s*\]|[xX ])\s*\\\]|['"][-*+][ \t]*\[[ xX]\])/;
+
+/** Маркер встречается только в комментарии строки — это не грамматика кода. */
+function markerOnlyInComment(line: string): boolean {
+  const trimmed = line.trimStart();
+  if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return true;
+  const commentAt = line.indexOf('//');
+  if (commentAt === -1) return false;
+  return !TASK_MARKER_SIGNATURE.test(line.slice(0, commentAt));
+}
+
+const RULE_TASK_MARKER: GuardRule = {
+  name: 'task-marker-outside-package',
+  description:
+    'грамматика маркера пункта задачи (`- [ ]`/`[x]`) — только @etn/markdown: собственный регэксп/литерал маркера вне markdown/',
+  pattern: TASK_MARKER_SIGNATURE,
+  include: inSrc,
+  allow: (rel, line) => inMarkdownPackage(rel) || markerOnlyInComment(line),
 };
 
 /**
@@ -217,6 +259,7 @@ describe('сторож: единый markdown-рендерер (673fa25f, ff1fa0
       REPO_ROOT,
       [
         RULE_TASK_LIST_HTML,
+        RULE_TASK_MARKER,
         RULE_OWN_MARK_RENDER,
         RULE_OWN_UNDERLINE_RENDER,
         RULE_OWN_COMMENT_STRIP,
@@ -224,6 +267,34 @@ describe('сторож: единый markdown-рендерер (673fa25f, ff1fa0
       ],
       SCAN_OPTIONS,
     );
+  });
+
+  it('маркер пункта задачи вне @etn/markdown запрещён (сторож краснеет на пробе)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-task-marker-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'client', 'src'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'markdown', 'src'), { recursive: true });
+      // Проба: собственный регэксп маркера в клиентском исходнике.
+      fs.writeFileSync(
+        path.join(dir, 'client', 'src', 'probe.ts'),
+        'export const TASK_OWN = /^[-*+] \\[[ xX]\\] /;\n',
+      );
+      // Комментарий-упоминание и пакет рендерера — не нарушения.
+      fs.writeFileSync(
+        path.join(dir, 'client', 'src', 'doc.ts'),
+        '// Пункт задачи пишется как `- [ ] текст`.\nexport const ok = 1;\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'markdown', 'src', 'grammar.ts'),
+        'export const RE = /^\\[[ xX]\\]/;\n',
+      );
+      const hits = collectViolations(dir, [RULE_TASK_MARKER]);
+      assert.equal(hits.length, 1, formatViolations(hits));
+      assert.equal(hits[0]!.file, 'client/src/probe.ts');
+      assert.equal(hits[0]!.rule, 'task-marker-outside-package');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('разбор/развёртка трансклюзий `![[…]]` — только в @etn/markdown', () => {

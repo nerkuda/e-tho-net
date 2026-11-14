@@ -21,6 +21,7 @@ import type {
   MdEditorEdit,
   MdEditorSnapshot as EditorSnapshot,
 } from './md-editor.js';
+import { TASK_MARKER_PATTERN, TASK_MARKER_PREFIX } from '@etn/markdown';
 
 export type { MdEditorEdit, MdEditorSnapshot as EditorSnapshot } from './md-editor.js';
 
@@ -299,13 +300,23 @@ export function isInlineActive(snap: EditorSnapshot, open: string, close: string
  * Блочные команды (маркер в начале строки).
  * ------------------------------------------------------------------ */
 
-/** Любой блочный маркер (заголовок/список/задача/цитата), снимаемый при переоформлении. */
-const ANY_BLOCK_MARKER = /^(?:[-*+] \[[ xX]\] |[-*+] |\d+[.)] |#{1,6} |> )/;
+/**
+ * Любой блочный маркер (заголовок/список/задача/цитата), снимаемый при
+ * переоформлении. Маркер задачи собирается из грамматики @etn/markdown.
+ */
+const ANY_BLOCK_MARKER = new RegExp(
+  `^(?:[-*+] ${TASK_MARKER_PATTERN} |[-*+] |\\d+[.)] |#{1,6} |> )`,
+);
 
-const BULLET_OWN = /^[-*+] (?!\[[ xX]\] )/;
+const BULLET_OWN = new RegExp(`^[-*+] (?!${TASK_MARKER_PATTERN} )`);
 const ORDERED_OWN = /^\d+[.)] /;
-const TASK_OWN = /^[-*+] \[[ xX]\] /;
+const TASK_OWN = new RegExp(`^[-*+] ${TASK_MARKER_PATTERN} `);
 const QUOTE_OWN = /^> ?/;
+
+/** Каретка после маркера списка, не являющегося пунктом задачи. */
+const BULLET_CARET = new RegExp(`^[ \\t]*[-*+] (?!${TASK_MARKER_PATTERN} )`);
+/** Каретка после маркера пункта задачи. */
+const TASK_CARET = new RegExp(`^[ \\t]*[-*+] ${TASK_MARKER_PATTERN} `);
 
 /** Цикл toggle: если у ВСЕХ непустых строк уже свой маркер — снимаем. */
 function allOwn(bodies: string[], own: RegExp): boolean {
@@ -339,7 +350,7 @@ export function toggleBulletList(snap: EditorSnapshot): TextEdit {
       if (isAll) return indent + body.replace(/^[-*+] /, '');
       return `${indent}- ${body.replace(ANY_BLOCK_MARKER, '')}`;
     },
-    (line) => caretAfter(line, /^[ \t]*[-*+] (?!\[[ xX]\] )/),
+    (line) => caretAfter(line, BULLET_CARET),
   );
 }
 
@@ -365,9 +376,9 @@ export function toggleTaskList(snap: EditorSnapshot): TextEdit {
     snap,
     (body, indent) => {
       if (isAll) return indent + body.replace(TASK_OWN, '');
-      return `${indent}- [ ] ${body.replace(ANY_BLOCK_MARKER, '')}`;
+      return `${indent}${TASK_MARKER_PREFIX}${body.replace(ANY_BLOCK_MARKER, '')}`;
     },
-    (line) => caretAfter(line, /^[ \t]*[-*+] \[[ xX]\] /),
+    (line) => caretAfter(line, TASK_CARET),
   );
 }
 

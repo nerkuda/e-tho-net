@@ -24,6 +24,7 @@ export * from './structure.js';
 export * from './chronicle.js';
 export * from './pin.js';
 export * from './reminder.js';
+export * from './task.js';
 export * from './realtime.js';
 export * from './lock.js';
 export * from './activity.js';
