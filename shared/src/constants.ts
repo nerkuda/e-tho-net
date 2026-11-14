@@ -535,6 +535,19 @@ export const HIERARCHY_SUBTREE_MAX_NODES = 2_000;
 /** Maximum number of ids accepted by `POST /thoughts/resolve` (03-server-api.md §6.9). */
 export const THOUGHT_RESOLVE_MAX_IDS = 100;
 
+/**
+ * Бюджет блоков «Открытые дела» и «Напоминания» в `meta` карточек мысли
+ * (0.16.1, задача f34066e1, операция 22f1ea95). Карточка — не список: агент
+ * видит ближайшие записи и признак `truncated`, а полный перебор делает
+ * `etn.ops { action: "tasks.list" }` / `reminders.list`. Числа держат бюджет
+ * ответа карточки (сторож `guard-mcp-list-projection`), поэтому растут только
+ * вместе с замером.
+ */
+export const THOUGHT_META_TASKS_LIMIT = 10;
+
+/** См. {@link THOUGHT_META_TASKS_LIMIT}: сколько напоминаний несёт `meta.reminders`. */
+export const THOUGHT_META_REMINDERS_LIMIT = 10;
+
 // ---------------------------------------------------------------------------
 // Слои изменений (фаза S, docs/13-layers.md)
 // ---------------------------------------------------------------------------

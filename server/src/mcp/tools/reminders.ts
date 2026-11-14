@@ -16,9 +16,8 @@
 
 import { z } from 'zod';
 
-import { PREF_KEY, type ReminderSubjectType } from '@etn/shared';
+import type { ReminderSubjectType } from '@etn/shared';
 
-import type { McpRuntime } from '../context.js';
 import {
   mcpWriteFx,
   openMemberNetwork,
@@ -27,6 +26,7 @@ import {
   runTool,
   runWrite,
   runWriteTool,
+  showInactiveFor,
 } from '../context.js';
 import {
   createReminder,
@@ -46,16 +46,6 @@ import {
 } from '../../contracts.js';
 import type { OpHandler } from './ops.js';
 
-/** Настройка сети владельца «Показывать неактуальные мысли и связи». */
-function showInactive(rt: McpRuntime, networkId: string): boolean {
-  const pref = rt.deps.systemDb.getNetworkPreference(
-    rt.deps.auth.userId,
-    networkId,
-    PREF_KEY.SHOW_INACTIVE,
-  );
-  return pref?.value === true;
-}
-
 /** Все шесть действий семейства `reminders.*`. */
 export const REMINDER_OPS_HANDLERS: Record<string, OpHandler> = {
   'reminders.list': (rt, p) => {
@@ -70,7 +60,7 @@ export const REMINDER_OPS_HANDLERS: Record<string, OpHandler> = {
           ? { subject_type: a.subject_type as ReminderSubjectType }
           : {}),
         ...(a.subject_id !== undefined ? { subject_id: a.subject_id } : {}),
-        show_inactive: showInactive(rt, a.network_id),
+        show_inactive: showInactiveFor(rt, a.network_id),
       });
     });
   },

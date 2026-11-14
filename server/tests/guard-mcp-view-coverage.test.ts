@@ -284,6 +284,14 @@ const MCP_READ_ONLY_VIEWS: readonly { tool: string; field: string; note: string 
     field: 'format',
     note: 'только чтение (readOnlyHint): пакетный экспорт собирает zip тем же доменом; запись в БД не производится. Оба значения покрыты mcp-publications.test.ts.',
   },
+  {
+    // 0.16.1 (задача f34066e1): выборка проекции задач — действие чтения
+    // реестра `etn.ops`; вид выбирает секцию выборки, записи нет. Значения
+    // open/done/overdue покрыты `mcp-tasks.test.ts`.
+    tool: 'etn.tasks.list',
+    field: 'scope',
+    note: 'только чтение (readOnlyHint действия etn.ops): вид выбирает секцию проекции задач (open/done/overdue/undated), записи нет.',
+  },
 ];
 
 interface ZodLike {

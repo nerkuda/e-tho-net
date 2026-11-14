@@ -15,6 +15,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   BASE_LAYER_ID,
   EtnError,
+  PREF_KEY,
   type LayerEcho,
   type ServerUpdatingErrorDetails,
 } from '@etn/shared';
@@ -181,6 +182,21 @@ export function requireWritable(rt: McpRuntime): void {
       'This API key is read-only: it can use resources and read tools, but not mutating tools.',
     );
   }
+}
+
+/**
+ * Настройка сети «Показывать неактуальные мысли и связи» у владельца ключа
+ * (0.16.1): её спрашивают per-user чтения, где неактуальность решает сервер
+ * (`reminders.list`, `meta` карточек). Единая точка — чтобы MCP-фасады не
+ * расходились в трактовке настройки.
+ */
+export function showInactiveFor(rt: McpRuntime, networkId: string): boolean {
+  const pref = rt.deps.systemDb.getNetworkPreference(
+    rt.deps.auth.userId,
+    networkId,
+    PREF_KEY.SHOW_INACTIVE,
+  );
+  return pref?.value === true;
 }
 
 /** Consume one write-budget slot, raising `RATE_LIMITED` when exhausted (F6). */

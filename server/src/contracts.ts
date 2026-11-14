@@ -1218,7 +1218,18 @@ export const ThoughtsQuery = defineContract('etn.thoughts.query', QueryFields, {
 
 export const ThoughtsGet = defineContract(
   'etn.thoughts.get',
-  z.object({ network_id: NetworkId, thought_id: ThoughtId, view: View }),
+  z.object({
+    network_id: NetworkId,
+    thought_id: ThoughtId,
+    view: View,
+    /**
+     * «Открытые дела» и напоминания запросившего о мысли (0.16.1, задача
+     * f34066e1, операция 22f1ea95). По умолчанию ВЫКЛ: карточка не платит за
+     * задачи, если агент их не спрашивал (бюджет — сторож
+     * `guard-mcp-list-projection`).
+     */
+    include_task_meta: z.boolean().optional(),
+  }),
   {},
 );
 
@@ -1228,6 +1239,12 @@ export const ThoughtsResolve = defineContract(
     network_id: NetworkId,
     thought_ids: z.array(ThoughtId).min(1).max(THOUGHT_RESOLVE_MAX_IDS),
     view: View,
+    /**
+     * Тот же блок «Открытые дела» + напоминания на каждую карточку (0.16.1,
+     * задача f34066e1, операция 22f1ea95). По умолчанию ВЫКЛ — пакет из 100
+     * карточек не должен молча раздуваться задачами.
+     */
+    include_task_meta: z.boolean().optional(),
   }),
   {},
 );
@@ -6405,4 +6422,100 @@ export const RestTaskPatch = defineContract(
     days: { from: { kind: 'body' } },
     months: { from: { kind: 'body' } },
   },
+);
+
+// MCP-двойники (операция 22f1ea95): действия `tasks.*` исполнителя etn.ops
+// повторяют REST-контракты (GET/PATCH /tasks), собственных MCP-инструментов не
+// появляется. Одно действие REST-батча — одно действие `etn.ops`: адресация
+// строки `comment_id` + `line_no` и `expected_revision` у одиночных правок
+// совпадают с PATCH /tasks, массовые команды — с массовыми того же PATCH.
+
+/** MCP `etn.tasks.list` = REST `GET /tasks` (фильтры, keyset-курсор, COUNT по флагу). */
+export const McpTaskList = defineContract('etn.tasks.list', RestTaskList.schema, RestTaskList.rest);
+
+/**
+ * Адрес строки задачи для одиночных действий (PATCH /tasks): `line_no` — номер
+ * строки `body_md` С НУЛЯ, `expected_revision` — ревизия комментария, которую
+ * видел агент. Расхождение ревизии — `VERSION_CONFLICT` (409), а не тихая
+ * правка чужой версии текста.
+ */
+const TaskLineActionFields = {
+  network_id: NetworkId,
+  comment_id: z.string().min(1),
+  line_no: z.number().int().min(0),
+  expected_revision: z.number().int().min(1),
+};
+
+/** MCP `etn.tasks.toggle` — чекбокс строки (`done` не задан — инверсия). */
+export const McpTaskToggle = defineContract(
+  'etn.tasks.toggle',
+  z.object({
+    ...TaskLineActionFields,
+    done: z.boolean().optional(),
+  }),
+  {},
+);
+
+/** MCP `etn.tasks.move` — единый сдвиг ВСЕХ date-ссылок строки (дни XOR месяцы). */
+export const McpTaskMove = defineContract(
+  'etn.tasks.move',
+  z
+    .object({
+      ...TaskLineActionFields,
+      days: z.number().int().optional(),
+      months: z.number().int().optional(),
+    })
+    .refine((v) => (v.days === undefined) !== (v.months === undefined), {
+      message: 'move requires exactly one of days or months.',
+      path: ['days'],
+    }),
+  {},
+);
+
+/** MCP `etn.tasks.cancel` — снять маркер задачи (`- [ ] текст` → `- текст`). */
+export const McpTaskCancel = defineContract(
+  'etn.tasks.cancel',
+  z.object({ ...TaskLineActionFields }),
+  {},
+);
+
+/** Фильтр массовой команды tasks.* — тот же, что у PATCH /tasks (`filter`). */
+const TaskMassFilterSchema = z.object({
+  scope: z.enum(TASK_SCOPES).optional(),
+  from: z.string().min(1).optional(),
+  to: z.string().min(1).optional(),
+  thought_id: ThoughtId.optional(),
+  comment_id: z.string().min(1).optional(),
+  today: z.string().min(1).optional(),
+});
+
+/**
+ * MCP `etn.tasks.cancelAll` — массовая отмена задач по фильтру. Деструктивное
+ * действие реестра: `etn.ops` требует `confirm: true` (образец массовых
+ * PATCH /tasks; undo и подтверждение на стороне клиента).
+ */
+export const McpTaskCancelAll = defineContract(
+  'etn.tasks.cancelAll',
+  z.object({
+    network_id: NetworkId,
+    filter: TaskMassFilterSchema,
+  }),
+  {},
+);
+
+/** MCP `etn.tasks.moveAll` — массовый перенос задач по фильтру (дни XOR месяцы). */
+export const McpTaskMoveAll = defineContract(
+  'etn.tasks.moveAll',
+  z
+    .object({
+      network_id: NetworkId,
+      filter: TaskMassFilterSchema,
+      days: z.number().int().optional(),
+      months: z.number().int().optional(),
+    })
+    .refine((v) => (v.days === undefined) !== (v.months === undefined), {
+      message: 'moveAll requires exactly one of days or months.',
+      path: ['days'],
+    }),
+  {},
 );

@@ -85,6 +85,12 @@ import {
   McpShelfRestore,
   McpShelfTrash,
   McpShelfUpdate,
+  McpTaskCancel,
+  McpTaskCancelAll,
+  McpTaskList,
+  McpTaskMove,
+  McpTaskMoveAll,
+  McpTaskToggle,
   MembersList,
   MetricsReads,
   MetricsTools,
@@ -1208,6 +1214,178 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     paramsContract: McpReminderRemove,
   },
 
+  // ---- tasks (0.16.1, задача f34066e1; операция 22f1ea95) ------------------
+  {
+    action: 'tasks.list',
+    tool: 'etn.tasks.list',
+    group: 'tasks',
+    when: 'the network tasks from the materialized projection: status/period scope, thought/comment filter, keyset page, COUNT by flag (overdue needs the client today)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      {
+        name: 'scope',
+        desc: '`open` | `done` | `overdue` | `undated` (default — all rows); `overdue`/`undated` are cross-section and ignore `from`/`to`',
+      },
+      { name: 'from', desc: 'period start — `YYYY-MM-DD` or a UTC instant (its UTC date is taken)' },
+      { name: 'to', desc: 'period end (same forms as `from`)' },
+      { name: 'thought_id', desc: 'only rows where the thought is a subject (`[[#uuid]]`)' },
+      { name: 'comment_id', desc: 'only rows sourced from this comment' },
+      {
+        name: 'today',
+        desc: "the client's day boundary (`YYYY-MM-DD` or a UTC instant); REQUIRED for `scope: overdue`",
+      },
+      { name: 'cursor', desc: 'keyset cursor of the next page (from the previous response)' },
+      { name: 'limit', desc: 'page size (1..200, default 50)' },
+      { name: 'count', desc: '`true` — also return `total` (a COUNT query)' },
+    ],
+    destructive: false,
+    readOnly: true,
+    effects:
+      'read-only, no writes. Response `{ items[], cursor, total?, max_revision }` (parity with REST `GET /tasks`). ' +
+      'A row is addressed by `{ comment_id, line_no }` (line number of `body_md`, 0-based) and carries `text`, ' +
+      '`due`/`period_from`/`period_to` (`YYYY-MM-DD`), `done`, `subject_thoughts`, `subject_state`, ' +
+      '`parent_task`/`subtask`, `revision`/`parsed_revision` and the source owner (`owner_type`/`owner_id`/`kind`). ' +
+      'Rows of permanent comments of entities marked for deletion are hidden; `max_revision` is the network ' +
+      'projection marker (the client compares it and shows "Refresh").',
+    errors:
+      '`VALIDATION_ERROR` - a bad date, an invalid keyset cursor; `BAD_REQUEST` - `scope: overdue` without `today` ' +
+      '(the server does not guess the client day).',
+    paramsContract: McpTaskList,
+  },
+  {
+    action: 'tasks.toggle',
+    tool: 'etn.tasks.toggle',
+    group: 'tasks',
+    when: 'close or reopen ONE task line: the checkbox `- [ ]` ↔ `- [x]` (`done` omitted — invert the current state)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'comment_id', required: true, desc: 'source comment of the line' },
+      { name: 'line_no', required: true, desc: 'line number of `body_md`, 0-based (the content line with the marker)' },
+      {
+        name: 'expected_revision',
+        required: true,
+        desc: 'the comment revision the caller saw; a mismatch - `VERSION_CONFLICT` (409)',
+      },
+      { name: 'done', desc: 'desired state; omitted — invert' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'rewrites the source `body_md` and writes ONE new comment revision (the task projection is re-created by the ' +
+      'comment write hook), emits `comment.updated` and returns `{ results[], revisions: [{ id, version }] }`. ' +
+      'A row-level failure does not abort the call: `results[].ok: false` with `not_a_task` (no task marker), ' +
+      '`line_not_found` or `comment_not_found`.',
+    errors:
+      '`VERSION_CONFLICT` - `expected_revision` differs from the current comment revision (HTTP 409); ' +
+      '`VALIDATION_ERROR`; `FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskToggle,
+  },
+  {
+    action: 'tasks.move',
+    tool: 'etn.tasks.move',
+    group: 'tasks',
+    when: 'shift ALL date links of ONE task line by days or months (the 31st falls back to the last day of the target month, the period is kept)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'comment_id', required: true, desc: 'source comment of the line' },
+      { name: 'line_no', required: true, desc: 'line number of `body_md`, 0-based' },
+      {
+        name: 'expected_revision',
+        required: true,
+        desc: 'the comment revision the caller saw; a mismatch - `VERSION_CONFLICT` (409)',
+      },
+      { name: 'days', desc: 'shift in days (exactly one of `days`/`months`, non-zero)' },
+      { name: 'months', desc: 'shift in months' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'one new revision of the source comment, `comment.updated`, `{ results[], revisions: [{ id, version }] }`. ' +
+      'Only calendar date links `[[YYYY-MM-DD]]` move (inline code and non-date targets stay); a line without date ' +
+      'links gets `results[].ok: false, error: "undated"`.',
+    errors:
+      '`VALIDATION_ERROR` - both or neither of `days`/`months`, a zero/non-integer shift; `VERSION_CONFLICT` (409); ' +
+      '`FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskMove,
+  },
+  {
+    action: 'tasks.cancel',
+    tool: 'etn.tasks.cancel',
+    group: 'tasks',
+    when: 'turn ONE task line into a plain line (`- [ ] text` → `- text`; a checklist item) — the text stays, the marker goes',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'comment_id', required: true, desc: 'source comment of the line' },
+      { name: 'line_no', required: true, desc: 'line number of `body_md`, 0-based' },
+      {
+        name: 'expected_revision',
+        required: true,
+        desc: 'the comment revision the caller saw; a mismatch - `VERSION_CONFLICT` (409)',
+      },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'one new revision of the source comment, `comment.updated`, `{ results[], revisions: [{ id, version }] }`. ' +
+      'A line without a task marker gives `results[].ok: false, error: "not_a_task"`.',
+    errors: '`VERSION_CONFLICT` (409); `VALIDATION_ERROR`; `FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskCancel,
+  },
+  {
+    action: 'tasks.cancelAll',
+    tool: 'etn.tasks.cancelAll',
+    group: 'tasks',
+    when: 'mass cancel: remove the task marker from EVERY open task matching the filter (their nested checklist subtasks go with them)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      {
+        name: 'filter',
+        required: true,
+        desc:
+          'row filter: `scope` (`open` | `overdue` | `undated` | `done`, default `open`), `from`/`to`, `thought_id`, ' +
+          '`comment_id`, `today` (required for `overdue`) — the same filter as the mass `PATCH /tasks`',
+      },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'destructive — `etn.ops` requires `confirm: true`. Closed (done) rows are history text and are not touched ' +
+      'unless `scope: done` is asked; each changed source comment gets one new revision and a `comment.updated` ' +
+      'event; response `{ results[], revisions: [{ id, version }] }` (per-row `ok`/`error`). Undo is the caller ' +
+      'saving the previous body (REST parity).',
+    errors:
+      '`VALIDATION_ERROR` - bad filter/date; `BAD_REQUEST` - `scope: overdue` without `today`; `FORBIDDEN` - ' +
+      'read-only key.',
+    paramsContract: McpTaskCancelAll,
+  },
+  {
+    action: 'tasks.moveAll',
+    tool: 'etn.tasks.moveAll',
+    group: 'tasks',
+    when: 'mass move: ONE shift applied to ALL date links of every open task matching the filter (rows without dates are skipped with `undated`)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      {
+        name: 'filter',
+        required: true,
+        desc:
+          'row filter: `scope` (default `open`), `from`/`to`, `thought_id`, `comment_id`, `today` (required for `overdue`)',
+      },
+      { name: 'days', desc: 'shift in days (exactly one of `days`/`months`, non-zero)' },
+      { name: 'months', desc: 'shift in months' },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'destructive — `etn.ops` requires `confirm: true`. One shift over all selected rows, one new revision per ' +
+      'changed source comment, `comment.updated`; response `{ results[], revisions: [{ id, version }] }` with ' +
+      'per-row `undated` for rows without date links.',
+    errors:
+      '`VALIDATION_ERROR` - both/neither shift, a bad filter; `BAD_REQUEST` - `scope: overdue` without `today`; ' +
+      '`FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskMoveAll,
+  },
+
   // ---- publications (0.11.1, задача 094653b6; карточки cab597a8/f236bb22/
   //      a610c091) -----------------------------------------------------------
   {
@@ -2271,6 +2449,83 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '## Events',
       'Every write emits `reminders.changed` (audience = `user`) with `action`',
       '`created|updated|snoozed|dismissed|removed`; occurrence actions also carry `occurrence_at`.',
+      '',
+      '## In a thought card',
+      '`etn.thoughts.get` / `etn.thoughts.resolve` with `include_task_meta: true` add the',
+      "caller's reminders about the subject as `meta.reminders` (`total`, `shown`, `truncated`;",
+      'items `{ id, kind, next_at, subject_state }`) — at most 10, the full list is',
+      '`reminders.list`. The flag is OFF by default; visibility is the same — another user',
+      'never sees the row.',
+    ].join('\n'),
+  },
+  {
+    // 0.16.1 (задача f34066e1): обзорная тема семейства `tasks.*`. Действия —
+    // в общем реестре, их `params`/эффекты/коды — по `topic` `tasks.<action>`;
+    // здесь — модель строки, адресация, ревизия, даты и массовые команды.
+    topic: 'tasks',
+    when: 'tasks overview: a task is a checkbox line of a comment, row addressing (`comment_id`+`line_no`), `expected_revision`/409, date links and move, toggle/cancel and the mass actions, `meta.open_tasks` in a thought card',
+    body_md: [
+      '# tasks — tasks and checklists',
+      '',
+      'A task is a LINE of a comment `body_md` carrying a checkbox: `- [ ] text` (open) or',
+      '`- [x] text` (done). The text is the source of truth: rows of the projection',
+      '(`task_rows` / `task_row_dates` / `task_row_subjects`) are re-created by the comment',
+      'write hook. Dates are calendar links `[[YYYY-MM-DD[ HH:MM]]]`: the first is',
+      '`period_from`, the last is `due`; a link with an impossible date is not a task date.',
+      'All 6 actions are available via `etn.ops` (`tasks.*`); the `params` shape, effects and',
+      'error codes of an action — `etn.guide { topic: "tasks.<action>" }`.',
+      '',
+      '## Addressing',
+      '- `comment_id` + `line_no` — the line CONTAINING the marker; `line_no` is 0-based',
+      "  (`body_md.split('\\n')`). A row that is not a task gives",
+      '  `results[].ok: false, error: "not_a_task"`; there is no task id of its own.',
+      '- `expected_revision` — the comment revision the caller saw (`revision` of a',
+      '  `tasks.list` row, or `version` of `etn.comments.get`). REQUIRED for',
+      '  `tasks.toggle` / `tasks.move` / `tasks.cancel`: a mismatch is `VERSION_CONFLICT`',
+      '  (409) and NOTHING is written — re-read the row and retry. There is no',
+      '  last-write-wins on task lines.',
+      '',
+      '## Reading (`tasks.list`)',
+      '- `scope` selects the base: `open` (not done), `done`, `overdue` (open with `due`',
+      "  earlier than the client's `today`), `undated` (open without date links); default —",
+      '  all rows. `from`/`to` intersect the task period. `thought_id` keeps rows whose',
+      '  subject is this thought (`[[#uuid]]` ID links only); `comment_id` — rows sourced',
+      '  from one comment.',
+      '- `overdue` / `undated` are CROSS-SECTION: they ignore `from`/`to`, and `overdue`',
+      "  REQUIRES `today` (the client's day boundary — the server never guesses the",
+      '  timezone). A period view plus the cross-section is two calls (or both scopes).',
+      '- Pagination is a keyset `cursor` (order `due` → `period_from` → id); `total` only',
+      '  with `count: true`. `max_revision` is the network projection marker: a different',
+      '  value means the projection moved and the page is worth re-reading.',
+      '- A row of a permanent comment of an entity marked for deletion is hidden;',
+      '  `subject_state: "inactive"` tells that the source owner or a subject is inactive.',
+      '',
+      '## Writing one line',
+      '- `tasks.toggle` — the checkbox only (`done` omitted inverts). `tasks.move` — one',
+      '  shift of ALL date links of the line (`days` XOR `months`; the 31st of a short',
+      '  month falls back to its last day, the period is kept). `tasks.cancel` —',
+      '  `- [ ] text` → `- text`: the line becomes a checklist item, the text stays.',
+      '- Each write returns one new revision per changed source comment',
+      '  (`revisions: [{ id, version }]`) and emits `comment.updated` with the full new',
+      '  `body_md`. Use the returned `version` as `expected_revision` of the next action.',
+      '',
+      '## Mass actions',
+      '- `tasks.cancelAll` / `tasks.moveAll` work over `filter` (same fields as',
+      '  `tasks.list`; `scope` defaults to `open`). Both are DESTRUCTIVE in `etn.ops`',
+      '  terms: `confirm: true` is required at the top level.',
+      '- Done rows are history text: they are not touched unless `scope: done` is asked.',
+      '  `cancelAll` also removes the marker from nested checklist subtasks of the selected',
+      '  tasks; `moveAll` skips rows without date links (`error: "undated"` per row).',
+      '- The answer is per-row `results[]` plus `revisions[]`: a failed row does not abort',
+      '  the command.',
+      '',
+      '## In a thought card',
+      '`etn.thoughts.get` / `etn.thoughts.resolve` with `include_task_meta: true` add',
+      '`meta.open_tasks` — open tasks where the thought is a subject (`total`, `shown`,',
+      '`truncated`, `items` with the row address, text and dates). The flag is OFF by',
+      'default (a card does not pay for tasks); the block is capped at 10 rows, the rest is',
+      'reached via `tasks.list { thought_id, scope: "open" }`. Filtering THOUGHTS by tasks',
+      '— the `tasks` / `tasks.overdue` leaves of `etn.thoughts.query`.',
     ].join('\n'),
   },
   {

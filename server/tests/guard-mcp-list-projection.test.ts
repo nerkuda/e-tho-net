@@ -958,4 +958,146 @@ describe('guard: карточки, справочники и каталог ти
       await closeMcpContext(ctx);
     }
   });
-});
+});// ===========================================================================
+// Сторож 0.16.1 (задача f34066e1, операция 22f1ea95): блоки «Открытые дела» и
+// напоминания карточки включаются ТОЛЬКО флагом `include_task_meta` и не
+// раздувают ответ сверх бюджета 10+10 строк.
+// ===========================================================================
+
+/**
+ * Бюджеты прироста ответа от `include_task_meta` (байты UTF-8) на карточке с
+ * ПРЕДЕЛЬНЫМ блоком: 10 открытых задач и 1 напоминание.
+ *
+ * Факты (фикстура сторожа, 2026-11-14): get +4794 Б, resolve на 2 карточки +5575 Б.
+ * Пороги — «факт × ~1,4» (факты фиксирует `console.log` теста): правка с
+ * ожидаемым ростом данных не краснит зря, а снятие лимита 10 строк или возврат
+ * блоков по умолчанию (прирост на десятки процентов) роняет сторож.
+ */
+const THOUGHT_META_GET_BUDGET_BYTES = 6700;
+const THOUGHT_META_RESOLVE_BUDGET_BYTES = 7800;
+
+describe(
+  'guard: meta карточки — флаг include_task_meta и бюджет (задача f34066e1)',
+  { skip: !nativeAvailable() },
+  () => {
+    /** Размер JSON-ответа в байтах UTF-8 (в этой области видимости своего нет). */
+    const bytesOf = (result: ClientCallToolResult): number =>
+      Buffer.byteLength(toolText(result), 'utf8');
+
+    it('по умолчанию блоков нет; с флагом прирост укладывается в бюджет 10+10', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const client = handle.client;
+          const subject = await createThoughtViaWrite(client, ctx.networkId, {
+            title: 'Предмет дел',
+          });
+          const other = await createThoughtViaWrite(client, ctx.networkId, {
+            title: 'Соседняя карточка',
+          });
+          // Источник задач — постоянный комментарий отдельной мысли (карточка
+          // субъекта остаётся без собственного комментария).
+          const owner = await createThoughtViaWrite(client, ctx.networkId, {
+            title: 'Список дел сторожа',
+          });
+          const lines = Array.from(
+            { length: 12 },
+            (_, index) =>
+              `- [ ] Дело ${index + 1} [[2027-03-${String(index + 1).padStart(2, '0')}]] [[#${subject.id}]]`,
+          );
+          await upsertPermanentViaWrite(client, ctx.networkId, owner.id, lines.join('\n'));
+          const reminder = await callOp(client, 'reminders.create', {
+            network_id: ctx.networkId,
+            subject_type: 'thought',
+            subject_id: subject.id,
+            kind: 'one',
+            schedule: { type: 'once' },
+            anchor_at: '2030-01-15T09:00:00.000Z',
+          });
+          assert.equal(reminder.isError, undefined, toolText(reminder));
+
+          const getPlain = await client.callTool({
+            name: 'etn.thoughts.get',
+            arguments: { network_id: ctx.networkId, thought_id: subject.id },
+          });
+          const getMeta = await client.callTool({
+            name: 'etn.thoughts.get',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_id: subject.id,
+              include_task_meta: true,
+            },
+          });
+          const resolvePlain = await client.callTool({
+            name: 'etn.thoughts.resolve',
+            arguments: { network_id: ctx.networkId, thought_ids: [subject.id, other.id] },
+          });
+          const resolveMeta = await client.callTool({
+            name: 'etn.thoughts.resolve',
+            arguments: {
+              network_id: ctx.networkId,
+              thought_ids: [subject.id, other.id],
+              include_task_meta: true,
+            },
+          });
+          for (const [label, result] of [
+            ['get.plain', getPlain],
+            ['get.meta', getMeta],
+            ['resolve.plain', resolvePlain],
+            ['resolve.meta', resolveMeta],
+          ] as const) {
+            assert.equal(result.isError, undefined, `${label}: ${toolText(result)}`);
+          }
+
+          // 1. По умолчанию блоков нет ни в одной карточке.
+          const plainCard = toolJson<{ meta: Record<string, unknown> }>(getPlain);
+          assert.equal('open_tasks' in plainCard.meta, false, 'get без флага не несёт open_tasks');
+          assert.equal('reminders' in plainCard.meta, false, 'get без флага не несёт reminders');
+          const plainBatch = toolJson<{ items: Array<{ meta: Record<string, unknown> }> }>(
+            resolvePlain,
+          );
+          for (const card of plainBatch.items) {
+            assert.equal('open_tasks' in card.meta, false, 'resolve без флага не несёт open_tasks');
+            assert.equal('reminders' in card.meta, false, 'resolve без флага не несёт reminders');
+          }
+
+          // 2. С флагом блоки полны до бюджета 10+10.
+          const metaCard = toolJson<{
+            meta: {
+              open_tasks: { total: number; shown: number; truncated: boolean; items: unknown[] };
+              reminders: { total: number; shown: number; items: unknown[] };
+            };
+          }>(getMeta);
+          assert.equal(metaCard.meta.open_tasks.total, 12);
+          assert.equal(metaCard.meta.open_tasks.items.length, 10);
+          assert.equal(metaCard.meta.open_tasks.shown, 10);
+          assert.equal(metaCard.meta.open_tasks.truncated, true);
+          assert.equal(metaCard.meta.reminders.items.length, 1);
+
+          // 3. Прирост ограничен: лимит строк и отсутствие блоков по умолчанию.
+          const getDelta = bytesOf(getMeta) - bytesOf(getPlain);
+          const resolveDelta = bytesOf(resolveMeta) - bytesOf(resolvePlain);
+          console.log(
+            `[meta budget] get: plain=${bytesOf(getPlain)} meta=${bytesOf(getMeta)} (+${getDelta}); ` +
+              `resolve: plain=${bytesOf(resolvePlain)} meta=${bytesOf(resolveMeta)} (+${resolveDelta})`,
+          );
+          assert.ok(getDelta > 0, 'с флагом блоки реально добавляются');
+          assert.ok(
+            getDelta <= THOUGHT_META_GET_BUDGET_BYTES,
+            `get с include_task_meta: прирост ${getDelta} Б превышает бюджет ${THOUGHT_META_GET_BUDGET_BYTES} Б`,
+          );
+          assert.ok(resolveDelta > 0, 'resolve с флагом блоки реально добавляет');
+          assert.ok(
+            resolveDelta <= THOUGHT_META_RESOLVE_BUDGET_BYTES,
+            `resolve с include_task_meta: прирост ${resolveDelta} Б превышает бюджет ${THOUGHT_META_RESOLVE_BUDGET_BYTES} Б`,
+          );
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+  },
+);
