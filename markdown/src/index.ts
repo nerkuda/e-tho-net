@@ -58,6 +58,8 @@ export {
 } from './transclusion.js';
 export { parseSelectionUnits } from './selection.js';
 export type { MarkdownUnit, MarkdownUnitKind } from './selection.js';
+export { parseTaskLines } from './task-lines.js';
+export type { TaskLine, TaskLineDate } from './task-lines.js';
 export { BLANK_LINE_CLASS, blankLinesPlugin } from './blank-lines.js';
 export { extractHeadings, formatHeading } from './headings.js';
 export type { MarkdownHeading } from './headings.js';
