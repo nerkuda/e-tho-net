@@ -180,6 +180,7 @@ import {
 import { type RecordTitleHandle } from './record-title.js';
 import { buildRecordHead, createRecordChips } from './record-head.js';
 import { parseChronicleState } from './state.js';
+import { mountTasksPanel, type TasksPanelHandle } from './tasks-panel.js';
 import { renderRecordView } from './record-body.js';
 import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
 
@@ -248,6 +249,8 @@ let feedWrap: HTMLElement | null = null;
 let feedList: HTMLElement | null = null;
 /** Контроллер клавиатурной навигации ленты (0.10.1, приёмка №9). */
 let feedNav: FeedNavHandle | null = null;
+/** Панель «Задачи и напоминания» над лентой (0.16.1, задача 64f7976a). */
+let tasksPanel: TasksPanelHandle | null = null;
 /**
  * Единый контроллер правки карточки записи (ТП «Дневник без псевдослота»):
  * режим правки принадлежит КАРТОЧКЕ — вход в правку любого поля (заголовок или
@@ -688,6 +691,8 @@ async function initialiseChronicle(networkId: string, tabId: string | null): Pro
   await reload();
   syncCalendar();
   if (entryMonthCounts !== null) void refreshCalendarCounts(entryMonthCounts);
+  // Панель задач — тоже период отбора: после входа в вид её данные актуальны.
+  tasksPanel?.refresh();
 }
 
 /** Persists the current filter + month to L4 (per-tab). Запись адресуется
@@ -842,7 +847,17 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     onAddThought: (id) => void pickAndAttach(id),
   });
 
-  main.append(addBar, feedWrap);
+  // Панель «Задачи и напоминания» — НАД лентой, вне блоков дней; при любом
+  // периоде одна (0.16.1, задача 64f7976a, спека f76ed829/15f8ea2f).
+  const tasksHost = div('chron-tasks-panel-host');
+  tasksPanel?.destroy();
+  tasksPanel = mountTasksPanel(tasksHost, {
+    getPeriod: () => currentFromTo(),
+    openDay: (day) => void openChronicleDay(day),
+    onRecordsChanged: () => void refreshFeedAndCalendar(),
+  });
+
+  main.append(addBar, tasksHost, feedWrap);
   void refreshCalendarCounts(calendarCountsSnapshot());
 
   // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
@@ -886,6 +901,8 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       calendar?.setFirstDayOfWeek(firstDayOfWeek);
       syncCalendar();
       scheduleChronicleFeedRefresh();
+      // Пороги группировки панели считают недели по этой же настройке.
+      tasksPanel?.refresh();
       if (store.state.activeView === 'chronicle') {
         void refreshCalendarCounts(calendarCountsSnapshot());
       }
@@ -903,6 +920,8 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     unsubscribe();
     feedNav?.destroy();
     feedNav = null;
+    tasksPanel?.destroy();
+    tasksPanel = null;
     host = null;
   };
 }
@@ -931,6 +950,8 @@ async function applyFilter(): Promise<void> {
   if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
   void refreshCalendarCounts(counts);
+  // Панель «Задачи и напоминания» живёт периодом отбора — применяем новый.
+  tasksPanel?.refresh();
 }
 
 /**

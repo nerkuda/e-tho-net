@@ -1,0 +1,306 @@
+/**
+ * Модель панели «Задачи и напоминания» над лентой «Дневника» (0.16.1, задача
+ * 64f7976a; элементы f76ed829/15f8ea2f/498f23e0; требования
+ * 6762adb0/0e85b66e/e6af8b9e/3616cfec/db1d9548).
+ *
+ * Проверяются чистые правила без DOM и сети:
+ *  • пороги группировки 1 / 2–14 / 15–50 / >50 (по мыслям/датам/неделям/месяцам);
+ *  • неделя начинается с первого дня недели сети (1b77decd), месяц — календарный;
+ *  • хвостовые группы «Без даты»/«Без мысли» и порядок строк внутри группы;
+ *  • счётчики открытых/выполненных;
+ *  • признак «строка устарела» (ревизия источника vs ревизия проекции, события
+ *    правки) и общая потребность в «Обновить» (0e85b66e);
+ *  • вхождения напоминаний: момент показа отложенного, секции
+ *    «просрочено/сегодня/период» по МЕСТНЫМ суткам, названия субъектов.
+ */
+
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import type { Reminder, ReminderListResult, TaskDTO } from '@etn/shared';
+
+import {
+  TASK_GROUP_NO_DATE,
+  TASK_GROUP_NO_SUBJECT,
+  TASK_GROUP_THRESHOLDS,
+  groupPanelRows,
+  lastDayOfMonth,
+  monthKeyOf,
+  panelNeedsRefresh,
+  reminderPanelRows,
+  reminderRowKey,
+  reminderSectionOf,
+  shiftDay,
+  taskCounters,
+  taskGroupingMode,
+  taskRowIsStale,
+  taskRowKey,
+  taskRowView,
+  weekStartOf,
+  type PanelGroupable,
+} from '../src/renderer/lib/ui/task-panel-model.js';
+
+/** Строка проекции с минимально нужными полями. */
+function task(overrides: Partial<TaskDTO> & { comment_id?: string; line_no?: number }): TaskDTO {
+  return {
+    comment_id: 'c1',
+    line_no: 0,
+    text: 'задача',
+    period_from: null,
+    period_to: null,
+    due: null,
+    done: false,
+    subject_thoughts: [],
+    subject_state: 'active',
+    parent_task: null,
+    subtask: false,
+    revision: 1,
+    parsed_revision: 1,
+    ...overrides,
+  };
+}
+
+/** Простая строка для проверки группировки. */
+function row(key: string, day: string | null, subjectId: string | null = null): PanelGroupable {
+  return { key, day, subjectId };
+}
+
+describe('пороги группировки (требование 6762adb0)', () => {
+  it('1 — по мыслям, 2–14 — по датам, 15–50 — по неделям, >50 — по месяцам', () => {
+    assert.equal(taskGroupingMode(0), 'thoughts');
+    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.thoughts), 'thoughts');
+    assert.equal(taskGroupingMode(2), 'dates');
+    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.dates), 'dates');
+    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.dates + 1), 'weeks');
+    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.weeks), 'weeks');
+    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.weeks + 1), 'months');
+  });
+});
+
+describe('календарные помощники (неделя сети, месяц)', () => {
+  it('неделя начинается с первого дня недели сети (1b77decd)', () => {
+    // 2026-11-14 — суббота.
+    assert.equal(weekStartOf('2026-11-14', 1), '2026-11-09', 'понедельник');
+    assert.equal(
+      weekStartOf('2026-11-14', 7),
+      '2026-11-08',
+      'воскресенье: суббота в неделе с вс 8-го',
+    );
+    assert.equal(weekStartOf('2026-11-09', 7), '2026-11-08');
+    // Невалидный номер дня недели трактуется как понедельник.
+    assert.equal(weekStartOf('2026-11-14', 0), '2026-11-09');
+  });
+
+  it('месяц — календарный, последний день учитывает високосность', () => {
+    assert.equal(monthKeyOf('2026-11-14'), '2026-11');
+    assert.equal(lastDayOfMonth('2026-11'), '2026-11-30');
+    assert.equal(lastDayOfMonth('2024-02'), '2024-02-29');
+    assert.equal(lastDayOfMonth('2025-02'), '2025-02-28');
+  });
+
+  it('сдвиг дня не выходит за календарь и не портит невалидный вход', () => {
+    assert.equal(shiftDay('2026-12-31', 1), '2027-01-01');
+    assert.equal(shiftDay('2026-03-01', -1), '2026-02-28');
+    assert.equal(shiftDay('', 1), '', 'невалидный день возвращается как есть');
+  });
+});
+
+describe('группировка строк (пороги 6762adb0)', () => {
+  it('по датам: группы дней в порядке появления, «Без даты» — последней', () => {
+    const groups = groupPanelRows(
+      [row('a', '2026-11-14'), row('b', '2026-11-12'), row('c', '2026-11-14'), row('d', null)],
+      'dates',
+      { firstDayOfWeek: 1 },
+    );
+    assert.deepEqual(
+      groups.map((group) => [group.key, group.from, group.to]),
+      [
+        ['date:2026-11-14', '2026-11-14', '2026-11-14'],
+        ['date:2026-11-12', '2026-11-12', '2026-11-12'],
+        [TASK_GROUP_NO_DATE, null, null],
+      ],
+    );
+    assert.deepEqual(
+      groups.map((group) => group.rows.map((item) => item.key)),
+      [['a', 'c'], ['b'], ['d']],
+    );
+  });
+
+  it('по неделям: диапазон недели считается от первого дня недели сети', () => {
+    const rows = [row('a', '2026-11-09'), row('b', '2026-11-15'), row('c', '2026-11-16')];
+    const monday = groupPanelRows(rows, 'weeks', { firstDayOfWeek: 1 });
+    assert.deepEqual(
+      monday.map((group) => [group.from, group.to, group.rows.length]),
+      [
+        ['2026-11-09', '2026-11-15', 2],
+        ['2026-11-16', '2026-11-22', 1],
+      ],
+    );
+    const sunday = groupPanelRows(rows, 'weeks', { firstDayOfWeek: 7 });
+    assert.deepEqual(
+      sunday.map((group) => [group.from, group.to, group.rows.length]),
+      [
+        ['2026-11-08', '2026-11-14', 1],
+        ['2026-11-15', '2026-11-21', 2],
+      ],
+      'при первом дне недели — воскресенье те же дни попадают в разные недели',
+    );
+  });
+
+  it('по месяцам: группа месяца и её границы', () => {
+    const groups = groupPanelRows([row('a', '2026-01-31'), row('b', '2026-01-01')], 'months', {
+      firstDayOfWeek: 1,
+    });
+    assert.deepEqual(
+      groups.map((group) => [group.key, group.from, group.to]),
+      [['month:2026-01', '2026-01-01', '2026-01-31']],
+    );
+  });
+
+  it('по мыслям: группы субъектов, «Без мысли» — последней, диапазон объединяется', () => {
+    const groups = groupPanelRows(
+      [
+        row('a', '2026-11-01', 't1'),
+        row('b', '2026-11-05', 't2'),
+        row('c', '2026-11-03', 't1'),
+        row('d', null, null),
+      ],
+      'thoughts',
+      { firstDayOfWeek: 1 },
+    );
+    assert.deepEqual(
+      groups.map((group) => [group.key, group.subjectId, group.from, group.to]),
+      [
+        ['thought:t1', 't1', '2026-11-01', '2026-11-03'],
+        ['thought:t2', 't2', '2026-11-05', '2026-11-05'],
+        [TASK_GROUP_NO_SUBJECT, null, null, null],
+      ],
+    );
+  });
+});
+
+describe('счётчики и «серая строка» (0e85b66e)', () => {
+  it('счётчики считают открытые и выполненные', () => {
+    assert.deepEqual(taskCounters([task({ done: false }), task({ done: true }), task({})]), {
+      open: 2,
+      done: 1,
+    });
+    assert.deepEqual(taskCounters([]), { open: 0, done: 0 });
+  });
+
+  it('строка устарела при рассинхроне ревизий или событии правки источника', () => {
+    const fresh = task({ comment_id: 'a', revision: 4, parsed_revision: 4 });
+    assert.equal(taskRowIsStale(fresh), false);
+    const behind = task({ comment_id: 'b', revision: 5, parsed_revision: 4 });
+    assert.equal(taskRowIsStale(behind), true);
+    assert.equal(taskRowIsStale(fresh, new Set(['a'])), true, 'событие правки красит строку');
+    assert.equal(taskRowIsStale(fresh, new Set(['другой'])), false);
+  });
+
+  it('«Обновить» нужен при событиях напоминаний или устаревшей строке', () => {
+    const rows = [task({ comment_id: 'a', revision: 2, parsed_revision: 2 })];
+    assert.equal(panelNeedsRefresh({ rows }), false);
+    assert.equal(panelNeedsRefresh({ rows, remindersChanged: true }), true);
+    assert.equal(panelNeedsRefresh({ rows, staleComments: new Set(['a']) }), true);
+    assert.equal(
+      panelNeedsRefresh({ rows: [task({ comment_id: 'a', revision: 3, parsed_revision: 2 })] }),
+      true,
+    );
+  });
+
+  it('строка панели несёт адрес проекции, день срока и субъекта', () => {
+    const view = taskRowView(
+      task({
+        comment_id: 'c9',
+        line_no: 3,
+        text: '- [ ] задача',
+        period_from: '2026-11-10',
+        due: '2026-11-14',
+        subject_thoughts: ['t1', 't2'],
+      }),
+    );
+    assert.equal(view.key, taskRowKey({ comment_id: 'c9', line_no: 3 }), 'ключ = адрес проекции');
+    assert.equal(view.day, '2026-11-14', 'день строки — срок');
+    assert.equal(view.subjectId, 't1');
+    assert.equal(view.stale, false);
+  });
+});
+
+describe('вхождения напоминаний (требования 6762adb0/86cb7451)', () => {
+  /** Напоминание с одним-двумя вхождениями. */
+  function reminder(overrides: Partial<Reminder> = {}): Reminder {
+    return {
+      id: 'r1',
+      user_id: 'u1',
+      subject_type: 'thought',
+      subject_id: 't1',
+      subject_state: 'active',
+      kind: 'series',
+      schedule: { type: 'once' },
+      anchor_at: '2026-11-14T09:00:00.000Z',
+      next_at: '2026-11-14T09:00:00.000Z',
+      exceptions: {},
+      state: 'active',
+      occurrences: [{ occurrence_at: '2026-11-14T09:00:00.000Z', status: 'active', until: null }],
+      created_at: '2026-11-01T00:00:00.000Z',
+      updated_at: '2026-11-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('отложенное вхождение показывается в момент `until`, ключ — момент расписания', () => {
+    const result: ReminderListResult = {
+      reminders: [
+        reminder({
+          occurrences: [
+            {
+              occurrence_at: '2026-11-14T09:00:00.000Z',
+              status: 'snoozed',
+              until: '2026-11-15T10:00:00.000Z',
+            },
+          ],
+        }),
+      ],
+      from: null,
+      to: null,
+    };
+    const rows = reminderPanelRows(result, new Map([['t1', 'Мысль']]), () => 'однократно');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.moment, '2026-11-15T10:00:00.000Z', 'момент показа — `until`');
+    assert.equal(rows[0]?.status, 'snoozed');
+    assert.equal(rows[0]?.title, 'Мысль');
+    assert.equal(rows[0]?.key, reminderRowKey('r1', '2026-11-14T09:00:00.000Z'));
+  });
+
+  it('название субъекта до доразрешения — его id', () => {
+    const result: ReminderListResult = { reminders: [reminder()], from: null, to: null };
+    const rows = reminderPanelRows(result, new Map(), () => 'однократно');
+    assert.equal(rows[0]?.title, 't1');
+  });
+
+  it('секция вхождения — по местным суткам: прошлое/сегодня/период', () => {
+    const todayStart = Date.parse('2026-11-14T00:00:00.000+03:00');
+    const todayEnd = Date.parse('2026-11-15T00:00:00.000+03:00');
+    const section = (moment: string): string =>
+      reminderSectionOf(
+        {
+          key: 'k',
+          reminderId: 'r1',
+          subjectType: 'thought',
+          subjectId: 't1',
+          title: 't',
+          moment,
+          status: 'active',
+          repeat: '',
+          day: moment.slice(0, 10),
+        },
+        todayStart,
+        todayEnd,
+      );
+    assert.equal(section('2026-11-13T23:59:00.000+03:00'), 'overdue');
+    assert.equal(section('2026-11-14T00:00:00.000+03:00'), 'today');
+    assert.equal(section('2026-11-14T23:59:00.000+03:00'), 'today');
+    assert.equal(section('2026-11-15T00:00:00.000+03:00'), 'period');
+    assert.equal(section('не момент'), 'period', 'невалидный момент — не просрочка');
+  });
+});

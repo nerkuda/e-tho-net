@@ -1327,6 +1327,90 @@ export const en = {
   /** Client render cap of record rows (0.15.4, задача 33ed043c): «N of M shown». */
   'records.more': '%1 of %2 shown',
 
+  // -- «Tasks and reminders» panel above the diary feed (0.16.1, 64f7976a) --
+  /** Panel title. */
+  'tasks.panelTitle': 'Tasks and reminders',
+  /** Undo the last bulk command. */
+  'tasks.undo': 'Undo',
+  /** The only panel button: re-read all lists from entries. */
+  'tasks.refresh': 'Refresh',
+  /** Title of the period tasks group. */
+  'tasks.groupTitle': 'Tasks of the period',
+  /** Title of the period reminders group. */
+  'tasks.remindersGroupTitle': 'Reminders of the period',
+  /** Task group counters (open, done). */
+  'tasks.counters': '%1 open · %2 done',
+  /** Reminder occurrences counter. */
+  'tasks.reminderCount': '%1 occurrences',
+  /** Show completed tasks toggle. */
+  'tasks.showDone': 'Show completed',
+  /** Bulk commands for the whole period. */
+  'tasks.cancelAllPeriod': 'Cancel all open in the period',
+  'tasks.moveAllPeriod': 'Move all open in the period to…',
+  /** Bulk commands for cross-period sections. */
+  'tasks.cancelAllOverdue': 'Cancel all overdue',
+  'tasks.cancelAllUndated': 'Cancel all without a due date',
+  /** Bulk commands for one group. */
+  'tasks.cancelAllGroup': 'Cancel all open in this group',
+  'tasks.moveAllGroup': 'Move all open in this group to…',
+  /** Date shift options. */
+  'tasks.shiftDay': 'the next day',
+  'tasks.shiftWeek': 'in a week',
+  'tasks.shiftMonth': 'in a month',
+  /** Task row commands. */
+  'tasks.openSource': 'Open source',
+  'tasks.moveRow': 'Move to…',
+  'tasks.cancelRow': 'Cancel task',
+  /** Reminder occurrence commands. */
+  'tasks.openSubject': 'Open subject',
+  'tasks.dismissReminder': 'Dismiss',
+  'tasks.snoozeReminder': 'Snooze…',
+  'tasks.createTask': 'Create a task for today',
+  /** Menu button tooltips. */
+  'tasks.rowCommands': 'Row commands',
+  'tasks.groupCommands': 'Group commands',
+  /** Task section titles. */
+  'tasks.sectionMain': 'Main',
+  'tasks.sectionOverdue': 'Overdue',
+  'tasks.sectionUndated': 'No due date',
+  /** Reminder section titles. */
+  'tasks.remindersOverdue': 'Overdue',
+  'tasks.remindersToday': 'Today',
+  'tasks.remindersPeriod': 'Period',
+  /** Groups without subject and without date. */
+  'tasks.groupNoThought': 'No thought',
+  'tasks.groupNoDate': 'No date',
+  /** Week range (start and end). */
+  'tasks.weekRange': 'week %1 — %2',
+  /** Snoozed occurrence badge. */
+  'tasks.badgeSnoozed': 'snoozed',
+  /** Reminder repeat labels. */
+  'tasks.repeatOnce': 'once',
+  'tasks.repeatWeekdays': 'on weekdays',
+  'tasks.repeatEveryDays': 'every %1 days',
+  'tasks.repeatWeekdayOfMonth': 'by weekday of the month',
+  'tasks.repeatDayOfMonth': 'day %1 every %2 months',
+  'tasks.repeatYearly': 'yearly on %1.%2',
+  'tasks.repeatLastDayOfMonth': 'last day of the month every %2 months',
+  /** Bulk command confirmation. */
+  'tasks.bulkTitle': 'Bulk command',
+  'tasks.bulkCancelQuestion': 'Cancel tasks in entries: %1? The lines become plain text.',
+  'tasks.bulkMoveQuestion': 'Move the dates of open lines in %1 entries?',
+  'tasks.bulkEmpty': 'The group has no open tasks.',
+  'tasks.bulkPartial': 'Some lines were not changed: %1.',
+  'tasks.bulkFailed': 'Bulk command failed: %1',
+  'tasks.undoFailed': 'Could not undo the command: %1',
+  /** Task row operation errors. */
+  'tasks.errorLineNotFound': 'Line not found in the source entry.',
+  'tasks.errorNotATask': 'The line is no longer a task.',
+  'tasks.errorCommentNotFound': 'Source entry not found.',
+  'tasks.errorUndated': 'The line has no dates to move.',
+  'tasks.errorGeneric': 'The row operation failed.',
+  'tasks.errorToggle': 'Could not toggle the task: %1',
+  'tasks.errorEdit': 'Could not save the line: %1',
+  'tasks.errorRowCommand': 'Row command failed: %1',
+  'tasks.reminderActionFailed': 'Reminder action failed: %1',
+
   // -- Общее выделение -----------------------------------------------------
   /** Добавить мысль к выделению (меню чипов хроники). */
   'selection.add': 'Add to selection',

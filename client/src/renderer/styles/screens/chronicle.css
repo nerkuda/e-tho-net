@@ -22,7 +22,8 @@
 
 /* Область панели отбора: размер и скрытость ведёт общий каркас
  * (`.fp-host`, задача 2ebe4206); здесь только вид области. */
-.chron-filter-area {  display: flex;
+.chron-filter-area {
+  display: flex;
   flex-direction: column;
   min-height: 0;
   padding: 10px 12px;
@@ -49,6 +50,15 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Контейнер панели «Задачи и напоминания» (0.16.1, задача 64f7976a).
+ * Панель стоит НАД лентой, вне блоков дней, и одна при любом периоде:
+ * собственную высоту и прокрутку держит компонента (`lib/ui/task-panel.css`),
+ * контейнер только резервирует место в колонке центра. */
+.chron-tasks-panel-host {
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -194,7 +204,11 @@
 /* Края диапазона выделены плотнее (диалог даты/периода). */
 .cal-day.is-selected-from,
 .cal-day.is-selected-to {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
   font-weight: 600;
 }
 
@@ -402,7 +416,12 @@
 /* Запись, к которой выполнен переход поиска (T7): подсветка рамкой и фоном. */
 .diary-record-target {
   border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+      transparent
+    );
 }
 
 /* Клавиатурная навигация ленты (0.10.1, итерация приёмки №9, требование
@@ -419,7 +438,12 @@
 
 .diary-record.diary-nav-current {
   border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+      transparent
+    );
 }
 
 .diary-record .diary-nav-el {

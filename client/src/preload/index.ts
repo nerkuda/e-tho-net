@@ -355,7 +355,14 @@ function buildApi(): EtnBridgeApi {
         invoke('comments.removeTarget', networkId, id, ownerType, ownerId, expectedVersion),
     },
     tasks: {
+      list: (networkId, query) => invoke('tasks.list', networkId, query),
       patch: (networkId, input) => invoke('tasks.patch', networkId, input),
+    },
+    reminders: {
+      list: (networkId, query) => invoke('reminders.list', networkId, query),
+      snooze: (networkId, id, until) => invoke('reminders.snooze', networkId, id, until),
+      dismiss: (networkId, id) => invoke('reminders.dismiss', networkId, id),
+      remove: (networkId, id) => invoke('reminders.remove', networkId, id),
     },
     attachments: {
       list: (networkId, ownerType, ownerId) =>

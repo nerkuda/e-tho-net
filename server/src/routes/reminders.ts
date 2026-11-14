@@ -23,7 +23,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { PREF_KEY, type ReminderSubjectType } from '@etn/shared';
+import { PREF_KEY, type ReminderDeleteResult, type ReminderSubjectType } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
 import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
@@ -167,7 +167,9 @@ export function createRemindersRoutes(deps: RouteDeps): FastifyPluginAsync {
             ],
           };
         });
-        sendSuccess(reply, { id: removed.id }, { request_id: req.id });
+        sendSuccess(reply, { id: removed.id } satisfies ReminderDeleteResult, {
+          request_id: req.id,
+        });
       },
     );
 

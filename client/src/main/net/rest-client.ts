@@ -2586,20 +2586,101 @@ export class RestClient {
   }
 
   /**
+   * `GET /networks/{nid}/tasks` — выборка задач из проекции (0.16.1, операция
+   * e6d65f51). Сквозные секции `overdue`/`undated` не зависят от периода;
+   * `overdue` требует `today` (локальные сутки клиента).
+   */
+  public async listTasks(
+    networkId: string,
+    query: import('../ipc/contract.js').TaskListQuery = {},
+  ): Promise<import('@etn/shared').TaskListPage> {
+    const q: QueryRecord = {};
+    if (query.scope !== undefined) q['scope'] = query.scope;
+    if (query.from !== undefined) q['from'] = query.from;
+    if (query.to !== undefined) q['to'] = query.to;
+    if (query.thought_id !== undefined) q['thought_id'] = query.thought_id;
+    if (query.comment_id !== undefined) q['comment_id'] = query.comment_id;
+    if (query.today !== undefined) q['today'] = query.today;
+    if (query.cursor !== undefined) q['cursor'] = query.cursor;
+    if (query.limit !== undefined) q['limit'] = query.limit;
+    if (query.count !== undefined) q['count'] = query.count ? 'true' : 'false';
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/tasks`, {
+      query: Object.keys(q).length > 0 ? q : undefined,
+    });
+  }
+
+  /**
    * `PATCH /networks/{nid}/tasks` — правка строк задач (0.16.1, операции
    * e6d65f51/de4cee18): `action: 'move'` двигает все date-ссылки строки
    * серверным механизмом (`shiftTaskLineDates`), `expected_revision`
-   * обязателен.
+   * обязателен. Массовая команда адресуется фильтром проекции (требование
+   * e6af8b9e).
    */
   public async patchTasks(
     networkId: string,
-    input: { ops: import('../ipc/contract.js').TaskOpInput[] },
+    input: import('../ipc/contract.js').TaskPatchInput,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').TaskPatchResult> {
     return this.request('PATCH', `/networks/${encodeURIComponent(networkId)}/tasks`, {
       body: input,
       requestOptions: opts,
     });
+  }
+
+  /** `GET /networks/{nid}/reminders` — строки владельца с раскрытием повторов. */
+  public async listReminders(
+    networkId: string,
+    query: import('../ipc/contract.js').ReminderListQuery = {},
+  ): Promise<import('@etn/shared').ReminderListResult> {
+    const q: QueryRecord = {};
+    if (query.from !== undefined) q['from'] = query.from;
+    if (query.to !== undefined) q['to'] = query.to;
+    if (query.horizon_days !== undefined) q['horizon_days'] = query.horizon_days;
+    if (query.subject_type !== undefined) q['subject_type'] = query.subject_type;
+    if (query.subject_id !== undefined) q['subject_id'] = query.subject_id;
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/reminders`, {
+      query: Object.keys(q).length > 0 ? q : undefined,
+    });
+  }
+
+  /** `POST /networks/{nid}/reminders/{id}/snooze` — отложить текущее вхождение. */
+  public async snoozeReminder(
+    networkId: string,
+    id: string,
+    until: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ReminderOccurrenceChange> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/reminders/${encodeURIComponent(id)}/snooze`,
+      { body: { until }, requestOptions: opts },
+    );
+  }
+
+  /** `POST /networks/{nid}/reminders/{id}/dismiss` — убрать текущее вхождение. */
+  public async dismissReminder(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ReminderOccurrenceChange> {
+    return this.request(
+      'POST',
+      `/networks/${encodeURIComponent(networkId)}/reminders/${encodeURIComponent(id)}/dismiss`,
+      { requestOptions: opts },
+    );
+  }
+
+  /** `DELETE /networks/{nid}/reminders/{id}` — удалить напоминание владельца. */
+  public async removeReminder(
+    networkId: string,
+    id: string,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').ReminderDeleteResult> {
+    return this.request(
+      'DELETE',
+      `/networks/${encodeURIComponent(networkId)}/reminders/${encodeURIComponent(id)}`,
+      { requestOptions: opts },
+    );
   }
 
   /** `POST /networks/{nid}/comments/{id}/targets` - attach one more owner (L20). */

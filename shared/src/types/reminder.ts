@@ -173,6 +173,21 @@ export interface ReminderListResult {
   to: string | null;
 }
 
+/**
+ * Ответ изменения вхождения (`POST …/reminders/{id}/snooze`,
+ * `POST …/reminders/{id}/dismiss`): обновлённая строка и момент вхождения,
+ * к которому применено изменение (UTC).
+ */
+export interface ReminderOccurrenceChange {
+  reminder: Reminder;
+  occurrence_at: string;
+}
+
+/** Ответ `DELETE …/reminders/{id}`: id удалённого напоминания владельца. */
+export interface ReminderDeleteResult {
+  id: string;
+}
+
 /** Потолок дальности раскрытия по умолчанию — 1 год от `from`. */
 export const REMINDER_DEFAULT_HORIZON_DAYS = 366;
 

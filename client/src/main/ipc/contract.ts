@@ -135,8 +135,16 @@ import type {
   StructureQueryRequest,
   StructureQueryResponse,
   StructureIdsQueryResult,
+  TaskMassAction,
+  TaskMassFilter,
+  TaskListPage,
   TaskOpAction,
   TaskPatchResult,
+  TaskScope,
+  ReminderDeleteResult,
+  ReminderListResult,
+  ReminderOccurrenceChange,
+  ReminderSubjectType,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -521,6 +529,55 @@ export interface TaskOpInput {
   days?: number;
   months?: number;
   expected_revision?: number;
+}
+
+/**
+ * Массовая команда группы «Задачи периода» (`PATCH /tasks`, требование
+ * e6af8b9e): адресация — фильтр проекции, а не список строк. `cancel-all`
+ * снимает маркер задачи (строки становятся `- текст`), `move-all` двигает все
+ * date-ссылки строк на один сдвиг (`days`/`months`, ровно один).
+ */
+export interface TaskMassCommandInput {
+  action: TaskMassAction;
+  filter: TaskMassFilter;
+  days?: number;
+  months?: number;
+}
+
+/**
+ * Тело `PATCH /networks/{nid}/tasks`: либо список операций по строкам, либо одна
+ * массовая команда по фильтру. Форма взаимоисключающая (сервер отвергает оба
+ * набора сразу).
+ */
+export type TaskPatchInput = { ops: TaskOpInput[] } | TaskMassCommandInput;
+
+/**
+ * Запрос `GET /networks/{nid}/tasks` (операция e6d65f51): основа выборки,
+ * период, адресация строки и keyset-страница. `today` — локальные сутки
+ * клиента (`YYYY-MM-DD`), обязательны для `scope: 'overdue'`.
+ */
+export interface TaskListQuery {
+  scope?: TaskScope;
+  from?: string;
+  to?: string;
+  thought_id?: string;
+  comment_id?: string;
+  today?: string;
+  cursor?: string;
+  limit?: number;
+  count?: boolean;
+}
+
+/**
+ * Запрос `GET /networks/{nid}/reminders` (операция ae19b1bf): период раскрытия
+ * повторов в UTC-инстансах и фильтр по субъекту.
+ */
+export interface ReminderListQuery {
+  from?: string;
+  to?: string;
+  horizon_days?: number;
+  subject_type?: ReminderSubjectType;
+  subject_id?: string;
 }
 
 /** The full `window.etn` surface (docs/07-client-electron.md §6). */
@@ -1327,11 +1384,27 @@ export interface EtnApi {
   /**
    * Задачи — проекция строк `- [ ]` в `body_md` (0.16.1, задача 632eca85;
    * операции e6d65f51/de4cee18). Клиент правит ТОЛЬКО строки (toggle/move/
-   * cancel) — список задач и массовые команды придут задачами панели.
+   * cancel) и запускает массовые команды группы (требование e6af8b9e).
    */
   tasks: {
-    /** `PATCH /networks/{nid}/tasks` — правка строк; ответ несёт новые ревизии. */
-    patch(networkId: string, input: { ops: TaskOpInput[] }): Promise<TaskPatchResult>;
+    /** `GET /networks/{nid}/tasks` — выборка из проекции (сквозные overdue/undated). */
+    list(networkId: string, query?: TaskListQuery): Promise<TaskListPage>;
+    /** `PATCH /networks/{nid}/tasks` — правка строк или массовая команда; ответ несёт новые ревизии. */
+    patch(networkId: string, input: TaskPatchInput): Promise<TaskPatchResult>;
+  };
+  /**
+   * Напоминания — персональные строки владельца (0.16.1, задача b47f1fd2;
+   * операции ae19b1bf/500d1b3d). Время сервера — UTC; «сегодня» считает клиент.
+   */
+  reminders: {
+    /** `GET /networks/{nid}/reminders` — строки владельца с раскрытием повторов. */
+    list(networkId: string, query?: ReminderListQuery): Promise<ReminderListResult>;
+    /** `POST …/reminders/{id}/snooze` — отложить ТОЛЬКО это вхождение. */
+    snooze(networkId: string, id: string, until: string): Promise<ReminderOccurrenceChange>;
+    /** `POST …/reminders/{id}/dismiss` — убрать ТЕКУЩЕЕ вхождение. */
+    dismiss(networkId: string, id: string): Promise<ReminderOccurrenceChange>;
+    /** `DELETE /networks/{nid}/reminders/{id}` — удалить напоминание владельца. */
+    remove(networkId: string, id: string): Promise<ReminderDeleteResult>;
   };
   attachments: {
     list(networkId: string, ownerType: AttachmentOwnerType, ownerId: string): Promise<Attachment[]>;

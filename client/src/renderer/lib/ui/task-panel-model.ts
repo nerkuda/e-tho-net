@@ -1,0 +1,368 @@
+/**
+ * Модель панели «Задачи и напоминания» — чистая логика без DOM и сети
+ * (0.16.1, задача 64f7976a; элементы f76ed829/15f8ea2f/498f23e0, требования
+ * 6762adb0/0e85b66e/e6af8b9e/3616cfec/db1d9548).
+ *
+ * Зачем отдельный модуль. Пороги группировки, состав секций, счётчики,
+ * признак «строка устарела» и раскладка напоминаний по «сегодня/просрочено» —
+ * правила, которые обязаны проверяться тестами без DOM и сети. Компонент
+ * `task-panel.ts` только рисует то, что здесь посчитано; экран
+ * `screens/chronicle/tasks-panel.ts` только загружает данные и зовёт действия.
+ *
+ * **Пороги (требование 6762adb0).** 1 элемент — по мыслям (субъектным
+ * строкам), 2–14 — по датам, 15–50 — по неделям, больше 50 — по месяцам.
+ * Неделя начинается с первого дня недели сети (требование 1b77decd: его
+ * учитывают ВСЕ календарные виджеты), поэтому режим принимает номер ISO-дня
+ * явно. Строки без даты собираются в хвостовую группу «Без даты», строки без
+ * субъекта — в группу «Без мысли»; эта группа всегда последняя.
+ *
+ * **Секции.** Секции приходят готовыми: сервер отдаёт их РАЗНЫМИ запросами
+ * (`scope=open` в периоде, `overdue` и `undated` — сквозные), модель лишь
+ * раскладывает строки каждой секции по группам, не смешивая их.
+ *
+ * **«Устарела» (требование 0e85b66e).** Строка серая, когда ревизия её
+ * комментария-источника не равна ревизии, из которой построена проекция
+ * (`revision !== parsed_revision`), либо комментарий изменён вне панели
+ * (id в наборе событий). Глобальная «Обновить» подсвечивается, если устарела
+ * хоть одна строка либо пришло событие напоминаний `reminders.changed`.
+ */
+
+import type { Reminder, ReminderListResult, TaskDTO } from '@etn/shared';
+
+/** Пороги группировки по количеству элементов (требование 6762adb0). */
+export const TASK_GROUP_THRESHOLDS = {
+  /** 1 элемент — по мыслям. */
+  thoughts: 1,
+  /** 2–14 — по датам (верхняя граница). */
+  dates: 14,
+  /** 15–50 — по неделям (верхняя граница). */
+  weeks: 50,
+} as const;
+
+/** Режим группировки списка. */
+export type TaskGroupingMode = 'thoughts' | 'dates' | 'weeks' | 'months';
+
+/**
+ * Режим группировки по количеству элементов: 1 — по мыслям, 2–14 — по датам,
+ * 15–50 — по неделям, больше 50 — по месяцам (требование 6762adb0).
+ */
+export function taskGroupingMode(count: number): TaskGroupingMode {
+  if (count <= TASK_GROUP_THRESHOLDS.thoughts) return 'thoughts';
+  if (count <= TASK_GROUP_THRESHOLDS.dates) return 'dates';
+  if (count <= TASK_GROUP_THRESHOLDS.weeks) return 'weeks';
+  return 'months';
+}
+
+/** Что модель знает о строке для группировки. */
+export interface PanelGroupable {
+  /** Стабильный ключ строки (переживает перерисовку). */
+  key: string;
+  /** Календарный день строки (`YYYY-MM-DD`), `null` — даты нет. */
+  day: string | null;
+  /** Субъект строки (мысль/публикация), `null` — субъекта нет. */
+  subjectId: string | null;
+}
+
+/** Группа строк одного списка: режим, диапазон и строки в исходном порядке. */
+export interface PanelGroup<T extends PanelGroupable> {
+  /** Стабильный ключ группы (строится из режима и значения). */
+  key: string;
+  kind: TaskGroupingMode;
+  /** Начало диапазона группы по датам (`YYYY-MM-DD`), `null` — без даты. */
+  from: string | null;
+  /** Конец диапазона группы по датам (`YYYY-MM-DD`), `null` — без даты. */
+  to: string | null;
+  /** Субъект группы режима «по мыслям». */
+  subjectId: string | null;
+  rows: T[];
+}
+
+/** Ключ группы «строки без субъекта». */
+export const TASK_GROUP_NO_SUBJECT = 'no-subject';
+
+/** Ключ группы «строки без даты». */
+export const TASK_GROUP_NO_DATE = 'no-date';
+
+/** Разобрать `YYYY-MM-DD` в UTC-дату (только календарная арифметика). */
+function parseDay(day: string): Date {
+  const [year, month, date] = day.split('-').map(Number) as [number, number, number];
+  return new Date(Date.UTC(year, month - 1, date));
+}
+
+/** Отформатировать UTC-дату в `YYYY-MM-DD`. */
+function formatDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+/** Сдвиг календарного дня на `delta` дней (невалидный день возвращается как есть). */
+export function shiftDay(day: string, delta: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  const base = parseDay(day);
+  base.setUTCDate(base.getUTCDate() + delta);
+  return formatDay(base);
+}
+
+/**
+ * Начало недели, содержащей `day`, при первом дне недели `firstDayOfWeek`
+ * (ISO: 1 = понедельник … 7 = воскресенье). Возвращает `YYYY-MM-DD`.
+ */
+export function weekStartOf(day: string, firstDayOfWeek: number): string {
+  const first = firstDayOfWeek >= 1 && firstDayOfWeek <= 7 ? firstDayOfWeek : 1;
+  const iso = parseDay(day).getUTCDay();
+  const weekday = iso === 0 ? 7 : iso;
+  return shiftDay(day, -((weekday - first + 7) % 7));
+}
+
+/** Ключ месяца (`YYYY-MM`) календарного дня. */
+export function monthKeyOf(day: string): string {
+  return day.slice(0, 7);
+}
+
+/** Последний день месяца `YYYY-MM` (`YYYY-MM-DD`). */
+export function lastDayOfMonth(month: string): string {
+  const [year, monthNo] = month.split('-').map(Number) as [number, number];
+  return formatDay(new Date(Date.UTC(year, monthNo, 0)));
+}
+
+/** Группа без даты — хвостовая, всегда последняя. */
+function noDateGroup<T extends PanelGroupable>(mode: TaskGroupingMode): PanelGroup<T> {
+  return { key: TASK_GROUP_NO_DATE, kind: mode, from: null, to: null, subjectId: null, rows: [] };
+}
+
+/**
+ * Разложить строки списка по группам согласно режиму (пороги 6762adb0).
+ *
+ * Порядок строк внутри группы — исходный (сервер уже отсортировал по сроку);
+ * группы идут в порядке первого появления, хвостовая группа «Без даты» —
+ * последней. Каждая группа несёт диапазон `from`/`to`, по которому экран
+ * строит фильтр массовой команды: «отменить/перенести всё по этой группе»
+ * адресуется проекцией, а не перечнем строк (требование e6af8b9e).
+ */
+export function groupPanelRows<T extends PanelGroupable>(
+  rows: readonly T[],
+  mode: TaskGroupingMode,
+  options: { firstDayOfWeek: number },
+): PanelGroup<T>[] {
+  const groups = new Map<string, PanelGroup<T>>();
+  let tail: PanelGroup<T> | null = null;
+
+  /** Взять (или создать) группу по ключу. */
+  const take = (group: PanelGroup<T>): PanelGroup<T> => {
+    const existing = groups.get(group.key);
+    if (existing !== undefined) return existing;
+    if (group.from === null && group.key === TASK_GROUP_NO_DATE) tail = group;
+    groups.set(group.key, group);
+    return group;
+  };
+
+  for (const row of rows) {
+    let group: PanelGroup<T>;
+    if (mode === 'thoughts') {
+      const subject = row.subjectId;
+      group = take({
+        key: subject === null ? TASK_GROUP_NO_SUBJECT : `thought:${subject}`,
+        kind: mode,
+        from: row.day,
+        to: row.day,
+        subjectId: subject,
+        rows: [],
+      });
+      // Диапазон группы-мысли — объединение дней её строк (для фильтра
+      // массовой команды он не нужен: там адресация по `thought_id`).
+      if (row.day !== null) {
+        if (group.from === null || row.day < group.from) group.from = row.day;
+        if (group.to === null || row.day > group.to) group.to = row.day;
+      }
+    } else if (row.day === null) {
+      group = take(noDateGroup<T>(mode));
+    } else if (mode === 'dates') {
+      group = take({
+        key: `date:${row.day}`,
+        kind: mode,
+        from: row.day,
+        to: row.day,
+        subjectId: null,
+        rows: [],
+      });
+    } else if (mode === 'weeks') {
+      const start = weekStartOf(row.day, options.firstDayOfWeek);
+      group = take({
+        key: `week:${start}`,
+        kind: mode,
+        from: start,
+        to: shiftDay(start, 6),
+        subjectId: null,
+        rows: [],
+      });
+    } else {
+      const month = monthKeyOf(row.day);
+      group = take({
+        key: `month:${month}`,
+        kind: mode,
+        from: `${month}-01`,
+        to: lastDayOfMonth(month),
+        subjectId: null,
+        rows: [],
+      });
+    }
+    group.rows.push(row);
+  }
+
+  const ordered: PanelGroup<T>[] = [];
+  for (const group of groups.values()) {
+    if (group === tail) continue;
+    ordered.push(group);
+  }
+  if (tail !== null) ordered.push(tail);
+  return ordered;
+}
+
+/** Строка задачи в панели (view-модель): данные для отрисовки и действий. */
+export interface TaskPanelRow extends PanelGroupable {
+  commentId: string;
+  /** Номер строки `body_md` с нуля (адрес `PATCH /tasks`). */
+  lineNo: number;
+  /** Снапшот текста строки без маркера задачи. */
+  text: string;
+  done: boolean;
+  /** Серая строка: устарела до «Обновить» и не редактируется. */
+  stale: boolean;
+  /** Пункт чек-листа под родительской задачей (показывается с отступом). */
+  subtask: boolean;
+  /** Первая date-ссылка строки (`YYYY-MM-DD`), `null` — строка без дат. */
+  periodFrom: string | null;
+  /** Последняя date-ссылка строки — срок (`YYYY-MM-DD`), `null` — без дат. */
+  due: string | null;
+  /** Мысли из ID-ссылок строки (для группировки по мыслям и перехода). */
+  subjectThoughts: string[];
+}
+
+/** Ключ строки задачи: адрес проекции (`comment_id` + `line_no`). */
+export function taskRowKey(ref: { comment_id: string; line_no: number }): string {
+  return `${ref.comment_id}:${ref.line_no}`;
+}
+
+/**
+ * Строка задачи устарела? Две причины (требование 0e85b66e):
+ *  • комментарий-источник изменён вне панели (id в наборе событий);
+ *  • проекция построена из прежней ревизии комментария.
+ */
+export function taskRowIsStale(
+  row: TaskDTO,
+  staleComments: ReadonlySet<string> = new Set(),
+): boolean {
+  return staleComments.has(row.comment_id) || row.revision !== row.parsed_revision;
+}
+
+/** Строка проекции → строка панели. */
+export function taskRowView(
+  row: TaskDTO,
+  staleComments: ReadonlySet<string> = new Set(),
+): TaskPanelRow {
+  return {
+    key: taskRowKey(row),
+    commentId: row.comment_id,
+    lineNo: row.line_no,
+    text: row.text,
+    done: row.done,
+    stale: taskRowIsStale(row, staleComments),
+    subtask: row.subtask,
+    periodFrom: row.period_from,
+    due: row.due,
+    day: row.due ?? row.period_from,
+    subjectThoughts: row.subject_thoughts,
+    subjectId: row.subject_thoughts[0] ?? null,
+  };
+}
+
+/** Счётчики заголовка группы: открытых и выполненных. */
+export function taskCounters(rows: readonly TaskDTO[]): { open: number; done: number } {
+  let open = 0;
+  let done = 0;
+  for (const row of rows) {
+    if (row.done) done += 1;
+    else open += 1;
+  }
+  return { open, done };
+}
+
+/**
+ * Нужен ли перезапрос панели (требование 0e85b66e): пришло событие
+ * напоминаний `reminders.changed` либо устарела хоть одна строка.
+ */
+export function panelNeedsRefresh(input: {
+  rows: readonly TaskDTO[];
+  staleComments?: ReadonlySet<string>;
+  remindersChanged?: boolean;
+}): boolean {
+  if (input.remindersChanged === true) return true;
+  return input.rows.some((row) => taskRowIsStale(row, input.staleComments));
+}
+
+/** Строка вхождения напоминания в панели (view-модель). */
+export interface ReminderPanelRow extends PanelGroupable {
+  reminderId: string;
+  subjectType: 'thought' | 'publication';
+  subjectId: string;
+  /** Название субъекта (мысль/публикация) или его id до доразрешения. */
+  title: string;
+  /** Момент ПОКАЗА вхождения (UTC-инстанс): `until` для отложенного. */
+  moment: string;
+  status: 'active' | 'snoozed';
+  /** Человекочитаемое описание повтора. */
+  repeat: string;
+}
+
+/** Ключ строки вхождения: напоминание + момент вхождения по расписанию. */
+export function reminderRowKey(reminderId: string, occurrenceAt: string): string {
+  return `${reminderId}:${occurrenceAt}`;
+}
+
+/** Секция напоминания по локальным суткам клиента (требование 6762adb0). */
+export type ReminderSectionKind = 'overdue' | 'today' | 'period';
+
+/**
+ * Секция вхождения по моменту показа: границы МЕСТНЫХ суток передаёт экран —
+ * часовой пояс считает клиент, модель его не угадывает.
+ */
+export function reminderSectionOf(
+  row: ReminderPanelRow,
+  todayStartMs: number,
+  todayEndMs: number,
+): ReminderSectionKind {
+  const moment = Date.parse(row.moment);
+  if (!Number.isFinite(moment)) return 'period';
+  if (moment < todayStartMs) return 'overdue';
+  if (moment < todayEndMs) return 'today';
+  return 'period';
+}
+
+/**
+ * Разложить вхождения напоминаний на строки панели: одно вхождение — одна
+ * строка, момент показа отложенного вхождения — `until`. Названия субъектов
+ * приходят готовыми (`titles`), описание повтора даёт экран словарём.
+ */
+export function reminderPanelRows(
+  result: ReminderListResult,
+  titles: ReadonlyMap<string, string>,
+  repeatLabel: (reminder: Reminder) => string,
+): ReminderPanelRow[] {
+  const rows: ReminderPanelRow[] = [];
+  for (const reminder of result.reminders) {
+    for (const occurrence of reminder.occurrences ?? []) {
+      const moment = occurrence.until ?? occurrence.occurrence_at;
+      rows.push({
+        key: reminderRowKey(reminder.id, occurrence.occurrence_at),
+        reminderId: reminder.id,
+        subjectType: reminder.subject_type,
+        subjectId: reminder.subject_id,
+        title: titles.get(reminder.subject_id) ?? reminder.subject_id,
+        moment,
+        status: occurrence.status,
+        repeat: repeatLabel(reminder),
+        day: moment.slice(0, 10),
+      });
+    }
+  }
+  return rows;
+}

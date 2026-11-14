@@ -34,12 +34,18 @@ const PERIOD_EDITOR = read('lib/period-editor.ts');
 describe('приёмка «Дневника» 0.10.1: компоновка (пункт 1)', () => {
   it('календарь — header панели отбора (первый элемент)', () => {
     assert.match(CHRONICLE, /mountChronicleFilterPanel\([\s\S]*header: \[calWrap\]/);
-    assert.match(PANEL, /for \(const node of headerNodes\) panel\.append\(node\)/, 'панель кладёт header перед содержимым');
+    assert.match(
+      PANEL,
+      /for \(const node of headerNodes\) panel\.append\(node\)/,
+      'панель кладёт header перед содержимым',
+    );
   });
 
   it('кнопка добавления — в верхней панели над лентой', () => {
     assert.match(CHRONICLE, /div\('chron-addbar'\)/);
-    assert.match(CHRONICLE, /main\.append\(addBar, feedWrap\)/);
+    // 0.16.1 (задача 64f7976a): между панелью добавления и лентой стоит
+    // панель «Задачи и напоминания» — одна при любом периоде, вне блоков дней.
+    assert.match(CHRONICLE, /main\.append\(addBar, tasksHost, feedWrap\)/);
     assert.match(CHRONICLE, /diary\.addRecord/);
   });
 });
@@ -129,7 +135,11 @@ describe('приёмка «Дневника» 0.10.1: состав панели 
     assert.match(PANEL, /showScope: true/, 'чекбоксы области поиска строки поиска');
     assert.match(PANEL, /OP_TARGETS, 'in'/, 'цели — под-выборка «в выборке»');
     assert.match(PANEL, /kind: 'subquery'/, 'значение целей — под-выборка мыслей');
-    assert.match(BUILDER, /out\.targets = buildWireFilter/, 'плоская форма targets сохранена для v1');
+    assert.match(
+      BUILDER,
+      /out\.targets = buildWireFilter/,
+      'плоская форма targets сохранена для v1',
+    );
   });
 
   it('убранное не вернулось: сторона связи, отдельная группа целей', () => {

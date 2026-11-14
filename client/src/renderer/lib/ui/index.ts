@@ -32,11 +32,7 @@ export type { TabSpec, TabsOptions, TabsHandle } from './tabs.js';
 
 // Сворачиваемые группы — единый компонент секций (задача a57e7998).
 export { collapsibleSection } from './collapsible.js';
-export type {
-  CollapsibleSpec,
-  CollapsibleSection,
-  CollapsibleClasses,
-} from './collapsible.js';
+export type { CollapsibleSpec, CollapsibleSection, CollapsibleClasses } from './collapsible.js';
 
 // Сообщения и строки ошибок — единственный вид строк ошибок клиента
 // (задача e20761c2, требование 397c5a56).
@@ -118,11 +114,7 @@ export { filePathField } from './file-path-field.js';
 export type { FilePathFieldOptions, FilePathFieldHandle } from './file-path-field.js';
 
 // Поле цвета — picker (+ hex).
-export {
-  COLOR_PICKER_CLASS,
-  COLOR_HEX_CLASS,
-  colorField,
-} from './color-field.js';
+export { COLOR_PICKER_CLASS, COLOR_HEX_CLASS, colorField } from './color-field.js';
 export type { ColorFieldOptions, ColorFieldHandle } from './color-field.js';
 
 // Всплывающая панель — общая механика поповеров (задача dd1f47d4,
@@ -356,13 +348,7 @@ export {
   treeVisibleIds,
   createTree,
 } from './tree.js';
-export type {
-  TreeItem,
-  TreeRowContext,
-  TreeColumn,
-  TreeOptions,
-  TreeHandle,
-} from './tree.js';
+export type { TreeItem, TreeRowContext, TreeColumn, TreeOptions, TreeHandle } from './tree.js';
 
 // Generic-чип-лист — чипы выбранных значений с крестиком снятия и поле
 // добавления (требование d1cd2095). Значения и подписи даёт владелец;
@@ -458,5 +444,59 @@ export { preserveScroll } from './scroll-anchor.js';
 export { DEFAULT_KEY_ATTR, reconcileKeyed } from './keyed-list.js';
 export type { KeyedRenderSpec, KeyedReconcileStats } from './keyed-list.js';
 
+// Панель «Задачи и напоминания» над лентой «Дневника» (0.16.1, задача
+// 64f7976a; элементы f76ed829/15f8ea2f/498f23e0): группы задач и напоминаний,
+// секции, счётчики, команды строки/группы и подсветка «Обновить». Вид —
+// `task-panel.css`, правила — модель `task-panel-model.ts`.
+export {
+  TASK_PANEL_CLASS,
+  TASK_PANEL_GROUP_CLASS,
+  TASK_PANEL_SECTION_CLASS,
+  TASK_PANEL_SUBGROUP_CLASS,
+  TASK_PANEL_ROW_CLASS,
+  TASK_PANEL_ROW_STALE_CLASS,
+  REMINDER_PANEL_ROW_CLASS,
+  mountTaskPanel,
+  shiftIso,
+} from './task-panel.js';
+export type {
+  TaskPanelView,
+  TaskPanelHandle,
+  TaskPanelActions,
+  TaskPanelSectionView,
+  TaskPanelSubgroupView,
+  ReminderPanelSectionView,
+  TaskRowCommand,
+  TaskShift,
+  ReminderRowAction,
+} from './task-panel.js';
 
-
+// Модель панели задач и напоминаний — чистые правила группировки (пороги
+// 6762adb0), секций, счётчиков и признака «строка устарела» (0e85b66e).
+export {
+  TASK_GROUP_THRESHOLDS,
+  TASK_GROUP_NO_SUBJECT,
+  TASK_GROUP_NO_DATE,
+  taskGroupingMode,
+  weekStartOf,
+  monthKeyOf,
+  lastDayOfMonth,
+  shiftDay,
+  groupPanelRows,
+  taskRowKey,
+  taskRowIsStale,
+  taskRowView,
+  taskCounters,
+  panelNeedsRefresh,
+  reminderRowKey,
+  reminderSectionOf,
+  reminderPanelRows,
+} from './task-panel-model.js';
+export type {
+  TaskGroupingMode,
+  PanelGroupable,
+  PanelGroup,
+  TaskPanelRow,
+  ReminderPanelRow,
+  ReminderSectionKind,
+} from './task-panel-model.js';

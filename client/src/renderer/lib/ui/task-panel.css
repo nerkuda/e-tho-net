@@ -1,0 +1,265 @@
+/*
+ * Панель «Задачи и напоминания» (0.16.1, задача 64f7976a) — вид библиотечной
+ * компоненты `task-panel.ts`. Только токены: цвета — из файлов тем, размеры —
+ * из шкал `styles/tokens.css` (требование 0dddd939, сторож guard-ui-tokens).
+ */
+
+.ui-task-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: var(--space-4) var(--space-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Скрытый узел панели: атрибут `hidden` обязан перебивать собственный
+ * `display` кнопки/группы. */
+.ui-task-panel [hidden] {
+  display: none;
+}
+
+.ui-task-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.ui-task-panel-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ui-task-panel-undo,
+.ui-task-panel-refresh {
+  flex: 0 0 auto;
+}
+
+/* Подсветка «Обновить»: данные устарели (требование 0e85b66e). */
+.ui-task-panel-refresh.is-stale {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ui-task-panel-status {
+  padding: var(--space-2) 0;
+}
+
+.ui-task-panel-error {
+  color: var(--danger);
+  font-size: var(--font-size-xs);
+}
+
+.ui-task-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.ui-task-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ui-task-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ui-task-group-title {
+  font-size: var(--font-size-s);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text);
+}
+
+.ui-task-group-counters {
+  flex: 1 1 auto;
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}
+
+/* Команды группы и строки — только при наведении (спека f76ed829). */
+.ui-task-group-menu,
+.ui-task-subgroup-menu,
+.ui-task-row-actions {
+  opacity: 0;
+  transition: opacity var(--transition-hover);
+}
+
+.ui-task-group-head:hover .ui-task-group-menu,
+.ui-task-group-head:focus-within .ui-task-group-menu,
+.ui-task-subgroup-head:hover .ui-task-subgroup-menu,
+.ui-task-subgroup-head:focus-within .ui-task-subgroup-menu,
+.ui-task-row:hover .ui-task-row-actions,
+.ui-task-row:focus-within .ui-task-row-actions {
+  opacity: 1;
+}
+
+.ui-task-group-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ui-task-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-task-section-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-dim);
+}
+
+.ui-task-subgroup-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--space-2);
+}
+
+.ui-task-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-task-subgroup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-task-subgroup-title {
+  font-size: var(--font-size-xs);
+  color: var(--text);
+}
+
+.ui-task-subgroup-count {
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}
+
+.ui-task-subgroup-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-task-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--hit-area);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-s);
+  cursor: default;
+}
+
+.ui-task-row:hover {
+  background: var(--bg-hover);
+}
+
+.ui-task-row.is-current {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ui-task-row.is-subtask {
+  margin-left: var(--tree-indent);
+}
+
+/* Серая строка: внешнее изменение источника ждёт «Обновить» (0e85b66e). */
+.ui-task-row.is-stale {
+  color: var(--text-dim);
+}
+
+.ui-task-row.is-stale .ui-task-row-check {
+  opacity: var(--state-disabled-opacity);
+}
+
+.ui-task-row.is-done .ui-task-row-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.ui-task-row-check {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.ui-task-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-s);
+  line-height: var(--line-height-snug);
+  overflow-wrap: anywhere;
+}
+
+.ui-task-row-text a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.ui-task-row-text a:hover {
+  text-decoration: underline;
+}
+
+.ui-task-row-edit {
+  width: 100%;
+}
+
+.ui-task-row-dates {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.ui-task-row-date {
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.ui-task-row-date:hover {
+  color: var(--accent);
+}
+
+.ui-task-row-repeat {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}
+
+.ui-task-row-flags {
+  flex: 0 0 auto;
+}
+
+.ui-task-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.ui-reminder-row .ui-task-row-text {
+  cursor: pointer;
+}
+
+.ui-reminder-row .ui-task-row-text:hover {
+  color: var(--accent);
+}

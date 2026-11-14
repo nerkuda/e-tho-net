@@ -1647,9 +1647,41 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
 
   // --- tasks (0.16.1, операции e6d65f51/de4cee18) --------------------------
   handlers.set(
+    'tasks.list',
+    bind((networkId: string, query: Parameters<RestClient['listTasks']>[1]) =>
+      requireRest(deps).listTasks(networkId, query),
+    ),
+  );
+  handlers.set(
     'tasks.patch',
     bind((networkId: string, input: Parameters<RestClient['patchTasks']>[1]) =>
       requireRest(deps).patchTasks(networkId, input, { clientRequestId: randomUUID() }),
+    ),
+  );
+
+  // --- reminders (0.16.1, операции ae19b1bf/500d1b3d) -----------------------
+  handlers.set(
+    'reminders.list',
+    bind((networkId: string, query: Parameters<RestClient['listReminders']>[1]) =>
+      requireRest(deps).listReminders(networkId, query),
+    ),
+  );
+  handlers.set(
+    'reminders.snooze',
+    bind((networkId: string, id: string, until: string) =>
+      requireRest(deps).snoozeReminder(networkId, id, until, { clientRequestId: randomUUID() }),
+    ),
+  );
+  handlers.set(
+    'reminders.dismiss',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).dismissReminder(networkId, id, { clientRequestId: randomUUID() }),
+    ),
+  );
+  handlers.set(
+    'reminders.remove',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).removeReminder(networkId, id, { clientRequestId: randomUUID() }),
     ),
   );
 
@@ -2786,6 +2818,9 @@ const SELF_MUTATING_IPC_METHODS: ReadonlySet<string> = new Set([
   'comments.addTarget',
   'comments.removeTarget',
   'tasks.patch',
+  'reminders.snooze',
+  'reminders.dismiss',
+  'reminders.remove',
   'attachments.add',
   'attachments.update',
   'attachments.remove',
