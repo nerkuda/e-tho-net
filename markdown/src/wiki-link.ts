@@ -16,8 +16,21 @@
  * publication mode the caller decides what each link becomes (in-document
  * anchor, plain title, or an «удалена» marker) instead of emitting a span.
  *
+ * Date links (0.16.1, ТП «Даты, задачи и напоминания»): `[[YYYY-MM-DD]]` and
+ * `[[YYYY-MM-DD HH:MM]]` are parsed BEFORE name resolution and become a date
+ * chip — a wiki-link span with the extra `wiki-link-date` class and the ISO
+ * value in `data-wiki-date` (`data-wiki-time` for the datetime form). The ADR
+ * «date-ссылка приоритетнее одноимённой мысли»: a valid ISO date is ALWAYS a
+ * date link, even when a thought of that name exists; a thought with a
+ * date-like name is reachable only by its id form `[[#<uuid>]]`. Anything that
+ * is not a valid ISO date (`[[2026-13-45]]`, `[[2026-1-2]]`, `[[2026-11-02
+ * 14:30:00]]`) stays a legacy name link. The visible label is the client's
+ * local short format `dd.MM.yyyy[ HH:MM]`, or the alias when one is given.
+ *
  * Resolution to a thought happens at click time in the client, never at
- * render time (names may change after the HTML is cached).
+ * render time (names may change after the HTML is cached). Opening the day in
+ * the client «Дневник» is a separate client-side task; this module only lays
+ * out the markup and the data attributes.
  */
 
 import type MarkdownIt from 'markdown-it';
@@ -52,6 +65,22 @@ export const WIKI_LINK_NETWORK_ATTR = 'data-wiki-network';
  * reports `{ kind: 'missing' }` (requirement [[#7f583ef9]]).
  */
 export const WIKI_LINK_MISSING_CLASS = 'wiki-link-missing';
+/**
+ * Extra class of a date chip (`[[YYYY-MM-DD]]` / `[[YYYY-MM-DD HH:MM]]`), so it
+ * is styled and clicked as a date, not as a thought link (требование 1389b057:
+ * «date-чип отличим от мысль-чипа»).
+ */
+export const WIKI_LINK_DATE_CLASS = 'wiki-link-date';
+/**
+ * Data attribute holding the ISO calendar date of a date chip (`YYYY-MM-DD`).
+ * The day the chip points at — the client opens «Дневник» on it.
+ */
+export const WIKI_LINK_DATE_ATTR = 'data-wiki-date';
+/**
+ * Data attribute holding the time of a datetime chip (`HH:MM`). Absent for the
+ * date-only form.
+ */
+export const WIKI_LINK_TIME_ATTR = 'data-wiki-time';
 
 /**
  * UUID v4 (and any other variant) — case-insensitive, 8-4-4-4-12 hex with
@@ -59,8 +88,74 @@ export const WIKI_LINK_MISSING_CLASS = 'wiki-link-missing';
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * ISO date-link target: `YYYY-MM-DD` or `YYYY-MM-DD HH:MM` — nothing else.
+ * Calendar validity (month 1..12, the day exists in that month) is checked
+ * separately: the regex alone would accept `2026-13-45`.
+ */
+const DATE_LINK_RE = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?$/;
+
+/** Parsed date-link target: the ISO date and the optional `HH:MM` time. */
+export interface DateLinkParts {
+  /** ISO calendar date `YYYY-MM-DD`. */
+  date: string;
+  /** `HH:MM` for the datetime form, `null` for the date-only form. */
+  time: string | null;
+}
+
+/** Gregorian leap-year rule. */
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+/** Number of days in a month of a Gregorian year. */
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/**
+ * Parses a wiki-link target as an ISO date link, or returns `null` when it is
+ * not one. ONLY the ISO calendar forms above are accepted (ADR fa50de55: no
+ * NLP dates, no `MM-DD`, no `T` separator, no seconds) — everything else falls
+ * back to the legacy name link.
+ */
+export function parseDateLinkTarget(target: string): DateLinkParts | null {
+  const match = DATE_LINK_RE.exec(target);
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+  if (match[4] !== undefined) {
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    if (hour > 23 || minute > 59) return null;
+  }
+  return {
+    date: `${match[1]}-${match[2]}-${match[3]}`,
+    time: match[4] === undefined ? null : `${match[4]}:${match[5]}`,
+  };
+}
+
+/**
+ * Visible label of a date link: the client's local short format
+ * `dd.MM.yyyy`, with ` HH:MM` appended for the datetime form (требование
+ * 1389b057). The value is a calendar date without a zone, so rendering it on
+ * the server is exact — no timezone conversion is involved. The label length
+ * equals the source target length (`2026-11-02` ↔ `02.11.2026`,
+ * `2026-11-02 14:30` ↔ `02.11.2026 14:30`), which keeps the source map a 1:1
+ * position mapping.
+ */
+export function formatDateLinkLabel(parts: DateLinkParts): string {
+  const [year, month, day] = parts.date.split('-');
+  const label = `${day}.${month}.${year}`;
+  return parts.time === null ? label : `${label} ${parts.time}`;
+}
+
 /** Kind of a parsed wiki link. */
-export type WikiLinkKind = 'name' | 'id' | 'cross' | 'pub';
+export type WikiLinkKind = 'name' | 'id' | 'cross' | 'pub' | 'date';
 
 /** Meta attached to a `wiki_link` token. */
 export interface WikiLinkMeta {
@@ -71,6 +166,10 @@ export interface WikiLinkMeta {
   targetId: string | null;
   /** Network id for kind='cross'. */
   networkId: string | null;
+  /** ISO date `YYYY-MM-DD` for kind='date'. */
+  date: string | null;
+  /** `HH:MM` for a datetime date link, otherwise null. */
+  time: string | null;
   /**
    * Source range of the visible text (alias, or the target name when there is
    * no alias), relative to the inline content. The source-map rule
@@ -165,6 +264,8 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     let kind: WikiLinkKind = 'name';
     let targetId: string | null = null;
     let networkId: string | null = null;
+    let date: string | null = null;
+    let time: string | null = null;
     if (target.startsWith('#')) {
       const id = target.slice(1).trim();
       if (UUID_RE.test(id)) {
@@ -191,12 +292,23 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
           targetId = id.toLowerCase();
         }
       }
+    } else {
+      // Date link (0.16.1): a VALID ISO date always wins over a thought of the
+      // same name (ADR fa50de55). Anything else stays a legacy name link.
+      const parts = parseDateLinkTarget(target);
+      if (parts !== null) {
+        kind = 'date';
+        date = parts.date;
+        time = parts.time;
+      }
     }
 
     if (!silent) {
       // Range of the visible text for the source-position mapping (задача
-      // ba68771d): the alias, the target name, or nothing for a bare id span.
-      const visible = kind === 'name' ? (alias ?? target) : alias;
+      // ba68771d): the alias, the target name / ISO date, or nothing for a bare
+      // id span. The date chip's generated label has the SAME length as the ISO
+      // target (`2026-11-02` ↔ `02.11.2026`), so the mapping stays 1:1.
+      const visible = kind === 'name' || kind === 'date' ? (alias ?? target) : alias;
       const mdRelative =
         visible === null
           ? null
@@ -206,6 +318,8 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
         target,
         alias,
         kind,
+        date,
+        time,
         targetId,
         networkId,
         mdRelative,
@@ -236,7 +350,9 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
         alias: meta.alias,
       });
       if (resolved !== undefined) return renderResolution(resolved, esc);
-      // No decision — plain text fallback (аlias when present).
+      // No decision — plain text fallback (аlias when present). A date chip
+      // degrades to its visible label, never to the «удалена» marker.
+      if (meta.kind === 'date') return esc(dateLinkLabel(meta));
       if (meta.kind === 'name') return esc(meta.alias ?? meta.target);
       return esc(meta.alias ?? 'удалена');
     }
@@ -246,7 +362,9 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
       return esc(meta.alias ?? 'удалена');
     }
 
-    const attrs: string[] = [`class="${WIKI_LINK_CLASS}"`];
+    const classes =
+      meta.kind === 'date' ? `${WIKI_LINK_CLASS} ${WIKI_LINK_DATE_CLASS}` : WIKI_LINK_CLASS;
+    const attrs: string[] = [`class="${classes}"`];
     // Absolute source ranges resolved by the source-map core rule (задача
     // ba68771d); present only when the render opted into position mapping.
     const carrier = meta as WikiLinkMeta & { mdRange?: SourceRange; mdAfter?: number };
@@ -257,6 +375,19 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
     }
     if (carrier.mdAfter !== undefined) {
       attrs.push(`${MD_SOURCE_AFTER_ATTR}="${carrier.mdAfter}"`);
+    }
+
+    if (meta.kind === 'date') {
+      // Date chip (0.16.1): the ISO value stays in the data attributes (the
+      // client needs it for the «Дневник» day target and the context menu), the
+      // visible label is the local short format or the author's alias. No
+      // `data-wiki-target` on purpose: a date is NOT a thought name, so the
+      // name-resolution path must never claim this span (ADR fa50de55).
+      attrs.push(`${WIKI_LINK_DATE_ATTR}="${esc(meta.date ?? meta.target)}"`);
+      if (meta.time !== null) {
+        attrs.push(`${WIKI_LINK_TIME_ATTR}="${esc(meta.time)}"`);
+      }
+      return `<span ${attrs.join(' ')}>${esc(dateLinkLabel(meta))}</span>`;
     }
 
     if (meta.kind === 'id' || meta.kind === 'cross') {
@@ -285,6 +416,17 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
   };
 }
 
+/**
+ * Visible label of a date link: the author's alias, or the local short format
+ * `dd.MM.yyyy[ HH:MM]` of the ISO value (требование 1389b057).
+ */
+function dateLinkLabel(meta: WikiLinkMeta): string {
+  if (meta.alias !== null) return meta.alias;
+  const parts =
+    meta.date === null ? parseDateLinkTarget(meta.target) : { date: meta.date, time: meta.time };
+  return parts === null ? meta.target : formatDateLinkLabel(parts);
+}
+
 /** Renders a resolver decision to safe HTML. */
 function renderResolution(
   resolution: WikiLinkResolution,
@@ -307,7 +449,13 @@ export function inlinePlainText(token: Token): string {
       out += child.content;
     } else if (child.type === 'wiki_link') {
       const meta = child.meta as WikiLinkMeta | null;
-      out += meta?.alias ?? meta?.target ?? '';
+      // A date chip's visible text is its formatted label, not the ISO target.
+      out +=
+        meta === null
+          ? ''
+          : meta.kind === 'date'
+            ? dateLinkLabel(meta)
+            : (meta.alias ?? meta.target);
     } else if (child.type === 'softbreak' || child.type === 'hardbreak') {
       out += ' ';
     }

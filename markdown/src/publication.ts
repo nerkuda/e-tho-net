@@ -24,7 +24,9 @@ import type Token from 'markdown-it/lib/token.mjs';
 import { DEFAULT_MAX_LENGTH, getRenderer } from './renderer.js';
 import type { TransclusionRenderOptions } from './transclusion-block.js';
 import {
+  formatDateLinkLabel,
   inlinePlainText,
+  parseDateLinkTarget,
   type WikiLinkRef,
   type WikiLinkResolver,
 } from './wiki-link.js';
@@ -495,6 +497,9 @@ function parseWikiLinkBody(content: string): ParsedWikiLink | null {
         targetId = id.toLowerCase();
       }
     }
+  } else if (parseDateLinkTarget(target) !== null) {
+    // Date link (0.16.1) — the same priority rule as in wiki-link.ts.
+    kind = 'date';
   }
   return { ref: { kind, id: targetId, networkId, target, alias } };
 }
@@ -514,6 +519,12 @@ function resolveWikiLinksInLine(line: string, resolveLink: WikiLinkResolver): st
       const resolved = resolveLink(parsed.ref);
       if (resolved === undefined) {
         if (parsed.ref.kind === 'name') return parsed.ref.alias ?? parsed.ref.target;
+        if (parsed.ref.kind === 'date') {
+          const parts = parseDateLinkTarget(parsed.ref.target);
+          return (
+            parsed.ref.alias ?? (parts === null ? parsed.ref.target : formatDateLinkLabel(parts))
+          );
+        }
         return parsed.ref.alias ?? 'удалена';
       }
       if (resolved.kind === 'anchor') return `[${resolved.text}](#${resolved.anchor})`;

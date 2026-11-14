@@ -16,6 +16,7 @@ import {
   publicationAnchor,
   renderMarkdown,
   renderPublicationFragment,
+  renderPublicationMarkdownFragment,
   shortId,
   WIKI_LINK_MISSING_CLASS,
   type WikiLinkRef,
@@ -262,6 +263,34 @@ test('legacy name-form в режиме публикации — запасной
   });
   assert.match(html, /см\. Имя мысли/);
   assert.ok(!html.includes('<span'), html);
+});
+
+test('date-ссылка в публикации без решения резолвера — подпись, не «удалена»', () => {
+  const { html } = renderPublicationFragment('см. [[2026-11-02]]', {
+    resolveLink: () => undefined,
+  });
+  assert.match(html, /см\. 02\.11\.2026/);
+  assert.ok(!html.includes('удалена'), html);
+  assert.ok(!html.includes('<span'), html);
+});
+
+test('резолвер публикации получает date-ссылку как kind date', () => {
+  const seen: WikiLinkRef[] = [];
+  renderPublicationFragment('[[2026-11-02 14:30|совещание]]', {
+    resolveLink: (ref) => {
+      seen.push(ref);
+      return { kind: 'text', text: 'совещание' };
+    },
+  });
+  assert.equal(seen[0]?.kind, 'date');
+  assert.equal(seen[0]?.target, '2026-11-02 14:30');
+});
+
+test('markdown-экспорт публикации: date-ссылка без решения — подпись', () => {
+  const { markdown } = renderPublicationMarkdownFragment('см. [[2026-11-02 14:30]]', {
+    resolveLink: () => undefined,
+  });
+  assert.equal(markdown, 'см. 02.11.2026 14:30');
 });
 
 test('резолвер вызывается и для кросс-сетевых ссылок', () => {

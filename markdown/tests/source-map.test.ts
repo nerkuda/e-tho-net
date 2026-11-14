@@ -309,6 +309,41 @@ test('== и <u> внутри label ссылки не роняют рендер �
   assert.ok(html.includes(`data-md-start="${src.indexOf('x</u>')}"`), html);
 });
 
+test('date-ссылка без алиаса помечается диапазоном ISO-даты (1:1 по длине)', () => {
+  const src = 'см. [[2026-11-02]] тут';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const start = src.indexOf('2026-11-02');
+  assert.match(
+    html,
+    new RegExp(`data-md-start="${start}" data-md-end="${start + '2026-11-02'.length}"`),
+    html,
+  );
+});
+
+test('date-ссылка с временем помечается диапазоном ISO-datetime', () => {
+  const src = 'см. [[2026-11-02 14:30]] тут';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const start = src.indexOf('2026-11-02');
+  assert.match(html, new RegExp(`data-md-start="${start}"`), html);
+  assert.match(html, new RegExp(`data-md-end="${start + '2026-11-02 14:30'.length}"`), html);
+});
+
+test('date-ссылка с алиасом помечается диапазоном алиаса', () => {
+  const src = 'см. [[2026-11-02|второе ноября]] тут';
+  const html = renderMarkdown(src, { sourceMap: true });
+  const start = src.indexOf('второе ноября');
+  assert.match(
+    html,
+    new RegExp(`data-md-start="${start}" data-md-end="${start + 'второе ноября'.length}"`),
+    html,
+  );
+});
+
+test('клик по тексту после date-ссылки даёт исходное смещение', () => {
+  const src = 'см. [[2026-11-02 14:30]] тут';
+  assert.equal(clickOffset(src, ' тут', 'т'), src.indexOf('тут'));
+});
+
 // ---------------------------------------------------------------------------
 // Resolver: DOM caret → source offset
 // ---------------------------------------------------------------------------
