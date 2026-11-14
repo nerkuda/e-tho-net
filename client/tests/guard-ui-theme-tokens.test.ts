@@ -92,6 +92,7 @@ const THEME_TOKENS = [
   '--selection',
   '--cursor',
   '--cal-weekend',
+  '--cal-marker-records',
   '--danger',
   '--danger-soft',
   '--ok',

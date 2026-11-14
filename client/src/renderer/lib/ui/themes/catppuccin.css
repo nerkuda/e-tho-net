@@ -48,6 +48,7 @@
   /* Пунктир курсора — mauve палитры Latte, отличим от акцента и выделения. */
   --cursor: #8839ef;
   --cal-weekend: #ea76cb;
+  --cal-marker-records: #209fb5; /* sapphire палитры Latte */
   --danger: #d20f39;
   --danger-soft: #fcedf0;
   --ok: #40a02b;
@@ -138,6 +139,7 @@
   /* Пунктир курсора — mauve палитры Mocha. */
   --cursor: #cba6f7;
   --cal-weekend: #f5c2e7;
+  --cal-marker-records: #89dceb; /* sky палитры Mocha */
   --danger: #f38ba8;
   --danger-soft: #3a2331;
   --ok: #a6e3a1;

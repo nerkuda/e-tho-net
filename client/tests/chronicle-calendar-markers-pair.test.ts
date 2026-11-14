@@ -19,17 +19,24 @@
  * затем публикация B с видом «карта» (скрытый «Дневник» ещё живёт состоянием A)
  * и поздний ответ A — маркеры чужой сети в календарь не попадают, новых
  * запросов прежний запуск не делает; текущая пара B считает маркеры своими.
- * Кейс 2: отказ маркеров ТЕКУЩЕЙ пары не ломает ленту и не подменяет штатную
- * диагностику отбора (сбой чтения маркеров глотается молча, как у «Связей
- * дня»); клетки остаются без маркеров.
+ * Кейс 2: отказ маркеров ТЕКУЩЕЙ пары не ломает ленту, показывает тост об
+ * ошибке (доработка по вердикту приёмки: молчаливое обнуление — дефект) и не
+ * подменяет штатную диагностику отбора; клетки остаются без маркеров.
  * Кейс 3 (красный гейт): экран отстыкован (host снят), затем сеть в store
  * сменилась — отложенный вход («Применить» на прежней панели) не должен
  * отправить отбор/маркеры A в B.
+ * Кейс 4 (красный гейт, доработка по вердикту): ПЕРВЫЙ вход в «Дневник»
+ * обязан загрузить маркеры показанного месяца, даже когда календарь уже стоял
+ * на месяце входа (`alignEntryMonth` ничего не сдвинул).
+ * Кейс 5 (красный гейт): вкладка появилась ПОСЛЕ входа (пара «сеть + null» →
+ * «сеть + вкладка») — ответ прежней пары отброшен, но маркеры обязаны
+ * загрузиться заново для новой пары, а не остаться пустыми.
  *
  * Мутации, которые обязаны краснить: (1) убрать сверку пары в
- * `refreshCalendarMarkers` — кейс 1; (2) вернуть проброс ошибки маркеров в
- * диагностику/исключение — кейс 2; (3) убрать сторож `chronicleFilterIsCurrent`
- * в `reload`/снимке маркеров/`persistState` — кейс 3.
+ * `refreshCalendarMarkers` — кейс 1; (2) вернуть молчаливое проглатывание
+ * ошибки маркеров — кейс 2; (3) убрать сторож `chronicleFilterIsCurrent`
+ * в `reload`/снимке маркеров/`persistState` — кейс 3; (4) вернуть загрузку
+ * маркеров только при смене месяца (`alignEntryMonth` → снимок) — кейсы 4, 5.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -128,11 +135,11 @@ function installShims(bridge: Dict): void {
   (globalThis as Dict).localStorage = win.localStorage;
 }
 
-/** Маркеры «как от сервера»: задача в первый день запрошенного месяца. */
-function markersResult(query: { from: string }): CalendarMarkersResult {
+/** Маркеры «как от сервера»: задача в заданный день запрошенного месяца. */
+function markersResult(query: { from: string }, day = '01'): CalendarMarkersResult {
   return {
     record_spans: [],
-    task_days: [query.from],
+    task_days: [`${query.from.slice(0, 8)}${day}`],
     overdue_days: [],
     fact_days: [],
     reminder_instants: [],
@@ -160,11 +167,14 @@ installShims({
     },
     calendarMarkers: async (networkId: string, query: MarkersCall['query']) => {
       markerCalls.push({ networkId, query });
-      if (holdMarkers) {
+      // Удержанный ответ отличается днём маркера: поздний ответ прежней пары
+      // нельзя спутать с маркерами, уже загруженными при входе.
+      const deferred = holdMarkers;
+      if (deferred) {
         await new Promise<void>((resolve) => held.push(resolve));
       }
       if (failMarkers !== null) throw failMarkers;
-      return markersResult(query);
+      return markersResult(query, deferred ? '20' : '01');
     },
   },
   chronicleFilters: {
@@ -268,6 +278,23 @@ function visibleMarkers(host: ShimElement): number {
   ).length;
 }
 
+/** Виден ли оранжевый маркер (задачи/напоминания) в клетке указанного дня. */
+function plansMarkerOn(host: ShimElement, day: string): boolean {
+  const cell = host.findAll((node) => node.classList.contains('cal-day') && node.title === day)[0];
+  if (cell === undefined) return false;
+  return (
+    cell.findAll(
+      (node) => node.classList.contains('cal-marker--plans') && !node.classList.contains('is-off'),
+    ).length > 0
+  );
+}
+
+/** Тосты в `document.body` (стек уведомлений). */
+function toasts(): ShimElement[] {
+  const body = (globalThis as any).document.body as ShimElement;
+  return body.findAll((node) => node.classList.contains('notice'));
+}
+
 let teardown: (() => void) | null = null;
 
 afterEach(() => {
@@ -291,6 +318,9 @@ beforeEach(() => {
   held = [];
   failMarkers = null;
   tabStateUpdates = [];
+  // Тосты живут в `document.body` — чистим между тестами, иначе сбойный тост
+  // одного теста выглядит как тост другого.
+  ((globalThis as any).document.body as ShimElement).replaceChildren();
 });
 
 /** Смонтировать экран на паре A (снимок с чужим типом) и дождаться старта. */
@@ -327,9 +357,13 @@ describe('«Дневник»: маркеры календаря в паре «с
     holdMarkers = true;
     apply.click();
     await waitHeldAtLeast(1);
-    const firstMarkers = markerCalls[0];
-    assert.ok(firstMarkers !== undefined, 'маркеры A запрошены применением отбора');
-    assert.equal(firstMarkers!.networkId, NET_A, 'снимок принадлежит паре A');
+    const heldCall = markerCalls[markerCalls.length - 1];
+    assert.ok(heldCall !== undefined, 'маркеры A запрошены применением отбора');
+    assert.equal(heldCall!.networkId, NET_A, 'снимок принадлежит паре A');
+    // День, которым ответит УДЕРЖАННЫЙ запрос: его маркера в клетках быть не
+    // должно, если поздний ответ прежней пары отброшен.
+    const lateAnswerDay = `${heldCall!.query.from.slice(0, 8)}20`;
+    const visibleBefore = visibleMarkers(host);
 
     stateMod.store.update({
       networkId: NET_B,
@@ -346,10 +380,11 @@ describe('«Дневник»: маркеры календаря в паре «с
 
     assert.equal(calls.length, mark, 'после смены пары прежний запуск не делает запросов');
     assert.equal(markerCalls.length, markersMark, 'и не запрашивает маркеры новой сети');
+    assert.equal(visibleMarkers(host), visibleBefore, 'поздний ответ A не изменил маркеры клеток');
     assert.equal(
-      visibleMarkers(host),
-      0,
-      'поздний ответ A не нарисовал маркеры чужой сети в клетках календаря',
+      plansMarkerOn(host, lateAnswerDay),
+      false,
+      'маркера позднего ответа чужой пары в клетках нет',
     );
 
     // Положительный контроль: в актуальной паре B применение отбора снова
@@ -375,8 +410,9 @@ describe('«Дневник»: маркеры календаря в паре «с
     );
   });
 
-  it('2. отказ маркеров текущей пары молчит и не подменяет диагностику отбора', async () => {
+  it('2. отказ маркеров текущей пары виден тостом и не подменяет диагностику отбора', async () => {
     const host = await mountOnA();
+    const before = markersTo(NET_A).length;
     // Отказ ТОЛЬКО маркерам; лента продолжает отвечать.
     failMarkers = new EtnError('VALIDATION_ERROR', 'Тип удалён из сети', {
       diagnostics: [
@@ -394,7 +430,7 @@ describe('«Дневник»: маркеры календаря в паре «с
     await flush();
     await flush();
 
-    assert.ok(markersTo(NET_A).length > 0, 'маркеры были запрошены');
+    assert.ok(markersTo(NET_A).length > before, 'применение отбора перезапрашивает маркеры');
     assert.ok(
       queriesTo(NET_A).some((call) => call.body?.limit === CHRONICLE_PAGE_SIZE),
       'лента текущей пары запрошена (сбой маркеров её не обрывает)',
@@ -402,8 +438,12 @@ describe('«Дневник»: маркеры календаря в паре «с
     assert.equal(
       hasPanelIssues(host),
       false,
-      'сбой маркеров не подменяет штатную диагностику отбора (глотается молча)',
+      'сбой маркеров не подменяет штатную диагностику отбора',
     );
+    const shown = toasts();
+    assert.ok(shown.length > 0, 'сбой маркеров показан тостом (молчаливое обнуление — дефект)');
+    assert.ok(shown[0]!.classList.contains('error'), 'тост сбоя — важное сообщение (error)');
+    assert.match(shown[0]!.flatText(), /маркер/i, 'текст тоста говорит о маркерах календаря');
     assert.equal(visibleMarkers(host), 0, 'клетки остаются без маркеров до перезапроса');
   });
 
@@ -453,5 +493,54 @@ describe('«Дневник»: маркеры календаря в паре «с
       stateMark,
       'снимок прежней пары не лёг в строку вкладки новой сети',
     );
+  });
+
+  it('4. первый вход в «Дневник» загружает маркеры показанного месяца', async () => {
+    // Календарь при монтировании уже стоит на месяце входа (сегодняшний месяц
+    // и снимок месяца совпадают). Вход в вид ОБЯЗАН перезапросить маркеры, не
+    // полагаясь на запрос монтирования: тот уходит раньше, когда вкладки ещё
+    // нет, и его ответ отбрасывается сторожем пары — первый вход оставался с
+    // пустыми клетками (блокер приёмки).
+    const host = await mountOnA();
+    const requested = markersTo(NET_A);
+
+    assert.ok(
+      requested.length >= 2,
+      'вход в вид перезапрашивает маркеры (монтирование + вход), а не только монтирование',
+    );
+    assert.equal(
+      requested[requested.length - 1]!.query.from.slice(8, 10),
+      '01',
+      'запрошен месяц показанного календаря',
+    );
+    assert.ok(visibleMarkers(host) > 0, 'маркеры применены сразу при входе, без смены месяца');
+  });
+
+  it('5. вкладка появилась после входа: маркеры загружаются для новой пары', async () => {
+    // Окно первого входа: пара «сеть + null», затем store публикует вкладку.
+    stateMod.store.update({
+      networkId: NET_A,
+      network: null,
+      activeView: 'chronicle',
+      screen: 'workspace',
+      tabs: [{ tab_id: 'tab-A', network_id: NET_A, chronicle_state: foreignSnapshot() }] as any,
+      activeTabId: null,
+      rtStatusByNetwork: { [NET_A]: 'connected' },
+    } as any);
+    const host = new ShimElement('div');
+    teardown = chronicleMod.mountChronicle(host as unknown as HTMLElement);
+    await chronicleMod.ensureChronicleInitialised();
+    await flush();
+    const afterFirstEntry = markerCalls.length;
+
+    stateMod.store.update({ activeTabId: 'tab-A' } as any);
+    await chronicleMod.ensureChronicleInitialised();
+    await flush();
+
+    assert.ok(
+      markerCalls.length > afterFirstEntry,
+      'после появления вкладки маркеры запрошены заново (ответ прежней пары отброшен)',
+    );
+    assert.ok(visibleMarkers(host) > 0, 'маркеры новой пары применены');
   });
 });

@@ -625,6 +625,7 @@ export const zh = {
   'diary.loadFailed': '无法加载记录：%1',
   'diary.saveFailed': '无法保存：%1',
   'diary.createFailed': '无法创建记录：%1',
+  'diary.markersFailed': '无法加载日历标记：%1',
   'diary.deleteTitle': '删除记录',
   'diary.deleteQuestion': '删除日记记录？',
   'diary.deleteFailed': '无法删除：%1',

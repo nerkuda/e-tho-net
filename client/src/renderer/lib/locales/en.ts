@@ -1284,6 +1284,8 @@ export const en = {
   'diary.saveFailed': 'Failed to save: %1',
   /** Не удалось создать запись (подстановка — причина). */
   'diary.createFailed': 'Failed to create the entry: %1',
+  /** Не удалось загрузить маркеры календаря месяца (подстановка — причина). */
+  'diary.markersFailed': 'Failed to load calendar markers: %1',
   /** Заголовок подтверждения удаления записи. */
   'diary.deleteTitle': 'Delete entry',
   /** Вопрос подтверждения удаления записи. */

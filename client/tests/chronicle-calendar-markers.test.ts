@@ -32,10 +32,19 @@ import {
   CALENDAR_MARKER_ORDER,
   type CalendarMarkerKind,
   type CalendarMarkersResult,
+  UI_THEME_NAMES,
 } from '@etn/shared';
 
 import { groupCalendarMarkers } from '../src/renderer/screens/chronicle/calendar-markers.js';
 import { ShimElement } from './dom-shim.js';
+import {
+  declaredTokens,
+  parseThemeColor,
+  readTheme,
+  THEME_MODES,
+  themeBlockBody,
+  type RgbColor,
+} from './theme-css.js';
 
 function installShim(): void {
   (globalThis as any).document = {
@@ -195,7 +204,15 @@ describe('календарь месяца: маркеры дня (0.16.1, ab9d62
   it('цвета маркеров — токены темы, прямых цветов нет', () => {
     const rule = (selector: string): string =>
       new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`).exec(CSS)?.[1] ?? '';
-    assert.match(rule('.cal-marker--records'), /background:\s*var\(--accent\)/);
+    // Записи — СВОЙ семантический токен, не акцент (требование ab9d627b:
+    // «записи НЕ из --accent-семейства»; в retronotes dark латунный --accent
+    // неразличим с оранжевым --warn).
+    assert.match(rule('.cal-marker--records'), /background:\s*var\(--cal-marker-records\)/);
+    assert.doesNotMatch(
+      rule('.cal-marker--records'),
+      /var\(--accent[a-z-]*\)/,
+      'маркер записей не использует акцент',
+    );
     assert.match(rule('.cal-marker--plans'), /background:\s*var\(--warn\)/);
     assert.match(rule('.cal-marker--facts'), /background:\s*var\(--ok\)/);
     assert.match(rule('.cal-marker--overdue'), /background:\s*var\(--danger\)/);
@@ -208,6 +225,86 @@ describe('календарь месяца: маркеры дня (0.16.1, ab9d62
     ]) {
       assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(rule(selector)), `${selector}: без hex-цвета`);
       assert.ok(!/\brgba?\(/.test(rule(selector)), `${selector}: без rgb()/rgba()`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Токен маркера записей в темах
+// ---------------------------------------------------------------------------
+
+/** Тон цвета в градусах (0–360). */
+function hueOf(color: RgbColor): number {
+  const r = color.r / 255;
+  const g = color.g / 255;
+  const b = color.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  if (delta === 0) return 0;
+  let hue: number;
+  if (max === r) hue = ((g - b) / delta) % 6;
+  else if (max === g) hue = (b - r) / delta + 2;
+  else hue = (r - g) / delta + 4;
+  hue *= 60;
+  return hue < 0 ? hue + 360 : hue;
+}
+
+/** Расстояние в sRGB — грубая, но строгая мера «это не тот же цвет». */
+function rgbDistance(a: RgbColor, b: RgbColor): number {
+  return Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
+}
+
+/** Цвет токена темы; отсутствие или неразборчивое значение — падение теста. */
+function themeColor(tokens: Map<string, string>, token: string, where: string): RgbColor {
+  const value = tokens.get(token);
+  assert.ok(value !== undefined, `${where}: токен ${token} объявлен`);
+  const color = parseThemeColor(value!);
+  assert.ok(color !== null, `${where}: ${token} = ${value} — цвет`);
+  return color!;
+}
+
+describe('маркер записей — семантический токен темы (0.16.1, ab9d627b)', () => {
+  it('все темы и режимы: свой токен, синий тон, отличимость от статусных маркеров', () => {
+    for (const name of UI_THEME_NAMES) {
+      const css = readTheme(name);
+      for (const mode of THEME_MODES) {
+        const where = `${name}/${mode}`;
+        const body = themeBlockBody(css, name, mode);
+        assert.ok(body !== null, `${where}: блок режима объявлен`);
+        const tokens = declaredTokens(body!);
+
+        const recordsValue = tokens.get('--cal-marker-records');
+        const records = themeColor(tokens, '--cal-marker-records', where);
+        // Синий тон — семантика записей (требование ab9d627b). В темах с
+        // латунным/янтарным акцентом иначе маркер записей сливается с
+        // оранжевым маркером задач (--warn): дефект приёмки retronotes dark.
+        const hue = hueOf(records);
+        assert.ok(
+          hue >= 180 && hue <= 250,
+          `${where}: маркер записей синий, тон ${hue.toFixed(1)}°`,
+        );
+        // Отдельный токен, а не акцент: значение не повторяет ни один --accent*
+        // той же темы (в т.ч. --accent и --accent-fg).
+        for (const [token, value] of tokens) {
+          if (!token.startsWith('--accent')) continue;
+          assert.notEqual(
+            value,
+            recordsValue,
+            `${where}: значение ${token} не равно маркеру записей`,
+          );
+        }
+        // Статусные маркеры остаются на своих токенах, но клетка может нести
+        // несколько маркеров сразу — цвета обязаны различаться.
+        for (const status of ['--warn', '--ok', '--danger'] as const) {
+          const color = themeColor(tokens, status, where);
+          const distance = rgbDistance(records, color);
+          assert.ok(
+            distance >= 60,
+            `${where}: маркер записей отличим от ${status} (расстояние ${distance.toFixed(1)})`,
+          );
+        }
+      }
     }
   });
 });

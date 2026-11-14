@@ -44,6 +44,7 @@
   /* Пунктир курсора — nord13 (жёлтый авроры), приглушённый для светлого фона. */
   --cursor: #8a5f1a;
   --cal-weekend: #b48ead;
+  --cal-marker-records: #4c8fa8;
   --danger: #bf616a;
   --danger-soft: #f3e2e4;
   --ok: #6d8a4e;
@@ -137,6 +138,7 @@
   /* Пунктир курсора — nord13 (жёлтый авроры). */
   --cursor: #ebcb8b;
   --cal-weekend: #b48ead;
+  --cal-marker-records: #7fa3cf;
   --danger: #bf616a;
   --danger-soft: #3d2a2e;
   --ok: #a3be8c;

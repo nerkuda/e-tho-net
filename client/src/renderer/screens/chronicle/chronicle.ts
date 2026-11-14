@@ -686,10 +686,8 @@ async function initialiseChronicle(networkId: string, tabId: string | null): Pro
   }
   // Календарь собран в `mountChronicle` ДО чтения снимка: показываем месяц
   // входа — восстановленный из снимка (`month`, ошибка 9b49d672) либо месяц
-  // сегодняшней даты, когда снимка месяца нет (ошибка 167860ac). Выделение дня
-  // поставит `syncCalendar` после запроса ленты; `showDate` не уведомляет
-  // `onMonthChange`, поэтому маркеры нового месяца пересчитываются явно.
-  const entryMonthMarkers = alignEntryMonth();
+  // сегодняшней даты, когда снимка месяца нет (ошибка 167860ac).
+  alignEntryMonth();
   await getHomeId(requireNetworkId()).catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
@@ -697,7 +695,12 @@ async function initialiseChronicle(networkId: string, tabId: string | null): Pro
   if (!isCurrentScreenPair(pair)) return;
   await reload();
   syncCalendar();
-  if (entryMonthMarkers !== null) void refreshCalendarMarkers(entryMonthMarkers);
+  // Маркеры показанного месяца — ВСЕГДА после входа (0.16.1, доработка по
+  // вердикту приёмки): раньше запрос шёл только при фактической смене месяца
+  // (`alignEntryMonth` возвращал снимок), и первый вход в «Дневник» оставался
+  // с пустыми клетками, хотя месяц уже был нужный. Снимок строится по
+  // фактически показанному месяцу после `syncCalendar`.
+  void refreshCalendarMarkers(calendarMarkersSnapshot());
   // Панель задач — тоже период отбора: после входа в вид её данные актуальны.
   tasksPanel?.refresh();
 }
@@ -2393,11 +2396,12 @@ function syncCalendar(): void {
  *   • месяц сегодняшней даты, когда снимок месяца не нёс, — ошибка 167860ac:
  *     вход без отбора позиционируется на текущей дате.
  * `showDate` не уведомляет `onMonthChange` (месяц уже проставлен в `month`),
- * поэтому маркеры нового месяца пересчитывает вызывающий: возвращённый снимок
- * — признак реальной смены месяца.
+ * поэтому маркеры показанного месяца загружает вызывающий ОТДЕЛЬНЫМ шагом —
+ * всегда, а не только при фактической смене месяца (доработка 0.16.1 по
+ * вердикту приёмки: первый вход оставался без маркеров).
  */
-function alignEntryMonth(): CalendarMarkersSnapshot | null {
-  if (calendar === null) return null;
+function alignEntryMonth(): void {
+  if (calendar === null) return;
   const today = todayLocal();
   const target = month ?? {
     year: Number(today.slice(0, 4)),
@@ -2406,11 +2410,10 @@ function alignEntryMonth(): CalendarMarkersSnapshot | null {
   const shown = calendar.getMonth();
   if (shown.year === target.year && shown.month === target.month) {
     month = target;
-    return null;
+    return;
   }
   calendar.showDate(`${target.year}-${pad2(target.month)}-01`);
   month = target;
-  return calendarMarkersSnapshot();
 }
 
 /**
@@ -2471,9 +2474,10 @@ function calendarMarkersSnapshot(): CalendarMarkersSnapshot | null {
  * видна и на выделенной, и на невыделенной дате.
  *
  * Пара и месяц — из {@link CalendarMarkersSnapshot}: смена пары после `await`
- * отменяет запрос (маркеры чужой сети не рисуются); сбой чтения не ломает
- * ленту — клетки остаются без маркеров до следующего перезапроса (как у блока
- * «Связи дня»), штатная диагностика отбора не подменяется.
+ * отменяет запрос (маркеры чужой сети не рисуются). Сбой чтения не ломает
+ * ленту, но и не остаётся незамеченным: клетки очищаются, а пользователю
+ * показывается тост (как у прежних counts; штатная диагностика отбора — для
+ * ошибок самого отбора — при этом не подменяется).
  */
 async function refreshCalendarMarkers(snapshot: CalendarMarkersSnapshot | null): Promise<void> {
   if (snapshot === null || calendar === null) return;
@@ -2484,8 +2488,14 @@ async function refreshCalendarMarkers(snapshot: CalendarMarkersSnapshot | null):
   try {
     const result = await etn.chronicle.calendarMarkers(pair.networkId, { from, to, today });
     next = groupCalendarMarkers(result, { from, to });
-  } catch {
+  } catch (err) {
+    // Сбой чтения маркеров ТЕКУЩЕЙ пары — видимая проблема, а не тишина:
+    // прежние counts показывали notice, и пользователь иначе видит пустой
+    // календарь без объяснения. Отказ прежней пары после смены сети молчит —
+    // его маркеры и не должны рисоваться.
+    if (!isCurrentScreenPair(pair)) return;
     next = new Map();
+    notice(t('diary.markersFailed', [errText(err)]), 'error');
   }
   if (seq !== calendarMarkersSeq || !isCurrentScreenPair(pair) || calendar === null) return;
   calendarMarkersByDay = next;

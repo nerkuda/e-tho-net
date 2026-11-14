@@ -48,6 +48,7 @@
      отличим и от латунного акцента, и от кожаной рамки выделения. */
   --cursor: #225973;
   --cal-weekend: #b43c3c; /* color-red */
+  --cal-marker-records: #3f7fb5; /* производный: синий вне латунного акцента */
   --danger: #b43c3c; /* color-red */
   --danger-soft: #f3e2df; /* производный: color-red на пергаменте */
   --ok: #719461; /* color-green */
@@ -142,6 +143,7 @@
   /* Пунктир текущего — циан color-cyan #4caddd: 7.76:1 к фону. */
   --cursor: #4caddd;
   --cal-weekend: #d4849a; /* color-pink */
+  --cal-marker-records: #6fb3e0; /* производный: синий вне латунного акцента */
   --danger: #d97878; /* color-red */
   --danger-soft: #3a2323; /* производный: color-red на base-05 */
   --ok: #64ad4b; /* color-green */
