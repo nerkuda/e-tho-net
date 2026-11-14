@@ -14,6 +14,7 @@ export {
   MS_PER_DAY,
   assertScheduleKind,
   computeNextAt,
+  exceptionMap,
   expandOccurrences,
   firstOccurrenceOnOrAfter,
   kindOfSchedule,

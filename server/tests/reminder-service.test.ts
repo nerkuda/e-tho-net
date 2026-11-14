@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { BASE_LAYER_ID, EtnError } from '@etn/shared';
+import { BASE_LAYER_ID, EtnError, MS_PER_DAY } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { createLayer } from '../src/domain/layer-service.js';
@@ -568,6 +568,67 @@ describe('reminder-service: snooze и dismiss (500d1b3d, 86cb7451)', () => {
       until: '2025-01-05T22:00:00.000Z',
     });
     assert.equal(second.occurrence_at, '2025-01-04T09:00:00.000Z');
+  });
+
+  it('цепочка панели: snooze → dismiss → snooze по вхождениям раскрытия — без 409', () => {
+    const ndb = createInMemoryNetworkDb();
+    const thoughtId = seedThought(ndb, 'Субъект');
+    // Ежедневная серия; вхождение сегодняшнего утра уже прошло (NOW = 10:00).
+    const id = dailyReminder(ndb, thoughtId, '2025-01-04T09:00:00.000Z');
+    const listWindow = {
+      from: new Date(NOW - MS_PER_DAY).toISOString(),
+      to: new Date(NOW + MS_PER_DAY).toISOString(),
+      show_inactive: false,
+      nowMs: NOW,
+    };
+    /** Вхождение, которое панель показывает строкой: `occurrence_at` — адрес исключения. */
+    const occurrenceAt = (at: string): string => {
+      const row = listReminders(ndb, OWNER, listWindow).reminders[0]?.occurrences?.find(
+        (item) => item.occurrence_at === at,
+      );
+      assert.ok(row !== undefined, `вхождение ${at} есть в раскрытии`);
+      return row.occurrence_at;
+    };
+
+    // 1. «Отложить» на сутки от момента показа строки (09:00 → 09:00 следующего дня).
+    const first = snoozeReminder(
+      ndb,
+      OWNER,
+      id,
+      '2025-01-05T09:00:00.000Z',
+      NOW,
+      occurrenceAt('2025-01-04T09:00:00.000Z'),
+    );
+    assert.equal(first.occurrence_at, '2025-01-04T09:00:00.000Z');
+
+    // 2. «Убрать» отложенную строку: раскрытие отдаёт её с моментом ВХОЖДЕНИЯ.
+    const dismissed = dismissReminder(
+      ndb,
+      OWNER,
+      id,
+      NOW,
+      occurrenceAt('2025-01-04T09:00:00.000Z'),
+    );
+    assert.equal(dismissed.occurrence_at, '2025-01-04T09:00:00.000Z');
+    assert.deepEqual(dismissed.reminder.exceptions['2025-01-04T09:00:00.000Z'], {
+      kind: 'dismiss',
+    });
+
+    // 3. Повторный «Отложить» уже следующее вхождение серии.
+    const next = snoozeReminder(
+      ndb,
+      OWNER,
+      id,
+      '2025-01-06T09:00:00.000Z',
+      NOW,
+      occurrenceAt('2025-01-05T09:00:00.000Z'),
+    );
+    assert.equal(next.occurrence_at, '2025-01-05T09:00:00.000Z');
+    assert.deepEqual(Object.keys(next.reminder.exceptions), [
+      '2025-01-04T09:00:00.000Z',
+      '2025-01-05T09:00:00.000Z',
+    ]);
+    assert.equal(next.reminder.next_at, '2025-01-06T09:00:00.000Z');
   });
 
   it('dismiss серии скрывает вхождение, но следующее остаётся', () => {

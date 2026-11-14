@@ -58,7 +58,10 @@ describe('guard-helpers: скан источников на запрещённы
     assert.equal(bad.length, 1);
     assert.equal(bad[0]!.line, 1);
     assert.ok(!hits.some((v) => v.file === 'skipped.txt'), 'неисходные файлы не сканируются');
-    assert.ok(!hits.some((v) => v.file.startsWith('sub/')), 'многострочный импорт построчно не виден');
+    assert.ok(
+      !hits.some((v) => v.file.startsWith('sub/')),
+      'многострочный импорт построчно не виден',
+    );
   });
 
   it('сопоставляет расширения без учёта регистра', () => {
@@ -76,6 +79,23 @@ describe('guard-helpers: скан источников на запрещённы
     const multi = hits.find((v) => v.file === 'sub/multiline.ts');
     assert.ok(multi, 'ожидалось нарушение в sub/multiline.ts');
     assert.equal(multi.line, 3); // строка `} from`
+  });
+
+  it('include ограничивает и файлы filePattern, а не только построчные', () => {
+    const dir = makeFixture();
+    // Запрещённая конструкция есть в двух файлах; include оставляет один.
+    // Правило с filePattern обязано уважать тот же фильтр файлов, что и pattern,
+    // иначе сторож незаметно сканирует всё дерево (репроверка 173f1540).
+    const onlyBad = { ...RULE_FILE, include: (rel: string) => rel === 'bad.ts' };
+    const hits = collectViolations(dir, [onlyBad]);
+    assert.ok(
+      hits.some((v) => v.file === 'bad.ts'),
+      'включённый файл проверен',
+    );
+    assert.ok(
+      !hits.some((v) => v.file === 'sub/multiline.ts'),
+      'файл вне include правилом filePattern не сканируется',
+    );
   });
 
   it('allow исключает import type, exclude убирает файлы и каталоги', () => {

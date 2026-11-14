@@ -6,16 +6,26 @@
  *  - пустое состояние — ghost-команда «Напомнить…» видима и ведёт в редактор
  *    (другой точки создания первого напоминания в клиенте нет);
  *  - у каждого напоминания в меню СВОЯ подпись (повтор/момент);
- *  - «Отложить» считается от МОМЕНТА ВХОЖДЕНИЯ и адресует его (`occurrence_at`),
- *    иначе сервер отвечает 400 для вхождений дальше суток;
- *  - «Убрать» адресует то же вхождение;
+ *  - «Отложить»/«Убрать» адресуют ближайшее ВИДИМОЕ вхождение (`occurrence_at`),
+ *    а `until` считается от момента ПОКАЗА: после snooze `next_at` — уже момент
+ *    показа, и адрес `next_at` сервер отвергает 409 (блокер репроверки);
+ *  - цепочка «snooze → dismiss → повторный snooze» проходит без 409;
+ *  - вхождений не осталось — пункты «Отложить»/«Убрать» недоступны;
  *  - `reminders.changed` обновляет подпись шапки (второй клиент/панель).
  */
 
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import type { AnyRealtimeEvent, Reminder, ReminderListResult } from '@etn/shared';
+import {
+  computeNextAt,
+  firstOccurrenceOnOrAfter,
+  nextCandidate,
+  type AnyRealtimeEvent,
+  type Reminder,
+  type ReminderException,
+  type ReminderListResult,
+} from '@etn/shared';
 
 import { shiftInstant } from '../src/renderer/lib/dates.js';
 import { t } from '../src/renderer/lib/i18n.js';
@@ -153,6 +163,123 @@ function installBridge(result: () => ReminderListResult): void {
       remove: async () => ({}),
     },
   };
+}
+
+/** Отказ сервера «нет активного вхождения» — 409 (как `noActiveOccurrence`). */
+function serverConflict(): Error {
+  return Object.assign(new Error('the reminder has no active occurrence to process.'), {
+    status: 409,
+  });
+}
+
+/** Граница текущих UTC-суток — нижняя граница поиска вхождения (как на сервере). */
+function utcDayStartMs(nowMs: number): number {
+  return Math.floor(nowMs / DAY_MS) * DAY_MS;
+}
+
+/**
+ * Подставной сервер напоминаний: правила `activeOccurrence`/snooze/dismiss из
+ * `server/src/domain/reminder-service.ts` на том же движке `@etn/shared`
+ * (`firstOccurrenceOnOrAfter`/`nextCandidate`/`computeNextAt`).
+ *
+ * Нужен, чтобы цепочка команд флага проверялась на НАСТОЯЩЕМ отказе 409, а не
+ * на «вызове с такими аргументами»: адрес не-вхождения и адрес уже убранного
+ * вхождения сервер отвергает, и регрессия обязана красить тест.
+ */
+function installStatefulBridge(initial: Reminder): {
+  failures: unknown[];
+  exceptions: Map<number, ReminderException>;
+  nextAt: () => string | null;
+} {
+  const schedule = initial.schedule;
+  const anchorMs = Date.parse(initial.anchor_at);
+  const exceptions = new Map<number, ReminderException>();
+  const failures: unknown[] = [];
+  const nextAt = (): string | null => computeNextAt(schedule, anchorMs, exceptions, Date.now());
+
+  /** Карта исключений в виде DTO (`exceptions`: UTC-момент → исключение). */
+  const exceptionsDto = (): Record<string, ReminderException> => {
+    const out: Record<string, ReminderException> = {};
+    for (const [ms, exception] of exceptions) out[new Date(ms).toISOString()] = exception;
+    return out;
+  };
+
+  /** Вхождение под команду: явный адрес проверяется по расписанию, как на сервере. */
+  const resolve = (requested?: string): number => {
+    if (requested !== undefined) {
+      const atMs = Date.parse(requested);
+      if (firstOccurrenceOnOrAfter(schedule, anchorMs, atMs) !== atMs) throw serverConflict();
+      if (exceptions.get(atMs)?.kind === 'dismiss') throw serverConflict();
+      return atMs;
+    }
+    const candidate = nextCandidate(schedule, anchorMs, exceptions, utcDayStartMs(Date.now()));
+    if (candidate === null) throw serverConflict();
+    return candidate.occurrence_at;
+  };
+
+  (globalThis as any).window.etn = {
+    reminders: {
+      list: async () =>
+        listResult([{ ...initial, next_at: nextAt(), exceptions: exceptionsDto() }]),
+      snooze: async (...args: unknown[]) => {
+        calls.snooze.push(args);
+        try {
+          const [, , until, requested] = args as [string, string, string, string | undefined];
+          const occurrenceMs = resolve(requested);
+          const untilMs = Date.parse(until);
+          if (!(untilMs > Date.now()) || !(untilMs > occurrenceMs)) throw new Error('until');
+          exceptions.set(occurrenceMs, {
+            kind: 'snooze',
+            until: new Date(untilMs).toISOString(),
+          });
+        } catch (err) {
+          failures.push(err);
+          throw err;
+        }
+        return {};
+      },
+      dismiss: async (...args: unknown[]) => {
+        calls.dismiss.push(args);
+        try {
+          const [, , requested] = args as [string, string, string | undefined];
+          exceptions.set(resolve(requested), { kind: 'dismiss' });
+        } catch (err) {
+          failures.push(err);
+          throw err;
+        }
+        return {};
+      },
+      remove: async () => ({}),
+    },
+  };
+  return { failures, exceptions, nextAt };
+}
+
+/**
+ * Напоминание «каждые 3 дня в 00:00 UTC»: вхождение СЕГОДНЯ уже прошло (или
+ * ровно сейчас), ближайшее — через трое суток. Такой ряд ловит подмену адреса:
+ * серверное «ближайшее от начала суток» указывает на прошедшее вхождение, а
+ * флаг обязан адресовать то, что показано как ближайшее.
+ */
+function everyThreeDaysReminder(): Reminder {
+  const now = new Date();
+  const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const anchor = new Date(todayStart).toISOString();
+  return reminder({
+    id: 'r1',
+    kind: 'rule',
+    schedule: { type: 'every_days', every: 3 },
+    anchor_at: anchor,
+    next_at: new Date(todayStart + 3 * DAY_MS).toISOString(),
+  });
+}
+
+/** Открыть меню флага и вернуть его корень. */
+function openFlagMenu(flag: { root: HTMLButtonElement }): ShimElement {
+  flag.root.click();
+  const menu = body.querySelector('.menu') as ShimElement | null;
+  assert.ok(menu !== null, 'меню флага открылось');
+  return menu;
 }
 
 beforeEach(() => {
@@ -330,6 +457,153 @@ describe('флаг напоминаний — меню и вхождения', (
     assert.equal(networkId, NET);
     assert.equal(id, 'r1');
     assert.equal(occurrenceAt, occurrence);
+  });
+
+  it('вхождений не осталось: «Отложить»/«Убрать» недоступны, подменю не раскрывается', async () => {
+    const anchor = new Date(Date.now() + 3 * DAY_MS).toISOString();
+    // Единственное вхождение уже убрано: `next_at` = null и исключение dismiss.
+    const entry = reminder({
+      id: 'r1',
+      next_at: null,
+      anchor_at: anchor,
+      exceptions: { [anchor]: { kind: 'dismiss' } },
+    });
+    installBridge(() => listResult([entry]));
+    const flag = createReminderFlag({
+      networkId: NET,
+      thoughtId: 't1',
+      thoughtTitle: 'Мысль',
+      openEditor: async () => null,
+    });
+    await flush();
+
+    const sub = expand(openFlagMenu(flag), reminderLabel(entry));
+    const snoozeRow = rowByLabel(sub, t('reminder.snoozeOccurrence'));
+    assert.ok(snoozeRow !== null, 'пункт «Отложить» есть в меню');
+    assert.ok(
+      snoozeRow!.classList.contains('menu-item-disabled'),
+      '«Отложить» помечен недоступным',
+    );
+    snoozeRow!.emit('mouseenter');
+    assert.equal(
+      sub.querySelectorAll(':scope > .menu-sub').length,
+      0,
+      'подменю недоступного пункта не раскрывается',
+    );
+
+    const dismissRow = rowByLabel(sub, t('reminder.dismissOccurrence'));
+    assert.ok(dismissRow !== null, 'пункт «Убрать» есть в меню');
+    assert.ok(dismissRow!.classList.contains('menu-item-disabled'), '«Убрать» помечен недоступным');
+    dismissRow!.click();
+    await flush();
+    assert.equal(calls.dismiss.length, 0, 'клик по недоступному пункту команду не шлёт');
+  });
+});
+
+describe('флаг напоминаний — цепочка вхождений (регресс 409)', () => {
+  it('snooze → dismiss → повторный snooze проходят без 409', async () => {
+    const entry = everyThreeDaysReminder();
+    const server = installStatefulBridge(entry);
+    const flag = createReminderFlag({
+      networkId: NET,
+      thoughtId: 't1',
+      thoughtTitle: 'Мысль',
+      openEditor: async () => null,
+    });
+    await flush();
+
+    const occurrence = Date.parse(entry.next_at!);
+
+    // 1. «Отложить» на сутки: адрес — момент вхождения, until — момент показа + сутки.
+    const snoozeOne = expand(
+      expand(openFlagMenu(flag), reminderLabel(entry)),
+      t('reminder.snoozeOccurrence'),
+    );
+    const dayRow = rowByLabel(snoozeOne, t('tasks.shiftDay'));
+    assert.ok(dayRow !== null, 'сдвиг на сутки есть');
+    dayRow!.click();
+    await flush();
+
+    assert.deepEqual(server.failures, [], 'первый snooze не получил отказа сервера');
+    const firstUntil = new Date(occurrence + DAY_MS).toISOString();
+    assert.deepEqual(server.exceptions.get(occurrence), {
+      kind: 'snooze',
+      until: firstUntil,
+    });
+    assert.equal(server.nextAt(), firstUntil, 'после snooze next_at — момент показа');
+
+    // 2. «Убрать» отложенное вхождение: адрес тот же момент вхождения, не `next_at`.
+    const dismissRow = rowByLabel(
+      expand(openFlagMenu(flag), reminderLabel(entry)),
+      t('reminder.dismissOccurrence'),
+    );
+    assert.ok(dismissRow !== null, 'пункт «Убрать» есть в меню');
+    dismissRow!.click();
+    await flush();
+
+    assert.deepEqual(server.failures, [], 'убрать отложенное вхождение — без 409');
+    assert.deepEqual(server.exceptions.get(occurrence), { kind: 'dismiss' });
+    const nextOccurrence = occurrence + 3 * DAY_MS;
+    assert.equal(server.nextAt(), new Date(nextOccurrence).toISOString());
+
+    // 3. Повторный «Отложить» уже следующее вхождение — тем же способом.
+    const snoozeTwo = expand(
+      expand(openFlagMenu(flag), reminderLabel(entry)),
+      t('reminder.snoozeOccurrence'),
+    );
+    const dayRowTwo = rowByLabel(snoozeTwo, t('tasks.shiftDay'));
+    assert.ok(dayRowTwo !== null, 'сдвиг на сутки есть и после уборки');
+    dayRowTwo!.click();
+    await flush();
+
+    assert.deepEqual(server.failures, [], 'повторный snooze — без 409');
+    assert.deepEqual(server.exceptions.get(nextOccurrence), {
+      kind: 'snooze',
+      until: new Date(nextOccurrence + DAY_MS).toISOString(),
+    });
+    assert.equal(server.nextAt(), new Date(nextOccurrence + DAY_MS).toISOString());
+    assert.equal(calls.snooze.length, 2, 'две команды «Отложить»');
+    assert.equal(calls.dismiss.length, 1, 'одна команда «Убрать»');
+  });
+
+  it('повторный snooze сразу после snooze адресует то же вхождение', async () => {
+    const entry = everyThreeDaysReminder();
+    const server = installStatefulBridge(entry);
+    const flag = createReminderFlag({
+      networkId: NET,
+      thoughtId: 't1',
+      thoughtTitle: 'Мысль',
+      openEditor: async () => null,
+    });
+    await flush();
+
+    const occurrence = Date.parse(entry.next_at!);
+    const snoozeDay = (): void => {
+      const sub = expand(
+        expand(openFlagMenu(flag), reminderLabel(entry)),
+        t('reminder.snoozeOccurrence'),
+      );
+      const row = rowByLabel(sub, t('tasks.shiftDay'));
+      assert.ok(row !== null, 'сдвиг на сутки есть');
+      row!.click();
+    };
+
+    snoozeDay();
+    await flush();
+    const firstUntil = new Date(occurrence + DAY_MS).toISOString();
+    assert.deepEqual(server.failures, [], 'первый snooze без отказа сервера');
+    assert.equal(server.nextAt(), firstUntil);
+
+    // Второе «Отложить»: `next_at` теперь момент показа, адрес — то же вхождение.
+    snoozeDay();
+    await flush();
+
+    assert.deepEqual(server.failures, [], 'повторный snooze после snooze — без 409');
+    assert.deepEqual(server.exceptions.get(occurrence), {
+      kind: 'snooze',
+      until: new Date(occurrence + 2 * DAY_MS).toISOString(),
+    });
+    assert.equal(calls.snooze.length, 2);
   });
 });
 

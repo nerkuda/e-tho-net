@@ -42,6 +42,7 @@ import {
   MS_PER_DAY,
   assertScheduleKind,
   computeNextAt,
+  exceptionMap,
   expandOccurrences,
   firstOccurrenceOnOrAfter,
   kindOfSchedule,
@@ -49,7 +50,6 @@ import {
   normalizeAnchor,
   parseInstant,
   validateSchedule,
-  type ExceptionMap,
 } from './reminder-repeat.js';
 
 /** Сырая строка `reminders`. */
@@ -181,16 +181,6 @@ function parseStoredExceptions(row: ReminderRow): Record<string, ReminderExcepti
     }
   }
   return out;
-}
-
-/** Карта исключений по UTC-миллисекундам момента вхождения. */
-function exceptionMap(exceptions: Record<string, ReminderException>): ExceptionMap {
-  const map = new Map<number, ReminderException>();
-  for (const [moment, exception] of Object.entries(exceptions)) {
-    const ms = Date.parse(moment);
-    if (Number.isFinite(ms)) map.set(ms, exception);
-  }
-  return map;
 }
 
 /**

@@ -14,16 +14,26 @@
  * Клик открывает меню действий по напоминаниям субъекта: создать, изменить
  * расписание, отложить ближайшее вхождение, убрать его и удалить напоминание.
  * «Отложить»/«Убрать» пишут только exceptions — расписание не меняется
- * (требование 86cb7451). «Отложить» считается от МОМЕНТА ВХОЖДЕНИЯ (как в
- * панели задач), адрес вхождения уходит на сервер (`occurrence_at`): `until` от
- * «сейчас» сервер отвергает для вхождений дальше суток.
+ * (требование 86cb7451).
+ *
+ * **Адрес вхождения.** Команды действуют на ближайшее ВИДИМОЕ вхождение, и
+ * считает его тот же движок `@etn/shared` (`nextCandidate`), которым сервер
+ * получает `next_at`. Адресуется МОМЕНТ ВХОЖДЕНИЯ (`occurrence_at`), а `until`
+ * отсчитывается от момента ПОКАЗА — так же, как в панели задач (`row.moment`).
+ * После snooze `next_at` — уже момент показа, и передать его адресом нельзя:
+ * сервер отвечает 409 «нет активного вхождения» (блокер репроверки 173f1540).
  *
  * Подписи строит `lib/reminder-label.ts` (общий словарь с облачком и панелью);
  * формат меню — `lib/menu.ts`. Подписка на `reminders.changed` — одна на модуль
  * (реестр живых флагов), как у индикаторов облачков (`lib/cloud-indicators.ts`).
  */
 
-import type { Reminder } from '@etn/shared';
+import {
+  exceptionMap,
+  nextCandidate,
+  type Reminder,
+  type ReminderNextCandidate,
+} from '@etn/shared';
 
 import { shiftInstant } from '../lib/dates.js';
 import { closeMenu, menuAction, menuSubmenu, showMenuAt, MENU_SEPARATOR } from '../lib/menu.js';
@@ -167,20 +177,51 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
   };
 
   /**
-   * «Отложить» вхождение: `until` считается от МОМЕНТА ВХОЖДЕНИЯ, а не от
-   * «сейчас» (сервер требует `until` строго позже вхождения — иначе 400,
-   * блокер приёмки). Адрес вхождения — ближайшее необработанное (`next_at`),
-   * тем же полем его адресует панель задач.
+   * Ближайшее видимое вхождение напоминания: тот же движок, которым сервер
+   * считает `next_at` (`nextCandidate`). `null` — вхождений не осталось:
+   * «Отложить»/«Убрать» недоступны.
    */
-  const snooze = (reminder: Reminder, shift: { days?: number; months?: number }): void => {
-    const occurrence = reminder.next_at;
+  const visibleOccurrence = (reminder: Reminder): ReminderNextCandidate | null => {
+    const anchorMs = Date.parse(reminder.anchor_at);
+    if (!Number.isFinite(anchorMs)) return null;
+    return nextCandidate(
+      reminder.schedule,
+      anchorMs,
+      exceptionMap(reminder.exceptions),
+      Date.now(),
+    );
+  };
+
+  /**
+   * «Отложить» вхождение: `until` считается от МОМЕНТА ПОКАЗА вхождения, а на
+   * сервер уходит адрес МОМЕНТА ВХОЖДЕНИЯ (`occurrence_at`). После snooze
+   * `next_at` — момент показа, и он не вхождение: адрес `next_at` сервер
+   * отвергает 409 (блокер репроверки 173f1540). Та же пара полей, что у панели
+   * задач (`row.moment` + `row.occurrenceAt`).
+   */
+  const snooze = (
+    reminder: Reminder,
+    occurrence: ReminderNextCandidate | null,
+    shift: { days?: number; months?: number },
+  ): void => {
+    if (occurrence === null) return;
+    const until = shiftInstant(new Date(occurrence.showing_at).toISOString(), shift);
+    const occurrenceAt = new Date(occurrence.occurrence_at).toISOString();
+    runAction(() => etn.reminders.snooze(options.networkId, reminder.id, until, occurrenceAt));
+  };
+
+  /**
+   * «Убрать» вхождение: адрес — тот же момент вхождения, что у «Отложить».
+   * Для отложенного вхождения исключение переписывается на `dismiss` (иначе
+   * убрать показанное вхождение было бы нечем).
+   */
+  const dismiss = (reminder: Reminder, occurrence: ReminderNextCandidate | null): void => {
     if (occurrence === null) return;
     runAction(() =>
-      etn.reminders.snooze(
+      etn.reminders.dismiss(
         options.networkId,
         reminder.id,
-        shiftInstant(occurrence, shift),
-        occurrence,
+        new Date(occurrence.occurrence_at).toISOString(),
       ),
     );
   };
@@ -190,7 +231,10 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
     // Подпись пункта — СВОЯ у каждого напоминания (повтор/момент), иначе подменю
     // нескольких напоминаний выглядели бы одинаково.
     const label = reminderLabel(reminder) || t('reminder.flagTitle');
-    const hasOccurrence = reminder.next_at !== null;
+    // Вхождение фиксируется при открытии меню: оно общее для «Отложить» и
+    // «Убрать» и задаёт как адрес, так и доступность пунктов.
+    const occurrence = visibleOccurrence(reminder);
+    const hasOccurrence = occurrence !== null;
     return menuSubmenu(label, [
       menuAction(t('reminder.editSchedule'), () => {
         void openEditor({
@@ -206,20 +250,15 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
       menuSubmenu(
         t('reminder.snoozeOccurrence'),
         SNOOZE_SHIFTS.map((item) =>
-          menuAction(t(item.labelKey), () => snooze(reminder, item.shift), {
+          menuAction(t(item.labelKey), () => snooze(reminder, occurrence, item.shift), {
             disabled: !hasOccurrence,
           }),
         ),
         { disabled: !hasOccurrence },
       ),
-      menuAction(
-        t('reminder.dismissOccurrence'),
-        () =>
-          runAction(() =>
-            etn.reminders.dismiss(options.networkId, reminder.id, reminder.next_at ?? undefined),
-          ),
-        { disabled: !hasOccurrence },
-      ),
+      menuAction(t('reminder.dismissOccurrence'), () => dismiss(reminder, occurrence), {
+        disabled: !hasOccurrence,
+      }),
       menuAction(t('reminder.remove'), () =>
         runAction(() => etn.reminders.remove(options.networkId, reminder.id)),
       ),

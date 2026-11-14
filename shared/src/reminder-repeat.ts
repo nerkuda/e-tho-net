@@ -355,6 +355,24 @@ export function normalizeAnchor(schedule: ReminderSchedule, anchorAtMs: number):
 /** Пара исключений, разобранная по моментам вхождений (UTC-миллисекунды). */
 export type ExceptionMap = ReadonlyMap<number, ReminderException>;
 
+/**
+ * Карта исключений из карты DTO (`exceptions`: UTC-момент → snooze/dismiss).
+ * Момент с неразборчивой датой пропускается: одна битая запись не должна прятать
+ * всю серию. Общая точка у серверного домена и у клиентского флага напоминаний —
+ * флаг считает ближайшее вхождение тем же движком (`nextCandidate`), поэтому
+ * карту исключений обязан разбирать один код.
+ */
+export function exceptionMap(
+  exceptions: Record<string, ReminderException>,
+): Map<number, ReminderException> {
+  const map = new Map<number, ReminderException>();
+  for (const [moment, exception] of Object.entries(exceptions)) {
+    const ms = Date.parse(moment);
+    if (Number.isFinite(ms)) map.set(ms, exception);
+  }
+  return map;
+}
+
 /** Момент показа для snooze-исключения. */
 function snoozeUntilMs(exception: ReminderException): number | null {
   if (exception.kind !== 'snooze') return null;
