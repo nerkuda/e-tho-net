@@ -48,11 +48,19 @@ import { badge } from './badge.js';
 import { iconButton, uiButton } from './button.js';
 import { choiceControl } from './choice-row.js';
 import { loadingState } from './empty-state.js';
+import { fieldInput } from './field.js';
 import { svgIcon } from './icon.js';
 import { reconcileKeyed } from './keyed-list.js';
 import { createListNav, type ListNavHandle } from './list.js';
 import { TABLE_ROW_KEY_ATTR } from './table.js';
 import type {
+  ReminderPanelRow,
+  ReminderSectionKind,
+  TaskGroupingMode,
+  TaskPanelRow,
+} from './task-panel-model.js';
+
+export type {
   ReminderPanelRow,
   ReminderSectionKind,
   TaskGroupingMode,
@@ -108,6 +116,11 @@ export interface ReminderPanelSectionView {
 export interface TaskPanelView {
   /** Данные устарели: «Обновить» подсвечена (требование 0e85b66e). */
   stale: boolean;
+  /**
+   * Фильтр массовых команд «за период» — тот же период, что показан лентой
+   * (from/to), иначе команда адресовала бы всю сеть (требование e6af8b9e).
+   */
+  periodFilter: TaskMassFilter;
   /** Есть что отменить после массовой команды. */
   canUndo: boolean;
   /** Переключатель показа выполненных (требование 6762adb0). */
@@ -129,10 +142,16 @@ export interface TaskPanelView {
 /** Команда строки задачи. */
 export type TaskRowCommand = 'open-source' | 'move' | 'cancel';
 
-/** Сдвиг дат строки (ровно один вид). */
+/**
+ * Сдвиг дат строки (ровно один вид). `date` — абсолютная дата `YYYY-MM-DD`:
+ * экран переводит её в серверный сдвиг (`days`) от срока строки (для строки)
+ * или от «сегодня» (для массовой команды), период каждой строки сохраняется
+ * (требования 236d4472/e6af8b9e).
+ */
 export interface TaskShift {
   days?: number;
   months?: number;
+  date?: string;
 }
 
 /** Действие над вхождением напоминания. */
@@ -149,16 +168,25 @@ export interface TaskPanelActions {
   /** Чекбокс строки: одиночный клик без режима правки. */
   toggle(row: TaskPanelRow, done: boolean): void;
   /**
-   * Сохранить инлайн-правку строки. `true` — сохранено (компонент выходит из
-   * правки), `false` — отказ экрана (правка остаётся открытой).
+   * Сырая строка `body_md` для инлайн-правки (с маркером и чекбоксом).
+   * `null` — строку прочитать не удалось (экран уже показал ошибку).
    */
-  editLine(row: TaskPanelRow, text: string): Promise<boolean>;
+  loadRawLine(row: TaskPanelRow): Promise<string | null>;
+  /**
+   * Сохранить инлайн-правку СЫРОЙ строки. `true` — сохранено (компонент
+   * выходит из правки), `false` — отказ экрана (правка остаётся открытой).
+   */
+  editLine(row: TaskPanelRow, rawLine: string): Promise<boolean>;
   /** Команда строки: открыть источник/перенести/отменить. */
   rowCommand(row: TaskPanelRow, command: TaskRowCommand, shift?: TaskShift): void;
   /** Массовая команда группы: отменить всё или перенести всё на сдвиг. */
   bulk(filter: TaskMassFilter, command: 'cancel-all' | 'move-all', shift?: TaskShift): void;
   /** Действие над вхождением напоминания. */
   reminderAction(row: ReminderPanelRow, action: ReminderRowAction, until?: string): void;
+  /** Диалог даты (`YYYY-MM-DD`); `null` — отмена. */
+  pickDate(initial: string): Promise<string | null>;
+  /** Диалог даты/времени; `initialIso` — текущий момент, результат — UTC-инстанс. */
+  pickDateTime(initialIso: string): Promise<string | null>;
   /** Переход к дню источника строки (клик по чипу даты/команда «Открыть источник»). */
   openDay(day: string): void;
   /** Отрисовка снапшота текста строки (markdown + кликабельные ссылки). */
@@ -240,6 +268,8 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
   let view: TaskPanelView | null = null;
   /** Ключ строки, открытой в инлайн-правке (`null` — правки нет). */
   let editingKey: string | null = null;
+  /** Сырая строка `body_md` открытой правки (маркер и чекбокс на месте). */
+  let editingRaw: string | null = null;
 
   const root = div(TASK_PANEL_CLASS);
   const head = div('ui-task-panel-head');
@@ -277,6 +307,26 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
    */
   const subgroupFilters = new WeakMap<HTMLElement, TaskMassFilter>();
 
+  /** «Перенести… на дату» для массовой команды: произвольная дата. */
+  async function pickBulkDate(filter: TaskMassFilter): Promise<void> {
+    const date = await actions.pickDate('');
+    if (date !== null) actions.bulk(filter, 'move-all', { date });
+  }
+
+  /** «Перенести… на дату» строки: якорь — её срок (или начало периода). */
+  async function pickRowDate(row: TaskPanelRow): Promise<void> {
+    const anchor = row.due ?? row.periodFrom;
+    if (anchor === null) return;
+    const date = await actions.pickDate(anchor);
+    if (date !== null) actions.rowCommand(row, 'move', { date });
+  }
+
+  /** «Отложить…» вхождения: произвольные дата и время. */
+  async function pickSnooze(row: ReminderPanelRow): Promise<void> {
+    const until = await actions.pickDateTime(row.moment);
+    if (until !== null) actions.reminderAction(row, 'snooze', until);
+  }
+
   /** Меню «⋮»: показать выполненные, массовые команды по секциям/всему периоду. */
   function tasksGroupMenu(): MenuItem[] {
     const items: MenuItem[] = [];
@@ -287,15 +337,17 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
       );
       // Массовые команды «по всему периоду» и по сквозным секциям — адресация
       // проекцией (требование e6af8b9e): фильтр перечисляет основу выборки.
-      const periodFilter: TaskMassFilter = { scope: 'open' };
+      // Период — from/to текущей ленты; `{ scope: 'open' }` без границ сервер
+      // применил бы ко всей сети (блокер приёмки).
+      const periodFilter: TaskMassFilter = view.periodFilter;
       items.push(
         menuAction(t('tasks.cancelAllPeriod'), () => actions.bulk(periodFilter, 'cancel-all')),
-        menuSubmenu(
-          t('tasks.moveAllPeriod'),
-          TASK_SHIFTS.map((item) =>
+        menuSubmenu(t('tasks.moveAllPeriod'), [
+          ...TASK_SHIFTS.map((item) =>
             menuAction(t(item.labelKey), () => actions.bulk(periodFilter, 'move-all', item.shift)),
           ),
-        ),
+          menuAction(t('tasks.moveDate'), () => void pickBulkDate(periodFilter)),
+        ]),
         MENU_SEPARATOR,
         menuAction(t('tasks.cancelAllOverdue'), () =>
           actions.bulk({ scope: 'overdue' }, 'cancel-all'),
@@ -313,12 +365,12 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     if (kind === 'reminder') return [];
     return [
       menuAction(t('tasks.cancelAllGroup'), () => actions.bulk(filter, 'cancel-all')),
-      menuSubmenu(
-        t('tasks.moveAllGroup'),
-        TASK_SHIFTS.map((item) =>
+      menuSubmenu(t('tasks.moveAllGroup'), [
+        ...TASK_SHIFTS.map((item) =>
           menuAction(t(item.labelKey), () => actions.bulk(filter, 'move-all', item.shift)),
         ),
-      ),
+        menuAction(t('tasks.moveDate'), () => void pickBulkDate(filter)),
+      ]),
     ];
   }
 
@@ -333,9 +385,14 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     items.push(
       menuSubmenu(
         t('tasks.moveRow'),
-        TASK_SHIFTS.map((item) =>
-          menuAction(t(item.labelKey), () => actions.rowCommand(row, 'move', item.shift)),
-        ),
+        [
+          ...TASK_SHIFTS.map((item) =>
+            menuAction(t(item.labelKey), () => actions.rowCommand(row, 'move', item.shift)),
+          ),
+          menuAction(t('tasks.moveDate'), () => void pickRowDate(row), {
+            disabled: day === null,
+          }),
+        ],
         { disabled: row.stale },
       ),
       menuAction(t('tasks.cancelRow'), () => actions.rowCommand(row, 'cancel'), {
@@ -350,14 +407,14 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     return [
       menuAction(t('tasks.openSubject'), () => actions.reminderAction(row, 'open-subject')),
       menuAction(t('tasks.dismissReminder'), () => actions.reminderAction(row, 'dismiss')),
-      menuSubmenu(
-        t('tasks.snoozeReminder'),
-        TASK_SHIFTS.map((item) =>
+      menuSubmenu(t('tasks.snoozeReminder'), [
+        ...TASK_SHIFTS.map((item) =>
           menuAction(t(item.labelKey), () =>
             actions.reminderAction(row, 'snooze', shiftIso(row.moment, item.shift)),
           ),
         ),
-      ),
+        menuAction(t('tasks.snoozeDateTime'), () => void pickSnooze(row)),
+      ]),
       MENU_SEPARATOR,
       menuAction(t('tasks.createTask'), () => actions.reminderAction(row, 'create-task')),
     ];
@@ -388,13 +445,20 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     /** Вернуть строку к виду снапшота (локально, без полной сверки списка). */
     const closeEdit = (): void => {
       editingKey = null;
+      editingRaw = null;
       releaseContext?.();
       releaseContext = null;
       if (node.isConnected) fillTaskRow(node, row);
     };
-    if (editingKey === row.key) {
-      const field = el('input', 'ui-input ui-task-row-edit') as HTMLInputElement;
-      field.value = row.text;
+    if (editingKey === row.key && editingRaw !== null) {
+      // Правится СЫРАЯ строка `body_md` (маркер и чекбокс на месте): снапшот
+      // `row.text` маркера не содержит, и запись его как всей строки уничтожила
+      // бы задачу (блокер приёмки 64f7976a).
+      const field = fieldInput({
+        value: editingRaw,
+        extraClass: 'ui-task-row-edit',
+        ariaLabel: t('tasks.editLineAria'),
+      });
       ensureInlineEditContext();
       inlineEditCommands.set(field, {
         commit: () => {
@@ -414,14 +478,25 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     } else {
       actions.renderText(textHost, row);
       textHost.addEventListener('dblclick', () => {
-        if (row.stale) return;
+        if (row.stale || editingKey === row.key) return;
         editingKey = row.key;
-        // Правка — состояние КОМПОНЕНТЫ, а не данных строки: сверка по ключу
-        // его не увидит, поэтому строку перерисовываем напрямую.
-        fillTaskRow(node, row);
-        const field = node.querySelector<HTMLInputElement>('.ui-task-row-edit');
-        field?.focus();
-        field?.select();
+        editingRaw = null;
+        // Сырую строку читает экран: компонент не знает сети. Пока ответа нет,
+        // строка остаётся снапшотом; ответ пришёл — перерисовываем поле.
+        void actions.loadRawLine(row).then((raw) => {
+          if (editingKey !== row.key) return;
+          if (raw === null) {
+            closeEdit();
+            return;
+          }
+          editingRaw = raw;
+          // Правка — состояние КОМПОНЕНТЫ, а не данных строки: сверка по ключу
+          // его не увидит, поэтому строку перерисовываем напрямую.
+          fillTaskRow(node, row);
+          const field = node.querySelector<HTMLInputElement>('.ui-task-row-edit');
+          field?.focus();
+          field?.select();
+        });
       });
     }
     const dates = div('ui-task-row-dates');
@@ -608,6 +683,7 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     // Строка, открытая в правке, могла уйти из выборки — правку закрываем.
     if (editingKey !== null && !entries().some((entry) => entry.key === editingKey)) {
       editingKey = null;
+      editingRaw = null;
     }
     root.dataset['stale'] = next.stale ? '1' : '0';
     undoBtn.hidden = !next.canUndo;

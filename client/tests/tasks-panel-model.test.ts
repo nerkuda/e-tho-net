@@ -22,20 +22,24 @@ import type { Reminder, ReminderListResult, TaskDTO } from '@etn/shared';
 import {
   TASK_GROUP_NO_DATE,
   TASK_GROUP_NO_SUBJECT,
-  TASK_GROUP_THRESHOLDS,
+  calendarDaysBetween,
   groupPanelRows,
   lastDayOfMonth,
   monthKeyOf,
+  panelMarkerAdvanced,
   panelNeedsRefresh,
+  planTaskBulk,
   reminderPanelRows,
   reminderRowKey,
   reminderSectionOf,
+  replaceTaskLine,
   shiftDay,
   taskCounters,
   taskGroupingMode,
   taskRowIsStale,
   taskRowKey,
   taskRowView,
+  taskRowsForFilter,
   weekStartOf,
   type PanelGroupable,
 } from '../src/renderer/lib/ui/task-panel-model.js';
@@ -67,13 +71,15 @@ function row(key: string, day: string | null, subjectId: string | null = null): 
 
 describe('пороги группировки (требование 6762adb0)', () => {
   it('1 — по мыслям, 2–14 — по датам, 15–50 — по неделям, >50 — по месяцам', () => {
+    // Числа спеки 6762adb0 зафиксированы литералами: тест ловит сдвиг порога
+    // (например, 14 → 15 в TASK_GROUP_THRESHOLDS), а не повторяет константу.
     assert.equal(taskGroupingMode(0), 'thoughts');
-    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.thoughts), 'thoughts');
+    assert.equal(taskGroupingMode(1), 'thoughts');
     assert.equal(taskGroupingMode(2), 'dates');
-    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.dates), 'dates');
-    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.dates + 1), 'weeks');
-    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.weeks), 'weeks');
-    assert.equal(taskGroupingMode(TASK_GROUP_THRESHOLDS.weeks + 1), 'months');
+    assert.equal(taskGroupingMode(14), 'dates');
+    assert.equal(taskGroupingMode(15), 'weeks');
+    assert.equal(taskGroupingMode(50), 'weeks');
+    assert.equal(taskGroupingMode(51), 'months');
   });
 });
 
@@ -208,6 +214,86 @@ describe('счётчики и «серая строка» (0e85b66e)', () => {
     );
   });
 
+  it('глобальный маркер проекции сравнивается с загруженным `max_revision`', () => {
+    assert.equal(panelMarkerAdvanced(8, 7), true, 'ревизия события новее загруженной');
+    assert.equal(panelMarkerAdvanced(7, 7), false, 'тот же маркер — не устарело');
+    assert.equal(panelMarkerAdvanced(6, 7), false);
+    assert.equal(panelMarkerAdvanced(null, 7), false, 'событие без ревизии не красит панель');
+    assert.equal(
+      panelNeedsRefresh({ rows: [], markerAdvanced: true }),
+      true,
+      'маркер ушёл вперёд — «Обновить» подсвечена',
+    );
+  });
+
+  it('массовая команда в периоде не трогает задачи вне периода', () => {
+    const rows = [
+      task({
+        comment_id: 'in',
+        period_from: '2026-11-14',
+        period_to: '2026-11-20',
+        due: '2026-11-20',
+      }),
+      task({
+        comment_id: 'before',
+        period_from: '2026-11-01',
+        period_to: '2026-11-10',
+        due: '2026-11-10',
+      }),
+      task({
+        comment_id: 'after',
+        period_from: '2026-12-01',
+        period_to: '2026-12-05',
+        due: '2026-12-05',
+      }),
+      task({ comment_id: 'undated', period_from: null, period_to: null, due: null }),
+    ];
+    const filter = { scope: 'open' as const, from: '2026-11-14', to: '2026-11-20' };
+    assert.deepEqual(
+      taskRowsForFilter(rows, filter).map((row) => row.comment_id),
+      ['in'],
+      'пересечение с периодом — только одна строка',
+    );
+    assert.deepEqual(
+      taskRowsForFilter(rows, { scope: 'undated' }).map((row) => row.comment_id),
+      ['undated'],
+    );
+    assert.deepEqual(
+      taskRowsForFilter(rows, { scope: 'overdue', today: '2026-11-14' }).map(
+        (row) => row.comment_id,
+      ),
+      ['before'],
+    );
+  });
+
+  it('подтверждение массовой команды считает строки, а undo — записи', () => {
+    const rows = [
+      task({ comment_id: 'c1', line_no: 0, period_from: '2026-11-14', period_to: '2026-11-14' }),
+      task({ comment_id: 'c1', line_no: 1, period_from: '2026-11-14', period_to: '2026-11-14' }),
+      task({ comment_id: 'c2', line_no: 0, period_from: '2026-11-14', period_to: '2026-11-14' }),
+    ];
+    const plan = planTaskBulk(rows, { scope: 'open', from: '2026-11-14', to: '2026-11-14' });
+    assert.equal(plan.rows.length, 3, 'строк — три');
+    assert.deepEqual(plan.commentIds, ['c1', 'c2'], 'записей — две');
+  });
+
+  it('замена строки сохраняет её сырой текст с маркером', () => {
+    const body = '- [ ] старая [[2026-11-14]]\n- [x] вторая';
+    assert.equal(
+      replaceTaskLine(body, 0, '- [x] новая [[2026-11-15]]'),
+      '- [x] новая [[2026-11-15]]\n- [x] вторая',
+      'маркер и чекбокс — часть строки, а не снапшота без них',
+    );
+    assert.equal(replaceTaskLine(body, 1, '- [x] вторая'), body, 'без изменений — тот же текст');
+    assert.equal(replaceTaskLine(body, 5, '- [ ] нет строки'), null);
+  });
+
+  it('разница дат считается календарными днями', () => {
+    assert.equal(calendarDaysBetween('2026-11-14', '2026-11-20'), 6);
+    assert.equal(calendarDaysBetween('2026-11-20', '2026-11-14'), -6);
+    assert.equal(calendarDaysBetween('2026-12-31', '2027-01-01'), 1);
+  });
+
   it('строка панели несёт адрес проекции, день срока и субъекта', () => {
     const view = taskRowView(
       task({
@@ -235,7 +321,7 @@ describe('вхождения напоминаний (требования 6762ad
       subject_type: 'thought',
       subject_id: 't1',
       subject_state: 'active',
-      kind: 'series',
+      kind: 'one',
       schedule: { type: 'once' },
       anchor_at: '2026-11-14T09:00:00.000Z',
       next_at: '2026-11-14T09:00:00.000Z',
@@ -264,7 +350,7 @@ describe('вхождения напоминаний (требования 6762ad
       from: null,
       to: null,
     };
-    const rows = reminderPanelRows(result, new Map([['t1', 'Мысль']]), () => 'однократно');
+    const rows = reminderPanelRows(result, new Map([['thought:t1', 'Мысль']]), () => 'однократно');
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.moment, '2026-11-15T10:00:00.000Z', 'момент показа — `until`');
     assert.equal(rows[0]?.status, 'snoozed');

@@ -1369,6 +1369,7 @@ export const ru = {
   'tasks.shiftDay': 'следующий день',
   'tasks.shiftWeek': 'через неделю',
   'tasks.shiftMonth': 'через месяц',
+  'tasks.moveDate': 'на дату…',
   /** Команды строки задачи. */
   'tasks.openSource': 'Открыть источник',
   'tasks.moveRow': 'Перенести на…',
@@ -1377,10 +1378,14 @@ export const ru = {
   'tasks.openSubject': 'Открыть субъект',
   'tasks.dismissReminder': 'Убрать',
   'tasks.snoozeReminder': 'Отложить…',
+  'tasks.snoozeDateTime': 'дата и время…',
+  'tasks.snoozeDateTimeTitle': 'Отложить напоминание',
   'tasks.createTask': 'Создать задачу на сегодня',
   /** Подсказки кнопок-меню. */
   'tasks.rowCommands': 'Команды строки',
   'tasks.groupCommands': 'Команды группы',
+  'tasks.editLineAria': 'Правка строки задачи (сырой markdown)',
+  'tasks.pickDateTitle': 'Перенести на дату',
   /** Заголовки секций задач. */
   'tasks.sectionMain': 'Основная',
   'tasks.sectionOverdue': 'Просрочено',
@@ -1406,8 +1411,8 @@ export const ru = {
   'tasks.repeatLastDayOfMonth': 'последний день месяца каждые %2 мес.',
   /** Подтверждение массовой команды. */
   'tasks.bulkTitle': 'Массовая команда',
-  'tasks.bulkCancelQuestion': 'Отменить задачи в записях: %1? Строки станут обычным текстом.',
-  'tasks.bulkMoveQuestion': 'Перенести даты невыполненных строк: %1 записей?',
+  'tasks.bulkCancelQuestion': 'Отменить задачи в строках: %1? Строки станут обычным текстом.',
+  'tasks.bulkMoveQuestion': 'Перенести даты строк: %1?',
   'tasks.bulkEmpty': 'В группе нет невыполненных задач.',
   'tasks.bulkPartial': 'Часть строк не изменена: %1.',
   'tasks.bulkFailed': 'Массовая команда не выполнена: %1',

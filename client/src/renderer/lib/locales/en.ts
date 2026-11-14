@@ -1357,6 +1357,7 @@ export const en = {
   'tasks.shiftDay': 'the next day',
   'tasks.shiftWeek': 'in a week',
   'tasks.shiftMonth': 'in a month',
+  'tasks.moveDate': 'on a date…',
   /** Task row commands. */
   'tasks.openSource': 'Open source',
   'tasks.moveRow': 'Move to…',
@@ -1365,10 +1366,14 @@ export const en = {
   'tasks.openSubject': 'Open subject',
   'tasks.dismissReminder': 'Dismiss',
   'tasks.snoozeReminder': 'Snooze…',
+  'tasks.snoozeDateTime': 'date and time…',
+  'tasks.snoozeDateTimeTitle': 'Snooze reminder',
   'tasks.createTask': 'Create a task for today',
   /** Menu button tooltips. */
   'tasks.rowCommands': 'Row commands',
   'tasks.groupCommands': 'Group commands',
+  'tasks.editLineAria': 'Edit task line (raw markdown)',
+  'tasks.pickDateTitle': 'Move to date',
   /** Task section titles. */
   'tasks.sectionMain': 'Main',
   'tasks.sectionOverdue': 'Overdue',
@@ -1394,8 +1399,8 @@ export const en = {
   'tasks.repeatLastDayOfMonth': 'last day of the month every %2 months',
   /** Bulk command confirmation. */
   'tasks.bulkTitle': 'Bulk command',
-  'tasks.bulkCancelQuestion': 'Cancel tasks in entries: %1? The lines become plain text.',
-  'tasks.bulkMoveQuestion': 'Move the dates of open lines in %1 entries?',
+  'tasks.bulkCancelQuestion': 'Cancel tasks in lines: %1? The lines become plain text.',
+  'tasks.bulkMoveQuestion': 'Move the dates of lines: %1?',
   'tasks.bulkEmpty': 'The group has no open tasks.',
   'tasks.bulkPartial': 'Some lines were not changed: %1.',
   'tasks.bulkFailed': 'Bulk command failed: %1',

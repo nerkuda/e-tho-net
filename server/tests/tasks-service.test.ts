@@ -486,5 +486,36 @@ describe(
         ndb.close();
       }
     });
+
+    it('массовая команда в периоде не трогает задачи вне периода', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const insideId = createTaskComment(ndb, 't-1', '- [ ] В периоде [[2026-11-15]]');
+        const outsideId = createTaskComment(ndb, 't-1', '- [ ] Вне периода [[2026-12-01]]');
+
+        const cancelled = write(ndb, () =>
+          applyTaskMassCommand(
+            ndb,
+            {
+              action: 'cancel-all',
+              filter: { scope: 'open', from: '2026-11-14', to: '2026-11-20' },
+            },
+            USER,
+          ),
+        );
+
+        assert.equal(cancelled.revisions.length, 1, 'изменена одна запись — только в периоде');
+        assert.equal(cancelled.changed[0]!.id, insideId);
+        const remaining = listTasks(ndb, { scope: 'open' });
+        assert.deepEqual(
+          remaining.items.map((task) => task.comment_id),
+          [outsideId],
+          'задача вне периода осталась открытой',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );

@@ -27,7 +27,7 @@
  * хоть одна строка либо пришло событие напоминаний `reminders.changed`.
  */
 
-import type { Reminder, ReminderListResult, TaskDTO } from '@etn/shared';
+import type { Reminder, ReminderListResult, TaskDTO, TaskMassFilter } from '@etn/shared';
 
 /** Пороги группировки по количеству элементов (требование 6762adb0). */
 export const TASK_GROUP_THRESHOLDS = {
@@ -222,7 +222,11 @@ export interface TaskPanelRow extends PanelGroupable {
   commentId: string;
   /** Номер строки `body_md` с нуля (адрес `PATCH /tasks`). */
   lineNo: number;
-  /** Снапшот текста строки без маркера задачи. */
+  /**
+   * Снапшот текста строки БЕЗ маркера задачи (для показа). Для инлайн-правки
+   * компонента запрашивает СЫРУЮ строку `body_md` (`loadRawLine`), иначе
+   * сохранение потеряло бы маркер и чекбокс.
+   */
   text: string;
   done: boolean;
   /** Серая строка: устарела до «Обновить» и не редактируется. */
@@ -288,15 +292,87 @@ export function taskCounters(rows: readonly TaskDTO[]): { open: number; done: nu
 
 /**
  * Нужен ли перезапрос панели (требование 0e85b66e): пришло событие
- * напоминаний `reminders.changed` либо устарела хоть одна строка.
+ * напоминаний `reminders.changed`, устарела хоть одна строка либо глобальный
+ * маркер проекции ушёл вперёд относительно загруженного.
  */
 export function panelNeedsRefresh(input: {
   rows: readonly TaskDTO[];
   staleComments?: ReadonlySet<string>;
   remindersChanged?: boolean;
+  markerAdvanced?: boolean;
 }): boolean {
-  if (input.remindersChanged === true) return true;
+  if (input.remindersChanged === true || input.markerAdvanced === true) return true;
   return input.rows.some((row) => taskRowIsStale(row, input.staleComments));
+}
+
+/**
+ * Глобальный маркер проекции (`max_revision` из GET /tasks) ушёл вперёд?
+ * Ревизия события больше загруженного маркера — в сети изменилась запись,
+ * которую панель ещё не перечитывала (уточнение e6d65f51 0.16.1).
+ */
+export function panelMarkerAdvanced(
+  eventRevision: number | null,
+  loadedMaxRevision: number,
+): boolean {
+  return eventRevision !== null && eventRevision > loadedMaxRevision;
+}
+
+/**
+ * Строки задач, попадающие под фильтр массовой команды (требование e6af8b9e):
+ * зеркало серверного отбора `GET /tasks` — тот же фильтр уходит в
+ * `PATCH /tasks`, поэтому подтверждение и undo считают те же строки.
+ */
+export function taskRowsForFilter(rows: readonly TaskDTO[], filter: TaskMassFilter): TaskDTO[] {
+  return rows.filter((row) => {
+    if (filter.comment_id !== undefined && row.comment_id !== filter.comment_id) return false;
+    if (filter.thought_id !== undefined && !row.subject_thoughts.includes(filter.thought_id)) {
+      return false;
+    }
+    if (filter.from !== undefined && (row.period_to === null || row.period_to < filter.from)) {
+      return false;
+    }
+    if (filter.to !== undefined && (row.period_from === null || row.period_from > filter.to)) {
+      return false;
+    }
+    if (filter.scope === 'open' && row.done) return false;
+    if (filter.scope === 'done' && !row.done) return false;
+    if (filter.scope === 'undated' && row.period_from !== null) return false;
+    if (filter.scope === 'overdue') {
+      if (row.due === null || row.done) return false;
+      if (filter.today !== undefined && row.due >= filter.today) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * План массовой команды: затронутые СТРОКИ (их считает подтверждение —
+ * e6af8b9e «сколько строк») и записи-источники (одна правка `body_md` на запись).
+ * Строк может быть больше записей: в одной записи несколько задач.
+ */
+export function planTaskBulk(
+  rows: readonly TaskDTO[],
+  filter: TaskMassFilter,
+): { rows: TaskDTO[]; commentIds: string[] } {
+  const selected = taskRowsForFilter(rows, filter);
+  return { rows: selected, commentIds: [...new Set(selected.map((row) => row.comment_id))] };
+}
+
+/**
+ * Заменить одну строку `body_md` целиком (правка сохраняет маркер и чекбокс:
+ * вызывающий передаёт СЫРУЮ строку). `null` — номера строки нет.
+ */
+export function replaceTaskLine(bodyMd: string, lineNo: number, line: string): string | null {
+  const lines = bodyMd.split('\n');
+  if (lineNo < 0 || lineNo >= lines.length) return null;
+  if (lines[lineNo] === line) return bodyMd;
+  lines[lineNo] = line;
+  return lines.join('\n');
+}
+
+/** Календарных дней от `from` до `to` (обе даты `YYYY-MM-DD`). */
+export function calendarDaysBetween(from: string, to: string): number {
+  return Math.round((parseDay(to).getTime() - parseDay(from).getTime()) / 86_400_000);
 }
 
 /** Строка вхождения напоминания в панели (view-модель). */
@@ -356,7 +432,9 @@ export function reminderPanelRows(
         reminderId: reminder.id,
         subjectType: reminder.subject_type,
         subjectId: reminder.subject_id,
-        title: titles.get(reminder.subject_id) ?? reminder.subject_id,
+        // Экран кладёт названия под ключами `<вид>:<id>`: одна карта хранит и
+        // мысли, и публикации (раньше ключ терялся и показывался GUID).
+        title: titles.get(`${reminder.subject_type}:${reminder.subject_id}`) ?? reminder.subject_id,
         moment,
         status: occurrence.status,
         repeat: repeatLabel(reminder),

@@ -37,6 +37,11 @@ import { requireNetworkId } from '../../app.js';
 import { renderMarkdown } from '@etn/markdown';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from '../../editor/wiki-link-resolver.js';
 import { confirmDialog } from '../../lib/dialog.js';
+import {
+  datePeriodValueFromInstants,
+  openDatePeriodDialog,
+  resolveDatePeriodInstants,
+} from '../../lib/date-period-dialog.js';
 import { errText, renderHtml } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateParts, getLang, t } from '../../lib/i18n.js';
@@ -55,10 +60,14 @@ import {
   type TaskShift,
 } from '../../lib/ui/task-panel.js';
 import {
+  calendarDaysBetween,
   groupPanelRows,
+  panelMarkerAdvanced,
   panelNeedsRefresh,
+  planTaskBulk,
   reminderPanelRows,
   reminderSectionOf,
+  replaceTaskLine,
   shiftDay,
   taskCounters,
   taskGroupingMode,
@@ -135,6 +144,8 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
   let showDone = false;
   let staleComments = new Set<string>();
   let remindersChanged = false;
+  /** Глобальный маркер `max_revision` ушёл вперёд после загрузки (0e85b66e). */
+  let markerAdvanced = false;
   let loadSeq = 0;
   /** Снимок текстов для отмены массовой команды (требование e6af8b9e). */
   let undoSnapshot: Array<{ id: string; body_md: string; version: number }> | null = null;
@@ -153,10 +164,13 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       renderView();
     },
     toggle: (row, done) => void toggleTask(row, done),
+    loadRawLine: (row) => loadRawLine(row),
     editLine: (row, text) => saveLine(row, text),
     rowCommand: (row, command, shift) => void runRowCommand(row, command, shift),
     bulk: (filter, command, shift) => void runBulk(filter, command, shift),
     reminderAction: (row, action, until) => void runReminderAction(row, action, until),
+    pickDate: (initial) => pickDate(initial),
+    pickDateTime: (initialIso) => pickDateTime(initialIso),
     openDay: (day) => deps.openDay(day),
     renderText: (node, row) => renderRowText(node, row),
   });
@@ -272,6 +286,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       };
       staleComments = new Set<string>();
       remindersChanged = false;
+      markerAdvanced = false;
       loadError = null;
       await resolveSubjects(seq);
     } catch (err) {
@@ -444,13 +459,12 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     if (disposed) return;
     const taskRows = [...state.period, ...state.overdue, ...state.undated, ...state.done];
     const counters = taskCounters(taskRows);
-    const stale =
-      staleComments.size > 0 ||
-      panelNeedsRefresh({
-        rows: taskRows,
-        staleComments,
-        remindersChanged,
-      });
+    const stale = panelNeedsRefresh({
+      rows: taskRows,
+      staleComments,
+      remindersChanged,
+      markerAdvanced,
+    });
 
     const reminderRows = reminderPanelRows(state.reminders, subjectTitles, repeatLabel);
     const todayStart = Date.parse(localDayStart(todayLocal()));
@@ -475,8 +489,17 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       sections.push(reminderSection('period', t('tasks.remindersPeriod'), buckets.period));
     }
 
+    const period = effectivePeriod();
     const view: TaskPanelView = {
       stale,
+      // «За период» адресуется теми же границами, что показаны лентой; без
+      // from/to сервер взял бы всю сеть (блокер приёмки 64f7976a).
+      periodFilter: {
+        scope: 'open',
+        from: period.from,
+        to: period.to,
+        today: todayLocal(),
+      },
       canUndo: undoSnapshot !== null,
       showDone,
       counters,
@@ -509,6 +532,43 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       (item) => item.comment_id === row.commentId && item.line_no === row.lineNo,
     );
     return ref?.revision ?? 1;
+  }
+
+  /**
+   * Абсолютная дата «перенести на…» → серверный сдвиг в днях. Сервер знает
+   * только `days`/`months` (de4cee18), поэтому дата переводится в разницу от
+   * якоря строки: срок (или начало периода) встаёт на выбранную дату, период
+   * строки сохраняется. `null` — дата та же самая (двигать нечего).
+   */
+  function shiftToDate(anchor: string, target: string): TaskShift | null {
+    const days = calendarDaysBetween(anchor, target);
+    if (!Number.isFinite(days) || days === 0) return null;
+    return { days };
+  }
+
+  /** Диалог «Дата» (общий контрол периода, ADR d4d53fe6); `null` — отмена. */
+  async function pickDate(initial: string): Promise<string | null> {
+    const day = isValidLocalDay(initial) ? initial : todayLocal();
+    const value = await openDatePeriodDialog({
+      allowPeriod: false,
+      allowTime: false,
+      title: t('tasks.pickDateTitle'),
+      initial: { mode: 'date', from: day, to: day },
+    });
+    return value === null ? null : value.from;
+  }
+
+  /** Диалог даты и времени отложенного вхождения; `null` — отмена. */
+  async function pickDateTime(initialIso: string): Promise<string | null> {
+    const previous = { from: initialIso, to: initialIso };
+    const value = await openDatePeriodDialog({
+      allowPeriod: false,
+      allowTime: true,
+      title: t('tasks.snoozeDateTimeTitle'),
+      initial: datePeriodValueFromInstants(initialIso, initialIso, true, true),
+    });
+    if (value === null) return null;
+    return resolveDatePeriodInstants(value, previous).from;
   }
 
   /** Текст ошибки операции строки (коды операции de4cee18). */
@@ -551,24 +611,39 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
   }
 
-  /** Инлайн-правка сырого markdown строки (правка `body_md` источника). */
-  async function saveLine(row: TaskPanelRow, text: string): Promise<boolean> {
+  /**
+   * Сырая строка `body_md` для инлайн-правки. Компонент показывает снапшот без
+   * маркера (`TaskDTO.text`), поэтому править его нельзя — читаем источник и
+   * отдаём строку целиком, с `- [ ] ` / `- [x] `.
+   */
+  async function loadRawLine(row: TaskPanelRow): Promise<string | null> {
     const networkId = requireNetworkId();
     try {
       const comment = await etn.comments.get(networkId, row.commentId);
-      const lines = comment.body_md.split('\n');
-      if (row.lineNo < 0 || row.lineNo >= lines.length) {
+      const line = comment.body_md.split('\n')[row.lineNo];
+      if (line === undefined) {
+        notice(taskErrorText('line_not_found'), 'error');
+        return null;
+      }
+      return line;
+    } catch (err) {
+      notice(t('tasks.errorEdit', [errText(err)]), 'error');
+      return null;
+    }
+  }
+
+  /** Инлайн-правка СЫРОЙ markdown строки (правка `body_md` источника). */
+  async function saveLine(row: TaskPanelRow, rawLine: string): Promise<boolean> {
+    const networkId = requireNetworkId();
+    try {
+      const comment = await etn.comments.get(networkId, row.commentId);
+      const next = replaceTaskLine(comment.body_md, row.lineNo, rawLine);
+      if (next === null) {
         notice(taskErrorText('line_not_found'), 'error');
         return false;
       }
-      if (lines[row.lineNo] === text) return true;
-      lines[row.lineNo] = text;
-      await etn.comments.update(
-        networkId,
-        row.commentId,
-        { body_md: lines.join('\n') },
-        comment.version,
-      );
+      if (next === comment.body_md) return true;
+      await etn.comments.update(networkId, row.commentId, { body_md: next }, comment.version);
       staleComments.add(row.commentId);
       renderView();
       return true;
@@ -590,6 +665,17 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       return;
     }
     const networkId = requireNetworkId();
+    let effectiveShift = shift;
+    if (command === 'move' && shift?.date !== undefined) {
+      const anchor = row.due ?? row.periodFrom;
+      if (anchor === null) {
+        notice(taskErrorText('undated'), 'error');
+        return;
+      }
+      const resolved = shiftToDate(anchor, shift.date);
+      if (resolved === null) return;
+      effectiveShift = resolved;
+    }
     try {
       const result = await etn.tasks.patch(networkId, {
         ops: [
@@ -597,7 +683,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
             comment_id: row.commentId,
             line_no: row.lineNo,
             action: command === 'move' ? 'move' : 'cancel',
-            ...(shift !== undefined ? shift : {}),
+            ...(effectiveShift !== undefined ? effectiveShift : {}),
             expected_revision: revisionOf(row),
           },
         ],
@@ -614,27 +700,6 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
   }
 
-  /** Адресные записи источника, которые затронет массовая команда. */
-  function sourceCommentIds(filter: TaskMassFilter): string[] {
-    const rows = [...state.period, ...state.overdue, ...state.undated];
-    const ids = new Set<string>();
-    for (const row of rows) {
-      if (filter.thought_id !== undefined && !row.subject_thoughts.includes(filter.thought_id)) {
-        continue;
-      }
-      if (filter.from !== undefined && (row.period_to === null || row.period_to < filter.from)) {
-        continue;
-      }
-      if (filter.to !== undefined && (row.period_from === null || row.period_from > filter.to)) {
-        continue;
-      }
-      if (filter.scope === 'undated' && row.period_from !== null) continue;
-      if (filter.scope === 'overdue' && (row.due === null || row.done)) continue;
-      ids.add(row.comment_id);
-    }
-    return [...ids];
-  }
-
   /** Массовая команда группы: подтверждение со сводкой → команда → undo. */
   async function runBulk(
     filter: TaskMassFilter,
@@ -642,15 +707,25 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     shift?: TaskShift,
   ): Promise<void> {
     const networkId = requireNetworkId();
-    const commentIds = sourceCommentIds(filter);
-    if (commentIds.length === 0) {
+    // Подтверждение считает СТРОКИ, а сервер адресует записи: одна правка
+    // `body_md` на запись, но задач в записи может быть несколько (e6af8b9e).
+    const plan = planTaskBulk([...state.period, ...state.overdue, ...state.undated], filter);
+    if (plan.rows.length === 0) {
       notice(t('tasks.bulkEmpty'), 'info');
       return;
+    }
+    let effectiveShift = shift;
+    if (command === 'move-all' && shift?.date !== undefined) {
+      // Массовый перенос — единый сдвиг от «сегодня» (периоды строк
+      // сохраняются); выбранная дата задаёт величину сдвига.
+      const resolved = shiftToDate(todayLocal(), shift.date);
+      if (resolved === null) return;
+      effectiveShift = resolved;
     }
     const confirmed = await confirmDialog(
       t('tasks.bulkTitle'),
       t(command === 'cancel-all' ? 'tasks.bulkCancelQuestion' : 'tasks.bulkMoveQuestion', [
-        commentIds.length,
+        plan.rows.length,
       ]),
       command === 'cancel-all',
     );
@@ -658,7 +733,9 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     try {
       // Прежние тексты — для отмены команды (undo): правки идут в записях-
       // источниках, поэтому откат — восстановление `body_md` с новой ревизией.
-      const snapshot = await Promise.all(commentIds.map((id) => etn.comments.get(networkId, id)));
+      const snapshot = await Promise.all(
+        plan.commentIds.map((id) => etn.comments.get(networkId, id)),
+      );
       undoSnapshot = snapshot.map((comment) => ({
         id: comment.id,
         body_md: comment.body_md,
@@ -667,7 +744,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       const result = await etn.tasks.patch(networkId, {
         action: command,
         filter,
-        ...(shift !== undefined ? shift : {}),
+        ...(effectiveShift !== undefined ? effectiveShift : {}),
       });
       const failed = result.results.filter((item) => !item.ok);
       if (failed.length > 0) {
@@ -799,11 +876,22 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       return;
     }
     if (event.type === 'comment.updated') {
-      const id = (event.data as { id?: string }).id;
-      if (id !== undefined && loadedCommentIds().has(id)) {
-        staleComments.add(id);
-        renderView();
+      const data = event.data as { id?: string; version?: unknown };
+      // Глобальный маркер проекции: `max_revision` из GET /tasks сравнивается
+      // с ревизией события (уточнение e6d65f51 0.16.1). Ушёл вперёд — в сети
+      // изменилась запись, панель показывает «Обновить» ещё до загрузки строк.
+      if (
+        panelMarkerAdvanced(
+          typeof data.version === 'number' ? data.version : null,
+          state.maxRevision,
+        )
+      ) {
+        markerAdvanced = true;
       }
+      if (data.id !== undefined && loadedCommentIds().has(data.id)) {
+        staleComments.add(data.id);
+      }
+      if (markerAdvanced || staleComments.size > 0) renderView();
       return;
     }
     if (event.type === 'comment.created' || event.type === 'comment.deleted') {
