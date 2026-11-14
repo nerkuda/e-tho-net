@@ -229,7 +229,8 @@ function buildApi(): EtnBridgeApi {
       exportPdf: (networkId, id) => invoke('publications.exportPdf', networkId, id),
       listShelves: (networkId) => invoke('publications.listShelves', networkId),
       createShelf: (networkId, input) => invoke('publications.createShelf', networkId, input),
-      updateShelf: (networkId, id, input) => invoke('publications.updateShelf', networkId, id, input),
+      updateShelf: (networkId, id, input) =>
+        invoke('publications.updateShelf', networkId, id, input),
       trashShelf: (networkId, id) => invoke('publications.trashShelf', networkId, id),
       restoreShelf: (networkId, id) => invoke('publications.restoreShelf', networkId, id),
       purgeShelf: (networkId, id) => invoke('publications.purgeShelf', networkId, id),
@@ -270,7 +271,14 @@ function buildApi(): EtnBridgeApi {
       setPropertyDefaultOverride: (networkId, ownerType, typeId, propertyId, value) =>
         invoke('types.setPropertyDefaultOverride', networkId, ownerType, typeId, propertyId, value),
       setPropertyDescriptionOverride: (networkId, ownerType, typeId, propertyId, description) =>
-        invoke('types.setPropertyDescriptionOverride', networkId, ownerType, typeId, propertyId, description),
+        invoke(
+          'types.setPropertyDescriptionOverride',
+          networkId,
+          ownerType,
+          typeId,
+          propertyId,
+          description,
+        ),
     },
     thoughtTypeViews: {
       list: (networkId, thoughtTypeId, opts) =>
@@ -282,7 +290,11 @@ function buildApi(): EtnBridgeApi {
       remove: (networkId, thoughtTypeId, viewId, expectedVersion) =>
         invoke('thoughtTypeViews.remove', networkId, thoughtTypeId, viewId, expectedVersion),
       run: (networkId, thoughtId, viewName, opts, requestId) =>
-        invokeCancellable('thoughtTypeViews.run', [networkId, thoughtId, viewName, opts], requestId),
+        invokeCancellable(
+          'thoughtTypeViews.run',
+          [networkId, thoughtId, viewName, opts],
+          requestId,
+        ),
       moveToThought: (networkId, thoughtTypeId, viewId, targetThoughtId) =>
         invoke('thoughtTypeViews.moveToThought', networkId, thoughtTypeId, viewId, targetThoughtId),
     },
@@ -341,6 +353,9 @@ function buildApi(): EtnBridgeApi {
         invoke('comments.addTarget', networkId, id, ownerType, ownerId, expectedVersion),
       removeTarget: (networkId, id, ownerType, ownerId, expectedVersion) =>
         invoke('comments.removeTarget', networkId, id, ownerType, ownerId, expectedVersion),
+    },
+    tasks: {
+      patch: (networkId, input) => invoke('tasks.patch', networkId, input),
     },
     attachments: {
       list: (networkId, ownerType, ownerId) =>
@@ -510,7 +525,8 @@ function buildApi(): EtnBridgeApi {
       set: (key, value) => invoke('meta.set', key, value),
     },
     history: {
-      list: (profileId, networkId, tabId, limit) => invoke('history.list', profileId, networkId, tabId, limit),
+      list: (profileId, networkId, tabId, limit) =>
+        invoke('history.list', profileId, networkId, tabId, limit),
       push: (profileId, networkId, tabId, thoughtId) =>
         invoke('history.push', profileId, networkId, tabId, thoughtId),
       rotate: (oldId, newId, tabId) => invoke('history.rotate', oldId, newId, tabId),

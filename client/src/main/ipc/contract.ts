@@ -30,7 +30,11 @@ export type {
   UpdateChannel,
 } from '@etn/shared';
 
-export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState } from '../compatibility.js';
+export type {
+  CompatibilityResult,
+  CompatibilityStatus,
+  CompatibilityBannerState,
+} from '../compatibility.js';
 
 import type {
   ApiKey,
@@ -131,6 +135,8 @@ import type {
   StructureQueryRequest,
   StructureQueryResponse,
   StructureIdsQueryResult,
+  TaskOpAction,
+  TaskPatchResult,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -244,12 +250,7 @@ export interface IpcErrorEnvelope {
  *  - `other` — прочий сетевой сбой без различимой причины.
  */
 export type ConnectFailureReason =
-  | 'refused'
-  | 'timeout'
-  | 'dns'
-  | 'unreachable'
-  | 'reset'
-  | 'other';
+  'refused' | 'timeout' | 'dns' | 'unreachable' | 'reset' | 'other';
 
 /** `details` транспортного отказа запроса — контракт main → renderer. */
 export interface ConnectFailureDetails {
@@ -367,9 +368,7 @@ export type WallpaperState =
  * name. No bytes are read — the add-attachment dialog only fills its path
  * field with it; the server sees the file once «Добавить» is pressed.
  */
-export type PickFileResult =
-  | { status: 'ok'; path: string; name: string }
-  | { status: 'cancel' };
+export type PickFileResult = { status: 'ok'; path: string; name: string } | { status: 'cancel' };
 
 /**
  * Содержимое системного буфера обмена, прочитанное главным процессом
@@ -436,8 +435,7 @@ export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity' | 'pub
  * (`publicationId`). Формы взаимоисключающи.
  */
 export type DeepLinkPayload =
-  | { networkId: string; thoughtId: string }
-  | { networkId: string; publicationId: string };
+  { networkId: string; thoughtId: string } | { networkId: string; publicationId: string };
 
 /**
  * Public DTO of an open tab (07-client-electron.md §3.6, workplan Q2).
@@ -508,6 +506,22 @@ export interface DraftRecord {
 
 /** Which stored drafts {@link EtnApi.ui.draftList} returns (default `pending`). */
 export type DraftListFilter = 'pending' | 'conflict' | 'all';
+
+/**
+ * Одна операция правки строки задачи для `PATCH /networks/{nid}/tasks`
+ * (операция de4cee18, 0.16.1). `line_no` — номер строки `body_md` С НУЛЯ,
+ * `expected_revision` — ревизия комментария-источника (обязательна для первой
+ * операции, иначе сервер ответит 400; несовпадение — 409).
+ */
+export interface TaskOpInput {
+  comment_id: string;
+  line_no: number;
+  action: TaskOpAction;
+  done?: boolean;
+  days?: number;
+  months?: number;
+  expected_revision?: number;
+}
 
 /** The full `window.etn` surface (docs/07-client-electron.md §6). */
 export interface EtnApi {
@@ -1106,7 +1120,12 @@ export interface EtnApi {
       networkId: string,
       thoughtId: string,
       viewName: string,
-      opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+      opts?: {
+        sort?: import('@etn/shared').StructureSort;
+        order?: import('@etn/shared').SortOrder;
+        limit?: number;
+        offset?: number;
+      },
       options?: { signal?: AbortSignal },
     ): Promise<RunThoughtTypeViewResult>;
     /**
@@ -1261,10 +1280,7 @@ export interface EtnApi {
      * dialog can quote it directly (0.8.1, требование 09f692ff); for
      * scalar properties the field is `null`.
      */
-    remove(
-      networkId: string,
-      id: string,
-    ): Promise<NetworkPropertyDeleteResult>;
+    remove(networkId: string, id: string): Promise<NetworkPropertyDeleteResult>;
     /**
      * `GET /networks/{nid}/properties/{id}/usage` — type bindings, in-type
      * values per binding and out-of-type values count (the two numbers the
@@ -1307,6 +1323,15 @@ export interface EtnApi {
       ownerId: string,
       expectedVersion?: number,
     ): Promise<Comment>;
+  };
+  /**
+   * Задачи — проекция строк `- [ ]` в `body_md` (0.16.1, задача 632eca85;
+   * операции e6d65f51/de4cee18). Клиент правит ТОЛЬКО строки (toggle/move/
+   * cancel) — список задач и массовые команды придут задачами панели.
+   */
+  tasks: {
+    /** `PATCH /networks/{nid}/tasks` — правка строк; ответ несёт новые ревизии. */
+    patch(networkId: string, input: { ops: TaskOpInput[] }): Promise<TaskPatchResult>;
   };
   attachments: {
     list(networkId: string, ownerType: AttachmentOwnerType, ownerId: string): Promise<Attachment[]>;
@@ -1484,11 +1509,7 @@ export interface EtnApi {
    */
   locks: {
     /** `POST /networks/{nid}/locks` — acquire (idempotent for self). */
-    acquire(
-      networkId: string,
-      entityType: string,
-      entityId: string,
-    ): Promise<LockRow>;
+    acquire(networkId: string, entityType: string, entityId: string): Promise<LockRow>;
     /** `DELETE /networks/{nid}/locks/:lockId` — release (owner only). */
     release(networkId: string, lockId: string): Promise<void>;
     /**
@@ -1496,10 +1517,7 @@ export interface EtnApi {
      * `userId`/`clientId`. Cold-start resync and the «Участники мыслесети»
      * panel both consume this.
      */
-    list(
-      networkId: string,
-      filters?: { userId?: string; clientId?: string },
-    ): Promise<LockRow[]>;
+    list(networkId: string, filters?: { userId?: string; clientId?: string }): Promise<LockRow[]>;
     /** `POST /networks/{nid}/locks/clear` — manual reset for a participant. */
     clear(networkId: string, userId: string): Promise<LocksClearResult>;
   };
@@ -1542,7 +1560,9 @@ export interface EtnApi {
      */
     onStale(cb: (payload: { networkId: string; lastSeq: number }) => void): () => void;
     /** Per-network terminal close (Q5) — `network.deleted` or membership lost. */
-    onNetworkLost(cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void): () => void;
+    onNetworkLost(
+      cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void,
+    ): () => void;
     /**
      * Layer control frames (S11, 13-layers.md §12, §2.4): the server switched
      * this session's layer (`switched`) or deleted the layer the session was
@@ -1564,11 +1584,7 @@ export interface EtnApi {
      * активная сеть (задача faba9ff4).
      */
     onLanguage(
-      cb: (payload: {
-        networkId: string;
-        language: string;
-        source: LanguageSource;
-      }) => void,
+      cb: (payload: { networkId: string; language: string; source: LanguageSource }) => void,
     ): () => void;
     /**
      * Own-mutation flag (S11, 08-ui-spec.md §2.2): the write may have created
@@ -1648,7 +1664,12 @@ export interface EtnApi {
       tabId?: string | null,
       limit?: number,
     ): Promise<FocusHistoryEntry[]>;
-    push(profileId: string, networkId: string, tabId: string | null, thoughtId: string): Promise<void>;
+    push(
+      profileId: string,
+      networkId: string,
+      tabId: string | null,
+      thoughtId: string,
+    ): Promise<void>;
     /**
      * Rotates the visit history on an editor-thought change `oldId → newId`
      * in one local transaction (11-settings-and-state.md §2.3, H7, Q4). Uses
@@ -1742,7 +1763,11 @@ export interface EtnApi {
      * мысли (она вернётся к состоянию основы; созданная только в слое —
      * исчезнет). Основа не затрагивается.
      */
-    discardThought(networkId: string, layerId: string, thoughtId: string): Promise<LayerDiscardReport>;
+    discardThought(
+      networkId: string,
+      layerId: string,
+      thoughtId: string,
+    ): Promise<LayerDiscardReport>;
     /** Structural diff + overridden ids (§10.3). */
     diff(networkId: string, layerId: string): Promise<LayerDiffResult>;
     /**
@@ -2027,7 +2052,12 @@ export type EtnBridgeThoughtTypeViews = Omit<EtnApi['thoughtTypeViews'], 'run'> 
     networkId: string,
     thoughtId: string,
     viewName: string,
-    opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+    opts?: {
+      sort?: import('@etn/shared').StructureSort;
+      order?: import('@etn/shared').SortOrder;
+      limit?: number;
+      offset?: number;
+    },
     requestId?: string,
   ): Promise<RunThoughtTypeViewResult>;
 };

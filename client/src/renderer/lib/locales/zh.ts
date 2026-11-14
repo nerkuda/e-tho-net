@@ -70,7 +70,8 @@ export const zh = {
   'propertyList.emptySearch': '未找到结果',
   'propertyList.emptySearchHint': '请更改查询或清除搜索。',
   'propertyList.structuralMark': '🔒（结构属性）',
-  'propertyList.structuralHint': '用于无类型「父级/子级」边的系统链接属性。无法在此对话框中编辑或删除。',
+  'propertyList.structuralHint':
+    '用于无类型「父级/子级」边的系统链接属性。无法在此对话框中编辑或删除。',
   'linkProperty.empty': '无属性',
   'linkProperty.pickerTitle': '选择链接属性',
   'thoughtDrop.linkPropertyLabel': '链接属性',
@@ -98,9 +99,12 @@ export const zh = {
   'filterEditor.blockingIssues': '视图中存在错误——请在保存前修正。',
   'filterEditor.baseLayerGuard': '只能在基础层编辑视图。请切换到基础层后重试。',
   'filterEditor.openFailed': '无法打开视图对话框：%1',
-  'filterEditor.registryPending': '网络属性注册表尚未读取——按属性的条件可能无法显示。正在重试读取。',
-  'filterEditor.registryPendingSave': '网络属性注册表尚未读取：保存将覆盖视图并丢失按属性的条件。请等待连接恢复或重新打开对话框。',
-  'filterEditor.conditionsLostSave': '读取注册表后未恢复按属性的条件：在读取前所做的编辑将替换视图并丢失这些条件。请关闭对话框且不保存，然后重新打开视图。',
+  'filterEditor.registryPending':
+    '网络属性注册表尚未读取——按属性的条件可能无法显示。正在重试读取。',
+  'filterEditor.registryPendingSave':
+    '网络属性注册表尚未读取：保存将覆盖视图并丢失按属性的条件。请等待连接恢复或重新打开对话框。',
+  'filterEditor.conditionsLostSave':
+    '读取注册表后未恢复按属性的条件：在读取前所做的编辑将替换视图并丢失这些条件。请关闭对话框且不保存，然后重新打开视图。',
   'filterEditor.conditionWithoutValue': '未设置条件值',
   'strip.ariaLabel': '视图栏',
   'strip.children': '子级',
@@ -125,15 +129,18 @@ export const zh = {
   'strip.defaultCleared': '已取消「默认」标记。',
   'strip.defaultFailed': '无法更改标记。',
   'strip.transferToTypeTitle': '将视图移入类型视图',
-  'strip.transferToTypeConfirm': '视图「%1」将成为类型「%2」的共享视图：该类型的所有想法都能看到它。',
+  'strip.transferToTypeConfirm':
+    '视图「%1」将成为类型「%2」的共享视图：该类型的所有想法都能看到它。',
   'strip.transferToThoughtTitle': '从类型视图中排除视图',
-  'strip.transferToThoughtConfirm': '视图「%1」将从类型「%2」的所有想法中消失，并成为想法「%3」的类型外视图。',
+  'strip.transferToThoughtConfirm':
+    '视图「%1」将从类型「%2」的所有想法中消失，并成为想法「%3」的类型外视图。',
   'strip.transferInheritedNote': '视图继承自类型「%1」——它也会从「%1」的所有子类型中消失。',
   'strip.transferDefaultNote': '接收方已有默认视图——移入的视图将不带此标记。',
   'strip.transferDone': '视图已移入。',
   'strip.transferFailed': '无法移入视图。',
   'strip.deleteTitle': '删除视图',
-  'strip.deleteTypeConfirm': '删除类型「%2」的视图「%1」？它将从该类型的所有想法中消失。此操作不可撤销。',
+  'strip.deleteTypeConfirm':
+    '删除类型「%2」的视图「%1」？它将从该类型的所有想法中消失。此操作不可撤销。',
   'strip.deleteThoughtConfirm': '删除想法「%2」的视图「%1」？此操作不可撤销。',
   'strip.deleted': '视图已删除。',
   'strip.deleteFailed': '无法删除视图。',
@@ -310,7 +317,8 @@ export const zh = {
   'comment.search.count': '第 %1 个，共 %2 个',
   'comment.search.none': '没有匹配',
   'comment.hotkeys.title': '评论快捷键',
-  'comment.hotkeys.hint': '点击快捷键以指定新的组合。快捷键保存在服务器上，并在所有想法网络中生效。',
+  'comment.hotkeys.hint':
+    '点击快捷键以指定新的组合。快捷键保存在服务器上，并在所有想法网络中生效。',
   'comment.hotkeys.capture': '请按下快捷键…',
   'comment.hotkeys.reset': '恢复默认',
   'comment.hotkeys.resetAll': '全部重置',
@@ -346,7 +354,8 @@ export const zh = {
   'errors.code.PROTECTED_ENTITY': '该对象受保护，无法更改',
   'errors.code.CLIENT_VERSION_UNSUPPORTED': '不支持此客户端版本——请更新客户端',
   'errors.code.CLIENT_VERSION_UNSUPPORTED.version-missing': '服务器未收到客户端版本——请更新客户端',
-  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-invalid': '服务器无法识别客户端版本——请更新客户端',
+  'errors.code.CLIENT_VERSION_UNSUPPORTED.version-invalid':
+    '服务器无法识别客户端版本——请更新客户端',
   'errors.code.CLIENT_VERSION_UNSUPPORTED.version-out-of-range':
     '客户端版本不符合服务器要求——请更新客户端',
   'errors.code.UPDATE_INSTALLER_FAILED': '无法启动更新安装程序',
@@ -411,8 +420,10 @@ export const zh = {
   'serverUpdate.stage.done': '更新已完成',
   'serverUpdate.stage.failed': '更新失败',
   'serverUpdate.progress.waiting': '正在等待服务器上的更新任务…',
-  'serverUpdate.progress.downloading': '服务器正在下载安装程序并校验 SHA-256——这可能需要长达 10 分钟…',
-  'serverUpdate.progress.disconnected': '与服务器的连接已中断——更新期间这是正常现象。正在等待服务器重启。',
+  'serverUpdate.progress.downloading':
+    '服务器正在下载安装程序并校验 SHA-256——这可能需要长达 10 分钟…',
+  'serverUpdate.progress.disconnected':
+    '与服务器的连接已中断——更新期间这是正常现象。正在等待服务器重启。',
   'serverUpdate.progress.reconnect': '重启后客户端将自动重新连接，并在新版本上继续工作。',
   'serverUpdate.failure.reason': '原因：%1',
   'serverUpdate.failure.journal': '安装程序日志：%1',
@@ -424,10 +435,8 @@ export const zh = {
     '安装程序未在规定时间内完成，已保持运行——请等待其结束并查看日志',
   'serverUpdate.failure.notAService':
     '服务器不是作为 Windows 服务运行的——无法自动更新：请手动停止服务器并运行安装程序，或将 ETN 安装为 Windows 服务',
-  'serverUpdate.failure.interrupted':
-    '服务器在更新任务完成前重启（阶段「%1」）；任务不会自动继续',
-  'serverUpdate.failure.interruptedNoStage':
-    '服务器在更新任务完成前重启；任务不会自动继续',
+  'serverUpdate.failure.interrupted': '服务器在更新任务完成前重启（阶段「%1」）；任务不会自动继续',
+  'serverUpdate.failure.interruptedNoStage': '服务器在更新任务完成前重启；任务不会自动继续',
   'serverUpdate.failure.internal': '更新任务因内部错误失败',
   'serverUpdate.failure.unknown': '更新因未知原因失败',
   'serverUpdate.failure.noReason': '更新失败；详情请查看服务器日志',
@@ -436,9 +445,11 @@ export const zh = {
   'serverUpdate.pathCopied': '路径已复制',
   'serverUpdate.pathCopyFailed': '无法复制路径。',
   'serverUpdate.confirm.title': '将服务器更新到版本 %1？',
-  'serverUpdate.confirm.message': '服务器将停止，数据库将复制到归档，安装程序将替换程序并启动新版本。更新期间，客户端会收到「服务器正在更新」响应（503/1012）并自动重新连接。完成前请勿关闭服务器计算机。',
+  'serverUpdate.confirm.message':
+    '服务器将停止，数据库将复制到归档，安装程序将替换程序并启动新版本。更新期间，客户端会收到「服务器正在更新」响应（503/1012）并自动重新连接。完成前请勿关闭服务器计算机。',
   'serverUpdate.confirm.action': '更新服务器',
-  'serverUpdate.installerFailedNote': '服务器继续在当前版本上运行。不再提供重试——请检查安装程序日志。',
+  'serverUpdate.installerFailedNote':
+    '服务器继续在当前版本上运行。不再提供重试——请检查安装程序日志。',
   'serverUpdate.dockerNote': '服务器部署在 Docker 中——无法从客户端自动更新。',
   'serverUpdate.instruction': '更新命令：%1',
   'serverUpdate.copyInstruction': '复制命令',
@@ -534,7 +545,8 @@ export const zh = {
   'thoughtTypes.empty': '暂时没有类型',
   'thoughtTypes.emptyHint': '使用「添加」按钮创建第一个类型。',
   'thoughtTypes.delete': '删除类型',
-  'thoughtTypes.deleteConfirm': '删除类型「%1」？此类型的想法将保留并变为无类型；此类型的属性值将被删除。',
+  'thoughtTypes.deleteConfirm':
+    '删除类型「%1」？此类型的想法将保留并变为无类型；此类型的属性值将被删除。',
   'typeEditor.tab.basic': '基本',
   'typeEditor.tab.properties': '属性',
   'typeEditor.tab.views': '视图',
@@ -543,7 +555,8 @@ export const zh = {
   'typeEditor.group.inherited': '继承自父类型的属性',
   'typeEditor.group.own': '属于该类型自身的属性',
   'typeEditor.addProperty': '添加属性…',
-  'typeEditor.addPropertyHint': '从网络目录中连接属性（新属性在选择对话框中通过「创建属性」按钮创建）',
+  'typeEditor.addPropertyHint':
+    '从网络目录中连接属性（新属性在选择对话框中通过「创建属性」按钮创建）',
   'linkTypes.title': '链接类型',
   'linkTypes.col.name': '名称（从源到目标 / 反向）',
   'linkTypes.col.connected': '已连接到类型',
@@ -663,9 +676,11 @@ export const zh = {
   'selection.properties.dirtyTitle': '未应用的更改',
   'selection.properties.dirtyMessage': '应用更改？',
   'selection.properties.dirtyDiscard': '不应用',
-  'selection.properties.nothingToApplyNoThoughts': '没有可应用的内容：所选想法尚未读取。请关闭并重新打开对话框。',
+  'selection.properties.nothingToApplyNoThoughts':
+    '没有可应用的内容：所选想法尚未读取。请关闭并重新打开对话框。',
   'selection.properties.nothingToApplyNoRows': '没有可应用的内容：未选中任何行。请勾选需要的属性。',
-  'selection.properties.nothingToApplyEmpty': '没有可应用的内容：所选行没有值，也没有可清除的内容。请输入值或取消勾选。',
+  'selection.properties.nothingToApplyEmpty':
+    '没有可应用的内容：所选行没有值，也没有可清除的内容。请输入值或取消勾选。',
   'selection.properties.skippedCount': '跳过的行数：%1',
   'selection.properties.skippedTitle': '没有值的行',
   'selection.properties.skippedLine': '「%1」：未设置值，也没有可清除的内容',
@@ -691,10 +706,12 @@ export const zh = {
   'attachments.remove.title': '移除归属',
   'attachments.remove.message': '从此对象移除附件「%1」？',
   'attachments.remove.shared': '该附件还有其他所有者——它将保留在那里。',
-  'attachments.remove.iconBlocked': '该附件正用作此对象的图标（或封面）。请先更换或清除图标，然后重试移除。',
+  'attachments.remove.iconBlocked':
+    '该附件正用作此对象的图标（或封面）。请先更换或清除图标，然后重试移除。',
   'attachments.remove.failed': '无法移除归属',
   'attachments.owner.add.failed': '无法添加附件所有者',
-  'publication.cover.removeOwnerBlocked': '该附件是此出版物的封面。请先更换或移除封面，然后重试移除。',
+  'publication.cover.removeOwnerBlocked':
+    '该附件是此出版物的封面。请先更换或移除封面，然后重试移除。',
   'attachments.owners.one': '1 个所有者',
   'attachments.owners.few': '%1 个所有者',
   'attachments.owners.many': '%1 个所有者',
@@ -702,7 +719,8 @@ export const zh = {
   'attachments.viewer.hint': '请选择要查看的附件。',
   'attachments.move.failed': '无法移动',
   'attachments.move.removeFailed': '附件已添加到新想法，但无法移除原归属',
-  'attachments.move.iconBlocked': '该附件是此对象的图标（或封面）。已将其添加到新想法，但未从当前对象移除。请先更换或清除图标，然后重试移动。',
+  'attachments.move.iconBlocked':
+    '该附件是此对象的图标（或封面）。已将其添加到新想法，但未从当前对象移除。请先更换或清除图标，然后重试移动。',
   'attachments.copy.failed': '无法复制',
   'attachments.copy.one': '已复制到 1 个想法',
   'attachments.copy.few': '已复制到 %1 个想法',
@@ -798,7 +816,8 @@ export const zh = {
   'publications.delete.reasonProperties': '无法彻底删除——出版物正用于属性（%1）。',
   'publications.delete.reasonBase': '无法彻底删除——出版物存在于基础层：在层中只能将其移到回收站。',
   'publications.delete.reasonLayers': '无法彻底删除——出版物已在层中修改：%1。',
-  'publications.delete.reasonShelfBase': '无法彻底删除——书架存在于基础层：在层中只能将其移到回收站。',
+  'publications.delete.reasonShelfBase':
+    '无法彻底删除——书架存在于基础层：在层中只能将其移到回收站。',
   'publications.wizard.title': '新建出版物',
   'publications.wizard.meta': '名称',
   'publications.wizard.recipe': '标题选择',
@@ -897,7 +916,8 @@ export const zh = {
   'publication.field.titlePlaceholder': '出版物标题',
   'publication.field.subtitlePlaceholder': '副标题',
   'publication.recipe.group.select': '章节选择',
-  'publication.recipe.group.selectHint': '指定父级想法——它们的子树将生成出版物的章节；其余条件用于细化范围。',
+  'publication.recipe.group.selectHint':
+    '指定父级想法——它们的子树将生成出版物的章节；其余条件用于细化范围。',
   'publication.recipe.group.texts': '章节内容属性',
   'publication.recipe.group.textsHint': '指定从所选章节的哪些属性生成其文本。',
   'publication.recipe.group.extras': '附加材料',
@@ -916,7 +936,8 @@ export const zh = {
   'publication.cover.ownerLink': '链接',
   'publication.cover.ownerRemove': '移除所有者',
   'publication.cover.removeLastOwner.title': '删除附件',
-  'publication.cover.removeLastOwner.body': '如果删除附件的最后一个所有者，附件将被删除。是否删除？',
+  'publication.cover.removeLastOwner.body':
+    '如果删除附件的最后一个所有者，附件将被删除。是否删除？',
   'publication.cover.removeOwner': '移除所有者',
   'publication.cover.setDone': '出版物封面已更新。',
   'publication.cover.cleared': '封面已移除。',
@@ -931,7 +952,8 @@ export const zh = {
   'publication.orderUp': '上移',
   'publication.orderDown': '下移',
   'publication.recipe.keywordsPlaceholder': '关键词…',
-  'publication.recipe.keywordsTooltip': '单词以空格分隔，全部为必需；* — 任意字符；-单词 — 排除。示例：项目* -测试*',
+  'publication.recipe.keywordsTooltip':
+    '单词以空格分隔，全部为必需；* — 任意字符；-单词 — 排除。示例：项目* -测试*',
   'publication.recipe.types': '想法类型',
   'publication.recipe.typesPlaceholder': '类型名称…',
   'publication.recipe.parentsTooltip': '将视图限制为指定想法的子级',
@@ -1005,14 +1027,16 @@ export const zh = {
   'usagePanel.properties.clearOne': '清除属性',
   'usagePanel.properties.cleared': '属性已清除。',
   'usagePanel.properties.clearAllTitle': '清除所有属性',
-  'usagePanel.properties.clearAllMessage': '通过属性指向此想法的所有链接将被删除。此操作不可逆转，并会影响其他想法。',
+  'usagePanel.properties.clearAllMessage':
+    '通过属性指向此想法的所有链接将被删除。此操作不可逆转，并会影响其他想法。',
   'usagePanel.properties.clearAllConfirm': '清除',
   'usagePanel.properties.clearedCount': '已清除链接：%1。',
   'usagePanel.properties.nothingCleared': '原本没有链接。',
   'usagePanel.layers.title': '在层中使用',
   'usagePanel.layers.empty': '没有任何层保留该实体。',
   'usagePanel.layers.delete': '删除层',
-  'usagePanel.layers.baseHint': '实体存在于基础层：在工作层中只能将其标记为删除，「彻底删除」仅在基础层可用。',
+  'usagePanel.layers.baseHint':
+    '实体存在于基础层：在工作层中只能将其标记为删除，「彻底删除」仅在基础层可用。',
   'usagePanel.openLink': '打开使用情况…',
   'usagePanel.openFromTrashTitle': '显示回收站当前行的使用位置',
   'usagePanel.restoreTitle': '取消此实体的删除标记',
@@ -1053,8 +1077,10 @@ export const zh = {
   'drafts.retry.rejected': '服务器拒绝了更改',
   'drafts.failed.unavailable': '未发送：%1 %2 —— 记录不可用（已删除或位于其他层）。',
   'drafts.failed.unusable': '未发送：%1 %2 —— 编辑内容已损坏或其类型不受支持。',
-  'drafts.startup.purged': '启动时已删除：上次会话的 %1 %2 —— 未写入的编辑内容不会保留到客户端下次启动。',
-  'drafts.conflict.kept': '草稿未发送：记录已在其他地方更改。草稿文本在客户端关闭前保存在本地，并将在下次编辑此字段时被替换。',
+  'drafts.startup.purged':
+    '启动时已删除：上次会话的 %1 %2 —— 未写入的编辑内容不会保留到客户端下次启动。',
+  'drafts.conflict.kept':
+    '草稿未发送：记录已在其他地方更改。草稿文本在客户端关闭前保存在本地，并将在下次编辑此字段时被替换。',
   'workspace.netMenu.title': '想法网络菜单',
   'workspace.networkLabel': '想法网络',
   'workspace.view.map': '想法地图',
@@ -1088,7 +1114,8 @@ export const zh = {
   'admin.label.create': '创建',
   'admin.generaciyaKey': '生成密钥',
   'admin.limitMustBytPolozhitelnymCelymChislom': '限制必须是正整数。',
-  'admin.keyPokazanOdinRazSohranitePeredayte': '密钥仅显示一次。请保存并交给用户——关闭后将无法再次查看。',
+  'admin.keyPokazanOdinRazSohranitePeredayte':
+    '密钥仅显示一次。请保存并交给用户——关闭后将无法再次查看。',
   'admin.keySkopirovan': '密钥已复制。',
   'admin.notSucceededCopyKey': '无法复制密钥。',
   'admin.title.apiKeyPokazanOdinRaz': 'API 密钥（仅显示一次）',
@@ -1109,9 +1136,11 @@ export const zh = {
   'admin.label.show': '显示',
   'admin.vsegoRecords': '记录总数：%1',
   'app.networkNotOpen': '网络未打开。',
-  'app.notSelectedThoughtKopirovaniyaSelectThought': '未选择要复制的想法。请在地图或结构中选择想法。',
+  'app.notSelectedThoughtKopirovaniyaSelectThought':
+    '未选择要复制的想法。请在地图或结构中选择想法。',
   'app.skopirovano': '已复制：「%1」',
-  'app.notSelectedThoughtPasteKlikniteThought': '未选择要粘贴到的想法。请在地图上点击想法或选择它。',
+  'app.notSelectedThoughtPasteKlikniteThought':
+    '未选择要粘贴到的想法。请在地图上点击想法或选择它。',
   'app.notSucceededReadSistemnyyBufer': '无法读取系统剪贴板：%1',
   'addDialog.applyLabel.add': '添加',
   'addDialog.createdSvyazanoErrors': '已创建/链接：%1，错误：%2',
@@ -1124,9 +1153,12 @@ export const zh = {
   'addDialog.label.typeThought': '想法类型',
   'addDialog.label.typeLink': '链接类型',
   'addDialog.label.propertyLink': '链接属性',
-  'addDialog.enterAddListCtrlEnterApply': 'Enter — 添加到列表，Ctrl+Enter — 应用。在「多个」模式下，点击找到的想法会将其添加到列表。',
-  'addDialog.selectOnlySuschestvuyuschihThoughtsEnterKlik': '仅从现有想法中选择：Enter 或点击找到的想法加入列表，Ctrl+Enter — 应用。',
-  'addDialog.searchIdetVsemVashimSetyamThought': '搜索范围包括你的所有网络；当前网络的想法不可用——请选择其他网络的想法。',
+  'addDialog.enterAddListCtrlEnterApply':
+    'Enter — 添加到列表，Ctrl+Enter — 应用。在「多个」模式下，点击找到的想法会将其添加到列表。',
+  'addDialog.selectOnlySuschestvuyuschihThoughtsEnterKlik':
+    '仅从现有想法中选择：Enter 或点击找到的想法加入列表，Ctrl+Enter — 应用。',
+  'addDialog.searchIdetVsemVashimSetyamThought':
+    '搜索范围包括你的所有网络；当前网络的想法不可用——请选择其他网络的想法。',
   'addDialog.cannotSvyazatThoughtSamoySoboy': '不能将想法与自身链接。',
   'addDialog.thoughtUkazannymIdOtsutstvuet': '指定 ID 的想法不存在。',
   'addDialog.sovpadeniyNoCreateNovyhThoughtsOtklyucheno': '没有匹配项——新建想法的功能已关闭。',
@@ -1184,7 +1216,8 @@ export const zh = {
   'contextMenu.exportSaved': '导出已保存：%1',
   'contextMenu.exportNotSucceeded': '导出失败：%1',
   'contextMenu.importNotSucceeded': '导入失败：%1',
-  'contextMenu.importCreatedObnovlenoNovyhLinksAttachments': '导入 %1：已创建 %2，已更新 %3，新链接 %4，附件 %5。',
+  'contextMenu.importCreatedObnovlenoNovyhLinksAttachments':
+    '导入 %1：已创建 %2，已更新 %3，新链接 %4，附件 %5。',
   'contextMenu.editProperties': '编辑属性',
   'contextMenu.editActive': '更改有效性',
   'contextMenu.invert': '反转',
@@ -1230,7 +1263,8 @@ export const zh = {
   'contextMenu.byDateProsmotraDesc': '按查看日期（降序）',
   'contextMenu.ruchnoy': '手动',
   'contextMenu.fileNotSelected': '未选择文件',
-  'dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy': '仅当区域排序为「手动」时可调整顺序（右键点击区域 → 顺序）。',
+  'dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy':
+    '仅当区域排序为「手动」时可调整顺序（右键点击区域 → 顺序）。',
   'dragCloud.createLink': '创建链接',
   'dragCloud.peremestitThought': '移动想法',
   'dragCloud.peremestitPodchinenie': '移动为子级',
@@ -1251,7 +1285,8 @@ export const zh = {
   'attachments.fileGreaterMbLimitAttachments': '文件超过 %1 MB——附件大小限制。',
   'attachments.peretaschiteFilesLinkRefSyuda': '将文件或链接拖到此处',
   'attachments.notSucceededAddAttachment': '无法添加附件。',
-  'attachments.peretaschenyNeraspoznannyeDannyePodderzhivayutsyaFilesH': '拖入了无法识别的数据。支持文件和 http(s) 链接。',
+  'attachments.peretaschenyNeraspoznannyeDannyePodderzhivayutsyaFilesH':
+    '拖入了无法识别的数据。支持文件和 http(s) 链接。',
   'attachments.attachmentsNo': '没有附件。',
   'attachments.notSucceededOpen': '无法打开：%1',
   'attachments.openPrilozheniiDefault': '用默认应用程序打开',
@@ -1259,7 +1294,8 @@ export const zh = {
   'attachments.forThisTypeAttachmentsPreviewUnavailable': '此类型的附件不支持预览。',
   'attachments.notTekstovoeAttachment': '非文本附件',
   'attachments.notSucceededReadFile': '无法读取文件',
-  'attachments.filePrevyshaetLimitProsmotraPokazanyPervye': '文件超过查看限制——已显示前 200 000 个字符，编辑已禁用。',
+  'attachments.filePrevyshaetLimitProsmotraPokazanyPervye':
+    '文件超过查看限制——已显示前 200 000 个字符，编辑已禁用。',
   'attachments.iconThoughtObnovlena': '想法图标已更新。',
   'attachments.notSucceededNaznachitIcon': '无法设置图标：%1',
   'attachments.notSucceededReadFileAttachments': '无法读取附件文件。',
@@ -1306,6 +1342,15 @@ export const zh = {
   'editor.link': '链接',
   'editor.thought': '想法',
   'editor.selectThoughtLink': '请选择想法或链接。',
+  // Тихая подсказка разбора строки задачи (элемент 8773d9df).
+  'editor.taskHint.task': '任务',
+  'editor.taskHint.done': '任务已完成',
+  'editor.taskHint.checklist': '清单项',
+  'editor.taskHint.period': '周期 %1–%2',
+  'editor.taskHint.due': '截止 %1',
+  'editor.taskHint.undated': '无截止日期',
+  'editor.taskHint.appearsPeriod': '将显示在「本周期任务」中',
+  'editor.taskHint.appearsUndated': '将显示在「无截止日期」中',
   'editor.label.sprava': '右侧',
   'editor.label.sleva': '左侧',
   'editor.label.sverhu': '上方',
@@ -1347,7 +1392,8 @@ export const zh = {
   'linksTab.searchUpominaniy': '搜索提及…',
   'linksTab.titleNigdeNotUpominaetsya': '该名称未被任何地方提及。',
   'markdownField.textKommentariya': '评论文本',
-  'markdownField.notSucceededPasteLinkRefTextNot': '无法插入链接：在源文本中未找到文本「%1」（已被格式更改）。',
+  'markdownField.notSucceededPasteLinkRefTextNot':
+    '无法插入链接：在源文本中未找到文本「%1」（已被格式更改）。',
   'markdownField.notSucceededSaveLinkRef': '无法保存链接：%1',
   'markdownField.pasteTextShablonaTypeThought': '插入想法类型中的模板文本',
   'markdownField.notSucceededPasteImageFieldsNo': '无法插入图片：字段没有所有者。',
@@ -1361,17 +1407,22 @@ export const zh = {
   'miniGraph.outgoing': '出链',
   'miniGraph.incoming': '入链',
   'miniGraph.more': '%1：还有 %2 %3',
-  'miniGraph.inTrashMetkaTrashChipaVosstanovlenie': '，在回收站中：%1（标签为回收站标记——通过回收站恢复）',
+  'miniGraph.inTrashMetkaTrashChipaVosstanovlenie':
+    '，在回收站中：%1（标签为回收站标记——通过回收站恢复）',
   'miniGraph.zhivyhLinks': '个有效链接 ',
   'miniGraph.polnyyListVkladke': '%1%2。完整列表 %3——在「%4」标签页中。',
   'miniGraph.neighbours': '邻居：%1',
-  'miniGraph.allPryamyeNeighboursThoughtStrukturnyeParents': '想法的所有直接邻居：结构父级与子级，以及双向的带类型链接。图谱始终显示想法的所有链接——想法地图的筛选不会影响它。',
+  'miniGraph.allPryamyeNeighboursThoughtStrukturnyeParents':
+    '想法的所有直接邻居：结构父级与子级，以及双向的带类型链接。图谱始终显示想法的所有链接——想法地图的筛选不会影响它。',
   'miniGraph.hiddenMassovyh': '已隐藏的批量链接：%1',
-  'miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber': '当一个邻居连接了 %1 条或更多同类型链接（计算两侧）时，每侧各画一条线，其余链接合并为该邻居旁的「+N」标签（标签提示类型、方向和隐藏数量）。计数器汇总各标签上的数字。无法在图谱上展开这些链接；完整列表见「%2」标签页。',
+  'miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber':
+    '当一个邻居连接了 %1 条或更多同类型链接（计算两侧）时，每侧各画一条线，其余链接合并为该邻居旁的「+N」标签（标签提示类型、方向和隐藏数量）。计数器汇总各标签上的数字。无法在图谱上展开这些链接；完整列表见「%2」标签页。',
   'miniGraph.moreNotPomestilos': '仍未显示：%1',
-  'miniGraph.onGraphPokazanyPervyeNeighboursOstalnye': '图谱显示前 %1 个邻居，其余 %2 个未显示。完整邻居与链接列表见「%3」标签页。',
+  'miniGraph.onGraphPokazanyPervyeNeighboursOstalnye':
+    '图谱显示前 %1 个邻居，其余 %2 个未显示。完整邻居与链接列表见「%3」标签页。',
   'miniGraph.linkTrashClickToOpenTrash': '回收站中的链接：%1——点击打开回收站并恢复',
-  'miniGraph.kolesoZumLevayaKnopkaPustomuMestu': '滚轮缩放，左键点击空白处平移，节点可拖动。悬停链接可查看类型和高亮。Ctrl+悬停预览。',
+  'miniGraph.kolesoZumLevayaKnopkaPustomuMestu':
+    '滚轮缩放，左键点击空白处平移，节点可拖动。悬停链接可查看类型和高亮。Ctrl+悬停预览。',
   'miniGraph.openLabel.openEditor': '在编辑器中打开',
   'properties.propertyNotFoundSpravochnikeNetwork': '网络目录中未找到该属性。',
   'properties.editProperty': '编辑属性',
@@ -1380,7 +1431,8 @@ export const zh = {
   'properties.linkRestored': '链接已恢复。',
   'properties.propertyMovedTipovye': '属性已移入类型属性。',
   'properties.perenestiTipovyeProperties': '移入类型属性',
-  'properties.rowZerkalnayaPrivyazkaPropertiesZhivetDrugom': '该行为镜像行：属性绑定位于另一类型——请在那里排除。',
+  'properties.rowZerkalnayaPrivyazkaPropertiesZhivetDrugom':
+    '该行为镜像行：属性绑定位于另一类型——请在那里排除。',
   'properties.privyazkaPropertiesNotFound': '未找到属性绑定。',
   'properties.propertyIsklyuchenoTypes': '属性已从类型中排除：%1。',
   'properties.propertyIsklyuchenoTipovyh': '属性已从类型属性中排除。',
@@ -1393,11 +1445,16 @@ export const zh = {
   'properties.label.createNovoe': '新建…',
   'properties.notSucceededSaveOrderProperties': '无法保存属性顺序：%1',
   'properties.noValuesVneType': '没有类型外值。',
-  'properties.propertyLinkNotConnectedTipuOwner': '链接属性未连接到所有者类型——值在此处编辑；将属性连接到类型后，它们将回到主表格。',
-  'properties.typeLinkNotImeetPropertiesReestre': '链接类型在注册表中没有属性——链接显示为类型外属性；可按该侧显示名称删除。',
-  'properties.propertyGreaterNotConnectedTipuOwner': '属性已不再连接到所有者类型——该值仅为历史保留。',
-  'properties.propertyLinkNotConnectedTipuOwner2': '链接属性未连接到所有者类型——请在此处输入值；将属性连接到类型后，它们将回到主表格。',
-  'properties.propertyNotConnectedTipuOwnerEnter': '属性未连接到所有者类型——请在此处输入值；将属性连接到类型后，它将回到主表格。',
+  'properties.propertyLinkNotConnectedTipuOwner':
+    '链接属性未连接到所有者类型——值在此处编辑；将属性连接到类型后，它们将回到主表格。',
+  'properties.typeLinkNotImeetPropertiesReestre':
+    '链接类型在注册表中没有属性——链接显示为类型外属性；可按该侧显示名称删除。',
+  'properties.propertyGreaterNotConnectedTipuOwner':
+    '属性已不再连接到所有者类型——该值仅为历史保留。',
+  'properties.propertyLinkNotConnectedTipuOwner2':
+    '链接属性未连接到所有者类型——请在此处输入值；将属性连接到类型后，它们将回到主表格。',
+  'properties.propertyNotConnectedTipuOwnerEnter':
+    '属性未连接到所有者类型——请在此处输入值；将属性连接到类型后，它将回到主表格。',
   'properties.notSucceededDeleteValue': '无法删除值：%1',
   'properties.deleteValue': '删除值',
   'properties.uTypeNoProperties': '该类型没有属性。',
@@ -1406,7 +1463,8 @@ export const zh = {
   'properties.title.openSistemnomObrabotchike': '用系统默认程序打开',
   'properties.noNetwork': '（无网络）',
   'properties.nerezolvleno': ' （未解析）',
-  'properties.lastZhivoyRezolvOtkazalNetworkTarget': '上次有效解析失败——网络或目标已删除。请在主表格中点击「更新名称」。',
+  'properties.lastZhivoyRezolvOtkazalNetworkTarget':
+    '上次有效解析失败——网络或目标已删除。请在主表格中点击「更新名称」。',
   'resourcePicker.label.iconThoughts': '想法图标',
   'resourcePicker.typesThoughtsIkonkamiNotZadany': '没有设置图标的想法类型。',
   'resourcePicker.iconType': '类型「%1」的图标',
@@ -1444,7 +1502,8 @@ export const zh = {
   'valueEditor.header.thoughtOtherNetworks': '其他网络的想法',
   'valueEditor.valueNotAddedSelectThoughtList': '未添加值：请从列表中选择想法。',
   'valueEditor.selectThoughtOtherNetwork': '从其他网络选择想法',
-  'valueEditor.thoughtOtherNetworkNotSelectedKross': '未选择其他网络的想法——禁止创建指向自身网络的跨网络链接。',
+  'valueEditor.thoughtOtherNetworkNotSelectedKross':
+    '未选择其他网络的想法——禁止创建指向自身网络的跨网络链接。',
   'valueEditor.selectThoughtOtherNetwork2': '选择其他网络的想法…',
   'valueEditor.clearValue': '清除值',
   'valueEditor.moreOdnuThought': '+ 再添加一个想法',
@@ -1461,8 +1520,10 @@ export const zh = {
   'valueEditor.no': '否',
   'valueEditor.label.deleteLinkThought': '删除与想法的链接',
   'valueEditor.label.pomestitLinkTrash': '将链接移到回收站',
-  'valueEditor.rebroVnetipovoyLinkDeleteLinkDostupno': '%1 —— 类型外链接的边；删除链接可在上下文菜单中操作。',
-  'valueEditor.rebraThisTypeLinkNotRedaktiruyutsya': '%1 —— 此链接类型的边不能通过属性编辑（链接类型在注册表中没有属性）。',
+  'valueEditor.rebroVnetipovoyLinkDeleteLinkDostupno':
+    '%1 —— 类型外链接的边；删除链接可在上下文菜单中操作。',
+  'valueEditor.rebraThisTypeLinkNotRedaktiruyutsya':
+    '%1 —— 此链接类型的边不能通过属性编辑（链接类型在注册表中没有属性）。',
   'valueEditor.title.selectCreateThought': '选择或创建想法',
   'valueEditor.notSucceededCreate': '无法创建「%1」：%2',
   'valueEditor.titleThoughtObyazatelno': '想法名称…（必填）',
@@ -1476,7 +1537,25 @@ export const zh = {
   'wikiLink.firstOpenNetwork': '请先打开网络。',
   'wikiLink.pokazanyPervyeUtochniteName': '仅显示前 %1 个，请细化名称。',
   'wikiLink.foundNeskolkoThoughts': '找到多个想法：「%1」',
-  'wikiLink.networkUnavailableLinkRefThoughtOtherNetwork': '网络不可用：%1。无法打开指向其他网络想法的链接。',
+  'wikiLink.networkUnavailableLinkRefThoughtOtherNetwork':
+    '网络不可用：%1。无法打开指向其他网络想法的链接。',
+  // Date-чип: меню (элемент c85ca40d) и автокомплит дат (элемент f9da2100).
+  'wikiLink.dateMenu.openDay': '打开当天',
+  'wikiLink.dateMenu.changeDate': '修改日期…',
+  'wikiLink.dateMenu.moveTomorrow': '移到明天',
+  'wikiLink.dateMenu.moveWeek': '移到下周',
+  'wikiLink.dateMenu.moveMonth': '移到下个月',
+  'wikiLink.dateMenu.noSource': '无法确定要修改的日期来源。',
+  'wikiLink.dateMenu.stale': '记录已在另一个窗口中被修改——请刷新后重试。',
+  'wikiLink.dateMenu.failed': '无法修改日期：%1',
+  'wikiLink.dateMenu.undated': '该行没有可移动的日期。',
+  'wikiLink.dateMenu.notTask': '该行不是任务——只能移动链接。',
+  'wikiLink.dateSuggest.dates': '日期',
+  'wikiLink.dateSuggest.thoughts': '想法',
+  'wikiLink.dateSuggest.today': '今天',
+  'wikiLink.dateSuggest.tomorrow': '明天',
+  'wikiLink.dateSuggest.typed': '输入的日期',
+  'wikiLink.dateSuggest.formatHint': '%1 → ISO %2',
   'importExport.label.nameFile': '文件名',
   'importExport.vklyuchitTypesThoughtsLinks': '包含想法类型和链接类型',
   'importExport.vklyuchitAttachmentsFilesVnutriArchive': '包含附件（归档内的文件）',
@@ -1492,7 +1571,8 @@ export const zh = {
   'importExport.label.importirovatHronologicheskieKommentarii': '导入时间线评论',
   'importExport.label.fileArchive': '归档文件',
   'importExport.chtoImportirovat': '导入内容',
-  'importExport.thoughtSovpadayuschimIdWillObnovlenySovpadeniyu': 'id 相同的想法将被更新；名称相同的将被复用（同义词合并）。其余内容将重新创建。',
+  'importExport.thoughtSovpadayuschimIdWillObnovlenySovpadeniyu':
+    'id 相同的想法将被更新；名称相同的将被复用（同义词合并）。其余内容将重新创建。',
   'importExport.title.importEtnx': '从 .etnx 导入',
   'importExport.label.importirovat': '导入',
   'cloud.hasPostoyannyyKommentariy': '有永久评论',
@@ -1588,10 +1668,12 @@ export const zh = {
   'filter.operandUnavailableProfile': '操作数「%1」在配置文件「%2」中不可用',
   'filter.operatorUnavailableOperandaProfile': '运算符「%1」在配置文件「%3」中不适用于操作数「%2」',
   'filter.viewNotSootvetstvuetProfilyu': '视图不符合配置文件「%1」：%2',
-  'filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy': '保存的视图定义无法读取（未知操作数或运算符）——条件未显示',
+  'filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy':
+    '保存的视图定义无法读取（未知操作数或运算符）——条件未显示',
   'filter.sohranennoeOpredelenieViewPovrezhdenoNotChitaetsya': '保存的视图定义已损坏且无法读取',
   'filter.conditionPropertyNotRaspoznanoOtbrosheno': '按属性的条件无法识别，已丢弃',
-  'filter.conditionPropertyOtbroshenoPropertiesGreaterNo': '按属性「%1」的条件已丢弃：网络中已不存在该属性',
+  'filter.conditionPropertyOtbroshenoPropertiesGreaterNo':
+    '按属性「%1」的条件已丢弃：网络中已不存在该属性',
   'filter.sortProsmotruEditorNotVyrazhaetsyaKey': '编辑器无法表达「按查看」排序——未显示该键',
   'filter.not_contains.notContains': '不包含',
   'filter.gte.greaterEqual': '大于或等于',
@@ -1609,7 +1691,8 @@ export const zh = {
   'filter.has.imeetProperty': '具有属性',
   'filter.not_has.notImeetProperty': '不具有属性',
   'filterDiagnostics.groupPustaDobavteConditionGroup': '组为空——请添加条件或组',
-  'filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno': '条件同时要求「已填写」和「未填写」——没有想法会匹配',
+  'filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno':
+    '条件同时要求「已填写」和「未填写」——没有想法会匹配',
   'filterDiagnostics.nizhnyayaGranicaDiapazonaNotLessVerhney': '范围下限不小于上限——没有想法会匹配',
   'filterDiagnostics.editZamenitSohranennoeOpredelenie': '%1。编辑将替换保存的定义。',
   'filterDiagnostics.value': '值「%1」',
@@ -1890,11 +1973,13 @@ export const zh = {
   'periodEditor.label.today7dWeekBack': '$today-7d — 一周前',
   'periodEditor.label.today30dViaMonth': '$today+30d — 一个月后',
   'periodEditor.label.today30dMonthBack': '$today-30d — 一个月前',
-  'periodEditor.notTokenPeriodDostupnyTodayNow': '「%1」——不是时间段令牌：可用 $today/$now、$weekStart/$weekEnd、$monthStart/$monthEnd、$yearStart/$yearEnd 以及算术 ±Nd/±Nw/±Nmo/±Ny（接受带点的旧写法；$thought.* 令牌需要想法上下文）。',
+  'periodEditor.notTokenPeriodDostupnyTodayNow':
+    '「%1」——不是时间段令牌：可用 $today/$now、$weekStart/$weekEnd、$monthStart/$monthEnd、$yearStart/$yearEnd 以及算术 ±Nd/±Nw/±Nmo/±Ny（接受带点的旧写法；$thought.* 令牌需要想法上下文）。',
   'periodEditor.by': '至 %1',
   'periodEditor.with': '从 %1',
   'periodEditor.tokensDatesFieldOtklyuchenyEnterDate': '此字段的日期令牌已禁用——请指定日期。',
-  'periodEditor.ozhidaetsyaGgggMmDdPolnyyIso': '「%1」——应为 YYYY-MM-DD、完整 ISO 时间或令牌（$today/$now、周/月/年边界 ± 算术）。',
+  'periodEditor.ozhidaetsyaGgggMmDdPolnyyIso':
+    '「%1」——应为 YYYY-MM-DD、完整 ISO 时间或令牌（$today/$now、周/月/年边界 ± 算术）。',
   'periodEditor.periodNotZadan': '未设置时间段',
   'periodEditor.label.dateTime': '日期和时间',
   'periodEditor.label.diapazon': '范围',
@@ -1933,7 +2018,8 @@ export const zh = {
   'propertyList.connected': '已连接',
   'propertyList.link': '链接（%1 - %2）',
   'propertyList.propertyAlreadyNasleduetsyaThisTipomPredka': '该类型已从祖先继承此属性',
-  'propertyList.thisNameStoronyPropertiesLinkAlready': '该链接属性侧名称已连接——可以连接另一个名称（反向）。',
+  'propertyList.thisNameStoronyPropertiesLinkAlready':
+    '该链接属性侧名称已连接——可以连接另一个名称（反向）。',
   'propertyList.propertyAlreadyConnectedEtomuTipu': '该属性已连接到此类型',
   'events.createdThought': '已创建想法',
   'events.changedThought': '已更改想法',
@@ -2047,7 +2133,8 @@ export const zh = {
   'about.server': '服务器',
   'about.serverVersion': '服务器：%1 · 版本 %2',
   'activity.label.views': '视图…',
-  'activity.conditionPrezhnegoViewNotVyrazhaetsyaProfilem': '旧视图的条件无法用「事件」配置文件表达，已丢弃：%1。',
+  'activity.conditionPrezhnegoViewNotVyrazhaetsyaProfilem':
+    '旧视图的条件无法用「事件」配置文件表达，已丢弃：%1。',
   'activity.forThisTypeLinkMoreNo': '此链接类型在注册表中还没有属性——无法编辑。',
   'activity.openPropertyLink': '打开链接属性',
   'activity.suschnostDeletedUnavailableSnapshotLog': '实体已删除或不可用。日志中的快照：',
@@ -2065,7 +2152,8 @@ export const zh = {
   'activity.allRecordsLogDatesWillZatronuty': '此日期之前的所有日志记录都将受影响。',
   'activity.label.dateVklyuchitelno': '日期（含）',
   'activity.operationNeobratimaRecordsWillDeletedWithout': '操作不可逆转——记录将被删除且无法恢复。',
-  'activity.allRecordsLogAktivnostiVybrannoyDates': '%1 所选日期之前的所有活动日志记录？操作不可逆转。',
+  'activity.allRecordsLogAktivnostiVybrannoyDates':
+    '%1 所选日期之前的所有活动日志记录？操作不可逆转。',
   'activity.label.typeThought': '想法类型',
   'activity.label.typeLink': '链接类型',
   'activity.label.property': '属性',
@@ -2079,7 +2167,8 @@ export const zh = {
   'chrono.record': '记录',
   'chrono.header.naydennyeRecords': '找到的记录',
   'chrono.title.searchZapisyam': '搜索记录',
-  'chrono.slovaViaProbelAllObyazatelnyLyubye': '单词以空格分隔，全部为必需；* — 任意字符；-单词 — 排除。条件通过两种方式（或）查找记录：按记录本身的正文和标题，以及按所选区域中的目标想法。「找到的记录」提示会通过跳转打开记录（使用记录中的时间段、滚动并高亮）。',
+  'chrono.slovaViaProbelAllObyazatelnyLyubye':
+    '单词以空格分隔，全部为必需；* — 任意字符；-单词 — 排除。条件通过两种方式（或）查找记录：按记录本身的正文和标题，以及按所选区域中的目标想法。「找到的记录」提示会通过跳转打开记录（使用记录中的时间段、滚动并高亮）。',
   'chrono.label.firstStarye': '最早优先',
   'chrono.label.firstNovye': '最新优先',
   'chrono.ariaLabel.napravlenieSort': '排序方向',
@@ -2090,20 +2179,26 @@ export const zh = {
   'layerMerge.thought': '想法「%1」',
   'layerMerge.vybrannyhThoughtsIzmenennyhLayer': '层中已更改的 %1 个所选想法',
   'layerMerge.editsLayerRazreshayutsyaOtnosheniyu': '层「%2」中对 %1 的修改相对于「%3」进行解析。',
-  'layerMerge.notSucceededReadOtlichiyaThoughtVariant': '无法读取想法的差异——「合并更改」选项不可用。',
+  'layerMerge.notSucceededReadOtlichiyaThoughtVariant':
+    '无法读取想法的差异——「合并更改」选项不可用。',
   'layerMerge.otkazatsyaChanges': '放弃更改',
-  'layerMerge.allEditsLayerWillDeletedVernetsya': '层中的所有修改将被删除——将恢复版本「%1」。无法撤销。',
+  'layerMerge.allEditsLayerWillDeletedVernetsya':
+    '层中的所有修改将被删除——将恢复版本「%1」。无法撤销。',
   'layerMerge.polnostyuPerepisatThoughtBase': '在基础层中完全覆盖想法',
-  'layerMerge.versionLayerPerenositsyaCelikomChangesThis': '层的版本将整体移入，「%1」对这些想法的更改将被覆盖。',
+  'layerMerge.versionLayerPerenositsyaCelikomChangesThis':
+    '层的版本将整体移入，「%1」对这些想法的更改将被覆盖。',
   'layerMerge.mergeChanges': '合并更改',
-  'layerMerge.postoyannyyKommentariyObedinyaetsyaBaseMarkeryKonflikto': '永久评论与基础层合并（git 风格冲突标记）；链接、属性和同义词取自层。',
+  'layerMerge.postoyannyyKommentariyObedinyaetsyaBaseMarkeryKonflikto':
+    '永久评论与基础层合并（git 风格冲突标记）；链接、属性和同义词取自层。',
   'layerMerge.mergeThought': '将想法合并到「%1」？',
   'layerMerge.mergeVybrannyeThought': '将所选想法合并到「%1」？',
   'layerMerge.label.vypolnit': '执行',
   'layerMerge.otkazatsyaChanges2': '放弃更改？',
-  'layerMerge.allEditsLayerWillDeletedBezvozvratno': '层中对 %1 的所有修改将被永久删除。基础层不会改变。',
+  'layerMerge.allEditsLayerWillDeletedBezvozvratno':
+    '层中对 %1 的所有修改将被永久删除。基础层不会改变。',
   'layerMerge.changesDeletedLayer': '%1 的修改已从层中删除。',
-  'layerMerge.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov': '已合并想法：%1。评论已合并，冲突块：%2。',
+  'layerMerge.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov':
+    '已合并想法：%1。评论已合并，冲突块：%2。',
   'layerMerge.merged': '已合并到「%1」：%2。',
   'layerMerge.notSucceededRazreshitChanges': '无法解析更改',
   'layers.propertiesLayer': '层属性',
@@ -2120,17 +2215,21 @@ export const zh = {
   'layers.placeholder.naprimerEditsAvgusta': '例如：八月修改',
   'layers.zachemLayerToSleduyuschiyAgentPonyal': '此层的用途——让后续人员（或代理）无需询问即可理解',
   'layers.placeholder.vetkaGitOptional': 'git 分支（可选）',
-  'layers.editsOstanutsyaLayerBaseNotIzmenitsya': '修改将保留在层中。在合并层之前，基础层不会改变。',
-  'layers.novyyLayerPoluchitSobstvennyeCvetaMap': '新层将获得自己的地图颜色（焦点条和背景），以便辨识；可在「层属性」中更改。',
+  'layers.editsOstanutsyaLayerBaseNotIzmenitsya':
+    '修改将保留在层中。在合并层之前，基础层不会改变。',
+  'layers.novyyLayerPoluchitSobstvennyeCvetaMap':
+    '新层将获得自己的地图颜色（焦点条和背景），以便辨识；可在「层属性」中更改。',
   'layers.label.vetkaGit': 'Git 分支',
   'layers.notSucceededCreateLayer': '无法创建层',
   'layers.title.novyyLayerChanges': '新建变更层',
   'layers.layerWillDeletedVmesteDochernimiLayers': '层将连同 %1 个子层一起删除：%2。',
-  'layers.deleteLayerNotMenyaetBaseTenevye': '删除层不会改变基础层：层中的隐藏修改将丢失，其余内容保持不变。',
+  'layers.deleteLayerNotMenyaetBaseTenevye':
+    '删除层不会改变基础层：层中的隐藏修改将丢失，其余内容保持不变。',
   'layers.deleteLayer': '删除层「%1」？',
   'layers.label.deleteLayer': '删除层',
   'layers.notSucceededDeleteLayer': '无法删除层',
-  'layers.allEditsLayerWillMovedKonflikte': '层的所有修改将移入「%1」。发生冲突时（创建层后基础层中的行已更改），合并不会执行——将显示差异列表。',
+  'layers.allEditsLayerWillMovedKonflikte':
+    '层的所有修改将移入「%1」。发生冲突时（创建层后基础层中的行已更改），合并不会执行——将显示差异列表。',
   'layers.merge': '将「%1」合并到「%2」？',
   'layers.label.merge': '合并',
   'layers.mergeRejected': '合并被拒绝',
@@ -2177,29 +2276,37 @@ export const zh = {
   'networks.label.descriptionOptional': '描述（可选）',
   'networks.enterTitleNetwork': '请输入网络名称。',
   'networks.title.createMysleset': '创建想法网络',
-  'onboarding.selfHostedGraphThoughtsPodklyuchitesSvoemu': '自托管想法图谱。连接到自己的 ETN 服务器以开始。',
+  'onboarding.selfHostedGraphThoughtsPodklyuchitesSvoemu':
+    '自托管想法图谱。连接到自己的 ETN 服务器以开始。',
   'onboarding.sohranennyeServery': '已保存的服务器',
   'onboarding.novoePodklyuchenie': '新建连接',
   'onboarding.moyServerOptional': '我的服务器（可选）',
   'onboarding.label.adresServer': '服务器地址',
   'onboarding.label.podklyuchitsya': '连接',
-  'onboarding.deleteServerAktivnoePodklyuchenieWillRazorvano': '删除服务器「%1」（%2）？活动连接将断开，本地数据（标签页、草稿、历史）将被删除。操作不可逆转。',
-  'onboarding.deleteServerLokalnyeDannyeThisProfilya': '删除服务器「%1」（%2）？此配置文件的本地数据将被删除。操作不可逆转。',
+  'onboarding.deleteServerAktivnoePodklyuchenieWillRazorvano':
+    '删除服务器「%1」（%2）？活动连接将断开，本地数据（标签页、草稿、历史）将被删除。操作不可逆转。',
+  'onboarding.deleteServerLokalnyeDannyeThisProfilya':
+    '删除服务器「%1」（%2）？此配置文件的本地数据将被删除。操作不可逆转。',
   'onboarding.deleteSohranennyyServer': '删除已保存的服务器',
-  'onboarding.enterAdresServerNaprimerHttpLocalhost': '请输入服务器地址，例如 http://localhost:3000',
+  'onboarding.enterAdresServerNaprimerHttpLocalhost':
+    '请输入服务器地址，例如 http://localhost:3000',
   'onboarding.enterApiKey': '请输入 API 密钥。',
   'propertyManager.connected': '已连接到 %1 %2',
   'propertyManager.zapolneno': '已填写 %1 %2',
   'propertyManager.deleteProperty': '删除属性',
-  'propertyManager.propertyCannotDeleteFirstOtklyuchiteIts': '无法删除属性「%1」：%2。请先将其从所有类型断开，并在「类型外属性」组中处理值。',
+  'propertyManager.propertyCannotDeleteFirstOtklyuchiteIts':
+    '无法删除属性「%1」：%2。请先将其从所有类型断开，并在「类型外属性」组中处理值。',
   'propertyManager.deletePropertyLink2etoActionIrreversible': '删除链接属性 %1？%2此操作不可逆转。',
   'propertyManager.deletePropertyThisActionIrreversible': '删除属性「%1」？此操作不可逆转。',
   'propertyManager.deletedStrukturnymiParentsChildren': '已删除。%1 %2 %3 结构「父级/子级」。',
   'propertyManager.propertyDeleted': '属性已删除。',
   'propertyManager.valueDefaultAllTypes': '所有类型的默认值',
-  'propertyManager.valueDefaultIstochnikovLyubyhTypesCan': '任意类型来源的默认值。可被上方表格行中的值覆盖',
-  'propertyManager.valueDefaultNaznacheniyLyubyhTypesCan': '任意类型目标的默认值。可被上方表格行中的值覆盖',
-  'propertyManager.descriptionPropertiesOnoZnachitKakomFormate': '属性描述：其含义及值格式（用于想法编辑器和 AI 代理的提示）',
+  'propertyManager.valueDefaultIstochnikovLyubyhTypesCan':
+    '任意类型来源的默认值。可被上方表格行中的值覆盖',
+  'propertyManager.valueDefaultNaznacheniyLyubyhTypesCan':
+    '任意类型目标的默认值。可被上方表格行中的值覆盖',
+  'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
+    '属性描述：其含义及值格式（用于想法编辑器和 AI 代理的提示）',
   'propertyManager.propertyTakimNameAlreadyHas': '已存在同名属性。',
   'propertyManager.label.vidValues': '值类型',
   'propertyManager.label.description': '描述',
@@ -2226,17 +2333,20 @@ export const zh = {
   'propertyManager.noPrivyazokClickAddType': '没有绑定。点击「添加类型」。',
   'propertyManager.title.otmetitAll': '全选',
   'propertyManager.metadataPoyavyatsyaAfterSave': '保存后将显示元数据。',
-  'propertyManager.changeKategoriyuSkalyarLinkCannotValues': '无法更改类别（标量 ↔ 链接）：链接值以边形式存在，而不是在值表中。',
+  'propertyManager.changeKategoriyuSkalyarLinkCannotValues':
+    '无法更改类别（标量 ↔ 链接）：链接值以边形式存在，而不是在值表中。',
   'propertyManager.enterNamesObeihStoron': '请填写两侧的名称。',
   'propertyManager.titlePropertiesObyazatelno2': '属性名称必填。',
   'propertyManager.changeTypeValues': '更改值类型',
-  'propertyManager.changeTypeValuesPropertiesValuesAll': '更改属性「%1」的值类型？所有元素中的值将转换为新类型；不兼容的值将被清除。',
+  'propertyManager.changeTypeValuesPropertiesValuesAll':
+    '更改属性「%1」的值类型？所有元素中的值将转换为新类型；不兼容的值将被清除。',
   'propertyManager.zhditeVypolnyaetsyaObrabotkaValues': '请稍候：正在处理值…',
   'propertyManager.obrabotkaVypolnenaPreobrazovanoDeleted': '处理完成：已转换 %1，已删除 %2。',
   'propertyManager.obrabotkaVypolnena': '处理完成。',
   'propertyManager.novoeProperty': '新建属性',
   'propertyManager.property': '属性 —「%1」',
-  'propertyManager.emptySozdaniiThoughtIspolzuetsyaObscheeValue': '留空——创建想法时使用绑定侧的通用值。',
+  'propertyManager.emptySozdaniiThoughtIspolzuetsyaObscheeValue':
+    '留空——创建想法时使用绑定侧的通用值。',
   'propertyManager.variantyValuesOdnomuRow': '值选项——每行一个',
   'propertyManager.label.vybiratList': '从列表选择',
   'propertyManager.label.neskolkoValues': '多个值',
@@ -2250,12 +2360,15 @@ export const zh = {
   'propertyManager.propertyNiChemuNotConnected': '属性未连接到任何对象。',
   'propertyManager.title.openType': '打开类型',
   'propertyManager.vsegoValuesTypeVneType': '类型中的值总数：%1。类型外：%2。',
-  'propertyManager.forThisTypeLinkMoreNo': '此链接类型在注册表中还没有属性。没有属性的链接类型没有用处——请通过「添加」创建属性。',
-  'propertyManager.stanutStrukturnymiParentsChildrenPoyavyatsyaIerarhii': '%1 %2 将成为结构「父级/子级」，并出现在想法层级中。 ',
+  'propertyManager.forThisTypeLinkMoreNo':
+    '此链接类型在注册表中还没有属性。没有属性的链接类型没有用处——请通过「添加」创建属性。',
+  'propertyManager.stanutStrukturnymiParentsChildrenPoyavyatsyaIerarhii':
+    '%1 %2 将成为结构「父级/子级」，并出现在想法层级中。 ',
   'propertyManager.stalo': '变为',
   'propertyManager.stali': '变为',
   'settingsLogs.client': '客户端',
-  'settingsLogs.fileLogClientDiagnosticsToggleApply': '用于诊断的客户端文件日志。开关立即生效；ERROR 记录始终写入。',
+  'settingsLogs.fileLogClientDiagnosticsToggleApply':
+    '用于诊断的客户端文件日志。开关立即生效；ERROR 记录始终写入。',
   'settingsLogs.label.loggingClient': '客户端日志记录',
   'settingsLogs.loggingClientEnabled': '客户端日志记录已启用。',
   'settingsLogs.loggingClientDisabled': '客户端日志记录已禁用。',
@@ -2263,11 +2376,14 @@ export const zh = {
   'settingsLogs.deleteAllFilesLogClient': '删除所有客户端日志文件',
   'settingsLogs.currentFileLog': '当前日志文件：',
   'settingsLogs.deleteLogsClient': '删除客户端日志？',
-  'settingsLogs.allFilesLogClientWillDeleted': '所有客户端日志文件将被删除，当前每日文件将被清空。操作不可逆转。',
+  'settingsLogs.allFilesLogClientWillDeleted':
+    '所有客户端日志文件将被删除，当前每日文件将被清空。操作不可逆转。',
   'settingsLogs.deletedFilesCurrentFileUsechen': '已删除文件：%1；当前文件已截断。',
   'settingsLogs.server': '服务器',
-  'settingsLogs.upravlenieLogServerDostupnoAdminPodklyuchennom': '服务器日志管理仅在已连接服务器时对管理员可用。',
-  'settingsLogs.fileLogServerDiagnosticsFlagZhivet': '用于诊断的服务器文件日志。标志保存在服务器内存中，重启时重置；开关立即生效。',
+  'settingsLogs.upravlenieLogServerDostupnoAdminPodklyuchennom':
+    '服务器日志管理仅在已连接服务器时对管理员可用。',
+  'settingsLogs.fileLogServerDiagnosticsFlagZhivet':
+    '用于诊断的服务器文件日志。标志保存在服务器内存中，重启时重置；开关立即生效。',
   'settingsLogs.label.loggingServer': '服务器日志记录',
   'settingsLogs.loggingServerEnabled': '服务器日志记录已启用。',
   'settingsLogs.loggingServerDisabled': '服务器日志记录已禁用。',
@@ -2280,7 +2396,8 @@ export const zh = {
   'settingsLogs.filesLogSelectFileSkachivaniya': '日志文件（选择要下载的文件）：',
   'settingsLogs.saved': '已保存：%1',
   'settingsLogs.deleteLogsServer': '删除服务器日志？',
-  'settingsLogs.allFilesLogServerWillDeleted': '所有服务器日志文件将被删除，当前每日文件将被清空。操作不可逆转。',
+  'settingsLogs.allFilesLogServerWillDeleted':
+    '所有服务器日志文件将被删除，当前每日文件将被清空。操作不可逆转。',
   'settingsLogs.filesLogServerDeleted': '服务器日志文件已删除。',
   'settingsLogs.noPravAdminUpravlenieLogServer': '没有管理员权限：服务器日志管理仅对管理员可用。',
   'settingsLogs.serverUnavailablePoprobuytePozzhe': '服务器不可用，请稍后重试。',
@@ -2294,9 +2411,12 @@ export const zh = {
   'settings.when_to_use.kogdaUse': '何时使用',
   'settings.conventions.pravila': '规则',
   'settings.examples.examples': '示例',
-  'settings.naznachenieNetworkOdnomDvuhAbzacahUvidit': '用一两段说明网络的用途。人和 AI 代理在选择网络时都会看到。',
-  'settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse': '代理何时应使用此网络。对于每个用例，说明还应读取网络的哪些字段。\n\n示例：\n- 编码 → conventions, structure\n- 项目回顾 → examples, conventions',
-  'settings.pravilaRecordsFormatHronologiyPometkaActive': '记录规则：时间线格式、active 标记、命名、类型和模板引用。',
+  'settings.naznachenieNetworkOdnomDvuhAbzacahUvidit':
+    '用一两段说明网络的用途。人和 AI 代理在选择网络时都会看到。',
+  'settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse':
+    '代理何时应使用此网络。对于每个用例，说明还应读取网络的哪些字段。\n\n示例：\n- 编码 → conventions, structure\n- 项目回顾 → examples, conventions',
+  'settings.pravilaRecordsFormatHronologiyPometkaActive':
+    '记录规则：时间线格式、active 标记、命名、类型和模板引用。',
   'settings.examplesHoroshihPlohihRecordsToAgent': '好记录和坏记录的示例——避免代理自行发明格式。',
   'settings.label.ponedelnik': '周一',
   'settings.label.vtornik': '周二',
@@ -2311,20 +2431,27 @@ export const zh = {
   'settings.profileUser': '用户配置文件',
   'settings.label.nameOtobrazheniya': '显示名称',
   'settings.label.login': '登录名',
-  'settings.nameOtobrazhaetsyaTulbareOtherMestahInterfeysa': '名称显示在工具栏和界面的其他位置。登录名在创建账户时指定。',
+  'settings.nameOtobrazhaetsyaTulbareOtherMestahInterfeysa':
+    '名称显示在工具栏和界面的其他位置。登录名在创建账户时指定。',
   'settings.emptyLabel.notZadano': '— 未设置 —',
   'settings.placeholder.typeThought': '想法类型…',
   'settings.showNeaktualnyeThoughtLinkNetwork': '在此网络中显示无效的想法和链接',
   'settings.showSoderzhimoeTrashNetwork': '在此网络中显示回收站内容',
-  'settings.theseFieldsZadaetOwnerNetworkAdmin': '这些字段由网络所有者或服务器管理员设置；更改将保存给所有成员。',
-  'settings.theseFieldsZadaetOwnerNetworkAdmin2': '这些字段由网络所有者或服务器管理员设置。可以查看，但不能修改。',
+  'settings.theseFieldsZadaetOwnerNetworkAdmin':
+    '这些字段由网络所有者或服务器管理员设置；更改将保存给所有成员。',
+  'settings.theseFieldsZadaetOwnerNetworkAdmin2':
+    '这些字段由网络所有者或服务器管理员设置。可以查看，但不能修改。',
   'settings.settingsNetwork': '网络设置',
   'settings.label.firstDenWeek': '每周第一天',
-  'settings.commonSettingAllCalendarVidzhetovNetwork': '网络中所有日历控件及日历令牌 $weekStart/$weekEnd 的通用设置。创建网络时，值取自服务器操作系统的区域设置。',
-  'settings.samoopisanieNetworkLyudeyAiAgentsMarkdown': '面向人和 AI 代理的网络自描述。Markdown：链接、列表、图片。在「何时使用」标签页中列出该网络适用的场景。',
-  'settings.uzlovoyTypeRazdelaOpredelyaetStrukturuNetwork': '章节节点类型决定网络结构（通过 `etn.networks.structure` 读取）。所选类型的所有有效想法都会成为章节。在移除引用之前，无法删除此处选择的类型。',
+  'settings.commonSettingAllCalendarVidzhetovNetwork':
+    '网络中所有日历控件及日历令牌 $weekStart/$weekEnd 的通用设置。创建网络时，值取自服务器操作系统的区域设置。',
+  'settings.samoopisanieNetworkLyudeyAiAgentsMarkdown':
+    '面向人和 AI 代理的网络自描述。Markdown：链接、列表、图片。在「何时使用」标签页中列出该网络适用的场景。',
+  'settings.uzlovoyTypeRazdelaOpredelyaetStrukturuNetwork':
+    '章节节点类型决定网络结构（通过 `etn.networks.structure` 读取）。所选类型的所有有效想法都会成为章节。在移除引用之前，无法删除此处选择的类型。',
   'settings.label.uzlovoyTypeRazdela': '章节节点类型',
-  'settings.typeInstructionAgentsZadaetKakieThought': '代理指令类型决定 `etn.instructions` 展示哪些想法（ADR 717f04df）。未选择时，展示返回空列表。此处选择的类型与节点类型一样受删除保护。',
+  'settings.typeInstructionAgentsZadaetKakieThought':
+    '代理指令类型决定 `etn.instructions` 展示哪些想法（ADR 717f04df）。未选择时，展示返回空列表。此处选择的类型与节点类型一样受删除保护。',
   'settings.label.typeInstructionAgents': '代理指令类型',
   'settings.vidimost': '可见性',
   'settings.commonSettingAllVashihKlientovNetwork': '此网络中所有客户端的通用设置。',
@@ -2344,11 +2471,13 @@ export const zh = {
   'structures.notSucceededCreateNovyhThoughtsOni': '无法创建 %1 个新想法——已跳过。',
   'structures.createdNovyhThoughts': '已创建新想法：%1。',
   'structures.confirmTitle.doEdinstvennymiParents': '设为唯一父级',
-  'structures.uSelectedThoughtsWillDeletedAll': '%1 个视图中选出的想法的所有入链将被删除，与所选想法（%2）的链接除外。是否继续？',
+  'structures.uSelectedThoughtsWillDeletedAll':
+    '%1 个视图中选出的想法的所有入链将被删除，与所选想法（%2）的链接除外。是否继续？',
   'structures.razorvat': '断开',
   'structures.razorvatLinkParents': '断开与父级的链接',
   'structures.razorvatLinkPodchinennymi': '断开与子级的链接',
-  'structures.uSelectedThoughtsWillDeletedLink': '%1 个视图中选出的想法与所选想法（%2）的链接将被删除。是否继续？',
+  'structures.uSelectedThoughtsWillDeletedLink':
+    '%1 个视图中选出的想法与所选想法（%2）的链接将被删除。是否继续？',
   'structures.confirmTitle.deleteThought': '删除想法',
   'structures.deleteSelectedThoughts': '删除 %1 个视图中选出的想法？',
   'structures.notSucceededApplyThoughts': '无法应用到 %2 个想法中的 %1 个（%3）。',
@@ -2412,33 +2541,41 @@ export const zh = {
   'typeManager.resetOverrideDescription': '重置描述覆盖',
   'typeManager.editNatureProperties': '编辑属性本质',
   'typeManager.otklyuchitProperty': '断开属性',
-  'typeManager.otklyuchitPropertyTypeValuesOstanutsyaThoughts': '从类型中断开属性「%1」？值将保留在想法和链接中，并显示在「类型外属性」组中。',
-  'typeManager.sohraniteTypeToDobavlyatPropertiesNovogo': '请先保存类型再添加属性——新类型还没有 id。',
+  'typeManager.otklyuchitPropertyTypeValuesOstanutsyaThoughts':
+    '从类型中断开属性「%1」？值将保留在想法和链接中，并显示在「类型外属性」组中。',
+  'typeManager.sohraniteTypeToDobavlyatPropertiesNovogo':
+    '请先保存类型再添加属性——新类型还没有 id。',
   'typeManager.propertiesPoyavyatsyaAfterSaveType': '保存类型后将显示属性。',
   'typeManager.byDefault': '默认',
-  'typeManager.zerkalnoePropertyLinkPorozhdenoPropertyDrugogo': '镜像链接属性：由另一类型的属性「%1」通过目标类型限制生成。此处不能编辑链接类型和方向。',
+  'typeManager.zerkalnoePropertyLinkPorozhdenoPropertyDrugogo':
+    '镜像链接属性：由另一类型的属性「%1」通过目标类型限制生成。此处不能编辑链接类型和方向。',
   'typeManager.zerkalo': '镜像 · %1',
   'typeManager.label.description': '描述…',
   'typeManager.title.pereopredelitDescriptionProperties': '覆盖属性描述',
   'typeManager.label.reset': '重置 ◆',
   'typeManager.unasledovannyhPropertiesNo': '没有继承属性。',
   'typeManager.storona': '侧',
-  'typeManager.editNaturePropertiesNameTypeValues': '编辑属性本质（名称、值类型、描述）——立即对所有类型生效',
+  'typeManager.editNaturePropertiesNameTypeValues':
+    '编辑属性本质（名称、值类型、描述）——立即对所有类型生效',
   'typeManager.unsetPrivyazkuPropertiesValuesNotDeleted': '解除属性绑定——值不会被删除',
   'typeManager.uTypeNoSobstvennyhProperties': '该类型没有自身属性。',
   'typeManager.istochnik': '源',
   'typeManager.naznachenie': '目标',
   'typeManager.podklyuchitProperty': '连接属性',
   'typeManager.label.createProperty': '创建属性',
-  'typeManager.propertyConnectedTipamPotomkamPodklyuchitIts': '属性「%1」已连接到子类型 %2。如果将其连接到类型「%3」，子类型自身的该属性连接将被移除（它们将从你的类型继承）。想法和链接中的属性值不会改变。',
+  'typeManager.propertyConnectedTipamPotomkamPodklyuchitIts':
+    '属性「%1」已连接到子类型 %2。如果将其连接到类型「%3」，子类型自身的该属性连接将被移除（它们将从你的类型继承）。想法和链接中的属性值不会改变。',
   'typeManager.target': '目标',
   'typeManager.targets': '目标',
   'typeManager.celey': '目标',
-  'typeManager.descriptionPropertiesThisTypeEmptyNasleduetsya': '此类型的属性描述（留空——从父级继承）',
-  'typeManager.propertyNasleduetsyaTypeHereZadaetsyaDescription': '属性「%1」继承自类型「%2」。此处设置的属性描述仅用于此类型（及其子类型，直到它们自行覆盖）。',
+  'typeManager.descriptionPropertiesThisTypeEmptyNasleduetsya':
+    '此类型的属性描述（留空——从父级继承）',
+  'typeManager.propertyNasleduetsyaTypeHereZadaetsyaDescription':
+    '属性「%1」继承自类型「%2」。此处设置的属性描述仅用于此类型（及其子类型，直到它们自行覆盖）。',
   'typeManager.descriptionProperties': '属性描述 —「%1」',
   'typeManager.label.resetOverride': '重置覆盖',
-  'typeManager.changeParentPovliyaetIzmenitsyaSostavNasleduemyh': '更换父级将影响 %1 %2：%3 的继承属性组成将改变（绑定出现或消失），默认值和描述的覆盖可能变为悬空——值将作为「类型外」保留，并且只读。是否继续？',
+  'typeManager.changeParentPovliyaetIzmenitsyaSostavNasleduemyh':
+    '更换父级将影响 %1 %2：%3 的继承属性组成将改变（绑定出现或消失），默认值和描述的覆盖可能变为悬空——值将作为「类型外」保留，并且只读。是否继续？',
   'typeManager.changeParentTypeThought': '更改想法类型的父级',
   'typeManager.nee': '它',
   'typeManager.nih': '它们',
@@ -2455,7 +2592,8 @@ export const zh = {
   'workspaceMenus.idUser': '用户 ID',
   'workspaceMenus.title.membersNetwork': '网络成员',
   'workspaceMenus.unsetAllBlokirovki': '解除所有锁定',
-  'workspaceMenus.unsetAllBlokirovkiMemberActionIrreversible': '解除成员「%1」的所有锁定？操作不可逆转。',
+  'workspaceMenus.unsetAllBlokirovkiMemberActionIrreversible':
+    '解除成员「%1」的所有锁定？操作不可逆转。',
   'workspaceMenus.unsetBlokirovok': '已解除锁定：%1。',
   'workspaceMenus.notSucceededUnsetBlokirovki': '无法解除锁定：%1',
   'workspaceMenus.vyytiNetwork': '退出网络',
@@ -2498,7 +2636,8 @@ export const zh = {
   'selection.notSucceededCopy': '无法复制：%1',
   'selection.typeLinkThoughtFocus': '与焦点想法的链接类型',
   'selection.doOnlyParent': '设为唯一父级',
-  'selection.uSelectionThoughtsWillDeletedAll': '%1 个所选想法的所有入链将被删除，与想法「%2」的链接除外。是否继续？',
+  'selection.uSelectionThoughtsWillDeletedAll':
+    '%1 个所选想法的所有入链将被删除，与想法「%2」的链接除外。是否继续？',
   'selection.notSucceededChangeTypeLinkThoughts': '无法更改 %1 个想法的链接类型。',
   'selection.settingsSelection': '选择设置',
   'selection.notSucceededApplyThoughts': '无法应用到 %1 个想法。',
@@ -2519,7 +2658,8 @@ export const zh = {
   'trash.linkVozvraschenaTrash': '链接已从回收站恢复。',
   'trash.deleteVybrannogo': '删除所选',
   'trash.allRowsTrash': '所有行——「移到回收站」',
-  'trash.nezablokirovannyeRowsDeleteZablokirovannyeTrash': '未锁定的行——「删除」，已锁定的——「移到回收站」',
+  'trash.nezablokirovannyeRowsDeleteZablokirovannyeTrash':
+    '未锁定的行——「删除」，已锁定的——「移到回收站」',
   'trash.cannotDeleteSovsem2': '无法彻底删除——%1',
   'trash.lishitsyaParent': '%1 %2 将失去父级。',
   'trash.deleteVybrannogo2': '删除所选（%1）',

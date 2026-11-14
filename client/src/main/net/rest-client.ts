@@ -131,9 +131,7 @@ function connectionLostError(networkId: string | null, message: string): EtnErro
   return new EtnError(
     'INTERNAL',
     message,
-    networkId === null
-      ? { kind: 'connection-lost' }
-      : { kind: 'connection-lost', networkId },
+    networkId === null ? { kind: 'connection-lost' } : { kind: 'connection-lost', networkId },
   );
 }
 
@@ -166,7 +164,12 @@ function legacyCursorOffset(cursor: unknown): number | undefined {
  * `offset` читать. `total` может быть `null` (COUNT не считался) — тогда
  * признаком «есть ещё» служит полная страница.
  */
-function legacyNextCursor(startOffset: number, pageLength: number, limit: number, total: number | null): string | null {
+function legacyNextCursor(
+  startOffset: number,
+  pageLength: number,
+  limit: number,
+  total: number | null,
+): string | null {
   const fullPage = limit > 0 && pageLength >= limit;
   const more = fullPage && (total === null || startOffset + pageLength < total);
   return more ? `${LEGACY_CURSOR_PREFIX}${startOffset + pageLength}` : null;
@@ -621,7 +624,8 @@ export class RestClient {
         promise: this.performRequest<T>(method, path, opts),
       };
       entry.promise = entry.promise.finally(() => {
-        if (this.inflightIdempotentPosts.get(key) === entry) this.inflightIdempotentPosts.delete(key);
+        if (this.inflightIdempotentPosts.get(key) === entry)
+          this.inflightIdempotentPosts.delete(key);
       });
       this.inflightIdempotentPosts.set(key, entry);
       return entry.promise as Promise<ResponseEnvelope<T>>;
@@ -690,8 +694,7 @@ export class RestClient {
       // Requests without a network context (`me.*`, `networks.create`, …) are
       // gated by the pool-wide health callback: at least one known network and
       // none `connected` (verify remark 1).
-      const linkDown =
-        networkId !== null ? this.downNetworks.has(networkId) : this.isServerDown();
+      const linkDown = networkId !== null ? this.downNetworks.has(networkId) : this.isServerDown();
       if (mutating && linkDown) {
         throw connectionLostError(
           networkId,
@@ -927,10 +930,7 @@ export class RestClient {
       // как данные.
       const code = mapHttpStatus(res.status);
       this.notifyVersionRejection(code, undefined);
-      throw new EtnError(
-        code,
-        `HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
-      );
+      throw new EtnError(code, `HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
     }
 
     if (empty) {
@@ -1112,7 +1112,10 @@ export class RestClient {
     displayName: string | null,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').CurrentUser> {
-    return this.request('PATCH', '/me', { body: { display_name: displayName }, requestOptions: opts });
+    return this.request('PATCH', '/me', {
+      body: { display_name: displayName },
+      requestOptions: opts,
+    });
   }
 
   /** `GET /me/keys` — list own API-keys (prefix only). */
@@ -1147,11 +1150,7 @@ export class RestClient {
    * server validates the value shape (e.g. `comment_hotkeys` must be a string
    * map).
    */
-  public async setMySetting(
-    key: string,
-    value: unknown,
-    opts?: RequestOptions,
-  ): Promise<void> {
+  public async setMySetting(key: string, value: unknown, opts?: RequestOptions): Promise<void> {
     await this.request('PUT', `/users/me/settings/${encodeURIComponent(key)}`, {
       body: { value },
       requestOptions: opts,
@@ -1220,11 +1219,9 @@ export class RestClient {
       meta: import('@etn/shared').WallpaperMeta;
     },
   ): Promise<import('@etn/shared').WallpaperInfo> {
-    return this.request(
-      'PUT',
-      `/users/me/wallpaper?network_id=${encodeURIComponent(networkId)}`,
-      { body: input },
-    );
+    return this.request('PUT', `/users/me/wallpaper?network_id=${encodeURIComponent(networkId)}`, {
+      body: input,
+    });
   }
 
   /**
@@ -1232,10 +1229,7 @@ export class RestClient {
    * сети (идемпотентен, 204); картинки других сетей не трогает.
    */
   public async deleteWallpaper(networkId: string): Promise<void> {
-    await this.request(
-      'DELETE',
-      `/users/me/wallpaper?network_id=${encodeURIComponent(networkId)}`,
-    );
+    await this.request('DELETE', `/users/me/wallpaper?network_id=${encodeURIComponent(networkId)}`);
   }
 
   /**
@@ -1359,9 +1353,7 @@ export class RestClient {
    * ждала `{ entries, total }`). `total` — размер окна до пагинации; при
    * отсутствии `meta.total` берётся размер страницы.
    */
-  public async adminListAudit(
-    query?: import('@etn/shared').AuditQuery,
-  ): Promise<AuditListResult> {
+  public async adminListAudit(query?: import('@etn/shared').AuditQuery): Promise<AuditListResult> {
     const q: QueryRecord = {};
     if (query) {
       if (query.actor !== undefined) q['actor'] = query.actor;
@@ -1787,8 +1779,14 @@ export class RestClient {
   }
 
   /** `GET /networks/{nid}/thought-types/{id}` — один тип мысли (задача 59119797). */
-  public async getThoughtType(networkId: string, id: string): Promise<import('@etn/shared').ThoughtType> {
-    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(id)}`);
+  public async getThoughtType(
+    networkId: string,
+    id: string,
+  ): Promise<import('@etn/shared').ThoughtType> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/thought-types/${encodeURIComponent(id)}`,
+    );
   }
 
   /** `POST /networks/{nid}/thought-types`. */
@@ -1845,7 +1843,10 @@ export class RestClient {
 
   /** `GET /networks/{nid}/link-types/{id}` — один тип связи (задача 59119797). */
   public async getLinkType(networkId: string, id: string): Promise<import('@etn/shared').LinkType> {
-    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/link-types/${encodeURIComponent(id)}`);
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/link-types/${encodeURIComponent(id)}`,
+    );
   }
 
   /** `POST /networks/{nid}/link-types`. */
@@ -2033,8 +2034,7 @@ export class RestClient {
       { query: includeEffective ? { include_effective: 'true' } : undefined },
     );
     const effective = meta as
-      | { effective?: import('@etn/shared').EffectiveThoughtTypeView[] }
-      | undefined;
+      { effective?: import('@etn/shared').EffectiveThoughtTypeView[] } | undefined;
     return { data, meta: { effective: effective?.effective ?? [] } };
   }
 
@@ -2133,17 +2133,19 @@ export class RestClient {
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/views/${encodeURIComponent(viewName)}/run`,
       { body, idempotentPost: true, requestOptions },
     );
-    const meta = envelope as {
-      total?: number;
-      limit?: number;
-      offset?: number;
-      directions?: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
-      /** Владелец прогона: `scope`/`defined_on` (0.14.1), `type_id` — только типовой. */
-      view?: import('@etn/shared').RunThoughtTypeViewMeta['view'];
-      sort?: string;
-      order?: string;
-      unresolved?: Array<{ token: string; reason: string; message: string }>;
-    } | undefined;
+    const meta = envelope as
+      | {
+          total?: number;
+          limit?: number;
+          offset?: number;
+          directions?: Record<string, { has_incoming: boolean; has_outgoing: boolean }>;
+          /** Владелец прогона: `scope`/`defined_on` (0.14.1), `type_id` — только типовой. */
+          view?: import('@etn/shared').RunThoughtTypeViewMeta['view'];
+          sort?: string;
+          order?: string;
+          unresolved?: Array<{ token: string; reason: string; message: string }>;
+        }
+      | undefined;
     return {
       data,
       meta: {
@@ -2184,8 +2186,7 @@ export class RestClient {
       { query: includeEffective ? { include_effective: 'true' } : undefined },
     );
     const effective = meta as
-      | { effective?: import('@etn/shared').EffectiveThoughtView[] }
-      | undefined;
+      { effective?: import('@etn/shared').EffectiveThoughtView[] } | undefined;
     return { data, meta: { effective: effective?.effective ?? [] } };
   }
 
@@ -2281,13 +2282,8 @@ export class RestClient {
    * 171a438e) and by the property-manager dialog (task d4e23670, fd4d4927)
    * as the main list source.
    */
-  public async listNetworkProperties(
-    networkId: string,
-  ): Promise<NetworkPropertyWithCounters[]> {
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/properties`,
-    );
+  public async listNetworkProperties(networkId: string): Promise<NetworkPropertyWithCounters[]> {
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/properties`);
   }
 
   /** `GET /networks/{nid}/properties/{id}` — one property + counters. */
@@ -2570,10 +2566,7 @@ export class RestClient {
   }
 
   /** `GET /networks/{nid}/comments/{id}` — one comment with all its targets (L20). */
-  public async getComment(
-    networkId: string,
-    id: string,
-  ): Promise<import('@etn/shared').Comment> {
+  public async getComment(networkId: string, id: string): Promise<import('@etn/shared').Comment> {
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/comments/${encodeURIComponent(id)}`,
@@ -2586,14 +2579,30 @@ export class RestClient {
     input: import('@etn/shared').CommentInputWithTargets,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').Comment> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/comments`,
-      { body: input, requestOptions: opts },
-    );
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/comments`, {
+      body: input,
+      requestOptions: opts,
+    });
   }
 
-  /** `POST /networks/{nid}/comments/{id}/targets` — attach one more owner (L20). */
+  /**
+   * `PATCH /networks/{nid}/tasks` — правка строк задач (0.16.1, операции
+   * e6d65f51/de4cee18): `action: 'move'` двигает все date-ссылки строки
+   * серверным механизмом (`shiftTaskLineDates`), `expected_revision`
+   * обязателен.
+   */
+  public async patchTasks(
+    networkId: string,
+    input: { ops: import('../ipc/contract.js').TaskOpInput[] },
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').TaskPatchResult> {
+    return this.request('PATCH', `/networks/${encodeURIComponent(networkId)}/tasks`, {
+      body: input,
+      requestOptions: opts,
+    });
+  }
+
+  /** `POST /networks/{nid}/comments/{id}/targets` - attach one more owner (L20). */
   public async addCommentTarget(
     networkId: string,
     id: string,
@@ -2769,7 +2778,10 @@ export class RestClient {
     networkId: string,
     id: string,
   ): Promise<import('@etn/shared').Attachment> {
-    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}`);
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/attachments/${encodeURIComponent(id)}`,
+    );
   }
 
   /** `PATCH /networks/{nid}/attachments/{id}`. */
@@ -2929,11 +2941,9 @@ export class RestClient {
     if (query.exclude_owner_id !== undefined) q['exclude_owner_id'] = query.exclude_owner_id;
     if (query.limit !== undefined) q['limit'] = query.limit;
     if (query.offset !== undefined) q['offset'] = query.offset;
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/attachments`,
-      { query: q },
-    );
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/attachments`, {
+      query: q,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -3068,9 +3078,7 @@ export class RestClient {
   }
 
   /** `GET /networks/{nid}/trash` (03-server-api.md §14b). */
-  public async listTrash(
-    networkId: string,
-  ): Promise<import('@etn/shared').TrashListResult> {
+  public async listTrash(networkId: string): Promise<import('@etn/shared').TrashListResult> {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/trash`);
   }
 
@@ -3307,11 +3315,9 @@ export class RestClient {
     if (synonyms.length > 0) q['synonyms'] = synonyms;
     if (typeIds.length > 0) q['type_ids'] = typeIds;
     if (mode !== undefined) q['mode'] = mode;
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`,
-      { query: q },
-    );
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/thoughts/duplicates`, {
+      query: q,
+    });
   }
 
   /**
@@ -3482,8 +3488,13 @@ export class RestClient {
       total,
       directions: meta?.directions ?? {},
       next_cursor: this.legacyStructureQuery
-        ? legacyNextCursor(startOffset, items.length, limit, typeof meta?.total === 'number' ? meta.total : null)
-        : meta?.next_cursor ?? null,
+        ? legacyNextCursor(
+            startOffset,
+            items.length,
+            limit,
+            typeof meta?.total === 'number' ? meta.total : null,
+          )
+        : (meta?.next_cursor ?? null),
       // Неразрешимые токены AST (требование b7fdab20): редактор отбора
       // подсвечивает их адреса — поле едет из того же конверта `meta`.
       ...(Array.isArray(meta?.unresolved) && meta.unresolved.length > 0
@@ -3530,8 +3541,13 @@ export class RestClient {
       ids: body.ids,
       total,
       next_cursor: this.legacyStructureQuery
-        ? legacyNextCursor(startOffset, body.ids.length, limit, typeof body.total === 'number' ? body.total : null)
-        : body.next_cursor ?? null,
+        ? legacyNextCursor(
+            startOffset,
+            body.ids.length,
+            limit,
+            typeof body.total === 'number' ? body.total : null,
+          )
+        : (body.next_cursor ?? null),
     };
   }
 
@@ -3597,9 +3613,7 @@ export class RestClient {
   }
 
   /** `GET /networks/{nid}/saved-filters?view=structures` — the user's own saved filters. */
-  public async listSavedFilters(
-    networkId: string,
-  ): Promise<import('@etn/shared').SavedFilter[]> {
+  public async listSavedFilters(networkId: string): Promise<import('@etn/shared').SavedFilter[]> {
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
       query: { view: 'structures' },
     });
@@ -3660,8 +3674,7 @@ export class RestClient {
       import('@etn/shared').ChronicleRow[]
     >('POST', `/networks/${encodeURIComponent(networkId)}/chronicle/query`, { body: request });
     const meta = envelope as
-      | { total?: number; warnings?: import('@etn/shared').FilterDiagnostic[] }
-      | undefined;
+      { total?: number; warnings?: import('@etn/shared').FilterDiagnostic[] } | undefined;
     const total = typeof meta?.total === 'number' ? meta.total : rows.length;
     return {
       rows,
@@ -3679,11 +3692,9 @@ export class RestClient {
   public async listChronicleFilters(
     networkId: string,
   ): Promise<import('@etn/shared').ChronicleSavedFilter[]> {
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/saved-filters`,
-      { query: { view: 'chronicle' } },
-    );
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
+      query: { view: 'chronicle' },
+    });
   }
 
   /** `POST /networks/{nid}/saved-filters` — create a chronicle filter (idempotent). */
@@ -3736,11 +3747,9 @@ export class RestClient {
   public async listActivityFilters(
     networkId: string,
   ): Promise<import('@etn/shared').ActivitySavedFilter[]> {
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/saved-filters`,
-      { query: { view: 'events' } },
-    );
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/saved-filters`, {
+      query: { view: 'events' },
+    });
   }
 
   /** `POST /networks/{nid}/saved-filters` — create an events filter (idempotent). */
@@ -3841,14 +3850,10 @@ export class RestClient {
       parent_thought_id: parentThoughtId,
     };
     if (slices !== undefined) body['etnx'] = slices;
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/import/commit`,
-      {
-        body,
-        requestOptions: opts,
-      },
-    );
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/import/commit`, {
+      body,
+      requestOptions: opts,
+    });
   }
 
   /** `GET /jobs/{jobId}` — poll an export job. */
@@ -3901,9 +3906,13 @@ export class RestClient {
    *  версии после `/me` доказывает, что поднялся новый процесс (задача
    *  479e37ed, вердикт повторной приёмки). */
   public async getVersion(): Promise<import('@etn/shared').VersionResponse> {
-    const response = await this.requestRaw<import('@etn/shared').VersionResponse>('GET', '/version');
+    const response = await this.requestRaw<import('@etn/shared').VersionResponse>(
+      'GET',
+      '/version',
+    );
     const version = response?.version;
-    this.lastKnownServerVersion = typeof version === 'string' && version.trim() !== '' ? version : null;
+    this.lastKnownServerVersion =
+      typeof version === 'string' && version.trim() !== '' ? version : null;
     return response;
   }
 
@@ -3960,10 +3969,7 @@ export class RestClient {
    * `details.stage`, `details.job`) — сервер продолжает работать на текущей
    * версии, повторять вызов нельзя.
    */
-  public async systemUpdateApply(
-    targetVersion: string,
-    opts?: RequestOptions,
-  ): Promise<UpdateJob> {
+  public async systemUpdateApply(targetVersion: string, opts?: RequestOptions): Promise<UpdateJob> {
     return this.request('POST', '/system/update/apply', {
       body: { target_version: targetVersion },
       requestOptions: {
@@ -4040,11 +4046,10 @@ export class RestClient {
     entityId: string,
     opts?: RequestOptions,
   ): Promise<import('@etn/shared').LockRow> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/locks`,
-      { body: { entity_type: entityType, entity_id: entityId }, requestOptions: opts },
-    );
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/locks`, {
+      body: { entity_type: entityType, entity_id: entityId },
+      requestOptions: opts,
+    });
   }
 
   /** `DELETE /networks/{nid}/locks/:lockId` — release (только владелец). */
@@ -4073,11 +4078,9 @@ export class RestClient {
     const query: QueryRecord = {};
     if (filters?.userId !== undefined) query['user_id'] = filters.userId;
     if (filters?.clientId !== undefined) query['client_id'] = filters.clientId;
-    return this.request(
-      'GET',
-      `/networks/${encodeURIComponent(networkId)}/locks`,
-      { query: Object.keys(query).length ? query : undefined },
-    );
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/locks`, {
+      query: Object.keys(query).length ? query : undefined,
+    });
   }
 
   /** `POST /networks/{nid}/locks/clear` — ручной сброс всех захватов пользователя. */
@@ -4086,11 +4089,10 @@ export class RestClient {
     userId: string,
     opts?: RequestOptions,
   ): Promise<LocksClearResult> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/locks/clear`,
-      { body: { user_id: userId }, requestOptions: opts },
-    );
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/locks/clear`, {
+      body: { user_id: userId },
+      requestOptions: opts,
+    });
   }
 
   /** `DELETE /system/logs` — remove every server journal file (current truncated). */
@@ -4155,11 +4157,10 @@ export class RestClient {
     untilMs: number,
     opts?: RequestOptions,
   ): Promise<ActivityRollupResult> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/activity/rollup`,
-      { body: { until_ms: untilMs }, requestOptions: opts },
-    );
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/activity/rollup`, {
+      body: { until_ms: untilMs },
+      requestOptions: opts,
+    });
   }
 
   /** `POST /networks/{nid}/activity/truncate` — обрезка журнала до `untilMs`. */
@@ -4168,11 +4169,10 @@ export class RestClient {
     untilMs: number,
     opts?: RequestOptions,
   ): Promise<ActivityTruncateResult> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/activity/truncate`,
-      { body: { until_ms: untilMs }, requestOptions: opts },
-    );
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/activity/truncate`, {
+      body: { until_ms: untilMs },
+      requestOptions: opts,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -4216,11 +4216,10 @@ export class RestClient {
     input: PublicationCreateInput,
     opts?: RequestOptions,
   ): Promise<Publication> {
-    return this.request(
-      'POST',
-      `/networks/${encodeURIComponent(networkId)}/publications`,
-      { body: input, requestOptions: opts ?? { clientRequestId: randomUUID() } },
-    );
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/publications`, {
+      body: input,
+      requestOptions: opts ?? { clientRequestId: randomUUID() },
+    });
   }
 
   /** `GET /networks/{nid}/publications/{id}` — карточка публикации. */
@@ -4332,7 +4331,9 @@ export class RestClient {
       'PUT',
       `/networks/${encodeURIComponent(networkId)}/publications/${encodeURIComponent(id)}/order`,
       {
-        body: { items: items.map((item) => ({ node_key: item.node_key, position: item.position })) },
+        body: {
+          items: items.map((item) => ({ node_key: item.node_key, position: item.position })),
+        },
         requestOptions: opts ?? { clientRequestId: randomUUID() },
       },
     );
@@ -4436,7 +4437,8 @@ export class RestClient {
     const params: QueryRecord = {};
     if (query.limit !== undefined) params['limit'] = query.limit;
     if (query.offset !== undefined) params['offset'] = query.offset;
-    if (query.publication_limit !== undefined) params['publication_limit'] = query.publication_limit;
+    if (query.publication_limit !== undefined)
+      params['publication_limit'] = query.publication_limit;
     return this.request(
       'GET',
       `/networks/${encodeURIComponent(networkId)}/thoughts/${encodeURIComponent(thoughtId)}/publications`,
@@ -4465,10 +4467,7 @@ export class RestClient {
    * {@link downloadJob}). Заголовок `x-publication-slug` несёт имя файла;
    * основной процесс печатает HTML в PDF скрытым окном (`webContents.printToPDF`).
    */
-  public async getPublicationPrintHtml(
-    networkId: string,
-    id: string,
-  ): Promise<PublicationPrint> {
+  public async getPublicationPrintHtml(networkId: string, id: string): Promise<PublicationPrint> {
     const url =
       `${this.baseUrl}/api/v1/networks/${encodeURIComponent(networkId)}` +
       `/publications/${encodeURIComponent(id)}/print`;
@@ -4523,20 +4522,12 @@ export class RestClient {
   }
 
   /** `POST …/shelves/{id}/trash` — полка в корзину. */
-  public async trashShelf(
-    networkId: string,
-    id: string,
-    opts?: RequestOptions,
-  ): Promise<Shelf> {
+  public async trashShelf(networkId: string, id: string, opts?: RequestOptions): Promise<Shelf> {
     return this.postShelfLifecycle(networkId, id, 'trash', opts);
   }
 
   /** `POST …/shelves/{id}/restore` — полка из корзины. */
-  public async restoreShelf(
-    networkId: string,
-    id: string,
-    opts?: RequestOptions,
-  ): Promise<Shelf> {
+  public async restoreShelf(networkId: string, id: string, opts?: RequestOptions): Promise<Shelf> {
     return this.postShelfLifecycle(networkId, id, 'restore', opts);
   }
 
@@ -4554,11 +4545,7 @@ export class RestClient {
   }
 
   /** `DELETE /networks/{nid}/shelves/{id}` — физическое удаление (основа). */
-  public async purgeShelf(
-    networkId: string,
-    id: string,
-    opts?: RequestOptions,
-  ): Promise<void> {
+  public async purgeShelf(networkId: string, id: string, opts?: RequestOptions): Promise<void> {
     await this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(id)}`,
@@ -4610,7 +4597,10 @@ export class RestClient {
     return this.request(
       'DELETE',
       `/networks/${encodeURIComponent(networkId)}/shelves/${encodeURIComponent(shelfId)}/items`,
-      { query: { publication_id: publicationId }, requestOptions: opts ?? { clientRequestId: randomUUID() } },
+      {
+        query: { publication_id: publicationId },
+        requestOptions: opts ?? { clientRequestId: randomUUID() },
+      },
     );
   }
 
@@ -4839,11 +4829,10 @@ const CONNECT_FAILURE_REASON_TEXT: Readonly<Record<ConnectFailureReason, string>
  */
 function transportFailure(err: unknown): EtnError {
   const reason = classifyConnectFailure(err);
-  return new EtnError(
-    'INTERNAL',
-    `Сетевая ошибка: ${CONNECT_FAILURE_REASON_TEXT[reason]}`,
-    { kind: 'connect-failed', reason } satisfies ConnectFailureDetails,
-  );
+  return new EtnError('INTERNAL', `Сетевая ошибка: ${CONNECT_FAILURE_REASON_TEXT[reason]}`, {
+    kind: 'connect-failed',
+    reason,
+  } satisfies ConnectFailureDetails);
 }
 
 /**
@@ -4851,10 +4840,7 @@ function transportFailure(err: unknown): EtnError {
  * Отмена ВЫЗЫВАЮЩИМ сохраняет исходную ошибку — как и на этапе установки
  * соединения, где `ro.signal?.aborted` пробрасывает её без обёртки.
  */
-async function readResponseBody<T>(
-  read: () => Promise<T>,
-  callerSignal?: AbortSignal,
-): Promise<T> {
+async function readResponseBody<T>(read: () => Promise<T>, callerSignal?: AbortSignal): Promise<T> {
   try {
     return await read();
   } catch (err) {

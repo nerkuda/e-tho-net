@@ -13,21 +13,23 @@
  */
 
 import { syntaxTree } from '@codemirror/language';
-import {
-  EditorState,
-  StateField,
-  type Range,
-  type SelectionRange,
-} from '@codemirror/state';
-import {
-  Decoration,
-  type DecorationSet,
-  EditorView,
-  WidgetType,
-} from '@codemirror/view';
+import { EditorState, StateField, type Range, type SelectionRange } from '@codemirror/state';
+import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 
 import { renderMarkdown } from '@etn/markdown';
+import {
+  TASK_MARKER_PATTERN,
+  WIKI_LINK_CLASS,
+  WIKI_LINK_DATE_ATTR,
+  WIKI_LINK_DATE_CLASS,
+  WIKI_LINK_TIME_ATTR,
+  formatDateLinkLabel,
+  parseDateLinkTarget,
+  parseTaskLines,
+  type TaskLine,
+} from '@etn/markdown';
 
+import { t } from '../lib/i18n.js';
 import { choiceControl } from '../lib/ui/choice-row.js';
 import { isCollapsedHiddenAt, setCollapseEffect } from './comment-collapse.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -45,14 +47,26 @@ export const MD_WIDGET_CLASS = 'md-widget';
  * пока виджет ещё в DOM.
  */
 let legacyWikiLinkClickHandler:
-  | ((widget: HTMLElement, view: EditorView, event: MouseEvent) => void)
-  | null = null;
+  ((widget: HTMLElement, view: EditorView, event: MouseEvent) => void) | null = null;
 
 /** Регистрирует обработчик легаси-виджета (см. {@link legacyWikiLinkClickHandler}). */
 export function setLegacyWikiLinkClickHandler(
   handler: ((widget: HTMLElement, view: EditorView, event: MouseEvent) => void) | null,
 ): void {
   legacyWikiLinkClickHandler = handler;
+}
+
+/**
+ * Обработчик левого клика по date-чипу в редакторе (0.16.1, требование
+ * 31fe2cc9): открывает день в «Дневнике». Ставит `wiki-link.ts` при
+ * инициализации — тот же приём, что у легаси-ссылки: клик по виджету
+ * перехватывается на `mousedown`, пока узел ещё в DOM.
+ */
+let dateChipClickHandler: ((date: string) => void) | null = null;
+
+/** Регистрирует обработчик клика по date-чипу (см. {@link dateChipClickHandler}). */
+export function setDateChipClickHandler(handler: ((date: string) => void) | null): void {
+  dateChipClickHandler = handler;
 }
 
 /**
@@ -72,11 +86,7 @@ export function isInRangeInclusive(
  * Инлайн-правило (M6-фикс): элемент активен, пока каретка внутри него или
  * непосредственно перед/после (позиции `from-1` … `to`).
  */
-export function isNearInline(
-  ranges: readonly SelectionRange[],
-  from: number,
-  to: number,
-): boolean {
+export function isNearInline(ranges: readonly SelectionRange[], from: number, to: number): boolean {
   return ranges.some((r) => {
     if (r.empty) return r.from >= from - 1 && r.from <= to;
     return r.to >= from - 1 && r.from <= to + 1;
@@ -193,6 +203,47 @@ class WikiLinkWidget extends WidgetType {
   }
 }
 
+/** Date-чип в live-preview: тот же вид, что спан просмотра `@etn/markdown`. */
+class WikiDateWidget extends WidgetType {
+  constructor(
+    readonly from: number,
+    readonly to: number,
+    readonly date: string,
+    readonly time: string | null,
+    readonly label: string,
+  ) {
+    super();
+  }
+
+  override eq(other: WikiDateWidget): boolean {
+    return (
+      other.from === this.from &&
+      other.to === this.to &&
+      other.date === this.date &&
+      other.time === this.time &&
+      other.label === this.label
+    );
+  }
+
+  override toDOM(): HTMLElement {
+    // Классы и data-атрибуты — те же, что у спана просмотра (0.16.1, элемент
+    // f9da2100): чип отличим от мысль-ссылки, а обработчики клика и меню
+    // работают по единым константам пакета.
+    const span = document.createElement('span');
+    span.className = `${MD_WIDGET_CLASS} ${WIKI_LINK_CLASS} ${WIKI_LINK_DATE_CLASS}`;
+    span.textContent = this.label;
+    span.dataset.mdFrom = String(this.from);
+    span.dataset.mdTo = String(this.to);
+    span.setAttribute(WIKI_LINK_DATE_ATTR, this.date);
+    if (this.time !== null) span.setAttribute(WIKI_LINK_TIME_ATTR, this.time);
+    return span;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
 /** Горизонтальная линейка. */
 class HrWidget extends WidgetType {
   constructor(
@@ -276,6 +327,36 @@ class ListMarkerWidget extends WidgetType {
   }
 }
 
+/**
+ * Тихая подсказка разбора строки задачи (0.16.1, элемент интерфейса 8773d9df):
+ * блок под строкой в фокусе, без фокуса и кликов — только чтение.
+ *
+ * Текст считает {@link taskHintText} по тому же парсеру, что и проекция задач
+ * (`parseTaskLines` пакета `@etn/markdown`), поэтому подсказка не может
+ * разойтись с «Задачами периода».
+ */
+class TaskHintWidget extends WidgetType {
+  constructor(readonly hint: string) {
+    super();
+  }
+
+  override eq(other: TaskHintWidget): boolean {
+    return other.hint === this.hint;
+  }
+
+  override toDOM(): HTMLElement {
+    const box = document.createElement('div');
+    box.className = 'cm-md-task-hint';
+    box.textContent = this.hint;
+    return box;
+  }
+
+  /** Подсказка — не интерактивная: клики и фокус остаются строке. */
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 /** Разбор `[[target|alias]]` для виджета wiki-ссылки (пустой алиас = имя). */
 export function wikiLabel(source: string): { target: string; label: string } | null {
   const m = /^\[\[([^[\]\n|]+)(?:\|([^\]\n]*))?\]\]$/.exec(source.trim());
@@ -316,6 +397,58 @@ export function isIdWikiLinkTarget(target: string): boolean {
     );
   }
   return false;
+}
+
+/** Сырая форма маркера чекбокса для дешёвого гейта (грамматика — в пакете). */
+const TASK_HINT_GATE_RE = new RegExp(TASK_MARKER_PATTERN);
+
+/** Короткая подпись даты в подсказке (`dd.MM.yyyy`). */
+function hintDate(iso: string): string {
+  return formatDateLinkLabel({ date: iso, time: null });
+}
+
+/**
+ * Текст тихой подсказки строки задачи по разбору парсера (элемент 8773d9df):
+ * роль строки, период/срок и где она появится. Никаких диалогов и действий.
+ */
+export function taskHintText(row: TaskLine): string {
+  const parts: string[] = [];
+  if (row.subtask) {
+    parts.push(t('editor.taskHint.checklist'));
+  } else {
+    parts.push(row.done ? t('editor.taskHint.done') : t('editor.taskHint.task'));
+    if (row.undated) {
+      parts.push(t('editor.taskHint.undated'));
+    } else {
+      if (row.periodFrom !== null && row.periodTo !== null && row.periodFrom !== row.periodTo) {
+        parts.push(t('editor.taskHint.period', [hintDate(row.periodFrom), hintDate(row.periodTo)]));
+      }
+      if (row.due !== null) parts.push(t('editor.taskHint.due', hintDate(row.due)));
+    }
+  }
+  parts.push(
+    row.undated ? t('editor.taskHint.appearsUndated') : t('editor.taskHint.appearsPeriod'),
+  );
+  return parts.join(' · ');
+}
+
+/**
+ * Подсказка для строки в фокусе: `null` — строка не задача (или разбор не
+ * нашёл её). Парсер вызывается только когда в текущей/предыдущей строке есть
+ * маркер чекбокса: обычный текст не платит за разбор документа.
+ */
+function taskHintAt(state: EditorState): { pos: number; text: string } | null {
+  const line = state.doc.lineAt(state.selection.main.head);
+  const previous = line.number > 1 ? state.doc.line(line.number - 1) : null;
+  if (
+    !TASK_HINT_GATE_RE.test(line.text) &&
+    (previous === null || !TASK_HINT_GATE_RE.test(previous.text))
+  ) {
+    return null;
+  }
+  const row = parseTaskLines(state.doc.toString()).find((item) => item.lineNo === line.number);
+  if (row === undefined || !row.hasCheckbox) return null;
+  return { pos: line.to, text: taskHintText(row) };
 }
 
 /** Строит набор декораций для текущего состояния. */
@@ -620,6 +753,21 @@ function buildDecorations(state: EditorState): DecorationSet {
               // который умеет асинхронный резолв и atomic range в edit-mode.
               // Иначе здесь пришлось бы показывать `#<uuid>` как label.
               if (isIdWikiLinkTarget(parsed.target)) return false;
+              // Date-ссылка (0.16.1): тот же чип, что в просмотре, а не имя
+              // мысли с датой (требование 31fe2cc9, элемент f9da2100).
+              const dateParts = parseDateLinkTarget(parsed.target);
+              if (dateParts !== null) {
+                const label =
+                  parsed.label === parsed.target ? formatDateLinkLabel(dateParts) : parsed.label;
+                parts.push({
+                  from,
+                  to,
+                  value: Decoration.replace({
+                    widget: new WikiDateWidget(from, to, dateParts.date, dateParts.time, label),
+                  }),
+                });
+                return false;
+              }
               parts.push({
                 from,
                 to,
@@ -658,6 +806,17 @@ function buildDecorations(state: EditorState): DecorationSet {
       }
     },
   });
+
+  // Тихая подсказка строки задачи в фокусе (элемент 8773d9df): блок под
+  // строкой, не участвует в вводе и кликах.
+  const hint = taskHintAt(state);
+  if (hint !== null) {
+    parts.push(
+      Decoration.widget({ widget: new TaskHintWidget(hint.text), block: true, side: 2 }).range(
+        hint.pos,
+      ),
+    );
+  }
 
   return Decoration.set(parts, true);
 }
@@ -701,6 +860,16 @@ export function mdWidgetMouseDown(event: MouseEvent, view: EditorView): boolean 
   const target = event.target as Element | null;
   const widget = target?.closest?.(`.${MD_WIDGET_CLASS}`);
   if (!(widget instanceof HTMLElement)) return false;
+
+  // Date-чип: левый клик открывает день в «Дневнике» (0.16.1, требование
+  // 31fe2cc9), исходник НЕ раскрывается. Обработчик ставит `wiki-link.ts`
+  // (`setDateChipClickHandler`), чтобы `md-live` не тянул навигацию в себя.
+  const date = widget.getAttribute(WIKI_LINK_DATE_ATTR);
+  if (date !== null && date !== '' && dateChipClickHandler !== null) {
+    event.preventDefault();
+    dateChipClickHandler(date);
+    return true;
+  }
 
   // Легаси-виджет wiki-ссылки: левый клик уходит в развилку (резолв имени →
   // конвертация → открытие), исходник НЕ раскрывается (0.12.2, задача

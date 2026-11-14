@@ -119,7 +119,11 @@ function parseHtml(html: string): ParsedNode {
   const push = (node: ParsedNode): void => {
     const parent = stack[stack.length - 1]!;
     (parent.children as ParsedNode[]).push(node);
-    Object.defineProperty(node, 'parentNode', { value: parent, configurable: true, writable: true });
+    Object.defineProperty(node, 'parentNode', {
+      value: parent,
+      configurable: true,
+      writable: true,
+    });
   };
   let i = 0;
   while (i < html.length) {
@@ -243,28 +247,48 @@ test('==метка== помечается диапазоном видимого 
   const src = 'абзац с ==меткой== хвост';
   const html = renderMarkdown(src, { sourceMap: true });
   const start = src.indexOf('меткой');
-  assert.match(html, new RegExp(`<mark ${MD_SOURCE_START_ATTR}="${start}" ${MD_SOURCE_END_ATTR}="${start + 'меткой'.length}"`), html);
+  assert.match(
+    html,
+    new RegExp(
+      `<mark ${MD_SOURCE_START_ATTR}="${start}" ${MD_SOURCE_END_ATTR}="${start + 'меткой'.length}"`,
+    ),
+    html,
+  );
 });
 
 test('<u>подч</u> помечается диапазоном видимого текста', () => {
   const src = 'абзац <u>подч</u> хвост';
   const html = renderMarkdown(src, { sourceMap: true });
   const start = src.indexOf('подч');
-  assert.match(html, new RegExp(`<u ${MD_SOURCE_START_ATTR}="${start}" ${MD_SOURCE_END_ATTR}="${start + 'подч'.length}"`), html);
+  assert.match(
+    html,
+    new RegExp(
+      `<u ${MD_SOURCE_START_ATTR}="${start}" ${MD_SOURCE_END_ATTR}="${start + 'подч'.length}"`,
+    ),
+    html,
+  );
 });
 
 test('wiki-ссылка с алиасом помечается диапазоном алиаса', () => {
   const src = 'см. [[Мысль|алиас]] тут';
   const html = renderMarkdown(src, { sourceMap: true });
   const start = src.indexOf('алиас');
-  assert.match(html, new RegExp(`data-md-start="${start}" data-md-end="${start + 'алиас'.length}"`), html);
+  assert.match(
+    html,
+    new RegExp(`data-md-start="${start}" data-md-end="${start + 'алиас'.length}"`),
+    html,
+  );
 });
 
 test('wiki-ссылка без алиаса помечается диапазоном имени', () => {
   const src = 'см. [[Мысль]] тут';
   const html = renderMarkdown(src, { sourceMap: true });
   const start = src.indexOf('Мысль');
-  assert.match(html, new RegExp(`data-md-start="${start}" data-md-end="${start + 'Мысль'.length}"`), html);
+  assert.match(
+    html,
+    new RegExp(`data-md-start="${start}" data-md-end="${start + 'Мысль'.length}"`),
+    html,
+  );
 });
 
 test('wiki-ссылка [[#id]] без алиаса: рендер не падает и диапазон не ставится', () => {
@@ -318,6 +342,12 @@ test('date-ссылка без алиаса помечается диапазо�
     new RegExp(`data-md-start="${start}" data-md-end="${start + '2026-11-02'.length}"`),
     html,
   );
+  // Вид ссылки: чип даты, а не мысль (мутационная проба задачи 9ec9d72a —
+  // раньше эти тесты проходили и на legacy-имени).
+  assert.ok(html.includes('class="wiki-link wiki-link-date"'), html);
+  assert.ok(html.includes('data-wiki-date="2026-11-02"'), html);
+  assert.ok(!html.includes('data-wiki-target='), html);
+  assert.ok(!html.includes('data-wiki-time'), html);
 });
 
 test('date-ссылка с временем помечается диапазоном ISO-datetime', () => {
@@ -326,6 +356,10 @@ test('date-ссылка с временем помечается диапазо�
   const start = src.indexOf('2026-11-02');
   assert.match(html, new RegExp(`data-md-start="${start}"`), html);
   assert.match(html, new RegExp(`data-md-end="${start + '2026-11-02 14:30'.length}"`), html);
+  assert.ok(html.includes('class="wiki-link wiki-link-date"'), html);
+  assert.ok(html.includes('data-wiki-date="2026-11-02"'), html);
+  assert.ok(html.includes('data-wiki-time="14:30"'), html);
+  assert.ok(!html.includes('data-wiki-target='), html);
 });
 
 test('date-ссылка с алиасом помечается диапазоном алиаса', () => {
@@ -337,6 +371,9 @@ test('date-ссылка с алиасом помечается диапазон�
     new RegExp(`data-md-start="${start}" data-md-end="${start + 'второе ноября'.length}"`),
     html,
   );
+  assert.ok(html.includes('class="wiki-link wiki-link-date"'), html);
+  assert.ok(html.includes('data-wiki-date="2026-11-02"'), html);
+  assert.ok(!html.includes('data-wiki-target='), html);
 });
 
 test('клик по тексту после date-ссылки даёт исходное смещение', () => {
@@ -362,11 +399,16 @@ test('sourceOffsetFromCaret: ближайший аннотированный п�
   // Клик по 'к' в «привет»: предок — абзац, смещение внутри абзаца.
   assert.equal(sourceOffsetFromCaret(p.childNodes[0]!, 5), 105);
   // Клик по 'о' в «конец»: предок — абзац, учитываются предыдущие сиблинги.
-  assert.equal(sourceOffsetFromCaret(p.childNodes[2]!, 1), 100 + 'привет '.length + 'мир'.length + 1);
+  assert.equal(
+    sourceOffsetFromCaret(p.childNodes[2]!, 1),
+    100 + 'привет '.length + 'мир'.length + 1,
+  );
 });
 
 test('sourceOffsetFromCaret: клик по элементу (не тексту) даёт start диапазона', () => {
-  const node = element({ [MD_SOURCE_START_ATTR]: '40', [MD_SOURCE_END_ATTR]: '50' }, [textNode('x')]);
+  const node = element({ [MD_SOURCE_START_ATTR]: '40', [MD_SOURCE_END_ATTR]: '50' }, [
+    textNode('x'),
+  ]);
   assert.equal(sourceOffsetFromCaret(node, 0), 40);
 });
 
@@ -504,7 +546,10 @@ test('data-md-end заголовка не захватывает закрыва�
   const src = '# Заголовок ##';
   const html = renderMarkdown(src, { sourceMap: true });
   const range = firstRange(html, 'h1');
-  assert.deepEqual(range, [src.indexOf('Заголовок'), src.indexOf('Заголовок') + 'Заголовок'.length]);
+  assert.deepEqual(range, [
+    src.indexOf('Заголовок'),
+    src.indexOf('Заголовок') + 'Заголовок'.length,
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -757,7 +802,10 @@ test('байт-паритет: не-leaf конструкции с escape вне
     renderMarkdown('**a ==c== b ' + bs + '* d**'),
     '<p><strong>a <mark>c</mark> b * d</strong></p>\n',
   );
-  assert.equal(renderMarkdown('**b ' + bs + '* d ==c==**'), '<p><strong>b * d <mark>c</mark></strong></p>\n');
+  assert.equal(
+    renderMarkdown('**b ' + bs + '* d ==c==**'),
+    '<p><strong>b * d <mark>c</mark></strong></p>\n',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -829,9 +877,18 @@ test('ссылка внутри конструкции: аннотирована
 });
 
 test('байт-паритет: ссылки/картинки/autolink без sourceMap не меняются', () => {
-  assert.equal(renderMarkdown('[метка](http://e) хвост'), '<p><a href="http://e">метка</a> хвост</p>\n');
-  assert.equal(renderMarkdown('<http://e> хвост'), '<p><a href="http://e">http://e</a> хвост</p>\n');
-  assert.equal(renderMarkdown('![a](http://e) после'), '<p><img src="http://e" alt="a" /> после</p>\n');
+  assert.equal(
+    renderMarkdown('[метка](http://e) хвост'),
+    '<p><a href="http://e">метка</a> хвост</p>\n',
+  );
+  assert.equal(
+    renderMarkdown('<http://e> хвост'),
+    '<p><a href="http://e">http://e</a> хвост</p>\n',
+  );
+  assert.equal(
+    renderMarkdown('![a](http://e) после'),
+    '<p><img src="http://e" alt="a" /> после</p>\n',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -844,7 +901,9 @@ test('linkify: диапазон URL — вместе со схемой, клик
   const start = src.indexOf('https://e.com');
   assert.match(
     html,
-    new RegExp(`<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'https://e.com'.length}"`),
+    new RegExp(
+      `<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'https://e.com'.length}"`,
+    ),
     html,
   );
   assert.match(html, /<a [^>]*data-md-after="\d+"[^>]*data-md-leaf="1"/, html);
@@ -866,7 +925,9 @@ test('linkify_scheme (mailto): диапазон вместе со схемой, 
   const start = src.indexOf('mailto:a@b.c');
   assert.match(
     html,
-    new RegExp(`<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'mailto:a@b.c'.length}"`),
+    new RegExp(
+      `<a [^>]*data-md-start="${start}"[^>]*data-md-end="${start + 'mailto:a@b.c'.length}"`,
+    ),
     html,
   );
   assert.match(html, /<a [^>]*data-md-after="\d+"[^>]*data-md-leaf="1"/, html);
@@ -1048,10 +1109,7 @@ test('байт-паритет: вне sourceMap вывод стандартны�
   assert.equal(renderMarkdown('*курсивом*'), '<p><em>курсивом</em></p>\n');
   assert.equal(renderMarkdown('`кодом`'), '<p><code>кодом</code></p>\n');
   assert.equal(renderMarkdown('~~зачёркнутым~~'), '<p><s>зачёркнутым</s></p>\n');
-  assert.equal(
-    renderMarkdown('**a ==b== c**'),
-    '<p><strong>a <mark>b</mark> c</strong></p>\n',
-  );
+  assert.equal(renderMarkdown('**a ==b== c**'), '<p><strong>a <mark>b</mark> c</strong></p>\n');
   assert.equal(renderMarkdown('***x***'), '<p><em><strong>x</strong></em></p>\n');
 });
 
@@ -1091,7 +1149,6 @@ test('повтор слова: каретка во втором вхождени
   assert.notEqual(second, 0);
 });
 
-
 // ---------------------------------------------------------------------------
 // Ошибка 49ebba76: карта сдвига в обычном (блочном) тексте
 // ---------------------------------------------------------------------------
@@ -1106,7 +1163,11 @@ const BACKSLASH = String.fromCharCode(92);
  */
 function assertBlockClick(src: string, rendered: string, char: string, sourceTail: string): void {
   const at = src.indexOf(sourceTail);
-  assert.notEqual(at, -1, `фрагмент ${JSON.stringify(sourceTail)} не найден в ${JSON.stringify(src)}`);
+  assert.notEqual(
+    at,
+    -1,
+    `фрагмент ${JSON.stringify(sourceTail)} не найден в ${JSON.stringify(src)}`,
+  );
   assert.equal(clickOffset(src, rendered, char), at, src);
 }
 
@@ -1162,10 +1223,7 @@ test('список, цитата, заголовок: escape/entity в текс�
 
 test('блок: карта сдвига садится на <li>, <p> цитаты и заголовок (49ebba76)', () => {
   assert.match(renderMarkdown('- a &amp; b', { sourceMap: true }), /<li[^>]*data-md-shift/);
-  assert.match(
-    renderMarkdown('> a &amp; b', { sourceMap: true }),
-    /<p[^>]*data-md-shift/,
-  );
+  assert.match(renderMarkdown('> a &amp; b', { sourceMap: true }), /<p[^>]*data-md-shift/);
   assert.match(renderMarkdown('# a &amp; b', { sourceMap: true }), /<h1[^>]*data-md-shift/);
 });
 
@@ -1228,21 +1286,25 @@ test('таблица: одинаковые ячейки не путаются п
   const src = '| x &amp; y |\n| --- |\n| x &amp; y |';
   const html = renderMarkdown(src, { sourceMap: true });
   const starts = [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"/g)].map((m) => Number(m[1]));
-  assert.deepEqual(
-    starts,
-    [src.indexOf('x &amp; y'), src.lastIndexOf('x &amp; y')],
-    html,
-  );
+  assert.deepEqual(starts, [src.indexOf('x &amp; y'), src.lastIndexOf('x &amp; y')], html);
 });
 
 test('таблица: escaped pipe не режет ячейку — диапазоны и клик (49ebba76)', () => {
   const src = '| a ' + BACKSLASH + '| b | c |\n| --- | --- |';
   const html = renderMarkdown(src, { sourceMap: true });
-  const ranges = [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
-    .map((m) => [Number(m[1]), Number(m[2])]);
+  const ranges = [
+    ...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g),
+  ].map((m) => [Number(m[1]), Number(m[2])]);
   // `\|` — не разделитель ячеек (семантика markdown-it `escapedSplit`):
   // ячейка 1 — «a \| b» ([2, 8)), ячейка 2 — «c» ([11, 12)).
-  assert.deepEqual(ranges, [[2, 8], [11, 12]], html);
+  assert.deepEqual(
+    ranges,
+    [
+      [2, 8],
+      [11, 12],
+    ],
+    html,
+  );
   // Клик в первой ячейке: backslash срезается ДО inline-разбора, поэтому
   // `b` даёт 6 при истине 7 — off-by-1 на escaped pipe (документированный предел).
   assert.equal(clickOffset(src, 'a | b', 'b'), 6);
@@ -1252,15 +1314,24 @@ test('таблица: escaped pipe не режет ячейку — диапаз
 
 test('таблица: маркер списка в начале ЯЧЕЙКИ не срезается (49ebba76)', () => {
   const cellRanges = (html: string): number[][] =>
-    [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
-      .map((m) => [Number(m[1]), Number(m[2])]);
+    [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)].map((m) => [
+      Number(m[1]),
+      Number(m[2]),
+    ]);
 
   // Таблица разбирается РАНЬШЕ списка, поэтому `- a` на верхнем уровне — ячейка,
   // а не маркер списка (регресс 62acccf3).
   for (const marker of ['-', '*', '+']) {
     const src = marker + ' a | b\n--- | ---';
     const html = renderMarkdown(src, { sourceMap: true });
-    assert.deepEqual(cellRanges(html), [[0, 3], [6, 7]], `${src}\n${html}`);
+    assert.deepEqual(
+      cellRanges(html),
+      [
+        [0, 3],
+        [6, 7],
+      ],
+      `${src}\n${html}`,
+    );
     assert.match(html, /<table data-md-start="0"/, html);
     assert.match(html, /<tr data-md-start="0"/, html);
     assert.equal(clickOffset(src, marker + ' a', marker), 0, src);
@@ -1270,7 +1341,14 @@ test('таблица: маркер списка в начале ЯЧЕЙКИ н�
   for (const marker of ['1.', '1)']) {
     const src = marker + ' a | b\n--- | ---';
     const html = renderMarkdown(src, { sourceMap: true });
-    assert.deepEqual(cellRanges(html), [[0, 4], [7, 8]], `${src}\n${html}`);
+    assert.deepEqual(
+      cellRanges(html),
+      [
+        [0, 4],
+        [7, 8],
+      ],
+      `${src}\n${html}`,
+    );
     assert.match(html, /<tr data-md-start="0"/, html);
     assert.equal(clickOffset(src, marker + ' a', 'a'), 3, src);
   }
@@ -1278,45 +1356,89 @@ test('таблица: маркер списка в начале ЯЧЕЙКИ н�
   // Цитата не делает маркер контейнерным: `>` срезается, `- ` — содержимое.
   const quoted = '> - a | b\n> --- | ---';
   const quotedHtml = renderMarkdown(quoted, { sourceMap: true });
-  assert.deepEqual(cellRanges(quotedHtml), [[2, 5], [8, 9]], quotedHtml);
+  assert.deepEqual(
+    cellRanges(quotedHtml),
+    [
+      [2, 5],
+      [8, 9],
+    ],
+    quotedHtml,
+  );
   assert.match(quotedHtml, /<tr data-md-start="2"/, quotedHtml);
   assert.equal(clickOffset(quoted, '- a', '-'), 2);
 
   // Таблица со ВТОРОЙ строки элемента списка: маркер на её шапке — содержимое.
   const second = '- текст\n  - a | b\n  --- | ---';
   const secondHtml = renderMarkdown(second, { sourceMap: true });
-  assert.deepEqual(cellRanges(secondHtml), [[10, 13], [16, 17]], secondHtml);
+  assert.deepEqual(
+    cellRanges(secondHtml),
+    [
+      [10, 13],
+      [16, 17],
+    ],
+    secondHtml,
+  );
   assert.equal(clickOffset(second, '- a', 'a'), 12);
 
   // Симптом карточки в этой форме: entity в ячейке, начинающейся с маркера.
   const entity = '- a &amp; b | c\n--- | ---';
   const entityHtml = renderMarkdown(entity, { sourceMap: true });
-  assert.deepEqual(cellRanges(entityHtml), [[0, 11], [14, 15]], entityHtml);
+  assert.deepEqual(
+    cellRanges(entityHtml),
+    [
+      [0, 11],
+      [14, 15],
+    ],
+    entityHtml,
+  );
   assert.equal(clickOffset(entity, '- a & b', 'b'), 10);
 });
 
 test('таблица в элементе списка: маркер списка не становится ячейкой (49ebba76)', () => {
   const cellRanges = (html: string): number[][] =>
-    [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
-      .map((m) => [Number(m[1]), Number(m[2])]);
+    [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)].map((m) => [
+      Number(m[1]),
+      Number(m[2]),
+    ]);
 
   const bullet = '- | a &amp; b | c |\n  | --- | --- |';
   const bulletHtml = renderMarkdown(bullet, { sourceMap: true });
   // Маркер `- ` пропущен (как `tShift` у markdown-it), а не стал ячейкой.
-  assert.deepEqual(cellRanges(bulletHtml), [[4, 13], [16, 17]], bulletHtml);
+  assert.deepEqual(
+    cellRanges(bulletHtml),
+    [
+      [4, 13],
+      [16, 17],
+    ],
+    bulletHtml,
+  );
   assert.match(bulletHtml, /<table data-md-start="4"/, bulletHtml);
   assert.match(bulletHtml, /<tr data-md-start="4"/, bulletHtml);
   assertBlockClick(bullet, 'a & b', 'b', 'b');
 
   const ordered = '1. | a &amp; b | c |\n   | --- | --- |';
   const orderedHtml = renderMarkdown(ordered, { sourceMap: true });
-  assert.deepEqual(cellRanges(orderedHtml), [[5, 14], [17, 18]], orderedHtml);
+  assert.deepEqual(
+    cellRanges(orderedHtml),
+    [
+      [5, 14],
+      [17, 18],
+    ],
+    orderedHtml,
+  );
   assert.match(orderedHtml, /<tr data-md-start="5"/, orderedHtml);
   assertBlockClick(ordered, 'a & b', 'b', 'b');
 
   const quoted = '> - | a &amp; b | c |\n>   | --- | --- |';
   const quotedHtml = renderMarkdown(quoted, { sourceMap: true });
-  assert.deepEqual(cellRanges(quotedHtml), [[6, 15], [18, 19]], quotedHtml);
+  assert.deepEqual(
+    cellRanges(quotedHtml),
+    [
+      [6, 15],
+      [18, 19],
+    ],
+    quotedHtml,
+  );
   assert.match(quotedHtml, /<tr data-md-start="6"/, quotedHtml);
   assertBlockClick(quoted, 'a & b', 'b', 'b');
 });
@@ -1334,8 +1456,9 @@ test('таблица: без sourceMap вывод не меняется (49ebba7
 
 /** `[start, end)` всех ячеек `th`/`td`, у которых есть диапазон. */
 function stampedCellRanges(html: string): number[][] {
-  return [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)]
-    .map((m) => [Number(m[1]), Number(m[2])]);
+  return [...html.matchAll(/<t[dh][^>]*data-md-start="(\d+)"[^>]*data-md-end="(\d+)"/g)].map(
+    (m) => [Number(m[1]), Number(m[2])],
+  );
 }
 
 test('таблица в цитате внутри списка: внешний маркер срезан, внутренний — содержимое (49ebba76)', () => {
@@ -1343,7 +1466,14 @@ test('таблица в цитате внутри списка: внешний �
   // правило таблицы сработало внутри цитаты раньше правила списка.
   const bullet = '- > - a | b\n  > --- | ---';
   const bulletHtml = renderMarkdown(bullet, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(bulletHtml), [[4, 7], [10, 11]], bulletHtml);
+  assert.deepEqual(
+    stampedCellRanges(bulletHtml),
+    [
+      [4, 7],
+      [10, 11],
+    ],
+    bulletHtml,
+  );
   assert.match(bulletHtml, /<table data-md-start="4"/, bulletHtml);
   assert.match(bulletHtml, /<tr data-md-start="4"/, bulletHtml);
   assert.equal(clickOffset(bullet, '- a', '-'), 4);
@@ -1352,26 +1482,51 @@ test('таблица в цитате внутри списка: внешний �
   // Entity в такой ячейке: сдвиг считается от 4, а не от срезанного 6.
   const entity = '- > - a &amp; b | c\n  > --- | ---';
   const entityHtml = renderMarkdown(entity, { sourceMap: true });
-  assert.match(entityHtml, /<th data-md-start="4" data-md-end="15" data-md-shift="5:4"/, entityHtml);
+  assert.match(
+    entityHtml,
+    /<th data-md-start="4" data-md-end="15" data-md-shift="5:4"/,
+    entityHtml,
+  );
   assertBlockClick(entity, '- a & b', 'b', 'b');
 
   // Нумерованный список → цитата → таблица.
   const ordered = '1. > - a | b\n   > --- | ---';
   const orderedHtml = renderMarkdown(ordered, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(orderedHtml), [[5, 8], [11, 12]], orderedHtml);
+  assert.deepEqual(
+    stampedCellRanges(orderedHtml),
+    [
+      [5, 8],
+      [11, 12],
+    ],
+    orderedHtml,
+  );
   assert.match(orderedHtml, /<tr data-md-start="5"/, orderedHtml);
   assert.equal(clickOffset(ordered, '- a', 'a'), 7);
 
   // Маркированный список → цитата → нумерованная ячейка.
   const orderedCell = '- > 1. a | b\n  > --- | ---';
   const orderedCellHtml = renderMarkdown(orderedCell, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(orderedCellHtml), [[4, 8], [11, 12]], orderedCellHtml);
+  assert.deepEqual(
+    stampedCellRanges(orderedCellHtml),
+    [
+      [4, 8],
+      [11, 12],
+    ],
+    orderedCellHtml,
+  );
   assert.equal(clickOffset(orderedCell, '1. a', 'a'), 7);
 
   // Нумерованный список → цитата → нумерованный список: оба маркера контейнеры.
   const nestedOrdered = '1. > 2. a | b\n   > --- | ---';
   const nestedOrderedHtml = renderMarkdown(nestedOrdered, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(nestedOrderedHtml), [[5, 9], [12, 13]], nestedOrderedHtml);
+  assert.deepEqual(
+    stampedCellRanges(nestedOrderedHtml),
+    [
+      [5, 9],
+      [12, 13],
+    ],
+    nestedOrderedHtml,
+  );
   assert.equal(clickOffset(nestedOrdered, '2. a', 'a'), 8);
 });
 
@@ -1379,26 +1534,58 @@ test('вложенность двух уровней: список → цита�
   // Внутренний маркер на строке шапки — содержимое ячейки.
   const deepContent = '- > - > - a | b\n  >   > --- | ---';
   const deepContentHtml = renderMarkdown(deepContent, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(deepContentHtml), [[8, 11], [14, 15]], deepContentHtml);
+  assert.deepEqual(
+    stampedCellRanges(deepContentHtml),
+    [
+      [8, 11],
+      [14, 15],
+    ],
+    deepContentHtml,
+  );
   assert.equal(clickOffset(deepContent, '- a', 'a'), 10);
 
   // Все маркеры — контейнеры: таблица стоит в самом внутреннем элементе списка.
   const deepContainer = '- > - > | a &amp; b | c |\n  >   > | --- | --- |';
   const deepContainerHtml = renderMarkdown(deepContainer, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(deepContainerHtml), [[10, 19], [22, 23]], deepContainerHtml);
-  assert.match(deepContainerHtml, /<th data-md-start="10"[^>]*data-md-shift="3:4"/, deepContainerHtml);
+  assert.deepEqual(
+    stampedCellRanges(deepContainerHtml),
+    [
+      [10, 19],
+      [22, 23],
+    ],
+    deepContainerHtml,
+  );
+  assert.match(
+    deepContainerHtml,
+    /<th data-md-start="10"[^>]*data-md-shift="3:4"/,
+    deepContainerHtml,
+  );
   assertBlockClick(deepContainer, 'a & b', 'b', 'b');
 
   // Маркер самого глубокого элемента списка — разметка, а не ячейка.
   const innerMarker = '- > - | a | b |\n  >   | --- | --- |';
   const innerMarkerHtml = renderMarkdown(innerMarker, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(innerMarkerHtml), [[8, 9], [12, 13]], innerMarkerHtml);
+  assert.deepEqual(
+    stampedCellRanges(innerMarkerHtml),
+    [
+      [8, 9],
+      [12, 13],
+    ],
+    innerMarkerHtml,
+  );
   assert.equal(clickOffset(innerMarker, 'a', 'a'), 8);
 
   // Два маркера на строке верхнего уровня — оба содержимое (таблица раньше списка).
   const topMarkers = '- - a | b\n  --- | ---';
   const topMarkersHtml = renderMarkdown(topMarkers, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(topMarkersHtml), [[0, 5], [8, 9]], topMarkersHtml);
+  assert.deepEqual(
+    stampedCellRanges(topMarkersHtml),
+    [
+      [0, 5],
+      [8, 9],
+    ],
+    topMarkersHtml,
+  );
   assert.equal(clickOffset(topMarkers, '- - a', '-'), 0);
   assert.equal(clickOffset(topMarkers, '- - a', 'a'), 4);
 });
@@ -1415,13 +1602,29 @@ test('вложенная таблица: конструкция, entity и ст�
 
   const body = '- > | a | b |\n  > | --- | --- |\n  > | c &amp; d | e |';
   const bodyHtml = renderMarkdown(body, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(bodyHtml), [[6, 7], [10, 11], [38, 47], [50, 51]], bodyHtml);
+  assert.deepEqual(
+    stampedCellRanges(bodyHtml),
+    [
+      [6, 7],
+      [10, 11],
+      [38, 47],
+      [50, 51],
+    ],
+    bodyHtml,
+  );
   assertBlockClick(body, 'c & d', 'd', 'd');
 
   // Escaped pipe во вложенной таблице не режет ячейку (off-by-1 документирован).
   const escaped = '- > | a ' + BACKSLASH + '| b | c |\n  > | --- | --- |';
   const escapedHtml = renderMarkdown(escaped, { sourceMap: true });
-  assert.deepEqual(stampedCellRanges(escapedHtml), [[6, 12], [15, 16]], escapedHtml);
+  assert.deepEqual(
+    stampedCellRanges(escapedHtml),
+    [
+      [6, 12],
+      [15, 16],
+    ],
+    escapedHtml,
+  );
   // Клик после `\|` уезжает на 1 (backslash срезан до inline-разбора) — предел.
   assert.equal(clickOffset(escaped, 'a | b', 'b'), 10);
   // Вторая ячейка после escaped pipe точна.
@@ -1433,7 +1636,16 @@ test('CRLF: вложенная таблица и строка тела — см�
   const html = renderMarkdown(src, { sourceMap: true });
   // База строки относительна начала строки (markdown-it парсит \r\n → \n копию),
   // поэтому абсолютные смещения — в исходной строке вместе с `\r`.
-  assert.deepEqual(stampedCellRanges(html), [[6, 7], [10, 11], [40, 49], [52, 53]], html);
+  assert.deepEqual(
+    stampedCellRanges(html),
+    [
+      [6, 7],
+      [10, 11],
+      [40, 49],
+      [52, 53],
+    ],
+    html,
+  );
   assertBlockClick(src, 'c & d', 'd', 'd');
 });
 

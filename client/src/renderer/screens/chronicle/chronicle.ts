@@ -68,6 +68,7 @@ import {
 } from '../../editor/wiki-link-resolver.js';
 import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
+import { isValidLocalDay } from '../../lib/dates.js';
 import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
@@ -76,9 +77,7 @@ import { svgIcon } from '../../lib/ui/icon.js';
 import { cachedHomeId, getHomeId, resetHomeCache } from '../../lib/home.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
-import {
-  resolvePeriodInstants,
-} from '../../lib/period-editor.js';
+import { resolvePeriodInstants } from '../../lib/period-editor.js';
 import {
   datePeriodValueFromInstants,
   formatRecordPeriod,
@@ -595,15 +594,33 @@ async function retryPendingFilterSnapshot(): Promise<void> {
   }
 }
 
+/**
+ * Инициализация пары «сеть + вкладка», которая ещё идёт. Второй вызов с той же
+ * парой обязан ДОЖДАТЬСЯ её, а не вернуться сразу (0.16.1, задача 9ec9d72a):
+ * `openChronicleDay` ставит период после загрузки снимка отбора, иначе
+ * загруженный снимок перетёр бы выбранный кликом день.
+ */
+let initInFlight: { key: string; promise: Promise<void> } | null = null;
+
 /** Switches to the diary view — lazily loads persisted state (L4). */
-export async function ensureChronicleInitialised(): Promise<void> {
+export function ensureChronicleInitialised(): Promise<void> {
   const networkId = store.state.networkId;
   const tabId = store.state.activeTabId;
-  if (networkId === null || host === null) return;
+  if (networkId === null || host === null) return Promise.resolve();
   const key = `${networkId}:${tabId ?? ''}`;
-  if (networkIdSeen === key) return;
+  if (networkIdSeen === key) {
+    return initInFlight?.key === key ? initInFlight.promise : Promise.resolve();
+  }
   networkIdSeen = key;
+  const promise = initialiseChronicle(networkId, tabId).finally(() => {
+    if (initInFlight?.promise === promise) initInFlight = null;
+  });
+  initInFlight = { key, promise };
+  return promise;
+}
 
+/** Ленивая инициализация «Дневника» для уже смонтированного экрана. */
+async function initialiseChronicle(networkId: string, tabId: string | null): Promise<void> {
   rows = [];
   total = 0;
   month = null;
@@ -776,9 +793,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   // хроно-запись» и компактные иконки «Развернуть все»/«Свернуть все» рядом
   // (0.10.1, приёмка №2 — кнопки не во всю ширину).
   const addBar = div('chron-addbar');
-  addBar.append(
-    div('chron-addbar-actions'),
-  );
+  addBar.append(div('chron-addbar-actions'));
   const addActions = addBar.firstElementChild as HTMLElement;
   addActions.append(
     uiButton({
@@ -1091,7 +1106,9 @@ function bindChronicleFeed(): void {
     // чипсом загруженной записи (замечание G3: невидимая правка не тратит запрос).
     if (prefix.startsWith('chronicle-thought:@')) {
       const id = prefix.slice('chronicle-thought:@'.length);
-      if (rows.some((row) => row.targets.some((t) => t.kind === 'thought' && t.thought.id === id))) {
+      if (
+        rows.some((row) => row.targets.some((t) => t.kind === 'thought' && t.thought.id === id))
+      ) {
         scheduleChronicleFeedRefresh();
       }
       return;
@@ -1263,10 +1280,7 @@ function renderFeed(): void {
  * вызывающий откатывается на полную перезагрузку ленты (в этом случае
  * спокойствие позиции не гарантируется, зато данные точны).
  */
-async function localRowFromComment(
-  comment: Comment,
-  home: string,
-): Promise<ChronicleRow | null> {
+async function localRowFromComment(comment: Comment, home: string): Promise<ChronicleRow | null> {
   const targets = await resolveRowTargets(comment.targets, home);
   if (targets === null) return null;
   return {
@@ -1313,7 +1327,6 @@ async function resolveRowTargets(
   }
   return out;
 }
-
 
 /**
  * Локальная вставка только что созданной записи: строка встаёт на своё место
@@ -1571,10 +1584,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     // `paintView`, лента «Дневника» обязана делать то же — иначе в режиме
     // ПРОСМОТРА ссылки на мысли невидимы (в правке имя подтягивает wikiIdPlugin).
     void resolveWikiLinksInDom(recordView, collapseNetworkId);
-    decorateCommentView(
-      recordView,
-      createCommentCollapseState(collapseNetworkId, row.id),
-    );
+    decorateCommentView(recordView, createCommentCollapseState(collapseNetworkId, row.id));
   }
 
   /**
@@ -1630,7 +1640,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       // Заголовок пишется тем же PATCH: коммит уходит, когда изменён заголовок
       // (тело поле видит само). При неизменных обоих полях PATCH не уходит.
       externalChanges: () =>
-        (title !== null ? title.value().trim() : row.title ?? '') !== (row.title ?? ''),
+        (title !== null ? title.value().trim() : (row.title ?? '')) !== (row.title ?? ''),
       ...(owner !== null ? { attachmentsOwner: owner } : {}),
       // Авто-подсветка упоминаний в правке записи — БЕЗ исключения владельца
       // (ошибка 3ebb6512): геттер задан явно и перекрывает fallback
@@ -1737,7 +1747,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   /** ЕДИНАЯ запись обоих полей одним PATCH (требование 26f0aa52). */
   const saveBoth = async (md: string): Promise<string> => {
     const networkId = requireNetworkId();
-    const nextTitle = (title !== null ? title.value() : row.title ?? '').trim();
+    const nextTitle = (title !== null ? title.value() : (row.title ?? '')).trim();
     const fresh = await etn.comments.get(networkId, row.id);
     const updated = await etn.comments.update(
       networkId,
@@ -1761,10 +1771,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     bodyDraft = updated.body_md;
     bodyLoaded = true;
     if (title !== null) {
-      title.setContent(
-        updated.title ?? '',
-        derivedTitleLabel(updated.title, updated.body_md),
-      );
+      title.setContent(updated.title ?? '', derivedTitleLabel(updated.title, updated.body_md));
       refreshDerivedTitle(title, updated.title, updated.body_md);
     }
   };
@@ -1934,12 +1941,7 @@ async function editRecordDates(row: ChronicleRow): Promise<void> {
     allowTime: true,
     firstDayOfWeek: networkFirstDayOfWeek(),
     // Время показано, только когда запись его уже учитывает; иначе — скрыто.
-    initial: datePeriodValueFromInstants(
-      previous.from,
-      previous.to,
-      row.use_time === true,
-      true,
-    ),
+    initial: datePeriodValueFromInstants(previous.from, previous.to, row.use_time === true, true),
   });
   if (result === null) return;
   await saveRecordDates(row.id, result, previous);
@@ -1979,7 +1981,6 @@ async function saveRecordDates(
   }
 }
 
-
 async function removeRecord(id: string): Promise<void> {
   const ok = await confirmDialog(t('diary.deleteTitle'), t('diary.deleteQuestion'), true);
   if (!ok) return;
@@ -2005,10 +2006,7 @@ async function copyRecord(id: string): Promise<void> {
     // Даты = сегодня + текущее время; голую дату не шлём (ADR 994d076a,
     // требование d58aa1a4 — полные UTC-инстансы, `valid_to` непуст).
     const now = new Date().toISOString();
-    const { from, to } = resolvePeriodInstants(
-      { from: today, to: today },
-      { from: now, to: now },
-    );
+    const { from, to } = resolvePeriodInstants({ from: today, to: today }, { from: now, to: now });
     await etn.comments.createMulti(networkId, source.targets, {
       kind: 'chronological',
       title: source.title,
@@ -2588,6 +2586,32 @@ export async function openChronicleRecord(record: ChronicleRecordRef): Promise<v
   setActiveView('chronicle');
   await ensureChronicleInitialised();
   await jumpToRecord(record);
+}
+
+/**
+ * Открыть «Дневник» на конкретном дне (0.16.1, требование 31fe2cc9 «Клик по
+ * date-чипу открывает день»): период ленты — эти ЛОКАЛЬНЫЕ сутки, календарь
+ * переводится на месяц дня, прочие критерии отбора сохраняются. Единый вход
+ * для чипа в просмотре и в live-preview — второй копии перехода нет.
+ *
+ * Значения периода пишутся через mode-конвертер `periodValuesForRange` (так же
+ * как переход к записи): period-editor в режиме «Пресеты» не отображает сырые
+ * даты, и панель показывала бы «сегодня» (ошибка ecd91c1d/8012a9b0).
+ */
+export async function openChronicleDay(day: string): Promise<void> {
+  if (!isValidLocalDay(day)) return;
+  // Ленивый импорт: статический замкнул бы цикл active-view → chronicle.
+  const { setActiveView } = await import('../active-view.js');
+  setActiveView('chronicle');
+  await ensureChronicleInitialised();
+  const values = periodValuesForRange(day, day, todayLocal(), 'presets');
+  setChroniclePeriod(values.from, values.to);
+  persistState();
+  // HOME нужен запросу ленты; без него первый запрос уходил бы с пустым HOME
+  // (та же страховка, что в `jumpToRecord`).
+  await getHomeId(requireNetworkId()).catch(() => undefined);
+  await reload();
+  showRecordDayInCalendar(day);
 }
 
 // ---------------------------------------------------------------------------

@@ -16,11 +16,18 @@ import type { EditorView } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import type { MarkdownExtension } from '@lezer/markdown';
 
-import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
+import {
+  WIKI_LINK_CLASS,
+  WIKI_LINK_DATE_ATTR,
+  WIKI_LINK_TARGET_ATTR,
+  WIKI_LINK_ID_ATTR,
+  WIKI_LINK_NETWORK_ATTR,
+} from '@etn/markdown';
 import type { Thought } from '@etn/shared';
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { focusFromUi, openNetwork, requireNetworkId } from '../app.js';
+import { todayLocal } from '../lib/dates.js';
 import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { otherHolder } from '../lib/lock-cache.js';
@@ -30,11 +37,16 @@ import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { openPopover, type PopoverAnchor } from '../lib/ui/popover.js';
 import { openStructuresThought } from '../screens/structures/structures.js';
 import { openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
-import { openChronicleThought } from '../screens/chronicle/chronicle.js';
+import { openChronicleDay, openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
+import { dateSuggestOptions, isDatePrefix, withThoughtsSection } from './date-suggest.js';
 import { markdownInlineExt } from './markdown-inline-ext.js';
-import { MD_WIDGET_CLASS, setLegacyWikiLinkClickHandler } from './md-live.js';
+import {
+  MD_WIDGET_CLASS,
+  setDateChipClickHandler,
+  setLegacyWikiLinkClickHandler,
+} from './md-live.js';
 import {
   legacyCandidateWindow,
   LEGACY_CANDIDATE_LIMIT,
@@ -135,6 +147,12 @@ function wikiLinkCompletions(): CompletionSource {
     // (элемент интерфейса 7a479549); обычная wiki-ссылка — с первого.
     if (hit.transclusion === true && hit.prefix.length < TRANSCLUSION_MIN_PREFIX) return null;
 
+    // Единый дропдаун (ADR ef097fad): цифры/точки/дефисы дают секцию «Даты»
+    // сверху, мысли идут ниже; буквенный ввод — только мысли. Трансклюзия дат
+    // не предлагает: это ссылка на фрагмент мысли, а не на день.
+    const datesShown = hit.transclusion !== true && isDatePrefix(hit.prefix);
+    const dateOptions = datesShown ? dateSuggestOptions(hit.prefix, todayLocal()) : [];
+
     let cached = cache.get(hit.prefix);
     if (cached === undefined || cached.expires < Date.now()) {
       cached = {
@@ -143,7 +161,9 @@ function wikiLinkCompletions(): CompletionSource {
       };
       cache.set(hit.prefix, cached);
     }
-    if (cached.options.length === 0) return null;
+    const thoughtOptions = withThoughtsSection(cached.options, dateOptions.length > 0);
+    const options = [...dateOptions, ...thoughtOptions];
+    if (options.length === 0) return null;
     // Без `validFor`: источник должен вызываться заново на каждый новый
     // символ префикса (кэш по префиксу выше это и обеспечивает). Широкий
     // `validFor` (WIKI_PREFIX_RE совпадает с любым продолжением) заставлял
@@ -153,7 +173,7 @@ function wikiLinkCompletions(): CompletionSource {
     // (ошибка 6bba224b-9899-4f7e-a37c-ff2067ac0a6c).
     return {
       from: line.from + hit.open + 2,
-      options: cached.options,
+      options,
     };
   };
 }
@@ -254,7 +274,11 @@ function convertLegacyLinkInBuffer(
 }
 
 /** Открыть уже разрешённую мысль по правилам текущего вида. */
-async function openResolvedThought(networkId: string, thoughtId: string, name: string): Promise<void> {
+async function openResolvedThought(
+  networkId: string,
+  thoughtId: string,
+  name: string,
+): Promise<void> {
   let thought: Thought;
   try {
     thought = await etn.thoughts.get(networkId, thoughtId);
@@ -407,7 +431,9 @@ export function openCandidatePopover(
     body.append(group);
   }
   if (truncated) {
-    body.append(el('p', 'muted', t('wikiLink.pokazanyPervyeUtochniteName', LEGACY_CANDIDATE_LIMIT)));
+    body.append(
+      el('p', 'muted', t('wikiLink.pokazanyPervyeUtochniteName', LEGACY_CANDIDATE_LIMIT)),
+    );
   }
   handle = openPopover({
     anchor,
@@ -441,13 +467,11 @@ export async function openWikiIdTarget(targetNetworkId: string, thoughtId: strin
   if (targetNetworkId !== currentNetworkId) {
     const existingTabId = findTabForNetwork(store.state.tabs, targetNetworkId)?.tab_id;
     try {
-      if (existingTabId !== undefined) await etn.tabs.activate(existingTabId).catch(() => undefined);
+      if (existingTabId !== undefined)
+        await etn.tabs.activate(existingTabId).catch(() => undefined);
       await openNetwork(targetNetworkId, existingTabId);
     } catch (err) {
-      notice(
-        t('wikiLink.networkUnavailableLinkRefThoughtOtherNetwork', errText(err)),
-        'error',
-      );
+      notice(t('wikiLink.networkUnavailableLinkRefThoughtOtherNetwork', errText(err)), 'error');
       return;
     }
     setActiveView('map');
@@ -505,6 +529,16 @@ export function shouldNavigateWikiLink(link: WikiLinkClickTarget): boolean {
   return !(link.closest('.cm-editor') !== null && link.classList.contains(MD_WIDGET_CLASS));
 }
 
+/**
+ * Открыть день в «Дневнике» из date-чипа (0.16.1, требование 31fe2cc9): единый
+ * вход для чипа редактора (`mousedown`-ветка) и чипа просмотра (`click`).
+ */
+function openDayFromChip(date: string): void {
+  void openChronicleDay(date).catch((error) => {
+    notice(t('mentions.notSucceededOpen', [date, errText(error)]), 'error');
+  });
+}
+
 /** Installs the delegated view-mode click handler (call once from main.ts). */
 export function initWikiLinkNavigation(): void {
   if (navigationWired) return;
@@ -528,11 +562,25 @@ export function initWikiLinkNavigation(): void {
     });
   });
 
+  // Date-чип в редакторе (0.16.1, требование 31fe2cc9): левый клик открывает
+  // день в «Дневнике». Перехват на `mousedown` — по той же причине, что и у
+  // легаси-ссылки: к моменту `click` виджет уже снят декорациями.
+  setDateChipClickHandler(openDayFromChip);
+
   document.addEventListener('click', (event) => {
     const target = event.target as Element | null;
     const link = target?.closest?.(`.${WIKI_LINK_CLASS}`);
     if (!(link instanceof HTMLElement)) return;
     if (!shouldNavigateWikiLink(link)) return;
+
+    // Date-чип (0.16.1, требование 31fe2cc9): клик открывает день в
+    // «Дневнике». Проверяется ДО имени мысли — date-ссылка приоритетнее мысли
+    // с таким именем (ADR fa50de55), а data-wiki-target у чипа нет вовсе.
+    const date = link.getAttribute(WIKI_LINK_DATE_ATTR);
+    if (date !== null && date !== '') {
+      openDayFromChip(date);
+      return;
+    }
 
     // Pub-ссылка (0.11.1, задача 3275fd8d, требование 7f583ef9): резолвер
     // пометил серверную legacy-форму атрибутом `data-wiki-pub` — открываем

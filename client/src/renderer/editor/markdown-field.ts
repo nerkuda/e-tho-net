@@ -44,7 +44,13 @@ import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
-import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import {
+  guardMenuFocus,
+  showMenuAt,
+  menuAction,
+  MENU_SEPARATOR,
+  type MenuItem,
+} from '../lib/menu.js';
 import { pushKeyOverlay, type KeyOverlayHandle } from '../lib/keymap.js';
 import { notice } from '../lib/notice.js';
 import { isInsidePopover, watchOutsideTap } from '../lib/ui/popover.js';
@@ -69,6 +75,7 @@ import {
   type CommentCollapseState,
 } from './comment-collapse.js';
 import { createCommentSearch } from './comment-search.js';
+import { registerCommentField } from './comment-source.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { annotateMentions, resolveMentionsExcludeThoughtId } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -284,11 +291,7 @@ function transclusionChunkBounds(
  * блок большей глубины лежит внутри одного из них, поэтому глубже не разбираем.
  * `missing`/`skip` — одна строка (`begin` без парного `end` не встречается).
  */
-function nestedChunkRanges(
-  expanded: string,
-  from: number,
-  to: number,
-): NestedChunkRange[] {
+function nestedChunkRanges(expanded: string, from: number, to: number): NestedChunkRange[] {
   const ranges: NestedChunkRange[] = [];
   let pos = from;
   while (pos < to) {
@@ -586,8 +589,14 @@ function viewSelectionNodes(
 export function viewSelectionOffsets(view: HTMLElement): { from: number; to: number } | null {
   const nodes = viewSelectionNodes(view);
   if (nodes === null) return null;
-  const from = sourceOffsetFromCaret(nodes.anchor.node as unknown as SourceMapNode, nodes.anchor.offset);
-  const to = sourceOffsetFromCaret(nodes.focus.node as unknown as SourceMapNode, nodes.focus.offset);
+  const from = sourceOffsetFromCaret(
+    nodes.anchor.node as unknown as SourceMapNode,
+    nodes.anchor.offset,
+  );
+  const to = sourceOffsetFromCaret(
+    nodes.focus.node as unknown as SourceMapNode,
+    nodes.focus.offset,
+  );
   if (from === null || to === null) return null;
   return { from, to };
 }
@@ -634,7 +643,6 @@ function ensureTransclusionViewRefresh(): void {
     }
   });
 }
-
 
 /**
  * Узел DOM ли `target` (`Window` — нет). Без `instanceof Node`: в тестовом
@@ -807,6 +815,11 @@ export function createMarkdownField(opts: {
   externalChanges?: () => boolean;
 }): HTMLElement {
   const root = div('md-field');
+  // Регистрация источника комментария для меню date-чипа (0.16.1): поле знает
+  // свой комментарий, а чип в просмотре — нет (см. `editor/comment-source.ts`).
+  if (opts.commentContext !== undefined) {
+    registerCommentField(root, { getCommentId: opts.commentContext.getCommentId });
+  }
   const view = div('md-field-view comment-view');
   // Просмотр фокусируем по клику (но не добавляем в порядок табуляции): поле —
   // текущий элемент для сочетаний, поэтому Ctrl+F открывает поиск и в
@@ -1107,13 +1120,13 @@ export function createMarkdownField(opts: {
   const insertMentionLink = (thought: MentionsScanThought, matchedText: string): void => {
     const idx = currentMd.indexOf(matchedText);
     if (idx === -1) {
-      notice(
-        t('markdownField.notSucceededPasteLinkRefTextNot', matchedText),
-      );
+      notice(t('markdownField.notSucceededPasteLinkRefTextNot', matchedText));
       return;
     }
     const newMd =
-      currentMd.slice(0, idx) + `[[${thought.title}|${matchedText}]]` + currentMd.slice(idx + matchedText.length);
+      currentMd.slice(0, idx) +
+      `[[${thought.title}|${matchedText}]]` +
+      currentMd.slice(idx + matchedText.length);
     if (opts.onSave === undefined) {
       showEdit(newMd);
       return;
@@ -2021,7 +2034,10 @@ async function uploadAttachment(
  * владельцем (`POST /attachments/{id}/owners`, идемпотентно). `true` — владение
  * подтверждено (или владельца у поля нет), `false` — сбой запроса.
  */
-async function ensureAttachmentOwner(owner: AttachmentsOwner, attachmentId: string): Promise<boolean> {
+async function ensureAttachmentOwner(
+  owner: AttachmentsOwner,
+  attachmentId: string,
+): Promise<boolean> {
   const networkId = store.state.networkId;
   if (networkId === null) return false;
   try {
@@ -2148,7 +2164,10 @@ function readFileAsDataUrl(file: File): Promise<string> {
  * dev http origin and from the packaged file:// page, unlike raw file://).
  */
 export function etnimgUrl(filePath: string): string {
-  const segments = filePath.replace(/\\/g, '/').split('/').filter((s) => s !== '');
+  const segments = filePath
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((s) => s !== '');
   const encoded = segments.map((seg, i) => {
     // A Windows drive segment ("C:") becomes the URL host — a bare letter,
     // because ':' would parse as a port separator.

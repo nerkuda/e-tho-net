@@ -8,14 +8,17 @@ import assert from 'node:assert/strict';
 
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { EditorSelection, EditorState } from '@codemirror/state';
+import { parseTaskLines } from '@etn/markdown';
 
 import {
   isIdWikiLinkTarget,
   isInRangeInclusive,
   isNearInline,
   livePreview,
+  taskHintText,
   wikiLabel,
 } from '../src/renderer/editor/md-live.js';
+import { t } from '../src/renderer/lib/i18n.js';
 import { ShimElement } from './dom-shim.js';
 import { createParsedState } from './editor-parse.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
@@ -80,12 +83,19 @@ test('заголовок: класс строки cm-md-h1 всегда; мар�
   const doc = '# Заголовок\nтекст';
   // Каретка вне заголовка (в «текст»): маркер скрыт, класс строки есть.
   const away = buildState(doc, doc.length);
-  assert.equal(allSpecs(away).some((r) => r.spec.class === 'cm-md-h1'), true, 'класс строки h1');
+  assert.equal(
+    allSpecs(away).some((r) => r.spec.class === 'cm-md-h1'),
+    true,
+    'класс строки h1',
+  );
   assert.equal(hasHiddenMark(away, 0, 1), true, '«# » скрыт, каретка вне');
   // Каретка внутри заголовка: маркер виден, класс строки остаётся.
   const inside = buildState(doc, 2);
   assert.equal(hasHiddenMark(inside, 0, 1), false, '«# » виден, каретка внутри');
-  assert.equal(allSpecs(inside).some((r) => r.spec.class === 'cm-md-h1'), true);
+  assert.equal(
+    allSpecs(inside).some((r) => r.spec.class === 'cm-md-h1'),
+    true,
+  );
 });
 
 test('заголовок: уровень определяет класс строки (h1–h6)', () => {
@@ -179,7 +189,11 @@ test('выделение ==…==: вне — маркеры скрыты и со
   const inside = buildState(doc, 2);
   assert.equal(hasHiddenMark(inside, 0, 2), false, 'открывающий `==` виден');
   assert.equal(hasHiddenMark(inside, 3, 5), false, 'закрывающий `==` виден');
-  assert.equal(hasClass(inside, 'cm-md-mark', 2, 3), true, 'содержимое подсвечено и при активности');
+  assert.equal(
+    hasClass(inside, 'cm-md-mark', 2, 3),
+    true,
+    'содержимое подсвечено и при активности',
+  );
 });
 
 test('подчёркивание <u>…</u>: вне — маркеры скрыты и содержимое подчёркнуто; внутри — маркеры видны', () => {
@@ -191,7 +205,11 @@ test('подчёркивание <u>…</u>: вне — маркеры скры�
   const inside = buildState(doc, 3);
   assert.equal(hasHiddenMark(inside, 0, 3), false, '`<u>` виден');
   assert.equal(hasHiddenMark(inside, 4, 8), false, '`</u>` виден');
-  assert.equal(hasClass(inside, 'cm-md-underline', 3, 4), true, 'подчёркивание остаётся и при активности');
+  assert.equal(
+    hasClass(inside, 'cm-md-underline', 3, 4),
+    true,
+    'подчёркивание остаётся и при активности',
+  );
 });
 
 test('пустые пары `====` и `<u></u>` — маркеры НЕ скрываются (паритет с рендерером)', () => {
@@ -204,7 +222,12 @@ test('пустые пары `====` и `<u></u>` — маркеры НЕ скры
   assert.equal(hasHiddenMark(markInline, 4, 6), false, 'закрывающий `==` не скрыт');
   // `========` — четыре пары, обе пары пустые: текст не стирается.
   const eight = buildState('========', 8);
-  for (const [f, t] of [[0, 2], [2, 4], [4, 6], [6, 8]] as const) {
+  for (const [f, t] of [
+    [0, 2],
+    [2, 4],
+    [4, 6],
+    [6, 8],
+  ] as const) {
     assert.equal(hasHiddenMark(eight, f, t), false, `восемь «=»: [${f},${t})`);
   }
   const uEmpty = buildState('<u></u> text', 10);
@@ -251,9 +274,14 @@ test('task-список: вне — маркер `[ ]` заменён чекбо
   );
   assert.ok(checkbox, 'маркер `[ ]` заменён виджетом-чекбоксом');
   assert.equal(hasHiddenMark(away, 0, 1), true, 'маркер списка `-` скрыт вне пункта');
-  // Каретка внутри пункта: исходные маркеры видны, виджета нет.
+  // Каретка внутри пункта: исходные маркеры видны, виджета-чекбокса нет.
+  // (Блочная тихая подсказка задачи 0.16.1 — отдельный виджет, здесь не в счёт:
+  // строка остаётся в фокусе, и подсказка по спеке 8773d9df на ней уместна.)
   const inside = buildState(doc, 3);
-  assert.equal(allSpecs(inside).some((r) => r.spec.widget !== undefined), false);
+  assert.equal(
+    allSpecs(inside).some((r) => r.from === 2 && r.to === 5 && r.spec.widget !== undefined),
+    false,
+  );
   assert.equal(hasHiddenMark(inside, 0, 1), false, 'маркер списка `-` виден');
   assert.equal(hasHiddenMark(inside, 2, 5), false, 'маркер `[ ]` виден');
 });
@@ -305,10 +333,16 @@ test('wiki-ссылка: вне — виджет; внутри — исходн�
   const doc = '[[Мысль]] x';
   // Каретка после ссылки (за пределами «перед/после»): ссылка — виджет.
   const away = buildState(doc, doc.length);
-  assert.equal(specs(away, 0, 1).some((s) => s.widget !== undefined), true);
+  assert.equal(
+    specs(away, 0, 1).some((s) => s.widget !== undefined),
+    true,
+  );
   // Каретка внутри: виджета нет, исходник виден.
   const inside = buildState(doc, 4);
-  assert.equal(specs(inside, 0, 1).some((s) => s.widget !== undefined), false);
+  assert.equal(
+    specs(inside, 0, 1).some((s) => s.widget !== undefined),
+    false,
+  );
 });
 
 test('wiki-ссылка ID-форма: live-preview не ставит виджет (R6 плагин подтянет имя)', () => {
@@ -324,7 +358,128 @@ test('wiki-ссылка ID-форма: live-preview не ставит видже
   );
   // Каретка внутри — поведение прежнее (исходник виден, виджета нет).
   const inside = buildState(doc, 4);
-  assert.equal(specs(inside, 0, 1).some((s) => s.widget !== undefined), false);
+  assert.equal(
+    specs(inside, 0, 1).some((s) => s.widget !== undefined),
+    false,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Date-чип и тихая подсказка строки задачи (0.16.1, задача 9ec9d72a;
+// элементы интерфейса f9da2100 и 8773d9df). Виджет проверяется через свой
+// `toDOM`: классы и data-атрибуты обязаны совпасть со спаном просмотра
+// `@etn/markdown` — на них держатся клик и контекстное меню чипа.
+// ---------------------------------------------------------------------------
+
+/** Минимальный контракт DOM-элемента виджета для проверок. */
+interface ChipDom {
+  className: string;
+  textContent: string;
+  getAttribute(name: string): string | null;
+}
+
+/** Виджет в диапазоне: `toDOM()` под временным `document.createElement`. */
+function widgetDomAt(state: EditorState, from: number, to: number): ChipDom {
+  const spec = specs(state, from, to).find((s) => s.widget !== undefined);
+  assert.ok(spec, `в диапазоне ${from}-${to} нет виджета`);
+  const widget = spec.widget as unknown as { toDOM(): ChipDom };
+  const global = globalThis as { document?: unknown };
+  const previous = global.document;
+  global.document = { createElement: (tag: string): ShimElement => new ShimElement(tag) };
+  try {
+    return widget.toDOM();
+  } finally {
+    if (previous === undefined) delete global.document;
+    else global.document = previous;
+  }
+}
+
+test('date-ссылка в live-preview: чип wiki-link-date с ISO в data-wiki-date', () => {
+  const doc = '[[2026-11-02]] x';
+  const state = buildState(doc, doc.length);
+  const chip = widgetDomAt(state, 0, 1);
+  assert.ok(chip.className.includes('wiki-link'), chip.className);
+  assert.ok(chip.className.includes('wiki-link-date'), chip.className);
+  assert.equal(chip.getAttribute('data-wiki-date'), '2026-11-02');
+  assert.equal(chip.getAttribute('data-wiki-time'), null);
+  assert.equal(chip.getAttribute('data-wiki-target'), null, 'дата — не имя мысли');
+  assert.equal(chip.textContent, '02.11.2026', 'видна локальная подпись, а не ISO');
+});
+
+test('date-ссылка со временем: data-wiki-time и подпись с временем', () => {
+  const doc = '[[2026-11-02 14:30]] x';
+  const state = buildState(doc, doc.length);
+  const chip = widgetDomAt(state, 0, 1);
+  assert.equal(chip.getAttribute('data-wiki-date'), '2026-11-02');
+  assert.equal(chip.getAttribute('data-wiki-time'), '14:30');
+  assert.equal(chip.textContent, '02.11.2026 14:30');
+});
+
+test('date-ссылка с алиасом: видна подпись автора, ISO — в data-wiki-date', () => {
+  const doc = '[[2026-11-02|второе ноября]] x';
+  const state = buildState(doc, doc.length);
+  const chip = widgetDomAt(state, 0, 1);
+  assert.equal(chip.textContent, 'второе ноября');
+  assert.equal(chip.getAttribute('data-wiki-date'), '2026-11-02');
+});
+
+test('каретка внутри date-ссылки: исходник виден, виджета нет (как у прочих ссылок)', () => {
+  const doc = '[[2026-11-02]] x';
+  const inside = buildState(doc, 4);
+  assert.equal(
+    specs(inside, 0, 1).some((s) => s.widget !== undefined),
+    false,
+  );
+});
+
+test('тихая подсказка: блок под строкой задачи в фокусе, период и срок из парсера', () => {
+  const doc = '- [ ] [[2026-11-02]]..[[2026-11-05]] задача';
+  const state = buildState(doc, doc.length);
+  const hint = allSpecs(state).find((r) => r.spec.block === true);
+  assert.ok(hint, 'подсказка — блочный виджет под строкой');
+  assert.equal(hint.from, doc.length, 'подсказка стоит в конце строки задачи');
+  const dom = widgetDomAt(state, hint.from, hint.from);
+  assert.equal(dom.className, 'cm-md-task-hint');
+  assert.match(dom.textContent, /02\.11\.2026/);
+  assert.match(dom.textContent, /05\.11\.2026/);
+});
+
+test('тихая подсказка: обычный текст её не получает', () => {
+  const doc = 'просто абзац без задач';
+  const state = buildState(doc, doc.length);
+  assert.equal(
+    allSpecs(state).some((r) => r.spec.block === true),
+    false,
+  );
+});
+
+test('тихая подсказка: пункт чек-листа — своя роль, а не задача', () => {
+  const doc = '- [ ] задача [[2026-11-02]]\n  - [ ] подпункт';
+  const state = buildState(doc, doc.length);
+  const hint = allSpecs(state).find((r) => r.spec.block === true);
+  assert.ok(hint, 'подсказка есть и у пункта чек-листа');
+  const dom = widgetDomAt(state, hint.from, hint.from);
+  assert.ok(dom.textContent.includes(t('editor.taskHint.checklist')), dom.textContent);
+});
+
+test('taskHintText: роль строки, период/срок и место появления', () => {
+  const rows = parseTaskLines('- [ ] [[2026-11-02]]..[[2026-11-05]] задача');
+  const task = rows.find((row) => row.isTask);
+  assert.ok(task);
+  const text = taskHintText(task);
+  assert.match(text, /02\.11\.2026/);
+  assert.match(text, /05\.11\.2026/);
+  assert.ok(text.includes(t('editor.taskHint.appearsPeriod')), text);
+
+  const undated = parseTaskLines('- [ ] задача без дат').find((row) => row.isTask);
+  assert.ok(undated);
+  const undatedText = taskHintText(undated);
+  assert.ok(undatedText.includes(t('editor.taskHint.undated')), undatedText);
+  assert.ok(undatedText.includes(t('editor.taskHint.appearsUndated')), undatedText);
+
+  const done = parseTaskLines('- [x] [[2026-11-02]]').find((row) => row.isTask);
+  assert.ok(done);
+  assert.ok(taskHintText(done).startsWith(t('editor.taskHint.done')), taskHintText(done));
 });
 
 // ---------------------------------------------------------------------------
@@ -452,7 +607,6 @@ test('HTML-комментарий (блочный CommentBlock): серый, м�
   assert.equal(hasHiddenMark(inside, block.from, block.from + 4), false, 'маркеры видны внутри');
   assert.equal(hasHiddenMark(inside, block.to - 3, block.to), false);
 });
-
 
 // ---------------------------------------------------------------------------
 // HTML-виджет (`HtmlWidget`) и сдвиг позиций (ошибка 4df5e284): печать выше

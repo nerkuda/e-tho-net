@@ -185,11 +185,9 @@ export const ru = {
   /** Сообщение валидации: имя отбора не заполнено. */
   'filterEditor.nameRequired': 'Укажите имя отбора.',
   /** Ошибка длины имени (параметры — предел и текущая длина). */
-  'filterEditor.nameTooLong':
-    'Имя не должно превышать %1 символов (сейчас %2).',
+  'filterEditor.nameTooLong': 'Имя не должно превышать %1 символов (сейчас %2).',
   /** Ошибка длины описания (параметры — предел и текущая длина). */
-  'filterEditor.descriptionTooLong':
-    'Описание не должно превышать %1 символов (сейчас %2).',
+  'filterEditor.descriptionTooLong': 'Описание не должно превышать %1 символов (сейчас %2).',
   /** Сообщение валидации: пустой отбор без единого условия. */
   'filterEditor.noCriteria': 'Укажите хотя бы одно условие отбора.',
   /** Сообщение валидации: в отборе есть красная диагностика. */
@@ -288,8 +286,7 @@ export const ru = {
   'strip.deleteTypeConfirm':
     'Удалить отбор «%1» типа «%2»? Он исчезнет у всех мыслей этого типа. Действие необратимо.',
   /** Удаление внетипового отбора (имя отбора, имя мысли-владельца). */
-  'strip.deleteThoughtConfirm':
-    'Удалить отбор «%1» мысли «%2»? Это действие необратимо.',
+  'strip.deleteThoughtConfirm': 'Удалить отбор «%1» мысли «%2»? Это действие необратимо.',
   /** Тост: отбор удалён. */
   'strip.deleted': 'Отбор удалён.',
   /** Ошибка удаления отбора. */
@@ -572,8 +569,7 @@ export const ru = {
   /** Первая команда центра: применить ссылку без раздела (aa309fb7). */
   'comment.transclusion.popover.allSections': 'Все разделы комментария',
   /** Подсказка команды «Все разделы комментария» (aa309fb7). */
-  'comment.transclusion.popover.allSectionsTooltip':
-    'Показать все разделы комментария мысли',
+  'comment.transclusion.popover.allSectionsTooltip': 'Показать все разделы комментария мысли',
   /** Плейсхолдер живого поиска по разделам источника (aa309fb7). */
   'comment.transclusion.popover.sectionSearch': 'Поиск раздела…',
   /** Плашка блока: мысль-источник недоступна или удалена. */
@@ -749,8 +745,7 @@ export const ru = {
     'не удалось скачать установщик обновления',
   'errors.code.UPDATE_INSTALLER_FAILED.installer-hash':
     'скачанный установщик не прошёл проверку контрольной суммы',
-  'errors.code.UPDATE_INSTALLER_FAILED.installer-launch':
-    'установщик обновления не запустился',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-launch': 'установщик обновления не запустился',
   'errors.unknownCode': 'не удалось выполнить действие',
 
   // -- Подключение к серверу (ошибка 390e9746) -----------------------------
@@ -787,9 +782,11 @@ export const ru = {
   /** Заголовок блокирующего диалога несовместимости. */
   'compatibility.dialog.title': 'Версии клиента и сервера несовместимы',
   /** Причина: сервер старше встроенного диапазона клиента. */
-  'compatibility.reason.serverOutdated': 'Сервер старше клиента — работа с этим сервером невозможна.',
+  'compatibility.reason.serverOutdated':
+    'Сервер старше клиента — работа с этим сервером невозможна.',
   /** Причина: клиент вне диапазона сервера (причина от сервера не пришла). */
-  'compatibility.reason.clientOutdated': 'Клиент не подходит серверу — работа с этим сервером невозможна.',
+  'compatibility.reason.clientOutdated':
+    'Клиент не подходит серверу — работа с этим сервером невозможна.',
   /** `426`, `details.reason = version-missing`: сервер не получил версию клиента. */
   'compatibility.reason.versionMissing': 'Сервер не получил версию клиента.',
   /** `426`, `details.reason = version-invalid`: версия клиента не разобрана. */
@@ -921,8 +918,7 @@ export const ru = {
    * появления поля `reason`. Показывается общий текст; путь к журналу, если
    * он есть, рисуется отдельной строкой.
    */
-  'serverUpdate.failure.noReason':
-    'обновление не удалось; подробности в журнале сервера',
+  'serverUpdate.failure.noReason': 'обновление не удалось; подробности в журнале сервера',
   /** Архив базы данных: `%1` — путь (сервер пока присылает `null`). */
   'serverUpdate.backupPath': 'Архив базы данных: %1',
   /** Кнопка копирования пути. */
@@ -945,8 +941,7 @@ export const ru = {
   'serverUpdate.installerFailedNote':
     'Сервер продолжает работу на текущей версии. Повторный запуск не предлагается — проверьте журнал установщика.',
   /** Docker: автообновление из клиента недоступно (инструкция — полем `instruction`). */
-  'serverUpdate.dockerNote':
-    'Сервер развёрнут в Docker — автообновление из клиента недоступно.',
+  'serverUpdate.dockerNote': 'Сервер развёрнут в Docker — автообновление из клиента недоступно.',
   /** Инструкция обновления от сервера (Docker). */
   'serverUpdate.instruction': 'Инструкция обновления: %1',
   /** Кнопка копирования команды из инструкции обновления. */
@@ -1082,8 +1077,7 @@ export const ru = {
   /** Подпись ссылки на сайт библиотеки. */
   'about.website': 'Сайт',
   /** Пояснение, где лежит полный перечень с текстами лицензий. */
-  'about.thirdPartyHint':
-    'Полный перечень с текстами лицензий — в файле THIRD-PARTY-NOTICES.txt.',
+  'about.thirdPartyHint': 'Полный перечень с текстами лицензий — в файле THIRD-PARTY-NOTICES.txt.',
 
   // -- Дерево списков (lib/ui/tree.ts) -------------------------------------
   /** Пустое состояние дерева, когда видимых строк нет. */
@@ -1662,10 +1656,13 @@ export const ru = {
   /** Диалог удаления публикации/полки (задача 00160da1). */
   'publications.delete.publicationTitle': 'Удаление публикации «%1»',
   'publications.delete.shelfTitle': 'Удаление полки «%1»',
-  'publications.delete.reasonProperties': 'Нельзя удалить совсем — публикация используется в свойствах (%1).',
-  'publications.delete.reasonBase': 'Нельзя удалить совсем — публикация существует в основе: в слое её можно только поместить в корзину.',
+  'publications.delete.reasonProperties':
+    'Нельзя удалить совсем — публикация используется в свойствах (%1).',
+  'publications.delete.reasonBase':
+    'Нельзя удалить совсем — публикация существует в основе: в слое её можно только поместить в корзину.',
   'publications.delete.reasonLayers': 'Нельзя удалить совсем — публикация изменена в слоях: %1.',
-  'publications.delete.reasonShelfBase': 'Нельзя удалить совсем — полка существует в основе: в слое её можно только поместить в корзину.',
+  'publications.delete.reasonShelfBase':
+    'Нельзя удалить совсем — полка существует в основе: в слое её можно только поместить в корзину.',
   /** Мастер создания публикации. */
   'publications.wizard.title': 'Новая публикация',
   'publications.wizard.meta': 'Название',
@@ -1750,8 +1747,7 @@ export const ru = {
     'Перетащите строку за имя, используйте Alt+↑/↓ или контекстное меню имени. Esc отменяет перетаскивание.',
   'rowReorderDemo.statusInitial': 'Порядок: исходный.',
   'rowReorderDemo.status': 'Порядок: %1.',
-  'rowReorderDemo.foot':
-    'Демо-стенд: порядок хранится только на странице, сервер не вызывается.',
+  'rowReorderDemo.foot': 'Демо-стенд: порядок хранится только на странице, сервер не вызывается.',
   'rowReorderDemo.value': 'значение %1',
   'rowReorderDemo.name.1': 'Альфа',
   'rowReorderDemo.name.2': 'Бета',
@@ -1859,7 +1855,8 @@ export const ru = {
   'publication.recipe.pickThoughts': 'Выбрать мысли…',
   'publication.recipe.pickTypes': 'Выбрать типы…',
   'publication.field.summary': 'Резюме',
-  'publication.summary.placeholder': 'Резюме публикации… (двойной клик — правка, Ctrl+Enter — сохранить)',
+  'publication.summary.placeholder':
+    'Резюме публикации… (двойной клик — правка, Ctrl+Enter — сохранить)',
   'publication.field.cover': 'Обложка',
   'publication.field.assembly': 'Дата сборки',
   'publication.field.numberingFrom': 'Нумеровать с уровня',
@@ -2031,8 +2028,7 @@ export const ru = {
   /** Гонка с удерживающим слоем: purge не удалил строку. */
   'usagePanel.purgeRace': 'Сущность не удалена: её удерживает слой. Список перечитан.',
   /** Гонка: сущность восстановили из корзины до подтверждения удаления. */
-  'usagePanel.purgeAlreadyRestored':
-    'Сущность уже восстановлена из корзины — удаление отменено.',
+  'usagePanel.purgeAlreadyRestored': 'Сущность уже восстановлена из корзины — удаление отменено.',
 
   // -- Статус realtime-соединения (ошибка de34b35b) -------------------------
   // Подписи и тултипы — по таблице заказчика после проверки GUI: короткая
@@ -2170,7 +2166,8 @@ export const ru = {
   'admin.otklyuchit': 'отключить',
   'admin.delete': 'удалить',
   'admin.title.sgenerirovatApiKeyTekuschemuUser': 'Сгенерировать API-key текущему пользователю',
-  'admin.title.vklyuchitOtklyuchitTekuschuyuUchetnuyuRecord': 'Включить/отключить текущую учётную запись',
+  'admin.title.vklyuchitOtklyuchitTekuschuyuUchetnuyuRecord':
+    'Включить/отключить текущую учётную запись',
   'admin.title.deleteTekuschegoUser': 'Удалить текущего пользователя',
   'admin.placeholder.otobrazhaemoeName': 'Отображаемое имя',
   'admin.label.admin': 'админ',
@@ -2181,7 +2178,8 @@ export const ru = {
   'admin.label.create': 'Создать',
   'admin.generaciyaKey': 'Генерация ключа',
   'admin.limitMustBytPolozhitelnymCelymChislom': 'Лимит должен быть положительным целым числом.',
-  'admin.keyPokazanOdinRazSohranitePeredayte': 'Ключ показан один раз. Сохраните и передайте его пользователю — после закрытия он больше недоступен.',
+  'admin.keyPokazanOdinRazSohranitePeredayte':
+    'Ключ показан один раз. Сохраните и передайте его пользователю — после закрытия он больше недоступен.',
   'admin.keySkopirovan': 'Ключ скопирован.',
   'admin.notSucceededCopyKey': 'Не удалось скопировать ключ.',
   'admin.title.apiKeyPokazanOdinRaz': 'API-key (показан один раз)',
@@ -2204,9 +2202,11 @@ export const ru = {
 
   // -- app ---------------------------------------------------------------
   'app.networkNotOpen': 'Сеть не открыта.',
-  'app.notSelectedThoughtKopirovaniyaSelectThought': 'Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.',
+  'app.notSelectedThoughtKopirovaniyaSelectThought':
+    'Не выбрана мысль для копирования. Выделите мысль на карте или в структурах.',
   'app.skopirovano': 'Скопировано: «%1»',
-  'app.notSelectedThoughtPasteKlikniteThought': 'Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.',
+  'app.notSelectedThoughtPasteKlikniteThought':
+    'Не выбрана мысль для вставки. Кликните на мысль на карте или выделите её.',
   'app.notSucceededReadSistemnyyBufer': 'Не удалось прочитать системный буфер: %1',
 
   // -- addDialog ---------------------------------------------------------
@@ -2221,16 +2221,21 @@ export const ru = {
   'addDialog.label.typeThought': 'Тип мысли',
   'addDialog.label.typeLink': 'Тип связи',
   'addDialog.label.propertyLink': 'Свойство связи',
-  'addDialog.enterAddListCtrlEnterApply': 'Enter — добавить в список, Ctrl+Enter — применить. В режиме «несколько» клик по найденной мысли добавляет её в список.',
-  'addDialog.selectOnlySuschestvuyuschihThoughtsEnterKlik': 'Выбор только из существующих мыслей: Enter или клик по найденной — в список, Ctrl+Enter — применить.',
-  'addDialog.searchIdetVsemVashimSetyamThought': 'Поиск идёт по всем вашим сетям; мысли текущей сети недоступны — выберите мысль другой сети.',
+  'addDialog.enterAddListCtrlEnterApply':
+    'Enter — добавить в список, Ctrl+Enter — применить. В режиме «несколько» клик по найденной мысли добавляет её в список.',
+  'addDialog.selectOnlySuschestvuyuschihThoughtsEnterKlik':
+    'Выбор только из существующих мыслей: Enter или клик по найденной — в список, Ctrl+Enter — применить.',
+  'addDialog.searchIdetVsemVashimSetyamThought':
+    'Поиск идёт по всем вашим сетям; мысли текущей сети недоступны — выберите мысль другой сети.',
   'addDialog.cannotSvyazatThoughtSamoySoboy': 'Нельзя связать мысль с самой собой.',
   'addDialog.thoughtUkazannymIdOtsutstvuet': 'Мысль с указанным ID отсутствует.',
-  'addDialog.sovpadeniyNoCreateNovyhThoughtsOtklyucheno': 'Совпадений нет — создание новых мыслей отключено.',
+  'addDialog.sovpadeniyNoCreateNovyhThoughtsOtklyucheno':
+    'Совпадений нет — создание новых мыслей отключено.',
   'addDialog.etaThoughtAlreadyList': 'Эта мысль уже в списке.',
   'addDialog.selected': 'Выбрано: %1',
   'addDialog.title.clearList': 'Очистить список',
-  'addDialog.suschestvuyuschayaThoughtTypeThoughtNotMenyaetsya': 'Существующая мысль — тип мысли не меняется',
+  'addDialog.suschestvuyuschayaThoughtTypeThoughtNotMenyaetsya':
+    'Существующая мысль — тип мысли не меняется',
   'addDialog.willCreatedNovayaThought': 'Будет создана новая мысль',
   'addDialog.title.deleteLine': 'Удалить строку',
   'addDialog.listThoughtsPust': 'Список мыслей пуст.',
@@ -2246,15 +2251,18 @@ export const ru = {
   'canvas.youRedaktiruete': 'вы редактируете',
   'canvas.youRedaktirueteEtuThought': 'Вы редактируете эту мысль.',
   'canvas.redaktiruet': 'Редактирует %1',
-  'canvas.thoughtChangedTekuschemLayerItsEdit': 'Мысль изменена в текущем слое — её правка уедет в основу при слиянии',
+  'canvas.thoughtChangedTekuschemLayerItsEdit':
+    'Мысль изменена в текущем слое — её правка уедет в основу при слиянии',
   'canvas.incomingLink': 'Входящие связи: %1',
   'canvas.outgoingLink': 'Исходящие связи: %1',
   'canvas.vliyayuschihThoughtsNoDvoynoyKlikAdd': 'Влияющих мыслей нет. Двойной клик для добавления',
   'canvas.siblings.rodstvennyhThoughtsNo': 'Родственных мыслей нет',
-  'canvas.podchinennyhThoughtsNoDvoynoyKlikAdd': 'Подчинённых мыслей нет. Двойной клик для добавления',
+  'canvas.podchinennyhThoughtsNoDvoynoyKlikAdd':
+    'Подчинённых мыслей нет. Двойной клик для добавления',
   'canvas.notSucceededVypolnitViewTokenNot': 'Не удалось выполнить отбор: токен не разрешился.',
   'canvas.prichinaNotUkazana': 'причина не указана',
-  'canvas.viewVernulEmptyRezultatTokenNot': 'Отбор вернул пустой результат: токен «%1» не разрешился (%2).',
+  'canvas.viewVernulEmptyRezultatTokenNot':
+    'Отбор вернул пустой результат: токен «%1» не разрешился (%2).',
   'canvas.hasIncomingLink': 'Есть входящие связи',
   'canvas.incomingLinksNo': 'Входящих связей нет',
   'canvas.hasOutgoingLink': 'Есть исходящие связи',
@@ -2287,12 +2295,14 @@ export const ru = {
   'contextMenu.exportSaved': 'Экспорт сохранён: %1',
   'contextMenu.exportNotSucceeded': 'Экспорт не удался: %1',
   'contextMenu.importNotSucceeded': 'Импорт не удался: %1',
-  'contextMenu.importCreatedObnovlenoNovyhLinksAttachments': 'Импорт %1: создано %2, обновлено %3, новых связей %4, вложений %5.',
+  'contextMenu.importCreatedObnovlenoNovyhLinksAttachments':
+    'Импорт %1: создано %2, обновлено %3, новых связей %4, вложений %5.',
   'contextMenu.editProperties': 'Изменить свойства',
   'contextMenu.editActive': 'Изменить актуальность',
   'contextMenu.invert': 'Инвертировать',
   'contextMenu.linkInverted': 'Связь инвертирована.',
-  'contextMenu.inObratnomNapravleniiTakayaLinkAlready': 'В обратном направлении такая связь уже существует.',
+  'contextMenu.inObratnomNapravleniiTakayaLinkAlready':
+    'В обратном направлении такая связь уже существует.',
   'contextMenu.invertLink': 'Инвертировать связь',
   'contextMenu.copyId': 'Копировать ID',
   'contextMenu.idThoughtSkopirovan': 'ID мысли скопирован.',
@@ -2335,7 +2345,8 @@ export const ru = {
   'contextMenu.fileNotSelected': 'файл не выбран',
 
   // -- dragCloud ---------------------------------------------------------
-  'dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy': 'Упорядочивание работает при сортировке зоны «ручной» (правый клик по зоне → порядок).',
+  'dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy':
+    'Упорядочивание работает при сортировке зоны «ручной» (правый клик по зоне → порядок).',
   'dragCloud.createLink': 'Создать связь',
   'dragCloud.peremestitThought': 'Переместить мысль',
   'dragCloud.peremestitPodchinenie': 'Переместить в подчинение',
@@ -2362,15 +2373,18 @@ export const ru = {
   'attachments.fileGreaterMbLimitAttachments': 'Файл больше %1 МБ — лимит вложения.',
   'attachments.peretaschiteFilesLinkRefSyuda': 'Перетащите файлы или ссылки сюда',
   'attachments.notSucceededAddAttachment': 'Не удалось добавить вложение.',
-  'attachments.peretaschenyNeraspoznannyeDannyePodderzhivayutsyaFilesH': 'Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.',
+  'attachments.peretaschenyNeraspoznannyeDannyePodderzhivayutsyaFilesH':
+    'Перетащены нераспознанные данные. Поддерживаются файлы и http(s)-ссылки.',
   'attachments.attachmentsNo': 'Вложений нет.',
   'attachments.notSucceededOpen': 'Не удалось открыть: %1',
   'attachments.openPrilozheniiDefault': 'Открыть в приложении по умолчанию',
   'attachments.attachment': 'Вложение',
-  'attachments.forThisTypeAttachmentsPreviewUnavailable': 'Для этого типа вложения предпросмотр недоступен.',
+  'attachments.forThisTypeAttachmentsPreviewUnavailable':
+    'Для этого типа вложения предпросмотр недоступен.',
   'attachments.notTekstovoeAttachment': 'не текстовое вложение',
   'attachments.notSucceededReadFile': 'Не удалось прочитать файл',
-  'attachments.filePrevyshaetLimitProsmotraPokazanyPervye': 'Файл превышает лимит просмотра — показаны первые 200 000 символов, правка отключена.',
+  'attachments.filePrevyshaetLimitProsmotraPokazanyPervye':
+    'Файл превышает лимит просмотра — показаны первые 200 000 символов, правка отключена.',
   'attachments.iconThoughtObnovlena': 'Иконка мысли обновлена.',
   'attachments.notSucceededNaznachitIcon': 'Не удалось назначить иконку: %1',
   'attachments.notSucceededReadFileAttachments': 'Не удалось прочитать файл вложения.',
@@ -2408,7 +2422,8 @@ export const ru = {
   'deepLink.networkUnavailable': 'Сеть недоступна: %1',
   'deepLink.publicationDeletedUnavailable': 'Публикация удалена или недоступна: %1',
   'deepLink.thoughtDeletedUnavailable': 'Мысль удалена или недоступна: %1',
-  'deepLink.notMoguOpenNeaktualnuyuThoughtNeaktualnye': 'Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.',
+  'deepLink.notMoguOpenNeaktualnuyuThoughtNeaktualnye':
+    'Не могу открыть неактуальную мысль — неактуальные мысли не отображаются.',
   'deepLink.notSucceededOpenThought': 'Не удалось открыть мысль: %1',
 
   // -- editor ------------------------------------------------------------
@@ -2421,18 +2436,30 @@ export const ru = {
   'editor.title.thought': 'Мысли',
   'editor.title.polozhenieEditor': 'Положение редактора',
   'editor.noSoderzhimogo': 'Нет содержимого.',
-  'editor.thoughtTrashClickRestoreDelete': 'Мысль в корзине. Нажмите для восстановления или удаления',
+  'editor.thoughtTrashClickRestoreDelete':
+    'Мысль в корзине. Нажмите для восстановления или удаления',
   'editor.link': 'Связь',
   'editor.thought': 'Мысль',
   'editor.selectThoughtLink': 'Выберите мысль или связь.',
+  // Тихая подсказка разбора строки задачи (элемент 8773d9df).
+  'editor.taskHint.task': 'задача',
+  'editor.taskHint.done': 'задача выполнена',
+  'editor.taskHint.checklist': 'пункт чек-листа',
+  'editor.taskHint.period': 'период %1–%2',
+  'editor.taskHint.due': 'срок %1',
+  'editor.taskHint.undated': 'без срока',
+  'editor.taskHint.appearsPeriod': 'появится в «Задачах периода»',
+  'editor.taskHint.appearsUndated': 'появится в «Без срока»',
   'editor.label.sprava': 'Справа',
   'editor.label.sleva': 'Слева',
   'editor.label.sverhu': 'Сверху',
   'editor.label.snizu': 'Снизу',
   'editor.label.hide': 'Скрыть',
-  'editor.thoughtChangedDrugimPolzovatelemDannyeObnovleny': '⚠ Мысль изменена другим пользователем — данные обновлены.',
+  'editor.thoughtChangedDrugimPolzovatelemDannyeObnovleny':
+    '⚠ Мысль изменена другим пользователем — данные обновлены.',
   'editor.linkChangedDrugimPolzovatelem': '⚠ Связь изменена другим пользователем.',
-  'editor.vosstanovlenNesohranennyyChernovikTitle': 'Восстановлен несохранённый черновик заголовка.',
+  'editor.vosstanovlenNesohranennyyChernovikTitle':
+    'Восстановлен несохранённый черновик заголовка.',
   'editor.title.cvetStil': 'Цвет и стиль',
   'editor.settingsThought': 'Настройки мысли',
   'editor.synonymsViaZapyatuyu': 'Синонимы (через запятую)',
@@ -2458,7 +2485,8 @@ export const ru = {
   // -- linkValueRemoval --------------------------------------------------
   'linkValueRemoval.linkPomeschenyTrash': 'Связи помещены в корзину (%1).',
   'linkValueRemoval.linkPomeschenaTrash': 'Связь помещена в корзину.',
-  'linkValueRemoval.chastLinksZablokirovanaOstalasTrash': 'Часть связей заблокирована и осталась в корзине.',
+  'linkValueRemoval.chastLinksZablokirovanaOstalasTrash':
+    'Часть связей заблокирована и осталась в корзине.',
   'linkValueRemoval.notSucceededDeleteLinkSovsem': 'Не удалось удалить связь совсем: %1',
   'linkValueRemoval.linkDeleted': 'Связи удалены (%1).',
   'linkValueRemoval.linkDeleted2': 'Связь удалена.',
@@ -2476,10 +2504,12 @@ export const ru = {
 
   // -- markdownField -----------------------------------------------------
   'markdownField.textKommentariya': 'Текст комментария',
-  'markdownField.notSucceededPasteLinkRefTextNot': 'Не удалось вставить ссылку: текст «%1» не найден в исходнике (изменён форматированием).',
+  'markdownField.notSucceededPasteLinkRefTextNot':
+    'Не удалось вставить ссылку: текст «%1» не найден в исходнике (изменён форматированием).',
   'markdownField.notSucceededSaveLinkRef': 'Не удалось сохранить ссылку: %1',
   'markdownField.pasteTextShablonaTypeThought': 'Вставить текст шаблона из типа мысли',
-  'markdownField.notSucceededPasteImageFieldsNo': 'Не удалось вставить картинку: у поля нет владельца.',
+  'markdownField.notSucceededPasteImageFieldsNo':
+    'Не удалось вставить картинку: у поля нет владельца.',
   'markdownField.izobrazhenie': 'изображение',
 
   // -- mentions ----------------------------------------------------------
@@ -2496,17 +2526,23 @@ export const ru = {
   'miniGraph.outgoing': 'исходящие',
   'miniGraph.incoming': 'входящие',
   'miniGraph.more': '%1: ещё %2 %3',
-  'miniGraph.inTrashMetkaTrashChipaVosstanovlenie': ', в корзине: %1 (метка корзины у чипа — восстановление через корзину)',
+  'miniGraph.inTrashMetkaTrashChipaVosstanovlenie':
+    ', в корзине: %1 (метка корзины у чипа — восстановление через корзину)',
   'miniGraph.zhivyhLinks': 'живых связей ',
   'miniGraph.polnyyListVkladke': '%1%2. Полный список %3— на вкладке «%4».',
   'miniGraph.neighbours': 'Соседей: %1',
-  'miniGraph.allPryamyeNeighboursThoughtStrukturnyeParents': 'Все прямые соседи мысли: структурные родители и потомки, а также типизированные связи в обе стороны. Граф всегда показывает все связи мысли — фильтры карты мыслей на него не влияют.',
+  'miniGraph.allPryamyeNeighboursThoughtStrukturnyeParents':
+    'Все прямые соседи мысли: структурные родители и потомки, а также типизированные связи в обе стороны. Граф всегда показывает все связи мысли — фильтры карты мыслей на него не влияют.',
   'miniGraph.hiddenMassovyh': 'Скрыто массовых: %1',
-  'miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber': 'Когда с одним соседом связано %1 и более рёбер одного типа (считая обе стороны), рисуется по одной линии на каждую сторону пары, а остальные связываются в чип «+N» у этого соседа (подсказка чипа — тип, сторона и число скрытых связей). Счётчик суммирует числа на чипах. Развернуть их на графе нельзя; полный список — на вкладке «%2».',
+  'miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber':
+    'Когда с одним соседом связано %1 и более рёбер одного типа (считая обе стороны), рисуется по одной линии на каждую сторону пары, а остальные связываются в чип «+N» у этого соседа (подсказка чипа — тип, сторона и число скрытых связей). Счётчик суммирует числа на чипах. Развернуть их на графе нельзя; полный список — на вкладке «%2».',
   'miniGraph.moreNotPomestilos': 'Ещё не поместилось: %1',
-  'miniGraph.onGraphPokazanyPervyeNeighboursOstalnye': 'На графе показаны первые %1 соседей, остальные %2 не поместились. Полный список соседей и связей — на вкладке «%3».',
-  'miniGraph.linkTrashClickToOpenTrash': 'Связи в корзине: %1 — нажмите, чтобы открыть корзину и восстановить',
-  'miniGraph.kolesoZumLevayaKnopkaPustomuMestu': 'Колесо — зум, левая кнопка по пустому месту — панорама, узлы можно таскать. Наведите на связь — тип и подсветка. Ctrl+hover — предпросмотр.',
+  'miniGraph.onGraphPokazanyPervyeNeighboursOstalnye':
+    'На графе показаны первые %1 соседей, остальные %2 не поместились. Полный список соседей и связей — на вкладке «%3».',
+  'miniGraph.linkTrashClickToOpenTrash':
+    'Связи в корзине: %1 — нажмите, чтобы открыть корзину и восстановить',
+  'miniGraph.kolesoZumLevayaKnopkaPustomuMestu':
+    'Колесо — зум, левая кнопка по пустому месту — панорама, узлы можно таскать. Наведите на связь — тип и подсветка. Ctrl+hover — предпросмотр.',
   'miniGraph.openLabel.openEditor': 'Открыть в редакторе',
 
   // -- properties --------------------------------------------------------
@@ -2517,12 +2553,14 @@ export const ru = {
   'properties.linkRestored': 'Связь восстановлена.',
   'properties.propertyMovedTipovye': 'Свойство перенесено в типовые.',
   'properties.perenestiTipovyeProperties': 'Перенести в типовые свойства',
-  'properties.rowZerkalnayaPrivyazkaPropertiesZhivetDrugom': 'Строка зеркальная: привязка свойства живёт на другом типе — исключите её там.',
+  'properties.rowZerkalnayaPrivyazkaPropertiesZhivetDrugom':
+    'Строка зеркальная: привязка свойства живёт на другом типе — исключите её там.',
   'properties.privyazkaPropertiesNotFound': 'Привязка свойства не найдена.',
   'properties.propertyIsklyuchenoTypes': 'Свойство исключено из типов: %1.',
   'properties.propertyIsklyuchenoTipovyh': 'Свойство исключено из типовых.',
   'properties.isklyuchitTipovyhProperties': 'Исключить из типовых свойств',
-  'properties.propertiesNedostupnyNoPodhodyaschegoType': 'Свойства недоступны — нет подходящего типа.',
+  'properties.propertiesNedostupnyNoPodhodyaschegoType':
+    'Свойства недоступны — нет подходящего типа.',
   'properties.title.propertiesType': 'Свойства типа',
   'properties.title.addProperty': 'Добавить свойство',
   'properties.title.propertiesVneType': 'Свойства вне типа',
@@ -2530,11 +2568,16 @@ export const ru = {
   'properties.label.createNovoe': 'Создать новое…',
   'properties.notSucceededSaveOrderProperties': 'Не удалось сохранить порядок свойств: %1',
   'properties.noValuesVneType': 'Нет значений вне типа.',
-  'properties.propertyLinkNotConnectedTipuOwner': 'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.',
-  'properties.typeLinkNotImeetPropertiesReestre': 'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
-  'properties.propertyGreaterNotConnectedTipuOwner': 'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
-  'properties.propertyLinkNotConnectedTipuOwner2': 'Свойство-связь не подключено к типу владельца — введите значения здесь; подключение свойства к типу вернёт их в основную таблицу.',
-  'properties.propertyNotConnectedTipuOwnerEnter': 'Свойство не подключено к типу владельца — введите значение здесь; подключение свойства к типу вернёт его в основную таблицу.',
+  'properties.propertyLinkNotConnectedTipuOwner':
+    'Свойство-связь не подключено к типу владельца — значения редактируются здесь; подключение свойства к типу вернёт их в основную таблицу.',
+  'properties.typeLinkNotImeetPropertiesReestre':
+    'Тип связи не имеет свойства в реестре — связь видна как внетиповое свойство; удалить её можно по display-имени стороны.',
+  'properties.propertyGreaterNotConnectedTipuOwner':
+    'Свойство больше не подключено к типу владельца — значение сохраняется только для истории.',
+  'properties.propertyLinkNotConnectedTipuOwner2':
+    'Свойство-связь не подключено к типу владельца — введите значения здесь; подключение свойства к типу вернёт их в основную таблицу.',
+  'properties.propertyNotConnectedTipuOwnerEnter':
+    'Свойство не подключено к типу владельца — введите значение здесь; подключение свойства к типу вернёт его в основную таблицу.',
   'properties.notSucceededDeleteValue': 'Не удалось удалить значение: %1',
   'properties.deleteValue': 'Удалить значение',
   'properties.uTypeNoProperties': 'У типа нет свойств.',
@@ -2543,7 +2586,8 @@ export const ru = {
   'properties.title.openSistemnomObrabotchike': 'Открыть в системном обработчике',
   'properties.noNetwork': '(нет сети)',
   'properties.nerezolvleno': ' (нерезолвлено)',
-  'properties.lastZhivoyRezolvOtkazalNetworkTarget': 'Последний живой резолв отказал — сеть или цель удалены. Нажмите «Обновить имя» в основной таблице.',
+  'properties.lastZhivoyRezolvOtkazalNetworkTarget':
+    'Последний живой резолв отказал — сеть или цель удалены. Нажмите «Обновить имя» в основной таблице.',
 
   // -- resourcePicker ----------------------------------------------------
   'resourcePicker.label.iconThoughts': 'Иконки мыслей',
@@ -2573,9 +2617,12 @@ export const ru = {
 
   // -- valueEditor -------------------------------------------------------
   'valueEditor.uprazdneno': 'упразднено',
-  'valueEditor.valuePublicationListStartEnterTitle': 'Значение — публикация из списка: начните вводить название и выберите строку',
-  'valueEditor.valueNotAddedSelectPublicationList': 'Значение не добавлено: выберите публикацию из списка.',
-  'valueEditor.obnovlenieNameDostupnoOnlyPropertiesThoughts': 'Обновление имени доступно только для свойств мыслей.',
+  'valueEditor.valuePublicationListStartEnterTitle':
+    'Значение — публикация из списка: начните вводить название и выберите строку',
+  'valueEditor.valueNotAddedSelectPublicationList':
+    'Значение не добавлено: выберите публикацию из списка.',
+  'valueEditor.obnovlenieNameDostupnoOnlyPropertiesThoughts':
+    'Обновление имени доступно только для свойств мыслей.',
   'valueEditor.snapshotyObnovleny': 'Снапшоты обновлены.',
   'valueEditor.obnovlenoNerezolvleno': 'Обновлено %1 из %2; %3 нерезолвлено.',
   'valueEditor.notSucceededObnovitName': 'Не удалось обновить имя: %1',
@@ -2583,11 +2630,13 @@ export const ru = {
   'valueEditor.label.deleteValues': 'Удалить из значения',
   'valueEditor.nerezolvleno': '%1 — %2 (нерезолвлено)',
   'valueEditor.titleThoughtOtherNetwork': 'Название мысли в другой сети…',
-  'valueEditor.valueThoughtListStartEnterTitle': 'Значение — мысль из списка: начните вводить название и выберите строку',
+  'valueEditor.valueThoughtListStartEnterTitle':
+    'Значение — мысль из списка: начните вводить название и выберите строку',
   'valueEditor.header.thoughtOtherNetworks': 'Мысли других сетей',
   'valueEditor.valueNotAddedSelectThoughtList': 'Значение не добавлено: выберите мысль из списка.',
   'valueEditor.selectThoughtOtherNetwork': 'Выбор мысли из другой сети',
-  'valueEditor.thoughtOtherNetworkNotSelectedKross': 'Мысль другой сети не выбрана — кросс-сетевая ссылка на свою сеть запрещена.',
+  'valueEditor.thoughtOtherNetworkNotSelectedKross':
+    'Мысль другой сети не выбрана — кросс-сетевая ссылка на свою сеть запрещена.',
   'valueEditor.selectThoughtOtherNetwork2': 'Выбрать мысль другой сети…',
   'valueEditor.clearValue': 'Очистить значение',
   'valueEditor.moreOdnuThought': '+ ещё одну мысль',
@@ -2604,24 +2653,47 @@ export const ru = {
   'valueEditor.no': 'нет',
   'valueEditor.label.deleteLinkThought': 'Удалить связь с мыслью',
   'valueEditor.label.pomestitLinkTrash': 'Поместить связь в корзину',
-  'valueEditor.rebroVnetipovoyLinkDeleteLinkDostupno': '%1 — ребро внетиповой связи; удаление связи доступно в контекстном меню.',
-  'valueEditor.rebraThisTypeLinkNotRedaktiruyutsya': '%1 — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).',
+  'valueEditor.rebroVnetipovoyLinkDeleteLinkDostupno':
+    '%1 — ребро внетиповой связи; удаление связи доступно в контекстном меню.',
+  'valueEditor.rebraThisTypeLinkNotRedaktiruyutsya':
+    '%1 — рёбра этого типа связи не редактируются через свойства (у типа связи нет свойства в реестре).',
   'valueEditor.title.selectCreateThought': 'Выбрать или создать мысли',
   'valueEditor.notSucceededCreate': 'Не удалось создать «%1»: %2',
   'valueEditor.titleThoughtObyazatelno': 'Название мысли… (обязательно)',
   'valueEditor.titleThought': 'Название мысли…',
 
   // -- wikiLink ----------------------------------------------------------
-  'wikiLink.notSucceededOpredelitParentNovoyThought': 'Не удалось определить родителя для новой мысли: %1',
+  'wikiLink.notSucceededOpredelitParentNovoyThought':
+    'Не удалось определить родителя для новой мысли: %1',
   'wikiLink.notSucceededObnovitLinkRef': 'Не удалось обновить ссылку: %1',
-  'wikiLink.notSucceededFindThoughtPerevodaId': 'Не удалось найти мысль «%1» для перевода на [[#<id>]].',
+  'wikiLink.notSucceededFindThoughtPerevodaId':
+    'Не удалось найти мысль «%1» для перевода на [[#<id>]].',
   'wikiLink.obnovitFormatId': 'Обновить формат на [[#<id>]] (%1)',
-  'wikiLink.notSucceededOpredelitPoziciyuLinkRefDokumente': 'Не удалось определить позицию ссылки в документе.',
+  'wikiLink.notSucceededOpredelitPoziciyuLinkRefDokumente':
+    'Не удалось определить позицию ссылки в документе.',
   'wikiLink.label.openThought': 'Открыть мысль',
   'wikiLink.firstOpenNetwork': 'Сначала откройте сеть.',
   'wikiLink.pokazanyPervyeUtochniteName': 'Показаны первые %1, уточните имя.',
   'wikiLink.foundNeskolkoThoughts': 'Найдено несколько мыслей: «%1»',
-  'wikiLink.networkUnavailableLinkRefThoughtOtherNetwork': 'Сеть недоступна: %1. Ссылка на мысль в другой сети не может быть открыта.',
+  'wikiLink.networkUnavailableLinkRefThoughtOtherNetwork':
+    'Сеть недоступна: %1. Ссылка на мысль в другой сети не может быть открыта.',
+  // Date-чип: меню (элемент c85ca40d) и автокомплит дат (элемент f9da2100).
+  'wikiLink.dateMenu.openDay': 'Открыть день',
+  'wikiLink.dateMenu.changeDate': 'Изменить дату…',
+  'wikiLink.dateMenu.moveTomorrow': 'Перенести на завтра',
+  'wikiLink.dateMenu.moveWeek': 'Перенести на неделю',
+  'wikiLink.dateMenu.moveMonth': 'Перенести на месяц',
+  'wikiLink.dateMenu.noSource': 'Не удалось определить источник даты для правки.',
+  'wikiLink.dateMenu.stale': 'Запись изменена в другом окне — обновите её и повторите.',
+  'wikiLink.dateMenu.failed': 'Не удалось изменить дату: %1',
+  'wikiLink.dateMenu.undated': 'В строке нет дат для переноса.',
+  'wikiLink.dateMenu.notTask': 'Строка не является задачей — перенести можно только ссылку.',
+  'wikiLink.dateSuggest.dates': 'Даты',
+  'wikiLink.dateSuggest.thoughts': 'Мысли',
+  'wikiLink.dateSuggest.today': 'Сегодня',
+  'wikiLink.dateSuggest.tomorrow': 'Завтра',
+  'wikiLink.dateSuggest.typed': 'Введённая дата',
+  'wikiLink.dateSuggest.formatHint': '%1 → формат ISO %2',
 
   // -- importExport ------------------------------------------------------
   'importExport.label.nameFile': 'Имя файла',
@@ -2635,11 +2707,14 @@ export const ru = {
   'importExport.title.exportEtnx': 'Экспорт в .etnx',
   'importExport.label.eksportirovat': 'Экспортировать',
   'importExport.importirovatTypesThoughtsLinks': 'Импортировать типы мыслей и связей',
-  'importExport.importirovatAttachmentsFilesVnutriArchive': 'Импортировать вложения (файлы внутри архива)',
-  'importExport.label.importirovatHronologicheskieKommentarii': 'Импортировать хронологические комментарии',
+  'importExport.importirovatAttachmentsFilesVnutriArchive':
+    'Импортировать вложения (файлы внутри архива)',
+  'importExport.label.importirovatHronologicheskieKommentarii':
+    'Импортировать хронологические комментарии',
   'importExport.label.fileArchive': 'Файл архива',
   'importExport.chtoImportirovat': 'Что импортировать',
-  'importExport.thoughtSovpadayuschimIdWillObnovlenySovpadeniyu': 'Мысли с совпадающим id будут обновлены; по совпадению названия — переиспользованы (синонимы объединятся). Остальное создастся заново.',
+  'importExport.thoughtSovpadayuschimIdWillObnovlenySovpadeniyu':
+    'Мысли с совпадающим id будут обновлены; по совпадению названия — переиспользованы (синонимы объединятся). Остальное создастся заново.',
   'importExport.title.importEtnx': 'Импорт из .etnx',
   'importExport.label.importirovat': 'Импортировать',
 
@@ -2688,10 +2763,12 @@ export const ru = {
   'entityPicker.createNovyy': 'Создать новый „%1“',
 
   // -- etnimg ------------------------------------------------------------
-  'etnimg.notSucceededOpenFileLinkRefVne': 'Не удалось открыть файл: ссылка вне поля комментария — владелец вложения неизвестен.',
+  'etnimg.notSucceededOpenFileLinkRefVne':
+    'Не удалось открыть файл: ссылка вне поля комментария — владелец вложения неизвестен.',
   'etnimg.notSucceededRazobratPathAttachment': 'Не удалось разобрать путь во вложении: %1',
   'etnimg.notSucceededOpenFileAttachments': 'Не удалось открыть файл вложения: %1',
-  'etnimg.attachmentLinkRefNotFoundOwnerKommentariya': 'Вложение по этой ссылке не найдено у владельца комментария.',
+  'etnimg.attachmentLinkRefNotFoundOwnerKommentariya':
+    'Вложение по этой ссылке не найдено у владельца комментария.',
 
   // -- filter ------------------------------------------------------------
   'filter.label.contains': 'содержит',
@@ -2745,15 +2822,22 @@ export const ru = {
   'filter.owner.owners': 'Владельцы',
   'filter.size.razmer': 'Размер',
   'filter.valueNotTrebuetsya': 'значение не требуется',
-  'filter.groupNotObyazanaImetRovnoOdnogo': 'группа «не» обязана иметь ровно одного ребёнка (сейчас %1)',
+  'filter.groupNotObyazanaImetRovnoOdnogo':
+    'группа «не» обязана иметь ровно одного ребёнка (сейчас %1)',
   'filter.operandUnavailableProfile': 'операнд «%1» недоступен в профиле «%2»',
-  'filter.operatorUnavailableOperandaProfile': 'оператор «%1» недоступен для операнда «%2» в профиле «%3»',
+  'filter.operatorUnavailableOperandaProfile':
+    'оператор «%1» недоступен для операнда «%2» в профиле «%3»',
   'filter.viewNotSootvetstvuetProfilyu': 'Отбор не соответствует профилю «%1»: %2',
-  'filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy': 'сохранённое определение отбора не читается (неизвестный операнд или оператор) — условия не показаны',
-  'filter.sohranennoeOpredelenieViewPovrezhdenoNotChitaetsya': 'сохранённое определение отбора повреждено и не читается',
-  'filter.conditionPropertyNotRaspoznanoOtbrosheno': 'условие по свойству не распознано и отброшено',
-  'filter.conditionPropertyOtbroshenoPropertiesGreaterNo': 'условие по свойству «%1» отброшено: свойства больше нет в сети',
-  'filter.sortProsmotruEditorNotVyrazhaetsyaKey': 'сортировка «по просмотру» в редакторе не выражается — ключ не показан',
+  'filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy':
+    'сохранённое определение отбора не читается (неизвестный операнд или оператор) — условия не показаны',
+  'filter.sohranennoeOpredelenieViewPovrezhdenoNotChitaetsya':
+    'сохранённое определение отбора повреждено и не читается',
+  'filter.conditionPropertyNotRaspoznanoOtbrosheno':
+    'условие по свойству не распознано и отброшено',
+  'filter.conditionPropertyOtbroshenoPropertiesGreaterNo':
+    'условие по свойству «%1» отброшено: свойства больше нет в сети',
+  'filter.sortProsmotruEditorNotVyrazhaetsyaKey':
+    'сортировка «по просмотру» в редакторе не выражается — ключ не показан',
   'filter.not_contains.notContains': 'не содержит',
   'filter.gte.greaterEqual': 'больше или равно',
   'filter.lte.lessEqual': 'меньше или равно',
@@ -2772,9 +2856,12 @@ export const ru = {
 
   // -- filterDiagnostics -------------------------------------------------
   'filterDiagnostics.groupPustaDobavteConditionGroup': 'группа пуста — добавьте условие или группу',
-  'filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno': 'условия требуют одновременного «заполнено» и «не заполнено» — ни одна мысль не подойдёт',
-  'filterDiagnostics.nizhnyayaGranicaDiapazonaNotLessVerhney': 'нижняя граница диапазона не меньше верхней — ни одна мысль не подойдёт',
-  'filterDiagnostics.editZamenitSohranennoeOpredelenie': '%1. Правка заменит сохранённое определение.',
+  'filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno':
+    'условия требуют одновременного «заполнено» и «не заполнено» — ни одна мысль не подойдёт',
+  'filterDiagnostics.nizhnyayaGranicaDiapazonaNotLessVerhney':
+    'нижняя граница диапазона не меньше верхней — ни одна мысль не подойдёт',
+  'filterDiagnostics.editZamenitSohranennoeOpredelenie':
+    '%1. Правка заменит сохранённое определение.',
   'filterDiagnostics.value': 'значение «%1»',
   'filterDiagnostics.deleted': 'удалено %1',
   /**
@@ -2797,7 +2884,8 @@ export const ru = {
   // -- filterEditor ------------------------------------------------------
 
   // -- filterFooter ------------------------------------------------------
-  'filterFooter.clickTextToPereytiRowOshibkoy': 'Нажмите на текст, чтобы перейти к строке с ошибкой',
+  'filterFooter.clickTextToPereytiRowOshibkoy':
+    'Нажмите на текст, чтобы перейти к строке с ошибкой',
   'filterFooter.title.writeSettingsView': 'Записать настройки отбора',
   'filterFooter.placeholder.nameView': 'имя отбора',
   'filterFooter.ariaLabel.nameView': 'Имя отбора',
@@ -2876,18 +2964,21 @@ export const ru = {
   // -- filterSubquery ----------------------------------------------------
   'filterSubquery.withoutConditions': 'без условий',
   'filterSubquery.not': 'НЕ (%1)',
-  'filterSubquery.clickToOpenSelectionModalnomLayer': '%1\n\nнажмите, чтобы открыть выборку в модальном слое',
+  'filterSubquery.clickToOpenSelectionModalnomLayer':
+    '%1\n\nнажмите, чтобы открыть выборку в модальном слое',
   'filterSubquery.title.removeSelectionValues': 'Убрать выборку из значения',
   'filterSubquery.selection': 'Выборка',
   'filterSubquery.label.gotovo': 'Готово',
   'filterSubquery.changePropertyRows': 'Сменить свойство строки?',
-  'filterSubquery.inRowSobranaPodSelectionSmene': 'В строке собрана под-выборка — при смене свойства она будет сброшена.',
+  'filterSubquery.inRowSobranaPodSelectionSmene':
+    'В строке собрана под-выборка — при смене свойства она будет сброшена.',
   'filterSubquery.label.list': 'Список',
   'filterSubquery.title.perechislitValuesRow': 'Перечислить значения в строке',
   'filterSubquery.sobratPodSelectionModalnomLayer': 'Собрать под-выборку в модальном слое',
   'filterSubquery.ariaLabel.vidValuesConditions': 'Вид значения условия',
   'filterSubquery.changeVidValues': 'Сменить вид значения?',
-  'filterSubquery.inRowSobranaPodSelectionPerehode': 'В строке собрана под-выборка — при переходе к списку она будет сброшена.',
+  'filterSubquery.inRowSobranaPodSelectionPerehode':
+    'В строке собрана под-выборка — при переходе к списку она будет сброшена.',
 
   // -- filterTokens ------------------------------------------------------
   'filterTokens.thoughtKontekstView': 'мысль-контекст отбора',
@@ -2940,7 +3031,8 @@ export const ru = {
   'filterTree.ishodnoeConditionNotFound': 'Исходное условие не найдено',
   'filterTree.groupPriemnikNotFound': 'Группа-приёмник не найдена',
   'filterTree.groupCannotVlozhitSamuSebyaIts': 'Группу нельзя вложить в саму себя или в её потомка',
-  'filterTree.fromGroupsNotCannotRemoveEdinstvennoe': 'Из группы НЕ нельзя убрать единственное условие',
+  'filterTree.fromGroupsNotCannotRemoveEdinstvennoe':
+    'Из группы НЕ нельзя убрать единственное условие',
   'filterTree.inGroupNotCanVlozhitOnly': 'В группу НЕ можно вложить только одно условие',
   'filterTree.moveNevozmozhen': 'Перенос невозможен',
   'filterTree.copyImpossible': 'Копирование невозможно',
@@ -2965,7 +3057,8 @@ export const ru = {
   'filterTree.title.operator': 'Оператор',
   'filterTree.title.deleteCondition': 'Удалить условие',
   'filterTree.zadayteValue': 'задайте значение',
-  'filterTree.vidzhetValuesSleduyuschayaZadachaEditor': 'Виджет значения — следующая задача редактора',
+  'filterTree.vidzhetValuesSleduyuschayaZadachaEditor':
+    'Виджет значения — следующая задача редактора',
   'filterTree.nichegoNotFound': 'ничего не найдено',
   'filterTree.ariaLabel.searchList': 'Поиск в списке',
 
@@ -2975,7 +3068,8 @@ export const ru = {
   'filterValue.type.type': 'тип',
   'filterValue.string.line': 'строку',
   'filterValue.date.date': 'дату',
-  'filterValue.thisConditionNotPrinimaetItsValue': 'Это условие не принимает %1: его значение другого вида',
+  'filterValue.thisConditionNotPrinimaetItsValue':
+    'Это условие не принимает %1: его значение другого вида',
   'filterValue.parents': 'родителей',
   'filterValue.children': 'потомков',
   'filterValue.attachments': 'вложений',
@@ -3005,7 +3099,8 @@ export const ru = {
 
   // -- hoverPreview ------------------------------------------------------
   'hoverPreview.with': 'С %1 · По %2',
-  'hoverPreview.networkUnavailableKommentariyNotRead': 'Сеть недоступна — комментарий не прочитать.',
+  'hoverPreview.networkUnavailableKommentariyNotRead':
+    'Сеть недоступна — комментарий не прочитать.',
   'hoverPreview.thoughtUnavailableNetwork': 'Мысль недоступна в этой сети.',
   'hoverPreview.notSucceededReadKommentariiNetwork': 'Не удалось прочитать комментарии этой сети.',
 
@@ -3015,7 +3110,8 @@ export const ru = {
   // -- keymap ------------------------------------------------------------
 
   // -- layerResync -------------------------------------------------------
-  'layerResync.notSucceededFindKornevuyuThoughtNetwork': 'Не удалось найти корневую мысль этой сети.',
+  'layerResync.notSucceededFindKornevuyuThoughtNetwork':
+    'Не удалось найти корневую мысль этой сети.',
 
   // -- lockGuard ---------------------------------------------------------
   'lockGuard.notSucceededPostavitZahvat': 'Не удалось поставить захват: %1',
@@ -3096,11 +3192,14 @@ export const ru = {
   'periodEditor.label.today7dWeekBack': '$today-7d — неделю назад',
   'periodEditor.label.today30dViaMonth': '$today+30d — через месяц',
   'periodEditor.label.today30dMonthBack': '$today-30d — месяц назад',
-  'periodEditor.notTokenPeriodDostupnyTodayNow': '«%1» — не токен периода: доступны $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd и арифметика ±Nd/±Nw/±Nmo/±Ny (легаси-написания с точкой принимаются; токены $thought.* требуют контекста мысли).',
+  'periodEditor.notTokenPeriodDostupnyTodayNow':
+    '«%1» — не токен периода: доступны $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd и арифметика ±Nd/±Nw/±Nmo/±Ny (легаси-написания с точкой принимаются; токены $thought.* требуют контекста мысли).',
   'periodEditor.by': 'по %1',
   'periodEditor.with': 'с %1',
-  'periodEditor.tokensDatesFieldOtklyuchenyEnterDate': 'Токены дат в этом поле отключены — укажите дату.',
-  'periodEditor.ozhidaetsyaGgggMmDdPolnyyIso': '«%1» — ожидается ГГГГ-ММ-ДД, полный ISO-инстанс или токен ($today/$now, границы недели/месяца/года ± арифметика).',
+  'periodEditor.tokensDatesFieldOtklyuchenyEnterDate':
+    'Токены дат в этом поле отключены — укажите дату.',
+  'periodEditor.ozhidaetsyaGgggMmDdPolnyyIso':
+    '«%1» — ожидается ГГГГ-ММ-ДД, полный ISO-инстанс или токен ($today/$now, границы недели/месяца/года ± арифметика).',
   'periodEditor.periodNotZadan': 'Период не задан',
   'periodEditor.label.dateTime': 'Дата и время',
   'periodEditor.label.diapazon': 'Диапазон',
@@ -3140,8 +3239,10 @@ export const ru = {
   'propertyList.unasledovano': 'унаследовано',
   'propertyList.connected': 'подключено',
   'propertyList.link': 'связь (%1 - %2)',
-  'propertyList.propertyAlreadyNasleduetsyaThisTipomPredka': 'Свойство уже наследуется этим типом от предка',
-  'propertyList.thisNameStoronyPropertiesLinkAlready': 'Это имя стороны свойства-связи уже подключено — можно подключить другое имя (обратное).',
+  'propertyList.propertyAlreadyNasleduetsyaThisTipomPredka':
+    'Свойство уже наследуется этим типом от предка',
+  'propertyList.thisNameStoronyPropertiesLinkAlready':
+    'Это имя стороны свойства-связи уже подключено — можно подключить другое имя (обратное).',
   'propertyList.propertyAlreadyConnectedEtomuTipu': 'Свойство уже подключено к этому типу',
 
   // -- events ------------------------------------------------------------
@@ -3238,7 +3339,8 @@ export const ru = {
   'suggest.poslednieValues': 'Последние значения',
 
   // -- thoughtCloud ------------------------------------------------------
-  'thoughtCloud.thoughtNahoditsyaTrashClickDeleteRestore': 'Мысль находится в корзине. Нажмите для удаления/восстановления',
+  'thoughtCloud.thoughtNahoditsyaTrashClickDeleteRestore':
+    'Мысль находится в корзине. Нажмите для удаления/восстановления',
   'thoughtCloud.thoughtOtherNetwork': 'Мысль другой сети: %1',
   'thoughtCloud.removeValues': 'Убрать из значения',
 
@@ -3251,7 +3353,8 @@ export const ru = {
 
   // -- pinned ------------------------------------------------------------
   'pinned.title.zakreplennyeThought': 'Закреплённые мысли',
-  'pinned.pinCanNotMoreThoughtsFirst': 'Закрепить можно не более %1 мыслей. Сначала открепите лишние мысли из панели закреплённых.',
+  'pinned.pinCanNotMoreThoughtsFirst':
+    'Закрепить можно не более %1 мыслей. Сначала открепите лишние мысли из панели закреплённых.',
   'pinned.notSucceededEditZakreplennye': 'Не удалось изменить закреплённые: %1',
   'pinned.zakrepiteThought': 'закрепите мысль',
   'pinned.zakreplennyeSkryty': 'закреплённые скрыты',
@@ -3263,7 +3366,8 @@ export const ru = {
   'about.label.sobrannyeRelizy': 'Собранные релизы',
   'about.label.textLicenzii': 'Текст лицензии',
   'about.version': 'Версия …',
-  'about.theEndlessThoughtNetworkSelfHosted': 'The Endless Thought Network — self-hosted граф мыслей',
+  'about.theEndlessThoughtNetworkSelfHosted':
+    'The Endless Thought Network — self-hosted граф мыслей',
   'about.licenziya': '%1 · Лицензия %2',
   'about.title.oProgramme': 'О программе',
   'about.version2': 'Версия %1',
@@ -3273,10 +3377,13 @@ export const ru = {
 
   // -- activity ----------------------------------------------------------
   'activity.label.views': 'Отборы…',
-  'activity.conditionPrezhnegoViewNotVyrazhaetsyaProfilem': 'Условие прежнего отбора не выражается профилем «События» и отброшено: %1.',
-  'activity.forThisTypeLinkMoreNo': 'Для этого типа связи ещё нет свойства в реестре — редактирование невозможно.',
+  'activity.conditionPrezhnegoViewNotVyrazhaetsyaProfilem':
+    'Условие прежнего отбора не выражается профилем «События» и отброшено: %1.',
+  'activity.forThisTypeLinkMoreNo':
+    'Для этого типа связи ещё нет свойства в реестре — редактирование невозможно.',
   'activity.openPropertyLink': 'Открыть свойство-связь',
-  'activity.suschnostDeletedUnavailableSnapshotLog': 'Сущность удалена или недоступна. Снимок из журнала:',
+  'activity.suschnostDeletedUnavailableSnapshotLog':
+    'Сущность удалена или недоступна. Снимок из журнала:',
   'activity.name.action': 'Действие',
   'activity.name.title': 'Название',
   'activity.name.kogda': 'Когда',
@@ -3290,8 +3397,10 @@ export const ru = {
   'activity.buttonLabel.obrezat': 'Обрезать',
   'activity.allRecordsLogDatesWillZatronuty': 'Все записи журнала до этой даты будут затронуты.',
   'activity.label.dateVklyuchitelno': 'Дата (включительно)',
-  'activity.operationNeobratimaRecordsWillDeletedWithout': 'Операция необратима — записи будут удалены без возможности восстановления.',
-  'activity.allRecordsLogAktivnostiVybrannoyDates': '%1 все записи журнала активности до выбранной даты? Действие необратимо.',
+  'activity.operationNeobratimaRecordsWillDeletedWithout':
+    'Операция необратима — записи будут удалены без возможности восстановления.',
+  'activity.allRecordsLogAktivnostiVybrannoyDates':
+    '%1 все записи журнала активности до выбранной даты? Действие необратимо.',
   'activity.label.typeThought': 'тип мысли',
   'activity.label.typeLink': 'тип связи',
   'activity.label.property': 'свойство',
@@ -3307,7 +3416,8 @@ export const ru = {
   'chrono.record': 'Запись',
   'chrono.header.naydennyeRecords': 'Найденные записи',
   'chrono.title.searchZapisyam': 'Поиск по записям',
-  'chrono.slovaViaProbelAllObyazatelnyLyubye': 'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. Условие ищет запись двумя путями (ИЛИ): по телу и заголовку самой записи и по мыслям-целям в выбранных областях. Подсказка «Найденные записи» открывает запись переходом (период из записи, прокрутка и подсветка).',
+  'chrono.slovaViaProbelAllObyazatelnyLyubye':
+    'Слова через пробел, все обязательны; * — любые символы; -слово — исключение. Условие ищет запись двумя путями (ИЛИ): по телу и заголовку самой записи и по мыслям-целям в выбранных областях. Подсказка «Найденные записи» открывает запись переходом (период из записи, прокрутка и подсветка).',
   'chrono.label.firstStarye': 'Сначала старые',
   'chrono.label.firstNovye': 'Сначала новые',
   'chrono.ariaLabel.napravlenieSort': 'Направление сортировки',
@@ -3321,21 +3431,28 @@ export const ru = {
   'layerMerge.base': 'Основу',
   'layerMerge.thought': 'мысли «%1»',
   'layerMerge.vybrannyhThoughtsIzmenennyhLayer': '%1 выбранных мыслей, изменённых в слое',
-  'layerMerge.editsLayerRazreshayutsyaOtnosheniyu': 'Правки %1 в слое «%2» разрешаются по отношению к «%3».',
-  'layerMerge.notSucceededReadOtlichiyaThoughtVariant': 'Не удалось прочитать отличия мысли — вариант «Объединить изменения» недоступен.',
+  'layerMerge.editsLayerRazreshayutsyaOtnosheniyu':
+    'Правки %1 в слое «%2» разрешаются по отношению к «%3».',
+  'layerMerge.notSucceededReadOtlichiyaThoughtVariant':
+    'Не удалось прочитать отличия мысли — вариант «Объединить изменения» недоступен.',
   'layerMerge.otkazatsyaChanges': 'Отказаться от изменений',
-  'layerMerge.allEditsLayerWillDeletedVernetsya': 'Все правки в слое будут удалены — вернётся версия «%1». Отменить нельзя.',
+  'layerMerge.allEditsLayerWillDeletedVernetsya':
+    'Все правки в слое будут удалены — вернётся версия «%1». Отменить нельзя.',
   'layerMerge.polnostyuPerepisatThoughtBase': 'Полностью переписать мысль в основе',
-  'layerMerge.versionLayerPerenositsyaCelikomChangesThis': 'Версия слоя переносится целиком, изменения «%1» по этим мыслям затираются.',
+  'layerMerge.versionLayerPerenositsyaCelikomChangesThis':
+    'Версия слоя переносится целиком, изменения «%1» по этим мыслям затираются.',
   'layerMerge.mergeChanges': 'Объединить изменения',
-  'layerMerge.postoyannyyKommentariyObedinyaetsyaBaseMarkeryKonflikto': 'Постоянный комментарий объединяется с основой (маркеры конфликтов git-стиля); связи, свойства и синонимы берутся из слоя.',
+  'layerMerge.postoyannyyKommentariyObedinyaetsyaBaseMarkeryKonflikto':
+    'Постоянный комментарий объединяется с основой (маркеры конфликтов git-стиля); связи, свойства и синонимы берутся из слоя.',
   'layerMerge.mergeThought': 'Слить мысль в «%1»?',
   'layerMerge.mergeVybrannyeThought': 'Слить выбранные мысли в «%1»?',
   'layerMerge.label.vypolnit': 'Выполнить',
   'layerMerge.otkazatsyaChanges2': 'Отказаться от изменений?',
-  'layerMerge.allEditsLayerWillDeletedBezvozvratno': 'Все правки %1 в слое будут удалены безвозвратно. Основа не изменится.',
+  'layerMerge.allEditsLayerWillDeletedBezvozvratno':
+    'Все правки %1 в слое будут удалены безвозвратно. Основа не изменится.',
   'layerMerge.changesDeletedLayer': 'Изменения %1 удалены из слоя.',
-  'layerMerge.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov': 'Слито мыслей: %1. Комментарий объединён, конфликтных блоков: %2.',
+  'layerMerge.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov':
+    'Слито мыслей: %1. Комментарий объединён, конфликтных блоков: %2.',
   'layerMerge.merged': 'Слито в «%1»: %2.',
   'layerMerge.notSucceededRazreshitChanges': 'Не удалось разрешить изменения',
 
@@ -3352,26 +3469,33 @@ export const ru = {
   'layers.propertiesBase': 'Свойства основы',
   'layers.propertiesLayer2': 'Свойства слоя «%1»',
   'layers.placeholder.naprimerEditsAvgusta': 'Например: Правки августа',
-  'layers.zachemLayerToSleduyuschiyAgentPonyal': 'Зачем этот слой — чтобы следующий (или агент) понял без расспросов',
+  'layers.zachemLayerToSleduyuschiyAgentPonyal':
+    'Зачем этот слой — чтобы следующий (или агент) понял без расспросов',
   'layers.placeholder.vetkaGitOptional': 'ветка git (необязательно)',
-  'layers.editsOstanutsyaLayerBaseNotIzmenitsya': 'Правки останутся в слое. Основа не изменится, пока вы не сольёте слой.',
-  'layers.novyyLayerPoluchitSobstvennyeCvetaMap': 'Новый слой получит собственные цвета карты (полоса фокуса и фон), чтобы его было видно; их можно поменять в «Свойствах слоя».',
+  'layers.editsOstanutsyaLayerBaseNotIzmenitsya':
+    'Правки останутся в слое. Основа не изменится, пока вы не сольёте слой.',
+  'layers.novyyLayerPoluchitSobstvennyeCvetaMap':
+    'Новый слой получит собственные цвета карты (полоса фокуса и фон), чтобы его было видно; их можно поменять в «Свойствах слоя».',
   'layers.label.vetkaGit': 'Ветка git',
   'layers.notSucceededCreateLayer': 'Не удалось создать слой',
   'layers.title.novyyLayerChanges': 'Новый слой изменений',
-  'layers.layerWillDeletedVmesteDochernimiLayers': 'Слой будет удалён вместе с %1 дочерними слоями: %2.',
-  'layers.deleteLayerNotMenyaetBaseTenevye': 'Удаление слоя не меняет основу: теневые правки слоя будут потеряны, всё остальное останется как есть.',
+  'layers.layerWillDeletedVmesteDochernimiLayers':
+    'Слой будет удалён вместе с %1 дочерними слоями: %2.',
+  'layers.deleteLayerNotMenyaetBaseTenevye':
+    'Удаление слоя не меняет основу: теневые правки слоя будут потеряны, всё остальное останется как есть.',
   'layers.deleteLayer': 'Удалить слой «%1»?',
   'layers.label.deleteLayer': 'Удалить слой',
   'layers.notSucceededDeleteLayer': 'Не удалось удалить слой',
-  'layers.allEditsLayerWillMovedKonflikte': 'Все правки слоя будут перенесены в «%1». При конфликте (строка изменилась в основе после создания слоя) слияние не выполнится — вы увидите список расхождений.',
+  'layers.allEditsLayerWillMovedKonflikte':
+    'Все правки слоя будут перенесены в «%1». При конфликте (строка изменилась в основе после создания слоя) слияние не выполнится — вы увидите список расхождений.',
   'layers.merge': 'Слить «%1» в «%2»?',
   'layers.label.merge': 'Слить',
   'layers.mergeRejected': 'Слияние отклонено',
   'layers.movedRows': 'Перенесено строк:',
   'layers.orderLinksChangedThoughtsSvernuto': 'Порядок связей изменён у %1 мыслей (свёрнуто).',
   'layers.linkIscheznuvshimKoncomPropuscheny': 'Связи с исчезнувшим концом пропущены: %1.',
-  'layers.beforeSliyaniemCreatedRezervnyyLayerRuchnogo': 'Перед слиянием создан резервный слой для ручного отката.',
+  'layers.beforeSliyaniemCreatedRezervnyyLayerRuchnogo':
+    'Перед слиянием создан резервный слой для ручного отката.',
   'layers.rezervnyyLayerNotNeeded': 'Резервный слой не понадобился.',
   'layers.title.layerMerged': 'Слой слит',
   'layers.loadingListOtlichiy': 'Загрузка списка отличий…',
@@ -3415,36 +3539,48 @@ export const ru = {
   'networks.title.createMysleset': 'Создать мыслесеть',
 
   // -- onboarding --------------------------------------------------------
-  'onboarding.selfHostedGraphThoughtsPodklyuchitesSvoemu': 'Self-hosted граф мыслей. Подключитесь к своему серверу ETN, чтобы начать.',
+  'onboarding.selfHostedGraphThoughtsPodklyuchitesSvoemu':
+    'Self-hosted граф мыслей. Подключитесь к своему серверу ETN, чтобы начать.',
   'onboarding.sohranennyeServery': 'Сохранённые серверы',
   'onboarding.novoePodklyuchenie': 'Новое подключение',
   'onboarding.moyServerOptional': 'Мой сервер (необязательно)',
   'onboarding.label.adresServer': 'Адрес сервера',
   'onboarding.label.podklyuchitsya': 'Подключиться',
-  'onboarding.deleteServerAktivnoePodklyuchenieWillRazorvano': 'Удалить сервер «%1» (%2)? Активное подключение будет разорвано, локальные данные (вкладки, черновики, история) — удалены. Действие необратимо.',
-  'onboarding.deleteServerLokalnyeDannyeThisProfilya': 'Удалить сервер «%1» (%2)? Локальные данные этого профиля будут удалены. Действие необратимо.',
+  'onboarding.deleteServerAktivnoePodklyuchenieWillRazorvano':
+    'Удалить сервер «%1» (%2)? Активное подключение будет разорвано, локальные данные (вкладки, черновики, история) — удалены. Действие необратимо.',
+  'onboarding.deleteServerLokalnyeDannyeThisProfilya':
+    'Удалить сервер «%1» (%2)? Локальные данные этого профиля будут удалены. Действие необратимо.',
   'onboarding.deleteSohranennyyServer': 'Удалить сохранённый сервер',
-  'onboarding.enterAdresServerNaprimerHttpLocalhost': 'Введите адрес сервера, например http://localhost:3000',
+  'onboarding.enterAdresServerNaprimerHttpLocalhost':
+    'Введите адрес сервера, например http://localhost:3000',
   'onboarding.enterApiKey': 'Введите API-key.',
 
   // -- propertyManager ---------------------------------------------------
   'propertyManager.connected': 'подключено к %1 %2',
   'propertyManager.zapolneno': 'заполнено %1 %2',
   'propertyManager.deleteProperty': 'Удалить свойство',
-  'propertyManager.propertyCannotDeleteFirstOtklyuchiteIts': 'Свойство «%1» нельзя удалить: %2. Сначала отключите его от всех типов и разберите значения в группе «Свойства вне типа».',
-  'propertyManager.deletePropertyLink2etoActionIrreversible': 'Удалить свойство-связь %1? %2Это действие необратимо.',
-  'propertyManager.deletePropertyThisActionIrreversible': 'Удалить свойство «%1»? Это действие необратимо.',
-  'propertyManager.deletedStrukturnymiParentsChildren': 'Удалено. %1 %2 %3 структурными «Родители/Потомки».',
+  'propertyManager.propertyCannotDeleteFirstOtklyuchiteIts':
+    'Свойство «%1» нельзя удалить: %2. Сначала отключите его от всех типов и разберите значения в группе «Свойства вне типа».',
+  'propertyManager.deletePropertyLink2etoActionIrreversible':
+    'Удалить свойство-связь %1? %2Это действие необратимо.',
+  'propertyManager.deletePropertyThisActionIrreversible':
+    'Удалить свойство «%1»? Это действие необратимо.',
+  'propertyManager.deletedStrukturnymiParentsChildren':
+    'Удалено. %1 %2 %3 структурными «Родители/Потомки».',
   'propertyManager.propertyDeleted': 'Свойство удалено.',
   'propertyManager.valueDefaultAllTypes': 'Значение по умолчанию для всех типов',
-  'propertyManager.valueDefaultIstochnikovLyubyhTypesCan': 'Значение по умолчанию для источников любых типов. Может быть переопределено значениями в строках таблицы выше',
-  'propertyManager.valueDefaultNaznacheniyLyubyhTypesCan': 'Значение по умолчанию для назначений любых типов. Может быть переопределено значениями в строках таблицы выше',
-  'propertyManager.descriptionPropertiesOnoZnachitKakomFormate': 'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)',
+  'propertyManager.valueDefaultIstochnikovLyubyhTypesCan':
+    'Значение по умолчанию для источников любых типов. Может быть переопределено значениями в строках таблицы выше',
+  'propertyManager.valueDefaultNaznacheniyLyubyhTypesCan':
+    'Значение по умолчанию для назначений любых типов. Может быть переопределено значениями в строках таблицы выше',
+  'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
+    'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)',
   'propertyManager.propertyTakimNameAlreadyHas': 'Свойство с таким именем уже есть.',
   'propertyManager.label.vidValues': 'Вид значения',
   'propertyManager.label.description': 'Описание',
   'propertyManager.risovatLinkMapDefault': 'рисовать связь на карте по умолчанию',
-  'propertyManager.zapolnennayaLinkRefBlokiruetDeleteTargets': 'заполненная ссылка блокирует удаление цели',
+  'propertyManager.zapolnennayaLinkRefBlokiruetDeleteTargets':
+    'заполненная ссылка блокирует удаление цели',
   'propertyManager.skalyarnoeProperty': 'Скалярное свойство',
   'propertyManager.titlePropertiesObyazatelno': 'Заголовок свойства (обязательно)',
   'propertyManager.label.nameProperties': 'Имя свойства',
@@ -3466,17 +3602,21 @@ export const ru = {
   'propertyManager.noPrivyazokClickAddType': 'Нет привязок. Нажмите «Добавить тип».',
   'propertyManager.title.otmetitAll': 'Отметить все',
   'propertyManager.metadataPoyavyatsyaAfterSave': 'Метаданные появятся после сохранения.',
-  'propertyManager.changeKategoriyuSkalyarLinkCannotValues': 'Сменить категорию (скаляр ↔ связь) нельзя: значения связи живут рёбрами, а не в таблице значений.',
+  'propertyManager.changeKategoriyuSkalyarLinkCannotValues':
+    'Сменить категорию (скаляр ↔ связь) нельзя: значения связи живут рёбрами, а не в таблице значений.',
   'propertyManager.enterNamesObeihStoron': 'Укажите имена обеих сторон.',
   'propertyManager.titlePropertiesObyazatelno2': 'Название свойства обязательно.',
   'propertyManager.changeTypeValues': 'Сменить тип значения',
-  'propertyManager.changeTypeValuesPropertiesValuesAll': 'Сменить тип значения свойства «%1»? Значения во всех элементах будут преобразованы к новому типу; несовместимые — очищены.',
+  'propertyManager.changeTypeValuesPropertiesValuesAll':
+    'Сменить тип значения свойства «%1»? Значения во всех элементах будут преобразованы к новому типу; несовместимые — очищены.',
   'propertyManager.zhditeVypolnyaetsyaObrabotkaValues': 'Ждите: выполняется обработка значений…',
-  'propertyManager.obrabotkaVypolnenaPreobrazovanoDeleted': 'Обработка выполнена: преобразовано %1, удалено %2.',
+  'propertyManager.obrabotkaVypolnenaPreobrazovanoDeleted':
+    'Обработка выполнена: преобразовано %1, удалено %2.',
   'propertyManager.obrabotkaVypolnena': 'Обработка выполнена.',
   'propertyManager.novoeProperty': 'Новое свойство',
   'propertyManager.property': 'Свойство — «%1»',
-  'propertyManager.emptySozdaniiThoughtIspolzuetsyaObscheeValue': 'Пусто — при создании мысли используется общее значение стороны привязки.',
+  'propertyManager.emptySozdaniiThoughtIspolzuetsyaObscheeValue':
+    'Пусто — при создании мысли используется общее значение стороны привязки.',
   'propertyManager.variantyValuesOdnomuRow': 'Варианты значения — по одному в строке',
   'propertyManager.label.vybiratList': 'выбирать из списка',
   'propertyManager.label.neskolkoValues': 'несколько значений',
@@ -3490,14 +3630,17 @@ export const ru = {
   'propertyManager.propertyNiChemuNotConnected': 'Свойство ни к чему не подключено.',
   'propertyManager.title.openType': 'Открыть тип',
   'propertyManager.vsegoValuesTypeVneType': 'Всего значений в типе: %1. Вне типа: %2.',
-  'propertyManager.forThisTypeLinkMoreNo': 'Для этого типа связи ещё нет свойства в реестре. Тип связи без свойства бесполезен — создайте свойство через «Добавить».',
-  'propertyManager.stanutStrukturnymiParentsChildrenPoyavyatsyaIerarhii': '%1 %2 станут структурными «Родители/Потомки» и появятся в иерархии мыслей. ',
+  'propertyManager.forThisTypeLinkMoreNo':
+    'Для этого типа связи ещё нет свойства в реестре. Тип связи без свойства бесполезен — создайте свойство через «Добавить».',
+  'propertyManager.stanutStrukturnymiParentsChildrenPoyavyatsyaIerarhii':
+    '%1 %2 станут структурными «Родители/Потомки» и появятся в иерархии мыслей. ',
   'propertyManager.stalo': 'стало',
   'propertyManager.stali': 'стали',
 
   // -- settingsLogs ------------------------------------------------------
   'settingsLogs.client': 'Клиент',
-  'settingsLogs.fileLogClientDiagnosticsToggleApply': 'Файловый журнал клиента для диагностики. Переключатель применяется немедленно; ERROR-записи пишутся всегда.',
+  'settingsLogs.fileLogClientDiagnosticsToggleApply':
+    'Файловый журнал клиента для диагностики. Переключатель применяется немедленно; ERROR-записи пишутся всегда.',
   'settingsLogs.label.loggingClient': 'Логирование клиента',
   'settingsLogs.loggingClientEnabled': 'Логирование клиента включено.',
   'settingsLogs.loggingClientDisabled': 'Логирование клиента выключено.',
@@ -3505,11 +3648,14 @@ export const ru = {
   'settingsLogs.deleteAllFilesLogClient': 'Удалить все файлы журнала клиента',
   'settingsLogs.currentFileLog': 'Текущий файл журнала:',
   'settingsLogs.deleteLogsClient': 'Удалить журналы клиента?',
-  'settingsLogs.allFilesLogClientWillDeleted': 'Все файлы журнала клиента будут удалены, текущий суточный файл — очищен. Действие необратимо.',
+  'settingsLogs.allFilesLogClientWillDeleted':
+    'Все файлы журнала клиента будут удалены, текущий суточный файл — очищен. Действие необратимо.',
   'settingsLogs.deletedFilesCurrentFileUsechen': 'Удалено файлов: %1; текущий файл усечён.',
   'settingsLogs.server': 'Сервер',
-  'settingsLogs.upravlenieLogServerDostupnoAdminPodklyuchennom': 'Управление журналом сервера доступно администратору при подключённом сервере.',
-  'settingsLogs.fileLogServerDiagnosticsFlagZhivet': 'Файловый журнал сервера для диагностики. Флаг живёт в памяти сервера и сбрасывается при перезапуске; переключатель применяется немедленно.',
+  'settingsLogs.upravlenieLogServerDostupnoAdminPodklyuchennom':
+    'Управление журналом сервера доступно администратору при подключённом сервере.',
+  'settingsLogs.fileLogServerDiagnosticsFlagZhivet':
+    'Файловый журнал сервера для диагностики. Флаг живёт в памяти сервера и сбрасывается при перезапуске; переключатель применяется немедленно.',
   'settingsLogs.label.loggingServer': 'Логирование сервера',
   'settingsLogs.loggingServerEnabled': 'Логирование сервера включено.',
   'settingsLogs.loggingServerDisabled': 'Логирование сервера выключено.',
@@ -3522,11 +3668,14 @@ export const ru = {
   'settingsLogs.filesLogSelectFileSkachivaniya': 'Файлы журнала (выберите файл для скачивания):',
   'settingsLogs.saved': 'Сохранено: %1',
   'settingsLogs.deleteLogsServer': 'Удалить журналы сервера?',
-  'settingsLogs.allFilesLogServerWillDeleted': 'Все файлы журнала сервера будут удалены, текущий суточный файл — очищен. Действие необратимо.',
+  'settingsLogs.allFilesLogServerWillDeleted':
+    'Все файлы журнала сервера будут удалены, текущий суточный файл — очищен. Действие необратимо.',
   'settingsLogs.filesLogServerDeleted': 'Файлы журнала сервера удалены.',
-  'settingsLogs.noPravAdminUpravlenieLogServer': 'Нет прав администратора: управление журналом сервера доступно только администратору.',
+  'settingsLogs.noPravAdminUpravlenieLogServer':
+    'Нет прав администратора: управление журналом сервера доступно только администратору.',
   'settingsLogs.serverUnavailablePoprobuytePozzhe': 'Сервер недоступен, попробуйте позже.',
-  'settingsLogs.notSucceededPoluchitStateLogServer': 'Не удалось получить состояние журнала сервера: %1',
+  'settingsLogs.notSucceededPoluchitStateLogServer':
+    'Не удалось получить состояние журнала сервера: %1',
   'settingsLogs.b': '%1 Б',
   'settingsLogs.kb': '%1 КБ',
   'settingsLogs.mb': '%1 МБ',
@@ -3538,10 +3687,14 @@ export const ru = {
   'settings.when_to_use.kogdaUse': 'Когда использовать',
   'settings.conventions.pravila': 'Правила',
   'settings.examples.examples': 'Примеры',
-  'settings.naznachenieNetworkOdnomDvuhAbzacahUvidit': 'Назначение сети в одном-двух абзацах. Увидит и человек, и AI-агент при выборе сети.',
-  'settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse': 'Когда агенту обращаться к этой сети. Для каждого use case — какие ещё поля сети читать.\n\nПример:\n- Кодирование → conventions, structure\n- Ретроспектива проекта → examples, conventions',
-  'settings.pravilaRecordsFormatHronologiyPometkaActive': 'Правила записи: формат хронологий, пометка active, нейминг, ссылки на типы и шаблоны.',
-  'settings.examplesHoroshihPlohihRecordsToAgent': 'Примеры хороших и плохих записей — чтобы агент не выдумывал форму.',
+  'settings.naznachenieNetworkOdnomDvuhAbzacahUvidit':
+    'Назначение сети в одном-двух абзацах. Увидит и человек, и AI-агент при выборе сети.',
+  'settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse':
+    'Когда агенту обращаться к этой сети. Для каждого use case — какие ещё поля сети читать.\n\nПример:\n- Кодирование → conventions, structure\n- Ретроспектива проекта → examples, conventions',
+  'settings.pravilaRecordsFormatHronologiyPometkaActive':
+    'Правила записи: формат хронологий, пометка active, нейминг, ссылки на типы и шаблоны.',
+  'settings.examplesHoroshihPlohihRecordsToAgent':
+    'Примеры хороших и плохих записей — чтобы агент не выдумывал форму.',
   'settings.label.ponedelnik': 'Понедельник',
   'settings.label.vtornik': 'Вторник',
   'settings.label.sreda': 'Среда',
@@ -3549,29 +3702,38 @@ export const ru = {
   'settings.label.pyatnica': 'Пятница',
   'settings.label.subbota': 'Суббота',
   'settings.label.voskresene': 'Воскресенье',
-  'settings.shiftEnterApplyCtrlEnterApply': 'Shift+Enter — применить, Ctrl+Enter — применить и закрыть',
+  'settings.shiftEnterApplyCtrlEnterApply':
+    'Shift+Enter — применить, Ctrl+Enter — применить и закрыть',
   'settings.profileNotLoaded': 'Профиль не загружен.',
   'settings.notZadano': 'Не задано',
   'settings.profileUser': 'Профиль пользователя',
   'settings.label.nameOtobrazheniya': 'Имя для отображения',
   'settings.label.login': 'Логин',
-  'settings.nameOtobrazhaetsyaTulbareOtherMestahInterfeysa': 'Имя отображается в тулбаре и других местах интерфейса. Логин задаётся при создании учётной записи.',
+  'settings.nameOtobrazhaetsyaTulbareOtherMestahInterfeysa':
+    'Имя отображается в тулбаре и других местах интерфейса. Логин задаётся при создании учётной записи.',
   'settings.emptyLabel.notZadano': '— не задано —',
   'settings.placeholder.typeThought': 'Тип мысли…',
   'settings.showNeaktualnyeThoughtLinkNetwork': 'Показывать неактуальные мысли и связи в этой сети',
   'settings.showSoderzhimoeTrashNetwork': 'Показывать содержимое корзины в этой сети',
-  'settings.theseFieldsZadaetOwnerNetworkAdmin': 'Эти поля задаёт владелец сети или администратор сервера; изменения сохраняются для всех участников.',
-  'settings.theseFieldsZadaetOwnerNetworkAdmin2': 'Эти поля задаёт владелец сети или администратор сервера. Вы можете посмотреть их, но не изменить.',
+  'settings.theseFieldsZadaetOwnerNetworkAdmin':
+    'Эти поля задаёт владелец сети или администратор сервера; изменения сохраняются для всех участников.',
+  'settings.theseFieldsZadaetOwnerNetworkAdmin2':
+    'Эти поля задаёт владелец сети или администратор сервера. Вы можете посмотреть их, но не изменить.',
   'settings.settingsNetwork': 'Настройки сети',
   'settings.label.firstDenWeek': 'Первый день недели',
-  'settings.commonSettingAllCalendarVidzhetovNetwork': 'Общая настройка для всех календарных виджетов сети и календарных токенов $weekStart/$weekEnd. При создании сети значение берётся из локали ОС сервера.',
-  'settings.samoopisanieNetworkLyudeyAiAgentsMarkdown': 'Самоописание сети для людей и AI-агентов. Markdown: ссылки, списки, картинки. Во вкладке «Когда использовать» перечислите сценарии, для которых подходит сеть.',
-  'settings.uzlovoyTypeRazdelaOpredelyaetStrukturuNetwork': 'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
+  'settings.commonSettingAllCalendarVidzhetovNetwork':
+    'Общая настройка для всех календарных виджетов сети и календарных токенов $weekStart/$weekEnd. При создании сети значение берётся из локали ОС сервера.',
+  'settings.samoopisanieNetworkLyudeyAiAgentsMarkdown':
+    'Самоописание сети для людей и AI-агентов. Markdown: ссылки, списки, картинки. Во вкладке «Когда использовать» перечислите сценарии, для которых подходит сеть.',
+  'settings.uzlovoyTypeRazdelaOpredelyaetStrukturuNetwork':
+    'Узловой тип раздела определяет структуру сети (читается через `etn.networks.structure`). Все активные мысли выбранного типа становятся разделами. Тип, выбранный здесь, нельзя удалить, пока ссылка не снята.',
   'settings.label.uzlovoyTypeRazdela': 'Узловой тип раздела',
-  'settings.typeInstructionAgentsZadaetKakieThought': 'Тип инструкций агентам задаёт, какие мысли отдаются витриной `etn.instructions` (ADR 717f04df). Без выбора витрина отвечает пустым списком. Тип, выбранный здесь, защищён от удаления так же, как узловой.',
+  'settings.typeInstructionAgentsZadaetKakieThought':
+    'Тип инструкций агентам задаёт, какие мысли отдаются витриной `etn.instructions` (ADR 717f04df). Без выбора витрина отвечает пустым списком. Тип, выбранный здесь, защищён от удаления так же, как узловой.',
   'settings.label.typeInstructionAgents': 'Тип инструкций агентам',
   'settings.vidimost': 'Видимость',
-  'settings.commonSettingAllVashihKlientovNetwork': 'Общая настройка для всех ваших клиентов в этой сети.',
+  'settings.commonSettingAllVashihKlientovNetwork':
+    'Общая настройка для всех ваших клиентов в этой сети.',
   'settings.razmerOblachka': 'Размер облачка',
   'settings.shirinaOblachkaPx': 'Ширина облачка, px (%1–%2)',
   'settings.otstupBetweenOblachkamiPx': 'Отступ между облачками, px (%1–%2)',
@@ -3588,21 +3750,25 @@ export const ru = {
   'structures.ubranoSelection': 'Убрано из выделения: %1.',
   'structures.selectedThoughtsVydeleniiNo': 'Отобранных мыслей в выделении нет.',
   'structures.podchinennyeThought': 'Подчинённые мысли',
-  'structures.notSucceededCreateNovyhThoughtsOni': 'Не удалось создать %1 новых мыслей — они пропущены.',
+  'structures.notSucceededCreateNovyhThoughtsOni':
+    'Не удалось создать %1 новых мыслей — они пропущены.',
   'structures.createdNovyhThoughts': 'Создано новых мыслей: %1.',
   'structures.confirmTitle.doEdinstvennymiParents': 'Сделать единственными родителями',
-  'structures.uSelectedThoughtsWillDeletedAll': 'У %1 отобранных мыслей будут удалены все входящие связи, кроме связей с выбранными мыслями (%2). Продолжить?',
+  'structures.uSelectedThoughtsWillDeletedAll':
+    'У %1 отобранных мыслей будут удалены все входящие связи, кроме связей с выбранными мыслями (%2). Продолжить?',
   'structures.razorvat': 'Разорвать',
   'structures.razorvatLinkParents': 'Разорвать связи с родителями',
   'structures.razorvatLinkPodchinennymi': 'Разорвать связи с подчинёнными',
-  'structures.uSelectedThoughtsWillDeletedLink': 'У %1 отобранных мыслей будут удалены связи с выбранными мыслями (%2). Продолжить?',
+  'structures.uSelectedThoughtsWillDeletedLink':
+    'У %1 отобранных мыслей будут удалены связи с выбранными мыслями (%2). Продолжить?',
   'structures.confirmTitle.deleteThought': 'Удалить мысли',
   'structures.deleteSelectedThoughts': 'Удалить %1 отобранных мыслей?',
   'structures.notSucceededApplyThoughts': 'Не удалось применить к %1 из %2 мыслей (%3).',
   'structures.primenenoThoughts': 'Применено к %1 мыслям.',
   'structures.notSucceededVypolnitKomandu': 'Не удалось выполнить команду: %1',
   'structures.label.komandy': 'Команды ▾',
-  'structures.komandyNadVsemiThoughtsViewWithout': 'Команды над всеми мыслями отбора (без учёта пагинации)',
+  'structures.komandyNadVsemiThoughtsViewWithout':
+    'Команды над всеми мыслями отбора (без учёта пагинации)',
   'structures.name.sirotskieThoughtWithoutParents': 'Сиротские мысли (без родителей)',
   'structures.name.createdWeek': 'Создано на этой неделе',
   'structures.name.createdZaDney': 'Создано за 30 дней',
@@ -3618,7 +3784,8 @@ export const ru = {
 
   // -- tabs --------------------------------------------------------------
   'tabs.openNetwork': 'Открыть сеть',
-  'tabs.selectNetworkSozdayteNovuyuCloseLyuboy': 'Выберите сеть или создайте новую. Закрыть — любой другой таб.',
+  'tabs.selectNetworkSozdayteNovuyuCloseLyuboy':
+    'Выберите сеть или создайте новую. Закрыть — любой другой таб.',
   'tabs.label.createNetwork': '+ Создать сеть',
   'tabs.more': 'Ещё %1',
   'tabs.aktivirovat': 'Активировать',
@@ -3626,10 +3793,12 @@ export const ru = {
   'tabs.networkUnavailable': 'Сеть недоступна',
 
   // -- thoughtTypes ------------------------------------------------------
-  'thoughtTypes.viewsPublikuyutKnopkiPolosyPodThought': 'Отборы — публикуют кнопки полосы под мыслью в фокусе',
+  'thoughtTypes.viewsPublikuyutKnopkiPolosyPodThought':
+    'Отборы — публикуют кнопки полосы под мыслью в фокусе',
   'thoughtTypes.label.view': '+ отбор',
   'thoughtTypes.title.createView': 'Создать отбор',
-  'thoughtTypes.sohraniteTypeToDobavlyatViewsNovogo': 'Сохраните тип, чтобы добавлять отборы — у нового типа ещё нет id.',
+  'thoughtTypes.sohraniteTypeToDobavlyatViewsNovogo':
+    'Сохраните тип, чтобы добавлять отборы — у нового типа ещё нет id.',
   'thoughtTypes.viewsDostupnyOnlyBase': 'Отборы доступны только в Основе.',
   'thoughtTypes.uTypePokaNoViews': 'У типа пока нет отборов.',
   'thoughtTypes.umloch': 'умлоч.',
@@ -3641,7 +3810,8 @@ export const ru = {
   'thoughtTypes.unsetPriznakDefault': 'Снять признак «по умолчанию»',
   'thoughtTypes.doOtboromDefault': 'Сделать отбором по умолчанию',
   'thoughtTypes.forAddViewsPereklyuchitesBase': 'Для добавления отборов переключитесь в Основу.',
-  'thoughtTypes.firstSohraniteTypeToDobavlyatViews': 'Сначала сохраните тип, чтобы добавлять отборы.',
+  'thoughtTypes.firstSohraniteTypeToDobavlyatViews':
+    'Сначала сохраните тип, чтобы добавлять отборы.',
   'thoughtTypes.forChangesViewPereklyuchitesBase': 'Для изменения отбора переключитесь в Основу.',
   'thoughtTypes.forDeleteViewPereklyuchitesBase': 'Для удаления отбора переключитесь в Основу.',
   'thoughtTypes.deleteViewThisActionIrreversible': 'Удалить отбор «%1»? Это действие необратимо.',
@@ -3657,7 +3827,8 @@ export const ru = {
   'typeManager.title.settingsType': 'Настройки типа',
   'typeManager.parentNasledovaniePropertiesStilya': 'Родитель (наследование свойств и стиля)',
   'typeManager.kornevoyTypeParentNotImeet': 'Корневой тип — родителя не имеет.',
-  'typeManager.kommentariyDescriptionTypePravilaPrimeneniya': 'Комментарий: описание типа, правила применения…',
+  'typeManager.kommentariyDescriptionTypePravilaPrimeneniya':
+    'Комментарий: описание типа, правила применения…',
   'typeManager.idPoyavitsyaAfterFirstRecordsType': 'id появится после первой записи типа.',
   'typeManager.titleTypeObyazatelno2': 'Название типа обязательно.',
   'typeManager.changeParentOtmenena': 'Смена родителя отменена.',
@@ -3665,33 +3836,42 @@ export const ru = {
   'typeManager.resetOverrideDescription': 'Сбросить переопределение описания',
   'typeManager.editNatureProperties': 'Править природу свойства',
   'typeManager.otklyuchitProperty': 'Отключить свойство',
-  'typeManager.otklyuchitPropertyTypeValuesOstanutsyaThoughts': 'Отключить свойство «%1» от типа? Значения останутся у мыслей и связей и будут показаны в группе «Свойства вне типа».',
-  'typeManager.sohraniteTypeToDobavlyatPropertiesNovogo': 'Сохраните тип, чтобы добавлять свойства — у нового типа ещё нет id.',
+  'typeManager.otklyuchitPropertyTypeValuesOstanutsyaThoughts':
+    'Отключить свойство «%1» от типа? Значения останутся у мыслей и связей и будут показаны в группе «Свойства вне типа».',
+  'typeManager.sohraniteTypeToDobavlyatPropertiesNovogo':
+    'Сохраните тип, чтобы добавлять свойства — у нового типа ещё нет id.',
   'typeManager.propertiesPoyavyatsyaAfterSaveType': 'Свойства появятся после сохранения типа.',
   'typeManager.byDefault': 'По умолчанию',
-  'typeManager.zerkalnoePropertyLinkPorozhdenoPropertyDrugogo': 'Зеркальное свойство-связь: порождено свойством «%1» другого типа через ограничение типов цели. Тип связи и направление не редактируются здесь.',
+  'typeManager.zerkalnoePropertyLinkPorozhdenoPropertyDrugogo':
+    'Зеркальное свойство-связь: порождено свойством «%1» другого типа через ограничение типов цели. Тип связи и направление не редактируются здесь.',
   'typeManager.zerkalo': 'зеркало · %1',
   'typeManager.label.description': 'описание…',
   'typeManager.title.pereopredelitDescriptionProperties': 'Переопределить описание свойства',
   'typeManager.label.reset': 'сбросить ◆',
   'typeManager.unasledovannyhPropertiesNo': 'Унаследованных свойств нет.',
   'typeManager.storona': 'Сторона',
-  'typeManager.editNaturePropertiesNameTypeValues': 'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
-  'typeManager.unsetPrivyazkuPropertiesValuesNotDeleted': 'Снять привязку свойства — значения не удаляются',
+  'typeManager.editNaturePropertiesNameTypeValues':
+    'Править природу свойства (имя, тип значения, описание) — действует во всех типах сразу',
+  'typeManager.unsetPrivyazkuPropertiesValuesNotDeleted':
+    'Снять привязку свойства — значения не удаляются',
   'typeManager.uTypeNoSobstvennyhProperties': 'У типа нет собственных свойств.',
   'typeManager.istochnik': 'источник',
   'typeManager.naznachenie': 'назначение',
   'typeManager.podklyuchitProperty': 'Подключить свойство',
   'typeManager.label.createProperty': 'Создать свойство',
-  'typeManager.propertyConnectedTipamPotomkamPodklyuchitIts': 'Свойство «%1» подключено к типам-потомкам %2. Если подключить его к типу «%3», у потомков снимутся их собственные подключения этого свойства (они станут наследовать его от вашего типа). Значения свойств в мыслях и связях при этом не изменятся.',
+  'typeManager.propertyConnectedTipamPotomkamPodklyuchitIts':
+    'Свойство «%1» подключено к типам-потомкам %2. Если подключить его к типу «%3», у потомков снимутся их собственные подключения этого свойства (они станут наследовать его от вашего типа). Значения свойств в мыслях и связях при этом не изменятся.',
   'typeManager.target': 'цель',
   'typeManager.targets': 'цели',
   'typeManager.celey': 'целей',
-  'typeManager.descriptionPropertiesThisTypeEmptyNasleduetsya': 'Описание свойства для этого типа (пусто — наследуется от родителя)',
-  'typeManager.propertyNasleduetsyaTypeHereZadaetsyaDescription': 'Свойство «%1» наследуется от типа «%2». Здесь задаётся описание свойства только для этого типа (и его подчинённых, пока те не переопределят сами).',
+  'typeManager.descriptionPropertiesThisTypeEmptyNasleduetsya':
+    'Описание свойства для этого типа (пусто — наследуется от родителя)',
+  'typeManager.propertyNasleduetsyaTypeHereZadaetsyaDescription':
+    'Свойство «%1» наследуется от типа «%2». Здесь задаётся описание свойства только для этого типа (и его подчинённых, пока те не переопределят сами).',
   'typeManager.descriptionProperties': 'Описание свойства — «%1»',
   'typeManager.label.resetOverride': 'Сбросить переопределение',
-  'typeManager.changeParentPovliyaetIzmenitsyaSostavNasleduemyh': 'Смена родителя повлияет на %1 %2: у %3 изменится состав наследуемых свойств (появятся или исчезнут привязки), а переопределения дефолтов и описаний могут стать висячими — значения сохранятся как «вне типа» и будут видны только на чтение. Продолжить?',
+  'typeManager.changeParentPovliyaetIzmenitsyaSostavNasleduemyh':
+    'Смена родителя повлияет на %1 %2: у %3 изменится состав наследуемых свойств (появятся или исчезнут привязки), а переопределения дефолтов и описаний могут стать висячими — значения сохранятся как «вне типа» и будут видны только на чтение. Продолжить?',
   'typeManager.changeParentTypeThought': 'Смена родителя типа мысли',
   'typeManager.nee': 'неё',
   'typeManager.nih': 'них',
@@ -3710,11 +3890,13 @@ export const ru = {
   'workspaceMenus.idUser': 'ID пользователя',
   'workspaceMenus.title.membersNetwork': 'Участники сети',
   'workspaceMenus.unsetAllBlokirovki': 'Снять все блокировки',
-  'workspaceMenus.unsetAllBlokirovkiMemberActionIrreversible': 'Снять все блокировки участника «%1»? Действие необратимо.',
+  'workspaceMenus.unsetAllBlokirovkiMemberActionIrreversible':
+    'Снять все блокировки участника «%1»? Действие необратимо.',
   'workspaceMenus.unsetBlokirovok': 'Снято блокировок: %1.',
   'workspaceMenus.notSucceededUnsetBlokirovki': 'Не удалось снять блокировки: %1',
   'workspaceMenus.vyytiNetwork': 'Выйти из сети',
-  'workspaceMenus.youPokineteNetworkPoteryaeteNeyAccess': 'Вы покинете сеть и потеряете к ней доступ.',
+  'workspaceMenus.youPokineteNetworkPoteryaeteNeyAccess':
+    'Вы покинете сеть и потеряете к ней доступ.',
 
   // -- search ------------------------------------------------------------
   'search.title.settingsSearch': 'Настройки поиска',
@@ -3757,16 +3939,19 @@ export const ru = {
   'selection.notSucceededCopy': 'Не удалось скопировать: %1',
   'selection.typeLinkThoughtFocus': 'Тип связи с мыслью в фокусе',
   'selection.doOnlyParent': 'Сделать единственным родителем',
-  'selection.uSelectionThoughtsWillDeletedAll': 'У %1 выделенных мыслей будут удалены все входящие связи, кроме связи с мыслью «%2». Продолжить?',
+  'selection.uSelectionThoughtsWillDeletedAll':
+    'У %1 выделенных мыслей будут удалены все входящие связи, кроме связи с мыслью «%2». Продолжить?',
   'selection.notSucceededChangeTypeLinkThoughts': 'Не удалось сменить тип связи у %1 мыслей.',
   'selection.settingsSelection': 'Настройки выделения',
   'selection.notSucceededApplyThoughts': 'Не удалось применить к %1 мыслям.',
   'selection.gruppovayaOperation': 'Групповая операция',
-  'selection.firstSfokusiruyteThoughtOnaStanetParent': 'Сначала сфокусируйте мысль — она станет родителем импортированного графа.',
+  'selection.firstSfokusiruyteThoughtOnaStanetParent':
+    'Сначала сфокусируйте мысль — она станет родителем импортированного графа.',
 
   // -- trash -------------------------------------------------------------
   'trash.ispolzuetsyaPropertiesOtherThoughts': '%1 используется в свойствах других мыслей',
-  'trash.suschestvuetBaseLayerItsCanOnly': '%1 существует в основе — в слое её можно только пометить на удаление',
+  'trash.suschestvuetBaseLayerItsCanOnly':
+    '%1 существует в основе — в слое её можно только пометить на удаление',
   'trash.changedLayers': '%1 изменена в слоях: %2',
   'trash.deleteThought': 'Удалить мысль',
   'trash.cannotDeleteSovsem': 'Нельзя удалить совсем — %1.',
@@ -3776,11 +3961,13 @@ export const ru = {
   'trash.thoughtPomeschenaTrash': 'Мысль помещена в корзину.',
   'trash.deleteLink': 'Удалить связь',
   'trash.title.deleteLink': 'Удаление связи',
-  'trash.linkNotDeletedTeperZablokirovanaUderzhivayuschiy': 'Связь не удалена: теперь заблокирована (удерживающий слой).',
+  'trash.linkNotDeletedTeperZablokirovanaUderzhivayuschiy':
+    'Связь не удалена: теперь заблокирована (удерживающий слой).',
   'trash.linkVozvraschenaTrash': 'Связь возвращена из корзины.',
   'trash.deleteVybrannogo': 'Удаление выбранного',
   'trash.allRowsTrash': 'Все строки — «В корзину»',
-  'trash.nezablokirovannyeRowsDeleteZablokirovannyeTrash': 'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
+  'trash.nezablokirovannyeRowsDeleteZablokirovannyeTrash':
+    'Незаблокированные строки — «Удалить», заблокированные — «В корзину»',
   'trash.cannotDeleteSovsem2': 'Нельзя удалить совсем — %1',
   'trash.lishitsyaParent': '%1 %2 лишится родителя.',
   'trash.deleteVybrannogo2': 'Удаление выбранного (%1)',
@@ -3791,7 +3978,8 @@ export const ru = {
   'trash.vernutTekuschuyuLineTrash': 'Вернуть текущую строку из корзины',
   'trash.title.deleteTekuschuyuLineSovsem': 'Удалить текущую строку совсем',
   'trash.label.deleteAllPossible': 'Удалить всё, что возможно',
-  'trash.fizicheskiDeleteAllNezablokirovannyeRowsTrash': 'Физически удалить все незаблокированные строки корзины',
+  'trash.fizicheskiDeleteAllNezablokirovannyeRowsTrash':
+    'Физически удалить все незаблокированные строки корзины',
   'trash.deletedOstalosZablokirovano': 'Удалено %1, осталось заблокировано %2.',
   'trash.clearTrash': 'Очистить корзину',
   'trash.thought': 'мысль',
@@ -3847,4 +4035,3 @@ export const ruPlurals = {
     other: 'Внимание: %1 потомка останется без родителей.',
   },
 } satisfies PluralCatalog;
-

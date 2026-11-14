@@ -485,7 +485,11 @@
 }
 
 .table-list tr.selected td {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 /* --- Properties table: headerless, five rows by default (L7, §6.3.1) ------- */
@@ -870,7 +874,11 @@
    без поиска. */
 .emoji-cell-current,
 .icon-library-cell-current {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
   outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -2px;
 }
@@ -878,7 +886,11 @@
 .icon-preview-current {
   border-style: solid;
   border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .icon-source-row {
@@ -1404,6 +1416,43 @@ input.task-list-item-checkbox:checked,
 
 .wiki-link:hover {
   text-decoration: underline;
+}
+
+/* Date-чип [[YYYY-MM-DD|время]] (0.16.1, элемент f9da2100): ссылка на ДЕНЬ, а
+   не на мысль, поэтому выглядит чипом, а не подчёркнутой ссылкой. Поверхность
+   и скругление — те же токены, что у чипов `lib/ui` (`chip-list.css`); фон
+   отделяет дату от мысль-ссылок. Точная визуальная доводка — на стенде
+   приёмки (DoD задачи 9ec9d72a). */
+.wiki-link.wiki-link-date {
+  display: inline-block;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong, var(--accent));
+  white-space: nowrap;
+}
+
+.wiki-link.wiki-link-date:hover {
+  text-decoration: none;
+  background: var(--bg-hover);
+}
+
+/* В редакторе date-чип — виджет `.md-widget`, у которого вертикальный паддинг
+   блока; чипу он не нужен, иначе строка с датой выше соседних. */
+.cm-editor .cm-line .md-widget.wiki-link-date {
+  padding-block: 0;
+}
+
+/* Тихая подсказка строки задачи в фокусе (0.16.1, элемент 8773d9df): блок под
+   строкой. Не интерактивна — виджет отдаёт события строке (`ignoreEvent`),
+   поэтому `pointer-events: none` лишь страхует выделение мышью. */
+.cm-md-task-hint {
+  padding: var(--space-1) 0 var(--space-1) var(--space-6);
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-snug);
+  pointer-events: none;
+  user-select: none;
 }
 
 /* ID-based wiki-link token (фаза R, R6): в edit-mode `#<id>` заменяется на
@@ -2055,7 +2104,11 @@ input.task-list-item-checkbox:checked,
 }
 
 .table-list tr.current td {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .attachment-item {
@@ -2077,7 +2130,11 @@ input.task-list-item-checkbox:checked,
 /* Текущая (выделенная клавиатурой) строка списка вложений — тем же токеном,
    что строки `.ui-table`/форм-гридов. */
 .attachment-item.selected {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .attachment-item .att-title {
@@ -2140,7 +2197,11 @@ input.task-list-item-checkbox:checked,
 /* Текущая строка результатов поиска (клавиатура общего списка, 6452ea94). */
 .att-search-result-current,
 .att-search-result-current:hover {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 /* Attachment rows open the context menu on right-click (08-ui-spec §6.5). */
@@ -2762,7 +2823,11 @@ input.task-list-item-checkbox:checked,
 }
 
 .att-pick-item-current {
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .att-pick-item-title {
@@ -2805,7 +2870,11 @@ input.task-list-item-checkbox:checked,
 
 .att-pick-preview-current {
   border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
-  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .att-pick-preview-img {
