@@ -182,6 +182,13 @@ export interface WikiLinkMeta {
    * as the after-anchor (`data-md-after`) for the text that follows the link.
    */
   mdRelativeAfter?: number | null;
+  /**
+   * Source range of the WHOLE link (`[[…]]` together with brackets, target and
+   * alias), relative to the inline content. The renderer does not need it, but
+   * positional editing does ({@link findDateLinkSpans}): the caller replaces
+   * only the target inside the brackets and keeps the author's alias.
+   */
+  mdRelativeLink?: SourceRange | null;
 }
 
 /** Relative range of the visible text of a wiki link inside its inline source. */
@@ -325,6 +332,8 @@ export function wikiLinkPlugin(md: MarkdownIt): void {
         mdRelative,
         // `]]` closes the link.
         mdRelativeAfter: close + 2,
+        // Whole link range for positional edits (see the interface field).
+        mdRelativeLink: { start, end: close + 2 },
       } satisfies WikiLinkMeta;
     }
     state.pos = close + 2;

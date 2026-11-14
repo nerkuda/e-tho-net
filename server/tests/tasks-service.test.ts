@@ -163,6 +163,23 @@ describe(
           undated.items.map((task) => task.comment_id),
           [undatedId],
         );
+        // «Сегодня» даёт клиент (требование fcdcd75f): без границы просрочка не
+        // вычисляется вовсе — сервер не подставляет свои UTC-сутки.
+        assert.throws(
+          () => listTasks(ndb, { scope: 'overdue' }),
+          (err: unknown) => err instanceof EtnError && err.code === 'BAD_REQUEST',
+          'scope=overdue без today — ошибка входа',
+        );
+        assert.throws(
+          () =>
+            applyTaskMassCommand(
+              ndb,
+              { action: 'move-all', filter: { scope: 'overdue' }, days: 1 },
+              USER,
+            ),
+          (err: unknown) => err instanceof EtnError && err.code === 'BAD_REQUEST',
+          'массовая команда по просрочке без today — ошибка входа',
+        );
       } finally {
         ndb.close();
       }
@@ -335,6 +352,24 @@ describe(
       assert.equal(
         shiftTaskLineDates('- [ ] Задача [[2026-01-30]] — [[2026-01-31 10:00]]', { months: 1 }),
         '- [ ] Задача [[2026-02-28]] — [[2026-02-28 10:00]]',
+      );
+      // Грамматика — только @etn/markdown: `T` в цели date-ссылкой не является
+      // (legacy-ссылка по имени), inline-code датой не считается, у ссылки с
+      // алиасом меняется только дата.
+      assert.equal(
+        shiftTaskLineDates('- [ ] [[2026-11-20]] и [[2026-01-05T10:00]] и `[[2026-12-01]]`', {
+          days: 1,
+        }),
+        '- [ ] [[2026-11-21]] и [[2026-01-05T10:00]] и `[[2026-12-01]]`',
+      );
+      assert.equal(
+        shiftTaskLineDates('- [ ] [[2026-11-20|созвон]]', { days: 1 }),
+        '- [ ] [[2026-11-21|созвон]]',
+      );
+      assert.equal(
+        shiftTaskLineDates('- [ ] `[[2026-12-01]]`', { days: 1 }),
+        null,
+        'date-ссылка внутри inline-code не сдвигается',
       );
 
       const ndb = createInMemoryNetworkDb();

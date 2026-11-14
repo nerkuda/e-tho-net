@@ -11,7 +11,8 @@
  *
  * Сторож краснеет на:
  *   1. собственную грамматику маркера в любом файле пакета, кроме
- *      `task-list.ts` (регэксп вида `\[[ xX]\]`, константа `TASK_MARKER`,
+ *      `task-list.ts` (регэксп вида `\[[ xX]\]`, объявление константы
+ *      `TASK_MARKER` — импорт готового `TASK_MARKER_PATTERN` законен, —
  *      имя токена `task_list_checkbox`, HTML-классы task-списка);
  *   2. потерю импорта общих хелперов в `task-lines.ts` (парсер начал бы
  *      разбирать разметку сам);
@@ -44,7 +45,10 @@ function sources(): Array<{ file: string; code: string }> {
       file,
       code: readFileSync(resolve(SRC_DIR, file), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/(^|\s)\/\/[^\n]*/g, '$1'),
+        .replace(/(^|\s)\/\/[^\n]*/g, '$1')
+        // Чистый ре-экспорт (`export { … } from './…'`) — не второй разбор:
+        // barrel `index.ts` переселяет наружу имя константы, но не грамматику.
+        .replace(/export \{[^}]*\} from '[^']+';/g, ''),
     }));
 }
 
@@ -54,7 +58,7 @@ describe('сторож: грамматика task-строк — только в
       // Маркер `[ ]` / `[x]` / `[ xX]` в КОДЕ файла (в комментариях он
       // легален и вырезан выше): символьный класс с пробелом/x/X внутри скобок.
       { name: 'маркер `[ ]`/`[x]`', pattern: /\[[xX ]{1,3}\]/ },
-      { name: 'константа TASK_MARKER', pattern: /TASK_MARKER/ },
+      { name: 'константа TASK_MARKER', pattern: /(?:const|let|var)\s+TASK_MARKER/ },
       { name: 'имя токена task_list_checkbox', pattern: /task_list_checkbox/ },
       { name: 'HTML-класс task-list-item', pattern: /task-list-item/ },
       { name: 'HTML-класс contains-task-list', pattern: /contains-task-list/ },

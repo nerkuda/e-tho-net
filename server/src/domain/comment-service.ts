@@ -1312,6 +1312,10 @@ export function removeCommentTarget(
           commentId,
           ndb.layerId,
         );
+      // Переезд основной привязки двигает ревизию, но не текст: пере-парс
+      // нужен, чтобы parsed_revision строк проекции догнал новую ревизию
+      // (иначе клиент покажет «Обновить» без причины).
+      queueTaskReparse(ndb, commentId);
     } else {
       bumpVersion(ndb, commentId, current.version, actorUserId);
     }
@@ -1335,5 +1339,9 @@ function bumpVersion(ndb: NetworkDb, commentId: string, currentVersion: number, 
       'UPDATE comments SET version = ?, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE id = ? AND layer_id = ?',
     )
     .run(currentVersion + 1, now, actorUserId, nowMs, commentId, ndb.layerId);
+  // Ревизия ушла вперёд, текст — нет (смена привязок/владельца): проекция задач
+  // должна догнать ревизию, иначе parsed_revision строк отстаёт и клиент
+  // показывает «Обновить» без причины.
+  queueTaskReparse(ndb, commentId);
 }
 

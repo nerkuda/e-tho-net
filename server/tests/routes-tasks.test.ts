@@ -301,6 +301,12 @@ describe(
         const badScope = await getTasks(ctx, { scope: 'later' });
         assert.equal(badScope.statusCode, 422);
 
+        // «Сегодня» считает клиент (требование fcdcd75f): без today просрочка
+        // не вычисляется — 400, а не тихие UTC-сутки сервера.
+        const noToday = await getTasks(ctx, { scope: 'overdue' });
+        assert.equal(noToday.statusCode, 400);
+        assert.equal(noToday.code, 'BAD_REQUEST');
+
         const empty = await patchTasks(ctx, {});
         assert.equal(empty.statusCode, 422, 'нужен ровно один из ops/action');
       } finally {

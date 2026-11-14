@@ -65,7 +65,13 @@ import type { NetworkDb } from '../db/network-db.js';
 import { BRANCHABLE_TABLES } from '../db/layer-chain.js';
 import type { BranchableTable } from '../db/layer-write.js';
 import { autoRollupLayerActivity } from './activity-service.js';
-import { deleteProjectionRows, dropTaskProjectionLayer, queueTaskReparse } from './task-projection.js';
+import {
+  deleteProjectionRows,
+  projectionLayerOf,
+  queueTaskLayerDrop,
+  queueTaskReparse,
+  queueTaskReparseAtLayer,
+} from './task-projection.js';
 import { purgeTrash } from './trash-service.js';
 
 /** Subset selection of a partial merge: logical row ids per branchable table. */
@@ -520,10 +526,14 @@ export function resetLayerOverride(
         .prepare('UPDATE layers SET last_activity_at = ? WHERE id = ?')
         .run(new Date().toISOString(), layerId);
     }
-    // Проекция задач (0.16.1): тексты не изменились, но перекрытие принято —
-    // пере-парс подтверждает, что строки слоя собраны из текущей редакции.
+    // Проекция задач (0.16.1): текст не изменился, но перекрытие принято и
+    // ревизия тени могла подняться — строки САМОГО слоя пере-парсятся, чтобы
+    // parsed_revision совпал с новой ревизией (контекст соединения здесь не
+    // при чём: reset работает с чужим слоем).
     for (const { table, row } of merged) {
-      if (table === 'comments') queueTaskReparse(ndb, row.id as string);
+      if (table === 'comments') {
+        queueTaskReparseAtLayer(ndb, row.id as string, projectionLayerOf(layerId));
+      }
     }
     return {
       layer: { id: layer.id, title: layer.title },
@@ -1099,12 +1109,15 @@ function mergeLayerInner(
   }
 
   // Проекция задач (0.16.1): таблицы проекции не ветвятся и не мержатся —
-  // строки слитого слоя удаляются целиком, а тексты, приехавшие в цель,
-  // пере-парсятся хуком записи после коммита.
-  dropTaskProjectionLayer(ndb, layerId);
+  // строки слитого слоя удаляются целиком, а строки ЦЕЛЕВОГО слоя пере-парсятся
+  // по финальному тексту. Надгробие (комментарий удалён в слое) тоже ставится
+  // в очередь: его строки в цели — осиротевшие, проход их удаляет
+  // (ADR d0c07f33: «строки, чей комментарий исчез, удаляются тем же проходом»).
+  queueTaskLayerDrop(ndb, layerId);
+  const targetProjectionLayer = projectionLayerOf(target.id);
   for (const entry of merged) {
-    if (entry.table === 'comments' && entry.row.deleted !== 1) {
-      queueTaskReparse(ndb, entry.row.id as string);
+    if (entry.table === 'comments') {
+      queueTaskReparseAtLayer(ndb, entry.row.id as string, targetProjectionLayer);
     }
   }
 

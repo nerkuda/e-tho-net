@@ -60,13 +60,10 @@ export { parseSelectionUnits } from './selection.js';
 export type { MarkdownUnit, MarkdownUnitKind } from './selection.js';
 export { parseTaskLines } from './task-lines.js';
 export type { TaskLine, TaskLineDate } from './task-lines.js';
-export {
-  isTaskLineMarker,
-  removeTaskLineMarker,
-  setTaskLineDone,
-  TASK_MARKER_PATTERN,
-  TASK_MARKER_PREFIX,
-} from './task-line-edit.js';
+export { findDateLinkSpans } from './date-links.js';
+export type { DateLinkSpan } from './date-links.js';
+export { isTaskLineMarker, removeTaskLineMarker, setTaskLineDone } from './task-line-edit.js';
+export { TASK_MARKER_PATTERN, TASK_MARKER_PREFIX } from './task-list.js';
 export { BLANK_LINE_CLASS, blankLinesPlugin } from './blank-lines.js';
 export { extractHeadings, formatHeading } from './headings.js';
 export type { MarkdownHeading } from './headings.js';

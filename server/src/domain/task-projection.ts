@@ -319,6 +319,8 @@ export function reparseCommentAtLayer(
 
 interface PendingProjection {
   comments: Set<string>;
+  /** Пары «комментарий → слой»: пере-парсить физическую строку этого слоя. */
+  atLayer: Map<string, string | null>;
   /** Слои, чьи строки удалить (слияние/отказ от изменений). */
   layers: Set<string>;
   /** Полный пере-парс сети (страховка/свип). */
@@ -330,7 +332,7 @@ const pending = new WeakMap<NetworkDb, PendingProjection>();
 function queueOf(ndb: NetworkDb): PendingProjection {
   let entry = pending.get(ndb);
   if (entry === undefined) {
-    entry = { comments: new Set(), layers: new Set(), rebuild: false };
+    entry = { comments: new Set(), atLayer: new Map(), layers: new Set(), rebuild: false };
     pending.set(ndb, entry);
   }
   return entry;
@@ -339,6 +341,21 @@ function queueOf(ndb: NetworkDb): PendingProjection {
 /** Поставить комментарий в очередь пере-парса (внутри транзакции записи). */
 export function queueTaskReparse(ndb: NetworkDb, commentId: string): void {
   queueOf(ndb).comments.add(commentId);
+}
+
+/**
+ * Поставить комментарий в очередь пере-парса КОНКРЕТНОГО слоя (`null` —
+ * основа): слияние и `reset_override` работают с чужими слоями, и контекст
+ * соединения здесь не при чём. Пустой/надгробный комментарий слоя даёт
+ * удаление его строк (ADR d0c07f33: осиротевшие строки удаляются тем же
+ * проходом).
+ */
+export function queueTaskReparseAtLayer(
+  ndb: NetworkDb,
+  commentId: string,
+  layerId: string | null,
+): void {
+  queueOf(ndb).atLayer.set(commentId, layerId);
 }
 
 /** Поставить слой в очередь удаления его строк проекции (слияние/отказ). */
@@ -359,7 +376,10 @@ export function discardTaskProjectionQueue(ndb: NetworkDb): void {
 /** Есть ли отложенная работа (для тестов и диагностики). */
 export function hasPendingTaskProjection(ndb: NetworkDb): boolean {
   const entry = pending.get(ndb);
-  return entry !== undefined && (entry.comments.size > 0 || entry.layers.size > 0 || entry.rebuild);
+  return (
+    entry !== undefined &&
+    (entry.comments.size > 0 || entry.atLayer.size > 0 || entry.layers.size > 0 || entry.rebuild)
+  );
 }
 
 /**
@@ -372,13 +392,23 @@ export function flushTaskProjection(ndb: NetworkDb): void {
   const entry = pending.get(ndb);
   if (entry === undefined) return;
   pending.delete(ndb);
-  if (entry.comments.size === 0 && entry.layers.size === 0 && !entry.rebuild) return;
+  if (
+    entry.comments.size === 0 &&
+    entry.atLayer.size === 0 &&
+    entry.layers.size === 0 &&
+    !entry.rebuild
+  ) {
+    return;
+  }
   try {
     ndb.transaction(() => {
       for (const layerId of entry.layers) dropTaskProjectionLayer(ndb, layerId);
       if (entry.rebuild) {
         rebuildTaskProjectionRows(ndb);
       } else {
+        for (const [commentId, layerId] of entry.atLayer) {
+          reparseCommentAtLayer(ndb, commentId, layerId);
+        }
         for (const commentId of entry.comments) reparseVisibleComment(ndb, commentId);
       }
       refreshTaskProjectionMarker(ndb);
@@ -463,18 +493,30 @@ export function refreshTaskProjectionMarker(ndb: NetworkDb): number {
  * `body_html`): строк в таблицах нет, а задачи у пользователя уже написаны.
  * Признак «сеть не разобрана» — маркер 0. Сеть, где разбор упал, остаётся
  * неразмеченной и повторится при следующем старте.
+ *
+ * L1-настройка версии ставится ТОЛЬКО когда свип прошёл все сети: иначе одна
+ * упавшая сеть осталась бы с пустой проекцией и без повторной попытки, а
+ * клиент видел бы пустые «Задачи» без «Обновить».
  */
 export function sweepTaskProjection(dataDir: string, systemDb: SystemDb, log: Logger): void {
   if (systemDb.getSetting(TASK_PROJECTION_SETTING) === TASK_PROJECTION_VERSION) return;
   let parsed = 0;
+  let failed = 0;
   for (const networkId of systemDb.listAllNetworkIds()) {
     try {
       const ndb = openNetworkDb(dataDir, networkId, log);
       if (readTaskProjectionMarker(ndb) > 0) continue;
       parsed += rebuildTaskProjection(ndb);
     } catch (err) {
+      failed += 1;
       log.warn({ err, networkId }, 'task projection sweep: network skipped');
     }
+  }
+  if (failed > 0) {
+    // Версия не двигается: следующий старт повторит свип (разобранные сети
+    // пропустит по маркеру), а клиент получит «Обновить» на живом сеансе.
+    log.warn({ failed, parsed }, 'task projection sweep incomplete: will retry on next start');
+    return;
   }
   systemDb.setSetting(TASK_PROJECTION_SETTING, TASK_PROJECTION_VERSION);
   log.info({ parsed, version: TASK_PROJECTION_VERSION }, 'task projection sweep complete');

@@ -12,27 +12,47 @@
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import DatabaseConstructor from 'better-sqlite3';
 
-import { BASE_LAYER_ID } from '@etn/shared';
+import { BASE_LAYER_ID, ETNX_VERSION, type EtnxManifest } from '@etn/shared';
 
-import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
+import {
+  closeNetworkDb,
+  createInMemoryNetworkDb,
+  type NetworkDb,
+} from '../src/db/network-db.js';
+import { runMigrations } from '../src/db/migrator.js';
+import { SystemDb } from '../src/db/system-db.js';
 import {
   createCommentWithTargets,
   deleteComment,
   updateComment,
 } from '../src/domain/comment-service.js';
-import { discardLayerThought, mergeLayer } from '../src/domain/merge-service.js';
+import { applyManifest } from '../src/domain/import-service.js';
+import {
+  discardLayerThought,
+  listPendingMergeConflicts,
+  mergeLayer,
+  resetLayerOverride,
+} from '../src/domain/merge-service.js';
 import { purgeOwnerDependants } from '../src/domain/owner-cleanup.js';
 import {
   buildTaskRows,
   readTaskProjectionMarker,
   rebuildTaskProjection,
+  sweepTaskProjection,
+  TASK_PROJECTION_SETTING,
 } from '../src/domain/task-projection.js';
 import { listTasks } from '../src/domain/task-service.js';
+import { getThought } from '../src/domain/thought-service.js';
 import { runWriteCore } from '../src/domain/write-wrapper.js';
+import { createLogger } from '../src/logger.js';
+import { networkDbPath, networkDir, systemMigrationsDir } from '../src/paths.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -380,6 +400,246 @@ describe(
         assert.equal(readTaskProjectionMarker(ndb), 1);
       } finally {
         ndb.close();
+      }
+    });
+
+    it('слияние удаления комментария из слоя убирает осиротевшие строки основы', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль 1');
+        const commentId = createTaskComment(ndb, 't-1', '- [ ] Основа [[2026-11-20]]');
+        const layerId = seedLayer(ndb);
+
+        ndb.useLayer(layerId);
+        write(ndb, () => deleteComment(ndb, commentId, 1, USER));
+        assert.deepEqual(
+          rowsOf(ndb, commentId).map((row) => row.layer_id),
+          [null],
+          'в слое комментарий невидим — своих строк у слоя нет',
+        );
+
+        ndb.useLayer(BASE_LAYER_ID);
+        write(ndb, () => mergeLayer(ndb, layerId, undefined, USER));
+
+        assert.equal(
+          rowsOf(ndb, commentId).length,
+          0,
+          'надгробие слито: строки исчезнувшего комментария удалены, осиротевших не остаётся',
+        );
+        for (const table of ['task_row_dates', 'task_row_subjects']) {
+          const row = ndb
+            .prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE comment_id = ?`)
+            .get(commentId) as { c: number };
+          assert.equal(row.c, 0, `${table}: строки исчезнувшего комментария удалены`);
+        }
+        assert.equal(listTasks(ndb).items.length, 0, 'в выборке задач ничего не осталось');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('импорт .etnx с задачами в текстах наполняет проекцию', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-parent', 'Родитель импорта');
+        seedThought(ndb, 't-import', 'Импортируемая мысль');
+        const thought = getThought(ndb, 't-import');
+        assert.ok(thought !== null);
+        const commentId = randomUUID();
+        const now = new Date().toISOString();
+        const manifest: EtnxManifest = {
+          format: 'etnx',
+          version: ETNX_VERSION,
+          exported_at: now,
+          source: { network_id: 'src', network_name: 'src', user_id: USER },
+          thought_types: [],
+          link_types: [],
+          properties: [],
+          type_properties: [],
+          thoughts: [thought],
+          thought_synonyms: [],
+          links: [],
+          comments: [
+            {
+              id: commentId,
+              owner_type: 'thought',
+              owner_id: 't-import',
+              targets: [{ owner_type: 'thought', owner_id: 't-import' }],
+              kind: 'chronological',
+              title: null,
+              body_md: '- [ ] Импортированная [[2026-11-20]]',
+              body_html: '',
+              valid_from: now,
+              valid_to: null,
+              use_time: false,
+              version: 1,
+              created_at: now,
+              updated_at: now,
+              created_by: USER,
+              updated_by: USER,
+            },
+          ],
+          comment_targets: [],
+          property_values: [],
+          attachments: [],
+          publications: [],
+          publication_order: [],
+          publication_exclusions: [],
+          shelves: [],
+          shelf_items: [],
+        };
+
+        write(ndb, () =>
+          applyManifest(
+            ndb,
+            manifest,
+            new Map(),
+            { actorUserId: USER, parentThoughtId: 't-parent' },
+            createLogger('silent'),
+          ),
+        );
+
+        const rows = rowsOf(ndb, commentId);
+        assert.equal(rows.length, 1, 'импорт наполнил проекцию строкой задачи');
+        assert.equal(rows[0]!.is_task, 1);
+        const dates = ndb
+          .prepare('SELECT date FROM task_row_dates WHERE comment_id = ?')
+          .all(commentId) as Array<{ date: string }>;
+        assert.deepEqual(
+          dates.map((row) => row.date),
+          ['2026-11-20'],
+        );
+        assert.deepEqual(
+          listTasks(ndb, { scope: 'open' }).items.map((task) => task.text),
+          ['Импортированная [[2026-11-20]]'],
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('reset_override слоя пере-парсит строки слоя под поднятую ревизию', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль 1');
+        const commentId = createTaskComment(ndb, 't-1', '- [ ] Основа [[2026-11-20]]');
+        const layerId = seedLayer(ndb);
+
+        ndb.useLayer(layerId);
+        write(ndb, () =>
+          updateComment(ndb, commentId, { body_md: '- [ ] Слой [[2026-11-21]]' }, 1, USER),
+        );
+
+        // Основа дважды правит ту же строку: у тени base_version 1, ревизия 2,
+        // у основы — 3. Превью называет конфликт, reset поднимает ревизию тени.
+        ndb.useLayer(BASE_LAYER_ID);
+        write(ndb, () =>
+          updateComment(ndb, commentId, { body_md: '- [ ] Фикс [[2026-11-22]]' }, 1, USER),
+        );
+        write(ndb, () =>
+          updateComment(ndb, commentId, { body_md: '- [ ] Фикс 2 [[2026-11-23]]' }, 2, USER),
+        );
+        assert.equal(
+          listPendingMergeConflicts(ndb, layerId, { comments: [commentId] }).conflicts.length,
+          1,
+        );
+
+        const reset = write(ndb, () => resetLayerOverride(ndb, layerId, { comments: [commentId] }));
+        assert.equal(reset.reset.length, 1);
+        assert.equal(reset.reset[0]!.version_raised_to, 3);
+
+        const layerRow = ndb
+          .prepare(
+            'SELECT text, parsed_revision FROM task_rows WHERE comment_id = ? AND layer_id = ?',
+          )
+          .get(commentId, layerId) as { text: string; parsed_revision: number } | undefined;
+        assert.ok(layerRow !== undefined);
+        assert.equal(layerRow!.text, 'Слой [[2026-11-21]]');
+        assert.equal(
+          layerRow!.parsed_revision,
+          3,
+          'parsed_revision строк слоя догнал поднятую ревизию (хук reset_override)',
+        );
+
+        ndb.useLayer(layerId);
+        assert.deepEqual(
+          listTasks(ndb, { scope: 'open' }).items.map((task) => task.text),
+          ['Слой [[2026-11-21]]'],
+          'в слое видна только его редакция',
+        );
+        ndb.useLayer(BASE_LAYER_ID);
+        assert.deepEqual(
+          listTasks(ndb, { scope: 'open' }).items.map((task) => task.text),
+          ['Фикс 2 [[2026-11-23]]'],
+          'основа не смешивается со слоем',
+        );
+
+        write(ndb, () => mergeLayer(ndb, layerId, undefined, USER));
+        assert.deepEqual(
+          rowsOf(ndb, commentId).map((row) => [row.layer_id, row.text]),
+          [[null, 'Слой [[2026-11-21]]']],
+          'после reset слияние проходит: основа получает текст слоя',
+        );
+        assert.equal(listTasks(ndb, { scope: 'open' }).items[0]!.due, '2026-11-21');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('свип: версия проекции ставится только после успеха всех сетей', () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'etn-task-sweep-'));
+      try {
+        const systemDb = new DatabaseConstructor(':memory:');
+        try {
+          systemDb.pragma('foreign_keys = ON');
+          runMigrations(systemDb, systemMigrationsDir());
+          const sys = new SystemDb(systemDb);
+          const owner = randomUUID();
+          sys.createUser({ id: owner, username: 'sweep-owner', displayName: 'Sweep' });
+          const brokenId = randomUUID();
+          sys.createNetworkRow(brokenId, owner, 'Битая сеть', null);
+          // Каталог на месте файла БД: открытие сети упадёт, не держа handle.
+          mkdirSync(networkDir(dataDir, brokenId), { recursive: true });
+          mkdirSync(networkDbPath(dataDir, brokenId), { recursive: true });
+
+          sweepTaskProjection(dataDir, sys, createLogger('silent'));
+          assert.equal(
+            sys.getSetting(TASK_PROJECTION_SETTING),
+            null,
+            'при сбое сети версия не двигается — свип повторится на следующем старте',
+          );
+        } finally {
+          systemDb.close();
+        }
+
+        // Чистая сеть: свип проходит целиком и только тогда ставит версию.
+        const cleanDir = mkdtempSync(join(tmpdir(), 'etn-task-sweep-ok-'));
+        const cleanDb = new DatabaseConstructor(':memory:');
+        // Объявлен до try: тот же id нужен в finally для закрытия соединения.
+        const cleanNetworkId = randomUUID();
+        try {
+          cleanDb.pragma('foreign_keys = ON');
+          runMigrations(cleanDb, systemMigrationsDir());
+          const sys = new SystemDb(cleanDb);
+          const owner = randomUUID();
+          sys.createUser({ id: owner, username: 'sweep-owner-ok', displayName: 'Sweep' });
+          sys.createNetworkRow(cleanNetworkId, owner, 'Чистая сеть', null);
+
+          sweepTaskProjection(cleanDir, sys, createLogger('silent'));
+          assert.notEqual(
+            sys.getSetting(TASK_PROJECTION_SETTING),
+            null,
+            'успешный свип фиксирует версию проекции',
+          );
+        } finally {
+          cleanDb.close();
+          // Соединение сети кешируется реестром: на Windows файл не удалить,
+          // пока handle открыт.
+          closeNetworkDb(cleanNetworkId);
+          rmSync(cleanDir, { recursive: true, force: true });
+        }
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true });
       }
     });
   },

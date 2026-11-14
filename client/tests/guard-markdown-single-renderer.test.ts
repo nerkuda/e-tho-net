@@ -160,6 +160,36 @@ const RULE_TASK_MARKER: GuardRule = {
 };
 
 /**
+ * 3b. Грамматика date-ссылки (`[[YYYY-MM-DD]]` / `[[YYYY-MM-DD HH:MM]]`) —
+ * только в пакете (0.16.1, ADR fa50de55).
+ *
+ * Вне `markdown/` запрещён свой регэксп даты в квадратных скобках: сервер прав
+ * строку задачи по позициям, которые отдаёт `findDateLinkSpans`. Собственный
+ * регэксп сдвигал и невалидные цели (`[[2026-01-05T10:00]]`), и ссылки внутри
+ * inline-code. Параметры `from/to/today` (`/^\d{4}-\d{2}-\d{2}$/`) — это не
+ * date-ссылка, поэтому правило смотрит только на `[[`-форму.
+ */
+const DATE_LINK_SIGNATURE = /(?:\\+\[\\+\[)[^\n]{0,40}(?:\\+d|\[0-9\])/;
+
+/** Строка упоминает грамматику только в комментарии — это не код. */
+function dateLinkOnlyInComment(line: string): boolean {
+  const trimmed = line.trimStart();
+  if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return true;
+  const commentAt = line.indexOf('//');
+  if (commentAt === -1) return false;
+  return !DATE_LINK_SIGNATURE.test(line.slice(0, commentAt));
+}
+
+const RULE_DATE_LINK: GuardRule = {
+  name: 'date-link-outside-package',
+  description:
+    'грамматика date-ссылки `[[YYYY-MM-DD]]` — только @etn/markdown: свой регэксп даты в `[[…]]` вне markdown/',
+  pattern: DATE_LINK_SIGNATURE,
+  include: inSrc,
+  allow: (rel, line) => inMarkdownPackage(rel) || dateLinkOnlyInComment(line),
+};
+
+/**
  * Собственные `replace`-преобразования новых конструкций в HTML: пара
  * «регэксп, распознающий синтаксис» + «строка-замена с HTML рендерера».
  * Редактор команд форматирования правит markdown-исходник (`==`, `<u>`,
@@ -260,6 +290,7 @@ describe('сторож: единый markdown-рендерер (673fa25f, ff1fa0
       [
         RULE_TASK_LIST_HTML,
         RULE_TASK_MARKER,
+        RULE_DATE_LINK,
         RULE_OWN_MARK_RENDER,
         RULE_OWN_UNDERLINE_RENDER,
         RULE_OWN_COMMENT_STRIP,
@@ -292,6 +323,34 @@ describe('сторож: единый markdown-рендерер (673fa25f, ff1fa0
       assert.equal(hits.length, 1, formatViolations(hits));
       assert.equal(hits[0]!.file, 'client/src/probe.ts');
       assert.equal(hits[0]!.rule, 'task-marker-outside-package');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('грамматика date-ссылки вне @etn/markdown запрещена (сторож краснеет на пробе)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-guard-date-link-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'server', 'src'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'markdown', 'src'), { recursive: true });
+      // Проба: собственный регэксп date-ссылки в серверном исходнике.
+      fs.writeFileSync(
+        path.join(dir, 'server', 'src', 'probe.ts'),
+        'export const DATE_LINK_RE = /\\[\\[(\\d{4})-(\\d{2})-(\\d{2})\\]\\]/g;\n',
+      );
+      // Параметры `from/to/today` и пакет рендерера — не нарушения.
+      fs.writeFileSync(
+        path.join(dir, 'server', 'src', 'params.ts'),
+        'export const DAY_RE = /^\\d{4}-\\d{2}-\\d{2}$/;\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'markdown', 'src', 'grammar.ts'),
+        'export const RE = /\\[\\[(\\d{4})-(\\d{2})-(\\d{2})\\]\\]/;\n',
+      );
+      const hits = collectViolations(dir, [RULE_DATE_LINK]);
+      assert.equal(hits.length, 1, formatViolations(hits));
+      assert.equal(hits[0]!.file, 'server/src/probe.ts');
+      assert.equal(hits[0]!.rule, 'date-link-outside-package');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

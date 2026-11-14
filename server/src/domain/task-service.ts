@@ -23,7 +23,9 @@
  * «Сегодня»/from/to приходят от клиента: сервер не хранит пояс и не решает,
  * какой сейчас день (требование fcdcd75f). Принимается календарный день
  * `YYYY-MM-DD` (единственная однозначная форма для date-ссылок) или
- * UTC-инстанс — из него берётся календарная дата по UTC.
+ * UTC-инстанс — из него берётся календарная дата по UTC. `scope=overdue` без
+ * `today` — `BAD_REQUEST` (400): просрочку по своим часам сервер не считает
+ * (операция e6d65f51).
  */
 
 import {
@@ -40,7 +42,7 @@ import {
   type TaskScope,
   type TaskSubjectState,
 } from '@etn/shared';
-import { removeTaskLineMarker, setTaskLineDone } from '@etn/markdown';
+import { findDateLinkSpans, removeTaskLineMarker, setTaskLineDone } from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getVisibleComment, updateComment } from './comment-service.js';
@@ -175,8 +177,18 @@ function buildFilter(filter: RowFilter): FilterSql {
   if (scope === 'open') where.push('tr.done = 0');
   if (scope === 'done') where.push('tr.done = 1');
   if (scope === 'overdue') {
+    // «Сегодня» решает клиент (требование fcdcd75f): сервер не хранит пояс и не
+    // подставляет сутки по своим часам — без переданной границы просрочку не
+    // вычислить, это ошибка входа (операция e6d65f51).
+    if (today === null) {
+      throw new EtnError(
+        'BAD_REQUEST',
+        'scope=overdue requires today — the day boundary of the client (YYYY-MM-DD or a UTC instant).',
+        { field: 'today' },
+      );
+    }
     where.push('tr.done = 0 AND tr.due IS NOT NULL AND tr.due < ?');
-    params.push(today ?? new Date().toISOString().slice(0, 10));
+    params.push(today);
   }
   if (scope === 'undated') where.push('tr.done = 0 AND tr.period_from IS NULL');
 
@@ -416,9 +428,6 @@ export interface TaskPatchOutcome extends TaskPatchResult {
   changed: Comment[];
 }
 
-/** Календарные date-ссылки строки: `[[YYYY-MM-DD]]` / `[[YYYY-MM-DD HH:MM]]`. */
-const DATE_LINK_RE = /\[\[(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}:\d{2}))?\]\]/g;
-
 /** Последний день месяца `month` (1..12) года `year`. */
 function lastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
@@ -442,21 +451,30 @@ export function shiftIsoDate(date: string, shift: { days?: number; months?: numb
   return base.toISOString().slice(0, 10);
 }
 
-/** Сдвинуть ВСЕ date-ссылки строки; `null` — в строке нет дат. */
+/**
+ * Сдвинуть ВСЕ date-ссылки строки; `null` — в строке нет дат.
+ *
+ * Грамматику даёт только `@etn/markdown` ({@link findDateLinkSpans}): позиции
+ * ссылок и целей приходят из правила `wiki_link` единого рендерера. Поэтому
+ * inline-code (`` `[[2026-12-01]]` ``) и цели, которые date-ссылкой не
+ * являются (`[[2026-01-05T10:00]]` — legacy-ссылка по имени), не трогаются,
+ * а у ссылки с алиасом (`[[2026-11-20|созвон]]`) меняется только дата.
+ */
 export function shiftTaskLineDates(
   line: string,
   shift: { days?: number; months?: number },
 ): string | null {
-  let count = 0;
-  const next = line.replace(
-    DATE_LINK_RE,
-    (whole, y: string, m: string, d: string, time?: string) => {
-      count += 1;
-      const shifted = shiftIsoDate(`${y}-${m}-${d}`, shift);
-      return time === undefined ? `[[${shifted}]]` : `[[${shifted} ${time}]]`;
-    },
-  );
-  return count === 0 ? null : next;
+  const spans = findDateLinkSpans(line);
+  if (spans.length === 0) return null;
+  // С конца: замены не сдвигают позиции ещё не обработанных ссылок.
+  let next = line;
+  for (let i = spans.length - 1; i >= 0; i -= 1) {
+    const span = spans[i]!;
+    const shifted = shiftIsoDate(span.parts.date, shift);
+    const target = span.parts.time === null ? shifted : `${shifted} ${span.parts.time}`;
+    next = `${next.slice(0, span.targetStart)}${target}${next.slice(span.targetEnd)}`;
+  }
+  return next;
 }
 
 /** Проверить сдвиг `move`: ровно один ненулевой целый сдвиг. */
