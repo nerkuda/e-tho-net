@@ -26,6 +26,7 @@ import {
   groupPanelRows,
   lastDayOfMonth,
   monthKeyOf,
+  orderTaskRowsUndatedFirst,
   panelMarkerAdvanced,
   panelNeedsRefresh,
   planTaskBulk,
@@ -41,6 +42,7 @@ import {
   taskRowKey,
   taskRowView,
   taskRowsForFilter,
+  taskZoneVisible,
   weekStartOf,
   type PanelGroupable,
 } from '../src/renderer/lib/ui/task-panel-model.js';
@@ -61,6 +63,9 @@ function task(overrides: Partial<TaskDTO> & { comment_id?: string; line_no?: num
     subtask: false,
     revision: 1,
     parsed_revision: 1,
+    owner_type: 'thought',
+    owner_id: 't1',
+    kind: 'chronological',
     ...overrides,
   };
 }
@@ -424,5 +429,47 @@ describe('вхождения напоминаний (требования 6762ad
       0,
       'нет напоминаний — ноль (бейдж скрыт)',
     );
+  });
+});
+
+describe('порядок панели редактора мысли (элемент f3893859)', () => {
+  it('строки без даты — всегда вверху, дальше срок по возрастанию', () => {
+    const rows = [
+      { key: 'a', due: '2026-11-20' },
+      { key: 'b', due: null },
+      { key: 'c', due: '2026-11-14' },
+      { key: 'd', due: null },
+      { key: 'e', due: '2026-11-14' },
+    ];
+    assert.deepEqual(
+      orderTaskRowsUndatedFirst(rows).map((row) => row.key),
+      ['b', 'd', 'c', 'e', 'a'],
+      'срок по возрастанию, равные сроки — в исходном (серверном) порядке',
+    );
+  });
+
+  it('исходный массив не мутируется', () => {
+    const rows = [
+      { key: 'a', due: '2026-11-20' },
+      { key: 'b', due: null },
+    ];
+    const ordered = orderTaskRowsUndatedFirst(rows);
+    assert.deepEqual(
+      rows.map((row) => row.key),
+      ['a', 'b'],
+    );
+    assert.notEqual(ordered, rows);
+  });
+});
+
+describe('видимость зоны «Задачи» вкладки «Основное» (f3893859)', () => {
+  it('пустая панель скрывается — комментарий занимает вкладку', () => {
+    assert.equal(taskZoneVisible({ rowCount: 0, loading: false, hasError: false }), false);
+  });
+
+  it('строки, загрузка и ошибка держат зону видимой', () => {
+    assert.equal(taskZoneVisible({ rowCount: 2, loading: false, hasError: false }), true);
+    assert.equal(taskZoneVisible({ rowCount: 0, loading: true, hasError: false }), true);
+    assert.equal(taskZoneVisible({ rowCount: 0, loading: false, hasError: true }), true);
   });
 });

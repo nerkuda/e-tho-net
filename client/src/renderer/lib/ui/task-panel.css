@@ -263,3 +263,65 @@
 .ui-reminder-row .ui-task-row-text:hover {
   color: var(--accent);
 }
+
+/* ---------------------------------------------------------------------------
+ * Панель редактора мысли (headless, 0.16.1, элемент f3893859)
+ *
+ * Своей шапки и рамки хоста «Дневника» нет: панель — тело группы `main.tasks`,
+ * заголовок/счётчики/«Обновить»/«⋮» стоят в шапке группы. Строки листаются
+ * прокруткой тела группы, поэтому собственную высоту не задаёт.
+ * ------------------------------------------------------------------------- */
+
+.ui-task-panel.is-headless {
+  flex: 1 1 auto;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+}
+
+.ui-task-flat-sections,
+.ui-task-flat-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Секция «Выполненные задачи (n)» — свёрнутая группа внутри плоского списка. */
+.ui-task-flat-collapsible {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.ui-task-flat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ui-task-flat-head:hover {
+  color: var(--accent);
+}
+
+.ui-task-flat-caret {
+  display: inline-flex;
+  transition: transform var(--transition-hover);
+}
+
+.ui-task-flat-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.ui-task-section-count {
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}

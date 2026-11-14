@@ -85,9 +85,14 @@ describe('editor mount (DOM-shimmed)', () => {
 
     mountEditor(new ShimElement('div') as any);
     const countAfterFirstMount = editorInternals.mainSectionCount();
-    // Только «Комментарий» — «Свойства» переехали в собственную вкладку
-    // (задача 8ab775d9); мини-граф живёт на отдельной вкладке «Граф».
-    assert.equal(countAfterFirstMount, 1, '«Комментарий» only — properties moved to their own tab (8ab775d9)');
+    // Вкладка «Основное» держит две зоны: «Комментарий» (сообщения) и «Задачи»
+    // (0.16.1, задача 710b68aa); «Свойства» переехали в собственную вкладку
+    // (задача 8ab775d9), мини-граф живёт на отдельной вкладке «Граф».
+    assert.equal(
+      countAfterFirstMount,
+      2,
+      '«Комментарий» и «Задачи» — ровно две зоны; свойства — на своей вкладке (8ab775d9)',
+    );
 
     // Two more network opens rebuild the workspace and re-run mountEditor.
     mountEditor(new ShimElement('div') as any);

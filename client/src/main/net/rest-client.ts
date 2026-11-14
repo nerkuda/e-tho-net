@@ -3803,6 +3803,18 @@ export class RestClient {
     };
   }
 
+  /** `GET /networks/{nid}/chronicle/day-links` — «связи дня» («Дневник», 0.16.1). */
+  public async listDayLinks(
+    networkId: string,
+    query: import('../ipc/contract.js').DayLinksQuery,
+  ): Promise<import('@etn/shared').DayLinksResult> {
+    const q: QueryRecord = { from: query.from };
+    if (query.to !== undefined) q['to'] = query.to;
+    return this.request('GET', `/networks/${encodeURIComponent(networkId)}/chronicle/day-links`, {
+      query: q,
+    });
+  }
+
   /** `GET /networks/{nid}/saved-filters?view=chronicle` — the user's chronicle filters. */
   public async listChronicleFilters(
     networkId: string,

@@ -3,6 +3,9 @@
  *
  *   POST /networks/:networkId/chronicle/query — two-phase chronological-comment
  *     query (thoughts → their chronological comments + link comments).
+ *   GET  /networks/:networkId/chronicle/day-links — «связи дня» диапазона
+ *     календарных дней клиента (0.16.1, требование 1fb1047d): датовые факты
+ *     мыслей + date-ссылки записей и постоянных комментариев (без задач).
  *
  * The query handler is read-only (no idempotency pre-handler); saved filters
  * of the chronicle view reuse the shared `/saved-filters` endpoints with
@@ -15,10 +18,12 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { sendList } from '../http/responses.js';
-import { filterProfileHasTime } from '@etn/shared';
+import { sendList, sendSuccess } from '../http/responses.js';
+import { filterProfileHasTime, type DayLinksResult } from '@etn/shared';
 import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
+import { parseRest, RestChronicleDayLinks } from '../contracts.js';
 import { parseChronicleQueryBody, queryChronicle } from '../domain/chronicle-service.js';
+import { listDayLinks } from '../domain/day-links-service.js';
 
 /** Route params for `:networkId`. */
 interface NetworkIdParams {
@@ -60,6 +65,24 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
             ? { warnings: result.warnings }
             : {}),
         });
+      },
+    );
+
+    // «Связи дня» дня ленты «Дневника» (0.16.1, требование 1fb1047d): датовые
+    // факты мыслей + date-ссылки из хроно-записей и постоянных комментариев,
+    // кроме строк-задач. Данные — индексные чтения проекции (task_row_dates,
+    // INDEX(date)) и справочника свойств; парсинг при чтении не выполняется.
+    app.get(
+      '/networks/:networkId/chronicle/day-links',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestChronicleDayLinks, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const result: DayLinksResult = listDayLinks(ndb, {
+          from: input.from,
+          ...(input.to !== undefined ? { to: input.to } : {}),
+        });
+        sendSuccess(reply, result, { request_id: req.id });
       },
     );
   };

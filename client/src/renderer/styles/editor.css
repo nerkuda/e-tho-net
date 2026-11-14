@@ -221,41 +221,57 @@
   font-size: 12px;
 }
 
-/* --- Tab «Комментарий» (L7, §6.3.1): table sections on top, the view/edit
-   section fills the rest of the tab; the splitter redistributes. ---------- */
-
-/* Top areas never grow or shrink on their own — only the splitter sizes them
-   (max-height of the scrollable table inside). */
-.tab-top {
-  flex: 0 0 auto;
+/* The comment grows with its area; the group body provides the scroll. */
+.chrono-editor .comment-view,
+.attachment-view-frame .comment-view {
+  max-height: none;
+  overflow-y: visible;
 }
 
-.main-bottom {
+/* --- Tab «Основное» (0.16.1, задача 710b68aa): две сворачиваемые зоны —
+   комментарий и панель «Задачи», между ними вертикальный сплиттер. Раскладка
+   повторяет `.links-tab`: развёрнутая группа (с телом) делит высоту вкладки,
+   свёрнутая схлопывается до заголовка; пустая панель скрыта атрибутом
+   `hidden` (событие `etn:zone-visibility` из тела панели). ---------------- */
+
+.main-tab {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.main-bottom > .group {
-  flex: 1 1 auto;
+.main-tab > .group {
+  flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.main-bottom > .group > .group-body {
+.main-tab > .group:has(> .group-body) {
+  flex-grow: 1;
+}
+
+.main-tab > .group > .group-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
 
-/* The comment grows with its area; the group body provides the scroll. */
-.main-bottom .comment-view,
-.chrono-editor .comment-view,
-.attachment-view-frame .comment-view {
+/* Пустая зона (панель «Задачи» без строк) не показывается и не держит место. */
+.main-tab > .group[hidden] {
+  display: none;
+}
+
+/* Комментарий растягивается по своей зоне; прокрутку даёт тело группы. */
+.main-tab .comment-view {
   max-height: none;
   overflow-y: visible;
+}
+
+/* Панель «Задачи» внутри группы: тело группы — единственный скролл-контейнер. */
+.main-tab .ui-task-panel.is-headless {
+  overflow: visible;
 }
 
 /* --- Tab «Вложения» (L7, 08-ui-spec.md §6.5) ------------------------------- */

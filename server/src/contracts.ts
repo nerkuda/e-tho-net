@@ -2372,6 +2372,26 @@ export const RestActivityList = defineContract(
   },
 );
 
+/**
+ * GET /networks/:id/chronicle/day-links — «связи дня» диапазона календарных
+ * дней (0.16.1, требование 1fb1047d).
+ */
+export const RestChronicleDayLinks = defineContract(
+  'rest:chronicle.day-links',
+  z.object({
+    network_id: NetworkId,
+    // Календарные дни клиента: сутки наблюдателя считает он (требование
+    // fcdcd75f), сервер только читает проекцию по INDEX(date).
+    from: z.string().min(1),
+    to: z.string().min(1).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    from: { from: { kind: 'query' }, parse: singleQueryValue },
+    to: { from: { kind: 'query' }, parse: singleQueryValue },
+  },
+);
+
 /** POST /networks/:id/activity/rollup|truncate — { until_ms }. */
 const activityUntil = {
   network_id: { from: { kind: 'param', name: 'networkId' } },

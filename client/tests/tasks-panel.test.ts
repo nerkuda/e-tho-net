@@ -32,6 +32,19 @@ import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/** Минимальный `CustomEvent`: шиму нужен `type`, продукту — `detail`. */
+class ShimCustomEvent {
+  readonly type: string;
+  readonly detail: unknown;
+  readonly bubbles: boolean;
+
+  constructor(type: string, init: { detail?: unknown; bubbles?: boolean } = {}) {
+    this.type = type;
+    this.detail = init.detail;
+    this.bubbles = init.bubbles === true;
+  }
+}
+
 /** Поднять минимальные глобалы DOM: без них фасады `el`/`div` не построят узлы. */
 function installShim(): void {
   const body = new ShimElement('body');
@@ -46,6 +59,8 @@ function installShim(): void {
     querySelector: (): null => null,
     activeElement: null,
   };
+  (globalThis as any).CustomEvent = ShimCustomEvent;
+  (globalThis as any).HTMLElement = ShimElement;
   // Меню (`showMenuAt`) позиционируется по `window` и вешает слушатели.
   const win = ((globalThis as any).window ??= {}) as Record<string, unknown>;
   win.innerWidth = 1200;
@@ -512,6 +527,191 @@ describe('панель задач: инлайн-правка строки (498f2
     assert.ok(row.querySelector('.ui-task-row-edit'));
     render(panelView([taskRow({ stale: true })], { stale: true }));
     assert.ok(row.querySelector('.ui-task-row-edit'), 'правка не сброшена перерисовкой списка');
+    destroy();
+  });
+});
+
+/** Снимок панели редактора мысли: плоские секции «активные» + «выполненные». */
+function flatView(active: TaskPanelRow[], done: TaskPanelRow[]): TaskPanelView {
+  return {
+    stale: false,
+    periodFilter: { scope: 'open', thought_id: 't1', today: '2026-11-14' },
+    canUndo: false,
+    showDone: true,
+    counters: { open: active.length, done: done.length },
+    reminderCount: 0,
+    taskSections: [
+      ...(active.length > 0
+        ? [{ key: 'active', title: '', flat: true, subgroups: [], rows: active }]
+        : []),
+      ...(done.length > 0
+        ? [
+            {
+              key: 'done',
+              title: t('tasks.doneGroup'),
+              flat: true,
+              collapsible: true,
+              collapsed: true,
+              subgroups: [],
+              rows: done,
+            },
+          ]
+        : []),
+    ],
+    reminderSections: [],
+    loading: false,
+    error: null,
+  };
+}
+
+/** Смонтировать headless-панель (панель редактора мысли, элемент f3893859). */
+function mountHeadless(
+  view: TaskPanelView,
+  overrides: Partial<TaskPanelActions> = {},
+): {
+  host: ShimElement;
+  calls: Calls;
+  headActions: HTMLElement[];
+  render: (view: TaskPanelView) => void;
+  destroy: () => void;
+} {
+  installShim();
+  keymap.keymapInternals.reset();
+  const host = new ShimElement('div');
+  const calls: Calls = {
+    refresh: 0,
+    undo: 0,
+    showDone: [],
+    toggles: [],
+    edits: [],
+    rowCommands: [],
+    bulk: [],
+    reminderActions: [],
+    reminderGroupDismiss: [],
+    days: [],
+    rawLines: 0,
+  };
+  const actions: TaskPanelActions = {
+    refresh: () => {
+      calls.refresh += 1;
+    },
+    undo: () => {
+      calls.undo += 1;
+    },
+    setShowDone: (show) => {
+      calls.showDone.push(show);
+    },
+    toggle: (row, done) => {
+      calls.toggles.push({ key: row.key, done });
+    },
+    loadRawLine: async (row) => `- [ ] ${row.text}`,
+    editLine: async (row, text) => {
+      calls.edits.push({ key: row.key, text });
+      return true;
+    },
+    rowCommand: (row, command) => {
+      calls.rowCommands.push(`${row.key}:${command}`);
+    },
+    bulk: (filter, command) => {
+      calls.bulk.push({ command, filter });
+    },
+    reminderAction: () => undefined,
+    reminderGroupDismiss: () => undefined,
+    pickDate: async () => null,
+    pickDateTime: async () => null,
+    openDay: (day) => {
+      calls.days.push(day);
+    },
+    openRowSource: (row) => {
+      calls.days.push(`source:${row.key}`);
+    },
+    renderText: (node, row) => {
+      node.textContent = row.text;
+    },
+    ...overrides,
+  };
+  const handle = mountTaskPanel(host as unknown as HTMLElement, actions, { headless: true });
+  handle.render(view);
+  return {
+    host,
+    calls,
+    headActions: handle.headActions(),
+    render: (next) => handle.render(next),
+    destroy: () => handle.destroy(),
+  };
+}
+
+describe('панель редактора мысли: headless, плоские секции (f3893859)', () => {
+  beforeEach(() => keymap.keymapInternals.reset());
+
+  it('своей шапки и групп-обёрток нет; активные строки — плоским списком', () => {
+    const { host, destroy } = mountHeadless(
+      flatView([taskRow(), taskRow({ key: 'c1:1', lineNo: 1, text: 'вторая' })], []),
+    );
+    assert.equal(host.querySelector('.ui-task-panel-head'), null, 'шапку даёт группа редактора');
+    assert.equal(host.querySelector('.ui-task-group'), null, 'обёрток групп нет');
+    assert.deepEqual(
+      rowsOf(host).map((row) => row.getAttribute('data-row-key')),
+      ['c1:0', 'c1:1'],
+    );
+    destroy();
+  });
+
+  it('выполненные — в свёрнутой секции «Выполненные задачи (n)», раскрывается кликом', () => {
+    const { host, destroy } = mountHeadless(
+      flatView([taskRow()], [taskRow({ key: 'c1:1', lineNo: 1, done: true })]),
+    );
+    const section = host.querySelector('.ui-task-flat-collapsible') as unknown as ShimElement;
+    assert.ok(section, 'секция выполненных построена');
+    assert.equal(
+      section.querySelector('.ui-task-section-count')?.textContent,
+      '(1)',
+      'счётчик секции — количество выполненных',
+    );
+    assert.equal(rowsOf(host).length, 1, 'свёрнутая секция строк не показывает');
+    (section.querySelector('.ui-task-flat-head') as unknown as ShimElement).click();
+    assert.equal(rowsOf(host).length, 2, 'раскрытая секция показывает выполненные');
+    destroy();
+  });
+
+  it('headActions: «Обновить» и «⋮» отдаются наружу и работают', () => {
+    let menuCalls = 0;
+    const { calls, headActions, destroy } = mountHeadless(flatView([taskRow()], []), {
+      headMenu: () => {
+        menuCalls += 1;
+        return [];
+      },
+    });
+    assert.equal(headActions.length, 2, 'кнопки шапки: «Обновить» и «⋮»');
+    headActions[0]!.click();
+    assert.equal(calls.refresh, 1);
+    (headActions[1] as unknown as ShimElement).emit('click', {
+      target: headActions[1],
+      currentTarget: headActions[1],
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    assert.equal(menuCalls, 1, 'меню «⋮» спрашивает экран');
+    destroy();
+  });
+
+  it('счётчики публикуются событием etn:set-count на корне панели', () => {
+    const { host, render, destroy } = mountHeadless(flatView([taskRow()], []));
+    const root = host.querySelector('.ui-task-panel') as unknown as ShimElement;
+    const seen: string[] = [];
+    root.addEventListener('etn:set-count', (event: { detail?: string }) => {
+      if (typeof event.detail === 'string') seen.push(event.detail);
+    });
+    render(flatView([taskRow(), taskRow({ key: 'c1:1', lineNo: 1 })], [taskRow({ key: 'c2:0' })]));
+    assert.deepEqual(seen, [t('tasks.counters', [2, 1])]);
+    destroy();
+  });
+
+  it('клик по чипу даты открывает запись-источник, а не день ленты', () => {
+    const { host, calls, destroy } = mountHeadless(flatView([taskRow()], []));
+    const chip = host.querySelector('.ui-task-row-date') as unknown as ShimElement;
+    chip.click();
+    assert.deepEqual(calls.days, ['source:c1:0']);
     destroy();
   });
 });

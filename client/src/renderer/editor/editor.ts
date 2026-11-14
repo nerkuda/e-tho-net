@@ -123,8 +123,9 @@ import {
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
-import { setClampRoot } from './list-heights.js';
+import { applyTabGroupClamp, setClampRoot } from './list-heights.js';
 import { registerCommentSections } from './comments.js';
+import { registerEditorTasksSection } from './tasks-panel.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
@@ -233,7 +234,7 @@ const TABS_THOUGHT: EditorTabDef[] = [
   {
     id: 'main',
     get title() {
-      return t('comment.title.kommentariy');
+      return t('editor.title.main');
     },
     counted: false,
   },
@@ -291,7 +292,7 @@ const TABS_LINK: EditorTabDef[] = [
   {
     id: 'main',
     get title() {
-      return t('comment.title.kommentariy');
+      return t('editor.title.main');
     },
     counted: false,
   },
@@ -1023,6 +1024,8 @@ export function mountEditor(editorHost: HTMLElement): void {
     registrationsDone = true;
     registerPropertiesGroup();
     registerCommentSections();
+    // Панель «Задачи» — вторая зона вкладки «Основное» (0.16.1, задача 710b68aa).
+    registerEditorTasksSection();
     registerAttachmentsTab();
     registerLinksTab();
     registerGraphTab();
@@ -1200,30 +1203,43 @@ function buildTabPane(id: EditorTabId): HTMLElement {
       pane.append(wrap);
       return pane;
     }
-    const topSpecs = specs.slice(0, -1);
-    const bottomSpec = specs[specs.length - 1]!;
-    let top: HTMLElement | null = null;
-    for (const spec of topSpecs) {
-      top = groupSection(spec);
-      top.classList.add('tab-top');
-      pane.append(top);
-    }
-    if (top !== null) {
-      // Resizes the top group's scrollable table (`.prop-wrap`); inert when
-      // the group is collapsed (no body at all, §6.3). The drag is
-      // remembered as the table's fixed height (bug 6b757336, ee745368,
-      // list-heights.ts).
-      const topEl = top;
-      pane.append(
-        rowSplitter(
-          () => topEl.querySelector('.prop-wrap') ?? topEl.querySelector('.group-body'),
-          { min: 34, persistKey: 'props' },
-        ),
-      );
-    }
-    const bottom = div('main-bottom');
-    bottom.append(groupSection(bottomSpec));
-    pane.append(bottom);
+    // «Основное» мысли (0.16.1, элемент 6083ab57): две сворачиваемые зоны —
+    // комментарий и панель «Задачи» (`main.tasks`), между ними вертикальный
+    // сплиттер. Сплиттер и фиксированная высота действуют, ТОЛЬКО когда обе
+    // зоны раскрыты и панель непуста; единственная раскрытая зона занимает
+    // вкладку целиком. У связи сюда не попадаем: у неё одна секция
+    // (комментарий) и группы задач нет.
+    const root = div('main-tab');
+    const groups = specs.map((spec) => groupSection(spec));
+    const bodyOf = (group: HTMLElement): HTMLElement | null =>
+      group.querySelector(':scope > .group-body') as HTMLElement | null;
+    const clampKeys = specs.map((spec, index) =>
+      index === 0 ? 'main.comment' : `main.${spec.id}`,
+    );
+    const splitters: HTMLElement[] = [];
+    groups.forEach((group, index) => {
+      if (index > 0) {
+        const previous = groups[index - 1]!;
+        const splitter = rowSplitter(() => bodyOf(previous), {
+          min: 50,
+          persistKey: clampKeys[index - 1]!,
+        });
+        splitters.push(splitter);
+        root.append(splitter);
+      }
+      root.append(group);
+    });
+    const relayout = (): void => {
+      const allOpen = groups.every((group) => !group.hidden && bodyOf(group) !== null);
+      groups.forEach((group, index) => applyTabGroupClamp(group, clampKeys[index]!, allOpen));
+      for (const splitter of splitters) splitter.hidden = !allOpen;
+    };
+    for (const group of groups) group.addEventListener('etn:toggled', () => relayout());
+    // Пустая панель «Задачи» скрывает свою зону (событие из тела панели):
+    // комментарий остаётся один и занимает вкладку.
+    root.addEventListener('etn:zone-visibility', () => relayout());
+    relayout();
+    pane.append(root);
     return pane;
   }
   const builder = tabContentBuilders.get(id);
@@ -2252,7 +2268,11 @@ function focusEditorComment(thoughtId: string, findText?: string, selection?: Md
       // The comment group is the bottom section of the tab; when collapsed,
       // expand it (a click toggles — click only when persisted state says so).
       if (activated && store.state.collapsedGroups['permanent'] === true) {
-        scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
+        scrollBox
+          .querySelector<HTMLElement>(
+            '.main-tab > .group[data-group-id="permanent"] > .group-header',
+          )
+          ?.click();
       }
       // Активация вкладки/группы могла пересобрать панель — даём тик и
       // перезапрашиваем поле уже у подтверждённой мысли.

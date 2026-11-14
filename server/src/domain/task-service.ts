@@ -344,6 +344,10 @@ function toTaskDtos(ndb: NetworkDb, rows: readonly TaskRow[]): TaskDTO[] {
       subtask: row.subtask === 1,
       revision: row.comment_revision,
       parsed_revision: row.parsed_revision,
+      // Адрес «Открыть источник»: владелец комментария-источника и его вид.
+      owner_type: row.owner_type as TaskDTO['owner_type'],
+      owner_id: row.owner_id,
+      kind: row.kind as TaskDTO['kind'],
     } satisfies TaskDTO;
   });
   return items;

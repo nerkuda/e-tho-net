@@ -48,6 +48,7 @@ import {
 import { badge } from './badge.js';
 import { iconButton, uiButton } from './button.js';
 import { choiceControl } from './choice-row.js';
+import { collapsibleSection } from './collapsible.js';
 import { loadingState } from './empty-state.js';
 import { fieldInput } from './field.js';
 import { svgIcon } from './icon.js';
@@ -104,6 +105,18 @@ export interface TaskPanelSectionView {
   key: string;
   title: string;
   subgroups: TaskPanelSubgroupView<TaskPanelRow>[];
+  /**
+   * Плоская секция: строки рисуются сразу, без подгрупп и их меню массовых
+   * команд. Так панель «Задачи» редактора мысли (0.16.1, элемент `f3893859`)
+   * показывает активные строки, а вложенная секция — выполненные.
+   */
+  flat?: boolean;
+  /** Секция-переключатель внутри плоского списка («Выполненные задачи (n)»). */
+  collapsible?: boolean;
+  /** Секция свёрнута при первом показе (только при `collapsible`). */
+  collapsed?: boolean;
+  /** Строки плоской секции (заполняется при `flat`). */
+  rows?: TaskPanelRow[];
 }
 
 /** Секция списка напоминаний. */
@@ -197,14 +210,41 @@ export interface TaskPanelActions {
   pickDateTime(initialIso: string): Promise<string | null>;
   /** Переход к дню источника строки (клик по чипу даты/команда «Открыть источник»). */
   openDay(day: string): void;
+  /**
+   * Переход к записи-источнику строки (панель редактора мысли: «Дневник» ленты
+   * здесь не при чём — открывается сама запись). Не задано — клик по чипу даты
+   * идёт в {@link openDay}, как в панели «Дневника».
+   */
+  openRowSource?(row: TaskPanelRow): void;
+  /**
+   * Пункты меню «⋮» шапки панели. Не задано — встроенное меню «Дневника»
+   * (показ выполненных, массовые команды «за период»/сквозных секций).
+   * Панель редактора мысли передаёт здесь команды по своей мысли.
+   */
+  headMenu?(): MenuItem[];
   /** Отрисовка снапшота текста строки (markdown + кликабельные ссылки). */
   renderText(host: HTMLElement, row: TaskPanelRow): void;
+}
+
+/** Настройка монтирования панели. */
+export interface TaskPanelOptions {
+  /**
+   * Панель встраивается в чужую шапку (группа `main.tasks` редактора): своей
+   * шапки нет, счётчики публикуются событием `etn:set-count`, а кнопки шапки
+   * компонента отдаёт через {@link TaskPanelHandle.headActions}.
+   */
+  headless?: boolean;
 }
 
 /** Публичный дескриптор панели. */
 export interface TaskPanelHandle {
   /** Отрисовать снимок (keyed-сверка; правка в процессе не сбрасывается). */
   render(view: TaskPanelView): void;
+  /**
+   * Кнопки шапки для встраивания (только режим {@link TaskPanelOptions.headless}):
+   * «Обновить» и «⋮». Узлы постоянные — потребитель кладёт их в свою шапку.
+   */
+  headActions(): HTMLElement[];
   /** Снять слушателей и навигацию. */
   destroy(): void;
 }
@@ -271,8 +311,13 @@ function handleInlineEditKey(event: KeyboardEvent): boolean {
  * Смонтировать панель в `host`. Панель монтируется один раз при сборке экрана;
  * дальнейшие состояния приходят через {@link TaskPanelHandle.render}.
  */
-export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): TaskPanelHandle {
+export function mountTaskPanel(
+  host: HTMLElement,
+  actions: TaskPanelActions,
+  options: TaskPanelOptions = {},
+): TaskPanelHandle {
   host.replaceChildren();
+  const headless = options.headless === true;
   let view: TaskPanelView | null = null;
   /** Ключ строки, открытой в инлайн-правке (`null` — правки нет). */
   let editingKey: string | null = null;
@@ -280,8 +325,7 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
   let editingRaw: string | null = null;
 
   const root = div(TASK_PANEL_CLASS);
-  const head = div('ui-task-panel-head');
-  const title = el('h3', 'ui-task-panel-title', t('tasks.panelTitle'));
+  if (headless) root.classList.add('is-headless');
   const undoBtn = uiButton({
     label: t('tasks.undo'),
     role: 'ghost',
@@ -297,15 +341,27 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     class: 'ui-task-panel-refresh',
     onClick: () => actions.refresh(),
   });
-  head.append(title, undoBtn, refreshBtn);
+  const tasksMenuBtn = makeMenuButton('tasks');
+  if (!headless) {
+    const head = div('ui-task-panel-head');
+    const title = el('h3', 'ui-task-panel-title', t('tasks.panelTitle'));
+    head.append(title, undoBtn, refreshBtn);
+    root.append(head);
+  }
 
   const body = div('ui-task-panel-body');
   const statusHost = div('ui-task-panel-status');
   statusHost.hidden = true;
-  const taskGroup = buildGroup('tasks');
-  const reminderGroup = buildGroup('reminders');
-  body.append(statusHost, taskGroup.root, reminderGroup.root);
-  root.append(head, body);
+  // Панель редактора мысли (headless): группы-обёртки нет — секции лежат прямо
+  // в теле, шапку и счётчики даёт группа `main.tasks` редактора.
+  const flatHost = div('ui-task-flat-sections');
+  const taskGroup = headless ? null : buildGroup('tasks', tasksMenuBtn);
+  const reminderGroup = headless ? null : buildGroup('reminders', makeMenuButton('reminders'));
+  body.append(statusHost);
+  if (taskGroup !== null) body.append(taskGroup.root);
+  else body.append(flatHost);
+  if (reminderGroup !== null) body.append(reminderGroup.root);
+  root.append(body);
   host.append(root);
 
   /**
@@ -337,6 +393,26 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
   async function pickSnooze(row: ReminderPanelRow): Promise<void> {
     const until = await actions.pickDateTime(row.moment);
     if (until !== null) actions.reminderAction(row, 'snooze', until);
+  }
+
+  /**
+   * Кнопка «⋮» шапки группы: содержимое меню задаёт экран через `headMenu`
+   * (панель редактора мысли), иначе — встроенное меню «Дневника».
+   */
+  function makeMenuButton(kind: 'tasks' | 'reminders'): HTMLElement {
+    return iconButton({
+      icon: svgIcon('ellipsis', 14),
+      title: t('tasks.groupCommands'),
+      role: 'ghost',
+      size: 's',
+      class: 'ui-task-group-menu',
+      onClick: (event) => {
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        const items = kind === 'tasks' ? (actions.headMenu?.() ?? tasksGroupMenu()) : [];
+        if (items.length === 0) return;
+        showMenuAt(rect.left, rect.bottom, items, { keyboard: true });
+      },
+    });
   }
 
   /** Меню «⋮»: показать выполненные, массовые команды по секциям/всему периоду. */
@@ -403,7 +479,11 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     const items: MenuItem[] = [];
     const day = row.due ?? row.periodFrom;
     if (day !== null) {
-      items.push(menuAction(t('tasks.openSource'), () => actions.openDay(day)));
+      items.push(
+        menuAction(t('tasks.openSource'), () =>
+          actions.openRowSource !== undefined ? actions.openRowSource(row) : actions.openDay(day),
+        ),
+      );
       items.push(MENU_SEPARATOR);
     }
     items.push(
@@ -530,7 +610,10 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
       if (dates.querySelector(`[data-day="${day}"]`) !== null) continue;
       const chip = span(day, 'ui-task-row-date');
       chip.dataset['day'] = day;
-      chip.addEventListener('click', () => actions.openDay(day));
+      chip.addEventListener('click', () => {
+        if (actions.openRowSource !== undefined) actions.openRowSource(row);
+        else actions.openDay(day);
+      });
       dates.append(chip);
     }
     const rowActions = div('ui-task-row-actions');
@@ -590,7 +673,10 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
   }
 
   /** Заголовок группы: название, счётчики, меню «⋮» (только при hover). */
-  function buildGroup(kind: 'tasks' | 'reminders'): {
+  function buildGroup(
+    kind: 'tasks' | 'reminders',
+    menuBtn: HTMLElement,
+  ): {
     root: HTMLElement;
     head: HTMLElement;
     title: HTMLElement;
@@ -605,19 +691,6 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
       'ui-task-group-title',
     );
     const counters = span('', 'ui-task-group-counters');
-    const menuBtn = iconButton({
-      icon: svgIcon('ellipsis', 14),
-      title: t('tasks.groupCommands'),
-      role: 'ghost',
-      size: 's',
-      class: 'ui-task-group-menu',
-      onClick: (event) => {
-        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-        const items = kind === 'tasks' ? tasksGroupMenu() : [];
-        if (items.length === 0) return;
-        showMenuAt(rect.left, rect.bottom, items, { keyboard: true });
-      },
-    });
     groupHead.append(groupTitle, counters, menuBtn);
     const sections = div('ui-task-group-sections');
     groupRoot.append(groupHead, sections);
@@ -629,6 +702,9 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     section: TaskPanelSectionView | ReminderPanelSectionView,
     kind: 'task' | 'reminder',
   ): HTMLElement {
+    if (kind === 'task' && (section as TaskPanelSectionView).flat === true) {
+      return buildFlatSection(section as TaskPanelSectionView);
+    }
     const node = div(TASK_PANEL_SECTION_CLASS);
     node.dataset['section'] = section.key;
     const title = span(section.title, 'ui-task-section-title');
@@ -636,6 +712,67 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     node.append(title, list);
     renderSubgroups(list, section.subgroups, kind);
     return node;
+  }
+
+  /**
+   * Плоская секция (панель редактора мысли): строки без подгрупп. Секция с
+   * `collapsible` — переключатель «Выполненные задачи (n)»: его тело живёт
+   * постоянно и прячется штатной сворачиваемой группой `lib/ui/collapsible`,
+   * поэтому свёрнутость переживает перерисовку панели.
+   */
+  function buildFlatSection(section: TaskPanelSectionView): HTMLElement {
+    const node = div(`${TASK_PANEL_SECTION_CLASS} ui-task-flat`);
+    node.dataset['section'] = section.key;
+    const rows = div('ui-task-flat-rows');
+    if (section.collapsible === true) {
+      const collapsible = collapsibleSection({
+        title: section.title,
+        count: `(${section.rows?.length ?? 0})`,
+        collapsed: section.collapsed === true,
+        classes: {
+          root: 'ui-task-flat-collapsible',
+          header: 'ui-task-flat-head',
+          title: 'ui-task-section-title',
+          count: 'ui-task-section-count',
+          caret: 'ui-task-flat-caret',
+          body: 'ui-task-flat-rows',
+        },
+        body: rows,
+      });
+      node.append(collapsible.root);
+    } else {
+      if (section.title !== '') node.append(span(section.title, 'ui-task-section-title'));
+      node.append(rows);
+    }
+    renderFlatRows(rows, section.rows ?? []);
+    return node;
+  }
+
+  /** Отрисовать строки плоской секции (keyed-сверка по адресу проекции). */
+  function renderFlatRows(hostEl: HTMLElement, rows: readonly TaskPanelRow[]): void {
+    reconcileKeyed(hostEl, rows, {
+      keyAttr: TABLE_ROW_KEY_ATTR,
+      key: (row) => row.key,
+      build: (row) => buildTaskRow(row),
+      update: (rowNode, row) => {
+        if (editingKey === row.key) return;
+        fillTaskRow(rowNode, row);
+      },
+    });
+  }
+
+  /**
+   * Обновить плоскую секцию при повторной отрисовке: строки и счётчик
+   * сворачиваемой секции (заголовок и свёрнутость узла не пересоздаются).
+   */
+  function updateFlatSection(node: HTMLElement, section: TaskPanelSectionView): void {
+    const rows = section.rows ?? [];
+    const rowsHost = node.querySelector('.ui-task-flat-rows');
+    if (rowsHost !== null) renderFlatRows(rowsHost as HTMLElement, rows);
+    if (section.collapsible !== true) return;
+    const collapsible = node.querySelector('.ui-task-flat-collapsible');
+    if (collapsible === null) return;
+    collapsible.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${rows.length})` }));
   }
 
   /** Подгруппа: заголовок с количеством и меню «⋮» + список строк. */
@@ -650,13 +787,24 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
   /** Отрисовка навигации по видимым строкам (серая строка тоже достижима). */
   let nav: ListNavHandle<PanelEntry> | null = null;
 
+  /** Строки секции задач независимо от её формы (плоская/с подгруппами). */
+  function sectionRows(section: TaskPanelSectionView): TaskPanelRow[] {
+    if (section.flat === true) return section.rows ?? [];
+    return section.subgroups.flatMap((subgroup) => subgroup.rows);
+  }
+
+  /** Секция попадает в отрисовку, только когда в ней есть строки. */
+  function sectionVisible(section: TaskPanelSectionView | ReminderPanelSectionView): boolean {
+    const flat = section as TaskPanelSectionView;
+    if (flat.flat === true) return (flat.rows ?? []).length > 0;
+    return section.subgroups.length > 0;
+  }
+
   function entries(): PanelEntry[] {
     if (view === null) return [];
     const list: PanelEntry[] = [];
     for (const section of view.taskSections) {
-      for (const subgroup of section.subgroups) {
-        for (const row of subgroup.rows) list.push({ key: row.key, kind: 'task' });
-      }
+      for (const row of sectionRows(section)) list.push({ key: row.key, kind: 'task' });
     }
     for (const section of view.reminderSections) {
       for (const subgroup of section.subgroups) {
@@ -691,13 +839,15 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     onActivate: (entry) => {
       if (entry.kind !== 'task' || view === null) return;
       for (const section of view.taskSections) {
-        for (const subgroup of section.subgroups) {
-          const row = subgroup.rows.find((item) => item.key === entry.key);
-          if (row === undefined) continue;
-          const day = row.due ?? row.periodFrom;
-          if (day !== null) actions.openDay(day);
+        const row = sectionRows(section).find((item) => item.key === entry.key);
+        if (row === undefined) continue;
+        if (actions.openRowSource !== undefined) {
+          actions.openRowSource(row);
           return;
         }
+        const day = row.due ?? row.periodFrom;
+        if (day !== null) actions.openDay(day);
+        return;
       }
     },
   });
@@ -725,12 +875,31 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
       statusHost.replaceChildren();
     }
 
-    taskGroup.counters.textContent = t('tasks.counters', [next.counters.open, next.counters.done]);
-    reminderGroup.root.hidden = next.reminderSections.length === 0 && next.reminderCount === 0;
-    reminderGroup.counters.textContent = t('tasks.reminderCount', [next.reminderCount]);
+    if (taskGroup !== null) {
+      taskGroup.counters.textContent = t('tasks.counters', [
+        next.counters.open,
+        next.counters.done,
+      ]);
+    }
+    if (headless) {
+      // Счётчики панели редактора живут в бейдже группы `main.tasks`: тело
+      // публикует их тем же событием, что и группы «Упоминаний».
+      root.dispatchEvent(
+        new CustomEvent('etn:set-count', {
+          bubbles: true,
+          detail: t('tasks.counters', [next.counters.open, next.counters.done]),
+        }),
+      );
+    }
+    if (reminderGroup !== null) {
+      reminderGroup.root.hidden = next.reminderSections.length === 0 && next.reminderCount === 0;
+      reminderGroup.counters.textContent = t('tasks.reminderCount', [next.reminderCount]);
+    }
 
-    renderSections(taskGroup.sections, next.taskSections, 'task');
-    renderSections(reminderGroup.sections, next.reminderSections, 'reminder');
+    renderSections(taskGroup?.sections ?? flatHost, next.taskSections, 'task');
+    if (reminderGroup !== null) {
+      renderSections(reminderGroup.sections, next.reminderSections, 'reminder');
+    }
     nav?.refresh();
   }
 
@@ -742,7 +911,7 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
   ): void {
     reconcileKeyed(
       hostEl,
-      sections.filter((section) => section.subgroups.length > 0),
+      sections.filter((section) => sectionVisible(section)),
       {
         keyAttr: 'data-section',
         key: (section) => section.key,
@@ -750,6 +919,10 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
         // новых элементов (контракт `keyed-list.ts`).
         build: (section) => buildSection(section, kind),
         update: (node, section) => {
+          if (kind === 'task' && (section as TaskPanelSectionView).flat === true) {
+            updateFlatSection(node, section as TaskPanelSectionView);
+            return;
+          }
           const titleNode = node.querySelector('.ui-task-section-title');
           if (titleNode !== null) titleNode.textContent = section.title;
           const list = node.querySelector('.ui-task-subgroup-list');
@@ -842,6 +1015,9 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
 
   return {
     render,
+    headActions(): HTMLElement[] {
+      return headless ? [refreshBtn, tasksMenuBtn] : [];
+    },
     destroy(): void {
       nav?.destroy();
       nav = null;

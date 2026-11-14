@@ -64,6 +64,7 @@ import type {
   CommentInput,
   CommentTarget,
   CurrentUser,
+  DayLinksResult,
   CrossNetworkDuplicateResponse,
   CrossNetworkStructureQueryResponse,
   PropertyCrossResolveResult,
@@ -572,6 +573,16 @@ export interface TaskListQuery {
 }
 
 /**
+ * Запрос `GET /networks/{nid}/chronicle/day-links` (операция 0.16.1,
+ * требование `1fb1047d`): календарный диапазон ленты «Дневника» (`YYYY-MM-DD`,
+ * сутки наблюдателя считает клиент). `to` не задан — ровно один день `from`.
+ */
+export interface DayLinksQuery {
+  from: string;
+  to?: string;
+}
+
+/**
  * Запрос `GET /networks/{nid}/reminders` (операция ae19b1bf): период раскрытия
  * повторов в UTC-инстансах и фильтр по субъекту.
  */
@@ -855,6 +866,11 @@ export interface EtnApi {
   chronicle: {
     /** `POST /chronicle/query` — two-phase chronological-comment query (L20). */
     query(networkId: string, request: ChronicleQueryRequest): Promise<ChronicleQueryResponse>;
+    /**
+     * `GET /chronicle/day-links` — датовые факты мыслей и date-ссылки дня
+     * (0.16.1, требование `1fb1047d`): блок «Связи дня» ленты «Дневника».
+     */
+    dayLinks(networkId: string, query: DayLinksQuery): Promise<DayLinksResult>;
   };
   chronicleFilters: {
     /** `GET /saved-filters?view=chronicle` — the user's chronicle filters (L20). */

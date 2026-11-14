@@ -291,6 +291,22 @@ export function taskCounters(rows: readonly TaskDTO[]): { open: number; done: nu
 }
 
 /**
+ * Порядок строк панели «Задачи» редактора мысли (элемент `f3893859`): строки
+ * без даты — ВСЕГДА вверху, дальше по возрастанию срока. Сортировка устойчива:
+ * строки с одинаковым сроком сохраняют серверный порядок.
+ */
+export function orderTaskRowsUndatedFirst<T extends { due: string | null }>(
+  rows: readonly T[],
+): T[] {
+  return [...rows].sort((left, right) => {
+    if (left.due === right.due) return 0;
+    if (left.due === null) return -1;
+    if (right.due === null) return 1;
+    return left.due < right.due ? -1 : 1;
+  });
+}
+
+/**
  * Нужен ли перезапрос панели (требование 0e85b66e): пришло событие
  * напоминаний `reminders.changed`, устарела хоть одна строка либо глобальный
  * маркер проекции ушёл вперёд относительно загруженного.
@@ -315,6 +331,20 @@ export function panelMarkerAdvanced(
   loadedMaxRevision: number,
 ): boolean {
   return eventRevision !== null && eventRevision > loadedMaxRevision;
+}
+
+/**
+ * Видимость зоны «Задачи» вкладки «Основное» (элемент `f3893859`, 0.16.1):
+ * пустая панель не показывается — комментарий занимает вкладку целиком.
+ * Пока идёт загрузка или панель не прочиталась (ошибка), зона видима: иначе
+ * пользователь не увидит ни строк, ни сообщения и не дотянется до «Обновить».
+ */
+export function taskZoneVisible(state: {
+  rowCount: number;
+  loading: boolean;
+  hasError: boolean;
+}): boolean {
+  return state.rowCount > 0 || state.loading || state.hasError;
 }
 
 /**

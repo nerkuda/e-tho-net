@@ -15,7 +15,8 @@
  * ней стоит маркер (у пункта `-\n  [ ] текст` — вторая строка записи).
  */
 
-import type { Comment } from './comment.js';
+import type { CommentKind } from '../enums.js';
+import type { Comment, CommentOwnerKind } from './comment.js';
 
 /** Основа выборки GET /tasks (операция e6d65f51). */
 export const TASK_SCOPES = ['open', 'done', 'overdue', 'undated'] as const;
@@ -68,6 +69,16 @@ export interface TaskDTO extends TaskRef {
   revision: number;
   /** Ревизия комментария, из которой построена строка проекции. */
   parsed_revision: number;
+  /**
+   * Владелец комментария-источника и его вид — адрес «Открыть источник»:
+   * у постоянного комментария открывается карточка владельца (мысль/связь/
+   * публикация), а не день строки (0.16.1, требование «задачи из постоянных
+   * комментариев»).
+   */
+  owner_type: CommentOwnerKind;
+  owner_id: string;
+  /** Вид комментария-источника (`permanent` | `chronological`). */
+  kind: CommentKind;
 }
 
 /**

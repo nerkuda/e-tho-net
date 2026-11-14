@@ -691,6 +691,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'chronicle.dayLinks',
+    bind((networkId: string, query: Parameters<RestClient['listDayLinks']>[1]) =>
+      requireRest(deps).listDayLinks(networkId, query),
+    ),
+  );
+  handlers.set(
     'chronicleFilters.list',
     bind((networkId: string) => requireRest(deps).listChronicleFilters(networkId)),
   );

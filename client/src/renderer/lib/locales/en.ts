@@ -1276,6 +1276,7 @@ export const en = {
   'diary.collapseAll': 'Collapse all',
   /** Команды контекстного меню группы дня: свернуть/развернуть записи дня (0.10.2). */
   'diary.collapseDayRecords': 'Collapse day entries',
+  'diary.dayLinksOwner': 'Open source',
   'diary.expandDayRecords': 'Expand day entries',
   /** Не удалось загрузить запись (подстановка — причина). */
   'diary.loadFailed': 'Failed to load the entry: %1',
@@ -1336,6 +1337,11 @@ export const en = {
   'tasks.refresh': 'Refresh',
   /** Title of the period tasks group. */
   'tasks.groupTitle': 'Tasks of the period',
+  /** Completed rows section of the editor tasks panel. */
+  'tasks.doneGroup': 'Completed tasks',
+  /** Bulk commands of the editor panel: open rows of this thought. */
+  'tasks.cancelAllThought': 'Cancel all open of this thought',
+  'tasks.moveAllThought': 'Move all open of this thought to…',
   /** Title of the period reminders group. */
   'tasks.remindersGroupTitle': 'Reminders of the period',
   /** Task group counters (open, done). */
@@ -1470,6 +1476,7 @@ export const en = {
   'tasks.errorToggle': 'Could not toggle the task: %1',
   'tasks.errorEdit': 'Could not save the line: %1',
   'tasks.errorRowCommand': 'Row command failed: %1',
+  'tasks.errorOpenSource': 'Could not open the source: %1',
   'tasks.reminderActionFailed': 'Reminder action failed: %1',
 
   // -- Общее выделение -----------------------------------------------------
@@ -2562,6 +2569,8 @@ export const en = {
   'deepLink.notSucceededOpenThought': 'Failed to open the thought: %1',
 
   // -- editor ------------------------------------------------------------
+  'editor.title.main': 'Main',
+  'editor.title.tasks': 'Tasks',
   'editor.title.properties': 'Properties',
   'editor.title.attachments': 'Attachments',
   'editor.title.mentions': 'Mentions',

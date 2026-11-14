@@ -399,6 +399,73 @@
   display: none;
 }
 
+/* Блок «Связи дня» (0.16.1, задача 710b68aa; элемент 8ecc30cd): датовые факты
+ * (мысль + подпись свойства), затем date-ссылки (владелец + сниппет + дата
+ * источника). Скрыт, когда данных нет, и вместе со свёрнутым днём. */
+.diary-day-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+}
+
+.diary-day-links[hidden],
+.diary-day.is-collapsed .diary-day-links {
+  display: none;
+}
+
+.diary-day-links-facts,
+.diary-day-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.diary-day-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.diary-day-link-caption {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+}
+
+.diary-day-link-time,
+.diary-day-link-source-date {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}
+
+.diary-day-link-source-date {
+  cursor: pointer;
+}
+
+.diary-day-link-source-date:hover {
+  color: var(--accent);
+}
+
+.diary-day-link-snippet {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.diary-day-link-snippet:hover {
+  color: var(--accent);
+}
+
+.diary-day-link-owner {
+  cursor: pointer;
+}
+
 /* ---------------------------------------------------------------------------
  * Запись дневника
  * ------------------------------------------------------------------------- */

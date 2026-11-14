@@ -372,10 +372,10 @@ function sliceConst(src: string, name: string): string {
 }
 
 describe('набор вкладок зависит от сущности (0.8.1, задача 95775cfd)', () => {
-  it('TABS_LINK — только «Комментарий», «Мысли», «Метаданные»', () => {
+  it('TABS_LINK — только «Основное», «Мысли», «Метаданные»', () => {
     const src = readText(SRC.editor);
     const link = sliceConst(src, 'TABS_LINK');
-    assert.ok(link.includes("return t('comment.title.kommentariy')"), '«Комментарий» present in the link set');
+    assert.ok(link.includes("return t('editor.title.main')"), '«Основное» present in the link set');
     assert.ok(link.includes("return t('editor.title.thought')"), '«Мысли» present in the link set');
     assert.ok(link.includes("return t('editor.title.metadata')"), '«Метаданные» present in the link set');
     // Вкладок, осмысленных только для мысли, у связи нет.

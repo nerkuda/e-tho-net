@@ -170,6 +170,13 @@ import {
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
 import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
 import {
+  buildDayLinksBlock,
+  groupDayLinks,
+  renderDayLinks,
+  type DayLinksActions,
+  type DayLinksData,
+} from './day-links.js';
+import {
   applyRecordCollapsed,
   applyRecordCollapsedForDay,
   dayOfCard,
@@ -251,6 +258,10 @@ let feedList: HTMLElement | null = null;
 let feedNav: FeedNavHandle | null = null;
 /** Панель «Задачи и напоминания» над лентой (0.16.1, задача 64f7976a). */
 let tasksPanel: TasksPanelHandle | null = null;
+/** Данные блока «Связи дня» по дням последней загрузки (0.16.1, элемент 8ecc30cd). */
+let dayLinksData = new Map<string, DayLinksData>();
+/** Поколение чтения «связей дня»: ответ устаревшего запроса не перерисовывает. */
+let dayLinksSeq = 0;
 /**
  * Единый контроллер правки карточки записи (ТП «Дневник без псевдослота»):
  * режим правки принадлежит КАРТОЧКЕ — вход в правку любого поля (заголовок или
@@ -1003,6 +1014,8 @@ async function reload(preserveDepth = false): Promise<void> {
     // (жёлтое — не блокирует; красное пришло бы ошибкой выше).
     setFilterServerIssues(filterIssuesFromQueryResult({ warnings: pageWarnings }));
     renderFeed();
+    // «Связи дня» периода — отдельным индексным чтением (0.16.1).
+    void refreshDayLinks();
     publishChronicleSnapshot();
   } catch (err) {
     if (seq !== querySeq) return;
@@ -1238,6 +1251,56 @@ function dayCount(day: string): number {
   return dayCounts.get(day) ?? 0;
 }
 
+/** Действия блока «Связи дня»: карточки владельцев и переход к дню источника. */
+function dayLinksActions(): DayLinksActions {
+  return {
+    openThought: (id) => void openChronicleThought(id),
+    openSource: (source) => {
+      if (source.owner_type === 'thought') {
+        void openChronicleThought(source.owner_id);
+        return;
+      }
+      if (source.owner_type === 'link') {
+        void openChronicleLinkById(source.owner_id);
+        return;
+      }
+      // Публикация: ленивый импорт — статический замкнул бы цикл экранов.
+      void import('../active-view.js').then((mod) =>
+        mod.openPublicationInWorkspace(source.owner_id),
+      );
+    },
+    openSourceDay: (day) => void openChronicleDay(day),
+  };
+}
+
+/**
+ * Перечитать «связи дня» за применённый период и обновить блоки уже
+ * отрисованных дней. Таблица проекции индексная, поэтому чтение одно на ленту:
+ * разбор по дням делает клиент (`groupDayLinks`).
+ */
+async function refreshDayLinks(): Promise<void> {
+  const networkId = store.state.networkId;
+  if (networkId === null || feedList === null) return;
+  const { from, to } = currentFromTo();
+  const seq = (dayLinksSeq += 1);
+  let next: Map<string, DayLinksData>;
+  try {
+    const result = await etn.chronicle.dayLinks(networkId, { from, to });
+    next = groupDayLinks(result);
+  } catch {
+    // Сбой чтения блока не ломает ленту: блоки остаются пустыми до повтора.
+    next = new Map();
+  }
+  if (seq !== dayLinksSeq) return;
+  dayLinksData = next;
+  const actions = dayLinksActions();
+  for (const section of Array.from(feedList.querySelectorAll<HTMLElement>('.diary-day'))) {
+    const day = section.dataset['day'] ?? '';
+    const block = section.querySelector<HTMLElement>('.diary-day-links');
+    if (block !== null) renderDayLinks(block, dayLinksData.get(day), actions);
+  }
+}
+
 function renderFeed(): void {
   const list = feedList;
   if (list === null) return;
@@ -1264,6 +1327,7 @@ function renderFeed(): void {
     update: (section, day) => updateDaySection(section, day.day),
   });
 
+  const linkActions = dayLinksActions();
   for (const day of days) {
     const section = findDaySection(list, day.day);
     if (section === null) continue;
@@ -1279,6 +1343,11 @@ function renderFeed(): void {
       build: (row) => buildRecordCard(row, day.day),
       update: (card, row) => updateRecordCard(card, row, day.day),
     });
+    // «Связи дня» — между записями и хвостом дня (элемент 8ecc30cd).
+    const linksBlock = section.querySelector<HTMLElement>('.diary-day-links');
+    if (linksBlock !== null) {
+      renderDayLinks(linksBlock, dayLinksData.get(day.day), linkActions);
+    }
   }
 
   // Хвост ленты («пусто»/«осталось N») — вне reconcile, монтируется после:
@@ -1369,6 +1438,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   }
   pendingReconcile = true;
   renderFeed();
+  void refreshDayLinks();
   publishChronicleSnapshot();
   syncCalendar();
   void refreshCalendarCounts(calendarCountsSnapshot());
@@ -1502,7 +1572,9 @@ function buildDaySection(day: string): HTMLElement {
   });
   head.prepend(svgIcon('chevron-down', 18));
   const list = div('diary-day-list');
-  section.append(head, list);
+  // Блок «Связи дня» (0.16.1, элемент 8ecc30cd) — после записей дня; данные
+  // приходят отдельным чтением периода, до него блок скрыт.
+  section.append(head, list, buildDayLinksBlock());
   // Начальное состояние группы — тем же помощником, что и in-place переключение
   // (одна точка правды о классах/атрибутах свёрнутой группы).
   applyDayCollapsed(section, collapsedDays.has(day), dayGroupLabels());
