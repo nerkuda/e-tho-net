@@ -90,6 +90,19 @@ export const REMINDER_PANEL_ROW_CLASS = 'ui-task-row ui-reminder-row';
 /** Состояние «строка устарела» (серая, не редактируется). */
 export const TASK_PANEL_ROW_STALE_CLASS = 'is-stale';
 
+/**
+ * Устаревшая строка задачи, внутри которой лежит `node` (`null` — строка
+ * свежая). Серая строка адресует ПРЕЖНЮЮ ревизию источника, поэтому команды,
+ * меняющие запись (`row.stale` в меню строки), запрещены до «Обновить»
+ * (требование 0e85b66e). Знание о маркерах строки живёт здесь, чтобы другие
+ * поверхности (меню date-чипа) не дублировали имена классов.
+ */
+export function staleTaskRowOf(node: HTMLElement): HTMLElement | null {
+  const row = node.closest(`.${TASK_PANEL_ROW_CLASS}`);
+  if (!(row instanceof HTMLElement)) return null;
+  return row.classList.contains(TASK_PANEL_ROW_STALE_CLASS) ? row : null;
+}
+
 /** Подгруппа списка: заголовок + фильтр массовой команды + строки. */
 export interface TaskPanelSubgroupView<T> {
   key: string;

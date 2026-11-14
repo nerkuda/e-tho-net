@@ -29,11 +29,9 @@
 
 import type { TaskDTO, TaskMassFilter } from '@etn/shared';
 
-import { renderMarkdown } from '@etn/markdown';
-
 import { confirmDialog } from '../lib/dialog.js';
 import { openDatePeriodDialog } from '../lib/date-period-dialog.js';
-import { div, errText, renderHtml } from '../lib/dom.js';
+import { div, errText } from '../lib/dom.js';
 import { todayLocal } from '../lib/dates.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
@@ -71,7 +69,7 @@ import {
   type TabPaneLifecycle,
 } from './editor.js';
 import type { GroupSpec } from './group.js';
-import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
+import { renderMarkdownWithWikiLinks } from './wiki-link-resolver.js';
 
 /** Предел строк на один запрос списка задач (сервер: `TASKS_MAX_LIMIT`). */
 const TASKS_PAGE_LIMIT = 200;
@@ -568,13 +566,7 @@ function mountEditorTasksPanel(
 
   /** Нарисовать снапшот текста строки: markdown + кликабельные ID-ссылки. */
   function renderRowText(node: HTMLElement, row: TaskPanelRow): void {
-    const networkId = requireNetworkId();
-    const html = renderMarkdown(row.text === '' ? '' : row.text);
-    renderHtml(node, paintWikiIdsInSnippet(html, networkId));
-    if (html === '') return;
-    void resolveWikiIdsInSnippet(html, networkId).then((resolved) => {
-      if (node.isConnected) renderHtml(node, resolved);
-    });
+    renderEditorTaskRowText(node, row.text, requireNetworkId());
   }
 
   /** Комментарии-источники, загруженные в панель. */
@@ -620,4 +612,18 @@ function mountEditorTasksPanel(
   void loadTasks();
 
   return panel;
+}
+
+/**
+ * Нарисовать снапшот текста строки зоны «Задачи» редактора мысли: markdown +
+ * кликабельные ID-ссылки. Резолв — по ГОТОВОМУ DOM (общий вход
+ * `renderMarkdownWithWikiLinks`): отрендеренный markdown несёт
+ * `<span class="wiki-link" data-wiki-id>`, которого резолвер строки сниппета не
+ * видит, поэтому подпись оставалась пустой, ссылка — некликабельной (Д1
+ * репроверки `7677fe06`, блокер 399c25d5). Вынесено из замыкания панели ради
+ * теста: DOM-шим не разбирает `innerHTML` на узлы, поэтому проверяется сам
+ * рендер строки.
+ */
+export function renderEditorTaskRowText(node: HTMLElement, text: string, networkId: string): void {
+  renderMarkdownWithWikiLinks(node, text, networkId);
 }

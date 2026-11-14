@@ -9,7 +9,9 @@
  *    (сборка секции + настоящий `groupSection` редактора);
  *  • **адрес «Открыть источник»** — замечание приёмки: хроно-строка открывает
  *    запись «Дневника» (pending ставится), постоянный комментарий — карточку
- *    владельца без pending-записи, которой у него не существует.
+ *    владельца без pending-записи, которой у него не существует;
+ *  • **ID-ссылка строки** (`[[#uuid]]`) получает подпись имени по готовому DOM
+ *    и остаётся кликабельной (Д1 репроверки 7677fe06).
  *
  * Сеть подменена: `window.etn.tasks.list` отдаёт управляемую фикстуру, остальные
  * методы — заглушки. DOM — общий шим `./dom-shim.js`.
@@ -254,5 +256,56 @@ describe('зона «Задачи» редактора: адрес «Откры�
     } finally {
       h.destroy();
     }
+  });
+});
+
+describe('зона «Задачи» редактора: ID-ссылка строки (Д1 репроверки 7677fe06)', () => {
+  beforeEach(() => shimDom());
+
+  it('строка с [[#uuid]] получает подпись имени и остаётся кликабельной', async () => {
+    const thoughtId = '44444444-4444-4444-8444-444444444444';
+    const api = {
+      thoughts: {
+        resolve: async (_networkId: string, ids: string[]) =>
+          ids.map((id) => ({ id, title: `Мысль ${id}`, active: true })),
+      },
+    };
+    (globalThis as any).etn = api;
+    ((globalThis as any).window as Record<string, unknown>)['etn'] = api;
+
+    // DOM-шим не разбирает `innerHTML` на узлы: узел со спаном подставляем сами —
+    // проверяется то, что резолв идёт по DOM строки, а не по строке HTML
+    // (резолвер сниппета не видит `<span data-wiki-id>` вовсе).
+    const span = new ShimElement('span');
+    span.setAttribute('class', 'wiki-link');
+    span.setAttribute('data-wiki-id', thoughtId);
+    const node = {
+      innerHTML: '',
+      querySelectorAll: (selector: string) => (selector.includes('data-wiki-id') ? [span] : []),
+    };
+
+    const { renderEditorTaskRowText } = await import('../src/renderer/editor/tasks-panel.js');
+    renderEditorTaskRowText(
+      node as unknown as HTMLElement,
+      `[[#${thoughtId}]] задача [[2026-11-14]]`,
+      'n1',
+    );
+    for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setImmediate(resolve));
+
+    assert.match(
+      String(node.innerHTML),
+      /wiki-link-date/,
+      'markdown отрендерен в узел (date-чип на месте)',
+    );
+    assert.equal(span.textContent, `Мысль ${thoughtId}`, 'подпись ID-ссылки — имя мысли');
+    assert.ok(
+      span.classList.contains('wiki-link-resolved'),
+      'ссылка помечена разрешённой (стиль кликабельности)',
+    );
+    assert.equal(
+      span.getAttribute('data-wiki-id'),
+      thoughtId,
+      'data-wiki-id сохранён — делегированный клик работает',
+    );
   });
 });

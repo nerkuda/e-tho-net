@@ -34,15 +34,14 @@ import {
 } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
-import { renderMarkdown } from '@etn/markdown';
-import { resolveWikiLinksInDom } from '../../editor/wiki-link-resolver.js';
+import { renderMarkdownWithWikiLinks } from '../../editor/wiki-link-resolver.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import {
   datePeriodValueFromInstants,
   openDatePeriodDialog,
   resolveDatePeriodInstants,
 } from '../../lib/date-period-dialog.js';
-import { errText, renderHtml } from '../../lib/dom.js';
+import { errText } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { formatDateParts, getLang, t } from '../../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../../lib/live/event-router.js';
@@ -993,15 +992,12 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
 
 /**
  * Нарисовать снапшот текста строки панели: markdown + кликабельные ID-ссылки.
- * ID-ссылки красятся по ГОТОВОМУ DOM (`resolveWikiLinksInDom`): серверный HTML
- * несёт пустые `<span class="wiki-link" data-wiki-id>`, и резолвер по строке
- * сниппета их не видит — подпись оставалась пустой, ссылка некликабельной
- * (блокер финальной приёмки 399c25d5).
+ * Резолв — по ГОТОВОМУ DOM (общий вход `renderMarkdownWithWikiLinks`): серверный
+ * HTML несёт пустые `<span class="wiki-link" data-wiki-id>`, и резолвер по строке
+ * сниппета их не видит (блокер 399c25d5).
  */
 export function renderTaskRowText(node: HTMLElement, text: string, networkId: string): void {
-  renderHtml(node, renderMarkdown(text));
-  if (text === '') return;
-  void resolveWikiLinksInDom(node, networkId);
+  renderMarkdownWithWikiLinks(node, text, networkId);
 }
 
 /** Классы строк панели — реэкспорт для тестов экрана и стенда. */

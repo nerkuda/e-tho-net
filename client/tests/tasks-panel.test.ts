@@ -22,6 +22,7 @@ import { t } from '../src/renderer/lib/i18n.js';
 import {
   TASK_PANEL_SECTION_CLASS,
   mountTaskPanel,
+  staleTaskRowOf,
   type ReminderPanelRow,
   type TaskPanelActions,
   type TaskPanelRow,
@@ -272,6 +273,23 @@ describe('панель задач: секции, строки и счётчик�
     const text = row.querySelector('.ui-task-row-text') as unknown as ShimElement;
     text.emit('dblclick', {});
     assert.equal(row.querySelector('.ui-task-row-edit'), null);
+    destroy();
+  });
+
+  it('staleTaskRowOf: находит серую строку из её чипа, у свежей — null', () => {
+    const { host, destroy } = mount([
+      taskRow({ stale: true }),
+      taskRow({ key: 'c1:1', lineNo: 1 }),
+    ]);
+    const rows = rowsOf(host);
+    const staleText = rows[0]!.querySelector('.ui-task-row-text') as unknown as ShimElement;
+    assert.equal(
+      staleTaskRowOf(staleText as unknown as HTMLElement),
+      rows[0],
+      'маркер серой строки — в её узле (один источник для меню строки и меню чипа)',
+    );
+    const freshText = rows[1]!.querySelector('.ui-task-row-text') as unknown as ShimElement;
+    assert.equal(staleTaskRowOf(freshText as unknown as HTMLElement), null, 'свежая строка — null');
     destroy();
   });
 

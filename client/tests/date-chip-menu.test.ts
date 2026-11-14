@@ -203,9 +203,16 @@ test('chipSourceOffset: data-md-start из source-map, мусор — null', () 
 // сообщается. Без DOM-меню и диалога: проверяется применение переноса.
 // ---------------------------------------------------------------------------
 
+/**
+ * Слушатели документа (нужны контекстному меню чипа: обработчик ставится в
+ * capture-фазе документа). Сбрасываются вместе с DOM на каждый тест.
+ */
+let documentListeners: Record<string, Array<(event: Record<string, unknown>) => void>> = {};
+
 /** Минимальный DOM: тосты `notice` кладутся в `document.body`. */
 function installDom(): ShimElement {
   const body = new ShimElement('body');
+  documentListeners = {};
   /* eslint-disable @typescript-eslint/no-explicit-any */
   // Адресация чипа в строке панели проверяет `instanceof HTMLElement` — как в
   // браузере: шим-элемент объявляется глобальным конструктором.
@@ -215,7 +222,9 @@ function installDom(): ShimElement {
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     documentElement: new ShimElement('html'),
     body,
-    addEventListener: () => undefined,
+    addEventListener: (type: string, listener: (event: Record<string, unknown>) => void) => {
+      (documentListeners[type] ??= []).push(listener);
+    },
     removeEventListener: () => undefined,
     activeElement: null,
     querySelector: () => null,
@@ -467,4 +476,75 @@ test('правка: «Изменить дату» на не-задаче — м�
 
   assert.equal(changes.length, 1);
   assert.equal(changes[0]!['insert'], '2026-11-20');
+});
+
+// ---------------------------------------------------------------------------
+// Серая строка панели (Д2 репроверки 7677fe06): меню чипа не меняет запись
+// ---------------------------------------------------------------------------
+
+/** Событие контекстного меню чипа: обработчик читает target и координаты. */
+function contextMenuAt(chip: ShimElement): Record<string, unknown> {
+  return {
+    target: chip,
+    clientX: 12,
+    clientY: 34,
+    preventDefault: (): void => undefined,
+    stopPropagation: (): void => undefined,
+  };
+}
+
+/** Пункт открытого меню по подписи. */
+function menuItemByLabel(label: string): ShimElement {
+  const item = body.querySelectorAll('.menu-item').find((node) => node.flatText().includes(label));
+  assert.ok(item, `пункт меню «${label}» есть`);
+  return item!;
+}
+
+/** Дождаться продолжений асинхронного переноса (PATCH/`comments.update`). */
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test('серая строка: меню чипа не меняет запись — сначала «Обновить»', async () => {
+  const text = '- [ ] проверка дня [[2026-11-18]]';
+  const calls = fakeEtn({ id: 'c9', version: 4, body_md: text });
+  const { initDateChipMenu } = await import('../src/renderer/editor/date-chip-menu.js');
+  initDateChipMenu();
+  const handler = documentListeners['contextmenu']?.[0];
+  assert.ok(handler, 'обработчик контекстного меню чипа подключён к документу');
+
+  const chip = panelChip('c9:0', '2026-11-18');
+  // Шим `closest` идёт от родителя (в браузере — с самого элемента), поэтому
+  // событие адресуем вложенному узлу чипа: обработчик ищет `.wiki-link-date`
+  // вверх по дереву — тот же путь, что и по клику на сам чип.
+  const target = new ShimElement('span');
+  chip.append(target);
+  const row = chip.closest('[data-row-key]') as ShimElement;
+  row.classList.add('ui-task-row', 'is-stale');
+
+  handler!(contextMenuAt(target));
+  const staleItem = menuItemByLabel(t('wikiLink.dateMenu.moveWeek'));
+  assert.equal(
+    staleItem.classList.contains('menu-item-disabled'),
+    true,
+    'перенос серой строки отключён: адрес comment_id:line_no устарел (правило 0e85b66e)',
+  );
+  staleItem.emit('click', { target: staleItem, stopPropagation: (): void => undefined });
+  await flushAsync();
+  assert.deepEqual(calls.get, [], 'источник даже не читался: команда недоступна');
+  assert.equal(calls.patch.length, 0, 'PATCH не ушёл — чужая строка не сдвинута');
+  assert.equal(calls.update.length, 0, 'comments.update не тронут');
+
+  // Контроль: у свежей строки та же команда доступна и уходит серверной операцией.
+  row.classList.remove('is-stale');
+  handler!(contextMenuAt(target));
+  const freshItem = menuItemByLabel(t('wikiLink.dateMenu.moveWeek'));
+  assert.equal(
+    freshItem.classList.contains('menu-item-disabled'),
+    false,
+    'свежая строка переносится',
+  );
+  freshItem.emit('click', { target: freshItem, stopPropagation: (): void => undefined });
+  await flushAsync();
+  assert.equal(calls.patch.length, 1, 'ровно один PATCH /tasks по строке задачи');
 });

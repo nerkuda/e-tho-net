@@ -42,6 +42,7 @@ import { t } from '../lib/i18n.js';
 import { MENU_SEPARATOR, menuAction, showMenuAt } from '../lib/menu.js';
 import { notice } from '../lib/notice.js';
 import { TABLE_ROW_KEY_ATTR } from '../lib/ui/table.js';
+import { staleTaskRowOf } from '../lib/ui/task-panel.js';
 import { openChronicleDay } from '../screens/chronicle/chronicle.js';
 import { COMMENT_FIELD_ATTR, commentSourceForField } from './comment-source.js';
 
@@ -581,16 +582,30 @@ async function applyDateChange(ctx: ChipContext, date: string, target: string): 
   );
 }
 
-/** Открыть меню у чипа. */
+/**
+ * Открыть меню у чипа. Серая строка панели (чужая правка источника) адресует
+ * ПРЕЖНИЙ `comment_id:line_no`: её команды записи запрещены до «Обновить» —
+ * ровно как в меню строки (`row.stale`, правило 0e85b66e). Навигация «Открыть
+ * день» остаётся доступной.
+ */
 function showDateChipMenu(chip: HTMLElement, date: string, x: number, y: number): void {
   const ctx = chipContext(chip);
+  const stale = staleTaskRowOf(chip) !== null;
   const items = [
     menuAction(t('wikiLink.dateMenu.openDay'), () => void openChronicleDay(date)),
     MENU_SEPARATOR,
-    menuAction(t('wikiLink.dateMenu.changeDate'), () => void changeChipDate(ctx, date)),
-    menuAction(t('wikiLink.dateMenu.moveTomorrow'), () => void moveChip(ctx, { days: 1 })),
-    menuAction(t('wikiLink.dateMenu.moveWeek'), () => void moveChip(ctx, { days: 7 })),
-    menuAction(t('wikiLink.dateMenu.moveMonth'), () => void moveChip(ctx, { months: 1 })),
+    menuAction(t('wikiLink.dateMenu.changeDate'), () => void changeChipDate(ctx, date), {
+      disabled: stale,
+    }),
+    menuAction(t('wikiLink.dateMenu.moveTomorrow'), () => void moveChip(ctx, { days: 1 }), {
+      disabled: stale,
+    }),
+    menuAction(t('wikiLink.dateMenu.moveWeek'), () => void moveChip(ctx, { days: 7 }), {
+      disabled: stale,
+    }),
+    menuAction(t('wikiLink.dateMenu.moveMonth'), () => void moveChip(ctx, { months: 1 }), {
+      disabled: stale,
+    }),
   ];
   showMenuAt(x, y, items);
 }

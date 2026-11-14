@@ -18,9 +18,15 @@
 
 import type { ThoughtRef } from '@etn/shared';
 
-import { WIKI_LINK_CLASS, WIKI_LINK_ID_ATTR, WIKI_LINK_TARGET_ATTR } from '@etn/markdown';
+import {
+  WIKI_LINK_CLASS,
+  WIKI_LINK_ID_ATTR,
+  WIKI_LINK_TARGET_ATTR,
+  renderMarkdown,
+} from '@etn/markdown';
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
+import { renderHtml } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { resolveThoughtRefs } from '../lib/thought-ref-batch.js';
 import { commitEntity, getEntity } from '../lib/live/index.js';
@@ -404,6 +410,27 @@ export async function resolveWikiLinksInDom(root: HTMLElement, networkId: string
   await Promise.all(tasks);
   paintCachedSpans(root, networkId);
   paintPubSpans(root, networkId);
+}
+
+/**
+ * Нарисовать markdown-снапшот текста в узле и подписать ID-ссылки по ГОТОВОМУ
+ * DOM: markdown → HTML → DOM, затем {@link resolveWikiLinksInDom}.
+ *
+ * Почему не резолвер сниппета: `paintWikiIdsInSnippet`/`resolveWikiIdsInSnippet`
+ * ищут форму `[[#<id>]]` в ТЕКСТЕ серверного сниппета, а отрендеренный markdown
+ * несёт уже `<span class="wiki-link" data-wiki-id>` — подпись оставалась пустой,
+ * ссылка некликабельной (блокер 399c25d5, Д1 репроверки `7677fe06`).
+ * Единый вход для поверхностей, рисующих markdown-снапшот строки (панели задач
+ * «Дневника» и редактора мысли).
+ */
+export function renderMarkdownWithWikiLinks(
+  node: HTMLElement,
+  text: string,
+  networkId: string,
+): void {
+  renderHtml(node, renderMarkdown(text));
+  if (text === '') return;
+  void resolveWikiLinksInDom(node, networkId);
 }
 
 // ---------------------------------------------------------------------------
