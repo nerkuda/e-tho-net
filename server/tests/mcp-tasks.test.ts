@@ -647,6 +647,42 @@ describe('MCP etn.tasks.* и meta карточки (22f1ea95)', { skip: !nativeA
     }
   });
 
+  it('meta.reminders: бюджет 10 строк и признак truncated (12 напоминаний)', async () => {
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const subject = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Много напоминаний',
+        });
+        // 12 независимых разовых напоминаний одной мысли (решение: несколько на
+        // мысль — каждое живёт само).
+        for (let index = 0; index < 12; index += 1) {
+          const created = await callOp(handle.client, 'reminders.create', {
+            network_id: ctx.networkId,
+            subject_type: 'thought',
+            subject_id: subject.id,
+            kind: 'one',
+            schedule: { type: 'once' },
+            anchor_at: `2027-04-${String(index + 1).padStart(2, '0')}T09:00:00.000Z`,
+          });
+          assert.equal(created.isError, undefined, toolText(created));
+        }
+
+        const withMeta = await cardMeta(handle, ctx.networkId, subject.id, true);
+        const reminders = withMeta.reminders!;
+        assert.equal(reminders.total, 12, 'total считает все напоминания мысли');
+        assert.equal(reminders.shown, 10, 'shown — бюджет карточки');
+        assert.equal(reminders.items.length, 10, 'items не больше предела');
+        assert.equal(reminders.truncated, true, 'признак «остальное — списком»');
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('справочник: темы tasks/tasks.<action> и классификация обслуживания', async () => {
     const ctx = await buildMcpContext();
     try {

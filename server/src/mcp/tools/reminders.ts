@@ -188,7 +188,14 @@ export const REMINDER_OPS_HANDLERS: Record<string, OpHandler> = {
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
       const reminder = runWrite(ndb, fx, () => {
-        const change = snoozeReminder(ndb, rt.deps.auth.userId, a.reminder_id, a.until);
+        const change = snoozeReminder(
+          ndb,
+          rt.deps.auth.userId,
+          a.reminder_id,
+          a.until,
+          Date.now(),
+          a.occurrence_at,
+        );
         return {
           result: change.reminder,
           events: [
@@ -223,7 +230,13 @@ export const REMINDER_OPS_HANDLERS: Record<string, OpHandler> = {
       const ndb = openMemberNetwork(rt, a.network_id);
       const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
       const reminder = runWrite(ndb, fx, () => {
-        const change = dismissReminder(ndb, rt.deps.auth.userId, a.reminder_id);
+        const change = dismissReminder(
+          ndb,
+          rt.deps.auth.userId,
+          a.reminder_id,
+          Date.now(),
+          a.occurrence_at,
+        );
         return {
           result: change.reminder,
           events: [

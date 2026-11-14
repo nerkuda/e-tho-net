@@ -235,6 +235,66 @@ describe('MCP etn.reminders.* (22f1ea95)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('snooze/dismiss адресуют occurrence_at — паритет с REST, а не «ближайшее» вхождение', async () => {
+    // Регресс приёмки 0.16.1: MCP-обработчики не пробрасывали `occurrence_at`,
+    // хотя контракт действия (двойник REST) его объявляет. Клиент панели шлёт
+    // адрес ПОКАЗАННОГО вхождения; без него сервер брал ближайшее — команда
+    // строки «Отложить» в дальнем вхождении молча трогала не ту строку.
+    const ctx = await buildMcpContext();
+    try {
+      const handle = await connectMcpClient(ctx, ctx.adminKey);
+      try {
+        const subject = await createThoughtViaWrite(handle.client, ctx.networkId, {
+          title: 'Адрес вхождения MCP',
+        });
+        const created = await callOp(handle.client, 'reminders.create', {
+          network_id: ctx.networkId,
+          subject_type: 'thought',
+          subject_id: subject.id,
+          kind: 'period',
+          schedule: { type: 'every_days', every: 1 },
+          anchor_at: '2030-01-01T09:00:00.000Z',
+        });
+        assert.equal(created.isError, undefined, toolText(created));
+        const id = toolJson<ReminderJson>(created).id;
+
+        const snoozed = await callOp(handle.client, 'reminders.snooze', {
+          network_id: ctx.networkId,
+          reminder_id: id,
+          until: '2030-01-03T18:00:00.000Z',
+          occurrence_at: '2030-01-03T09:00:00.000Z',
+        });
+        assert.equal(snoozed.isError, undefined, toolText(snoozed));
+        const snoozedCard = toolJson<ReminderJson>(snoozed);
+        assert.deepEqual(
+          snoozedCard.exceptions,
+          { '2030-01-03T09:00:00.000Z': { kind: 'snooze', until: '2030-01-03T18:00:00.000Z' } },
+          'исключение легло на адресованное вхождение',
+        );
+        assert.equal(
+          snoozedCard.next_at,
+          '2030-01-01T09:00:00.000Z',
+          'ближайшее вхождение не сдвинулось',
+        );
+
+        const dismissed = await callOp(handle.client, 'reminders.dismiss', {
+          network_id: ctx.networkId,
+          reminder_id: id,
+          occurrence_at: '2030-01-02T09:00:00.000Z',
+        });
+        assert.equal(dismissed.isError, undefined, toolText(dismissed));
+        assert.deepEqual(toolJson<ReminderJson>(dismissed).exceptions, {
+          '2030-01-03T09:00:00.000Z': { kind: 'snooze', until: '2030-01-03T18:00:00.000Z' },
+          '2030-01-02T09:00:00.000Z': { kind: 'dismiss' },
+        });
+      } finally {
+        await handle.close();
+      }
+    } finally {
+      await closeMcpContext(ctx);
+    }
+  });
+
   it('ошибки: расхождение kind — VALIDATION_ERROR, чужой субъект — NOT_FOUND, read-only ключ — FORBIDDEN', async () => {
     const ctx = await buildMcpContext();
     try {
