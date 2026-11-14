@@ -66,6 +66,9 @@ import {
   PUBLICATION_ACTIVE_FILTERS,
   PUBLICATION_EXPORT_FORMATS,
   PUBLICATION_SORTS,
+  REMINDER_KINDS,
+  REMINDER_MAX_HORIZON_DAYS,
+  REMINDER_SUBJECT_TYPES,
   REALTIME_DEFAULTS,
   SAVED_FILTER_VIEWS,
   SEARCH_SCOPES,
@@ -5844,4 +5847,172 @@ export const McpShelfAssign = defineContract(
     assigned: z.boolean().optional(),
   }),
   {},
+);
+
+
+// ---------------------------------------------------------------------------
+// Напоминания (0.16.1, задача b47f1fd2; операции ae19b1bf / 500d1b3d)
+// ---------------------------------------------------------------------------
+//
+// Напоминание — сервисная per-user сущность сети (`reminders`), НЕ мысль и НЕ
+// связь. Время сервера — только UTC-инстансы: «сегодня» и границы суток считает
+// клиент (требование fcdcd75f). Грамматика повтора закрыта (bbca8f7d): состав
+// ключей расписания и семантические диапазоны проверяет домен (400, операция
+// ae19b1bf), здесь — структура для `tools/list` и REST-карты.
+
+/** ISO-8601 инстанс (UTC) — единица времени напоминаний. */
+const ReminderInstant = z
+  .string()
+  .refine((value) => Number.isFinite(Date.parse(value)), 'must be an ISO-8601 instant.');
+
+/**
+ * Закрытая грамматика повтора: вид серии и её параметры.
+ *
+ * Схема принимает объект ЦЕЛИКОМ, не перечисляя виды: грамматику (состав
+ * ключей, диапазоны, неизвестный `type`) владеет домен (`validateSchedule`) и
+ * отвергает её `VALIDATION_ERROR` с HTTP 400, как требует операция ae19b1bf.
+ * Перечисление `z.discriminatedUnion` отвергало бы неизвестный `type` ошибкой
+ * zod (422) — «невалидная грамматика» получала бы два разных статуса.
+ */
+const ReminderScheduleSchema = z.looseObject({});
+
+/** POST /networks/:id/reminders — создать напоминание о мысли/публикации. */
+export const RestReminderCreate = defineContract(
+  'rest:reminders.create',
+  z.object({
+    network_id: NetworkId,
+    subject_type: z.enum(REMINDER_SUBJECT_TYPES),
+    subject_id: z.string().min(1),
+    kind: z.enum(REMINDER_KINDS),
+    schedule: ReminderScheduleSchema,
+    anchor_at: ReminderInstant,
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    subject_type: { from: { kind: 'body' }, req: true, msg: 'subject_type is required.' },
+    subject_id: { from: { kind: 'body' }, req: true, msg: 'subject_id is required.' },
+    kind: { from: { kind: 'body' }, req: true, msg: 'kind is required (one|period|rule).' },
+    schedule: { from: { kind: 'body' }, req: true, msg: 'schedule is required.' },
+    anchor_at: { from: { kind: 'body' }, req: true, msg: 'anchor_at is required.' },
+  },
+);
+
+/** GET /networks/:id/reminders — список владельца с раскрытием повторов. */
+export const RestReminderList = defineContract(
+  'rest:reminders.list',
+  z.object({
+    network_id: NetworkId,
+    from: ReminderInstant.optional(),
+    to: ReminderInstant.optional(),
+    horizon_days: z.number().int().min(1).max(REMINDER_MAX_HORIZON_DAYS).optional(),
+    subject_type: z.enum(REMINDER_SUBJECT_TYPES).optional(),
+    subject_id: z.string().min(1).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    from: { from: { kind: 'query' }, parse: singleQueryValue },
+    to: { from: { kind: 'query' }, parse: singleQueryValue },
+    horizon_days: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    subject_type: { from: { kind: 'query' }, parse: singleQueryValue },
+    subject_id: { from: { kind: 'query' }, parse: singleQueryValue },
+  },
+);
+
+/** PATCH /networks/:id/reminders/{id} — изменить kind/schedule/anchor серии. */
+export const RestReminderUpdate = defineContract(
+  'rest:reminders.update',
+  z.object({
+    network_id: NetworkId,
+    reminder_id: z.string().min(1),
+    kind: z.enum(REMINDER_KINDS).optional(),
+    schedule: ReminderScheduleSchema.optional(),
+    anchor_at: ReminderInstant.optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+    kind: { from: { kind: 'body' } },
+    schedule: { from: { kind: 'body' } },
+    anchor_at: { from: { kind: 'body' } },
+  },
+);
+
+/** DELETE /networks/:id/reminders/{id} — удалить напоминание владельца. */
+export const RestReminderDelete = defineContract(
+  'rest:reminders.delete',
+  z.object({ network_id: NetworkId, reminder_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/reminders/{id}/snooze — отложить текущее вхождение. */
+export const RestReminderSnooze = defineContract(
+  'rest:reminders.snooze',
+  z.object({
+    network_id: NetworkId,
+    reminder_id: z.string().min(1),
+    until: ReminderInstant,
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+    until: { from: { kind: 'body' }, req: true, msg: 'until is required.' },
+  },
+);
+
+/** POST /networks/:id/reminders/{id}/dismiss — убрать текущее вхождение. */
+export const RestReminderDismiss = defineContract(
+  'rest:reminders.dismiss',
+  z.object({ network_id: NetworkId, reminder_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+// MCP-двойники (операция 22f1ea95): действия `reminders.*` исполнителя etn.ops
+// повторяют REST-контракты, собственных MCP-инструментов не появляется.
+
+/** MCP `etn.reminders.create` = REST `POST /reminders`. */
+export const McpReminderCreate = defineContract(
+  'etn.reminders.create',
+  RestReminderCreate.schema,
+  RestReminderCreate.rest,
+);
+
+/** MCP `etn.reminders.list` = REST `GET /reminders`. */
+export const McpReminderList = defineContract(
+  'etn.reminders.list',
+  RestReminderList.schema,
+  RestReminderList.rest,
+);
+
+/** MCP `etn.reminders.update` = REST `PATCH /reminders/{id}`. */
+export const McpReminderUpdate = defineContract(
+  'etn.reminders.update',
+  RestReminderUpdate.schema,
+  RestReminderUpdate.rest,
+);
+
+/** MCP `etn.reminders.remove` = REST `DELETE /reminders/{id}`. */
+export const McpReminderRemove = defineContract(
+  'etn.reminders.remove',
+  RestReminderDelete.schema,
+  RestReminderDelete.rest,
+);
+
+/** MCP `etn.reminders.snooze` = REST `POST /reminders/{id}/snooze`. */
+export const McpReminderSnooze = defineContract(
+  'etn.reminders.snooze',
+  RestReminderSnooze.schema,
+  RestReminderSnooze.rest,
+);
+
+/** MCP `etn.reminders.dismiss` = REST `POST /reminders/{id}/dismiss`. */
+export const McpReminderDismiss = defineContract(
+  'etn.reminders.dismiss',
+  RestReminderDismiss.schema,
+  RestReminderDismiss.rest,
 );

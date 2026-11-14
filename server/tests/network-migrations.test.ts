@@ -64,6 +64,8 @@ const EXPECTED_TABLES = [
   'user_focus_order',
   'saved_filters',
   'user_pinned_thoughts',
+  // 054_reminders: сервисная per-user таблица, по слоям НЕ ветвится (0.16.1).
+  'reminders',
   'embeddings',
   'thought_read_metrics',
   'object_locks',

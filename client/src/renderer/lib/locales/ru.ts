@@ -3209,6 +3209,7 @@ export const ru = {
   'events.publicationDeleted': 'публикация удалена',
   'events.changedShelf': 'изменена полка',
   'events.shelfDeleted': 'полка удалена',
+  'events.reminderChanged': 'изменено напоминание',
   'events.incomingLink': 'Входящие связи',
   'events.outgoingLink': 'Исходящие связи',
   'events.copy': '%1 (копия)',

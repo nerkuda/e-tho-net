@@ -44,6 +44,7 @@ import type {
   ThoughtTypeViewUpdateInput,
 } from './thought-type-view.js';
 import type { Publication, PublicationOrderItem, Shelf } from './publication.js';
+import type { Reminder } from './reminder.js';
 
 // ---------------------------------------------------------------------------
 // Envelope
@@ -129,6 +130,9 @@ export const REALTIME_EVENT_TYPES = [
   'saved-filter.updated',
   'saved-filter.deleted',
   'pinned-thoughts.updated',
+  // напоминания (0.16.1, задача b47f1fd2, операция ae19b1bf) — per-user,
+  // доставляется владельцу (audience=user)
+  'reminders.changed',
   // change layers (§4.9, task S8)
   'layer.merged',
   // object locks (task 2031df5e — захват объекта при редактировании)
@@ -415,6 +419,21 @@ export interface PinnedThoughtsUpdatedData {
 }
 
 /**
+ * `reminders.changed` (0.16.1, задача b47f1fd2, операция ae19b1bf): одно
+ * изменение напоминаний владельца. Клиент перерисовывает флаг в карточке,
+ * индикатор в облачке и бейдж «сегодня». `reminder` отсутствует у `removed`
+ * (строки больше нет в выдаче), у остальных действий — полная карточка после
+ * изменения вместе с пересчитанным `next_at`.
+ */
+export interface RemindersChangedData {
+  action: 'created' | 'updated' | 'snoozed' | 'dismissed' | 'removed';
+  reminder_id: string;
+  reminder?: Reminder;
+  /** Вид вхождения, к которому относится действие (только snooze/dismiss). */
+  occurrence_at?: string;
+}
+
+/**
  * `layer.merged` (task S8, 04-realtime.md §4.9/§11.4): the single event a
  * successful layer merge emits — the full merge report plus both layers'
  * identities. Recipients must fully re-sync their visible state.
@@ -677,6 +696,7 @@ export interface RealtimeEventMap {
   'saved-filter.updated': SavedFilterUpdatedData;
   'saved-filter.deleted': SavedFilterDeletedData;
   'pinned-thoughts.updated': PinnedThoughtsUpdatedData;
+  'reminders.changed': RemindersChangedData;
   'layer.merged': LayerMergedData;
   'edit.acquired': EditAcquiredData;
   'edit.released': EditReleasedData;
@@ -787,6 +807,7 @@ export const REALTIME_EVENT_AUDIENCE = {
   'saved-filter.updated': 'user',
   'saved-filter.deleted': 'user',
   'pinned-thoughts.updated': 'user',
+  'reminders.changed': 'user',
   'layer.merged': 'network',
   'edit.acquired': 'network',
   'edit.released': 'network',

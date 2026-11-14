@@ -3122,6 +3122,7 @@ export const en = {
   'events.publicationDeleted': 'publication deleted',
   'events.changedShelf': 'shelf changed',
   'events.shelfDeleted': 'shelf deleted',
+  'events.reminderChanged': 'reminder changed',
   'events.incomingLink': 'Incoming links',
   'events.outgoingLink': 'Outgoing links',
   'events.copy': '%1 (copy)',

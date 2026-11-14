@@ -288,6 +288,9 @@ const READ_ONLY_OPS_ACTIONS: Readonly<Record<string, ReadOnlyCoverage>> = {
       '(изменяющее по HTTP-классификации); MCP-действие отдаёт архив в ответе без записи',
   },
   'shelves.list': { rest: { method: 'GET', path: '/api/v1/networks/:networkId/shelves' } },
+  'reminders.list': {
+    rest: { method: 'GET', path: '/api/v1/networks/:networkId/reminders' },
+  },
   'shelves.deletionCheck': {
     rest: { method: 'GET', path: '/api/v1/networks/:networkId/shelves/:id/deletion-check' },
   },
@@ -482,6 +485,11 @@ const PUBLICATIONS_TOOL_SOURCE = fs.readFileSync(
   path.join(SERVER_ROOT, 'src', 'mcp', 'tools', 'publications.ts'),
   'utf8',
 );
+/** Исходник фасада напоминаний — третья карта обработчиков `etn.ops` (0.16.1). */
+const REMINDERS_TOOL_SOURCE = fs.readFileSync(
+  path.join(SERVER_ROOT, 'src', 'mcp', 'tools', 'reminders.ts'),
+  'utf8',
+);
 
 /** Исходник контрактов REST — читающий POST-двойник `mentions.scan`. */
 const CONTRACTS_SOURCE = fs.readFileSync(path.join(SERVER_ROOT, 'src', 'contracts.ts'), 'utf8');
@@ -583,6 +591,7 @@ describe('read-only не пишет: статические правила (ош
     const bodies = new Map([
       ...collectOpHandlerBodies(OPS_TOOL_SOURCE, 'const HANDLERS'),
       ...collectOpHandlerBodies(PUBLICATIONS_TOOL_SOURCE, 'export const PUBLICATION_OPS_HANDLERS'),
+      ...collectOpHandlerBodies(REMINDERS_TOOL_SOURCE, 'export const REMINDER_OPS_HANDLERS'),
     ]);
     for (const entry of OPS_ACTIONS) {
       if (!entry.readOnly) continue;

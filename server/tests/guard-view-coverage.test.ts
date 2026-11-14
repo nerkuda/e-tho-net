@@ -175,6 +175,28 @@ const WRITE_VIEW_COVERAGE: readonly WriteViewEntry[] = [
     },
   },
   {
+    contract: 'RestReminderCreate',
+    field: 'kind',
+    operation: 'POST /networks/:networkId/reminders',
+    tests: {
+      one: 'routes-reminders.test.ts::POST создаёт напоминание каждого вида (kind=one|period|rule) и нормализует anchor_at',
+      period:
+        'routes-reminders.test.ts::POST создаёт напоминание каждого вида (kind=one|period|rule) и нормализует anchor_at',
+      rule: 'routes-reminders.test.ts::POST создаёт напоминание каждого вида (kind=one|period|rule) и нормализует anchor_at',
+    },
+  },
+  {
+    contract: 'RestReminderUpdate',
+    field: 'kind',
+    operation: 'PATCH /networks/:networkId/reminders/:id',
+    tests: {
+      one: 'routes-reminders.test.ts::PATCH заменяет серию (kind=one|period|rule), сбрасывает исключения и пересчитывает next_at',
+      period:
+        'routes-reminders.test.ts::PATCH заменяет серию (kind=one|period|rule), сбрасывает исключения и пересчитывает next_at',
+      rule: 'routes-reminders.test.ts::PATCH заменяет серию (kind=one|period|rule), сбрасывает исключения и пересчитывает next_at',
+    },
+  },
+  {
     contract: 'RestFocusPrefsBody',
     field: 'dir',
     operation: 'PUT /networks/:networkId/thoughts/:fid/focus-preferences',

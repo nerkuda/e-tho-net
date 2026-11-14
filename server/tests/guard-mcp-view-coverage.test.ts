@@ -163,6 +163,28 @@ const MCP_WRITE_VIEW_COVERAGE: readonly McpWriteViewEntry[] = [
       type_view: 'mcp-views.test.ts::etn.ontology.delete { kind: type_view } удаляет отбор',
     },
   },
+  {
+    // 0.16.1 (задача b47f1fd2): `kind` напоминания — вид серии (one/period/rule),
+    // обязан согласовываться с `schedule.type`; обработчики — в `tools/reminders.ts`.
+    tool: 'etn.reminders.create',
+    field: 'kind',
+    tests: {
+      one: 'mcp-reminders.test.ts::etn.reminders.create: каждое значение kind (one/period/rule) создаёт серию своего вида',
+      period:
+        'mcp-reminders.test.ts::etn.reminders.create: каждое значение kind (one/period/rule) создаёт серию своего вида',
+      rule: 'mcp-reminders.test.ts::etn.reminders.create: каждое значение kind (one/period/rule) создаёт серию своего вида',
+    },
+  },
+  {
+    tool: 'etn.reminders.update',
+    field: 'kind',
+    tests: {
+      one: 'mcp-reminders.test.ts::etn.reminders.update: каждое значение kind (one/period/rule) заменяет серию',
+      period:
+        'mcp-reminders.test.ts::etn.reminders.update: каждое значение kind (one/period/rule) заменяет серию',
+      rule: 'mcp-reminders.test.ts::etn.reminders.update: каждое значение kind (one/period/rule) заменяет серию',
+    },
+  },
 ];
 
 /**

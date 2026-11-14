@@ -162,6 +162,7 @@ import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
 import { mcpTokenContext } from './token-context.js';
 import { PUBLICATION_OPS_HANDLERS } from './publications.js';
+import { REMINDER_OPS_HANDLERS } from './reminders.js';
 import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, isMutatingOpCall, type OpEntry } from './ops-catalog.js';
 
 /** Разложить `params` по схеме действия (уже провалидированы контрактом). */
@@ -1918,6 +1919,10 @@ const HANDLERS: Record<string, OpHandler> = {
   // 25 операций публикаций и полок перенесены из собственных инструментов в
   // паттерн guide+ops; обработчики — в publications.ts (единый источник).
   ...PUBLICATION_OPS_HANDLERS,
+
+  // ---- reminders (0.16.1, задача b47f1fd2) ----------------------------------
+  // 6 операций напоминаний: обработчики — в reminders.ts (единый источник).
+  ...REMINDER_OPS_HANDLERS,
 };
 
 /** Проверка доступа к сети для read-действий (форwards на общий хелпер). */

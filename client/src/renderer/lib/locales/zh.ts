@@ -1999,6 +1999,7 @@ export const zh = {
   'events.publicationDeleted': '出版物已删除',
   'events.changedShelf': '已更改书架',
   'events.shelfDeleted': '书架已删除',
+  'events.reminderChanged': '提醒已更改',
   'events.incomingLink': '入链',
   'events.outgoingLink': '出链',
   'events.copy': '%1（副本）',

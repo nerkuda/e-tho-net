@@ -1015,6 +1015,8 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   get 'publication.purged'() { return t('events.publicationDeleted'); },
   get 'shelf.updated'() { return t('events.changedShelf'); },
   get 'shelf.deleted'() { return t('events.shelfDeleted'); },
+  // Напоминания (0.16.1, задача b47f1fd2) — строка статус-бара.
+  get 'reminders.changed'() { return t('events.reminderChanged'); },
 };
 
 /**

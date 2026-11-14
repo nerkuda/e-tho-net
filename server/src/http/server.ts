@@ -54,6 +54,7 @@ import { createLinksRoutes } from '../routes/links.js';
 import { createStructuresRoutes } from '../routes/structures.js';
 import { createChronicleRoutes } from '../routes/chronicle.js';
 import { createPinsRoutes } from '../routes/pins.js';
+import { createRemindersRoutes } from '../routes/reminders.js';
 import { createTypesRoutes } from '../routes/types.js';
 import { createThoughtTypeViewsRoutes } from '../routes/thought-type-views.js';
 import { createThoughtCustomViewsRoutes } from '../routes/thought-custom-views.js';
@@ -446,6 +447,10 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // Pinned-thoughts routes (L18): per-user ordered list (03-server-api.md §19).
   await app.register(createPinsRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Напоминания (0.16.1, задача b47f1fd2; операции ae19b1bf/500d1b3d):
+  // per-user CRUD, раскрытие повторов на период, snooze/dismiss вхождения.
+  await app.register(createRemindersRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Type routes (task D3): thought/link types + type_properties (03-server-api.md §8).
   await app.register(createTypesRoutes(routeDeps), { prefix: '/api/v1' });

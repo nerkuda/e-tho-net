@@ -71,6 +71,12 @@ import {
   McpPublicationTrash,
   McpPublicationUpdate,
   McpPublicationUsage,
+  McpReminderCreate,
+  McpReminderDismiss,
+  McpReminderList,
+  McpReminderRemove,
+  McpReminderSnooze,
+  McpReminderUpdate,
   McpShelfAssign,
   McpShelfCreate,
   McpShelfDelete,
@@ -1050,6 +1056,156 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     errors:
       '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`. A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
     paramsContract: PropertiesRemove,
+  },
+
+  // ---- reminders (0.16.1, задача b47f1fd2; операции ae19b1bf/500d1b3d) -----
+  {
+    action: 'reminders.list',
+    tool: 'etn.reminders.list',
+    group: 'reminders',
+    when: "the caller's reminders on a period with repeats expanded into occurrences (`next_at`, snooze/dismiss included)",
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'from', desc: 'period start (ISO-8601 UTC; default - now)' },
+      { name: 'to', desc: 'period end (default `from + horizon_days`)' },
+      { name: 'horizon_days', desc: 'expansion ceiling in days (default 366, max 3660)' },
+      { name: 'subject_type', desc: '`thought` | `publication`' },
+      { name: 'subject_id', desc: 'only the reminders of this subject' },
+    ],
+    destructive: false,
+    readOnly: true,
+    effects:
+      'read-only, no writes. Returns `{ reminders[], from, to }`; each reminder carries `next_at`, `kind`, ' +
+      '`schedule`, `anchor_at`, `exceptions` and `subject_state`, plus `occurrences[]` ' +
+      "(`{ occurrence_at, status: active|snoozed, until }`) when a period is requested. Only the caller's own " +
+      'reminders; a subject marked for deletion or unavailable in the session layer is hidden, an inactive subject ' +
+      'is hidden unless the network setting `show_inactive` is on. `next_at` is advanced lazily from `anchor_at` ' +
+      'and never points into the past.',
+    errors:
+      '`VALIDATION_ERROR` - a bad instant, `to` earlier than `from`, `horizon_days` out of range.',
+    paramsContract: McpReminderList,
+  },
+  {
+    action: 'reminders.create',
+    tool: 'etn.reminders.create',
+    group: 'reminders',
+    when: 'create a personal reminder about a thought or a publication: once, every N days/months or a calendar rule',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'subject_type', required: true, desc: '`thought` | `publication`' },
+      { name: 'subject_id', required: true, desc: 'subject id' },
+      {
+        name: 'kind',
+        required: true,
+        desc: '`one` | `period` | `rule` (must match `schedule.type`)',
+      },
+      {
+        name: 'schedule',
+        required: true,
+        desc:
+          'closed repeat grammar: `{type:"once"}`; `{type:"weekdays",days:[1..7]}`; `{type:"every_days",every}`; ' +
+          '`{type:"weekday_of_month",weekday,nth:1..5|"last"}`; `{type:"day_of_month",day,every_months}`; ' +
+          '`{type:"yearly",month,day}`; `{type:"last_day_of_month",every_months}`',
+      },
+      {
+        name: 'anchor_at',
+        required: true,
+        desc: 'reference occurrence (ISO-8601 UTC; its time of day is inherited)',
+      },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'the server normalizes `anchor_at` to the first occurrence of the series, computes `next_at` and stores the ' +
+      "card; `reminders.changed` (audience=user) refreshes the owner's clients. Returns the reminder card.",
+    errors:
+      '`VALIDATION_ERROR` - invalid repeat grammar or `kind`/`schedule.type` mismatch (HTTP 400 on REST); ' +
+      '`NOT_FOUND` - subject missing or marked for deletion; `FORBIDDEN` - read-only key.',
+    paramsContract: McpReminderCreate,
+  },
+  {
+    action: 'reminders.update',
+    tool: 'etn.reminders.update',
+    group: 'reminders',
+    when: 'change the series of a reminder (kind / schedule / anchor); exceptions are reset and `next_at` is recomputed',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+      { name: 'kind', desc: 'new `kind` (must match the resulting `schedule.type`)' },
+      { name: 'schedule', desc: 'new repeat schedule (closed grammar)' },
+      { name: 'anchor_at', desc: 'new reference occurrence (ISO-8601 UTC)' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'kind, schedule and anchor are replaced together; the exceptions map is reset and `next_at` recomputed from ' +
+      'the new anchor; `reminders.changed`. Returns the updated card.',
+    errors:
+      '`VALIDATION_ERROR` - nothing to change, invalid grammar, `kind` mismatch; `NOT_FOUND` - the reminder is gone; ' +
+      "`FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderUpdate,
+  },
+  {
+    action: 'reminders.dismiss',
+    tool: 'etn.reminders.dismiss',
+    group: 'reminders',
+    when: 'hide the CURRENT occurrence of a reminder until the next one on the schedule (the series is untouched)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'writes `{kind:"dismiss"}` into `exceptions` at the occurrence moment (never touches `schedule`), recomputes ' +
+      '`next_at` and emits `reminders.changed` with `occurrence_at`. For `kind: one` this ends the single occurrence. ' +
+      'Returns the card; the dismissed moment does not hide an occurrence that starts at exactly the same instant ' +
+      '(strict comparison).',
+    errors:
+      '`VALIDATION_ERROR` - no active occurrence to process (HTTP 409 on REST); `NOT_FOUND` - the reminder is gone; ' +
+      "`FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderDismiss,
+  },
+  {
+    action: 'reminders.snooze',
+    tool: 'etn.reminders.snooze',
+    group: 'reminders',
+    when: 'defer the CURRENT occurrence of a reminder to `until` (only this occurrence; the series keeps its schedule)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+      {
+        name: 'until',
+        required: true,
+        desc: 'new showing moment (ISO-8601 UTC, must be in the future)',
+      },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'writes `{kind:"snooze", until}` into `exceptions` at the occurrence moment, recomputes `next_at` (it becomes ' +
+      'the nearest visible showing) and emits `reminders.changed` with `occurrence_at`. `schedule` is untouched.',
+    errors:
+      '`VALIDATION_ERROR` - `until` not in the future or no active occurrence (HTTP 409 on REST); `NOT_FOUND` - the ' +
+      "reminder is gone; `FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderSnooze,
+  },
+  {
+    action: 'reminders.remove',
+    tool: 'etn.reminders.remove',
+    group: 'reminders',
+    when: "delete one of the caller's reminders (the series disappears from lists and indicators)",
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'marks the per-user row `removed` (it leaves every listing, indicator and badge) and emits ' +
+      '`reminders.changed` (`action: removed`). Returns `{ id }`.',
+    errors: "`NOT_FOUND` - the reminder is gone; `FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderRemove,
   },
 
   // ---- publications (0.11.1, задача 094653b6; карточки cab597a8/f236bb22/
@@ -2033,6 +2189,86 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
     topic: 'how_to_write_batch',
     when: 'step-by-step batch write instruction for `etn.thoughts.write`: sections, `ref`/`target_ref`, `on_duplicate`, limits, migration from the absorbed tools',
     body_md: writeBatchHowToText('<network_id>'),
+  },
+  {
+    // 0.16.1 (задача b47f1fd2): обзорная тема семейства `reminders.*`.
+    // Действия — в общем реестре, их `params`/эффекты/коды — по `topic`
+    // `reminders.<action>`; здесь — модель, грамматика, `next_at`, исключения и
+    // видимость, общие для всего семейства.
+    topic: 'reminders',
+    when: 'reminders overview: personal reminders on a thought/publication, the closed repeat grammar and `kind`, anchor normalization, lazy `next_at`, exceptions (snooze/dismiss), period expansion and subject visibility',
+    body_md: [
+      '# reminders — personal reminders',
+      '',
+      'A reminder is a personal (per-user) notification about a thought or a publication:',
+      'when to show it and how the repeat behaves. Rows live in the per-user `reminders` table of the',
+      'network database and are NOT branched by layers: the owner sees the same series in any layer',
+      'context, and the row is invisible to other users (another user reaches it — `FORBIDDEN`).',
+      'All 6 actions are available via `etn.ops` (`reminders.*`); the `params` shape, effects and',
+      'error codes of an action — `etn.guide { topic: "reminders.<action>" }`.',
+      '',
+      '## Repeat grammar (closed)',
+      '`schedule` is an object with a `type` and NO extra keys; an unknown type or a stray key is',
+      '`VALIDATION_ERROR` (HTTP 400 on REST). A series has no end (no `until`/`count`).',
+      '',
+      '| `schedule.type` | shape | `kind` |',
+      '|---|---|---|',
+      '| `once` | `{}` | `one` |',
+      '| `weekdays` | `{ days: [1..7] }` (ISO, 1 = Mon) | `rule` |',
+      '| `every_days` | `{ every: 1..3650 }` | `period` |',
+      '| `weekday_of_month` | `{ weekday: 1..7, nth: 1..5 or "last" }` | `rule` |',
+      '| `day_of_month` | `{ day: 1..31, every_months: 1..120 }` | `period` |',
+      '| `yearly` | `{ month: 1..12, day: 1..31 }` | `rule` |',
+      '| `last_day_of_month` | `{ every_months: 1..120 }` | `period` |',
+      '',
+      '`kind` is a coarse view of the same series and MUST match `schedule.type` — a mismatch is',
+      '`VALIDATION_ERROR` (`details.field = "kind"`, HTTP 400 on REST).',
+      '',
+      '## Anchor and `next_at`',
+      '- `anchor_at` is a reference instant. The server NORMALIZES it to the FIRST occurrence of the',
+      '  series on or after the requested moment and stores that value. The time of day of the anchor',
+      '  is inherited by every occurrence of the series.',
+      '- Edges: the 31st in a short month and 29.02 in a non-leap year fall back to the LAST day of the',
+      '  month; an absent N-th weekday of a month (a 5th Thursday) skips that occurrence and the series',
+      '  continues; `once` keeps the anchor as given.',
+      '- `next_at` is the moment of the nearest visible SHOWING (for a snoozed occurrence — its `until`)',
+      '  and never points into the past: it is recomputed lazily from `anchor_at` plus the exceptions on',
+      '  every read. Reads do NOT write to the database; `next_at` in the row is updated by writes only.',
+      '',
+      '## Occurrences and exceptions',
+      '- `exceptions` is a map "occurrence instant → `{kind:"snooze", until}` | `{kind:"dismiss"}`"',
+      '  stored in UTC. An exception addresses the OCCURRENCE instant, not the showing moment: snoozing',
+      '  an already deferred occurrence rewrites the same record.',
+      '- The comparison is STRICT: an occurrence is hidden only when `until` is strictly later than the',
+      '  occurrence instant; an occurrence that lands exactly on `until` stays visible.',
+      '- `reminders.snooze`/`reminders.dismiss` touch only the CURRENT occurrence — `schedule` and the',
+      '  series are untouched. `reminders.update` replaces the series (`kind`/`schedule`/`anchor_at`',
+      '  together), RESETS `exceptions` and recomputes `next_at`.',
+      '- `reminders.dismiss` of `kind: one` ends its single occurrence (`next_at: null`); the row stays',
+      '  `active`. `reminders.remove` is a soft delete: the row becomes `removed` and leaves every',
+      '  listing, indicator and badge.',
+      '',
+      '## Period expansion (`reminders.list`)',
+      '- `from` (default — now) and `to` (default — `from + horizon_days`) ask for an explicit period:',
+      '  each series is expanded into `occurrences[]` (`{ occurrence_at, status: active|snoozed, until }`),',
+      '  and a snoozed occurrence appears in the period that contains its `until`.',
+      '- `horizon_days` (default 366, max 3660) is a hard ceiling: the requested period is clipped to it,',
+      '  not rejected; the actual window is echoed in `from`/`to` of the answer.',
+      '- Without `from`/`to` there is no expansion and `occurrences` is absent; every reminder still',
+      '  carries the lazy `next_at`.',
+      '- The list holds the caller rows only, ordered by `next_at` (rows without occurrences — last).',
+      '',
+      '## Subject visibility',
+      '- A subject marked for deletion (or absent in the session layer — no live row in',
+      '  `thoughts_v`/`publications_v`) hides the reminder: it is not listed and never fires, but it is',
+      '  NOT deleted automatically. `reminders.create` on such a subject — `NOT_FOUND`.',
+      '- An inactive subject follows the network setting "show inactive": with the setting on the',
+      '  reminder is returned with `subject_state: "inactive"`, with it off the reminder is hidden.',
+      '',
+      '## Events',
+      'Every write emits `reminders.changed` (audience = `user`) with `action`',
+      '`created|updated|snoozed|dismissed|removed`; occurrence actions also carry `occurrence_at`.',
+    ].join('\n'),
   },
   {
     topic: 'publications',
