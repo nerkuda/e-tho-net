@@ -64,10 +64,13 @@ import { onReconnected, store } from '../state.js';
 import {
   openLinkInEditor,
   openRecordInEditor,
+  openThoughtInEditor,
   registerMainSection,
+  showEditorMainTab,
   type EditorContext,
   type TabPaneLifecycle,
 } from './editor.js';
+import type { GroupSpec } from './group.js';
 import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from './wiki-link-resolver.js';
 
 /** Предел строк на один запрос списка задач (сервер: `TASKS_MAX_LIMIT`). */
@@ -89,20 +92,34 @@ function emptyState(): EditorTasksState {
  * после группы `permanent`). Порядок регистрации задаёт порядок зон вкладки.
  */
 export function registerEditorTasksSection(): void {
-  registerMainSection((ctx, lifecycle) => {
-    if (ctx.ownerType !== 'thought') return null;
-    const host = div('main-tasks-body');
-    const panel = mountEditorTasksPanel(host, ctx, lifecycle);
-    return {
-      id: 'main.tasks',
-      title: t('editor.title.tasks'),
-      // Панель раскрыта по умолчанию: свёрнутость `main.tasks` — пользовательский
-      // персист (`editor_collapsed_groups`), дефолт — раскрытая зона.
-      defaultCollapsed: false,
-      actions: panel.headActions(),
-      buildBody: () => host,
-    };
-  });
+  registerMainSection(createEditorTasksSection);
+}
+
+/**
+ * Секция `main.tasks` как `GroupSpec` (`null` — у связи зоны задач нет).
+ * Отдельная фабрика: шапку зоны (бейдж счётчиков, «Обновить», «⋮») проверяет
+ * DOM-тест без монтирования всего редактора (0.16.1, блокер приёмки 710b68aa).
+ */
+export function createEditorTasksSection(
+  ctx: EditorContext,
+  lifecycle: TabPaneLifecycle,
+): GroupSpec | null {
+  if (ctx.ownerType !== 'thought') return null;
+  const host = div('main-tasks-body');
+  const panel = mountEditorTasksPanel(host, ctx, lifecycle);
+  return {
+    id: 'main.tasks',
+    title: t('editor.title.tasks'),
+    // Панель раскрыта по умолчанию: свёрнутость `main.tasks` — пользовательский
+    // персист (`editor_collapsed_groups`), дефолт — раскрытая зона.
+    defaultCollapsed: false,
+    // Бейдж шапки: счётчики публикует тело панели событием `etn:set-count`.
+    // Без `lazyCount` группы не создавали узел бейджа, и счётчики (требование
+    // f3893859 «заголовок панели: «Задачи», счётчики») не показывались.
+    lazyCount: true,
+    actions: panel.headActions(),
+    buildBody: () => host,
+  };
 }
 
 /**
@@ -421,12 +438,23 @@ function mountEditorTasksPanel(
     if (dto === null) return;
     const networkId = requireNetworkId();
     try {
+      // Постоянный комментарий записи «Дневника» не имеет: его источник
+      // открывается карточкой владельца на вкладке «Основное», без
+      // pending-записи (замечание приёмки 710b68aa). Запись выбирает только
+      // хроно-строка.
+      const permanent = dto.kind === 'permanent';
       if (dto.owner_type === 'thought') {
-        openRecordInEditor(dto.owner_id, dto.comment_id);
+        if (permanent) {
+          openThoughtInEditor(dto.owner_id);
+          showEditorMainTab();
+        } else {
+          openRecordInEditor(dto.owner_id, dto.comment_id);
+        }
         return;
       }
       if (dto.owner_type === 'link') {
         openLinkInEditor(await etn.links.get(networkId, dto.owner_id));
+        if (permanent) showEditorMainTab();
         return;
       }
       // Публикация: ленивый импорт — статический замкнул бы цикл экранов.

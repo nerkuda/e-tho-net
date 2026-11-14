@@ -374,6 +374,13 @@ export function mountTaskPanel(
   const subgroupReminderRows = new WeakMap<HTMLElement, readonly ReminderPanelRow[]>();
   /** Заголовок подгруппы — для вопроса подтверждения групповой команды. */
   const subgroupTitles = new WeakMap<HTMLElement, string>();
+  /**
+   * Тело плоской секции по узлу секции: свёрнутая секция снимает тело с экрана
+   * (`lib/ui/collapsible`), и поиск `.ui-task-flat-rows` в DOM в этот момент
+   * ничего не находит — ссылка держится здесь (блокер приёмки 710b68aa: после
+   * «Обновить» строки свёрнутой секции оставались старыми).
+   */
+  const flatRowsHosts = new WeakMap<HTMLElement, HTMLElement>();
 
   /** «Перенести… на дату» для массовой команды: произвольная дата. */
   async function pickBulkDate(filter: TaskMassFilter): Promise<void> {
@@ -724,6 +731,7 @@ export function mountTaskPanel(
     const node = div(`${TASK_PANEL_SECTION_CLASS} ui-task-flat`);
     node.dataset['section'] = section.key;
     const rows = div('ui-task-flat-rows');
+    flatRowsHosts.set(node, rows);
     if (section.collapsible === true) {
       const collapsible = collapsibleSection({
         title: section.title,
@@ -767,8 +775,10 @@ export function mountTaskPanel(
    */
   function updateFlatSection(node: HTMLElement, section: TaskPanelSectionView): void {
     const rows = section.rows ?? [];
-    const rowsHost = node.querySelector('.ui-task-flat-rows');
-    if (rowsHost !== null) renderFlatRows(rowsHost as HTMLElement, rows);
+    // Свёрнутая секция держит тело вне DOM — берём ссылку, сохранённую сборкой.
+    const rowsHost =
+      flatRowsHosts.get(node) ?? node.querySelector<HTMLElement>('.ui-task-flat-rows');
+    if (rowsHost !== null) renderFlatRows(rowsHost, rows);
     if (section.collapsible !== true) return;
     const collapsible = node.querySelector('.ui-task-flat-collapsible');
     if (collapsible === null) return;

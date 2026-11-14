@@ -528,6 +528,16 @@ export function openRecordInEditor(thoughtId: string, commentId: string): void {
 }
 
 /**
+ * Показывает вкладку «Основное» каналом отображения, НЕ записывая предпочтение
+ * пользователя (0.16.1, замечание приёмки 710b68aa): «Открыть источник»
+ * постоянного комментария ведёт в карточку владельца — записи «Дневника» у
+ * такого комментария нет, и pending-запись там не нашлась бы.
+ */
+export function showEditorMainTab(): void {
+  displayTab('main');
+}
+
+/**
  * Общее тело {@link openThoughtInEditor} и программного входа
  * {@link openRecordInEditor}. `force` обходит ОБА молчаливых no-op повторного
  * открытия (фокус и уже открытая та же мысль); публичный

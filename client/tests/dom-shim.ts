@@ -799,10 +799,16 @@ export class ShimElement {
    * Продукт шлёт на элементах `CustomEvent` (`editor/properties.ts` →
    * `etn:refresh-count` для бейджа группы); шим-`CustomEvent` тестов обязан
    * нести `type`. Без типа — no-op (совместимость с урезанными заглушками).
+   * `bubbles: true` поднимает событие по цепочке родителей, как в браузере:
+   * на этом держится публикация счётчиков из тела группы (`etn:set-count`
+   * панели задач → бейдж шапки зоны редактора).
    */
   dispatchEvent(event: any): boolean {
     const type = event?.type;
-    if (typeof type === 'string' && type !== '') this.emit(type, event);
+    if (typeof type !== 'string' || type === '') return true;
+    this.emit(type, event);
+    if (event?.bubbles !== true) return true;
+    for (let node = this.parent; node !== null; node = node.parent) node.emit(type, event);
     return true;
   }
 

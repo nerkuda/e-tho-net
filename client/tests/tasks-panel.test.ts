@@ -674,6 +674,37 @@ describe('панель редактора мысли: headless, плоские �
     destroy();
   });
 
+  it('выполненная после «Обновить» строка доезжает до СВЁРНУТОЙ секции (блокер приёмки)', () => {
+    const { host, render, destroy } = mountHeadless(
+      flatView([taskRow()], [taskRow({ key: 'c1:1', lineNo: 1, done: true, text: 'старая' })]),
+    );
+    const section = host.querySelector('.ui-task-flat-collapsible') as unknown as ShimElement;
+    assert.equal(section.querySelector('.ui-task-section-count')?.textContent, '(1)');
+    // «Обновить» при свёрнутой секции: её тело снято с экрана, но строки обязаны
+    // обновиться — до правки update искал контейнер строк в DOM и не находил.
+    render(
+      flatView(
+        [taskRow()],
+        [
+          taskRow({ key: 'c1:1', lineNo: 1, done: true, text: 'старая' }),
+          taskRow({ key: 'c1:2', lineNo: 2, done: true, text: 'новая' }),
+        ],
+      ),
+    );
+    assert.equal(
+      section.querySelector('.ui-task-section-count')?.textContent,
+      '(2)',
+      'счётчик свёрнутой секции обновился',
+    );
+    (section.querySelector('.ui-task-flat-head') as unknown as ShimElement).click();
+    assert.deepEqual(
+      rowsOf(section).map((row) => row.getAttribute('data-row-key')),
+      ['c1:1', 'c1:2'],
+      'раскрытая секция показывает новую строку',
+    );
+    destroy();
+  });
+
   it('headActions: «Обновить» и «⋮» отдаются наружу и работают', () => {
     let menuCalls = 0;
     const { calls, headActions, destroy } = mountHeadless(flatView([taskRow()], []), {
