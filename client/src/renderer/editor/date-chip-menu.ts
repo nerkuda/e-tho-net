@@ -135,6 +135,23 @@ export function dateSpanByOrdinal(body: string, ordinal: number): DateSpanLocati
 }
 
 /**
+ * Date-ссылка на КОНКРЕТНОЙ строке `body_md` — адрес строки панели «Задачи и
+ * напоминания»: ключ её строки несёт `line_no`, а порядковый номер чипа
+ * считается ВНУТРИ строки панели (по всему `body_md` он указал бы на чужую
+ * дату). `ordinal` — номер чипа внутри строки; `null` — первая ссылка строки.
+ */
+export function dateSpanOnLine(
+  body: string,
+  lineNo: number,
+  ordinal: number | null = null,
+): DateSpanLocation | null {
+  if (lineNo < 0) return null;
+  const spans = bodyDateSpans(body).filter((item) => item.lineNo === lineNo);
+  if (spans.length === 0) return null;
+  return ordinal === null ? spans[0]! : (spans[ordinal] ?? null);
+}
+
+/**
  * Date-ссылка по абсолютному смещению (source-map просмотра). Для ссылки с
  * алиасом `data-md-start` указывает на алиас — берём ссылку, в диапазон
  * которой входит смещение.
@@ -230,6 +247,11 @@ interface ViewChip {
   offset: number | null;
   /** Порядковый номер чипа в области, либо null. */
   ordinal: number | null;
+  /**
+   * Номер строки `body_md` с нуля — адрес строки панели «Задачи и напоминания»
+   * (`data-row-key` = `<comment_id>:<line_no>`), либо null.
+   */
+  lineNo: number | null;
 }
 
 type ChipContext = EditorChip | ViewChip;
@@ -252,6 +274,21 @@ function chipOrdinal(chip: HTMLElement, scope: HTMLElement): number | null {
   return index === -1 ? null : index;
 }
 
+/**
+ * Ключ строки панели задач `<comment_id>:<line_no>` (формат `taskRowKey`).
+ * Ключи других строк панели под шаблон не подходят: у напоминания после
+ * двоеточия ISO-момент, у карточки ленты в ключе сам id записи.
+ */
+const PANEL_TASK_ROW_KEY_RE = /^([^:\s]+):(\d+)$/;
+
+/** Разобрать ключ строки панели задач; `null` — ключ другого вида. */
+function panelRowAddress(key: string | null): { commentId: string; lineNo: number } | null {
+  const match = key === null ? null : PANEL_TASK_ROW_KEY_RE.exec(key.trim());
+  if (match === null) return null;
+  const lineNo = Number(match[2]);
+  return Number.isInteger(lineNo) && lineNo >= 0 ? { commentId: match[1]!, lineNo } : null;
+}
+
 /** Определить адрес чипа по DOM (до открытия меню — DOM ещё стабилен). */
 function chipContext(chip: HTMLElement): ChipContext {
   const view = editorViewAt(chip);
@@ -268,20 +305,32 @@ function chipContext(chip: HTMLElement): ChipContext {
       commentId,
       offset: chipSourceOffset(chip),
       ordinal: chipOrdinal(chip, field),
+      lineNo: null,
     };
   }
 
   const card = chip.closest(`[${TABLE_ROW_KEY_ATTR}]`);
   if (card instanceof HTMLElement) {
+    const key = card.getAttribute(TABLE_ROW_KEY_ATTR);
+    const task = panelRowAddress(key);
     return {
       kind: 'view',
-      commentId: card.getAttribute(TABLE_ROW_KEY_ATTR),
+      // Строка панели задач адресует источник ПАРОЙ `comment_id:line_no`;
+      // остальные строки (карточка ленты) несут в ключе сам id комментария.
+      commentId: task?.commentId ?? key,
       offset: chipSourceOffset(chip),
       ordinal: chipOrdinal(chip, card),
+      lineNo: task?.lineNo ?? null,
     };
   }
 
-  return { kind: 'view', commentId: null, offset: chipSourceOffset(chip), ordinal: null };
+  return {
+    kind: 'view',
+    commentId: null,
+    offset: chipSourceOffset(chip),
+    ordinal: null,
+    lineNo: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -352,12 +401,18 @@ async function resolveViewChip(ctx: ViewChip): Promise<ResolvedView | null> {
     notice(t('wikiLink.dateMenu.failed', errText(err)), 'error');
     return null;
   }
-  const location =
-    ctx.offset !== null
-      ? dateSpanByOffset(comment.body_md, ctx.offset)
-      : ctx.ordinal !== null
-        ? dateSpanByOrdinal(comment.body_md, ctx.ordinal)
-        : null;
+  let location: DateSpanLocation | null;
+  if (ctx.offset !== null) {
+    location = dateSpanByOffset(comment.body_md, ctx.offset);
+  } else if (ctx.lineNo !== null) {
+    // Строка панели задач: адрес строки известен из ключа, а порядковый номер
+    // чипа считается внутри строки (см. `dateSpanOnLine`).
+    location = dateSpanOnLine(comment.body_md, ctx.lineNo, ctx.ordinal);
+  } else if (ctx.ordinal !== null) {
+    location = dateSpanByOrdinal(comment.body_md, ctx.ordinal);
+  } else {
+    location = null;
+  }
   if (location === null) {
     notice(t('wikiLink.dateMenu.noSource'), 'error');
     return null;
@@ -570,4 +625,4 @@ export function initDateChipMenu(): void {
  * Внутренности для юнит-теста без GUI: диалог даты и DOM-контекст чипа не
  * поднимаем, а поведение переноса проверяем на подставленном контексте.
  */
-export const __testing = { moveChip, applyDateChange };
+export const __testing = { moveChip, applyDateChange, chipContext };

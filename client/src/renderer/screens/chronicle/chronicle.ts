@@ -129,6 +129,7 @@ import {
   resolvePeriodDay,
   todayLocal,
   weekPeriod,
+  type DiaryDay,
 } from './diary.js';
 import { groupCalendarMarkers, type CalendarMarkersByDay } from './calendar-markers.js';
 import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
@@ -169,6 +170,7 @@ import {
   buildDayLinksBlock,
   groupDayLinks,
   renderDayLinks,
+  withLinkDays,
   type DayLinksActions,
   type DayLinksData,
 } from './day-links.js';
@@ -1294,6 +1296,18 @@ async function refreshDayLinks(): Promise<void> {
   }
   if (seq !== dayLinksSeq) return;
   dayLinksData = next;
+  // Состав дней мог измениться: день без своих записей, но со «связями дня»,
+  // обязан появиться секцией (замечание финальной приёмки 399c25d5). Секции
+  // дней строит `renderFeed` — при расхождении перерисовываем ленту (keyed-
+  // сверка не тронет существующие узлы и прокрутку).
+  const expected = feedDays().map((day) => day.day);
+  const rendered = Array.from(feedList.querySelectorAll<HTMLElement>('.diary-day')).map(
+    (section) => section.dataset['day'] ?? '',
+  );
+  if (expected.length !== rendered.length || expected.some((day) => !rendered.includes(day))) {
+    renderFeed();
+    return;
+  }
   const actions = dayLinksActions();
   for (const section of Array.from(feedList.querySelectorAll<HTMLElement>('.diary-day'))) {
     const day = section.dataset['day'] ?? '';
@@ -1302,17 +1316,32 @@ async function refreshDayLinks(): Promise<void> {
   }
 }
 
+/**
+ * Дни ленты за применённый период: локальные дни записей (порядок сервера) плюс
+ * дни, у которых есть ТОЛЬКО «связи дня» (`withLinkDays`, замечание финальной
+ * приёмки 399c25d5). Одна точка правды и для `renderFeed`, и для проверки
+ * состава секций в `refreshDayLinks`.
+ */
+function feedDays(): DiaryDay[] {
+  const { from, to } = currentFromTo();
+  // Направление сортировки ленты (0.10.1, итерация приёмки №8, п.3): сервер
+  // отдаёт строки в выбранном порядке, клиент уважает его и в группировке дней.
+  const order = getFilterState().order;
+  return withLinkDays(groupByLocalDays(rows, { from, to, order }), dayLinksData, {
+    from,
+    to,
+    order,
+  });
+}
+
 function renderFeed(): void {
   const list = feedList;
   if (list === null) return;
   if (statusEl !== null) statusEl.hidden = true;
   list.hidden = false;
 
-  const { from, to } = currentFromTo();
-  // Направление сортировки ленты (0.10.1, итерация приёмки №8, п.3): сервер
-  // отдаёт строки в выбранном порядке, клиент уважает его и в группировке дней.
-  const order = getFilterState().order;
-  const days = groupByLocalDays(rows, { from, to, order });
+  // Дни ленты — записи + дни, у которых есть только «связи дня» (`feedDays`).
+  const days = feedDays();
   // Маркеры календаря приходят из отдельного запроса по месяцу
   // (`refreshCalendarMarkers`) — они не зависят от применённого периода, поэтому
   // видны и на выделенной, и на невыделенной дате (0.16.1, требование ab9d627b).

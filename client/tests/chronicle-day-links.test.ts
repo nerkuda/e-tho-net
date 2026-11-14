@@ -17,6 +17,7 @@ import {
   buildDayLinksBlock,
   groupDayLinks,
   renderDayLinks,
+  withLinkDays,
 } from '../src/renderer/screens/chronicle/day-links.js';
 import { formatDayLabel, localDay } from '../src/renderer/screens/chronicle/diary.js';
 import { ShimElement } from './dom-shim.js';
@@ -215,5 +216,69 @@ describe('связи дня: разбор ответа и блок дня (1fb10
     const date = block.querySelector('.diary-day-link-source-date') as unknown as ShimElement;
     date.click();
     assert.equal(calls.days.length, 2, 'дата источника — тот же переход к дню');
+  });
+});
+
+describe('дни ленты: день только со «связями дня» (замечание 399c25d5)', () => {
+  beforeEach(() => installShim());
+
+  it('день без записей, но со связями, становится днём ленты в её порядке', () => {
+    const links = groupDayLinks({
+      facts: [],
+      links: [{ day: '2026-11-11', time: null, source: owner('t-brat', 'Брат') }],
+    });
+    const days = withLinkDays(
+      [
+        { day: '2026-11-10', rows: [] },
+        { day: '2026-11-12', rows: [] },
+      ],
+      links,
+      {
+        from: '2026-11-10',
+        to: '2026-11-12',
+        order: 'asc',
+      },
+    );
+    assert.deepEqual(
+      days.map((day) => day.day),
+      ['2026-11-10', '2026-11-11', '2026-11-12'],
+    );
+    assert.deepEqual(days[1]!.rows, [], 'у добавленного дня записей нет — только связи');
+  });
+
+  it('день с записями не дублируется, день вне периода не добавляется', () => {
+    const links = groupDayLinks({
+      facts: [],
+      links: [
+        { day: '2026-11-10', time: null, source: owner('t-brat', 'Брат') },
+        { day: '2026-12-01', time: null, source: owner('t-brat', 'Брат') },
+      ],
+    });
+    const days = withLinkDays([{ day: '2026-11-10', rows: [] }], links, {
+      from: '2026-11-01',
+      to: '2026-11-30',
+      order: 'desc',
+    });
+    assert.deepEqual(
+      days.map((day) => day.day),
+      ['2026-11-10'],
+      'дубля нет, день вне применённого периода не показывается',
+    );
+  });
+
+  it('«Убывание»: добавленный день встаёт по направлению ленты', () => {
+    const links = groupDayLinks({
+      facts: [],
+      links: [{ day: '2026-11-11', time: null, source: owner('t-brat', 'Брат') }],
+    });
+    const days = withLinkDays([{ day: '2026-11-10', rows: [] }], links, {
+      from: '2026-11-01',
+      to: '2026-11-30',
+      order: 'desc',
+    });
+    assert.deepEqual(
+      days.map((day) => day.day),
+      ['2026-11-11', '2026-11-10'],
+    );
   });
 });

@@ -881,8 +881,9 @@ export class ShimElement {
   closest(selector: string): ShimElement | null {
     let current: ShimElement | null = this.parent;
     while (current !== null) {
-      if (selector.startsWith('.') && current.classList.contains(selector.slice(1))) return current;
-      if (!selector.startsWith('.') && current.tagName === selector) return current;
+      // Тот же предикат, что у `querySelectorAll`: классы, `#id`, тег и
+      // атрибутные формы (`.cloud[data-id="…"]`, `[data-row-key]`).
+      if (current.matchesSelector(selector)) return current;
       current = current.parent;
     }
     return null;

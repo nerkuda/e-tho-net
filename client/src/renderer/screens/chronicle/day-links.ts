@@ -18,13 +18,13 @@
  * — от экрана (`DayLinksActions`), поэтому правила блока проверяются DOM-тестом.
  */
 
-import type { DayFact, DayLink, DayLinkSource, DayLinksResult } from '@etn/shared';
+import type { DayFact, DayLink, DayLinkSource, DayLinksResult, SortOrder } from '@etn/shared';
 
 import { div, el, span } from '../../lib/dom.js';
 import { t } from '../../lib/i18n.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
-import { formatDayLabel, localDay } from './diary.js';
+import { compareDays, formatDayLabel, localDay, type DiaryDay } from './diary.js';
 
 /** Класс контейнера датовых фактов (первый ребёнок блока). */
 const FACTS_SLOT = 'diary-day-links-facts';
@@ -67,6 +67,31 @@ export function groupDayLinks(result: DayLinksResult): Map<string, DayLinksData>
   for (const fact of result.facts) take(fact.day).facts.push(fact);
   for (const link of result.links) take(link.day).links.push(link);
   return days;
+}
+
+/**
+ * Дни ленты = дни записей + дни, у которых есть ТОЛЬКО «связи дня» (0.16.1,
+ * требование 1fb1047d). День без своих записей, но со связями, обязан стать
+ * секцией дня (заголовок + блок связей) — замечание финальной приёмки 399c25d5.
+ * Слияние идёт в границах применённого периода и в его направлении
+ * (`compareDays`), поэтому порядок ленты не зависит от источника дня.
+ */
+export function withLinkDays(
+  days: readonly DiaryDay[],
+  links: ReadonlyMap<string, DayLinksData>,
+  opts: { from: string; to: string; order: SortOrder },
+): DiaryDay[] {
+  const merged = [...days];
+  const known = new Set(days.map((day) => day.day));
+  for (const day of links.keys()) {
+    if (known.has(day)) continue;
+    if (opts.from !== '' && day < opts.from) continue;
+    if (opts.to !== '' && day > opts.to) continue;
+    known.add(day);
+    merged.push({ day, rows: [] });
+  }
+  if (merged.length === days.length) return merged;
+  return merged.sort((a, b) => compareDays(a.day, b.day, opts.order));
 }
 
 /**

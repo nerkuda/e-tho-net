@@ -12,7 +12,9 @@
  *  • подгруппы напоминаний показывают НАЗВАНИЯ субъектов обоих видов (мысль и
  *    публикация), а не GUID: вид берётся у строки, ключи названий у видов разные;
  *  • «Перенести… на дату», равную якорю строки («сегодня» — массово), не
- *    закрывает диалог молча, а пишет статус «Перенос не требуется».
+ *    закрывает диалог молча, а пишет статус «Перенос не требуется»;
+ *  • ID-ссылка строки (`[[#uuid]]`) красится по ГОТОВОМУ DOM: подпись — имя
+ *    мысли, span остаётся `.wiki-link[data-wiki-id]` (блокер приёмки 399c25d5).
  *
  * Сеть подменена: `window.etn` — подставной REST-клиент, который записывает
  * вызовы. DOM — общий шим `./dom-shim.js`; диалоги (подтверждение, выбор даты)
@@ -40,6 +42,8 @@ interface Calls {
   records: number;
   /** `deps.openDay(day)` — переход к источнику. */
   days: string[];
+  /** `etn.thoughts.resolve(networkId, ids)` — запрошенные id ID-ссылок. */
+  resolved: string[];
 }
 
 /** Данные, которые «есть в сети» у подставного клиента. */
@@ -165,7 +169,7 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     if (index >= 0) windowListeners.splice(index, 1);
   };
 
-  const calls: Calls = { list: [], patch: [], records: 0, days: [] };
+  const calls: Calls = { list: [], patch: [], records: 0, days: [], resolved: [] };
   const tasks = fixture.tasks ?? [];
   const api = {
     ui: {
@@ -195,6 +199,10 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     },
     thoughts: {
       get: async (_networkId: string, id: string) => ({ id, title: `Мысль ${id}` }),
+      resolve: async (_networkId: string, ids: string[]) => {
+        calls.resolved.push(...ids);
+        return ids.map((id) => ({ id, title: `Мысль ${id}`, exists: true }));
+      },
     },
     publications: {
       get: async (_networkId: string, id: string) => ({ id, title: `Публикация ${id}` }),
@@ -384,6 +392,43 @@ describe('панель задач: подгруппы напоминаний п�
       assert.ok(
         !titles.some((title) => /^[0-9a-f-]{36}$/.test(title)),
         'в заголовках подгрупп нет GUID',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('панель задач: ID-ссылка строки красится по готовому DOM (блокер 399c25d5)', () => {
+  it('пустой span data-wiki-id получает подпись мысли и остаётся кликабельным', async () => {
+    const h = await setup({});
+    try {
+      const thoughtId = '33333333-3333-4333-8333-333333333333';
+      // DOM-шим не разбирает `innerHTML` на узлы: подставляем узел сами —
+      // проверяется именно то, что резолв идёт по DOM строки, а не по строке
+      // HTML (резолвер сниппета не видит `<span data-wiki-id>` вовсе).
+      const span = new ShimElement('span');
+      span.setAttribute('class', 'wiki-link');
+      span.setAttribute('data-wiki-id', thoughtId);
+      const node = {
+        innerHTML: '',
+        querySelectorAll: (selector: string) => (selector.includes('data-wiki-id') ? [span] : []),
+      };
+      const { renderTaskRowText } =
+        await import('../src/renderer/screens/chronicle/tasks-panel.js');
+      renderTaskRowText(node as unknown as HTMLElement, `[[#${thoughtId}]] [[2026-11-11]]`, 'n1');
+      await h.settle();
+
+      assert.deepEqual(h.calls.resolved, [thoughtId], 'id ID-ссылки запрошен у сети');
+      assert.equal(span.textContent, `Мысль ${thoughtId}`, 'подпись ссылки — имя мысли');
+      assert.ok(
+        span.classList.contains('wiki-link-resolved'),
+        'ссылка помечена разрешённой (стиль кликабельности)',
+      );
+      assert.equal(
+        span.getAttribute('data-wiki-id'),
+        thoughtId,
+        'data-wiki-id сохранён — делегированный клик работает',
       );
     } finally {
       h.destroy();

@@ -18,6 +18,7 @@ import {
   chipSourceOffset,
   dateSpanByOffset,
   dateSpanByOrdinal,
+  dateSpanOnLine,
   dayDelta,
   replaceSpanTarget,
   shiftLineDates,
@@ -62,6 +63,25 @@ test('dateSpanByOrdinal: `[[…]]` внутри ограды кода не сч�
   assert.equal(found.span.parts.date, '2026-11-02', 'первый чип — после ограды');
   assert.equal(found.lineNo, 3);
   assert.equal(dateSpanByOrdinal(body, 1), null);
+});
+
+// ---------------------------------------------------------------------------
+// Адрес строки панели «Задачи и напоминания» (`comment_id:line_no`)
+// ---------------------------------------------------------------------------
+
+test('dateSpanOnLine: строка адресуется ключом, номер чипа — внутри строки', () => {
+  const body = 'предисловие [[2026-10-01]]\n- [ ] задача [[2026-11-02]]..[[2026-11-05]]';
+  assert.equal(dateSpanOnLine(body, 0, 0)?.span.parts.date, '2026-10-01');
+  assert.equal(dateSpanOnLine(body, 1, null)?.span.parts.date, '2026-11-02', 'без номера — первая');
+
+  const second = dateSpanOnLine(body, 1, 1);
+  assert.ok(second);
+  assert.equal(second.lineNo, 1);
+  assert.equal(second.span.parts.date, '2026-11-05', 'номер чипа считается внутри строки');
+
+  assert.equal(dateSpanOnLine(body, 1, 2), null, 'в строке всего две ссылки');
+  assert.equal(dateSpanOnLine(body, 7, 0), null, 'строки нет');
+  assert.equal(dateSpanOnLine(body, -1, 0), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -187,6 +207,9 @@ test('chipSourceOffset: data-md-start из source-map, мусор — null', () 
 function installDom(): ShimElement {
   const body = new ShimElement('body');
   /* eslint-disable @typescript-eslint/no-explicit-any */
+  // Адресация чипа в строке панели проверяет `instanceof HTMLElement` — как в
+  // браузере: шим-элемент объявляется глобальным конструктором.
+  (globalThis as any).HTMLElement = ShimElement;
   (globalThis as any).document = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
@@ -209,6 +232,7 @@ function installDom(): ShimElement {
 }
 
 interface FakeCalls {
+  get: string[];
   patch: Array<{ networkId: string; payload: Record<string, unknown> }>;
   update: Array<{ networkId: string; id: string; changes: { body_md: string }; version: number }>;
 }
@@ -218,11 +242,14 @@ function fakeEtn(
   comment: { id: string; version: number; body_md: string },
   patch?: (payload: Record<string, unknown>) => Promise<unknown>,
 ): FakeCalls {
-  const calls: FakeCalls = { patch: [], update: [] };
+  const calls: FakeCalls = { get: [], patch: [], update: [] };
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const api = {
     comments: {
-      get: async () => comment,
+      get: async (_networkId: string, id: string) => {
+        calls.get.push(id);
+        return comment;
+      },
       update: async (
         networkId: string,
         id: string,
@@ -252,7 +279,24 @@ function fakeEtn(
 
 /** Контекст чипа в просмотре: адрес ссылки — по абсолютному смещению. */
 function viewChip(body: string, date = '2026-11-02'): Record<string, unknown> {
-  return { kind: 'view', commentId: 'c1', offset: body.indexOf(date), ordinal: null };
+  return {
+    kind: 'view',
+    commentId: 'c1',
+    offset: body.indexOf(date),
+    ordinal: null,
+    lineNo: null,
+  };
+}
+
+/** Чип в строке панели «Задачи и напоминания»: ключ строки — `comment_id:line_no`. */
+function panelChip(rowKey: string, date = '2026-11-02'): ShimElement {
+  const card = new ShimElement('div');
+  card.setAttribute('data-row-key', rowKey);
+  const chip = new ShimElement('span');
+  chip.classList.add('wiki-link', 'wiki-link-date');
+  chip.setAttribute('data-wiki-date', date);
+  card.append(chip);
+  return chip;
 }
 
 /** Контекст чипа в правке: однострочный документ и журнал изменений буфера. */
@@ -304,6 +348,32 @@ test('просмотр: перенос строки-задачи — один PA
     'единый сдвиг строки задан адресом строки и оптимистичной ревизией',
   );
   assert.equal(calls.patch[0]!.networkId, 'n1');
+});
+
+test('панель: чип строки задачи адресуется ключом comment_id:line_no', async () => {
+  // В body_md есть дата ДО строки задачи: порядковый номер чипа по всему
+  // документу указал бы на чужую строку — адрес обязан идти по ключу строки.
+  const text = 'предисловие [[2026-10-01]]\n- [ ] задача [[2026-11-02]]';
+  const calls = fakeEtn({ id: 'c9', version: 4, body_md: text });
+  const ctx = __testing.chipContext(panelChip('c9:1') as unknown as HTMLElement);
+
+  await __testing.moveChip(ctx as never, { days: 7 });
+
+  assert.deepEqual(calls.get, ['c9'], 'в comments.get уходит id комментария, а не ключ строки');
+  assert.equal(calls.update.length, 0, 'строку-задачу правит серверная операция');
+  assert.equal(calls.patch.length, 1, 'ровно одна серверная операция');
+  const payload = calls.patch[0]!.payload as { ops: Array<Record<string, unknown>> };
+  assert.deepEqual(
+    payload.ops[0],
+    {
+      comment_id: 'c9',
+      line_no: 1,
+      action: 'move',
+      days: 7,
+      expected_revision: 4,
+    },
+    'адрес операции — строка панели, а не номер чипа во всём body_md',
+  );
 });
 
 test('просмотр: не-задача — правится ТОЛЬКО кликнутая ссылка', async () => {

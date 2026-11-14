@@ -35,7 +35,7 @@ import {
 
 import { requireNetworkId } from '../../app.js';
 import { renderMarkdown } from '@etn/markdown';
-import { paintWikiIdsInSnippet, resolveWikiIdsInSnippet } from '../../editor/wiki-link-resolver.js';
+import { resolveWikiLinksInDom } from '../../editor/wiki-link-resolver.js';
 import { confirmDialog } from '../../lib/dialog.js';
 import {
   datePeriodValueFromInstants,
@@ -921,13 +921,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
 
   /** Нарисовать снапшот текста строки: markdown + кликабельные ID-ссылки. */
   function renderRowText(node: HTMLElement, row: TaskPanelRow): void {
-    const networkId = requireNetworkId();
-    const html = renderMarkdown(row.text === '' ? '' : row.text);
-    renderHtml(node, paintWikiIdsInSnippet(html, networkId));
-    if (html === '') return;
-    void resolveWikiIdsInSnippet(html, networkId).then((resolved) => {
-      if (node.isConnected) renderHtml(node, resolved);
-    });
+    renderTaskRowText(node, row.text, requireNetworkId());
   }
 
   /**
@@ -995,6 +989,19 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       panel.destroy();
     },
   };
+}
+
+/**
+ * Нарисовать снапшот текста строки панели: markdown + кликабельные ID-ссылки.
+ * ID-ссылки красятся по ГОТОВОМУ DOM (`resolveWikiLinksInDom`): серверный HTML
+ * несёт пустые `<span class="wiki-link" data-wiki-id>`, и резолвер по строке
+ * сниппета их не видит — подпись оставалась пустой, ссылка некликабельной
+ * (блокер финальной приёмки 399c25d5).
+ */
+export function renderTaskRowText(node: HTMLElement, text: string, networkId: string): void {
+  renderHtml(node, renderMarkdown(text));
+  if (text === '') return;
+  void resolveWikiLinksInDom(node, networkId);
 }
 
 /** Классы строк панели — реэкспорт для тестов экрана и стенда. */
