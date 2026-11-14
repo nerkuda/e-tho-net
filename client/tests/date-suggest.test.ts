@@ -7,13 +7,16 @@
  *  - введённая дата предлагается ТОЛЬКО когда она существует (31.02.2026 и
  *    02.13.2026 молчат), подсказка формата `dd.mm.yyyy` → ISO;
  *  - выбор пункта вставляет полную ISO-форму и закрывает `]]`;
- *  - мысли уходят в отдельную секцию «Мысли» ниже дат.
+ *  - мысли уходят в отдельную секцию «Мысли» ниже дат;
+ *  - источники `[[` (`wikiLinkCompletionSources`) на цифрах/дефисах отдают
+ *    «Даты» с `filter: false` (иначе FuzzyMatcher CM6 отбросил бы метки дат),
+ *    на буквах — только мысли; пустой префикс после `[[` достижим.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { Completion } from '@codemirror/autocomplete';
+import type { Completion, CompletionContext, CompletionSource } from '@codemirror/autocomplete';
 
 import {
   dateSuggestOptions,
@@ -23,6 +26,8 @@ import {
   typedDateIso,
   withThoughtsSection,
 } from '../src/renderer/editor/date-suggest.js';
+import { wikiLinkCompletionSources, wikiPrefixAt } from '../src/renderer/editor/wiki-link.js';
+import { store } from '../src/renderer/state.js';
 
 const TODAY = '2026-11-14';
 
@@ -90,4 +95,114 @@ test('withThoughtsSection: при датах мысли уходят в свою
 
   const plain = withThoughtsSection(thoughts, false);
   assert.equal(plain[0]!.section, undefined, 'буквенный ввод — без заголовка «Мысли»');
+});
+
+// ---------------------------------------------------------------------------
+// Источник автокомплита `[[` (wiki-link.ts): «Даты» + «Мысли» в одном дропдауне
+// ---------------------------------------------------------------------------
+
+/**
+ * Контекст автокомплита: источникам нужны только `pos` и `state.doc.lineAt` —
+ * полноценный `CompletionContext` требует EditorView, а контракт источника
+ * (что видно по вводу) от вида не зависит.
+ */
+function contextAt(doc: string): CompletionContext {
+  return {
+    pos: doc.length,
+    state: { doc: { lineAt: () => ({ from: 0, text: doc }) } },
+  } as unknown as CompletionContext;
+}
+
+/** Подменить мост `etn` поиском мыслей; возвращает журнал запросов. */
+function installSearch(titles: readonly string[]): string[] {
+  const queries: string[] = [];
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  (globalThis as any).etn = {
+    thoughts: {
+      search: async (_networkId: string, req: { q: string }) => {
+        queries.push(req.q);
+        return {
+          by_names: titles.map((title, index) => ({ thought_id: `id-${index}`, title })),
+        };
+      },
+    },
+  };
+  return queries;
+}
+
+/** Источники дропдауна в порядке регистрации: [даты, мысли, трансклюзия]. */
+function sources(): readonly CompletionSource[] {
+  return wikiLinkCompletionSources();
+}
+
+test('wikiPrefixAt: пустой префикс после `[[` — валидное состояние дропдауна', () => {
+  assert.deepEqual(wikiPrefixAt('текст [['), { open: 6, prefix: '' });
+  assert.deepEqual(wikiPrefixAt('[['), { open: 0, prefix: '' });
+  // Закрытая/алиасная форма по-прежнему не префикс, и `![[` — трансклюзия.
+  assert.equal(wikiPrefixAt('[[Имя]]'), null);
+  assert.deepEqual(wikiPrefixAt('![[abc'), { open: 1, prefix: 'abc', transclusion: true });
+});
+
+test('источник дат: цифры/дефисы — секция «Даты» НЕ фильтруется FuzzyMatcher', async () => {
+  store.update({ networkId: 'n1' });
+  installSearch(['Мысль']);
+
+  for (const prefix of ['2', '2026-', '2026-11', '2026-11-02', '14.11', '']) {
+    const dateResult = await sources()[0]!(contextAt(`[[${prefix}`));
+    assert.ok(dateResult !== null, `префикс ${JSON.stringify(prefix)} показывает даты`);
+    assert.equal(
+      dateResult.filter,
+      false,
+      'кандидатов отобрал date-suggest — FuzzyMatcher CM6 их метки не переживут',
+    );
+    assert.ok(dateResult.options.length >= 2, 'сегодня и завтра всегда в секции дат');
+    for (const option of dateResult.options) {
+      assert.deepEqual(option.section, datesSection(), 'пункты дат — в секции «Даты»');
+      assert.match(String(option.apply), /^\d{4}-\d{2}-\d{2}\]\]$/, 'вставка ISO + закрытие');
+    }
+  }
+});
+
+test('источник дат: ввод полной даты добавляет третий пункт «введённая дата»', async () => {
+  store.update({ networkId: 'n1' });
+  installSearch([]);
+  const dateResult = await sources()[0]!(contextAt('[[2026-11-02'));
+  assert.equal(dateResult?.options.length, 3);
+  assert.equal(dateResult!.options[2]!.apply, '2026-11-02]]');
+});
+
+test('источник дат: буквы дат не показывают (ADR ef097fad)', async () => {
+  store.update({ networkId: 'n1' });
+  installSearch(['Брат']);
+  assert.equal(await sources()[0]!(contextAt('[[бр')), null);
+});
+
+test('источник мыслей: в датном режиме мысли уходят в секцию «Мысли» ниже дат', async () => {
+  store.update({ networkId: 'n1' });
+  installSearch(['Мысль']);
+
+  const dates = await sources()[0]!(contextAt('[[2026-11'));
+  const thoughts = await sources()[1]!(contextAt('[[2026-11'));
+  assert.ok(dates !== null && thoughts !== null);
+  assert.equal(thoughts.options.length, 1);
+  assert.deepEqual(thoughts.options[0]!.section, thoughtsSection());
+  assert.ok(datesSection().rank! < thoughtsSection().rank!, 'даты выше мыслей');
+
+  const letters = await sources()[1]!(contextAt('[[бр'));
+  assert.equal(
+    letters!.options[0]!.section,
+    undefined,
+    'буквы — единственный список без заголовков',
+  );
+});
+
+test('пустой префикс: обе секции — «Даты» сверху и «Мысли» ниже', async () => {
+  store.update({ networkId: 'n1' });
+  const queries = installSearch(['Мысль']);
+
+  const dates = await sources()[0]!(contextAt('[['));
+  const thoughts = await sources()[1]!(contextAt('[['));
+  assert.ok(dates !== null && dates.options.length >= 2, 'даты доступны сразу после `[[`');
+  assert.deepEqual(thoughts?.options[0]?.section, thoughtsSection());
+  assert.deepEqual(queries, [''], 'мысли ищутся по пустому префиксу — секция достижима');
 });

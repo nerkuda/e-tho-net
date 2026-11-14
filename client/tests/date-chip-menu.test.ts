@@ -8,10 +8,13 @@
  * строки и нормализация 31-го числа (та же, что у серверной операции `move`).
  */
 
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { EtnError } from '@etn/shared';
+
 import {
+  __testing,
   chipSourceOffset,
   dateSpanByOffset,
   dateSpanByOrdinal,
@@ -21,6 +24,8 @@ import {
   shiftSpanTarget,
   taskLineAt,
 } from '../src/renderer/editor/date-chip-menu.js';
+import { t } from '../src/renderer/lib/i18n.js';
+import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
 // ---------------------------------------------------------------------------
@@ -170,4 +175,226 @@ test('chipSourceOffset: data-md-start из source-map, мусор — null', () 
   const negative = new ShimElement('span');
   negative.setAttribute('data-md-start', '-3');
   assert.equal(chipSourceOffset(negative), null);
+});
+
+// ---------------------------------------------------------------------------
+//Интеграция переноса (вердикт приёмки 0.16.1): строка-задача — ВСЕ ссылки,
+// не-задача — одна; просмотр идёт серверной операцией, конфликт ревизии честно
+// сообщается. Без DOM-меню и диалога: проверяется применение переноса.
+// ---------------------------------------------------------------------------
+
+/** Минимальный DOM: тосты `notice` кладутся в `document.body`. */
+function installDom(): ShimElement {
+  const body = new ShimElement('body');
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  (globalThis as any).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: new ShimElement('html'),
+    body,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    activeElement: null,
+    querySelector: () => null,
+  };
+  const win = ((globalThis as any).window ??= {}) as Record<string, unknown>;
+  // Таймеры не запускаем: тост живёт в DOM до конца теста.
+  let nextTimer = 0;
+  win['setTimeout'] = () => ++nextTimer;
+  win['clearTimeout'] = () => undefined;
+  win['addEventListener'] = () => undefined;
+  win['removeEventListener'] = () => undefined;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  return body;
+}
+
+interface FakeCalls {
+  patch: Array<{ networkId: string; payload: Record<string, unknown> }>;
+  update: Array<{ networkId: string; id: string; changes: { body_md: string }; version: number }>;
+}
+
+/** Подменить мост `etn`: комментарий-источник и журнал записей. */
+function fakeEtn(
+  comment: { id: string; version: number; body_md: string },
+  patch?: (payload: Record<string, unknown>) => Promise<unknown>,
+): FakeCalls {
+  const calls: FakeCalls = { patch: [], update: [] };
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const api = {
+    comments: {
+      get: async () => comment,
+      update: async (
+        networkId: string,
+        id: string,
+        changes: { body_md: string },
+        version: number,
+      ) => {
+        calls.update.push({ networkId, id, changes, version });
+        return {};
+      },
+    },
+    tasks: {
+      patch: async (networkId: string, payload: Record<string, unknown>) => {
+        calls.patch.push({ networkId, payload });
+        if (patch !== undefined) return patch(payload);
+        return { results: [{ ok: true }] };
+      },
+    },
+  };
+  // `lib/etn` читает мост из `window.etn`, если `window` существует, иначе из
+  // `globalThis` — DOM-шим заводит `window` (таймеры тостов), поэтому пишем в оба.
+  (globalThis as any).etn = api;
+  const win = (globalThis as any).window as Record<string, unknown> | undefined;
+  if (win !== undefined) win['etn'] = api;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  return calls;
+}
+
+/** Контекст чипа в просмотре: адрес ссылки — по абсолютному смещению. */
+function viewChip(body: string, date = '2026-11-02'): Record<string, unknown> {
+  return { kind: 'view', commentId: 'c1', offset: body.indexOf(date), ordinal: null };
+}
+
+/** Контекст чипа в правке: однострочный документ и журнал изменений буфера. */
+function editorChip(doc: string): {
+  ctx: Record<string, unknown>;
+  changes: Array<Record<string, unknown>>;
+} {
+  const changes: Array<Record<string, unknown>> = [];
+  const view = {
+    state: {
+      doc: {
+        lineAt: () => ({ from: 0, text: doc, number: 1 }),
+        toString: () => doc,
+      },
+    },
+    dispatch: (spec: { changes?: Array<Record<string, unknown>> }) => {
+      changes.push(...(spec.changes ?? []));
+    },
+  };
+  return { ctx: { kind: 'editor', view, linkFrom: doc.indexOf('[[') }, changes };
+}
+
+let body: ShimElement;
+
+beforeEach(() => {
+  body = installDom();
+  store.update({ networkId: 'n1' });
+});
+
+test('просмотр: перенос строки-задачи — один PATCH /tasks op move с ревизией', async () => {
+  const text = '- [ ] задача [[2026-11-02]]..[[2026-11-05]]';
+  const calls = fakeEtn({ id: 'c1', version: 7, body_md: text });
+
+  await __testing.moveChip(viewChip(text) as never, { days: 1 });
+
+  assert.equal(calls.update.length, 0, 'строку-задачу не правит comments.update');
+  assert.equal(calls.patch.length, 1, 'ровно одна серверная операция');
+  const payload = calls.patch[0]!.payload as { ops: Array<Record<string, unknown>> };
+  assert.equal(payload.ops.length, 1);
+  assert.deepEqual(
+    payload.ops[0],
+    {
+      comment_id: 'c1',
+      line_no: 0,
+      action: 'move',
+      days: 1,
+      expected_revision: 7,
+    },
+    'единый сдвиг строки задан адресом строки и оптимистичной ревизией',
+  );
+  assert.equal(calls.patch[0]!.networkId, 'n1');
+});
+
+test('просмотр: не-задача — правится ТОЛЬКО кликнутая ссылка', async () => {
+  const text = 'см. [[2026-11-02]] и [[2026-11-05]]';
+  const calls = fakeEtn({ id: 'c1', version: 7, body_md: text });
+
+  await __testing.moveChip(viewChip(text) as never, { days: 1 });
+
+  assert.equal(calls.patch.length, 0, 'серверная модель задач не трогается');
+  assert.equal(calls.update.length, 1);
+  assert.equal(calls.update[0]!.changes.body_md, 'см. [[2026-11-03]] и [[2026-11-05]]');
+  assert.equal(calls.update[0]!.version, 7);
+});
+
+test('просмотр: конфликт ревизии (409) — подсказка «обновите»', async () => {
+  const text = '- [ ] [[2026-11-02]]';
+  fakeEtn({ id: 'c1', version: 7, body_md: text }, async () => {
+    throw new EtnError('VERSION_CONFLICT', 'stale');
+  });
+
+  await __testing.moveChip(viewChip(text) as never, { days: 1 });
+
+  assert.ok(body.textContent.includes(t('wikiLink.dateMenu.stale')), 'показан текст «обновите»');
+});
+
+test('просмотр: «Изменить дату» на задаче — PATCH со сдвигом на разницу дней', async () => {
+  const text = '- [ ] [[2026-11-02]]..[[2026-11-05]]';
+  const calls = fakeEtn({ id: 'c1', version: 7, body_md: text });
+
+  await __testing.applyDateChange(viewChip(text) as never, '2026-11-02', '2026-11-20');
+
+  const payload = calls.patch[0]!.payload as { ops: Array<Record<string, unknown>> };
+  assert.deepEqual(
+    payload.ops[0],
+    {
+      comment_id: 'c1',
+      line_no: 0,
+      action: 'move',
+      days: 18,
+      expected_revision: 7,
+    },
+    'период сохраняется: сдвиг на 18 дней для всей строки',
+  );
+});
+
+test('просмотр: «Изменить дату» на не-задаче — одна ссылка через comments.update', async () => {
+  const text = 'см. [[2026-11-02]] и [[2026-11-20]]';
+  const calls = fakeEtn({ id: 'c1', version: 7, body_md: text });
+
+  await __testing.applyDateChange(viewChip(text) as never, '2026-11-02', '2026-11-10');
+
+  assert.equal(calls.patch.length, 0);
+  assert.equal(calls.update[0]!.changes.body_md, 'см. [[2026-11-10]] и [[2026-11-20]]');
+});
+
+test('правка: перенос строки-задачи сдвигает ОБЕ date-ссылки', async () => {
+  const doc = '- [ ] задача [[2026-11-02]]..[[2026-11-05]]';
+  const { ctx, changes } = editorChip(doc);
+
+  await __testing.moveChip(ctx as never, { days: 1 });
+
+  assert.equal(changes.length, 2, 'обе ссылки строки');
+  assert.deepEqual(changes.map((change) => change['insert']).sort(), ['2026-11-03', '2026-11-06']);
+});
+
+test('правка: не-задача сдвигает только кликнутую ссылку', async () => {
+  const doc = 'см. [[2026-11-02]] и [[2026-11-05]]';
+  const { ctx, changes } = editorChip(doc);
+
+  await __testing.moveChip(ctx as never, { days: 1 });
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0]!['insert'], '2026-11-03');
+});
+
+test('правка: «Изменить дату» на задаче — выбранная дата + сдвиг остальных', async () => {
+  const doc = '- [ ] задача [[2026-11-02]]..[[2026-11-05]]';
+  const { ctx, changes } = editorChip(doc);
+
+  await __testing.applyDateChange(ctx as never, '2026-11-02', '2026-11-20');
+
+  assert.equal(changes.length, 2, 'период сохраняется: сдвинуты обе ссылки');
+  assert.deepEqual(changes.map((change) => change['insert']).sort(), ['2026-11-20', '2026-11-23']);
+});
+
+test('правка: «Изменить дату» на не-задаче — меняется один чип', async () => {
+  const doc = 'см. [[2026-11-02]] и [[2026-11-05]]';
+  const { ctx, changes } = editorChip(doc);
+
+  await __testing.applyDateChange(ctx as never, '2026-11-02', '2026-11-20');
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0]!['insert'], '2026-11-20');
 });

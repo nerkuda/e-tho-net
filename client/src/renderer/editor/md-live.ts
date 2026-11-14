@@ -70,6 +70,18 @@ export function setDateChipClickHandler(handler: ((date: string) => void) | null
 }
 
 /**
+ * Передать клик по date-чипу обработчику дня — ЕДИНЫЙ вход для чипа редактора
+ * (`mousedown`, здесь) и чипа просмотра (делегированный `click`,
+ * `wiki-link.ts`). Возвращает `false`, если обработчик ещё не зарегистрирован
+ * (навигация не инициализирована) — тогда чип ведёт себя как прочий виджет.
+ */
+export function clickDateChip(date: string): boolean {
+  if (dateChipClickHandler === null) return false;
+  dateChipClickHandler(date);
+  return true;
+}
+
+/**
  * Блочное правило (M6-фикс): блок активен, пока каретка/выделение
  * пересекает его диапазон ВКЛЮЧИТЕЛЬНО — от первого до последнего символа
  * блока маркеры не скрываются.
@@ -865,9 +877,8 @@ export function mdWidgetMouseDown(event: MouseEvent, view: EditorView): boolean 
   // 31fe2cc9), исходник НЕ раскрывается. Обработчик ставит `wiki-link.ts`
   // (`setDateChipClickHandler`), чтобы `md-live` не тянул навигацию в себя.
   const date = widget.getAttribute(WIKI_LINK_DATE_ATTR);
-  if (date !== null && date !== '' && dateChipClickHandler !== null) {
+  if (date !== null && date !== '' && clickDateChip(date)) {
     event.preventDefault();
-    dateChipClickHandler(date);
     return true;
   }
 

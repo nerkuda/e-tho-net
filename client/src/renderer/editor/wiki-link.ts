@@ -10,7 +10,12 @@
  * time — names may change after the HTML is cached).
  */
 
-import { autocompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
+import {
+  autocompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionSource,
+} from '@codemirror/autocomplete';
 import type { Extension } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
@@ -43,6 +48,7 @@ import { store } from '../state.js';
 import { dateSuggestOptions, isDatePrefix, withThoughtsSection } from './date-suggest.js';
 import { markdownInlineExt } from './markdown-inline-ext.js';
 import {
+  clickDateChip,
   MD_WIDGET_CLASS,
   setDateChipClickHandler,
   setLegacyWikiLinkClickHandler,
@@ -68,7 +74,9 @@ export const TRANSCLUSION_MIN_PREFIX = 3;
  * Позиция открывающих скобок и набранный префикс; `transclusion` — перед
  * `[[` стоит восклицательный знак (ссылка трансклюзии, элемент интерфейса
  * 7a479549). Возвращает также `transclusion`, только когда он истинен, —
- * форма ответа прежняя для обычных wiki-ссылок.
+ * форма ответа прежняя для обычных wiki-ссылок. Пустой префикс — валидное
+ * состояние датного режима: сразу после `[[` дропдаун показывает «Даты»
+ * (сегодня/завтра) и «Мысли» (ADR ef097fad, решение приёмки 0.16.1).
  */
 export function wikiPrefixAt(
   before: string,
@@ -76,7 +84,7 @@ export function wikiPrefixAt(
   const open = before.lastIndexOf('[[');
   if (open === -1) return null;
   const rest = before.slice(open + 2);
-  if (rest === '' || !WIKI_PREFIX_RE.test(rest)) return null;
+  if (!WIKI_PREFIX_RE.test(rest)) return null;
   if (open > 0 && before[open - 1] === '!') return { open, prefix: rest, transclusion: true };
   return { open, prefix: rest };
 }
@@ -139,19 +147,17 @@ function wikiLinkCompletions(): CompletionSource {
   // результаты поиска независимо и не видят чужих записей.
   const cache = new Map<string, { expires: number; options: Completion[] }>();
   return async (context) => {
-    const line = context.state.doc.lineAt(context.pos);
-    const before = line.text.slice(0, context.pos - line.from);
-    const hit = wikiPrefixAt(before);
-    if (hit === null) return null;
+    const at = completionPrefix(context);
+    if (at === null) return null;
+    const { hit, from } = at;
     // Трансклюзия: список мыслей открывается не раньше трёх символов имени
     // (элемент интерфейса 7a479549); обычная wiki-ссылка — с первого.
     if (hit.transclusion === true && hit.prefix.length < TRANSCLUSION_MIN_PREFIX) return null;
 
-    // Единый дропдаун (ADR ef097fad): цифры/точки/дефисы дают секцию «Даты»
-    // сверху, мысли идут ниже; буквенный ввод — только мысли. Трансклюзия дат
-    // не предлагает: это ссылка на фрагмент мысли, а не на день.
+    // Единый дропдаун (ADR ef097fad): в датном режиме секцию «Даты» сверху
+    // отдаёт отдельный источник `dateCompletions`; здесь мысли лишь получают
+    // свою секцию НИЖЕ, иначе CM6 поставил бы их выше дат.
     const datesShown = hit.transclusion !== true && isDatePrefix(hit.prefix);
-    const dateOptions = datesShown ? dateSuggestOptions(hit.prefix, todayLocal()) : [];
 
     let cached = cache.get(hit.prefix);
     if (cached === undefined || cached.expires < Date.now()) {
@@ -161,8 +167,7 @@ function wikiLinkCompletions(): CompletionSource {
       };
       cache.set(hit.prefix, cached);
     }
-    const thoughtOptions = withThoughtsSection(cached.options, dateOptions.length > 0);
-    const options = [...dateOptions, ...thoughtOptions];
+    const options = withThoughtsSection(cached.options, datesShown);
     if (options.length === 0) return null;
     // Без `validFor`: источник должен вызываться заново на каждый новый
     // символ префикса (кэш по префиксу выше это и обеспечивает). Широкий
@@ -171,19 +176,50 @@ function wikiLinkCompletions(): CompletionSource {
     // перезапрашивая сервер, — поэтому `[[новиков` не находил ничего, если
     // при односимвольном префиксе мысль не попала в первые 20
     // (ошибка 6bba224b-9899-4f7e-a37c-ff2067ac0a6c).
-    return {
-      from: line.from + hit.open + 2,
-      options,
-    };
+    return { from, options };
   };
+}
+
+/** Позиция `[[` и набранный префикс для текущего контекста автокомплита. */
+function completionPrefix(
+  context: CompletionContext,
+): { hit: { open: number; prefix: string; transclusion?: true }; from: number } | null {
+  const line = context.state.doc.lineAt(context.pos);
+  const before = line.text.slice(0, context.pos - line.from);
+  const hit = wikiPrefixAt(before);
+  if (hit === null) return null;
+  return { hit, from: line.from + hit.open + 2 };
+}
+
+/**
+ * Источник секции «Даты» (0.16.1, элемент f9da2100, ADR ef097fad). Кандидатов
+ * отбирает правило `date-suggest` по набранному префиксу, поэтому результат
+ * помечен `filter: false`: метки «Сегодня · 14.11.2026» не содержат ни дефиса,
+ * ни ISO-цифр, и штатный FuzzyMatcher CM6 отбросил бы ВСЕ пункты дат на вводе
+ * `2026-11-02` (проверено прогоном реального FuzzyMatcher). `validFor` вместе
+ * с `filter: false` несовместим по контракту CM6 и запрещён сторожем
+ * `guard-wiki-link-validfor`.
+ */
+const dateCompletions: CompletionSource = (context) => {
+  const at = completionPrefix(context);
+  if (at === null || at.hit.transclusion === true) return null;
+  if (!isDatePrefix(at.hit.prefix)) return null;
+  const options = dateSuggestOptions(at.hit.prefix, todayLocal());
+  if (options.length === 0) return null;
+  return { from: at.from, options, filter: false };
+};
+
+/** Все источники дропдауна `[[`: «Даты», «Мысли» и разделы трансклюзии. */
+export function wikiLinkCompletionSources(): CompletionSource[] {
+  // Один автокомплит на wiki-ссылки и трансклюзии (ADR 8c41387c):
+  // подсказки мыслей и дат — здесь, разделов источника — в transclusion.ts.
+  return [dateCompletions, wikiLinkCompletions(), transclusionSectionCompletions()];
 }
 
 /** Autocomplete extension: opens on `[[` + typed prefix, inserts `имя]]`. */
 export function wikiLinkAutocompletion(): Extension {
   return autocompletion({
-    // Один автокомплит на wiki-ссылки и трансклюзии (ADR 8c41387c):
-    // подсказки мыслей — здесь, разделов источника — в transclusion.ts.
-    override: [wikiLinkCompletions(), transclusionSectionCompletions()],
+    override: wikiLinkCompletionSources(),
     activateOnTyping: true,
   });
 }
@@ -530,8 +566,10 @@ export function shouldNavigateWikiLink(link: WikiLinkClickTarget): boolean {
 }
 
 /**
- * Открыть день в «Дневнике» из date-чипа (0.16.1, требование 31fe2cc9): единый
- * вход для чипа редактора (`mousedown`-ветка) и чипа просмотра (`click`).
+ * Открыть день в «Дневнике» из date-чипа (0.16.1, требование 31fe2cc9).
+ * Обработчик по умолчанию для единого входа `clickDateChip` (`md-live.ts`):
+ * его вызывают и чип редактора (`mousedown`-ветка), и чип просмотра
+ * (делегированный `click`).
  */
 function openDayFromChip(date: string): void {
   void openChronicleDay(date).catch((error) => {
@@ -576,9 +614,11 @@ export function initWikiLinkNavigation(): void {
     // Date-чип (0.16.1, требование 31fe2cc9): клик открывает день в
     // «Дневнике». Проверяется ДО имени мысли — date-ссылка приоритетнее мысли
     // с таким именем (ADR fa50de55), а data-wiki-target у чипа нет вовсе.
+    // Идём через общий вход `clickDateChip` (тот же обработчик дня, что у
+    // mousedown в редакторе) — так клик в просмотре и в правке не расходятся.
     const date = link.getAttribute(WIKI_LINK_DATE_ATTR);
     if (date !== null && date !== '') {
-      openDayFromChip(date);
+      clickDateChip(date);
       return;
     }
 

@@ -494,7 +494,15 @@ async function changeChipDate(ctx: ChipContext, date: string): Promise<void> {
     title: t('wikiLink.dateMenu.changeDate'),
   });
   if (picked === null) return;
-  const target = picked.from;
+  await applyDateChange(ctx, date, picked.from);
+}
+
+/**
+ * Применить выбранную пользователем дату к чипу: строке-задаче — единый сдвиг
+ * всех её date-ссылок на разницу дней (период сохраняется), иначе — только
+ * кликнутый чип. Вынесено из диалога, чтобы поведение проверялось без GUI.
+ */
+async function applyDateChange(ctx: ChipContext, date: string, target: string): Promise<void> {
   if (!isValidLocalDay(target) || target === date) return;
   const delta = dayDelta(date, target);
   if (delta === 0) return;
@@ -557,3 +565,9 @@ export function initDateChipMenu(): void {
     true,
   );
 }
+
+/**
+ * Внутренности для юнит-теста без GUI: диалог даты и DOM-контекст чипа не
+ * поднимаем, а поведение переноса проверяем на подставленном контексте.
+ */
+export const __testing = { moveChip, applyDateChange };
