@@ -1001,11 +1001,7 @@ export const en = {
   'settings.wallpaperUpload': 'Upload…',
   'settings.wallpaperRemove': 'Remove image',
   'settings.wallpaperPreviewAlt': 'Current map background image',
-  'settings.wallpaperNone': 'No image selected: the map shows the theme background and the dot grid.',
-  'settings.wallpaperHint':
-    'The image is stored on the server separately for each network and applied to all your clients on this server. Preparation (size, luminance) runs in the client.',
-  /** Image belongs to the pair "user × network" (task 5db41abf). */
-  'settings.wallpaperHintNetwork': 'The image belongs to the network “%1”.',
+  'settings.wallpaperHint': 'Each user can set their own image for each network.',
   'settings.wallpaperHintNoNetwork': 'Open a network: the image is chosen for the current one.',
   'settings.wallpaperErrorTooLargeSource':
     'The file is larger than %1 MB — choose a smaller image.',
@@ -1018,6 +1014,7 @@ export const en = {
     'The server rejected the image: the file exceeds the 5 MB limit.',
   'settings.wallpaperErrorServer':
     'The server rejected the image: check the format and file size.',
+  'settings.wallpaperRestoreFailed': 'Could not restore the previous image.',
   /** Выбор хранится в профиле пользователя (требование 219d030c). */
   'settings.uiThemeHintAllDevices':
     'Stored in your user profile and applied to all your clients on this server.',
@@ -3494,6 +3491,8 @@ export const en = {
   'settings.otstupBetweenOblachkamiPx': 'Spacing between bubbles, px (%1–%2)',
   'settings.hranitsyaOnlyClient': 'Stored on this client only.',
   'settings.settingsSaved': 'Settings saved.',
+  'settings.unsaved.title': 'Unapplied changes',
+  'settings.unsaved.message': 'Changes have not been applied. Apply them before closing?',
 
   // -- structures --------------------------------------------------------
   'structures.komandyView': 'View commands',

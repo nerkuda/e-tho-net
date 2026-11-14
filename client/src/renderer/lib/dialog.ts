@@ -99,6 +99,14 @@ export interface DialogDirtyGuard {
    * b58f6aad, поэтому редакторы с сохранением ничего не меняют.
    */
   labels?: DialogDirtyLabels;
+  /**
+   * «Закрыть без сохранения» с собственной уборкой (задача a6ad0143): диалог
+   * настроек обязан вернуть мгновенно применённые настройки к снимку, а не
+   * просто закрыться. Получает «close» каркаса и зовёт его сам после отката;
+   * при ошибке отката каркас оставляет диалог открытым (вызывающий показывает
+   * причину). Не задано — прежнее поведение: «Не сохранять» просто закрывает.
+   */
+  discard?: (close: () => void) => void;
 }
 
 /** A dialog footer button. */
@@ -195,6 +203,14 @@ export interface DialogOptions {
    * pair with {@link extraShortcuts} for additional keys such as Shift+Enter.
    */
   customFooter?: HTMLElement;
+  /**
+   * Кнопка-подтверждение кастомного футера ({@link customFooter}): Ctrl/Cmd+
+   * Enter нажимает её так же, как встроенную primary-кнопку {@link buttons}
+   * (задача a6ad0143 — подсказка футера настроек обещала это сочетание, но
+   * каркас не знал, какую кнопку нажимать). Для дефолтного футера не нужна:
+   * подтверждение задаётся {@link DialogButton.confirm}.
+   */
+  primaryButton?: HTMLButtonElement;
   /**
    * Строка ошибки в панели кнопок (футере) — ОБЯЗАТЕЛЬНОЕ место любой ошибки
    * диалога: футер лежит вне тела и не переключается вместе с вкладками,
@@ -801,6 +817,8 @@ export function showDialog(opts: DialogOptions): () => void {
   }
 
   if (opts.customFooter !== undefined) {
+    // Ctrl/Cmd+Enter: кастомный футер объявляет свою кнопку подтверждения.
+    primaryBtn = opts.primaryButton ?? null;
     box.append(opts.customFooter);
   } else if (opts.buttons !== undefined && opts.buttons.length > 0) {
     const footer = div('dialog-footer');
@@ -918,7 +936,14 @@ export function showDialog(opts: DialogOptions): () => void {
       // закрыть» (главное действие справа, как в остальных футерах).
       buttons: [
         { label: labels?.stay ?? t('dialog.unsaved.stay') },
-        { label: labels?.discard ?? t('dialog.unsaved.discard'), onClick: () => close() },
+        {
+          label: labels?.discard ?? t('dialog.unsaved.discard'),
+          onClick: () => {
+            const discard = opts.dirty?.discard;
+            if (discard === undefined) close();
+            else discard(close);
+          },
+        },
         {
           label: labels?.save ?? t('dialog.unsaved.save'),
           primary: true,

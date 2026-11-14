@@ -1,6 +1,6 @@
 {
   "name": "0e4a52cd-theme-mode",
-  "description": "Задача 0e4a52cd «Механизм применения темы и режима в клиенте» (требование 219d030c, элемент edc921ab, сценарии 580f8d10 и b1131d65). Стенд: язык сервера ru. Проверяется: boot-применение до первого экрана (атрибуты data-theme/data-mode на корне, фон body); раздел «Оформление» в «Клиенте» (fieldSelect из 6 тем + режим из двух опций, подписи из словаря); живая перекраска при смене темы и режима (--bg/--surface темы + color-scheme) без перезапуска; тема/режим — исключение из draft-модели (кнопки «Применить» остаются неактивными); сохранение в профиль (PUT ui_theme/ui_mode) и кэш client_meta с владельцем; восстановление после перезапуска страницы; отказ записи темы (сервер отвергает неизвестное значение 422: выбор применён локально, серверное значение не затёрто, поставлен маркер отложенной синхронизации и показана строка ошибки; затем валидный выбор синхронизируется и маркер снимается; деградация «сервер новее сборки» — неизвестная серверу тема — покрыта юнит-тестом ui-theme.test.ts); восстановление из кэша, когда серверных значений нет. Запуск: npm -w @etn/server run build && npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.0e4a52cd-theme-mode.scenario.json --out .tmp/0e4a52cd/out",
+  "description": "Задача 0e4a52cd «Механизм применения темы и режима в клиенте» (требование 219d030c, элемент edc921ab, сценарии 580f8d10 и b1131d65). Стенд: язык сервера ru. Проверяется: boot-применение до первого экрана (атрибуты data-theme/data-mode на корне, фон body); раздел «Оформление» в «Клиенте» (fieldSelect из 6 тем + режим из двух опций, подписи из словаря); живая перекраска при смене темы и режима (--bg/--surface темы + color-scheme) без перезапуска; тема/режим — мгновенные настройки, но входят в «непринятые изменения»: «Применить» фиксирует снимок и гасит кнопки, «Отмена» откатывает тему и режим к снимку; сохранение в профиль (PUT ui_theme/ui_mode) и кэш client_meta с владельцем; восстановление после перезапуска страницы; отказ записи темы (сервер отвергает неизвестное значение 422: выбор применён локально, серверное значение не затёрто, поставлен маркер отложенной синхронизации и показана строка ошибки; затем валидный выбор синхронизируется и маркер снимается; деградация «сервер новее сборки» — неизвестная серверу тема — покрыта юнит-тестом ui-theme.test.ts); восстановление из кэша, когда серверных значений нет. Запуск: npm -w @etn/server run build && npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.0e4a52cd-theme-mode.scenario.json --out .tmp/0e4a52cd/out",
   "timeout": 300000,
   "texts": {
     "appearance": { "ru": "Оформление", "en": "Appearance" },
@@ -77,8 +77,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section",
-      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+      "name": "open-appearance-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
     },
     {
       "name": "appearance-section",
@@ -105,9 +105,9 @@
     },
     {
       "name": "section-labels",
-      "probe": "(() => { const titles = Array.from(document.querySelectorAll('.settings-section .settings-section-title')).map((e) => (e.textContent || '').trim()); const fields = Array.from(document.querySelectorAll('.settings-section .ui-field-label')).map((e) => (e.textContent || '').trim()); return { hasAppearance: titles.includes('{{text:appearance}}'), fields: fields.filter((s) => s === '{{text:themeField}}' || s === '{{text:modeField}}') }; })()",
+      "probe": "(() => { const titles = Array.from(document.querySelectorAll('.settings-section .settings-section-title')).map((e) => (e.textContent || '').trim()); const fields = Array.from(document.querySelectorAll('.settings-section .ui-field-label')).map((e) => (e.textContent || '').trim()); return { hasAppearanceTitle: titles.includes('{{text:appearance}}'), fields: fields.filter((s) => s === '{{text:themeField}}' || s === '{{text:modeField}}') }; })()",
       "expect": {
-        "hasAppearance": true,
+        "hasAppearanceTitle": false,
         "fields": ["Тема интерфейса", "Режим"]
       }
     },
@@ -134,7 +134,16 @@
       }
     },
     {
-      "name": "apply-buttons-not-dirty",
+      "name": "apply-buttons-dirty",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.disabled)",
+      "expect": [false, false, false]
+    },
+    {
+      "name": "apply-theme-choice",
+      "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[0]) throw new Error('нет кнопки «Применить»'); buttons[0].click(); return true; })()"
+    },
+    {
+      "name": "apply-buttons-clean",
       "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.disabled)",
       "expect": [true, false, true]
     },
@@ -240,8 +249,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-refusal",
-      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+      "name": "open-appearance-refusal",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
     },
     {
       "name": "appearance-refusal",
@@ -375,6 +384,68 @@
         "bg": "rgb(250, 246, 240)",
         "surface": "#fffcf7"
       }
+    },
+    {
+      "name": "open-user-menu-rollback",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    { "name": "user-menu-rollback", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-rollback",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-rollback",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-rollback",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "appearance-rollback",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.settings-wallpaper') !== null"
+    },
+    {
+      "name": "theme-before-rollback",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); if (!s) throw new Error('нет выбора темы'); return s.value; })()",
+      "expect": "wasp"
+    },
+    {
+      "name": "pick-nordic-rollback",
+      "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); if (!s) throw new Error('нет выбора темы'); s.value = 'nordic'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()",
+      "expect": "nordic"
+    },
+    {
+      "name": "nordic-live-rollback",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.theme === 'nordic'"
+    },
+    {
+      "name": "buttons-dirty-rollback",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.disabled)",
+      "expect": [false, false, false]
+    },
+    {
+      "name": "cancel-rollback",
+      "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[1]) throw new Error('нет кнопки «Отмена»'); buttons[1].click(); return true; })()"
+    },
+    {
+      "name": "theme-restored-rollback",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null && document.documentElement.dataset.theme === 'wasp' && document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "server-theme-restored",
+      "api": {
+        "name": "server-theme-restored",
+        "method": "GET",
+        "path": "/users/me/settings",
+        "expression": "({ theme: data.ui_theme ?? null, mode: data.ui_mode ?? null })"
+      },
+      "expect": { "theme": "wasp", "mode": null }
     }
   ]
 }

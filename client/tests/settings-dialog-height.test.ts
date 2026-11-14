@@ -4,7 +4,8 @@
  * S/M/L/XL, высота не зависит от вкладки».
  *
  * Симптом до правки: разделы левой навигации (Пользователь / Мыслесеть /
- * Клиент / Логирование) имеют разную высоту, диалог собирался из `body` +
+ * Клиент / Оформление / Логирование) имеют разную высоту, диалог собирался из
+ * `body` +
  * `customFooter` и получал только `max-height` роли — при переключении раздела
  * окно «дёргалось», кнопки футера уезжали. Этап 1 дизайн-системы убрал класс
  * `dialog-box-tall`, фиксировавший высоту диалога с кастомным футером, но роль
@@ -144,15 +145,21 @@ describe('диалог «Все настройки»: стабильная вы�
     const fixedBefore = found.dataset['dialogFixedHeight'];
     const heightBefore = found.style.getPropertyValue('height');
 
-    // Раздел «Пользователь» показан; переходим на «Клиент» (другая высота).
-    navButton(backdrop, 'Клиент').click();
+    // Раздел «Пользователь» показан; переходим на «Оформление» (другая высота).
+    navButton(backdrop, 'Оформление').click();
 
     const content = backdrop.findAll('settings-content')[0];
     assert.ok(content !== undefined, 'контейнер содержимого на месте');
     assert.ok(
-      content!.flatText().includes('Тема'),
-      'содержимое переключилось на раздел «Клиент»',
+      content!.flatText().includes('Тема интерфейса'),
+      'содержимое переключилось на раздел «Оформление»',
     );
+    // «Оформление» — самостоятельный раздел (задача a6ad0143): в «Клиенте»
+    // темы больше нет, там остались язык приложения и размер облачка.
+    navButton(backdrop, 'Клиент').click();
+    const clientText = content!.flatText();
+    assert.ok(!clientText.includes('Тема интерфейса'), 'в «Клиенте» нет выбора темы');
+    assert.ok(clientText.includes('Размер облачка'), 'в «Клиенте» остался размер облачка');
     assert.equal(found.dataset['dialogSize'], sizeBefore, 'роль размера не изменилась');
     assert.equal(found.dataset['dialogFixedHeight'], fixedBefore, 'фиксация высоты сохранилась');
     assert.equal(

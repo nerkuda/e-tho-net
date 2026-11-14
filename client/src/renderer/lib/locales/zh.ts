@@ -489,10 +489,7 @@ export const zh = {
   'settings.wallpaperUpload': '上传…',
   'settings.wallpaperRemove': '移除图片',
   'settings.wallpaperPreviewAlt': '当前地图背景图片',
-  'settings.wallpaperNone': '未选择图片：地图显示主题背景和点阵网格。',
-  'settings.wallpaperHint': '图片在服务器上按网络分别保存，并应用于此服务器上您的所有客户端。尺寸与亮度的处理在客户端完成。',
-  /** 图片属于「用户 × 网络」组合（任务 5db41abf）。 */
-  'settings.wallpaperHintNetwork': '图片属于网络「%1」。',
+  'settings.wallpaperHint': '每个用户可以为每个网络设置自己的图片。',
   'settings.wallpaperHintNoNetwork': '请先打开一个网络：图片是为当前网络选择的。',
   'settings.wallpaperErrorTooLargeSource': '文件大于 %1 MB — 请选择更小的图片。',
   /** Потолок ИСХОДНОГО файла при системном выборе картинки (код из main). */
@@ -501,6 +498,7 @@ export const zh = {
   'settings.wallpaperErrorTooLargeResult': '处理后图片仍大于 %1 MB — 请选择其他图片。',
   'settings.wallpaperErrorFileSize': '服务器拒绝了图片：文件超过 5 MB 限制。',
   'settings.wallpaperErrorServer': '服务器拒绝了图片：请检查格式和文件大小。',
+  'settings.wallpaperRestoreFailed': '无法恢复之前的图片。',
   /** Выбор хранится в профиле пользователя (требование 219d030c). */
   'settings.uiThemeHintAllDevices': '保存在用户配置中，并应用于此服务器上您的所有客户端。',
   /** Старый сервер не хранит выбор темы в профиле. */
@@ -2336,6 +2334,8 @@ export const zh = {
   'settings.otstupBetweenOblachkamiPx': '气泡间距，px（%1–%2）',
   'settings.hranitsyaOnlyClient': '仅保存在当前客户端。',
   'settings.settingsSaved': '设置已保存。',
+  'settings.unsaved.title': '未应用的更改',
+  'settings.unsaved.message': '更改尚未应用。关闭前要应用吗？',
   'structures.komandyView': '视图命令',
   'structures.viewPustKomandaNotPrimenena': '视图为空——命令未应用。',
   'structures.addedVydeleniyu': '已添加到选择：%1。',

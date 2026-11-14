@@ -32,12 +32,26 @@ import { etn } from '../lib/etn.js';
 import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow, choiceControl } from '../lib/ui/choice-row.js';
 
+/** Текущее состояние тумблеров журналирования (для снимка «Применить»). */
+export interface LogsSectionState {
+  /** Включено ли журналирование клиента; `null` — ещё не известно. */
+  client: boolean | null;
+  /** Включено ли журналирование сервера; `null` — недоступно (не admin). */
+  server: boolean | null;
+}
+
 /**
  * Confirmation seam: unit tests substitute their own resolver, the dialog
  * stays the production default.
  */
 export interface LogsSectionOptions {
   confirm?: (title: string, message: string) => Promise<boolean>;
+  /**
+   * Смена состояния тумблеров (задача a6ad0143): диалог настроек держит снимок
+   * «принятого» состояния и включает мгновенные изменения в «Применить».
+   * Вызывается после каждой успешной загрузки/переключения.
+   */
+  onChange?: (state: LogsSectionState) => void;
 }
 
 /** Builds the whole «Логирование» section of the settings dialog. */
@@ -77,6 +91,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
             clientState = state;
             setClientMsg(next ? t('settingsLogs.loggingClientEnabled') : t('settingsLogs.loggingClientDisabled'));
             renderClient();
+            notify();
           })
           .catch((err: unknown) => {
             // Immediate apply failed — revert the visual state and say why.
@@ -142,6 +157,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       setClientMsg(t('settingsLogs.deletedFilesCurrentFileUsechen', result.deleted));
       clientState = await etn.system.getClientLogState();
       renderClient();
+      notify();
     } catch (err) {
       setClientMsg(errText(err), true);
     }
@@ -158,6 +174,14 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
   function setServerMsg(text: string, isError = false): void {
     setStatusText(serverMsg, text, isError);
+  }
+
+  /** Сообщить диалогу текущее состояние тумблеров (снимок/«Применить»). */
+  function notify(): void {
+    opts.onChange?.({
+      client: clientState?.enabled ?? null,
+      server: serverStatus?.enabled ?? null,
+    });
   }
 
   function renderServer(): void {
@@ -197,6 +221,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
             serverStatus = fresh;
             setServerMsg(next ? t('settingsLogs.loggingServerEnabled') : t('settingsLogs.loggingServerDisabled'));
             renderServer();
+            notify();
           })
           .catch((err: unknown) => {
             toggle.checked = !next;
@@ -317,6 +342,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       setServerMsg(t('settingsLogs.filesLogServerDeleted'));
       selectedServerFile = null;
       renderServer();
+      notify();
     } catch (err) {
       setServerMsg(errText(err), true);
     }
@@ -333,6 +359,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     .then((state) => {
       clientState = state;
       renderClient();
+      notify();
     })
     .catch((err: unknown) => {
       setClientMsg(errText(err), true);
@@ -343,10 +370,12 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     .then((status) => {
       serverStatus = status;
       renderServer();
+      notify();
     })
     .catch((err: unknown) => {
       serverError = serverUnavailableReason(err);
       renderServer();
+      notify();
     });
 
   return root;

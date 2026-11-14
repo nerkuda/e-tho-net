@@ -295,3 +295,113 @@ describe('свои метки подтверждения закрытия (ош�
     );
   });
 });
+
+describe('кастомный футер: primary-кнопка и свой откат (задача a6ad0143)', () => {
+  /** Ctrl+Enter — всем слушателям keydown окна (bubble-фаза каркаса). */
+  function pressCtrlEnter(): void {
+    const event = {
+      key: 'Enter',
+      repeat: false,
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      defaultPrevented: false,
+      preventDefault: () => {
+        event.defaultPrevented = true;
+      },
+    };
+    for (const { type, listener } of [...windowListeners]) {
+      if (type === 'keydown') listener(event);
+    }
+  }
+
+  /** Кнопка сырого DOM-шима (кастомный футер собирает свою панель). */
+  function makeButton(label: string): ShimElement {
+    const btn = (globalThis as any).document.createElement('button') as ShimElement;
+    btn.textContent = label;
+    return btn;
+  }
+
+  it('Ctrl+Enter нажимает кнопку, объявленную primaryButton кастомного футера', () => {
+    installShim();
+    drainDialogs();
+    let applied = 0;
+    const footer = div('dialog-footer');
+    const primary = makeButton('Применить и закрыть');
+    primary.addEventListener('click', () => {
+      applied += 1;
+    });
+    footer.append(primary as unknown as Node);
+    showDialog({
+      title: 'Настройки',
+      size: 'm',
+      body: div('settings-body'),
+      customFooter: footer,
+      primaryButton: primary as unknown as HTMLButtonElement,
+    });
+
+    pressCtrlEnter();
+    assert.equal(applied, 1, 'Ctrl+Enter нажал заявленную primary-кнопку');
+    assert.equal(backdrops().length, 1, 'диалог остался открыт (кнопка решает сама)');
+    drainDialogs();
+  });
+
+  it('без primaryButton Ctrl+Enter молчит: кастомная панель сама отвечает за клавишу', () => {
+    installShim();
+    drainDialogs();
+    let clicks = 0;
+    const footer = div('dialog-footer');
+    const apply = makeButton('Применить');
+    apply.addEventListener('click', () => {
+      clicks += 1;
+    });
+    footer.append(apply as unknown as Node);
+    showDialog({
+      title: 'Настройки',
+      size: 'm',
+      body: div('settings-body'),
+      customFooter: footer,
+    });
+
+    pressCtrlEnter();
+    assert.equal(clicks, 0, 'без primaryButton нажимать нечего');
+    drainDialogs();
+  });
+
+  it('«Не сохранять» получает close и закрывает диалог только после отката', () => {
+    installShim();
+    drainDialogs();
+    const input = (globalThis as any).document.createElement('input') as ShimElement;
+    const bodyEl = div('form-stack');
+    bodyEl.append(input as unknown as Node);
+    let closeAfterRollback: (() => void) | null = null;
+    let discarded = 0;
+    showDialog({
+      title: 'Настройки',
+      size: 'm',
+      body: bodyEl,
+      dirty: {
+        isDirty: () => input.value !== '',
+        save: () => undefined,
+        discard: (close) => {
+          discarded += 1;
+          closeAfterRollback = close;
+        },
+      },
+      buttons: [{ label: t('actions.cancel') }, { label: 'Применить', primary: true }],
+    });
+    input.value = 'правка';
+    pressEscape();
+    assert.equal(backdrops().length, 2, 'подтверждение открылось');
+
+    buttonByLabel(backdrops()[1]!, t('dialog.unsaved.discard')).click();
+    assert.equal(discarded, 1, '«Не сохранять» позвал собственный откат');
+    assert.equal(backdrops().length, 1, 'диалог ждёт завершения отката');
+
+    assert.ok(closeAfterRollback !== null, 'откат получил close каркаса');
+    // TS не сужает переменную, присвоенную в колбэке: приводим явно.
+    (closeAfterRollback as unknown as () => void)();
+    assert.equal(backdrops().length, 0, 'после отката диалог закрыт');
+  });
+});

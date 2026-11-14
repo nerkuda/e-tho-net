@@ -61,8 +61,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section",
-      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+      "name": "open-appearance-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
     },
     {
       "name": "wallpaper-block",
@@ -167,8 +167,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section-2",
-      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+      "name": "open-appearance-section-2",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
     },
     {
       "name": "pick-blue-topaz",
@@ -212,7 +212,7 @@
         "preview_visible": true,
         "remove_enabled": true,
         "upload_enabled": true,
-        "footer_disabled": [true, false, true]
+        "footer_disabled": [false, false, false]
       }
     },
 
@@ -263,8 +263,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section-3",
-      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Клиент'); if (!nav) throw new Error('нет раздела «Клиент»'); nav.click(); return true; })()"
+      "name": "open-appearance-section-3",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
     },
     {
       "name": "preview-hidden-after-remove",
@@ -289,6 +289,58 @@
       "name": "wallpaper-from-cache-at-boot",
       "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), state: s.status, source: s.source, image_var_nonempty: getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim().length > 0 }; })()",
       "expect": { "attr": "on", "state": "ok", "source": "server", "image_var_nonempty": true }
+    },
+    {
+      "name": "open-user-menu-rollback",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    { "name": "user-menu-visible-rollback", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-rollback",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog-rollback",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-rollback",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "appearance-ready-rollback",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.settings-wallpaper-preview') !== null"
+    },
+    {
+      "name": "capture-wallpaper-before",
+      "expect": "ok",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); window.__wpHashBefore = s.content_hash; return s.status; })()"
+    },
+    {
+      "name": "remove-wallpaper-rollback",
+      "eval": "(() => { const block = document.querySelector('.settings-wallpaper'); if (!block) throw new Error('нет блока картинки'); const remove = block.children[2]; if (!remove) throw new Error('нет кнопки удаления'); remove.click(); return true; })()"
+    },
+    {
+      "name": "preview-hidden-rollback",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.settings-wallpaper-preview').hidden === true"
+    },
+    {
+      "name": "buttons-dirty-rollback",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.disabled)",
+      "expect": [false, false, false]
+    },
+    {
+      "name": "cancel-rollback",
+      "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[1]) throw new Error('нет кнопки «Отмена»'); buttons[1].click(); return true; })()"
+    },
+    {
+      "name": "wallpaper-restored-rollback",
+      "timeout": 20000,
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { dialog_closed: document.querySelector('.dialog-backdrop') === null, status: s.status, same_hash: s.content_hash === window.__wpHashBefore }; })()",
+      "expect": { "dialog_closed": true, "status": "ok", "same_hash": true }
     }
   ]
 }

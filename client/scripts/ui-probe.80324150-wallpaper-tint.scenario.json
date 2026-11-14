@@ -6,7 +6,7 @@
     "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
     "userMenuTitle": { "ru": "Меню пользователя", "en": "User menu" },
     "userMenuSettings": { "ru": "Настройки", "en": "Settings" },
-    "settingsClientSection": { "ru": "Клиент", "en": "Client" },
+    "settingsAppearanceSection": { "ru": "Оформление", "en": "Appearance" },
     "layerMenuBase": { "ru": "Основа", "en": "Base" },
     "layerCreate": { "ru": "Создать новый слой…", "en": "Create new layer…" },
     "layerProps": { "ru": "Свойства слоя…", "en": "Layer properties…" },
@@ -187,7 +187,7 @@
     },
     {
       "name": "open-client-section",
-      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}'); if (nav === undefined) throw new Error('client section not found'); nav.click(); return true; })()"
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsAppearanceSection}}'); if (nav === undefined) throw new Error('appearance section not found'); nav.click(); return true; })()"
     },
     {
       "name": "wallpaper-block",
@@ -263,6 +263,15 @@
         "name": "blue-topaz-light-applied",
         "timeout": 10000,
         "waitFor": "document.documentElement.dataset.theme === 'blue-topaz' && document.documentElement.dataset.mode === 'light'"
+      },
+      {
+        "name": "apply-theme-mode",
+        "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[0]) throw new Error('нет кнопки «Применить»'); buttons[0].click(); return true; })()"
+      },
+      {
+        "name": "apply-theme-mode-settled",
+        "timeout": 15000,
+        "waitFor": "document.querySelectorAll('.settings-footer-buttons button')[0].disabled === true"
       },
     { "name": "close-settings", "key": "Escape" },
     {
@@ -341,7 +350,7 @@
 
     {
       "name": "open-client-section-bt",
-      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}'); if (nav === undefined) throw new Error('client section not found'); nav.click(); return true; })()"
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsAppearanceSection}}'); if (nav === undefined) throw new Error('appearance section not found'); nav.click(); return true; })()"
     },
 
     {
@@ -394,6 +403,15 @@
       }
     },
 
+      {
+        "name": "apply-theme-mode-bt",
+        "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[0]) throw new Error('нет кнопки «Применить»'); buttons[0].click(); return true; })()"
+      },
+      {
+        "name": "apply-theme-mode-bt-settled",
+        "timeout": 15000,
+        "waitFor": "document.querySelectorAll('.settings-footer-buttons button')[0].disabled === true"
+      },
     {
       "name": "close-settings-bt",
       "key": "Escape"
