@@ -22,6 +22,7 @@ import { t } from '../src/renderer/lib/i18n.js';
 import {
   TASK_PANEL_SECTION_CLASS,
   mountTaskPanel,
+  type ReminderPanelRow,
   type TaskPanelActions,
   type TaskPanelRow,
   type TaskPanelView,
@@ -63,6 +64,7 @@ interface Calls {
   rowCommands: string[];
   bulk: Array<{ command: string; filter: unknown; shift?: unknown }>;
   reminderActions: string[];
+  reminderGroupDismiss: string[];
   days: string[];
   rawLines: number;
 }
@@ -139,6 +141,7 @@ function mount(
     rowCommands: [],
     bulk: [],
     reminderActions: [],
+    reminderGroupDismiss: [],
     days: [],
     rawLines: 0,
   };
@@ -172,6 +175,9 @@ function mount(
     },
     reminderAction: (row, action, until) => {
       calls.reminderActions.push(`${row.key}:${action}${until === undefined ? '' : `:${until}`}`);
+    },
+    reminderGroupDismiss: (title, rows) => {
+      calls.reminderGroupDismiss.push(`${title}:${rows.map((row) => row.key).join(',')}`);
     },
     pickDate: async () => '2026-11-20',
     pickDateTime: async () => '2026-11-20T12:00:00.000Z',
@@ -277,6 +283,128 @@ describe('панель задач: секции, строки и счётчик�
       today: '2026-11-14',
     });
     assert.equal(calls.bulk[0]!.command, 'cancel-all');
+    destroy();
+  });
+
+  it('групповая команда «Отменить все напоминания» адресует вхождения группы', () => {
+    const rows: ReminderPanelRow[] = [
+      {
+        key: 'r1:2026-11-14T09:00:00.000Z',
+        reminderId: 'r1',
+        subjectType: 'thought',
+        subjectId: 't1',
+        title: 'Мысль',
+        moment: '2026-11-14T09:00:00.000Z',
+        occurrenceAt: '2026-11-14T09:00:00.000Z',
+        status: 'active',
+        repeat: 'однократно',
+        day: '2026-11-14',
+      },
+      {
+        key: 'r2:2026-11-14T10:00:00.000Z',
+        reminderId: 'r2',
+        subjectType: 'thought',
+        subjectId: 't2',
+        title: 'Вторая',
+        moment: '2026-11-14T10:00:00.000Z',
+        occurrenceAt: '2026-11-14T10:00:00.000Z',
+        status: 'active',
+        repeat: 'ежегодно 8 марта',
+        day: '2026-11-14',
+      },
+    ];
+    const { host, calls, render, destroy } = mount([]);
+    render(
+      panelView([], {
+        reminderCount: rows.length,
+        reminderSections: [
+          {
+            key: 'today',
+            title: 'Сегодня',
+            subgroups: [
+              {
+                key: 'date:2026-11-14',
+                title: '14.11.2026',
+                kind: 'dates',
+                filter: {},
+                rows,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const reminderGroup = host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
+    const menuButton = reminderGroup.querySelector(
+      '.ui-task-subgroup-menu',
+    ) as unknown as ShimElement;
+    assert.ok(menuButton, 'у подгруппы напоминаний есть меню команд');
+    menuButton.emit('click', {
+      target: menuButton,
+      currentTarget: menuButton,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const item = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('reminder.groupDismiss')));
+    assert.ok(item, 'пункт «Отменить все напоминания по группе» в меню');
+    item!.click();
+    assert.deepEqual(calls.reminderGroupDismiss, [
+      `14.11.2026:${rows.map((row) => row.key).join(',')}`,
+    ]);
+    destroy();
+  });
+
+  it('меню строки напоминания: «Изменить расписание» и адрес вхождения', () => {
+    const rows: ReminderPanelRow[] = [
+      {
+        key: 'r1:2026-11-14T09:00:00.000Z',
+        reminderId: 'r1',
+        subjectType: 'thought',
+        subjectId: 't1',
+        title: 'Мысль',
+        moment: '2026-11-14T09:00:00.000Z',
+        occurrenceAt: '2026-11-14T09:00:00.000Z',
+        status: 'active',
+        repeat: 'однократно',
+        day: '2026-11-14',
+      },
+    ];
+    const { host, calls, render, destroy } = mount([]);
+    render(
+      panelView([], {
+        reminderCount: rows.length,
+        reminderSections: [
+          {
+            key: 'today',
+            title: 'Сегодня',
+            subgroups: [
+              { key: 'date:2026-11-14', title: '14.11.2026', kind: 'dates', filter: {}, rows },
+            ],
+          },
+        ],
+      }),
+    );
+    const reminderGroup = host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
+    const menuButton = reminderGroup.querySelector(
+      '.ui-reminder-row-menu',
+    ) as unknown as ShimElement;
+    assert.ok(menuButton, 'у строки напоминания есть меню команд');
+    menuButton.emit('click', {
+      target: menuButton,
+      currentTarget: menuButton,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const edit = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('reminder.editSchedule')));
+    assert.ok(edit, 'пункт «Изменить расписание» в меню строки');
+    edit!.click();
+    assert.deepEqual(calls.reminderActions, [`${rows[0]!.key}:edit-schedule`]);
     destroy();
   });
 

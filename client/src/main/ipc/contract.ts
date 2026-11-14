@@ -141,9 +141,12 @@ import type {
   TaskOpAction,
   TaskPatchResult,
   TaskScope,
+  Reminder,
   ReminderDeleteResult,
+  ReminderKind,
   ReminderListResult,
   ReminderOccurrenceChange,
+  ReminderSchedule,
   ReminderSubjectType,
   Thought,
   ThoughtBatchInput,
@@ -578,6 +581,26 @@ export interface ReminderListQuery {
   horizon_days?: number;
   subject_type?: ReminderSubjectType;
   subject_id?: string;
+}
+
+/**
+ * Вход `POST /networks/{nid}/reminders` (операция ae19b1bf): вид, грамматика
+ * повтора и опорное вхождение. Согласованность `kind` ↔ `schedule.type`
+ * проверяет сервер (расхождение — 400).
+ */
+export interface ReminderCreateInput {
+  subject_type: ReminderSubjectType;
+  subject_id: string;
+  kind: ReminderKind;
+  schedule: ReminderSchedule;
+  anchor_at: string;
+}
+
+/** Вход `PATCH /networks/{nid}/reminders/{id}` — правка расписания серии. */
+export interface ReminderUpdateInput {
+  kind?: ReminderKind;
+  schedule?: ReminderSchedule;
+  anchor_at?: string;
 }
 
 /** The full `window.etn` surface (docs/07-client-electron.md §6). */
@@ -1399,10 +1422,23 @@ export interface EtnApi {
   reminders: {
     /** `GET /networks/{nid}/reminders` — строки владельца с раскрытием повторов. */
     list(networkId: string, query?: ReminderListQuery): Promise<ReminderListResult>;
+    /** `POST /networks/{nid}/reminders` — создать напоминание владельца. */
+    create(networkId: string, input: ReminderCreateInput): Promise<Reminder>;
+    /** `PATCH /networks/{nid}/reminders/{id}` — изменить расписание серии. */
+    update(networkId: string, id: string, input: ReminderUpdateInput): Promise<Reminder>;
     /** `POST …/reminders/{id}/snooze` — отложить ТОЛЬКО это вхождение. */
-    snooze(networkId: string, id: string, until: string): Promise<ReminderOccurrenceChange>;
-    /** `POST …/reminders/{id}/dismiss` — убрать ТЕКУЩЕЕ вхождение. */
-    dismiss(networkId: string, id: string): Promise<ReminderOccurrenceChange>;
+    snooze(
+      networkId: string,
+      id: string,
+      until: string,
+      occurrenceAt?: string,
+    ): Promise<ReminderOccurrenceChange>;
+    /** `POST …/reminders/{id}/dismiss` — убрать вхождение (`occurrenceAt` — показанное). */
+    dismiss(
+      networkId: string,
+      id: string,
+      occurrenceAt?: string,
+    ): Promise<ReminderOccurrenceChange>;
     /** `DELETE /networks/{nid}/reminders/{id}` — удалить напоминание владельца. */
     remove(networkId: string, id: string): Promise<ReminderDeleteResult>;
   };

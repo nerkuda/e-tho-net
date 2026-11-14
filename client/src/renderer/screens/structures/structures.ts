@@ -1471,9 +1471,9 @@ function buildCloud(row: TreeRow, selection: Set<string>): HTMLElement {
   // Indicator row identical to the canvas cloud (§15.4: 📝/📅/📎, patched
   // asynchronously via the shared indicator queue of canvas.ts).
   const ind = div('cloud-ind');
-  const perm = span('📝', 'ind dim');
-  const chrono = span('📅', 'ind dim');
-  const att = span('📎', 'ind dim');
+  const perm = span('📝', 'ind ind-comment dim');
+  const chrono = span('📅', 'ind ind-chrono dim');
+  const att = span('📎', 'ind ind-att dim');
   markCommentPreview(perm, 'thought', row.thoughtId, ref?.title ?? '—');
   markChronoPreview(chrono, 'thought', row.thoughtId, ref?.title ?? '—');
   markAttachmentsPreview(att, 'thought', row.thoughtId, ref?.title ?? '—');

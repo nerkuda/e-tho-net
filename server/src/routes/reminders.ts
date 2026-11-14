@@ -180,7 +180,14 @@ export function createRemindersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestReminderSnooze, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const change = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-          const updated = snoozeReminder(ndb, req.auth!.user.id, input.reminder_id, input.until);
+          const updated = snoozeReminder(
+            ndb,
+            req.auth!.user.id,
+            input.reminder_id,
+            input.until,
+            Date.now(),
+            input.occurrence_at,
+          );
           return {
             result: updated,
             events: [
@@ -208,7 +215,13 @@ export function createRemindersRoutes(deps: RouteDeps): FastifyPluginAsync {
         const input = parseRest(RestReminderDismiss, req);
         const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
         const change = runWrite(ndb, restWriteFx(deps, req, input.network_id), () => {
-          const updated = dismissReminder(ndb, req.auth!.user.id, input.reminder_id);
+          const updated = dismissReminder(
+            ndb,
+            req.auth!.user.id,
+            input.reminder_id,
+            Date.now(),
+            input.occurrence_at,
+          );
           return {
             result: updated,
             events: [

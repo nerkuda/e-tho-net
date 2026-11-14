@@ -55,6 +55,20 @@
   border: 1px solid var(--border);
   border-bottom: 0;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  /* Бейдж «сегодня» позиционируется относительно САМОЙ закладки. */
+  position: relative;
+}
+
+/* Бейдж «сегодня» на закладке «Дневник» (0.16.1, элемент 23887005): счётчик
+   напоминаний в правом верхнем углу значка, не растягивает закладку. Клик по
+   бейджу — переход на сегодня, поэтому pointer-events остаются включёнными. */
+.toolbar .view-tab .view-tab-badge {
+  position: absolute;
+  top: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+  z-index: 2;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .toolbar .view-tab svg {

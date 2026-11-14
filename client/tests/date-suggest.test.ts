@@ -26,7 +26,11 @@ import {
   typedDateIso,
   withThoughtsSection,
 } from '../src/renderer/editor/date-suggest.js';
-import { wikiLinkCompletionSources, wikiPrefixAt } from '../src/renderer/editor/wiki-link.js';
+import {
+  wikiLinkCompletionSources,
+  wikiLinkInternals,
+  wikiPrefixAt,
+} from '../src/renderer/editor/wiki-link.js';
 import { store } from '../src/renderer/state.js';
 
 const TODAY = '2026-11-14';
@@ -196,13 +200,22 @@ test('источник мыслей: в датном режиме мысли у�
   );
 });
 
-test('пустой префикс: обе секции — «Даты» сверху и «Мысли» ниже', async () => {
+test('пустой префикс: секция «Даты» есть, поиск мыслей не запрашивается', async () => {
   store.update({ networkId: 'n1' });
   const queries = installSearch(['Мысль']);
 
   const dates = await sources()[0]!(contextAt('[['));
   const thoughts = await sources()[1]!(contextAt('[['));
   assert.ok(dates !== null && dates.options.length >= 2, 'даты доступны сразу после `[[`');
-  assert.deepEqual(thoughts?.options[0]?.section, thoughtsSection());
-  assert.deepEqual(queries, [''], 'мысли ищутся по пустому префиксу — секция достижима');
+  assert.equal(thoughts, null, 'пустой префикс мыслей не предлагает');
+  assert.deepEqual(queries, [], 'по пустому префиксу сервер не ищется (хвост задачи 5)');
+});
+
+test('загрузчик подсказок: пустой префикс не зовёт thoughts.search', async () => {
+  const queries = installSearch(['Мысль']);
+  assert.deepEqual(await wikiLinkInternals.loadCompletions('n1', ''), []);
+  assert.deepEqual(queries, [], 'пустая строка поиска на сервер не уходит');
+  const hits = await wikiLinkInternals.loadCompletions('n1', 'Мыс');
+  assert.equal(hits.length, 1, 'непустой префикс ищется как раньше');
+  assert.deepEqual(queries, ['Мыс']);
 });

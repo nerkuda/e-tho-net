@@ -22,4 +22,5 @@ export * from './mentions.js';
 export * from './deep-link.js';
 export * from './filter-profiles.js';
 export * from './semver.js';
+export * from './reminder-repeat.js';
 export * from './types/index.js';

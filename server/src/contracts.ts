@@ -5969,21 +5969,35 @@ export const RestReminderSnooze = defineContract(
     network_id: NetworkId,
     reminder_id: z.string().min(1),
     until: ReminderInstant,
+    /**
+     * Адрес КОНКРЕТНОГО вхождения серии (UTC-инстанс). Панель показывает
+     * несколько вхождений одного напоминания и передаёт показанное; без поля
+     * сервер берёт ближайшее необработанное вхождение (не раньше текущих
+     * UTC-суток) — см. операцию 500d1b3d.
+     */
+    occurrence_at: ReminderInstant.optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     reminder_id: { from: { kind: 'param', name: 'id' } },
     until: { from: { kind: 'body' }, req: true, msg: 'until is required.' },
+    occurrence_at: { from: { kind: 'body' } },
   },
 );
 
 /** POST /networks/:id/reminders/{id}/dismiss — убрать текущее вхождение. */
 export const RestReminderDismiss = defineContract(
   'rest:reminders.dismiss',
-  z.object({ network_id: NetworkId, reminder_id: z.string().min(1) }),
+  z.object({
+    network_id: NetworkId,
+    reminder_id: z.string().min(1),
+    /** Адрес конкретного вхождения серии (см. RestReminderSnooze). */
+    occurrence_at: ReminderInstant.optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     reminder_id: { from: { kind: 'param', name: 'id' } },
+    occurrence_at: { from: { kind: 'body' } },
   },
 );
 

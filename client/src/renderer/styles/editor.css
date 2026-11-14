@@ -2882,3 +2882,61 @@ input.task-list-item-checkbox:checked,
   max-height: 100%;
   object-fit: contain;
 }
+
+/* ----- напоминания (0.16.1, задача 173f1540) ------------------------------ */
+
+/* Флаг напоминаний в шапке мысли: текстовая ghost-кнопка ряда «Актуально».
+   Длинная подпись усекается, полный повтор несёт тултип. */
+.editor-reminder-flag {
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+}
+
+/* Редактор напоминания (элемент 58cca4f7): секции формы друг под другом. */
+.reminder-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.reminder-anchor-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.reminder-params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.reminder-weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* Preview первых вхождений — тот же список, что в Ctrl-подсказке облачка. */
+.reminder-preview-title {
+  color: var(--text-faint);
+  font-size: var(--font-size-s);
+}
+
+.reminder-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.reminder-preview-row {
+  font-size: var(--font-size-s);
+  color: var(--text);
+}
+
+.reminder-preview-empty {
+  color: var(--text-faint);
+}

@@ -43,6 +43,7 @@ import {
   assertScheduleKind,
   computeNextAt,
   expandOccurrences,
+  firstOccurrenceOnOrAfter,
   kindOfSchedule,
   nextCandidate,
   normalizeAnchor,
@@ -473,35 +474,87 @@ export function removeReminder(
   return toDto(removed, visibility ?? 'unavailable', nowMs);
 }
 
-/** Текущее вхождение (кандидат «сейчас») из лениво посчитанного `next_at`. */
+/** Ошибка «обрабатывать нечего» — 409 (операции ae19b1bf/500d1b3d). */
+function noActiveOccurrence(): never {
+  throw new EtnError('VALIDATION_ERROR', 'the reminder has no active occurrence to process.', {
+    status: 409,
+    field: 'reminder_id',
+  });
+}
+
+/**
+ * Граница текущих UTC-суток — нижняя граница поиска «наступившего» вхождения.
+ *
+ * Сервер не решает «сегодня» (требование fcdcd75f: локальные сутки — забота
+ * клиента), поэтому для ВЫЗОВОВ БЕЗ явного `occurrence_at` берётся грубая
+ * серверная аппроксимация — начало текущих UTC-суток. Этого достаточно, чтобы
+ * вхождение, наступившее ранее в тот же день, оставалось активным для
+ * snooze/dismiss (хвост приёмки 0.16.1): панель показывает его в секции
+ * «Сегодня», а до исправления сервер отвечал 409 «нет активного вхождения».
+ * Точный адрес вхождения (в том числе просроченного) клиент передаёт явно.
+ */
+function utcDayStartMs(nowMs: number): number {
+  return Math.floor(nowMs / MS_PER_DAY) * MS_PER_DAY;
+}
+
+/**
+ * Вхождение, к которому применяется snooze/dismiss.
+ *
+ * `requestedOccurrenceAt` (необязательный `occurrence_at` запроса) адресует
+ * КОНКРЕТНОЕ вхождение серии — это путь панели: она показывает несколько
+ * вхождений одного напоминания (секции «Просрочено/Сегодня/Период»), и команда
+ * строки обязана менять именно показанное вхождение, а не «ближайшее».
+ * Вхождение проверяется по расписанию (момент обязан быть вхождением серии) и
+ * по карте исключений (уже убранное — 409).
+ *
+ * Без адреса берётся ближайшее необработанное вхождение не раньше начала
+ * текущих UTC-суток: вхождение «сегодня», момент которого уже прошёл, остаётся
+ * активным; более старые пропускаются (ленивое продвижение next_at).
+ */
 function activeOccurrence(
   row: ReminderRow,
   nowMs: number,
-): { occurrenceAt: string; showingAt: string } {
+  requestedOccurrenceAt?: string,
+): { occurrenceAt: string; occurrenceMs: number; showingAt: string } {
   const schedule = parseStoredSchedule(row);
-  const candidate = nextCandidate(
-    schedule,
-    parseInstant(row.anchor_at),
-    exceptionMap(parseStoredExceptions(row)),
-    nowMs,
-  );
-  if (candidate === null) {
-    throw new EtnError('VALIDATION_ERROR', 'the reminder has no active occurrence to process.', {
-      status: 409,
-      field: 'reminder_id',
-    });
+  const anchorMs = parseInstant(row.anchor_at);
+  const exceptions = exceptionMap(parseStoredExceptions(row));
+
+  let candidate: { occurrence_at: number; showing_at: number } | null;
+  if (requestedOccurrenceAt !== undefined) {
+    const atMs = parseInstant(requestedOccurrenceAt, 'occurrence_at');
+    // Момент обязан быть вхождением ЭТОЙ серии: иначе клиент адресует чужую
+    // строку, и запись исключения легла бы в мёртвый ключ.
+    if (firstOccurrenceOnOrAfter(schedule, anchorMs, atMs) !== atMs) noActiveOccurrence();
+    const exception = exceptions.get(atMs);
+    if (exception?.kind === 'dismiss') noActiveOccurrence();
+    const untilMs = exception?.kind === 'snooze' ? Date.parse(exception.until) : Number.NaN;
+    const showingAt = Number.isFinite(untilMs) && untilMs > atMs ? untilMs : atMs;
+    candidate = { occurrence_at: atMs, showing_at: showingAt };
+  } else {
+    candidate = nextCandidate(schedule, anchorMs, exceptions, utcDayStartMs(nowMs));
   }
+  if (candidate === null) noActiveOccurrence();
   // Исключение адресует МОМЕНТ ВХОЖДЕНИЯ, а не момент показа: повторное
   // «Отложить» уже перенесённого вхождения переписывает его же запись.
   return {
     occurrenceAt: new Date(candidate.occurrence_at).toISOString(),
+    occurrenceMs: candidate.occurrence_at,
     showingAt: new Date(candidate.showing_at).toISOString(),
   };
 }
 
 /**
- * Отложить ТЕКУЩЕЕ вхождение: в `exceptions` пишется `{ kind: snooze, until }` на
- * его момент. Расписание и серия не меняются (требование 86cb7451).
+ * Отложить вхождение: в `exceptions` пишется `{ kind: snooze, until }` на его
+ * момент. Расписание и серия не меняются (требование 86cb7451).
+ *
+ * `requestedOccurrenceAt` — явный адрес вхождения из панели (см.
+ * {@link activeOccurrence}); без него адресуется ближайшее необработанное.
+ *
+ * `until` обязан быть строго позже МОМЕНТА ВХОЖДЕНИЯ: при `until ≤ момент`
+ * вхождение по правилу строгого сравнения не скрывается, запись в exceptions
+ * мёртвая, а `next_at` вернулся бы к тому же вхождению — «Отложить» молча не
+ * работало (хвост приёмки 0.16.1, требование 4401beb8).
  */
 export function snoozeReminder(
   ndb: NetworkDb,
@@ -509,29 +562,34 @@ export function snoozeReminder(
   reminderId: string,
   until: string,
   nowMs: number = Date.now(),
+  requestedOccurrenceAt?: string,
 ): ReminderOccurrenceChange {
   const row = loadOwnedRow(ndb, userId, reminderId);
-  const { occurrenceAt } = activeOccurrence(row, nowMs);
+  const { occurrenceAt, occurrenceMs } = activeOccurrence(row, nowMs, requestedOccurrenceAt);
   const untilMs = parseInstant(until, 'until');
   if (untilMs <= nowMs) badRequest('`until` must be in the future.', 'until');
+  if (untilMs <= occurrenceMs) {
+    badRequest('`until` must be later than the occurrence it postpones.', 'until');
+  }
   const exceptions = parseStoredExceptions(row);
   exceptions[occurrenceAt] = { kind: 'snooze', until: new Date(untilMs).toISOString() };
   return writeExceptions(ndb, row, exceptions, occurrenceAt, nowMs);
 }
 
 /**
- * Убрать ТЕКУЩЕЕ вхождение: `{ kind: dismiss }` на его момент; следующее
- * вхождение по расписанию остаётся видимым (сравнение строгое — равномоментное
- * вхождение не скрывается).
+ * Убрать вхождение: `{ kind: dismiss }` на его момент; следующее вхождение по
+ * расписанию остаётся видимым (сравнение строгое — равномоментное вхождение не
+ * скрывается). `requestedOccurrenceAt` — явный адрес вхождения из панели.
  */
 export function dismissReminder(
   ndb: NetworkDb,
   userId: string,
   reminderId: string,
   nowMs: number = Date.now(),
+  requestedOccurrenceAt?: string,
 ): ReminderOccurrenceChange {
   const row = loadOwnedRow(ndb, userId, reminderId);
-  const { occurrenceAt } = activeOccurrence(row, nowMs);
+  const { occurrenceAt } = activeOccurrence(row, nowMs, requestedOccurrenceAt);
   const exceptions = parseStoredExceptions(row);
   exceptions[occurrenceAt] = { kind: 'dismiss' };
   return writeExceptions(ndb, row, exceptions, occurrenceAt, nowMs);

@@ -47,6 +47,7 @@ import { etn } from '../../lib/etn.js';
 import { formatDateParts, getLang, t } from '../../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../../lib/live/event-router.js';
 import { notice } from '../../lib/notice.js';
+import { openReminderEditor } from '../../lib/reminder-editor.js';
 import { store } from '../../state.js';
 import {
   REMINDER_PANEL_ROW_CLASS,
@@ -60,6 +61,7 @@ import {
   type TaskShift,
 } from '../../lib/ui/task-panel.js';
 import {
+  REMINDERS_OVERDUE_DAYS,
   calendarDaysBetween,
   groupPanelRows,
   panelMarkerAdvanced,
@@ -96,9 +98,6 @@ export interface TasksPanelHandle {
   /** Снять подписки и размонтировать компоненту. */
   destroy(): void;
 }
-
-/** Сколько дней назад смотреть сработавшие напоминания в секции «Просрочено». */
-const REMINDERS_OVERDUE_DAYS = 30;
 
 /** Предел строк на один запрос списка задач (сервер: `TASKS_MAX_LIMIT`). */
 const TASKS_PAGE_LIMIT = 200;
@@ -169,6 +168,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     rowCommand: (row, command, shift) => void runRowCommand(row, command, shift),
     bulk: (filter, command, shift) => void runBulk(filter, command, shift),
     reminderAction: (row, action, until) => void runReminderAction(row, action, until),
+    reminderGroupDismiss: (title, rows) => void runReminderGroupDismiss(title, rows),
     pickDate: (initial) => pickDate(initial),
     pickDateTime: (initialIso) => pickDateTime(initialIso),
     openDay: (day) => deps.openDay(day),
@@ -815,11 +815,29 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
         }
         return;
       }
+      if (action === 'edit-schedule') {
+        // Правка расписания — по карточке напоминания (PATCH), вхождение здесь
+        // не адресуется: расписание меняется у всего напоминания.
+        const reminder = state.reminders.reminders.find((item) => item.id === row.reminderId);
+        if (reminder === undefined) return;
+        await openReminderEditor({
+          subjectType: row.subjectType,
+          subjectId: row.subjectId,
+          reminder,
+          subjectTitle: row.title,
+          onSaved: () => {
+            void loadPanel();
+          },
+        });
+        return;
+      }
       if (action === 'dismiss') {
-        await etn.reminders.dismiss(networkId, row.reminderId);
+        // Адрес вхождения: у отложенной строки показан `until`, а исключение
+        // обязано лечь на момент РАСПИСАНИЯ (требование 86cb7451).
+        await etn.reminders.dismiss(networkId, row.reminderId, row.occurrenceAt);
       } else if (action === 'snooze') {
         if (until === undefined) return;
-        await etn.reminders.snooze(networkId, row.reminderId, until);
+        await etn.reminders.snooze(networkId, row.reminderId, until, row.occurrenceAt);
       } else {
         await createTaskForToday(row);
         return;
@@ -828,6 +846,37 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     } catch (err) {
       notice(t('tasks.reminderActionFailed', [errText(err)]), 'error');
     }
+  }
+
+  /**
+   * Групповая команда «Отменить все напоминания по группе»: убрать каждое
+   * вхождение строк группы (по одному dismiss с адресом вхождения). Ошибка
+   * одной строки не отменяет остальные; итог показывается числом убранных.
+   */
+  async function runReminderGroupDismiss(
+    title: string,
+    rows: readonly ReminderPanelRow[],
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const networkId = requireNetworkId();
+    const confirmed = await confirmDialog(
+      t('reminder.groupDismiss'),
+      t('reminder.groupDismissQuestion', [title]),
+      true,
+    );
+    if (!confirmed || disposed) return;
+    let removed = 0;
+    for (const row of rows) {
+      try {
+        await etn.reminders.dismiss(networkId, row.reminderId, row.occurrenceAt);
+        removed += 1;
+      } catch {
+        // Строка могла исчезнуть/смениться между загрузкой и командой —
+        // остальные вхождения группы всё равно убираются.
+      }
+    }
+    notice(t('reminder.groupDismissDone', [removed]));
+    await loadPanel();
   }
 
   /**

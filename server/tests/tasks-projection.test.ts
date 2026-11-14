@@ -21,16 +21,13 @@ import DatabaseConstructor from 'better-sqlite3';
 
 import { BASE_LAYER_ID, ETNX_VERSION, type EtnxManifest } from '@etn/shared';
 
-import {
-  closeNetworkDb,
-  createInMemoryNetworkDb,
-  type NetworkDb,
-} from '../src/db/network-db.js';
+import { closeNetworkDb, createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { SystemDb } from '../src/db/system-db.js';
 import {
   createCommentWithTargets,
   deleteComment,
+  removeCommentTarget,
   updateComment,
 } from '../src/domain/comment-service.js';
 import { applyManifest } from '../src/domain/import-service.js';
@@ -234,6 +231,93 @@ describe(
           .prepare('SELECT parsed_revision FROM task_rows WHERE comment_id = ? LIMIT 1')
           .get(commentId) as { parsed_revision: number };
         assert.equal(parsed.parsed_revision, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('перепривязка комментария двигает parsed_revision через хук пере-парса', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль 1');
+        seedThought(ndb, 't-2', 'Мысль 2');
+        // Комментарий привязан к двум мыслям: первая — основная привязка.
+        const commentId = write(
+          ndb,
+          () =>
+            createCommentWithTargets(
+              ndb,
+              [
+                { owner_type: 'thought', owner_id: 't-1' },
+                { owner_type: 'thought', owner_id: 't-2' },
+              ],
+              { kind: 'chronological', body_md: '- [ ] Задача [[2026-11-20]]' },
+              USER,
+            ).id,
+        );
+        const revision = (): number =>
+          (
+            ndb.prepare('SELECT version FROM comments WHERE id = ?').get(commentId) as {
+              version: number;
+            }
+          ).version;
+        const parsedRevision = (): number =>
+          (
+            ndb
+              .prepare('SELECT parsed_revision FROM task_rows WHERE comment_id = ? LIMIT 1')
+              .get(commentId) as { parsed_revision: number }
+          ).parsed_revision;
+
+        assert.equal(revision(), 1);
+        assert.equal(parsedRevision(), 1);
+
+        // Не-основная привязка: bumpVersion + пере-парс (текст не менялся).
+        write(ndb, () => removeCommentTarget(ndb, commentId, 'thought', 't-2', 1, USER));
+        assert.equal(revision(), 2);
+        assert.equal(parsedRevision(), 2, 'parsed_revision догнал ревизию');
+
+        // Переезд основной привязки: тоже ревизия + пере-парс.
+        const moved = write(
+          ndb,
+          () =>
+            createCommentWithTargets(
+              ndb,
+              [
+                { owner_type: 'thought', owner_id: 't-1' },
+                { owner_type: 'thought', owner_id: 't-2' },
+              ],
+              { kind: 'chronological', body_md: '- [ ] Вторая задача [[2026-11-21]]' },
+              USER,
+            ).id,
+        );
+        write(ndb, () => removeCommentTarget(ndb, moved, 'thought', 't-1', 1, USER));
+        assert.equal(
+          (
+            ndb.prepare('SELECT version FROM comments WHERE id = ?').get(moved) as {
+              version: number;
+            }
+          ).version,
+          2,
+          'переезд основной привязки — новая ревизия',
+        );
+        assert.equal(
+          (
+            ndb
+              .prepare('SELECT parsed_revision FROM task_rows WHERE comment_id = ? LIMIT 1')
+              .get(moved) as { parsed_revision: number }
+          ).parsed_revision,
+          2,
+          'переезд основной привязки пере-парсит строки',
+        );
+        assert.equal(
+          (
+            ndb.prepare('SELECT COUNT(*) AS c FROM task_rows WHERE comment_id = ?').get(moved) as {
+              c: number;
+            }
+          ).c,
+          1,
+          'строка проекции осталась: текст не менялся',
+        );
       } finally {
         ndb.close();
       }

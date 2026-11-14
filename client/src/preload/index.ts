@@ -360,8 +360,12 @@ function buildApi(): EtnBridgeApi {
     },
     reminders: {
       list: (networkId, query) => invoke('reminders.list', networkId, query),
-      snooze: (networkId, id, until) => invoke('reminders.snooze', networkId, id, until),
-      dismiss: (networkId, id) => invoke('reminders.dismiss', networkId, id),
+      create: (networkId, input) => invoke('reminders.create', networkId, input),
+      update: (networkId, id, input) => invoke('reminders.update', networkId, id, input),
+      snooze: (networkId, id, until, occurrenceAt) =>
+        invoke('reminders.snooze', networkId, id, until, occurrenceAt),
+      dismiss: (networkId, id, occurrenceAt) =>
+        invoke('reminders.dismiss', networkId, id, occurrenceAt),
       remove: (networkId, id) => invoke('reminders.remove', networkId, id),
     },
     attachments: {

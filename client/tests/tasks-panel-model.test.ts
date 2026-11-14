@@ -30,6 +30,7 @@ import {
   panelNeedsRefresh,
   planTaskBulk,
   reminderPanelRows,
+  dueReminderCount,
   reminderRowKey,
   reminderSectionOf,
   replaceTaskLine,
@@ -376,6 +377,7 @@ describe('вхождения напоминаний (требования 6762ad
           subjectId: 't1',
           title: 't',
           moment,
+          occurrenceAt: moment,
           status: 'active',
           repeat: '',
           day: moment.slice(0, 10),
@@ -388,5 +390,39 @@ describe('вхождения напоминаний (требования 6762ad
     assert.equal(section('2026-11-14T23:59:00.000+03:00'), 'today');
     assert.equal(section('2026-11-15T00:00:00.000+03:00'), 'period');
     assert.equal(section('не момент'), 'period', 'невалидный момент — не просрочка');
+  });
+
+  it('счётчик бейджа «сегодня»: сегодняшние + просроченные вхождения, будущие — нет', () => {
+    const todayEnd = Date.parse('2026-11-15T00:00:00.000+03:00');
+    const result: ReminderListResult = {
+      reminders: [
+        reminder({
+          occurrences: [
+            { occurrence_at: '2026-11-14T09:00:00.000+03:00', status: 'active', until: null },
+            { occurrence_at: '2026-11-10T09:00:00.000+03:00', status: 'active', until: null },
+            {
+              // Отложенное вхождение видно по `until` — считаем момент показа.
+              occurrence_at: '2026-11-01T09:00:00.000+03:00',
+              status: 'snoozed',
+              until: '2026-11-14T18:00:00.000+03:00',
+            },
+            { occurrence_at: '2026-11-20T09:00:00.000+03:00', status: 'active', until: null },
+            {
+              occurrence_at: '2026-11-25T09:00:00.000+03:00',
+              status: 'snoozed',
+              until: '2026-12-01T09:00:00.000+03:00',
+            },
+          ],
+        }),
+      ],
+      from: null,
+      to: null,
+    };
+    assert.equal(dueReminderCount(result, todayEnd), 3, 'два вхождения + отложенное на сегодня');
+    assert.equal(
+      dueReminderCount({ reminders: [], from: null, to: null }, todayEnd),
+      0,
+      'нет напоминаний — ноль (бейдж скрыт)',
+    );
   });
 });

@@ -2643,17 +2643,47 @@ export class RestClient {
     });
   }
 
+  /** `POST /networks/{nid}/reminders` — создать напоминание владельца. */
+  public async createReminder(
+    networkId: string,
+    input: import('../ipc/contract.js').ReminderCreateInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Reminder> {
+    return this.request('POST', `/networks/${encodeURIComponent(networkId)}/reminders`, {
+      body: input,
+      requestOptions: opts,
+    });
+  }
+
+  /** `PATCH /networks/{nid}/reminders/{id}` — изменить расписание серии. */
+  public async updateReminder(
+    networkId: string,
+    id: string,
+    input: import('../ipc/contract.js').ReminderUpdateInput,
+    opts?: RequestOptions,
+  ): Promise<import('@etn/shared').Reminder> {
+    return this.request(
+      'PATCH',
+      `/networks/${encodeURIComponent(networkId)}/reminders/${encodeURIComponent(id)}`,
+      { body: input, requestOptions: opts },
+    );
+  }
+
   /** `POST /networks/{nid}/reminders/{id}/snooze` — отложить текущее вхождение. */
   public async snoozeReminder(
     networkId: string,
     id: string,
     until: string,
     opts?: RequestOptions,
+    occurrenceAt?: string,
   ): Promise<import('@etn/shared').ReminderOccurrenceChange> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/reminders/${encodeURIComponent(id)}/snooze`,
-      { body: { until }, requestOptions: opts },
+      {
+        body: occurrenceAt === undefined ? { until } : { until, occurrence_at: occurrenceAt },
+        requestOptions: opts,
+      },
     );
   }
 
@@ -2662,11 +2692,15 @@ export class RestClient {
     networkId: string,
     id: string,
     opts?: RequestOptions,
+    occurrenceAt?: string,
   ): Promise<import('@etn/shared').ReminderOccurrenceChange> {
     return this.request(
       'POST',
       `/networks/${encodeURIComponent(networkId)}/reminders/${encodeURIComponent(id)}/dismiss`,
-      { requestOptions: opts },
+      {
+        body: occurrenceAt === undefined ? {} : { occurrence_at: occurrenceAt },
+        requestOptions: opts,
+      },
     );
   }
 

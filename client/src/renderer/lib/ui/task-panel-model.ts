@@ -384,6 +384,12 @@ export interface ReminderPanelRow extends PanelGroupable {
   title: string;
   /** Момент ПОКАЗА вхождения (UTC-инстанс): `until` для отложенного. */
   moment: string;
+  /**
+   * Момент вхождения ПО РАСПИСАНИЮ — адрес исключения для snooze/dismiss
+   * (требование 86cb7451, операция 500d1b3d). У отложенного вхождения `moment`
+   * — его `until`, а исключение всё равно адресуется исходным моментом.
+   */
+  occurrenceAt: string;
   status: 'active' | 'snoozed';
   /** Человекочитаемое описание повтора. */
   repeat: string;
@@ -413,6 +419,29 @@ export function reminderSectionOf(
   return 'period';
 }
 
+/** Сколько дней назад смотреть сработавшие напоминания (секция «Просрочено»
+ *  панели и бейдж «сегодня» считают один горизонт). */
+export const REMINDERS_OVERDUE_DAYS = 30;
+
+/**
+ * Сколько вхождений «на сегодня или просрочено» в выдаче списка: момент показа
+ * раньше конца местных суток (тот же предел, что у секции «Сегодня» в
+ * {@link reminderSectionOf}) — сегодняшнее либо просроченное. Счётчик бейджа
+ * «сегодня» на закладке «Дневник» (элемент 23887005) считает ТЕ ЖЕ вхождения,
+ * что секции «Просрочено»/«Сегодня» панели, — второй формулы счёта нет.
+ * Вхождения с неразборчивым моментом не считаются.
+ */
+export function dueReminderCount(result: ReminderListResult, todayEndMs: number): number {
+  let count = 0;
+  for (const reminder of result.reminders) {
+    for (const occurrence of reminder.occurrences ?? []) {
+      const moment = Date.parse(occurrence.until ?? occurrence.occurrence_at);
+      if (Number.isFinite(moment) && moment < todayEndMs) count += 1;
+    }
+  }
+  return count;
+}
+
 /**
  * Разложить вхождения напоминаний на строки панели: одно вхождение — одна
  * строка, момент показа отложенного вхождения — `until`. Названия субъектов
@@ -436,6 +465,7 @@ export function reminderPanelRows(
         // мысли, и публикации (раньше ключ терялся и показывался GUID).
         title: titles.get(`${reminder.subject_type}:${reminder.subject_id}`) ?? reminder.subject_id,
         moment,
+        occurrenceAt: occurrence.occurrence_at,
         status: occurrence.status,
         repeat: repeatLabel(reminder),
         day: moment.slice(0, 10),

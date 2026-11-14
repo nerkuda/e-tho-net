@@ -155,7 +155,8 @@ export interface TaskShift {
 }
 
 /** Действие над вхождением напоминания. */
-export type ReminderRowAction = 'open-subject' | 'dismiss' | 'snooze' | 'create-task';
+export type ReminderRowAction =
+  'open-subject' | 'edit-schedule' | 'dismiss' | 'snooze' | 'create-task';
 
 /** Реакции панели: всё, что требует сети/состояния экрана. */
 export interface TaskPanelActions {
@@ -183,6 +184,12 @@ export interface TaskPanelActions {
   bulk(filter: TaskMassFilter, command: 'cancel-all' | 'move-all', shift?: TaskShift): void;
   /** Действие над вхождением напоминания. */
   reminderAction(row: ReminderPanelRow, action: ReminderRowAction, until?: string): void;
+  /**
+   * Групповая команда «Отменить все напоминания по группе»: убрать КАЖДОЕ
+   * вхождение строк группы (одна операция dismiss на вхождение, требование
+   * 500d1b3d). `title` — заголовок группы для вопроса подтверждения.
+   */
+  reminderGroupDismiss(title: string, rows: readonly ReminderPanelRow[]): void;
   /** Диалог даты (`YYYY-MM-DD`); `null` — отмена. */
   pickDate(initial: string): Promise<string | null>;
   /** Диалог даты/времени; `initialIso` — текущий момент, результат — UTC-инстанс. */
@@ -306,6 +313,10 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
    * открытия меню: замыкание держало бы фильтр первого построения.
    */
   const subgroupFilters = new WeakMap<HTMLElement, TaskMassFilter>();
+  /** Строки напоминаний подгруппы — адрес групповой команды «Отменить все…». */
+  const subgroupReminderRows = new WeakMap<HTMLElement, readonly ReminderPanelRow[]>();
+  /** Заголовок подгруппы — для вопроса подтверждения групповой команды. */
+  const subgroupTitles = new WeakMap<HTMLElement, string>();
 
   /** «Перенести… на дату» для массовой команды: произвольная дата. */
   async function pickBulkDate(filter: TaskMassFilter): Promise<void> {
@@ -374,6 +385,18 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     ];
   }
 
+  /**
+   * Меню «⋮» подгруппы НАПОМИНАНИЙ: одна групповая команда — убрать все
+   * вхождения строк группы. Задач у вхождения нет, поэтому меню задач сюда не
+   * подходит.
+   */
+  function reminderSubgroupMenu(title: string, rows: readonly ReminderPanelRow[]): MenuItem[] {
+    if (rows.length === 0) return [];
+    return [
+      menuAction(t('reminder.groupDismiss'), () => actions.reminderGroupDismiss(title, rows)),
+    ];
+  }
+
   /** Строка меню команд строки задачи. */
   function taskRowMenu(row: TaskPanelRow): MenuItem[] {
     const items: MenuItem[] = [];
@@ -406,6 +429,7 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
   function reminderRowMenu(row: ReminderPanelRow): MenuItem[] {
     return [
       menuAction(t('tasks.openSubject'), () => actions.reminderAction(row, 'open-subject')),
+      menuAction(t('reminder.editSchedule'), () => actions.reminderAction(row, 'edit-schedule')),
       menuAction(t('tasks.dismissReminder'), () => actions.reminderAction(row, 'dismiss')),
       menuSubmenu(t('tasks.snoozeReminder'), [
         ...TASK_SHIFTS.map((item) =>
@@ -766,8 +790,10 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
     const countNode = node.querySelector('.ui-task-subgroup-count');
     if (countNode !== null) countNode.textContent = String(subgroup.rows.length);
     subgroupFilters.set(node, subgroup.filter);
+    subgroupTitles.set(node, subgroup.title);
+    if (kind === 'reminder') subgroupReminderRows.set(node, subgroup.rows as ReminderPanelRow[]);
     const head = node.querySelector('.ui-task-subgroup-head') as HTMLElement;
-    if (kind === 'task' && head.querySelector('.ui-task-subgroup-menu') === null) {
+    if (head.querySelector('.ui-task-subgroup-menu') === null) {
       head.append(
         iconButton({
           icon: svgIcon('ellipsis', 14),
@@ -777,9 +803,15 @@ export function mountTaskPanel(host: HTMLElement, actions: TaskPanelActions): Ta
           class: 'ui-task-subgroup-menu',
           onClick: (event) => {
             const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-            const filter = subgroupFilters.get(node);
-            if (filter === undefined) return;
-            showMenuAt(rect.left, rect.bottom, subgroupMenu('task', filter), { keyboard: true });
+            const items =
+              kind === 'task'
+                ? subgroupMenu('task', subgroupFilters.get(node) ?? {})
+                : reminderSubgroupMenu(
+                    subgroupTitles.get(node) ?? '',
+                    subgroupReminderRows.get(node) ?? [],
+                  );
+            if (items.length === 0) return;
+            showMenuAt(rect.left, rect.bottom, items, { keyboard: true });
           },
         }),
       );

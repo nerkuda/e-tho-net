@@ -126,6 +126,11 @@ const COMPLETION_TTL_MS = 10_000;
 
 /** Loads prefix matches over titles + synonyms from the server search. */
 async function loadCompletions(networkId: string, prefix: string): Promise<Completion[]> {
+  // Пустой префикс (`[[` только что набрано) — это НЕ поиск: серверный запрос
+  // по пустой строке вернул бы 20 произвольных имён, и список не был бы
+  // подсказкой. Дропдаун для пустого префикса не открывается вовсе (хвост
+  // задачи 5 задачи 173f1540).
+  if (prefix === '') return [];
   try {
     const res = await etn.thoughts.search(networkId, { q: prefix, scope: 'names', limit: 20 });
     return res.by_names.map((hit) => ({
@@ -140,6 +145,13 @@ async function loadCompletions(networkId: string, prefix: string): Promise<Compl
   }
 }
 
+/**
+ * Тестовый шов: прямой вызов загрузчика подсказок без CM6-контекста. Нужен
+ * проверке «пустой префикс `[[` не ищет по серверу» на САМОМ загрузчике, а не
+ * только на обёртке источника.
+ */
+export const wikiLinkInternals = { loadCompletions };
+
 function wikiLinkCompletions(): CompletionSource {
   // Кэш ПО-ИНСТАНСНЫЙ: своё замыкание на каждый вызов `wikiLinkCompletions()`,
   // а вызов — один на редактор (в `wikiLinkAutocompletion()`). Два инстанса
@@ -150,6 +162,8 @@ function wikiLinkCompletions(): CompletionSource {
     const at = completionPrefix(context);
     if (at === null) return null;
     const { hit, from } = at;
+    // Пустой префикс — подсказок нет (ни мыслей, ни дат).
+    if (hit.prefix === '') return null;
     // Трансклюзия: список мыслей открывается не раньше трёх символов имени
     // (элемент интерфейса 7a479549); обычная wiki-ссылка — с первого.
     if (hit.transclusion === true && hit.prefix.length < TRANSCLUSION_MIN_PREFIX) return null;
@@ -569,12 +583,26 @@ export function shouldNavigateWikiLink(link: WikiLinkClickTarget): boolean {
  * Открыть день в «Дневнике» из date-чипа (0.16.1, требование 31fe2cc9).
  * Обработчик по умолчанию для единого входа `clickDateChip` (`md-live.ts`):
  * его вызывают и чип редактора (`mousedown`-ветка), и чип просмотра
- * (делегированный `click`).
+ * (делегированный `click`). `open` — шов для проверки связки без живого
+ * «Дневника» (по умолчанию — единый вход `openChronicleDay`).
  */
-function openDayFromChip(date: string): void {
-  void openChronicleDay(date).catch((error) => {
+export function openDayFromChip(
+  date: string,
+  open: (day: string) => Promise<void> = openChronicleDay,
+): void {
+  void open(date).catch((error) => {
     notice(t('mentions.notSucceededOpen', [date, errText(error)]), 'error');
   });
+}
+
+/**
+ * Тестовый шов: снять признак «навигация подключена» (`initWikiLinkNavigation`
+ * идемпотентен). Нужен поведенческой проверке связки «клик по чипу → день»:
+ * она обязана увидеть обработчик, который ставит САМА инициализация, а не
+ * читать исходник регуляркой. В рантайме не вызывается.
+ */
+export function resetWikiLinkNavigationForTests(): void {
+  navigationWired = false;
 }
 
 /** Installs the delegated view-mode click handler (call once from main.ts). */

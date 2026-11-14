@@ -94,6 +94,10 @@ import {
   setCloudIndicatorInterest,
 } from '../lib/cloud-indicators.js';
 import {
+  reminderIndicatorCell,
+  refreshReminderIndicators,
+} from '../lib/reminder-indicators.js';
+import {
   initLinksOverlay,
   drawLinksNow,
   setEllipseHover,
@@ -551,6 +555,10 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     if (host?.isConnected === true) refreshZoneCounterChrome();
   });
   resizeObserver.observe(host);
+  // Индикаторы напоминаний (⏰, 0.16.1): список владельца на сеть читается
+  // один раз на монтирование и дальше обновляется событием `reminders.changed`;
+  // ячейки строятся из кэша, поэтому запрос идёт параллельно с раскладкой.
+  void refreshReminderIndicators();
   scheduleRender();
 
   // Teardown handle: releases every global subscription/observer wired above.
@@ -1464,15 +1472,17 @@ function renderFocusRow(focus: FocusResponse): void {
   markNeighborsPreview(topEllipse, thought.id, neighborsDirForEllipse('top'), thought.title);
   markNeighborsPreview(bottomEllipse, thought.id, neighborsDirForEllipse('bottom'), thought.title);
 
-  // Indicator row identical to the zone clouds: 📝/📅/📎 under the title.
+  // Indicator row identical to the zone clouds: ⏰/📝/📅/📎 under the title.
+  // ⏰ (напоминания, элемент ba827eb6) стоит ПЕРВОЙ — перед 📝.
   const ind = div('cloud-ind');
-  const focusPerm = span('📝', 'ind dim');
-  const focusChrono = span('📅', 'ind dim');
-  const focusAtt = span('📎', 'ind dim');
+  const focusReminder = reminderIndicatorCell(thought.id, thought.title);
+  const focusPerm = span('📝', 'ind ind-comment dim');
+  const focusChrono = span('📅', 'ind ind-chrono dim');
+  const focusAtt = span('📎', 'ind ind-att dim');
   markCommentPreview(focusPerm, 'thought', thought.id, thought.title);
   markChronoPreview(focusChrono, 'thought', thought.id, thought.title);
   markAttachmentsPreview(focusAtt, 'thought', thought.id, thought.title);
-  ind.append(focusPerm, focusChrono, focusAtt);
+  ind.append(focusReminder, focusPerm, focusChrono, focusAtt);
   const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
   main?.append(ind);
 
@@ -2624,14 +2634,17 @@ function buildCloud(
   markNeighborsPreview(topEllipse, entry.id, neighborsDirForEllipse('top'), cloudTitleFull);
   markNeighborsPreview(bottomEllipse, entry.id, neighborsDirForEllipse('bottom'), cloudTitleFull);
 
+  // Ряд индикаторов: ⏰/📝/📅/📎. Индикатор напоминаний — ПЕРВЫМ (элемент
+  // ba827eb6), клик по нему ведёт в карточку мысли с секцией напоминаний.
   const ind = div('cloud-ind');
-  const perm = span('📝', 'ind dim');
-  const chrono = span('📅', 'ind dim');
-  const att = span('📎', 'ind dim');
+  const reminder = reminderIndicatorCell(entry.id, cloudTitleFull);
+  const perm = span('📝', 'ind ind-comment dim');
+  const chrono = span('📅', 'ind ind-chrono dim');
+  const att = span('📎', 'ind ind-att dim');
   markCommentPreview(perm, 'thought', entry.id, cloudTitleFull);
   markChronoPreview(chrono, 'thought', entry.id, cloudTitleFull);
   markAttachmentsPreview(att, 'thought', entry.id, cloudTitleFull);
-  ind.append(perm, chrono, att);
+  ind.append(reminder, perm, chrono, att);
 
   const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
   main?.append(ind);

@@ -8,22 +8,26 @@
  * редакторе. Без этой ветки клик по чипу в просмотре молчит (вердикт приёмки:
  * отключение ветки не красило ни один тест).
  *
- * Здесь же — связка «обработчик по умолчанию открывает день»: источник
- * проверяется чтением (реальный `openChronicleDay` требует живого «Дневника»,
- * а его поведение покрыто `chronicle-*` тестами).
+ * Здесь же — связка «обработчик по умолчанию открывает день»: проверяется
+ * ПОВЕДЕНИЕМ (регистрация обработчика + передача даты в шов открытия), без
+ * чтения исходника регуляркой.
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { afterEach, before, beforeEach, describe, it } from 'node:test';
 
 import { WIKI_LINK_DATE_ATTR } from '@etn/markdown';
 
 import {
+  clickDateChip,
   setDateChipClickHandler,
   setLegacyWikiLinkClickHandler,
 } from '../src/renderer/editor/md-live.js';
-import { initWikiLinkNavigation } from '../src/renderer/editor/wiki-link.js';
+import {
+  initWikiLinkNavigation,
+  openDayFromChip,
+  resetWikiLinkNavigationForTests,
+} from '../src/renderer/editor/wiki-link.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -127,21 +131,23 @@ describe('клик по date-чипу в просмотре открывает �
 });
 
 describe('связка «обработчик по умолчанию → openChronicleDay»', () => {
-  it('навигация регистрирует открытие дня и передаёт его через clickDateChip', () => {
-    const nav = readFileSync(
-      new URL('../src/renderer/editor/wiki-link.ts', import.meta.url),
-      'utf8',
-    );
-    assert.match(
-      nav,
-      /setDateChipClickHandler\(openDayFromChip\)/,
-      'обработчик дня по умолчанию — `openDayFromChip`',
-    );
-    assert.match(nav, /clickDateChip\(date\)/, 'клик в просмотре идёт через единый вход');
-    assert.match(
-      nav,
-      /void openChronicleDay\(date\)/,
-      '`openDayFromChip` открывает день в «Дневнике»',
-    );
+  it('навигация регистрирует обработчик дня, и он открывает день', () => {
+    // Регистрация проверяется ПОВЕДЕНИЕМ: без обработчика `clickDateChip`
+    // возвращает `false`. Дата невалидна намеренно — реальный
+    // `openChronicleDay` вышел бы в «Дневник», а юнит-тесту это не нужно.
+    setDateChipClickHandler(null);
+    resetWikiLinkNavigationForTests();
+    initWikiLinkNavigation();
+    assert.equal(clickDateChip('не-дата'), true, 'навигация поставила обработчик дня');
+
+    // Поведение обработчика: дата уходит в открытие дня (шов `open`).
+    const opened: string[] = [];
+    openDayFromChip('2026-11-03', async (day) => {
+      opened.push(day);
+    });
+    assert.deepEqual(opened, ['2026-11-03'], 'обработчик открывает ДЕНЬ чипа');
+
+    // Вернуть шпион, чтобы порядок тестов файла не зависел от этого блока.
+    setDateChipClickHandler((date) => dates.push(date));
   });
 });

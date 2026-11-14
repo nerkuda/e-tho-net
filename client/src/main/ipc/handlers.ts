@@ -1667,15 +1667,38 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'reminders.create',
+    bind((networkId: string, input: Parameters<RestClient['createReminder']>[1]) =>
+      requireRest(deps).createReminder(networkId, input, { clientRequestId: randomUUID() }),
+    ),
+  );
+  handlers.set(
+    'reminders.update',
+    bind((networkId: string, id: string, input: Parameters<RestClient['updateReminder']>[2]) =>
+      requireRest(deps).updateReminder(networkId, id, input, { clientRequestId: randomUUID() }),
+    ),
+  );
+  handlers.set(
     'reminders.snooze',
-    bind((networkId: string, id: string, until: string) =>
-      requireRest(deps).snoozeReminder(networkId, id, until, { clientRequestId: randomUUID() }),
+    bind((networkId: string, id: string, until: string, occurrenceAt?: string) =>
+      requireRest(deps).snoozeReminder(
+        networkId,
+        id,
+        until,
+        { clientRequestId: randomUUID() },
+        occurrenceAt,
+      ),
     ),
   );
   handlers.set(
     'reminders.dismiss',
-    bind((networkId: string, id: string) =>
-      requireRest(deps).dismissReminder(networkId, id, { clientRequestId: randomUUID() }),
+    bind((networkId: string, id: string, occurrenceAt?: string) =>
+      requireRest(deps).dismissReminder(
+        networkId,
+        id,
+        { clientRequestId: randomUUID() },
+        occurrenceAt,
+      ),
     ),
   );
   handlers.set(

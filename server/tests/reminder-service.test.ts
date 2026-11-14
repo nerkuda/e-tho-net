@@ -409,11 +409,16 @@ describe('reminder-service: snooze и dismiss (500d1b3d, 86cb7451)', () => {
     const id = dailyReminder(ndb, thoughtId);
     const until = '2025-01-05T20:00:00.000Z';
     const change = snoozeReminder(ndb, OWNER, id, until, NOW);
-    assert.equal(change.occurrence_at, '2025-01-05T09:00:00.000Z');
+    // Вхождение 09:00 сегодня уже наступило (сейчас 10:00), но оно ещё не
+    // обработано и остаётся активным до конца UTC-суток — панель показывает его
+    // в секции «Сегодня» (хвост приёмки 0.16.1).
+    assert.equal(change.occurrence_at, '2025-01-04T09:00:00.000Z');
     assert.deepEqual(change.reminder.exceptions, {
-      '2025-01-05T09:00:00.000Z': { kind: 'snooze', until },
+      '2025-01-04T09:00:00.000Z': { kind: 'snooze', until },
     });
-    assert.equal(change.reminder.next_at, until);
+    // Следующее вхождение серии (09:00) наступает раньше переноса (20:00) —
+    // ближайший показ именно оно.
+    assert.equal(change.reminder.next_at, '2025-01-05T09:00:00.000Z');
     assert.deepEqual(
       change.reminder.schedule,
       { type: 'every_days', every: 1 },
@@ -421,12 +426,32 @@ describe('reminder-service: snooze и dismiss (500d1b3d, 86cb7451)', () => {
     );
   });
 
-  it('snooze в прошлое и без активного вхождения — 400/409', () => {
+  it('snooze в прошлое, не позже вхождения и без активного вхождения — 400/409', () => {
     const ndb = createInMemoryNetworkDb();
     const thoughtId = seedThought(ndb, 'Субъект');
     const id = dailyReminder(ndb, thoughtId);
     expectError(
       () => snoozeReminder(ndb, OWNER, id, '2025-01-04T09:00:00.000Z', NOW),
+      'VALIDATION_ERROR',
+      400,
+    );
+
+    // until в будущем, но НЕ ПОЗЖЕ момента вхождения: вхождение по строгому
+    // сравнению не скрывается, запись в exceptions была бы мёртвой.
+    const future = createReminder(
+      ndb,
+      OWNER,
+      {
+        subject_type: 'thought',
+        subject_id: thoughtId,
+        kind: 'one',
+        schedule: { type: 'once' },
+        anchor_at: '2025-01-10T09:00:00.000Z',
+      },
+      NOW,
+    ).id;
+    expectError(
+      () => snoozeReminder(ndb, OWNER, future, '2025-01-10T08:00:00.000Z', NOW),
       'VALIDATION_ERROR',
       400,
     );
@@ -450,15 +475,99 @@ describe('reminder-service: snooze и dismiss (500d1b3d, 86cb7451)', () => {
     );
   });
 
-  it('повторное snooze переписывает исключение того же вхождения', () => {
+  it('наступившее сегодня вхождение kind=one активно для snooze и dismiss', () => {
+    const ndb = createInMemoryNetworkDb();
+    const thoughtId = seedThought(ndb, 'Субъект');
+    const today = createReminder(
+      ndb,
+      OWNER,
+      {
+        subject_type: 'thought',
+        subject_id: thoughtId,
+        kind: 'one',
+        schedule: { type: 'once' },
+        // 09:00 сегодня, «сейчас» — 10:00: вхождение наступило, но не обработано.
+        anchor_at: '2025-01-04T09:00:00.000Z',
+      },
+      NOW,
+    );
+    assert.equal(today.next_at, null, 'next_at смотрит только вперёд');
+
+    const snoozed = snoozeReminder(ndb, OWNER, today.id, '2025-01-04T12:00:00.000Z', NOW);
+    assert.equal(snoozed.occurrence_at, '2025-01-04T09:00:00.000Z');
+    assert.equal(snoozed.reminder.next_at, '2025-01-04T12:00:00.000Z');
+
+    const another = createReminder(
+      ndb,
+      OWNER,
+      {
+        subject_type: 'thought',
+        subject_id: thoughtId,
+        kind: 'one',
+        schedule: { type: 'once' },
+        anchor_at: '2025-01-04T08:00:00.000Z',
+      },
+      NOW,
+    );
+    const dismissed = dismissReminder(ndb, OWNER, another.id, NOW);
+    assert.equal(dismissed.occurrence_at, '2025-01-04T08:00:00.000Z');
+    assert.equal(dismissed.reminder.next_at, null, 'единственное вхождение убрано');
+  });
+
+  it('явный occurrence_at адресует показанное вхождение, чужой момент — 409', () => {
+    const ndb = createInMemoryNetworkDb();
+    const thoughtId = seedThought(ndb, 'Субъект');
+    // Ежедневная серия с 2024-12-20: в окне панели есть просроченные вхождения.
+    const id = dailyReminder(ndb, thoughtId, '2024-12-20T09:00:00.000Z');
+
+    const dismissed = dismissReminder(ndb, OWNER, id, NOW, '2024-12-30T09:00:00.000Z');
+    assert.equal(dismissed.occurrence_at, '2024-12-30T09:00:00.000Z');
+    assert.deepEqual(Object.keys(dismissed.reminder.exceptions), ['2024-12-30T09:00:00.000Z']);
+    assert.equal(
+      dismissed.reminder.next_at,
+      '2025-01-05T09:00:00.000Z',
+      'next_at смотрит только вперёд: убранное вхождение в прошлом его не меняет',
+    );
+
+    expectError(
+      () => dismissReminder(ndb, OWNER, id, NOW, '2024-12-30T10:00:00.000Z'),
+      'VALIDATION_ERROR',
+      409,
+    );
+    expectError(
+      () => dismissReminder(ndb, OWNER, id, NOW, '2024-12-30T09:00:00.000Z'),
+      'VALIDATION_ERROR',
+      409,
+    );
+    expectError(
+      () =>
+        snoozeReminder(ndb, OWNER, id, '2025-01-05T09:00:00.000Z', NOW, '2024-12-30T09:00:00.000Z'),
+      'VALIDATION_ERROR',
+      409,
+    );
+  });
+
+  it('повторное snooze адресует то же вхождение', () => {
     const ndb = createInMemoryNetworkDb();
     const thoughtId = seedThought(ndb, 'Субъект');
     const id = dailyReminder(ndb, thoughtId);
     snoozeReminder(ndb, OWNER, id, '2025-01-05T20:00:00.000Z', NOW);
-    const second = snoozeReminder(ndb, OWNER, id, '2025-01-05T22:00:00.000Z', NOW);
-    assert.deepEqual(Object.keys(second.reminder.exceptions), ['2025-01-05T09:00:00.000Z']);
-    assert.equal(second.reminder.next_at, '2025-01-05T22:00:00.000Z');
-    assert.equal(second.occurrence_at, '2025-01-05T09:00:00.000Z');
+    // Панель передаёт момент показанного вхождения: перенос переписывает его же
+    // запись, а не уезжает на следующее вхождение серии.
+    const second = snoozeReminder(
+      ndb,
+      OWNER,
+      id,
+      '2025-01-05T22:00:00.000Z',
+      NOW,
+      '2025-01-04T09:00:00.000Z',
+    );
+    assert.deepEqual(Object.keys(second.reminder.exceptions), ['2025-01-04T09:00:00.000Z']);
+    assert.deepEqual(second.reminder.exceptions['2025-01-04T09:00:00.000Z'], {
+      kind: 'snooze',
+      until: '2025-01-05T22:00:00.000Z',
+    });
+    assert.equal(second.occurrence_at, '2025-01-04T09:00:00.000Z');
   });
 
   it('dismiss серии скрывает вхождение, но следующее остаётся', () => {
@@ -466,10 +575,10 @@ describe('reminder-service: snooze и dismiss (500d1b3d, 86cb7451)', () => {
     const thoughtId = seedThought(ndb, 'Субъект');
     const id = dailyReminder(ndb, thoughtId);
     const change = dismissReminder(ndb, OWNER, id, NOW);
-    assert.equal(change.occurrence_at, '2025-01-05T09:00:00.000Z');
-    assert.equal(change.reminder.next_at, '2025-01-06T09:00:00.000Z');
+    assert.equal(change.occurrence_at, '2025-01-04T09:00:00.000Z');
+    assert.equal(change.reminder.next_at, '2025-01-05T09:00:00.000Z');
     assert.deepEqual(change.reminder.exceptions, {
-      '2025-01-05T09:00:00.000Z': { kind: 'dismiss' },
+      '2025-01-04T09:00:00.000Z': { kind: 'dismiss' },
     });
   });
 

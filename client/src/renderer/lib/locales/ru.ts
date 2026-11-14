@@ -1409,6 +1409,79 @@ export const ru = {
   'tasks.repeatDayOfMonth': '%1-е число каждые %2 мес.',
   'tasks.repeatYearly': 'ежегодно %1.%2',
   'tasks.repeatLastDayOfMonth': 'последний день месяца каждые %2 мес.',
+
+  // -- Напоминания: подписи флага, облачка и редактора (173f1540) ------------
+  /** Однократное напоминание без даты (в подписи повтора). */
+  'reminder.once': 'однократно',
+  /** Однократное напоминание: момент показа. */
+  'reminder.onceAt': 'однократно %1',
+  /** Дни недели (подстановка — перечисление через запятую). */
+  'reminder.weekdays': 'по %1',
+  /** Каждый день. */
+  'reminder.everyDay': 'каждый день',
+  /** Каждый N-й день (подстановка — N). */
+  'reminder.everyNDays': 'каждые %1 дн.',
+  /** N-й день недели месяца (подстановки — день недели, номер вхождения). */
+  'reminder.weekdayOfMonth': '%1 — %2-е вхождение в месяце',
+  /** Последний день недели месяца (подстановка — день недели). */
+  'reminder.weekdayOfMonthLast': '%1 — последнее вхождение в месяце',
+  /** Число месяца каждый месяц (подстановка — число). */
+  'reminder.dayOfMonth': 'каждое %1-е',
+  /** Число месяца каждые N месяцев (подстановки — число, N). */
+  'reminder.dayOfMonthEvery': '%1-е число каждые %2 мес.',
+  /** Ежегодно (подстановка — «8 марта»). */
+  'reminder.yearly': 'ежегодно %1',
+  /** Последний день каждого месяца. */
+  'reminder.lastDayOfMonth': 'последний день месяца',
+  /** Последний день месяца каждые N месяцев (подстановка — N). */
+  'reminder.lastDayOfMonthEvery': 'последний день месяца каждые %1 мес.',
+  /** Ближайший показ в Ctrl-подсказке облачка (подстановка — дата и время). */
+  'reminder.nextAt': 'ближайшее: %1',
+  /** Заголовок диалога создания. */
+  'reminder.createTitle': 'Новое напоминание',
+  /** Заголовок диалога правки расписания. */
+  'reminder.editTitle': 'Расписание напоминания',
+  /** Группа «Вид» в редакторе. */
+  'reminder.kind': 'Вид',
+  'reminder.kindOne': 'Один раз',
+  'reminder.kindPeriod': 'Период',
+  'reminder.kindRule': 'Повтор',
+  /** Группа «Повтор» в редакторе. */
+  'reminder.repeat': 'Повтор',
+  'reminder.typeWeekdays': 'По дням недели',
+  'reminder.typeEveryDays': 'Каждый N-й день',
+  'reminder.typeWeekdayOfMonth': 'N-й день недели месяца',
+  'reminder.typeDayOfMonth': 'Число месяца',
+  'reminder.typeYearly': 'Ежегодно',
+  'reminder.typeLastDayOfMonth': 'Последний день месяца',
+  /** Поля редактора. */
+  'reminder.anchorDate': 'Дата',
+  'reminder.anchorTime': 'Время',
+  'reminder.everyDays': 'Каждый N-й день, N',
+  'reminder.dayField': 'Число месяца',
+  'reminder.everyMonthsField': 'Каждые N месяцев, N',
+  'reminder.weekdayField': 'День недели',
+  'reminder.nthField': 'Вхождение в месяце',
+  'reminder.nthLast': 'последнее',
+  'reminder.preview': 'Первые вхождения',
+  'reminder.previewEmpty': 'Вхождений пока нет',
+  'reminder.save': 'Сохранить',
+  'reminder.cancel': 'Отмена',
+  'reminder.saveFailed': 'Не удалось сохранить напоминание: %1',
+  /** Меню флага в шапке мысли. */
+  'reminder.flagTitle': 'Напоминания',
+  'reminder.create': 'Создать напоминание…',
+  'reminder.editSchedule': 'Изменить расписание…',
+  'reminder.dismissOccurrence': 'Убрать это вхождение',
+  'reminder.snoozeOccurrence': 'Отложить…',
+  'reminder.remove': 'Удалить напоминание',
+  'reminder.actionFailed': 'Действие с напоминанием не выполнено: %1',
+  /** Заголовок бейджа «сегодня» на вкладке Дневника (подстановка — число). */
+  'reminder.todayBadge': 'Напоминания сегодня и просрочки: %1',
+  /** Групповая команда панели: убрать все вхождения напоминаний группы. */
+  'reminder.groupDismiss': 'Отменить все напоминания по этой группе',
+  'reminder.groupDismissQuestion': 'Убрать все вхождения напоминаний группы «%1»?',
+  'reminder.groupDismissDone': 'Убрано вхождений: %1',
   /** Подтверждение массовой команды. */
   'tasks.bulkTitle': 'Массовая команда',
   'tasks.bulkCancelQuestion': 'Отменить задачи в строках: %1? Строки станут обычным текстом.',

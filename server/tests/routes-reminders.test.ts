@@ -406,6 +406,164 @@ describe('routes /reminders (b47f1fd2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('snooze требует until позже вхождения, а наступившее сегодня вхождение активно', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const subjectId = await createSubject(ctx, 'Сегодняшнее напоминание');
+      // Вхождение уже наступило в текущих UTC-сутках (сервер не знает пояса
+      // клиента и берёт свои сутки — хвост приёмки 0.16.1).
+      const dayStart = Math.floor(Date.now() / 86_400_000) * 86_400_000;
+      const todayOccurrence = new Date(Math.max(dayStart, Date.now() - 60_000)).toISOString();
+      const created = await postReminder(ctx, {
+        subject_type: 'thought',
+        subject_id: subjectId,
+        kind: 'one',
+        schedule: { type: 'once' },
+        anchor_at: todayOccurrence,
+      });
+      assert.equal(created.statusCode, 201, JSON.stringify(created.json()));
+      const todayId = created.json().data.id;
+
+      const snoozed = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/reminders/${todayId}/snooze`,
+        headers: authHeaders(ctx),
+        payload: { until: new Date(Date.now() + 3_600_000).toISOString() },
+      });
+      assert.equal(snoozed.statusCode, 200, JSON.stringify(snoozed.json()));
+      assert.equal(
+        (snoozed.json().data as { occurrence_at: string }).occurrence_at,
+        todayOccurrence,
+      );
+
+      const dismissed = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/reminders/${todayId}/dismiss`,
+        headers: authHeaders(ctx),
+        payload: {},
+      });
+      assert.equal(dismissed.statusCode, 200, JSON.stringify(dismissed.json()));
+      assert.equal(
+        (dismissed.json().data as { occurrence_at: string }).occurrence_at,
+        todayOccurrence,
+      );
+
+      // until в будущем, но НЕ позже вхождения — 400: запись была бы мёртвой.
+      const future = await postReminder(ctx, {
+        subject_type: 'thought',
+        subject_id: subjectId,
+        kind: 'one',
+        schedule: { type: 'once' },
+        anchor_at: '2030-01-15T09:00:00.000Z',
+      });
+      const futureId = future.json().data.id;
+      const early = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/reminders/${futureId}/snooze`,
+        headers: authHeaders(ctx),
+        payload: { until: '2030-01-15T08:00:00.000Z' },
+      });
+      assert.equal(early.statusCode, 400, JSON.stringify(early.json()));
+      assert.equal(early.json().error?.code, 'VALIDATION_ERROR');
+
+      // Явный адрес вхождения: чужой момент отвергается 409.
+      const foreignMoment = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/reminders/${futureId}/dismiss`,
+        headers: authHeaders(ctx),
+        payload: { occurrence_at: '2030-01-15T10:00:00.000Z' },
+      });
+      assert.equal(foreignMoment.statusCode, 409, JSON.stringify(foreignMoment.json()));
+
+      const addressed = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/networks/${ctx.networkId}/reminders/${futureId}/dismiss`,
+        headers: authHeaders(ctx),
+        payload: { occurrence_at: '2030-01-15T09:00:00.000Z' },
+      });
+      assert.equal(addressed.statusCode, 200, JSON.stringify(addressed.json()));
+      assert.equal(
+        (addressed.json().data as { occurrence_at: string }).occurrence_at,
+        '2030-01-15T09:00:00.000Z',
+      );
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
+  it('каждая мутация отдаёт владельцу событие reminders.changed', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const subjectId = await createSubject(ctx, 'Событие');
+      const events: Array<{ type: string; audience?: string; action?: string }> = [];
+      const unsubscribe = ctx.app.pubsub.subscribe(ctx.networkId, (event) => {
+        const data = event.data as { action?: string };
+        events.push({
+          type: event.type,
+          ...(event.audience !== undefined ? { audience: event.audience } : {}),
+          ...(data.action !== undefined ? { action: data.action } : {}),
+        });
+      });
+      try {
+        const created = await postReminder(ctx, {
+          subject_type: 'thought',
+          subject_id: subjectId,
+          kind: 'period',
+          schedule: { type: 'every_days', every: 1 },
+          anchor_at: ANCHOR,
+        });
+        assert.equal(created.statusCode, 201, JSON.stringify(created.json()));
+        const id = created.json().data.id;
+
+        const patched = await ctx.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/networks/${ctx.networkId}/reminders/${id}`,
+          headers: authHeaders(ctx),
+          payload: { schedule: { type: 'every_days', every: 2 } },
+        });
+        assert.equal(patched.statusCode, 200, JSON.stringify(patched.json()));
+
+        const snoozed = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/reminders/${id}/snooze`,
+          headers: authHeaders(ctx),
+          payload: { until: '2030-01-15T20:00:00.000Z' },
+        });
+        assert.equal(snoozed.statusCode, 200, JSON.stringify(snoozed.json()));
+
+        const dismissed = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/reminders/${id}/dismiss`,
+          headers: authHeaders(ctx),
+          payload: {},
+        });
+        assert.equal(dismissed.statusCode, 200, JSON.stringify(dismissed.json()));
+
+        const removed = await ctx.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/networks/${ctx.networkId}/reminders/${id}`,
+          headers: authHeaders(ctx),
+        });
+        assert.equal(removed.statusCode, 200, JSON.stringify(removed.json()));
+      } finally {
+        unsubscribe();
+      }
+
+      const changes = events.filter((e) => e.type === 'reminders.changed');
+      assert.deepEqual(
+        changes.map((e) => e.action),
+        ['created', 'updated', 'snoozed', 'dismissed', 'removed'],
+        'событие на каждую мутацию',
+      );
+      assert.ok(
+        changes.every((e) => e.audience === 'user'),
+        'события напоминаний адресованы только владельцу',
+      );
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
   it('DELETE удаляет мягко: списка и повторного удаления напоминание не видит', async () => {
     const ctx = await buildRestContext();
     try {

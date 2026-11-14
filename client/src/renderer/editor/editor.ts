@@ -80,6 +80,7 @@ import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { createReminderFlag } from './reminder-flag.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
@@ -2809,7 +2810,15 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   });
   actionsBtn.type = 'button';
 
-  row.append(typeCombo.root, activeLabel, actionsBtn);
+  // Флаг напоминаний (0.16.1, элемент 24ad3735): человекочитаемый повтор рядом
+  // с отметкой «Актуально»; клик — меню действий по напоминаниям мысли.
+  const reminderFlag = createReminderFlag({
+    networkId: requireNetworkId(),
+    thoughtId: thought.id,
+    thoughtTitle: thought.title,
+  });
+
+  row.append(typeCombo.root, activeLabel, reminderFlag.root, actionsBtn);
   box.append(row);
 
   /**
@@ -2834,6 +2843,8 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     activeCheck.checked = next.active;
     activeCheck.disabled = next.is_protected && next.is_root;
     syncThoughtHeaderLock();
+    // Живая шапка переживает смену мысли — флаг переходит на новую цель.
+    reminderFlag.setTarget(next.id, next.title);
   };
   headerRetarget = (ctx): void => {
     if (ctx.ownerType === 'thought' && ctx.thought !== null) applyThought(ctx.thought);
