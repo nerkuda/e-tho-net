@@ -23,10 +23,16 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
-import { PREF_KEY, type ReminderDeleteResult, type ReminderSubjectType } from '@etn/shared';
+import { type ReminderDeleteResult, type ReminderSubjectType } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  resolveShowInactive,
+  restWriteFx,
+  runWrite,
+  type RouteDeps,
+} from './helpers.js';
 import {
   createReminder,
   dismissReminder,
@@ -44,17 +50,6 @@ import {
   RestReminderSnooze,
   RestReminderUpdate,
 } from '../contracts.js';
-
-/**
- * Настройка сети «Показывать неактуальные мысли и связи в этой сети»
- * (PREF_KEY.SHOW_INACTIVE, по умолчанию выключена). Решение 2026-11-12:
- * неактуальный субъект показывается серым при включённой настройке и скрыт при
- * выключенной; на срабатывание это не влияет.
- */
-function showInactiveFor(app: FastifyInstance, userId: string, networkId: string): boolean {
-  const pref = app.systemDb.getNetworkPreference(userId, networkId, PREF_KEY.SHOW_INACTIVE);
-  return pref?.value === true;
-}
 
 /** `/api/v1/networks*` reminders routes plugin factory. */
 export function createRemindersRoutes(deps: RouteDeps): FastifyPluginAsync {
@@ -108,7 +103,7 @@ export function createRemindersRoutes(deps: RouteDeps): FastifyPluginAsync {
             ? { subject_type: input.subject_type as ReminderSubjectType }
             : {}),
           ...(input.subject_id !== undefined ? { subject_id: input.subject_id } : {}),
-          show_inactive: showInactiveFor(app, req.auth!.user.id, input.network_id),
+          show_inactive: resolveShowInactive(app, req.auth!.user.id, input.network_id),
         });
         sendSuccess(reply, result, { request_id: req.id });
       },

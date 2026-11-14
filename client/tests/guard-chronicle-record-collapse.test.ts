@@ -10,7 +10,8 @@
  *    дня из DOM-предка `dayOfCard`);
  *  • единица свёрнутости — вхождение «день + id» (`recordCollapseKey`);
  *  • поле «комментарий» доступно только у развёрнутой записи (`feed-nav`);
- *  • календарь использует точки (`calendarDotCount`), а не число `.cal-count`;
+ *  • календарь использует маркеры дня (`cal-marker`), а не число `.cal-count`
+ *    и не точки-пороги 0.10.2 (0.16.1, требование ab9d627b);
  *  • заголовок выходного дня красится токеном `--cal-weekend` (обе темы);
  *  • смена надписи заголовка (`setRecordTitleLabel`) сохраняет иконку-шеврон:
  *    индикатор передаётся явно и не угадывается по первому узлу кнопки
@@ -100,10 +101,11 @@ describe('сторож: сворачиваемая запись «Дневник
     );
   });
 
-  it('календарь: точки индикатора вместо числа-счётчика', () => {
-    assert.match(CALENDAR, /calendarDotCount\(count\)/, 'пороги точек 50/100');
-    assert.match(CALENDAR, /'cal-dots'/, 'столбик точек');
+  it('календарь: маркеры дня вместо числа-счётчика и точек-порогов', () => {
+    assert.match(CALENDAR, /CALENDAR_MARKER_ORDER/, 'порядок маркеров — из @etn/shared');
+    assert.match(CALENDAR, /'cal-markers'/, 'столбик маркеров');
     assert.ok(!/cal-count/.test(CALENDAR), 'число-счётчик `.cal-count` упразднено');
+    assert.ok(!/cal-dots|calendarDotCount/.test(CALENDAR), 'точки-пороги 0.10.2 упразднены');
     assert.ok(
       !/\.cal-day\.has-records/.test(CHRONICLE_CSS),
       'фоновая подсветка `.has-records` убрана',

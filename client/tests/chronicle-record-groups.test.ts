@@ -1,19 +1,18 @@
 /**
- * Сворачиваемая запись ленты «Дневника» (0.10.2, задача 41ed99ab): чистые
- * помощники календаря (пороги точек), производный заголовок записи, признак
- * выходного дня и in-place-переключение тела записи на DOM-шиме.
+ * Сворачиваемая запись ленты «Дневника» (0.10.2, задача 41ed99ab): производный
+ * заголовок записи, признак выходного дня и in-place-переключение тела записи
+ * на DOM-шиме.
  *
- * Требования — карточка 41ed99ab (пп.1, 2, 5): точки вместо счётчика; заголовок
- * из `title` либо первой непустой строки тела со снятием разметки (150 симв.);
+ * Требования — карточка 41ed99ab (пп.1, 2, 5): заголовок из `title` либо первой
+ * непустой строки тела со снятием разметки (150 симв.);
  * сб/вс — отдельный токен; сворачивание записи не пересобирает ленту.
+ * Маркеры календаря (0.16.1: точки-пороги упразднены) — отдельный тест
+ * `chronicle-calendar-markers.test.ts`.
  */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import {
-  calendarDotCount,
-} from '../src/renderer/lib/month-calendar.js';
 import {
   EDITOR_RECORD_TITLE_MAX,
   RECORD_DISPLAY_TITLE_MAX,
@@ -29,18 +28,6 @@ import {
   recordCollapseKey,
 } from '../src/renderer/screens/chronicle/record-groups.js';
 import { ShimElement } from './dom-shim.js';
-
-describe('календарь: пороги точек-индикаторов (задача 41ed99ab)', () => {
-  it('0 записей — 0 точек; ≤50 — 1; 51…100 — 2; >100 — 3', () => {
-    assert.equal(calendarDotCount(0), 0);
-    assert.equal(calendarDotCount(1), 1);
-    assert.equal(calendarDotCount(50), 1);
-    assert.equal(calendarDotCount(51), 2);
-    assert.equal(calendarDotCount(100), 2);
-    assert.equal(calendarDotCount(101), 3);
-    assert.equal(calendarDotCount(999), 3);
-  });
-});
 
 describe('производный заголовок записи (задача 41ed99ab, п.2)', () => {
   it('непустой title — как есть', () => {
@@ -153,7 +140,10 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
 
     applyRecordCollapsed(card as unknown as HTMLElement, true, labels);
     assert.ok(card.classList.contains('is-collapsed'), 'карточка свёрнута');
-    assert.ok(titleRef.classList.contains('is-collapsed'), 'индикатор заголовка повёрнут (472457bf)');
+    assert.ok(
+      titleRef.classList.contains('is-collapsed'),
+      'индикатор заголовка повёрнут (472457bf)',
+    );
     assert.equal(bodyRef.hidden, true, 'тело скрыто');
     assert.equal(titleRef.getAttribute('aria-expanded'), 'false');
     assert.equal(titleRef.title, 'Развернуть');
@@ -169,10 +159,7 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
   });
 
   it('ключ вхождения различает копии записи в разных днях', () => {
-    assert.notEqual(
-      recordCollapseKey('2026-09-11', 'r1'),
-      recordCollapseKey('2026-09-10', 'r1'),
-    );
+    assert.notEqual(recordCollapseKey('2026-09-11', 'r1'), recordCollapseKey('2026-09-10', 'r1'));
   });
 
   it('findRecordCard и dayOfCard находят вхождение и день', () => {
@@ -180,17 +167,10 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
       { day: '2026-09-11', records: ['r1'] },
       { day: '2026-09-10', records: ['r1'] },
     ]);
-    const found = findRecordCard(
-      feed.root as unknown as HTMLElement,
-      '2026-09-10',
-      'r1',
-    );
+    const found = findRecordCard(feed.root as unknown as HTMLElement, '2026-09-10', 'r1');
     assert.ok(found === (feed.card('2026-09-10', 'r1') as unknown as HTMLElement));
     assert.equal(dayOfCard(feed.card('2026-09-10', 'r1') as unknown as HTMLElement), '2026-09-10');
-    assert.equal(
-      findRecordCard(feed.root as unknown as HTMLElement, '2026-09-01', 'r1'),
-      null,
-    );
+    assert.equal(findRecordCard(feed.root as unknown as HTMLElement, '2026-09-01', 'r1'), null);
   });
 
   it('восстановление свёрнутости не зависит от DOM-предка карточки (регресс блокера 1)', () => {
@@ -206,10 +186,14 @@ describe('applyRecordCollapsed: тело скрывается на месте (�
     // Сохранённый ключ вхождения «день + id» (как из `diary_collapsed_records`).
     const saved = new Set([recordCollapseKey('2026-09-11', 'r1')]);
     assert.equal(dayOfCard(card as unknown as HTMLElement), null, 'предка дня нет');
-    applyRecordCollapsed(card as unknown as HTMLElement, saved.has(recordCollapseKey('2026-09-11', 'r1')), {
-      collapse: 'Свернуть',
-      expand: 'Развернуть',
-    });
+    applyRecordCollapsed(
+      card as unknown as HTMLElement,
+      saved.has(recordCollapseKey('2026-09-11', 'r1')),
+      {
+        collapse: 'Свернуть',
+        expand: 'Развернуть',
+      },
+    );
     assert.ok(card.classList.contains('is-collapsed'), 'свёрнутость восстановлена');
     assert.equal(body.hidden, true, 'тело скрыто');
   });
@@ -239,13 +223,7 @@ describe('applyRecordCollapsedForDay: восстановление по явно
     const saved = new Set([recordCollapseKey('2026-09-11', 'r1')]);
     assert.equal(dayOfCard(card as unknown as HTMLElement), null, 'предка дня нет');
 
-    applyRecordCollapsedForDay(
-      card as unknown as HTMLElement,
-      '2026-09-11',
-      'r1',
-      saved,
-      labels,
-    );
+    applyRecordCollapsedForDay(card as unknown as HTMLElement, '2026-09-11', 'r1', saved, labels);
     assert.ok(card.classList.contains('is-collapsed'), 'свёрнутость восстановлена');
     assert.ok(title.classList.contains('is-collapsed'), 'индикатор заголовка восстановлен');
     assert.equal(body.hidden, true, 'тело скрыто');
@@ -255,13 +233,7 @@ describe('applyRecordCollapsedForDay: восстановление по явно
   it('ключ вхождения решает: сохранённый день другого дня не сворачивает', () => {
     const { card } = detachedCard();
     const saved = new Set([recordCollapseKey('2026-09-10', 'r1')]);
-    applyRecordCollapsedForDay(
-      card as unknown as HTMLElement,
-      '2026-09-11',
-      'r1',
-      saved,
-      labels,
-    );
+    applyRecordCollapsedForDay(card as unknown as HTMLElement, '2026-09-11', 'r1', saved, labels);
     assert.ok(!card.classList.contains('is-collapsed'), 'запись развёрнута');
   });
 
@@ -278,4 +250,3 @@ describe('applyRecordCollapsedForDay: восстановление по явно
     assert.equal(body.hidden, false);
   });
 });
-

@@ -1280,8 +1280,6 @@ export const en = {
   'diary.expandDayRecords': 'Expand day entries',
   /** Не удалось загрузить запись (подстановка — причина). */
   'diary.loadFailed': 'Failed to load the entry: %1',
-  /** Не удалось пересчитать счётчики календаря (подстановка — причина). */
-  'diary.countsFailed': 'Failed to recalculate calendar marks: %1',
   /** Не удалось сохранить запись (подстановка — причина). */
   'diary.saveFailed': 'Failed to save: %1',
   /** Не удалось создать запись (подстановка — причина). */
@@ -3323,6 +3321,10 @@ export const en = {
   'calendar.ariaLabel.year': 'Year',
   'calendar.title.month': 'Month',
   'calendar.week': 'Week %1: %2 — %3',
+  'calendar.marker.records': 'Records',
+  'calendar.marker.plans': 'Tasks and reminders',
+  'calendar.marker.facts': 'Date facts and date links',
+  'calendar.marker.overdue': 'Overdue tasks',
 
   // -- periodEditor ------------------------------------------------------
   'periodEditor.label.today1dZavtra': '$today+1d — tomorrow',

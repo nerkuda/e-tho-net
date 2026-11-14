@@ -6,6 +6,9 @@
  *   GET  /networks/:networkId/chronicle/day-links — «связи дня» диапазона
  *     календарных дней клиента (0.16.1, требование 1fb1047d): датовые факты
  *     мыслей + date-ссылки записей и постоянных комментариев (без задач).
+ *   GET  /networks/:networkId/chronicle/calendar-markers — маркеры дней
+ *     календаря месяца (0.16.1, требование ab9d627b): записи, задачи и
+ *     напоминания, датовые факты и date-ссылки, просрочка.
  *
  * The query handler is read-only (no idempotency pre-handler); saved filters
  * of the chronicle view reuse the shared `/saved-filters` endpoints with
@@ -19,10 +22,11 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import { sendList, sendSuccess } from '../http/responses.js';
-import { filterProfileHasTime, type DayLinksResult } from '@etn/shared';
-import { openRouteNetworkDb, requestBody, type RouteDeps } from './helpers.js';
-import { parseRest, RestChronicleDayLinks } from '../contracts.js';
+import { filterProfileHasTime, type CalendarMarkersResult, type DayLinksResult } from '@etn/shared';
+import { openRouteNetworkDb, requestBody, resolveShowInactive, type RouteDeps } from './helpers.js';
+import { parseRest, RestChronicleCalendarMarkers, RestChronicleDayLinks } from '../contracts.js';
 import { parseChronicleQueryBody, queryChronicle } from '../domain/chronicle-service.js';
+import { listCalendarMarkers } from '../domain/calendar-markers-service.js';
 import { listDayLinks } from '../domain/day-links-service.js';
 
 /** Route params for `:networkId`. */
@@ -81,6 +85,27 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
         const result: DayLinksResult = listDayLinks(ndb, {
           from: input.from,
           ...(input.to !== undefined ? { to: input.to } : {}),
+        });
+        sendSuccess(reply, result, { request_id: req.id });
+      },
+    );
+
+    // Маркеры дней календаря месяца «Дневника» (0.16.1, требование ab9d627b):
+    // один агрегатный запрос на месяц — записи, задачи/напоминания, датовые
+    // факты и date-ссылки, просрочка. Дни месяца и «сегодня» приходят от
+    // клиента (требование fcdcd75f), напоминания — per-user запросившего.
+    app.get(
+      '/networks/:networkId/chronicle/calendar-markers',
+      { preHandler: [app.authPreHandler, requireNetworkMember()] },
+      async (req: FastifyRequest, reply) => {
+        const input = parseRest(RestChronicleCalendarMarkers, req);
+        const ndb = openRouteNetworkDb(deps, req, input.network_id, app.appLogger);
+        const result: CalendarMarkersResult = listCalendarMarkers(ndb, {
+          from: input.from,
+          to: input.to,
+          today: input.today,
+          userId: req.auth!.user.id,
+          show_inactive: resolveShowInactive(app, req.auth!.user.id, input.network_id),
         });
         sendSuccess(reply, result, { request_id: req.id });
       },

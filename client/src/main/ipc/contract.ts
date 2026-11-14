@@ -56,6 +56,7 @@ import type {
   AttachmentUpdateInput,
   AttachmentUsage,
   ActivitySavedFilter,
+  CalendarMarkersResult,
   ChronicleFilterDefinition,
   ChronicleQueryRequest,
   ChronicleQueryResponse,
@@ -583,6 +584,20 @@ export interface DayLinksQuery {
 }
 
 /**
+ * Запрос `GET /networks/{nid}/chronicle/calendar-markers` (операция 0.16.1,
+ * требование `ab9d627b`): отображаемый месяц и «сегодня» клиента (`YYYY-MM-DD`,
+ * сутки наблюдателя считает клиент — требование `fcdcd75f`).
+ */
+export interface CalendarMarkersQuery {
+  /** Первый день месяца. */
+  from: string;
+  /** Последний день месяца. */
+  to: string;
+  /** Локальные сутки клиента — граница просрочки (`due < today`). */
+  today: string;
+}
+
+/**
  * Запрос `GET /networks/{nid}/reminders` (операция ae19b1bf): период раскрытия
  * повторов в UTC-инстансах и фильтр по субъекту.
  */
@@ -871,6 +886,12 @@ export interface EtnApi {
      * (0.16.1, требование `1fb1047d`): блок «Связи дня» ленты «Дневника».
      */
     dayLinks(networkId: string, query: DayLinksQuery): Promise<DayLinksResult>;
+    /**
+     * `GET /chronicle/calendar-markers` — маркеры дней месяца для календаря
+     * панели «Дневника» (0.16.1, требование `ab9d627b`): записи, задачи и
+     * напоминания, датовые факты и date-ссылки, просрочка.
+     */
+    calendarMarkers(networkId: string, query: CalendarMarkersQuery): Promise<CalendarMarkersResult>;
   };
   chronicleFilters: {
     /** `GET /saved-filters?view=chronicle` — the user's chronicle filters (L20). */

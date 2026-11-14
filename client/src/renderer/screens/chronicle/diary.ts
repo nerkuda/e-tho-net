@@ -33,7 +33,13 @@ import { visibleRecordTargets } from '../../lib/record-targets.js';
 // виджетом значения условия, ошибка 1b6c49fe). Реэкспорт сохраняет прежние точки
 // импорта у потребителей (`addDays`/`isoWeekNumber`/`todayLocal` и токенов —
 // `isPeriodToken`/`resolveDateToken` из этого модуля).
-export { addDays, isPeriodToken, isoWeekNumber, resolveDateToken, todayLocal } from '../../lib/dates.js';
+export {
+  addDays,
+  isPeriodToken,
+  isoWeekNumber,
+  resolveDateToken,
+  todayLocal,
+} from '../../lib/dates.js';
 
 /** Один день ленты: локальная дата `YYYY-MM-DD` и записи, видимые в этот день. */
 export interface DiaryDay {
@@ -277,8 +283,24 @@ export function clampPseudoDate(today: string, from: string, to: string): string
  * интервала — она «мозолит глаза» в каждом дне периода.
  */
 export function rowDays(row: ChronicleRow, from = '', to = ''): string[] {
-  let start = localDay(row.valid_from);
-  let end = row.valid_to !== null ? localDay(row.valid_to) : start;
+  return intervalDays(row.valid_from, row.valid_to, from, to);
+}
+
+/**
+ * Дни ЛОКАЛЬНОГО календаря, покрытые интервалом `[validFrom, validTo]` (UTC-
+ * инстансы; `validTo = null` — интервал одного момента), в пересечении с
+ * диапазоном `[from, to]` (границы включительные). Общий разбор для строки
+ * ленты (`rowDays`) и интервалов записей маркеров календаря (0.16.1, требование
+ * ab9d627b): день наблюдателя — один и тот же расчёт.
+ */
+export function intervalDays(
+  validFrom: string,
+  validTo: string | null,
+  from = '',
+  to = '',
+): string[] {
+  let start = localDay(validFrom);
+  let end = validTo !== null ? localDay(validTo) : start;
   if (start === '') return [];
   if (end === '') end = start;
   if (end < start) [start, end] = [end, start];
@@ -342,11 +364,7 @@ export function formatDayLabel(day: string): string {
  * Та же модель, что у серверного `ORDER BY`, — клиентская локальная вставка не
  * расходится с порядком страницы.
  */
-export function compareRecords(
-  a: ChronicleRow,
-  b: ChronicleRow,
-  order: SortOrder = 'asc',
-): number {
+export function compareRecords(a: ChronicleRow, b: ChronicleRow, order: SortOrder = 'asc'): number {
   const dir = order === 'desc' ? -1 : 1;
   const byDate = a.valid_from === b.valid_from ? 0 : a.valid_from < b.valid_from ? -1 : 1;
   if (byDate !== 0) return byDate * dir;
@@ -482,10 +500,7 @@ export function localDayEnd(day: string): string {
  * не выпадает из UTC-суток, а лента показывает весь её день. `''` — дата не
  * разобралась.
  */
-export function recordPeriod(row: {
-  valid_from: string;
-  valid_to: string | null;
-}): PeriodRange {
+export function recordPeriod(row: { valid_from: string; valid_to: string | null }): PeriodRange {
   let from = localDay(row.valid_from);
   let to = row.valid_to !== null ? localDay(row.valid_to) : from;
   if (from === '') return { from: '', to: '' };
@@ -493,7 +508,6 @@ export function recordPeriod(row: {
   if (to < from) [from, to] = [to, from];
   return { from: localDayStart(from), to: localDayEnd(to) };
 }
-
 
 /**
  * Период недели (клик по номеру/строке недели): от ПЕРВОГО дня недели сети

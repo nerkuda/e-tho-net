@@ -3815,6 +3815,20 @@ export class RestClient {
     });
   }
 
+  /** `GET /networks/{nid}/chronicle/calendar-markers` — маркеры дней месяца («Дневник», 0.16.1). */
+  public async listCalendarMarkers(
+    networkId: string,
+    query: import('../ipc/contract.js').CalendarMarkersQuery,
+  ): Promise<import('@etn/shared').CalendarMarkersResult> {
+    return this.request(
+      'GET',
+      `/networks/${encodeURIComponent(networkId)}/chronicle/calendar-markers`,
+      {
+        query: { from: query.from, to: query.to, today: query.today },
+      },
+    );
+  }
+
   /** `GET /networks/{nid}/saved-filters?view=chronicle` — the user's chronicle filters. */
   public async listChronicleFilters(
     networkId: string,

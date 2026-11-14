@@ -168,6 +168,7 @@ function buildApi(): EtnBridgeApi {
     chronicle: {
       query: (networkId, request) => invoke('chronicle.query', networkId, request),
       dayLinks: (networkId, query) => invoke('chronicle.dayLinks', networkId, query),
+      calendarMarkers: (networkId, query) => invoke('chronicle.calendarMarkers', networkId, query),
     },
     chronicleFilters: {
       list: (networkId) => invoke('chronicleFilters.list', networkId),

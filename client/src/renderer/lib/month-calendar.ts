@@ -30,6 +30,15 @@
  * перетаскивание диапазона — через `onRangeChange`. Инвариант панели «поля
  * периода — единственный источник дат» остаётся на экране.
  *
+ * **Маркеры дня (0.16.1, требование ab9d627b).** Индикация дня — маркеры-цвета
+ * в четырёх ФИКСИРОВАННЫХ местах слева от номера: записи (синий), задачи и
+ * напоминания (оранжевый), датовые факты и date-ссылки (зелёный), просрочка
+ * (красный). Цвета — только токены дизайн-системы (`--accent`/`--warn`/`--ok`/
+ * `--danger`, обе темы). Счётчиков в клетках нет: число-счётчик и точки-пороги
+ * 0.10.2 упразднены. Источник маркеров — опция `markers`; НЕ задана — режим
+ * `markers: off` (диалог «Дата/период» маркеров не показывает), включает его
+ * только панель отбора «Дневника».
+ *
  * Чистая сетка месяца ({@link buildMonthWeeks}) и примитивы дат — `lib/dates.ts`
  * (перенесены из `screens/chronicle/diary.ts`, чтобы библиотека не зависела от
  * экрана). DOM собирается на общем словаре кнопок (`lib/ui/button.ts`), поля —
@@ -39,6 +48,7 @@
  */
 
 import { div, el, span } from './dom.js';
+import { CALENDAR_MARKER_ORDER, type CalendarMarkerKind } from '@etn/shared';
 import { buildMonthWeeks, firstOfMonth, todayLocal, type CalendarWeek } from './dates.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
@@ -128,8 +138,13 @@ export interface MonthCalendarOptions {
   to?: string;
   /** Сегодняшний локальный день (подсветка). */
   today?: string;
-  /** Сколько записей попало в день (0 — счётчик не рисуется). */
-  counts?: (day: string) => number;
+  /**
+   * Источник маркеров дня (0.16.1, требование ab9d627b). НЕ задан — маркеры
+   * ВЫКЛЮЧЕНЫ (`markers: off` по умолчанию): общий компонент показывает
+   * маркеры только у календаря панели отбора «Дневника», календарь диалога
+   * «Дата/период» рендерится без них.
+   */
+  markers?: (day: string) => readonly CalendarMarkerKind[];
   /** Клик по дню. */
   onPickDay?: (day: string) => void;
   /**
@@ -169,6 +184,12 @@ export interface MonthCalendarHandle {
   root: HTMLElement;
   /** Перерисовать выделение периода извне. */
   setSelection(from: string, to: string): void;
+  /**
+   * Перерисовать сетку, не меняя выделения и показанного месяца: источник
+   * маркеров — замыкание хозяина, поэтому новые данные маркеров появляются
+   * только после перерисовки (`refreshCalendarMarkers` экрана «Дневника»).
+   */
+  refresh(): void;
   /** Показать месяц по дате `YYYY-MM-DD`. */
   showDate(day: string): void;
   /** Показанный месяц. */
@@ -182,23 +203,35 @@ export interface MonthCalendarHandle {
 }
 
 /**
- * Индикатор записей дня (0.10.2, задача 41ed99ab, элемент 55b07702): число
- * чисел-счётчиков заменено 1–3 вертикальными точками. Пороги: записей нет —
- * 0 точек; ≤ 50 — 1 точка; 51…100 — 2 точки; > 100 — 3 точки. Точки живут
- * только там, где хозяин передал `counts` (панель «Дневника»); в диалоге
- * даты/периода счётчики не задаются — вид прежний.
+ * Подпись маркера для подсказки; текст берётся в момент рендера (словарь живой).
  */
-export function calendarDotCount(count: number): 0 | 1 | 2 | 3 {
-  if (count <= 0) return 0;
-  if (count <= 50) return 1;
-  if (count <= 100) return 2;
-  return 3;
+function markerTitle(kind: CalendarMarkerKind): string {
+  switch (kind) {
+    case 'records':
+      return t('calendar.marker.records');
+    case 'plans':
+      return t('calendar.marker.plans');
+    case 'facts':
+      return t('calendar.marker.facts');
+    case 'overdue':
+      return t('calendar.marker.overdue');
+  }
 }
 
-/** Столбик из `n` точек-индикаторов (слева от номера дня). */
-function buildDots(n: number): HTMLElement {
-  const box = el('span', 'cal-dots');
-  for (let i = 0; i < n; i++) box.append(el('span', 'cal-dot'));
+/**
+ * Столбик маркеров дня (слева от номера дня): четыре фиксированных места,
+ * присутствующие маркеры покрашены токенами дизайн-системы, отсутствующие не
+ * видны, но занимают своё место. Счётчиков в клетке нет (0.16.1: число-счётчик
+ * и точки-пороги 0.10.2 упразднены).
+ */
+function buildMarkers(present: ReadonlySet<CalendarMarkerKind>): HTMLElement {
+  const box = el('span', 'cal-markers');
+  for (const kind of CALENDAR_MARKER_ORDER) {
+    const marker = el('span', `cal-marker cal-marker--${kind}`);
+    if (present.has(kind)) marker.title = markerTitle(kind);
+    else marker.classList.add('is-off');
+    box.append(marker);
+  }
   return box;
 }
 
@@ -519,7 +552,6 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     if (inPeriod(cell.day)) classes.push('is-selected');
     if (from !== '' && cell.day === from) classes.push('is-selected-from');
     if (to !== '' && cell.day === to) classes.push('is-selected-to');
-    const count = opts.counts?.(cell.day) ?? 0;
     const label = String(Number(cell.day.slice(8, 10)));
     const button = uiButton({
       label: '',
@@ -540,11 +572,12 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
         if ((event as MouseEvent).detail >= 2) opts.onPickDayActivate?.(cell.day);
       },
     });
-    // Индикатор записей — столбик 1–3 точек СЛЕВА от номера дня, по центру
-    // ячейки (0.10.2, задача 41ed99ab); фоновой подсветки `.has-records` больше
-    // нет — счётчик-число упразднён.
-    const dots = calendarDotCount(count);
-    if (dots > 0) button.append(buildDots(dots));
+    // Маркеры дня — столбик фиксированных мест СЛЕВА от номера дня (0.16.1,
+    // требование ab9d627b). Хозяин не передал источник (`markers: off`) —
+    // столбика нет вовсе: календарь диалога «Дата/период» остаётся прежним.
+    if (opts.markers !== undefined) {
+      button.append(buildMarkers(new Set(opts.markers(cell.day))));
+    }
     button.append(span(label, 'cal-day-num'));
     if (dragEnabled) wireDrag(button, cell.day);
     return button;
@@ -630,6 +663,9 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     setSelection: (nextFrom, nextTo) => {
       from = nextFrom;
       to = nextTo;
+      render();
+    },
+    refresh: () => {
       render();
     },
     showDate: (day) => {

@@ -697,6 +697,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     ),
   );
   handlers.set(
+    'chronicle.calendarMarkers',
+    bind((networkId: string, query: Parameters<RestClient['listCalendarMarkers']>[1]) =>
+      requireRest(deps).listCalendarMarkers(networkId, query),
+    ),
+  );
+  handlers.set(
     'chronicleFilters.list',
     bind((networkId: string) => requireRest(deps).listChronicleFilters(networkId)),
   );

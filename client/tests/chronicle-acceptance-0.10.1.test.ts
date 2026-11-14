@@ -9,7 +9,9 @@
  *     `setAttribute`, а не `dataset[...]`;
  *  3) кнопка «Сегодня» в календаре;
  *  4) псевдо-запись по одному заголовку доходит до ленты (нет обходной меры);
- *  5) счётчики записей считаются по месяцу, независимо от периода;
+ *  5) маркеры дней считаются одним агрегатным запросом по месяцу, независимо
+ *     от периода (0.16.1: счётчики-записи заменены маркерами, требование
+ *     ab9d627b);
  *  6) панель отбора — состав «Структур» (без «стороны связи» и отдельной
  *     группы «критерии целей», период без переключателя режимов).
  */
@@ -30,6 +32,7 @@ const CALENDAR = read('lib/month-calendar.ts');
 const PANEL = read('screens/chronicle/filter-panel.ts');
 const BUILDER = read('lib/filter-builder.ts');
 const PERIOD_EDITOR = read('lib/period-editor.ts');
+const DATE_PERIOD_DIALOG = read('lib/date-period-dialog.ts');
 
 describe('приёмка «Дневника» 0.10.1: компоновка (пункт 1)', () => {
   it('календарь — header панели отбора (первый элемент)', () => {
@@ -79,36 +82,50 @@ describe('приёмка «Дневника» 0.10.1/0.12.1: немедленн�
   });
 });
 
-describe('приёмка «Дневника» 0.10.1: счётчики календаря (пункт 5)', () => {
-  it('счётчики считаются отдельным запросом по месяцу, без периода', () => {
-    // Снимок пары и отбора приходит параметром: счётчики считают отбор ТОЛЬКО
-    // своей пары «сеть + вкладка» (ошибка 58c55bb9).
+describe('приёмка «Дневника» 0.10.1: маркеры календаря (пункт 5, 0.16.1)', () => {
+  it('маркеры считаются одним агрегатным запросом по месяцу, без периода', () => {
+    // Снимок пары, месяца и «сегодня» снимается в одной точке: маркеры считают
+    // отбор ТОЛЬКО своей пары «сеть + вкладка» (ошибка 58c55bb9).
     assert.match(
       CHRONICLE,
-      /async function refreshCalendarCounts\(snapshot: CalendarCountsSnapshot \| null\)/,
+      /async function refreshCalendarMarkers\(snapshot: CalendarMarkersSnapshot \| null\)/,
     );
-    // Границы месяца — ЛОКАЛЬНЫЕ сутки (приёмка №4, задача fd9eef49): «голая
-    // дата» на сервере = сутки UTC и запись у локальной полуночи выпадала бы
-    // из счётчиков месяца.
-    // Задача 608ecb79: границы месяца подменяются В ДЕРЕВЕ периода (тело-дерево
-    // и плоские `date_from`/`date_to` вместе сервер отвергает).
+    // Один запрос за месяц: интервалы записей и моменты напоминаний приходят
+    // UTC-инстансами, «сегодня» — от клиента (требования fcdcd75f, ab9d627b).
     assert.match(
       CHRONICLE,
-      /chronicleDefinitionForPeriod\(localDayStart\(first\), localDayEnd\(last\)\)/,
-      'начало/конец локальных суток месяца — в отборе-дереве',
+      /etn\.chronicle\.calendarMarkers\(pair\.networkId, \{ from, to, today \}\)/,
+      'агрегатный запрос маркеров вместо counts-запроса записей',
+    );
+    assert.match(CHRONICLE, /groupCalendarMarkers\(result, \{ from, to \}\)/, 'раскладка по дням');
+    assert.ok(
+      !/refreshCalendarCounts|CHRONICLE_QUERY_MAX_LIMIT/.test(CHRONICLE),
+      'counts-запрос записей упразднён',
     );
     assert.ok(
       !/dayCounts\.set\(day\.day, day\.rows\.length\)/.test(CHRONICLE),
-      'счётчики больше не берутся из периода-фильтрованной ленты',
+      'маркеры больше не берутся из периода-фильтрованной ленты',
     );
   });
 
-  it('день с записями получает индикатор независимо от выделения', () => {
-    // 0.10.2 (задача 41ed99ab): число-счётчик заменено столбиком точек слева от
-    // номера дня; пороги 50/100 — `calendarDotCount`, класс `cal-dots`.
-    assert.match(CALENDAR, /const dots = calendarDotCount\(count\)/);
-    assert.match(CALENDAR, /if \(dots > 0\) button\.append\(buildDots\(dots\)\)/);
-    assert.match(CALENDAR, /'cal-dots'/);
+  it('маркеры есть только у календаря панели; диалог «Дата/период» — markers: off', () => {
+    // Панель передаёт источник маркеров (0.16.1, требование ab9d627b).
+    assert.match(CHRONICLE, /markers: \(day\) => dayMarkers\(day\)/, 'источник маркеров панели');
+    // Компонент рисует столбик четырёх фиксированных мест в порядке
+    // `CALENDAR_MARKER_ORDER`; счётчика и точек-порогов больше нет.
+    assert.match(CALENDAR, /CALENDAR_MARKER_ORDER/, 'порядок мест — из @etn/shared');
+    assert.match(
+      CALENDAR,
+      /buildMarkers\(new Set\(opts\.markers\(cell\.day\)\)\)/,
+      'маркеры клетки',
+    );
+    assert.ok(!/calendarDotCount|cal-dots|cal-count/.test(CALENDAR), 'счётчики упразднены');
+    // Диалог собирает тот же компонент без опции `markers` — режим `markers: off`.
+    assert.match(DATE_PERIOD_DIALOG, /buildMonthCalendar\(\{/, 'диалог использует общий календарь');
+    assert.ok(
+      !/markers\s*:/.test(DATE_PERIOD_DIALOG),
+      'диалог «Дата/период» маркеров не показывает',
+    );
   });
 });
 

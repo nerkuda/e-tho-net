@@ -168,6 +168,22 @@ export function resolveShowTrash(
 }
 
 /**
+ * Настройка сети «Показывать неактуальные мысли и связи в этой сети»
+ * (PREF_KEY.SHOW_INACTIVE, по умолчанию выключена). Решение 2026-11-12:
+ * неактуальный субъект показывается серым при включённой настройке и скрыт при
+ * выключенной; на срабатывание напоминаний это не влияет. Одна точка чтения
+ * для выдач напоминаний (панель, бейдж «сегодня», маркеры календаря).
+ */
+export function resolveShowInactive(
+  app: FastifyInstance,
+  userId: string,
+  networkId: string,
+): boolean {
+  const pref = app.systemDb.getNetworkPreference(userId, networkId, PREF_KEY.SHOW_INACTIVE);
+  return pref?.value === true;
+}
+
+/**
  * Контекст записи REST-фасада для обёртки домена ({@link runWrite},
  * ADR 162d8e7a): актор и слой сессии — из запроса (слой к этому моменту уже
  * резолвлен открытием `ndb`), транспорт событий — `deps.emit`. Аудита для
@@ -241,7 +257,7 @@ export function parseLinkTypeFilterQuery(
   if (typeIds.length === 0 && includeStructural !== true) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      "the link-type filter is empty: provide link_type_id and/or include_structural=true.",
+      'the link-type filter is empty: provide link_type_id and/or include_structural=true.',
       { field: 'link_type_id' },
       requestId,
     );

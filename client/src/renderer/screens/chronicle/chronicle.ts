@@ -34,9 +34,8 @@
 
 import {
   CHRONICLE_PAGE_SIZE,
-  CHRONICLE_QUERY_MAX_LIMIT,
   UI_STATE_KEY,
-  type ChronicleFilterDefinition,
+  type CalendarMarkerKind,
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
@@ -124,21 +123,18 @@ import {
   isLastChip,
   isWeekend,
   localDay,
-  localDayEnd,
-  localDayStart,
   parentThoughtIds,
   periodValuesForRange,
   recordMentionsExcludeThoughtId,
   resolvePeriodDay,
-  rowDays,
   todayLocal,
   weekPeriod,
 } from './diary.js';
+import { groupCalendarMarkers, type CalendarMarkersByDay } from './calendar-markers.js';
 import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
 import {
   addThoughtToFilter,
   chronicleDefinition,
-  chronicleDefinitionForPeriod,
   chroniclePeriod,
   chronicleQueryDefinition,
   clearFilter,
@@ -197,12 +193,6 @@ import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
  */
 const CHRONICLE_FILTER_MIN_W = 230;
 const CHRONICLE_FILTER_MAX_W = 480;
-
-/**
- * Потолок страниц запроса счётчиков календаря (страница — `CHRONICLE_QUERY_MAX_LIMIT`):
- * защита от неограниченного цикла на месяце с очень большим числом записей.
- */
-const CAL_COUNTS_MAX_PAGES = 20;
 
 let host: HTMLElement | null = null;
 /** Composite cache key of the last init: `${networkId}:${tabId}`. */
@@ -297,8 +287,14 @@ let calendar: MonthCalendarHandle | null = null;
 let calendarFirstDayOfWeek: number | null = null;
 /** Persisted month of the calendar (`chronicle_state.month`). */
 let month: { year: number; month: number } | null = null;
-/** Счётчики записей по дням (для календаря), пересчитываются при отрисовке. */
-const dayCounts = new Map<string, number>();
+/**
+ * Маркеры дней календаря (0.16.1, требование ab9d627b): раскладка ответа
+ * `etn.chronicle.calendarMarkers` по локальным дням. Источник для компонента —
+ * замыкание `markers`, перерисовка — `calendar.refresh()`.
+ */
+let calendarMarkersByDay: CalendarMarkersByDay = new Map();
+/** Поколение чтения маркеров: ответ устаревшего запроса не перерисовывает. */
+let calendarMarkersSeq = 0;
 /** Запись, к которой выполнен переход: карточка подсвечена до следующего применения. */
 let jumpHighlightId: string | null = null;
 /** Строка поиска дневниковых записей (0.10.1, задача 46057359). */
@@ -692,8 +688,8 @@ async function initialiseChronicle(networkId: string, tabId: string | null): Pro
   // входа — восстановленный из снимка (`month`, ошибка 9b49d672) либо месяц
   // сегодняшней даты, когда снимка месяца нет (ошибка 167860ac). Выделение дня
   // поставит `syncCalendar` после запроса ленты; `showDate` не уведомляет
-  // `onMonthChange`, поэтому счётчики нового месяца пересчитываются явно.
-  const entryMonthCounts = alignEntryMonth();
+  // `onMonthChange`, поэтому маркеры нового месяца пересчитываются явно.
+  const entryMonthMarkers = alignEntryMonth();
   await getHomeId(requireNetworkId()).catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
@@ -701,7 +697,7 @@ async function initialiseChronicle(networkId: string, tabId: string | null): Pro
   if (!isCurrentScreenPair(pair)) return;
   await reload();
   syncCalendar();
-  if (entryMonthCounts !== null) void refreshCalendarCounts(entryMonthCounts);
+  if (entryMonthMarkers !== null) void refreshCalendarMarkers(entryMonthMarkers);
   // Панель задач — тоже период отбора: после входа в вид её данные актуальны.
   tasksPanel?.refresh();
 }
@@ -783,7 +779,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   calendar = buildMonthCalendar({
     today: todayLocal(),
     month: month ?? undefined,
-    counts: (day) => dayCount(day),
+    // Маркеры дня — ТОЛЬКО у календаря панели отбора «Дневника» (0.16.1,
+    // требование ab9d627b): диалог «Дата/период» режим `markers: off`.
+    markers: (day) => dayMarkers(day),
     firstDayOfWeek: calendarFirstDayOfWeek,
     onPickDay: (day) => void pickPeriod(dayPeriod(day)),
     onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
@@ -791,7 +789,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     onMonthChange: (year, monthNo) => {
       month = { year, month: monthNo };
       persistState();
-      void refreshCalendarCounts(calendarCountsSnapshot());
+      void refreshCalendarMarkers(calendarMarkersSnapshot());
     },
   });
   calWrap.append(calendar.root);
@@ -869,7 +867,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   });
 
   main.append(addBar, tasksHost, feedWrap);
-  void refreshCalendarCounts(calendarCountsSnapshot());
+  void refreshCalendarMarkers(calendarMarkersSnapshot());
 
   // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
   bindChronicleFeed();
@@ -915,7 +913,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       // Пороги группировки панели считают недели по этой же настройке.
       tasksPanel?.refresh();
       if (store.state.activeView === 'chronicle') {
-        void refreshCalendarCounts(calendarCountsSnapshot());
+        void refreshCalendarMarkers(calendarMarkersSnapshot());
       }
     }
     // Показ скрытого вида снимает отложенную пометку одним перезапросом
@@ -943,12 +941,12 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
 
 /** Applies the current filter from scratch (the «Применить» path). */
 async function applyFilter(): Promise<void> {
-  // Пара и отбор снимаются ДО ожиданий: после `await` текущая сеть может быть
-  // уже другой (окно openNetwork), и счётчики ушли бы чужим отбором в неё
+  // Пара и месяц снимаются ДО ожиданий: после `await` текущая сеть может быть
+  // уже другой (окно openNetwork), и маркеры ушли бы чужим месяцем в неё
   // (ошибка 58c55bb9).
   const pair = currentScreenPair();
   if (pair === null) return;
-  const counts = calendarCountsSnapshot();
+  const markersSnapshot = calendarMarkersSnapshot();
   // Ручное применение снимает подсветку перехода.
   jumpHighlightId = null;
   persistState();
@@ -960,7 +958,7 @@ async function applyFilter(): Promise<void> {
   if (feedWrap !== null) feedWrap.scrollTop = 0;
   if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts(counts);
+  void refreshCalendarMarkers(markersSnapshot);
   // Панель «Задачи и напоминания» живёт периодом отбора — применяем новый.
   tasksPanel?.refresh();
 }
@@ -1192,15 +1190,15 @@ async function refreshFeedAndCalendar(): Promise<void> {
     window.clearTimeout(feedRefreshTimer);
     feedRefreshTimer = null;
   }
-  // Отбор и пара — на входе: перезапрос, переживший смену сети/вкладки, не
-  // должен посчитать календарь новой сети чужим отбором (ошибка 58c55bb9).
+  // Пара и месяц — на входе: перезапрос, переживший смену сети/вкладки, не
+  // должен посчитать календарь новой сети чужим месяцем (ошибка 58c55bb9).
   const pair = currentScreenPair();
   if (pair === null) return;
-  const counts = calendarCountsSnapshot();
+  const markersSnapshot = calendarMarkersSnapshot();
   await reloadKeepingDepth();
   if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts(counts);
+  void refreshCalendarMarkers(markersSnapshot);
 }
 
 /** Опубликовать снимок ленты в кэш слоя (наблюдатели/диагностика). */
@@ -1246,9 +1244,9 @@ function currentFromTo(): { from: string; to: string } {
   };
 }
 
-/** Число записей, попавших в день (счётчик календаря). */
-function dayCount(day: string): number {
-  return dayCounts.get(day) ?? 0;
+/** Маркеры дня для календаря (пусто — клетка без маркеров). */
+function dayMarkers(day: string): readonly CalendarMarkerKind[] {
+  return calendarMarkersByDay.get(day) ?? [];
 }
 
 /** Действия блока «Связи дня»: карточки владельцев и переход к дню источника. */
@@ -1312,9 +1310,9 @@ function renderFeed(): void {
   // отдаёт строки в выбранном порядке, клиент уважает его и в группировке дней.
   const order = getFilterState().order;
   const days = groupByLocalDays(rows, { from, to, order });
-  // Счётчики календаря приходят из отдельного запроса по месяцу
-  // (`refreshCalendarCounts`) — они не зависят от применённого периода, поэтому
-  // видны и на выделенной, и на невыделенной дате (0.10.1, дефект приёмки).
+  // Маркеры календаря приходят из отдельного запроса по месяцу
+  // (`refreshCalendarMarkers`) — они не зависят от применённого периода, поэтому
+  // видны и на выделенной, и на невыделенной дате (0.16.1, требование ab9d627b).
   // Инкрементальное обновление ленты (уровень 2 тех.проекта `1d48df6d`):
   // ВНЕШНИЙ уровень — группы дней по ключу дня (`data-day`), ВНУТРЕННИЙ —
   // карточки записей по `data-row-key`. Неизменные узлы не пересоздаются,
@@ -1421,8 +1419,8 @@ async function resolveRowTargets(
 /**
  * Локальная вставка только что созданной записи: строка встаёт на своё место
  * (`insertRowByDay`), лента пересобирается keyed-сверкой без сетевого
- * перезапроса — соседние карточки и прокрутка сохраняются. Метка дня календаря
- * обновляется сразу (`syncCalendar` + `refreshCalendarCounts`).
+ * перезапроса — соседние карточки и прокрутка сохраняются. Маркеры дня
+ * календаря обновляются сразу (`syncCalendar` + `refreshCalendarMarkers`).
  *
  * Дедупликация по id: строку могла вставить другая ветка (realtime-событие,
  * перезагрузка/сверка) — повторная вставка дала бы ленте два узла с одним
@@ -1441,7 +1439,7 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   void refreshDayLinks();
   publishChronicleSnapshot();
   syncCalendar();
-  void refreshCalendarCounts(calendarCountsSnapshot());
+  void refreshCalendarMarkers(calendarMarkersSnapshot());
   feedNav?.refresh();
 }
 
@@ -2395,10 +2393,10 @@ function syncCalendar(): void {
  *   • месяц сегодняшней даты, когда снимок месяца не нёс, — ошибка 167860ac:
  *     вход без отбора позиционируется на текущей дате.
  * `showDate` не уведомляет `onMonthChange` (месяц уже проставлен в `month`),
- * поэтому счётчики нового месяца пересчитывает вызывающий: возвращённый снимок
+ * поэтому маркеры нового месяца пересчитывает вызывающий: возвращённый снимок
  * — признак реальной смены месяца.
  */
-function alignEntryMonth(): CalendarCountsSnapshot | null {
+function alignEntryMonth(): CalendarMarkersSnapshot | null {
   if (calendar === null) return null;
   const today = todayLocal();
   const target = month ?? {
@@ -2412,7 +2410,7 @@ function alignEntryMonth(): CalendarCountsSnapshot | null {
   }
   calendar.showDate(`${target.year}-${pad2(target.month)}-01`);
   month = target;
-  return calendarCountsSnapshot();
+  return calendarMarkersSnapshot();
 }
 
 /**
@@ -2432,98 +2430,68 @@ function showRecordDayInCalendar(day: string): void {
 }
 
 /**
- * Снимок для счётчиков календаря: пара «сеть + вкладка» и отбор месяца
- * снимаются ВМЕСТЕ, в одной точке. Иначе запрос уходит с сетью текущего тика и
- * отбором прежней пары: окно `openNetwork` между публикацией новой сети и
- * переинициализацией скрытого экрана (ошибка 58c55bb9) — 422 «Тип … удалён из
- * сети» на `POST /networks/<B>/chronicle/query` с чужим отбором.
+ * Снимок для маркеров календаря: пара «сеть + вкладка», показанный месяц и
+ * «сегодня» клиента снимаются ВМЕСТЕ, в одной точке. Иначе запрос уходит с
+ * сетью текущего тика и месяцем прежней пары: окно `openNetwork` между
+ * публикацией новой сети и переинициализацией скрытого экрана (ошибка
+ * 58c55bb9) — маркеры чужой сети в клетках новой.
  */
-interface CalendarCountsSnapshot {
+interface CalendarMarkersSnapshot {
   pair: ScreenPair;
-  definition: ChronicleFilterDefinition;
-  /** Границы месяца для разбора длительности записей (`rowDays`). */
-  first: string;
-  last: string;
+  /** Первый день показанного месяца (`YYYY-MM-DD`). */
+  from: string;
+  /** Последний день показанного месяца. */
+  to: string;
+  /** Локальные сутки клиента — граница просрочки (требование fcdcd75f). */
+  today: string;
 }
 
-/** Снять пару и отбор месяца в текущей точке; `null` — считать нечего. */
-function calendarCountsSnapshot(): CalendarCountsSnapshot | null {
+/** Снять пару, месяц и «сегодня» в текущей точке; `null` — считать нечего. */
+function calendarMarkersSnapshot(): CalendarMarkersSnapshot | null {
   const pair = currentScreenPair();
   if (pair === null || calendar === null) return null;
-  // Счётчики считаются отбором ТОЛЬКО своей пары: в окне `openNetwork` сеть
-  // уже новая, а отбор — ещё прежней пары; такой снимок не снимается вовсе
-  // (ошибка 58c55bb9 — 422 «Тип … удалён из сети» на счётчиках календаря).
+  // Маркеры считаются ТОЛЬКО своей парой: в окне `openNetwork` сеть уже новая,
+  // а отбор — ещё прежней пары; такой снимок не снимается вовсе (ошибка
+  // 58c55bb9).
   if (!chronicleFilterIsCurrent(pair)) return null;
   const { year, month: monthNo } = calendar.getMonth();
-  const first = `${year}-${pad2(monthNo)}-01`;
-  const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
-  // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
-  // сервере = сутки UTC (469d8d69), и запись у локальной полуночи первого/1-го
-  // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
-  // Период ПОДМЕНЯЕТСЯ внутри AST-отбора (задача 608ecb79): тело-дерево и
-  // плоские границы вместе сервер отвергает.
   return {
     pair,
-    first,
-    last,
-    definition: chronicleDefinitionForPeriod(localDayStart(first), localDayEnd(last)),
+    from: `${year}-${pad2(monthNo)}-01`,
+    to: new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10),
+    today: todayLocal(),
   };
 }
 
 /**
- * Счётчики записей по дням ОТОБРАЖАЕМОГО месяца (0.10.1, элемент 55b07702):
- * отдельный запрос по границам месяца с текущими критериями, БЕЗ периода —
- * поэтому счётчик виден и на выделенной, и на невыделенной дате. Числа дней
- * считаются тем же разбором длительности записи, что и лента (`rowDays`).
+ * Маркеры дней ОТОБРАЖАЕМОГО месяца (0.16.1, требование ab9d627b): ОДИН
+ * агрегатный запрос `GET /chronicle/calendar-markers` за месяц и «сегодня» —
+ * вместо прежнего counts-запроса записей (упразднён) и поштучных чтений.
+ * Данные маркеров НЕ зависят от применённого отбора: это ось времени, она
+ * видна и на выделенной, и на невыделенной дате.
  *
- * Пара и отбор — из {@link CalendarCountsSnapshot}: смена пары после любого
- * `await` отменяет запрос (чужие типы/период в новой сети не применяются),
- * ошибка текущей пары показывается штатной диагностикой отбора, а не тишиной.
+ * Пара и месяц — из {@link CalendarMarkersSnapshot}: смена пары после `await`
+ * отменяет запрос (маркеры чужой сети не рисуются); сбой чтения не ломает
+ * ленту — клетки остаются без маркеров до следующего перезапроса (как у блока
+ * «Связи дня»), штатная диагностика отбора не подменяется.
  */
-async function refreshCalendarCounts(snapshot: CalendarCountsSnapshot | null): Promise<void> {
+async function refreshCalendarMarkers(snapshot: CalendarMarkersSnapshot | null): Promise<void> {
   if (snapshot === null || calendar === null) return;
-  const { pair, definition, first, last } = snapshot;
+  const { pair, from, to, today } = snapshot;
   if (!isCurrentScreenPair(pair)) return;
-  const tally = new Map<string, number>();
+  const seq = (calendarMarkersSeq += 1);
+  let next: CalendarMarkersByDay;
   try {
-    let offset = 0;
-    for (let page = 0; page < CAL_COUNTS_MAX_PAGES; page += 1) {
-      const res = await etn.chronicle.query(pair.networkId, {
-        ...definition,
-        limit: CHRONICLE_QUERY_MAX_LIMIT,
-        offset,
-      });
-      // Пара сменилась, пока шла страница: её строки принадлежат прежнему
-      // отбору и не считаются (ошибка 58c55bb9).
-      if (!isCurrentScreenPair(pair)) return;
-      for (const row of res.rows) {
-        for (const day of rowDays(row, first, last)) tally.set(day, (tally.get(day) ?? 0) + 1);
-      }
-      offset += res.rows.length;
-      if (res.rows.length === 0 || offset >= res.total) break;
-    }
-  } catch (err) {
-    // Сбой текущей пары не глотаем: красная диагностика ядра — в строки
-    // редактора (штатный канал, как у запроса ленты). Ошибка прежней пары к
-    // новой не относится — молча выходим.
-    if (!isCurrentScreenPair(pair)) return;
-    const issues = filterIssuesFromQueryError(err);
-    if (issues.length > 0) {
-      setFilterServerIssues(issues);
-    } else {
-      notice(`${t('diary.countsFailed', [errText(err)])}`, 'error');
-    }
-    return; // прежние счётчики остаются на месте
+    const result = await etn.chronicle.calendarMarkers(pair.networkId, { from, to, today });
+    next = groupCalendarMarkers(result, { from, to });
+  } catch {
+    next = new Map();
   }
-  if (!isCurrentScreenPair(pair)) return;
-  dayCounts.clear();
-  for (const [day, count] of tally) dayCounts.set(day, count);
-  const period = chroniclePeriod();
-  const fdw = networkFirstDayOfWeek();
-  calendar.setSelection(
-    resolvePeriodDay(period.from, todayLocal(), fdw),
-    resolvePeriodDay(period.to, todayLocal(), fdw),
-  );
+  if (seq !== calendarMarkersSeq || !isCurrentScreenPair(pair) || calendar === null) return;
+  calendarMarkersByDay = next;
+  // Источник маркеров — замыкание `dayMarkers`: новые данные видны только
+  // после перерисовки сетки, выделение периода при этом не трогается.
+  calendar.refresh();
 }
 
 /** Двузначная запись числа. */
