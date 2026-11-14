@@ -49,9 +49,17 @@ export interface LogsSectionOptions {
   /**
    * Смена состояния тумблеров (задача a6ad0143): диалог настроек держит снимок
    * «принятого» состояния и включает мгновенные изменения в «Применить».
-   * Вызывается после каждой успешной загрузки/переключения.
+   * Вызывается после каждой загрузки и после запроса на переключение —
+   * с «последним запрошенным» значением, не дожидаясь ответа сервера, — и
+   * повторно по завершении записи (подтверждённым или откаченным при ошибке).
    */
   onChange?: (state: LogsSectionState) => void;
+  /**
+   * Запись тумблера начата (задача a6ad0143, гонка «Отмены»): диалог ждёт её
+   * перед откатом снимка — иначе откат уйдёт параллельно записи и сервер
+   * получит не тот итог. Ошибки записи раздел обрабатывает сам.
+   */
+  onWrite?: (write: Promise<unknown>) => void;
 }
 
 /** Builds the whole «Логирование» section of the settings dialog. */
@@ -84,8 +92,14 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       disabled: clientState === null,
       onChange: (next) => {
         const toggle = logToggle.input;
+        const confirmed = clientState;
         toggle.disabled = true;
-        void etn.system
+        // «Последнее запрошенное» значение диалог видит СРАЗУ (задача a6ad0143):
+        // признак «есть непринятые изменения» и откат считаются по выбору
+        // пользователя, а не по подтверждённому ответу сервера.
+        if (clientState !== null) clientState = { ...clientState, enabled: next };
+        notify();
+        const write = etn.system
           .setClientLogging(next)
           .then((state) => {
             clientState = state;
@@ -94,13 +108,17 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
             notify();
           })
           .catch((err: unknown) => {
-            // Immediate apply failed — revert the visual state and say why.
-            toggle.checked = !next;
+            // Запись не прошла: возвращаем подтверждённое состояние и говорим
+            // причину — выбор не остаётся «применённым» молча.
+            clientState = confirmed;
+            toggle.checked = confirmed?.enabled ?? !next;
             setClientMsg(errText(err), true);
+            notify();
           })
           .finally(() => {
             toggle.disabled = false;
           });
+        opts.onWrite?.(write);
       },
     });
     const toggleLabel = logToggle.row;
@@ -214,8 +232,13 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       disabled: status === null,
       onChange: (next) => {
         const toggle = logToggle.input;
+        const confirmed = serverStatus;
         toggle.disabled = true;
-        void etn.system
+        // «Последнее запрошенное» значение — сразу (задача a6ad0143): откат
+        // снимка считается по нему, а не по подтверждённому ответу сервера.
+        if (serverStatus !== null) serverStatus = { ...serverStatus, enabled: next };
+        notify();
+        const write = etn.system
           .setServerLogging(next)
           .then((fresh) => {
             serverStatus = fresh;
@@ -224,12 +247,17 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
             notify();
           })
           .catch((err: unknown) => {
-            toggle.checked = !next;
+            // Запись не прошла: возвращаем подтверждённое состояние и говорим
+            // причину — выбор не остаётся «применённым» молча.
+            serverStatus = confirmed;
+            toggle.checked = confirmed?.enabled ?? !next;
             setServerMsg(errText(err), true);
+            notify();
           })
           .finally(() => {
             toggle.disabled = false;
           });
+        opts.onWrite?.(write);
       },
     });
     const toggleLabel = logToggle.row;

@@ -54,9 +54,13 @@ function installShim(): void {
   };
 }
 
-/** Дождаться разрешения промисов диалога (загрузки, применения, отката). */
+/**
+ * Дождаться разрешения промисов диалога (загрузки, применения, отката).
+ * Откат теперь сначала ждёт хвост записей тумблеров («Отмена» во время
+ * записи), поэтому цепочка микрозадач длиннее одного тика.
+ */
 async function flush(): Promise<void> {
-  for (let i = 0; i < 8; i++) await Promise.resolve();
+  for (let i = 0; i < 24; i++) await Promise.resolve();
 }
 
 /** Esc — всем слушателям keydown окна (нижние диалоги игнорируют). */
@@ -90,6 +94,25 @@ interface FakeServer {
   serverLogging: boolean;
   admin: boolean;
   wallpaper: WallpaperState;
+  /** Управляемая запись тумблера сервера: держит ответ до `release` теста. */
+  gateServer?: Gate;
+  /** Запись тумблера сервера завершается ошибкой. */
+  failServerWrite?: boolean;
+}
+
+/** Промис, который тест отпускает сам: воспроизводит запись «в полёте». */
+interface Gate {
+  promise: Promise<void>;
+  release: () => void;
+}
+
+/** Управляемая запись: `release()` завершает её. */
+function makeGate(): Gate {
+  let release: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release: () => release() };
 }
 
 interface Calls {
@@ -194,6 +217,8 @@ async function openDialog(
       },
       setServerLogging: async (enabled: boolean) => {
         calls.setServerLogging.push(enabled);
+        if (server.gateServer !== undefined) await server.gateServer.promise;
+        if (server.failServerWrite === true) throw new Error('Сервер отверг запись журнала.');
         server.serverLogging = enabled;
         return { enabled, logDir: '/logs', retentionDays: 30, files: [] };
       },
@@ -520,5 +545,81 @@ describe('настройки: снимок и откат мгновенных и
     const user = await openDialog('logs', { admin: false });
     assert.equal(logToggles(user.backdrop).length, 1, 'у пользователя только клиентский тумблер');
     await closeDialogs(user.backdrop);
+  });
+  it('«Отмена» во время записи тумблера ждёт запись и возвращает снимок', async () => {
+    const gate = makeGate();
+    const { backdrop, calls, server } = await openDialog('logs', {
+      admin: true,
+      serverLogging: false,
+      gateServer: gate,
+    });
+    const serverToggle = logToggles(backdrop)[1];
+    assert.ok(serverToggle !== undefined, 'тумблер сервера на месте');
+
+    serverToggle.checked = true;
+    serverToggle.fire('change');
+    await flush();
+    assert.deepEqual(calls.setServerLogging, [true], 'запись пошла');
+    assert.equal(
+      footerButton(backdrop, 'Применить').disabled,
+      false,
+      'выбор учтён сразу, не дожидаясь ответа',
+    );
+
+    footerButton(backdrop, 'Отмена').click();
+    await flush();
+    assert.deepEqual(
+      calls.setServerLogging,
+      [true],
+      'откат ждёт начатую запись, второй запрос ещё не отправлен',
+    );
+    assert.equal(
+      (globalThis as any).document.body.findAll('dialog-backdrop').length,
+      1,
+      'диалог открыт, пока запись в полёте',
+    );
+
+    gate.release();
+    for (let i = 0; i < 4; i++) await flush();
+    assert.deepEqual(
+      calls.setServerLogging,
+      [true, false],
+      'после записи откат вернул значение снимка',
+    );
+    assert.equal(server.serverLogging, false, 'итоговое состояние = снимок');
+    assert.equal(
+      (globalThis as any).document.body.findAll('dialog-backdrop').length,
+      0,
+      'после отката диалог закрыт',
+    );
+  });
+
+  it('ошибка записи тумблера: «Отмена» закрывает диалог без лишних запросов', async () => {
+    const { backdrop, calls, server } = await openDialog('logs', {
+      admin: true,
+      serverLogging: false,
+      failServerWrite: true,
+    });
+    const serverToggle = logToggles(backdrop)[1];
+    assert.ok(serverToggle !== undefined, 'тумблер сервера на месте');
+
+    serverToggle.checked = true;
+    serverToggle.fire('change');
+    await flush();
+    assert.deepEqual(calls.setServerLogging, [true], 'запись отвергнута сервером');
+
+    footerButton(backdrop, 'Отмена').click();
+    for (let i = 0; i < 4; i++) await flush();
+    assert.deepEqual(
+      calls.setServerLogging,
+      [true],
+      'фактическое значение уже совпадает со снимком — лишнего запроса нет',
+    );
+    assert.equal(server.serverLogging, false, 'на сервере по-прежнему снимок');
+    assert.equal(
+      (globalThis as any).document.body.findAll('dialog-backdrop').length,
+      0,
+      'ошибка записи не мешает закрыть диалог',
+    );
   });
 });

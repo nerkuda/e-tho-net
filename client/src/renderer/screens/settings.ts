@@ -364,6 +364,33 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     server: null,
   };
 
+  /**
+   * Записи тумблеров журналирования в полёте (задача a6ad0143, гонка
+   * «Отмены»): раздел сообщает последнее ЗАПРОШЕННОЕ значение сразу, а
+   * фактическое на сервере определяется только по завершении записи. Откат
+   * к снимку поэтому сначала ждёт этот хвост. Живёт на уровне диалога —
+   * пересборка раздела при переходе по навигации не теряет начатые записи.
+   */
+  let logsWrites: Promise<void> = Promise.resolve();
+
+  /** Учесть начатую запись тумблера: хвост ждёт и успех, и ошибку. */
+  function trackLogsWrite(write: Promise<unknown>): void {
+    const settled = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    logsWrites = Promise.all([logsWrites, settled]).then(() => undefined);
+  }
+
+  /** Дождаться записей тумблеров, включая начатые во время ожидания. */
+  async function waitLogsWrites(): Promise<void> {
+    for (;;) {
+      const tail = logsWrites;
+      await tail;
+      if (tail === logsWrites) return;
+    }
+  }
+
   /** Снимок картинки: «нет картинки» либо байты и метаданные прежней. */
   type WallpaperSnapshot =
     | { kind: 'none' }
@@ -500,8 +527,15 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
    * Вернуть мгновенные настройки к снимку: тема, режим, картинка активной сети
    * (прежние байты загружаются обратно, загруженная при отсутствии прежней —
    * удаляется) и тумблеры журналирования.
+   *
+   * Откат тумблеров считается по ПОСЛЕДНЕМУ ЗАПРОШЕННОМУ значению и потому
+   * сначала ждёт начатые записи (задача a6ad0143, гонка «Отмены»): без этого
+   * «Отмена», нажатая во время записи, уходила параллельно ей и сервер
+   * оставался с новым значением. Записи нет в полёте и фактическое значение
+   * уже совпадает со снимком — лишнего запроса не отправляется.
    */
   async function rollbackImmediate(): Promise<void> {
+    await waitLogsWrites();
     const tasks: Array<Promise<unknown>> = [];
     if (snapshot.theme !== store.state.uiTheme) tasks.push(changeUiTheme(snapshot.theme));
     if (snapshot.mode !== store.state.theme) tasks.push(changeUiMode(snapshot.mode));
@@ -1227,7 +1261,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
         section = renderAppearanceSection();
         break;
       case 'logs':
-        section = buildLogsSection({ onChange: onLogsState });
+        section = buildLogsSection({ onChange: onLogsState, onWrite: trackLogsWrite });
         break;
     }
     content.append(section);
@@ -1384,6 +1418,14 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     setBusy(true);
     errorLine.clear();
     try {
+      // Записи тумблеров в полёте: снимок фиксирует их фактический итог, а не
+      // «последнее запрошенное» значение (задача a6ad0143).
+      await waitLogsWrites();
+      if (!hasUnappliedChanges()) {
+        // Пока ждали запись, она могла не пройти — применять больше нечего.
+        if (thenClose) closeDialog();
+        return;
+      }
       // Черновик разделов уходит на сервер только при реальных правках:
       // мгновенные настройки («Оформление», «Логирование») уже применены, и
       // «Применить» для них — фиксация снимка.
