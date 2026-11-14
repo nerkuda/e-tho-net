@@ -8,12 +8,15 @@
  *   * `tasks` — «Есть задачи»/«Нет задач»: незакрытые (`done = 0`) субъектные
  *     задачи мысли из проекции `task_rows`/`task_row_subjects`; строка видна
  *     только при видимом комментарии-источнике (та же видимость, что в панели
- *     «Задачи» — `task-service.ts`);
+ *     «Задачи» — `task-service.ts`), а постоянные комментарии помеченных на
+ *     удаление владельцев задач не дают (уточнение приёмки, ТП f326e6c0);
  *   * `reminders` — «Есть напоминание»/«Нет напоминания»: АКТИВНЫЕ напоминания
  *     ЗАПРОСИВШЕГО (per-user область), удалённые владельцем не считаются;
- *   * `reminder_at` — «Дата напоминания»: ближайшее `next_at` напоминаний
- *     запросившего, сравнения/период, токены дат, равенство «голой даты» =
- *     её сутки.
+ *     субъект в корзине не даёт напоминания — как `listReminders`;
+ *   * `reminder_at` — «Дата напоминания»: ЛЕНИВО вычисленное ближайшее
+ *     `next_at` напоминаний запросившего (то же, что панель/индикатор;
+ *     устаревшая колонка БД не используется), сравнения/период, токены дат,
+ *     равенство «голой даты» = её сутки.
  *
  * Мутационные пробы (снятие ветки листа в `query-service.ts` / подмены
  * видимости строки проекции или владельца напоминаний) краснят соответствующие
@@ -92,6 +95,7 @@ function seedReminder(
   userId: string,
   subjectId: string,
   anchorAt = '2026-11-20T09:00:00.000Z',
+  nowMs = NOW_MS,
 ): string {
   return createReminder(
     ndb,
@@ -103,7 +107,7 @@ function seedReminder(
       schedule: { type: 'every_days', every: 1 },
       anchor_at: anchorAt,
     },
-    NOW_MS,
+    nowMs,
   ).id;
 }
 
@@ -120,15 +124,14 @@ function ids(
   ast: FilterAst,
   opts: { userId?: string; tokenContext?: ThoughtQueryOptions['tokenContext'] } = {},
 ): string[] {
+  // Часы сценария по умолчанию: next_at напоминаний считается ЛЕНИВО (доработка
+  // по приёмке), поэтому без явных часов тест зависел бы от реальной даты.
+  const tokenContext = opts.tokenContext ?? tokensAt(NOW_MS, opts.userId ?? USER);
   const result = queryThoughts(
     ndb,
     opts.userId ?? USER,
     { sort: 'alpha', order: 'asc', limit: 100, offset: 0, ast },
-    {
-      emptyFilterMode: 'all',
-      maxLimit: 200,
-      ...(opts.tokenContext !== undefined ? { tokenContext: opts.tokenContext } : {}),
-    },
+    { emptyFilterMode: 'all', maxLimit: 200, tokenContext },
   );
   return result.items.map((item) => item.id).sort();
 }
@@ -301,6 +304,79 @@ describe(
         assert.ok(
           !ids(ndb, leaf('reminder_at', 'gte', '2000-01-01')).includes(strangerOnly),
           'напоминания другого участника не учитываются',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('«Есть задачи»: постоянный комментарий помеченного на удаление владельца не считается', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const subject = seedThought(ndb, 'Субъект');
+        const trashedOwner = seedThought(ndb, 'Владелец в корзине');
+        runWriteCore(
+          ndb,
+          { networkId: ndb.networkId, userId: USER, layerId: ndb.layerId },
+          () => ({
+            result: createCommentWithTargets(
+              ndb,
+              [{ owner_type: 'thought', owner_id: trashedOwner }],
+              { kind: 'permanent', body_md: `- [ ] Задача [[#${subject}]]` },
+              USER,
+            ).id,
+          }),
+        );
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashedOwner);
+
+        assert.deepEqual(ids(ndb, leaf('tasks', 'not_empty')), []);
+        assert.deepEqual(ids(ndb, leaf('tasks', 'is_empty')), [subject, trashedOwner].sort());
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('«Дата напоминания»: next_at считается лениво, устаревшая колонка БД не используется', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const subject = seedThought(ndb, 'Давнее ежедневное');
+        // Создано 2026-11-01: в БД зафиксировано первое вхождение 2026-11-02.
+        const reminderId = seedReminder(
+          ndb,
+          USER,
+          subject,
+          '2026-11-01T09:00:00.000Z',
+          Date.parse('2026-11-01T10:00:00.000Z'),
+        );
+        const stored = ndb
+          .prepare('SELECT next_at FROM reminders WHERE id = ?')
+          .get(reminderId) as { next_at: string };
+        assert.equal(stored.next_at, '2026-11-02T09:00:00.000Z', 'колонка БД устарела');
+
+        // Панель на 2026-11-14 отдаёт следующее вхождение 15-го — условие видит его же.
+        assert.deepEqual(ids(ndb, leaf('reminder_at', 'eq', '2026-11-15')), [subject].sort());
+        // Устаревшее значение из колонки не матчится.
+        assert.deepEqual(ids(ndb, leaf('reminder_at', 'eq', '2026-11-02')), []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('напоминания субъекта в корзине не учитываются (reminders и reminder_at)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const live = seedThought(ndb, 'Живая');
+        const trashed = seedThought(ndb, 'В корзине');
+        seedReminder(ndb, USER, live, '2026-11-20T09:00:00.000Z');
+        seedReminder(ndb, USER, trashed, '2026-11-20T09:00:00.000Z');
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashed);
+
+        assert.deepEqual(ids(ndb, leaf('reminders', 'not_empty')), [live].sort());
+        assert.deepEqual(ids(ndb, leaf('reminders', 'is_empty')), [trashed].sort());
+        assert.deepEqual(
+          ids(ndb, leaf('reminder_at', 'gte', '2000-01-01')),
+          [live].sort(),
+          'дата напоминания субъекта в корзине не участвует',
         );
       } finally {
         ndb.close();

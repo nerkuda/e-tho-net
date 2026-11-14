@@ -96,6 +96,7 @@ import {
   listEffectiveTypeProperties,
   resolveConditionPropertyRef,
 } from './property-service.js';
+import { reminderNextAtBySubject } from './reminder-service.js';
 import { nameTrigramMatch } from './search-service.js';
 import { REF_COLUMNS, rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause, listTypeNodes } from './type-hierarchy.js';
@@ -2547,7 +2548,7 @@ function filterAstLeafClause(
         astRequesterId(astOpts),
       ]);
     case 'reminder_at':
-      return reminderAtLeafClause(leaf, path, requestId, astOpts);
+      return reminderAtLeafClause(ndb, leaf, path, requestId, astOpts);
 
     case 'active':
       return boolColumnClause('t.active', leaf, path, requestId);
@@ -2939,9 +2940,9 @@ function astRequesterId(astOpts: AstExecOptions | undefined): string {
  * контексте слоя. Видимость строки проекции — та же, что в панели «Задачи»
  * (`task-service.ts`, `buildFilter`): строка живёт вместе с редакцией своего
  * комментария, `layer_id = NULL` — основа, иначе слой победившей редакции.
- * Исключение задач из постоянных комментариев помеченных на удаление владельцев
- * — забота панели (она перечисляет все задачи сети); условие отбора судит
- * субъектные задачи мысли, а корзину мысли отсекает собственный лист `trashed`.
+ * Постоянные комментарии помеченных на удаление владельцев (мысль/связь/
+ * публикация) не дают задач нигде — тот же запрет, что в панели (ТП f326e6c0,
+ * уточнение 4; `task-service.ts`, `buildFilter`).
  */
 const TASKS_LEAF_EXISTS_SQL = `EXISTS (
   SELECT 1 FROM task_row_subjects s
@@ -2952,37 +2953,61 @@ const TASKS_LEAF_EXISTS_SQL = `EXISTS (
     JOIN comments_v v
       ON v.id = tr.comment_id
      AND ((tr.layer_id IS NULL AND v.layer_id = ?) OR tr.layer_id = v.layer_id)
-   WHERE s.thought_id = t.id AND tr.is_task = 1 AND tr.done = 0)`;
+   WHERE s.thought_id = t.id AND tr.is_task = 1 AND tr.done = 0
+     AND NOT (v.kind = 'permanent' AND (
+       (v.owner_type = 'thought' AND EXISTS (
+          SELECT 1 FROM thoughts_v o WHERE o.id = v.owner_id AND o.marked_for_deletion = 1))
+       OR (v.owner_type = 'link' AND EXISTS (
+          SELECT 1 FROM links_v o WHERE o.id = v.owner_id AND o.marked_for_deletion = 1))
+       OR (v.owner_type = 'publication' AND EXISTS (
+          SELECT 1 FROM publications_v o WHERE o.id = v.owner_id AND o.marked_for_deletion = 1))
+       )))`;
 
 /**
  * Подзапрос существования АКТИВНОГО напоминания ЗАПРОСИВШЕГО на мысль
  * (0.16.1, задача 4cfc6257): per-user область — `user_id` владельца, а не все
- * напоминания сети. `removed` (удалённые владельцем) не считаются.
+ * напоминания сети. `removed` (удалённые владельцем) не считаются; субъект в
+ * корзине не даёт напоминания — как `listReminders` (замечание приёмки).
  */
 const REMINDERS_LEAF_EXISTS_SQL = `EXISTS (
   SELECT 1 FROM reminders r
    WHERE r.user_id = ? AND r.state = 'active'
-     AND r.subject_type = 'thought' AND r.subject_id = t.id)`;
+     AND r.subject_type = 'thought' AND r.subject_id = t.id
+     AND t.marked_for_deletion = 0)`;
 
 /**
  * Лист «Дата напоминания» (0.16.1, задача 4cfc6257): сравнение БЛИЖАЙШЕГО
- * `next_at` активных напоминаний запросившего с границей/периодом. Семантика
- * дат — общая с датами создания/изменения (равенство «голой даты» = её сутки,
+ * `next_at` активных напоминаний запросившего с границей/периодом. `next_at`
+ * берётся ЛЕНИВО тем же движком повторов, что у панели/индикатора
+ * (`reminderNextAtBySubject` → `computeNextAt`): колонка БД обновляется только
+ * на записях и к дате чтения устаревает (доработка по приёмке). Семантика дат —
+ * общая с датами создания/изменения (равенство «голой даты» = её сутки,
  * включительная верхняя граница разворачивается до конца суток UTC, токены
- * `$today`… раскрыты резолвером до сравнения). `next_at` = NULL (нет вхождений)
- * не проходит ни одно сравнение — «нет значения» выражает отдельное условие
- * «Есть напоминание».
+ * `$today`… раскрыты резолвером до сравнения). Субъект в корзине не участвует —
+ * как `listReminders`. `next_at` = NULL (нет вхождений) не проходит ни одно
+ * сравнение — «нет значения» выражает отдельное условие «Есть напоминание».
  */
 function reminderAtLeafClause(
+  ndb: NetworkDb,
   leaf: FilterAstLeaf,
   path: string,
   requestId?: string,
   astOpts?: AstExecOptions,
 ): Clause {
-  const nextAtSql = `(SELECT MIN(r.next_at) FROM reminders r
-     WHERE r.user_id = ? AND r.state = 'active'
-       AND r.subject_type = 'thought' AND r.subject_id = t.id)`;
-  return dateLeafClause(nextAtSql, leaf, path, requestId, [astRequesterId(astOpts)]);
+  // Валидация оператора/границ — до дешёвого выхода «напоминаний нет».
+  const date = dateLeafClause('x.column2', leaf, path, requestId);
+  // Субъекты-кандидаты — только напоминания запросившего; расчёт `next_at`
+  // один раз на условие, не N+1 по всей сети.
+  const rows = [
+    ...reminderNextAtBySubject(ndb, astRequesterId(astOpts), astOpts?.ctx?.nowMs ?? Date.now()),
+  ];
+  if (rows.length === 0) return AST_FALSE;
+  const values = rows.map(() => '(?, ?)').join(', ');
+  return {
+    sql: `t.id IN (
+      SELECT x.column1 FROM (VALUES ${values}) AS x WHERE ${date.sql})`,
+    params: [...rows.flatMap(([id, nextAt]) => [id, nextAt]), ...date.params],
+  };
 }
 
 /**
@@ -3069,18 +3094,16 @@ function expandInclusiveDateUpper(value: string): string {
 }
 
 /**
- * Лист по датовому скалярному выражению (дата создания/изменения, ближайшее
- * напоминание): равно/не равно, сравнения и «между» (границы включительны).
- * `baseParams` — параметры самого выражения, когда это подзапрос
- * (`reminder_at`): они идут ПЕРЕД каждой границей, потому что выражение
- * подставляется в SQL столько раз, сколько у него границ.
+ * Лист по датовому скалярному выражению (дата создания/изменения): равно/не
+ * равно, сравнения и «между» (границы включительны). Напоминания используют ту
+ * же функцию над вычисленным в JS значением `next_at` (см.
+ * {@link reminderAtLeafClause}).
  */
 function dateLeafClause(
   column: string,
   leaf: FilterAstLeaf,
   path: string,
   requestId?: string,
-  baseParams: readonly unknown[] = [],
 ): Clause {
   const one = (op: string, value: unknown): Clause => {
     if (typeof value !== 'string' || value.trim() === '') {
@@ -3090,7 +3113,7 @@ function dateLeafClause(
     // Включительная верхняя граница-«голая дата» — конец суток UTC (469d8d69).
     const bound = op === 'lte' ? expandInclusiveDateUpper(raw) : raw;
     const sql = op === 'gt' ? '>' : op === 'gte' ? '>=' : op === 'lt' ? '<' : '<=';
-    return { sql: `${column} ${sql} ?`, params: [...baseParams, bound] };
+    return { sql: `${column} ${sql} ?`, params: [bound] };
   };
   if (leaf.operator === 'gt' || leaf.operator === 'gte' || leaf.operator === 'lt' || leaf.operator === 'lte') {
     return one(leaf.operator, leaf.value);

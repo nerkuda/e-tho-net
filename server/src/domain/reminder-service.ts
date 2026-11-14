@@ -268,6 +268,48 @@ function toDto(
   return dto;
 }
 
+/**
+ * Ближайшее ЛЕНИВО вычисленное `next_at` активных напоминаний запросившего по
+ * субъектам-мыслям (0.16.1, задача 4cfc6257, доработка по приёмке): условие
+ * отбора «Дата напоминания» обязано видеть то же значение, что панель и
+ * индикатор (`listReminders` → `computeNextAt`), а не устаревшую колонку
+ * `reminders.next_at` — она обновляется только на записях.
+ *
+ * Область — напоминания запросившего (per-user); видимость субъекта — как в
+ * `listReminders`: помеченный на удаление или недоступный в контексте слоя
+ * субъект не участвует. Для субъекта с несколькими напоминаниями — минимальное
+ * `showing_at`. Пустой `userId` — владельца нет, напоминаний нет.
+ */
+export function reminderNextAtBySubject(
+  ndb: NetworkDb,
+  userId: string,
+  nowMs: number,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  if (userId === '') return out;
+  const rows = ndb
+    .prepare(
+      "SELECT * FROM reminders WHERE user_id = ? AND state = 'active' AND subject_type = 'thought'",
+    )
+    .all(userId) as ReminderRow[];
+  if (rows.length === 0) return out;
+  const subjectIds = [...new Set(rows.map((row) => row.subject_id))];
+  const visibility = subjectVisibility(ndb, 'thought', subjectIds);
+  for (const row of rows) {
+    if ((visibility.get(row.subject_id) ?? 'unavailable') === 'unavailable') continue;
+    const nextAt = computeNextAt(
+      parseStoredSchedule(row),
+      parseInstant(row.anchor_at),
+      exceptionMap(parseStoredExceptions(row)),
+      nowMs,
+    );
+    if (nextAt === null) continue;
+    const previous = out.get(row.subject_id);
+    if (previous === undefined || nextAt < previous) out.set(row.subject_id, nextAt);
+  }
+  return out;
+}
+
 /** Период раскрытия после применения потолка дальности. */
 function expansionWindow(
   options: ReminderListOptions,
