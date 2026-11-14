@@ -216,6 +216,11 @@ describe('бейдж «сегодня» на закладке «Дневник»
     assert.ok(node !== undefined, 'бейдж смонтирован в закладку');
     assert.equal(node?.textContent, '2', 'сегодня + просрочка');
     assert.notEqual(node?.hidden, true, 'ненулевой счётчик показывает бейдж');
+    // Видимостью владеет ТОЛЬКО атрибут `hidden`: класс `.hidden` из токенов
+    // (`display:none !important`) не снимался вместе с атрибутом и оставлял
+    // бейдж невидимым (блокер приёмки 173f1540).
+    assert.equal(node?.classList.contains('hidden'), false, 'класса hidden нет');
+    assert.notEqual(node?.style.display, 'none', 'стиль не прячет бейдж');
 
     node?.emit('click', { stopPropagation: (): void => undefined } as any);
     assert.equal(opened, 1, 'клик по бейджу открывает сегодня');
@@ -225,6 +230,7 @@ describe('бейдж «сегодня» на закладке «Дневник»
     routeRealtimeEvent(remindersChanged());
     await flush();
     assert.equal(node?.hidden, true, 'ноль скрывает бейдж');
+    assert.equal(node?.classList.contains('hidden'), false, 'скрытие — только атрибутом');
 
     teardown();
     assert.equal(button.querySelectorAll('.view-tab-badge').length, 0, 'teardown снимает бейдж');

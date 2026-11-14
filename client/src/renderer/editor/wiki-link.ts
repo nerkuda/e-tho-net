@@ -146,11 +146,25 @@ async function loadCompletions(networkId: string, prefix: string): Promise<Compl
 }
 
 /**
- * Тестовый шов: прямой вызов загрузчика подсказок без CM6-контекста. Нужен
- * проверке «пустой префикс `[[` не ищет по серверу» на САМОМ загрузчике, а не
- * только на обёртке источника.
+ * Открытие дня по умолчанию для date-чипа — единый вход `openChronicleDay`.
+ * Модульная переменная (а не параметр по умолчанию с прямой ссылкой): тест
+ * подменяет её швом и проверяет СВЯЗКУ «обработчик, который ставит
+ * инициализация → открытие дня», а не только факт регистрации обработчика.
  */
-export const wikiLinkInternals = { loadCompletions };
+let defaultDayOpener: (day: string) => Promise<void> = openChronicleDay;
+
+/**
+ * Тестовый шов: прямой вызов загрузчика подсказок без CM6-контекста и подмена
+ * единого входа «Дневника» для поведенческой проверки связки date-чипа. В
+ * рантайме не используется.
+ */
+export const wikiLinkInternals = {
+  loadCompletions,
+  /** Подменить открытие дня по умолчанию; `null` — вернуть `openChronicleDay`. */
+  setDefaultDayOpener(open: ((day: string) => Promise<void>) | null): void {
+    defaultDayOpener = open ?? openChronicleDay;
+  },
+};
 
 function wikiLinkCompletions(): CompletionSource {
   // Кэш ПО-ИНСТАНСНЫЙ: своё замыкание на каждый вызов `wikiLinkCompletions()`,
@@ -588,7 +602,7 @@ export function shouldNavigateWikiLink(link: WikiLinkClickTarget): boolean {
  */
 export function openDayFromChip(
   date: string,
-  open: (day: string) => Promise<void> = openChronicleDay,
+  open: (day: string) => Promise<void> = defaultDayOpener,
 ): void {
   void open(date).catch((error) => {
     notice(t('mentions.notSucceededOpen', [date, errText(error)]), 'error');

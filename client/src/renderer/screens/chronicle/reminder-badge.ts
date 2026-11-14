@@ -52,8 +52,12 @@ export function mountReminderTodayBadge(
   const node = badge('', {
     kind: 'pill',
     tone: 'accent',
-    extraClass: `${REMINDER_TODAY_BADGE_CLASS} hidden`,
+    // Класс `hidden` не заводим: видимостью владеет АТРИБУТ `hidden`, а
+    // `.hidden` из `styles/tokens.css` (`display:none !important`) не снимался
+    // вместе с атрибутом — бейдж оставался невидимым (блокер приёмки 173f1540).
+    extraClass: REMINDER_TODAY_BADGE_CLASS,
   });
+  node.hidden = true;
   node.setAttribute('aria-live', 'polite');
   button.append(node);
 

@@ -93,6 +93,24 @@ export function setPeriodTimeTo(
   return { fromTime: time < fromTime ? time : fromTime, toTime: time };
 }
 
+/**
+ * Сдвиг UTC-инстанса на календарный сдвиг (`days`/`months`) — арифметика команд
+ * «Отложить» и «Перенести на…». До дня считается в миллисекундах, до месяца —
+ * календарно (31.01 + 1 мес = 28/29.02). Реализация ОДНА: ею пользуются панель
+ * задач (`shiftIso` в `lib/ui/task-panel.ts`) и меню флага напоминаний
+ * (`editor/reminder-flag.ts`) — второго счёта сдвига в клиенте нет.
+ */
+export function shiftInstant(iso: string, shift: { days?: number; months?: number }): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  if (shift.months !== undefined) {
+    const target = new Date(date.getTime());
+    target.setMonth(target.getMonth() + shift.months);
+    return target.toISOString();
+  }
+  return new Date(date.getTime() + (shift.days ?? 0) * 86_400_000).toISOString();
+}
+
 /** Сдвиг календарного дня на `n` суток (арифметика в UTC — без переходов DST). */
 export function addDays(day: string, n: number): string {
   const m = BARE_DATE_RE.exec(day.trim());

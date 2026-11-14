@@ -34,6 +34,7 @@
 import type { TaskMassFilter } from '@etn/shared';
 
 import { div, el, span } from '../dom.js';
+import { shiftInstant } from '../dates.js';
 import { t } from '../i18n.js';
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
 import {
@@ -862,15 +863,10 @@ function formatMoment(iso: string): string {
   return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Сдвиг UTC-инстанса на календарный сдвиг (`days`/`months`) — для «Отложить». */
+/**
+ * Сдвиг UTC-инстанса на календарный сдвиг (`days`/`months`) — для «Отложить».
+ * Счёт один: `shiftInstant` из `lib/dates.ts` (тот же сдвиг у меню флага напоминаний).
+ */
 export function shiftIso(iso: string, shift: TaskShift): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  if (shift.months !== undefined) {
-    const target = new Date(date.getTime());
-    target.setMonth(target.getMonth() + shift.months);
-    return target.toISOString();
-  }
-  const target = new Date(date.getTime() + (shift.days ?? 0) * 24 * 60 * 60 * 1000);
-  return target.toISOString();
+  return shiftInstant(iso, shift);
 }

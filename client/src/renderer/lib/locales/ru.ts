@@ -1470,6 +1470,8 @@ export const ru = {
   'reminder.saveFailed': 'Не удалось сохранить напоминание: %1',
   /** Меню флага в шапке мысли. */
   'reminder.flagTitle': 'Напоминания',
+  /** Флаг при нуле напоминаний — ghost-команда создания первого. */
+  'reminder.addFlag': 'Напомнить…',
   'reminder.create': 'Создать напоминание…',
   'reminder.editSchedule': 'Изменить расписание…',
   'reminder.dismissOccurrence': 'Убрать это вхождение',

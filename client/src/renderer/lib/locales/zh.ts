@@ -737,6 +737,8 @@ export const zh = {
   'reminder.cancel': '取消',
   'reminder.saveFailed': '无法保存提醒：%1',
   'reminder.flagTitle': '提醒',
+  /** 无提醒时 — 新建第一条提醒的 ghost 命令。 */
+  'reminder.addFlag': '提醒我…',
   'reminder.create': '新建提醒…',
   'reminder.editSchedule': '更改时间表…',
   'reminder.dismissOccurrence': '移除此发生时间',

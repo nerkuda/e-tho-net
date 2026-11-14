@@ -1439,6 +1439,8 @@ export const en = {
   'reminder.cancel': 'Cancel',
   'reminder.saveFailed': 'Could not save the reminder: %1',
   'reminder.flagTitle': 'Reminders',
+  /** Flag with no reminders — ghost command to create the first one. */
+  'reminder.addFlag': 'Remind me…',
   'reminder.create': 'Create reminder…',
   'reminder.editSchedule': 'Change schedule…',
   'reminder.dismissOccurrence': 'Dismiss this occurrence',

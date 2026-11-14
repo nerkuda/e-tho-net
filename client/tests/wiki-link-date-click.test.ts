@@ -27,6 +27,7 @@ import {
   initWikiLinkNavigation,
   openDayFromChip,
   resetWikiLinkNavigationForTests,
+  wikiLinkInternals,
 } from '../src/renderer/editor/wiki-link.js';
 import { ShimElement } from './dom-shim.js';
 
@@ -149,5 +150,27 @@ describe('связка «обработчик по умолчанию → openCh
 
     // Вернуть шпион, чтобы порядок тестов файла не зависел от этого блока.
     setDateChipClickHandler((date) => dates.push(date));
+  });
+
+  it('обработчик инициализации доводит дату до открытия дня (не заглушка)', async () => {
+    // Проверка СВЯЗКИ, а не факта регистрации: заглушка
+    // `setDateChipClickHandler(() => undefined)` тоже вернула бы `true`, но день
+    // бы не открылся. Шов меняет единый вход «Дневника» — поведение остаётся
+    // настоящим: дату принимает обработчик, который поставила ИНИЦИАЛИЗАЦИЯ.
+    setDateChipClickHandler(null);
+    resetWikiLinkNavigationForTests();
+    const opened: string[] = [];
+    wikiLinkInternals.setDefaultDayOpener(async (day) => {
+      opened.push(day);
+    });
+    try {
+      initWikiLinkNavigation();
+      assert.equal(clickDateChip('2026-11-06'), true, 'обработчик поставлен');
+      for (let i = 0; i < 4; i += 1) await Promise.resolve();
+      assert.deepEqual(opened, ['2026-11-06'], 'дата дошла до открытия дня');
+    } finally {
+      wikiLinkInternals.setDefaultDayOpener(null);
+      setDateChipClickHandler((date) => dates.push(date));
+    }
   });
 });
