@@ -1405,6 +1405,8 @@ export const en = {
   'tasks.bulkPartial': 'Some lines were not changed: %1.',
   'tasks.bulkFailed': 'Bulk command failed: %1',
   'tasks.undoFailed': 'Could not undo the command: %1',
+  /** Status line: the picked date matched the anchor — nothing to move. */
+  'tasks.moveNotNeeded': 'Nothing to move',
   /** Task row operation errors. */
   'tasks.errorLineNotFound': 'Line not found in the source entry.',
   'tasks.errorNotATask': 'The line is no longer a task.',

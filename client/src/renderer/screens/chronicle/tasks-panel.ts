@@ -334,11 +334,19 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     return subjectTitles.get(`${kind}:${id}`) ?? id;
   }
 
-  /** Заголовок группы по режиму и диапазону (локализованный). */
-  function groupTitle(group: PanelGroup<TaskPanelRow | ReminderPanelRow>): string {
+  /**
+   * Заголовок группы по режиму и диапазону (локализованный). Вид субъекта —
+   * параметр: режим «по мыслям» группирует строки и мыслей, и публикаций, а
+   * ключ названия у видов разный (`thought:<id>` / `publication:<id>`), поэтому
+   * жёсткий 'thought' показывал GUID публикации (блокер репроверки 64f7976a).
+   */
+  function groupTitle(
+    group: PanelGroup<TaskPanelRow | ReminderPanelRow>,
+    subjectKind: 'thought' | 'publication' = 'thought',
+  ): string {
     if (group.kind === 'thoughts') {
       if (group.subjectId === null) return t('tasks.groupNoThought');
-      return subjectTitle('thought', group.subjectId);
+      return subjectTitle(subjectKind, group.subjectId);
     }
     if (group.from === null || group.to === null) return t('tasks.groupNoDate');
     if (group.kind === 'dates') return formatDayLabel(group.from);
@@ -414,10 +422,9 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       title,
       subgroups: groups.map((group) => ({
         key: group.key,
-        title:
-          group.kind === 'thoughts'
-            ? subjectTitle('thought', group.subjectId ?? '')
-            : groupTitle(group),
+        // Вид субъекта берём у СТРОК группы, а не угадываем: в группе «по
+        // мыслям» лежат и мысли, и публикации (строки уже несут `subjectType`).
+        title: groupTitle(group, group.rows[0]?.subjectType ?? 'thought'),
         kind: group.kind,
         filter: {},
         rows: group.rows,
@@ -538,7 +545,8 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
    * Абсолютная дата «перенести на…» → серверный сдвиг в днях. Сервер знает
    * только `days`/`months` (de4cee18), поэтому дата переводится в разницу от
    * якоря строки: срок (или начало периода) встаёт на выбранную дату, период
-   * строки сохраняется. `null` — дата та же самая (двигать нечего).
+   * строки сохраняется. `null` — дата совпала с якорем: двигать нечего, экран
+   * говорит об этом пользователю, а не закрывает диалог молча.
    */
   function shiftToDate(anchor: string, target: string): TaskShift | null {
     const days = calendarDaysBetween(anchor, target);
@@ -673,7 +681,12 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
         return;
       }
       const resolved = shiftToDate(anchor, shift.date);
-      if (resolved === null) return;
+      if (resolved === null) {
+        // Дата совпала с якорем строки — молчаливое закрытие выглядело бы как
+        // «ничего не произошло» (замечание репроверки 64f7976a).
+        notice(t('tasks.moveNotNeeded'), 'info');
+        return;
+      }
       effectiveShift = resolved;
     }
     try {
@@ -719,7 +732,12 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       // Массовый перенос — единый сдвиг от «сегодня» (периоды строк
       // сохраняются); выбранная дата задаёт величину сдвига.
       const resolved = shiftToDate(todayLocal(), shift.date);
-      if (resolved === null) return;
+      if (resolved === null) {
+        // Выбрано «сегодня» — сдвиг нулевой: показываем статус пользователю
+        // вместо молчаливого закрытия диалога (замечание репроверки 64f7976a).
+        notice(t('tasks.moveNotNeeded'), 'info');
+        return;
+      }
       effectiveShift = resolved;
     }
     const confirmed = await confirmDialog(

@@ -702,6 +702,8 @@ export const zh = {
   'tasks.bulkPartial': '部分行未修改：%1。',
   'tasks.bulkFailed': '批量命令未执行：%1',
   'tasks.undoFailed': '无法撤销命令：%1',
+  /** 状态行：所选日期与锚点相同，无需移动。 */
+  'tasks.moveNotNeeded': '无需移动',
   'tasks.errorLineNotFound': '来源记录中未找到该行。',
   'tasks.errorNotATask': '该行已不是任务。',
   'tasks.errorCommentNotFound': '未找到来源记录。',
