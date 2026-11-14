@@ -483,8 +483,6 @@ export const zh = {
   'settings.uiMode': '模式',
   'settings.uiMode.dark': '深色',
   'settings.uiMode.light': '浅色',
-  /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
-  'settings.uiThemeLiveHint': '主题和模式立即生效，无需重启。',
   'settings.wallpaper': '地图背景图片',
   'settings.wallpaperUpload': '上传…',
   'settings.wallpaperRemove': '移除图片',

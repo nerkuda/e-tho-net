@@ -1038,8 +1038,6 @@ export const ru = {
   'settings.uiMode': 'Режим',
   'settings.uiMode.dark': 'Тёмный',
   'settings.uiMode.light': 'Светлый',
-  /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
-  'settings.uiThemeLiveHint': 'Тема и режим применяются сразу, без перезапуска.',
   'settings.wallpaper': 'Фоновая картинка карты',
   'settings.wallpaperUpload': 'Загрузить…',
   'settings.wallpaperRemove': 'Убрать картинку',

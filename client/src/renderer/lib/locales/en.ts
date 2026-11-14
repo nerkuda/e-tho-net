@@ -995,8 +995,6 @@ export const en = {
   'settings.uiMode': 'Mode',
   'settings.uiMode.dark': 'Dark',
   'settings.uiMode.light': 'Light',
-  /** Подсказка: применение мгновенное, без перезапуска (сценарий b1131d65). */
-  'settings.uiThemeLiveHint': 'Theme and mode apply immediately, without a restart.',
   'settings.wallpaper': 'Map background image',
   'settings.wallpaperUpload': 'Upload…',
   'settings.wallpaperRemove': 'Remove image',

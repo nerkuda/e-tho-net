@@ -1230,7 +1230,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       unknownThemeNote,
       deferredNote,
       fieldRow({ label: t('settings.uiMode'), control: modeGroup }),
-      el('p', 'muted', t('settings.uiThemeLiveHint')),
       fieldRow({ label: t('settings.wallpaper'), control: wallpaperBlock }),
       wallpaperHintNote,
     );
