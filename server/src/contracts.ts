@@ -6368,7 +6368,9 @@ export const McpReminderDismiss = defineContract(
  * Одна операция PATCH /tasks над строкой задачи.
  *
  * `line_no` — номер строки body_md С НУЛЯ (операция de4cee18), строка
- * содержимого пункта: там стоит маркер.
+ * содержимого пункта: там стоит маркер. `date` — цель операции `set_due`
+ * (ошибка 3f9ea2ee): срок строки встаёт на выбранную дату, строка без дат
+ * получает новую date-ссылку (календарный день `YYYY-MM-DD`).
  */
 const TaskOpSchema = z.object({
   comment_id: z.string().min(1),
@@ -6377,6 +6379,10 @@ const TaskOpSchema = z.object({
   done: z.boolean().optional(),
   days: z.number().int().optional(),
   months: z.number().int().optional(),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   expected_revision: z.number().int().min(1).optional(),
 });
 
@@ -6452,7 +6458,23 @@ export const RestTaskPatch = defineContract(
     .refine((v) => v.action !== 'cancel-all' || (v.days === undefined && v.months === undefined), {
       message: 'cancel-all does not take a shift.',
       path: ['days'],
-    }),
+    })
+    .refine((v) => v.action !== 'undate-all' || (v.days === undefined && v.months === undefined), {
+      message: 'undate-all does not take a shift.',
+      path: ['days'],
+    })
+    .refine(
+      (v) =>
+        (v.ops ?? []).every((op) =>
+          op.action === 'set_due'
+            ? op.date !== undefined && op.days === undefined && op.months === undefined
+            : op.date === undefined,
+        ),
+      {
+        message: 'set_due takes date (without days/months); other ops do not take date.',
+        path: ['ops'],
+      },
+    ),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     ops: { from: { kind: 'body' } },

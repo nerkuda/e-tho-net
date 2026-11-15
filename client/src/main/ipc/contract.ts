@@ -524,7 +524,9 @@ export type DraftListFilter = 'pending' | 'conflict' | 'all';
  * Одна операция правки строки задачи для `PATCH /networks/{nid}/tasks`
  * (операция de4cee18, 0.16.1). `line_no` — номер строки `body_md` С НУЛЯ,
  * `expected_revision` — ревизия комментария-источника (обязательна для первой
- * операции, иначе сервер ответит 400; несовпадение — 409).
+ * операции, иначе сервер ответит 400; несовпадение — 409). `date` — цель
+ * операции `set_due` (ошибка 3f9ea2ee): срок строки встаёт на выбранный
+ * календарный день, у строки без дат появляется новая date-ссылка.
  */
 export interface TaskOpInput {
   comment_id: string;
@@ -533,6 +535,7 @@ export interface TaskOpInput {
   done?: boolean;
   days?: number;
   months?: number;
+  date?: string;
   expected_revision?: number;
 }
 
@@ -540,7 +543,9 @@ export interface TaskOpInput {
  * Массовая команда группы «Задачи периода» (`PATCH /tasks`, требование
  * e6af8b9e): адресация — фильтр проекции, а не список строк. `cancel-all`
  * снимает маркер задачи (строки становятся `- текст`), `move-all` двигает все
- * date-ссылки строк на один сдвиг (`days`/`months`, ровно один).
+ * date-ссылки строк на один сдвиг (`days`/`months`, ровно один), `undate-all`
+ * снимает у строк все date-ссылки («Сделать бессрочными», ошибка 3cef7466) и
+ * сдвига не берёт.
  */
 export interface TaskMassCommandInput {
   action: TaskMassAction;

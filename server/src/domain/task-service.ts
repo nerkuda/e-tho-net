@@ -6,8 +6,9 @@
  *     from/to, thought_id/comment_id, keyset-курсор (стандарт 3f2fdc41),
  *     COUNT только по флагу (стандарт 5adebf61), граница «сегодня» — параметр
  *     клиента;
- *   * PATCH /tasks — операция de4cee18: ops toggle/move/cancel плюс массовые
- *     cancel-all/move-all по фильтру; `expected_revision` → 409.
+ *   * PATCH /tasks — операция de4cee18: ops toggle/move/cancel/set_due/undate
+ *     плюс массовые cancel-all/move-all/undate-all по фильтру;
+ *     `expected_revision` → 409.
  *
  * Правка идёт в `body_md` источника (текст — источник истины): сервер меняет
  * указанную строку и пишет новую ревизию комментария; таблицы проекции
@@ -42,7 +43,13 @@ import {
   type TaskScope,
   type TaskSubjectState,
 } from '@etn/shared';
-import { findDateLinkSpans, removeTaskLineMarker, setTaskLineDone } from '@etn/markdown';
+import {
+  findDateLinkSpans,
+  isTaskLineMarker,
+  removeTaskLineDates,
+  removeTaskLineMarker,
+  setTaskLineDone,
+} from '@etn/markdown';
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getVisibleComment, updateComment } from './comment-service.js';
@@ -422,6 +429,8 @@ export interface TaskOpInput {
   days?: number;
   /** `move`: сдвиг в месяцах. */
   months?: number;
+  /** `set_due`: целевой срок `YYYY-MM-DD`. */
+  date?: string;
   /** Ревизия комментария, которую видел клиент (обязательна для первой op записи). */
   expected_revision?: number;
 }
@@ -479,6 +488,37 @@ export function shiftTaskLineDates(
     next = `${next.slice(0, span.targetStart)}${target}${next.slice(span.targetEnd)}`;
   }
   return next;
+}
+
+/**
+ * Календарных дней от `from` до `to` (обе даты `YYYY-MM-DD`, UTC-арифметика).
+ */
+function calendarDayDelta(from: string, to: string): number {
+  const [fy, fm, fd] = from.split('-').map(Number) as [number, number, number];
+  const [ty, tm, td] = to.split('-').map(Number) as [number, number, number];
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000);
+}
+
+/**
+ * Задать срок строки (операция `set_due`, ошибка 3f9ea2ee).
+ *
+ *  • в строке есть date-ссылки — все они сдвигаются так, чтобы ПОСЛЕДНЯЯ
+ *    (срок) встала на `target`; период строки сохраняется (тот же единый сдвиг,
+ *    что у `move`, требование 236d4472), время ссылки не меняется;
+ *  • дат нет — в КОНЕЦ текста строки добавляется новая date-ссылка `[[target]]`
+ *    (бессрочная задача получает срок и попадает в отборы по датам).
+ *
+ * `null` — строка не задача (маркера нет) или цель совпала со сроком строки:
+ * двигать нечего, писать новую ревизию незачем.
+ */
+export function setTaskLineDue(line: string, target: string): string | null {
+  if (!isTaskLineMarker(line)) return null;
+  const spans = findDateLinkSpans(line);
+  if (spans.length === 0) return `${line.replace(/[ \t]+$/, '')} [[${target}]]`;
+  const due = spans[spans.length - 1]!;
+  const days = calendarDayDelta(due.parts.date, target);
+  if (days === 0) return null;
+  return shiftTaskLineDates(line, { days });
 }
 
 /** Проверить сдвиг `move`: ровно один ненулевой целый сдвиг. */
@@ -590,6 +630,13 @@ export function applyTaskOps(
         next = setTaskLineDone(line, op.done ?? !row.done);
       } else if (op.action === 'cancel') {
         next = removeTaskLineMarker(line);
+      } else if (op.action === 'undate') {
+        // Дат нет — операция ничего не меняет (успешный no-op): массовая
+        // команда «Сделать бессрочными» не падает на уже бессрочных строках.
+        next = removeTaskLineDates(line) ?? line;
+      } else if (op.action === 'set_due') {
+        // Тот же no-op, если выбранная дата уже равна сроку строки.
+        next = setTaskLineDue(line, op.date ?? '') ?? line;
       } else {
         const shift = validateShift(op);
         next = shiftTaskLineDates(line, shift);
@@ -604,8 +651,10 @@ export function applyTaskOps(
         });
         continue;
       }
-      lines[op.line_no] = next;
-      dirty = true;
+      if (next !== line) {
+        lines[op.line_no] = next;
+        dirty = true;
+      }
       results.push({ comment_id: commentId, line_no: op.line_no, ok: true });
     }
 
@@ -673,7 +722,8 @@ function selectMassRows(ndb: NetworkDb, filter: TaskMassFilter): MassRow[] {
  *
  * `cancel-all` снимает маркер у задач и их подстрок-подзадач; `move-all`
  * переносит все date-ссылки выбранных строк единым сдвигом (строки без дат
- * пропускаются с `undated`).
+ * пропускаются с `undated`); `undate-all` удаляет все date-ссылки строк
+ * («Сделать бессрочными», ошибка 3cef7466), уже бессрочные строки — no-op.
  */
 export function applyTaskMassCommand(
   ndb: NetworkDb,
@@ -767,6 +817,9 @@ export function applyTaskMassCommand(
       if (command.action === 'cancel-all') {
         next = removeTaskLineMarker(line);
         if (next === null) error = 'not_a_task';
+      } else if (command.action === 'undate-all') {
+        // Уже бессрочная строка — успешный no-op (в выборке могут быть такие).
+        next = removeTaskLineDates(line) ?? line;
       } else {
         next = shiftTaskLineDates(line, shift!);
         if (next === null) error = 'undated';
@@ -780,8 +833,10 @@ export function applyTaskMassCommand(
         });
         continue;
       }
-      lines[entry.line_no] = next;
-      dirty = true;
+      if (next !== line) {
+        lines[entry.line_no] = next;
+        dirty = true;
+      }
       results.push({ comment_id: commentId, line_no: entry.line_no, ok: true });
     }
     if (dirty) {

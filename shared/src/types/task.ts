@@ -22,12 +22,26 @@ import type { Comment, CommentOwnerKind } from './comment.js';
 export const TASK_SCOPES = ['open', 'done', 'overdue', 'undated'] as const;
 export type TaskScope = (typeof TASK_SCOPES)[number];
 
-/** Операции правки одной строки (PATCH /tasks, операция de4cee18). */
-export const TASK_OPS = ['toggle', 'move', 'cancel'] as const;
+/**
+ * Операции правки одной строки (PATCH /tasks, операция de4cee18):
+ * - `toggle` — состояние чекбокса;
+ * - `move` — единый сдвиг ВСЕХ дат строки (`days`/`months`);
+ * - `cancel` — снять маркер задачи;
+ * - `set_due` — задать срок (`date`): строка с датами сдвигается так, чтобы
+ *   последняя ссылка встала на выбранную дату (период сохраняется), строка без
+ *   дат получает новую date-ссылку в конце текста (ошибка 3f9ea2ee);
+ * - `undate` — «Сделать бессрочной»: удалить ВСЕ date-ссылки строки, задача
+ *   остаётся без срока (ошибка 3cef7466).
+ */
+export const TASK_OPS = ['toggle', 'move', 'cancel', 'set_due', 'undate'] as const;
 export type TaskOpAction = (typeof TASK_OPS)[number];
 
-/** Массовые команды группы «Задачи периода» (требование e6af8b9e). */
-export const TASK_MASS_ACTIONS = ['cancel-all', 'move-all'] as const;
+/**
+ * Массовые команды группы «Задачи периода» (требование e6af8b9e):
+ * `cancel-all` — снять маркеры, `move-all` — сдвиг дат, `undate-all` —
+ * «Сделать бессрочными» (все date-ссылки выбранных строк удаляются).
+ */
+export const TASK_MASS_ACTIONS = ['cancel-all', 'move-all', 'undate-all'] as const;
 export type TaskMassAction = (typeof TASK_MASS_ACTIONS)[number];
 
 /**

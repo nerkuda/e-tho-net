@@ -5,8 +5,9 @@
  * Проверяются scope-секции (overdue/undated — сквозные), keyset-курсор без
  * дублей, COUNT только по флагу, фильтры thought_id/comment_id, состояния
  * субъектов и исключение постоянных комментариев помеченных на удаление;
- * правка: toggle/move/cancel, expected_revision → 409, единый сдвиг всех
- * date-ссылок строки и нормализация 31-го, массовые команды.
+ * правка: toggle/move/cancel/set_due/undate, expected_revision → 409, единый
+ * сдвиг всех date-ссылок строки и нормализация 31-го, массовые команды
+ * (включая «Сделать бессрочными», ошибка 3cef7466).
  *
  * Требует нативного better-sqlite3; иначе пропускается.
  */
@@ -17,6 +18,7 @@ import { describe, it } from 'node:test';
 import DatabaseConstructor from 'better-sqlite3';
 
 import { BASE_LAYER_ID, EtnError } from '@etn/shared';
+import { removeTaskLineDates } from '@etn/markdown';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { createCommentWithTargets } from '../src/domain/comment-service.js';
@@ -24,6 +26,7 @@ import {
   applyTaskMassCommand,
   applyTaskOps,
   listTasks,
+  setTaskLineDue,
   shiftIsoDate,
   shiftTaskLineDates,
 } from '../src/domain/task-service.js';
@@ -434,6 +437,178 @@ describe(
         );
         assert.equal(cancelled.revisions[0]!.body_md, '- С датой [[2026-11-20]]');
         assert.equal(listTasks(ndb, { scope: 'open' }).items.length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('set_due: бессрочная строка получает date-ссылку, срок строки встаёт на выбранную дату', () => {
+      // Ошибка 3f9ea2ee: «Перенести на дату» для задачи без срока задаёт срок.
+      assert.equal(
+        setTaskLineDue('- [ ] Задача', '2026-11-20'),
+        '- [ ] Задача [[2026-11-20]]',
+        'дат нет — ссылка добавляется в конец текста строки',
+      );
+      assert.equal(
+        setTaskLineDue('- [ ] Период [[2026-11-10]] [[2026-11-12]]', '2026-11-20'),
+        '- [ ] Период [[2026-11-18]] [[2026-11-20]]',
+        'срок — последняя ссылка, период сохраняется (единый сдвиг)',
+      );
+      assert.equal(
+        setTaskLineDue('- [ ] Срок [[2026-11-20 09:00]]', '2026-11-22'),
+        '- [ ] Срок [[2026-11-22 09:00]]',
+        'время ссылки сохраняется',
+      );
+      assert.equal(
+        setTaskLineDue('- [ ] Срок [[2026-11-20]]', '2026-11-20'),
+        null,
+        'выбранная дата равна сроку — двигать нечего',
+      );
+      assert.equal(setTaskLineDue('- Пункт без маркера', '2026-11-20'), null, 'строка не задача');
+
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const undatedId = createTaskComment(ndb, 't-1', '- [ ] Без срока');
+        const result = write(ndb, () =>
+          applyTaskOps(
+            ndb,
+            [
+              {
+                comment_id: undatedId,
+                line_no: 0,
+                action: 'set_due',
+                date: '2026-11-20',
+                expected_revision: 1,
+              },
+            ],
+            USER,
+          ),
+        );
+        assert.deepEqual(result.results, [{ comment_id: undatedId, line_no: 0, ok: true }]);
+        assert.equal(result.revisions[0]!.body_md, '- [ ] Без срока [[2026-11-20]]');
+        const page = listTasks(ndb, { scope: 'open', from: '2026-11-20', to: '2026-11-20' });
+        assert.deepEqual(
+          page.items.map((task) => [task.comment_id, task.due]),
+          [[undatedId, '2026-11-20']],
+          'задача появилась в отборе по выбранной дате',
+        );
+        assert.equal(
+          listTasks(ndb, { scope: 'undated' }).items.length,
+          0,
+          'из «Без срока» строка ушла',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('undate: все date-ссылки строки удаляются, задача уходит в «Без срока»', () => {
+      // Ошибка 3cef7466: команда «Сделать бессрочной».
+      assert.equal(
+        removeTaskLineDates('- [ ] Период [[2026-11-10]] — [[2026-11-12]]'),
+        '- [ ] Период —',
+        'удаляются все ссылки, разделитель-пробел уходит вместе с ними',
+      );
+      assert.equal(
+        removeTaskLineDates('- [ ] `[[2026-11-10]]`'),
+        null,
+        'inline-code date-ссылкой не является',
+      );
+      assert.equal(
+        removeTaskLineDates('- [ ] [[2026-01-05T10:00]]'),
+        null,
+        'legacy-ссылка по имени — не date-ссылка',
+      );
+
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const commentId = createTaskComment(
+          ndb,
+          't-1',
+          ['- [ ] Задача [[2026-11-10]] [[2026-11-12]]', '- [ ] Вторая [[2026-11-13]]'].join('\n'),
+        );
+        const result = write(ndb, () =>
+          applyTaskOps(
+            ndb,
+            [{ comment_id: commentId, line_no: 0, action: 'undate', expected_revision: 1 }],
+            USER,
+          ),
+        );
+        assert.deepEqual(result.results, [{ comment_id: commentId, line_no: 0, ok: true }]);
+        assert.equal(
+          result.revisions[0]!.body_md,
+          '- [ ] Задача\n- [ ] Вторая [[2026-11-13]]',
+          'даты удалены только у адресованной строки',
+        );
+        const undated = listTasks(ndb, { scope: 'undated' });
+        assert.deepEqual(
+          undated.items.map((task) => [task.line_no, task.period_from, task.due]),
+          [[0, null, null]],
+          'период и срок очищены — строка в «Без срока»',
+        );
+
+        const again = write(ndb, () =>
+          applyTaskOps(
+            ndb,
+            [
+              {
+                comment_id: commentId,
+                line_no: 0,
+                action: 'undate',
+                expected_revision: result.revisions[0]!.version,
+              },
+            ],
+            USER,
+          ),
+        );
+        assert.deepEqual(
+          again.results,
+          [{ comment_id: commentId, line_no: 0, ok: true }],
+          'уже бессрочная строка — успешный no-op',
+        );
+        assert.equal(again.changed.length, 0, 'новая ревизия не пишется');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('массовая undate-all снимает даты у всех выбранных невыполненных строк', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        createTaskComment(
+          ndb,
+          't-1',
+          ['- [ ] Первая [[2026-11-14]]', '- [ ] Вторая [[2026-11-15]]', '- [ ] Третья'].join('\n'),
+        );
+        const outsideId = createTaskComment(ndb, 't-1', '- [ ] Вне периода [[2026-12-01]]');
+
+        const result = write(ndb, () =>
+          applyTaskMassCommand(
+            ndb,
+            {
+              action: 'undate-all',
+              filter: { scope: 'open', from: '2026-11-14', to: '2026-11-20' },
+            },
+            USER,
+          ),
+        );
+        assert.ok(
+          result.results.every((entry) => entry.ok),
+          'строки без дат — успешный no-op, ошибок нет',
+        );
+        const undated = listTasks(ndb, { scope: 'undated' });
+        assert.deepEqual(
+          undated.items.map((task) => task.text).sort(),
+          ['Вторая', 'Первая', 'Третья'],
+          'все строки периода стали бессрочными',
+        );
+        const openOutside = listTasks(ndb, { scope: 'open' }).items.find(
+          (task) => task.comment_id === outsideId,
+        );
+        assert.equal(openOutside?.due, '2026-12-01', 'строка вне периода не тронута');
       } finally {
         ndb.close();
       }

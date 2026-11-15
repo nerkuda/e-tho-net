@@ -62,7 +62,12 @@ export { parseTaskLines } from './task-lines.js';
 export type { TaskLine, TaskLineDate } from './task-lines.js';
 export { findDateLinkSpans } from './date-links.js';
 export type { DateLinkSpan } from './date-links.js';
-export { isTaskLineMarker, removeTaskLineMarker, setTaskLineDone } from './task-line-edit.js';
+export {
+  isTaskLineMarker,
+  removeTaskLineDates,
+  removeTaskLineMarker,
+  setTaskLineDone,
+} from './task-line-edit.js';
 export { TASK_MARKER_PATTERN, TASK_MARKER_PREFIX } from './task-list.js';
 export { BLANK_LINE_CLASS, blankLinesPlugin } from './blank-lines.js';
 export { extractHeadings, formatHeading } from './headings.js';
@@ -76,10 +81,7 @@ export {
   TRANSCLUSION_SECTION_ATTR,
   transclusionBlockPlugin,
 } from './transclusion-block.js';
-export type {
-  TransclusionLabels,
-  TransclusionRenderOptions,
-} from './transclusion-block.js';
+export type { TransclusionLabels, TransclusionRenderOptions } from './transclusion-block.js';
 export type {
   TransclusionRef,
   TransclusionResolution,
