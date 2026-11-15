@@ -2945,10 +2945,21 @@ input.task-list-item-checkbox:checked,
   gap: var(--space-4);
 }
 
+/*
+ * Опорные дата и время напоминания стоят В КОЛОНКУ: `.ui-field` — контейнерный
+ * запрос (`container-type: inline-size`), в строковом flex его ширина
+ * считается нулевой — поля сжимались до нескольких пикселей и подписи
+ * наезжали друг на друга (ошибка 3ff85ede). Отступ снизу у полей нулевой:
+ * зазор даёт сама колонка.
+ */
 .reminder-anchor-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.reminder-anchor-row .ui-field {
+  margin-bottom: 0;
 }
 
 .reminder-params {
