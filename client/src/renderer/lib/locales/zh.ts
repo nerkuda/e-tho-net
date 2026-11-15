@@ -339,6 +339,8 @@ export const zh = {
   'errors.propertyNameAmbiguous': '属性名称不明确——网络中有多个属性使用该名称',
   'errors.propertyTargetType': '值的类型不符合属性允许的类型',
   'errors.code.VALIDATION_ERROR': '请检查输入的数据',
+  'errors.code.VALIDATION_ERROR.no-occurrence':
+    '按此间隔不会产生任何提醒：所选日期在该序列的月份或年份中不存在——请更改日期或步长',
   'errors.code.BAD_REQUEST': '无法完成请求',
   'errors.code.UNAUTHORIZED': '需要登录',
   'errors.code.FORBIDDEN': '没有足够的权限执行此操作',

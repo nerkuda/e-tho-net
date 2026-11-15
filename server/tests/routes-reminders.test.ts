@@ -179,6 +179,41 @@ describe('routes /reminders (b47f1fd2)', { skip: !nativeAvailable() }, () => {
     }
   });
 
+  it('POST недостижимой серии — понятный 400, а не INTERNAL (приёмка 173f1540)', async () => {
+    const ctx = await buildRestContext();
+    try {
+      const subjectId = await createSubject(ctx);
+      // Сетка годов 2026 + 4k ≡ 2 (mod 4): 29 февраля в ней не бывает никогда.
+      const noOccurrence = await postReminder(ctx, {
+        subject_type: 'thought',
+        subject_id: subjectId,
+        kind: 'rule',
+        schedule: { type: 'yearly', month: 2, day: 29, every_years: 4 },
+        anchor_at: '2026-02-15T09:00:00.000Z',
+      });
+      assert.equal(noOccurrence.statusCode, 400, JSON.stringify(noOccurrence.json()));
+      const error = noOccurrence.json().error;
+      assert.equal(error?.code, 'VALIDATION_ERROR', 'не INTERNAL: серия невыполнима');
+      const details = error?.details as { status?: number; issue?: string } | undefined;
+      assert.equal(details?.status, 400);
+      assert.equal(details?.issue, 'no-occurrence', 'по причине клиент берёт локализованный текст');
+      assert.match(error?.message ?? '', /no occurrence/i);
+
+      // Достижимая серия того же вида по-прежнему создаётся.
+      const reachable = await postReminder(ctx, {
+        subject_type: 'thought',
+        subject_id: subjectId,
+        kind: 'rule',
+        schedule: { type: 'yearly', month: 2, day: 29, every_years: 2 },
+        anchor_at: '2026-02-15T09:00:00.000Z',
+      });
+      assert.equal(reachable.statusCode, 201, JSON.stringify(reachable.json()));
+      assert.equal(reachable.json().data.anchor_at, '2028-02-29T09:00:00.000Z');
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
   it('GET отдаёт только свои напоминания, раскрывает период и проверяет его границы', async () => {
     const ctx = await buildRestContext();
     try {

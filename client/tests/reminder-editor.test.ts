@@ -6,7 +6,10 @@
  *
  * Preview проверяется ТЕМ ЖЕ вычислителем, что сервер (`expandOccurrences` из
  * `@etn/shared`): для каждой команды из черновика обязано найтись вхождение на
- * год вперёд — иначе редактор показал бы «Вхождений пока нет».
+ * год вперёд — иначе редактор показал бы «Вхождений пока нет». Подпись заголовка
+ * и состав команд защищены отдельно, а недостижимая серия («29.02 каждый 4-й
+ * год» от сетки годов ≡2 mod 4) даёт пустой preview, а не исключение (приёмка
+ * 173f1540).
  */
 
 import assert from 'node:assert/strict';
@@ -70,6 +73,67 @@ describe('редактор напоминания: команды «Напомн
     );
     assert.equal(PREVIEW_LIMIT, 5, 'подпись обещает «Следующие 5 напоминаний»');
     assert.equal(REMINDER_DAY_LIMIT, 30, 'число месяца по ТЗ — 1..30 плюс «последний день»');
+  });
+
+  it('заголовок preview — ровно «Следующие 5 напоминаний»', () => {
+    assert.equal(
+      reminderEditorInternals.previewTitleText(),
+      'Следующие 5 напоминаний',
+      'подпись обещает БЛИЖАЙШИЕ пять вхождений — не «первые» и не другое число',
+    );
+  });
+
+  it('«не напоминать» есть только у существующего напоминания и идёт первой', () => {
+    assert.deepEqual(
+      reminderEditorInternals.commandList(undefined),
+      [...REMINDER_COMMANDS],
+      'у нового напоминания удалять нечего — команды «не напоминать» нет',
+    );
+    assert.deepEqual(
+      reminderEditorInternals.commandList(
+        reminderWith({ type: 'once' }, '2026-11-15T06:00:00.000Z'),
+      ),
+      ['not_remind', ...REMINDER_COMMANDS],
+      'у существующего команда «не напоминать» открывает список',
+    );
+  });
+
+  it('preview переживает недостижимую серию: пустой список вместо исключения', () => {
+    const base = reminderEditorInternals.emptyDraft();
+    const nowMs = Date.parse('2026-02-15T06:00:00.000Z');
+    // Сетка годов 2026 + 4k ≡ 2 (mod 4): 29 февраля в ней не бывает никогда.
+    const unreachable = {
+      ...base,
+      command: 'yearly' as const,
+      date: '2026-02-15',
+      day: 29,
+      month: 2,
+      interval: 4,
+    };
+    assert.deepEqual(
+      reminderEditorInternals.previewOccurrences(unreachable, nowMs),
+      [],
+      'серия пуста — preview показывает «Вхождений пока нет», диалог остаётся жив',
+    );
+    const reachable = { ...unreachable, interval: 2 };
+    // Окно preview — год вперёд от «сейчас»: следующее вхождение 29.02.2028
+    // попадает в него, если смотреть из середины 2027-го.
+    const occurrences = reminderEditorInternals.previewOccurrences(
+      reachable,
+      Date.parse('2027-06-01T06:00:00.000Z'),
+    );
+    assert.ok(occurrences.length > 0, 'шаг 2 года от 2026-й опоры попадает в 2028-й високосный');
+    const [firstAt] = occurrences;
+    assert.ok(firstAt !== undefined);
+    const first = new Date(firstAt);
+    assert.equal(first.getFullYear(), 2028);
+    assert.equal(first.getMonth(), 1, 'февраль');
+    assert.equal(first.getDate(), 29);
+    assert.deepEqual(
+      reminderEditorInternals.previewOccurrences({ ...base, command: 'not_remind' }, nowMs),
+      [],
+      'у команды «не напоминать» расписания нет — preview пуст, а не падает',
+    );
   });
 
   it('команда «не напоминать» расписания не имеет', () => {

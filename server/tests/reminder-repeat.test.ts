@@ -306,6 +306,63 @@ describe('reminder-repeat: интервалы и пропуск выходных
   });
 });
 
+describe('reminder-repeat: недостижимая серия — отказ 400, а не INTERNAL (приёмка 173f1540)', () => {
+  /** Ожидать отказ недостижимой серии: `VALIDATION_ERROR` + явный 400 + `issue`. */
+  function expectNoOccurrence(fn: () => unknown): EtnError {
+    let caught: unknown = null;
+    assert.throws(fn, (err: unknown) => {
+      caught = err;
+      return true;
+    });
+    assert.ok(caught instanceof EtnError, 'ожидалась EtnError');
+    const details = caught.details as
+      { status?: number; issue?: string; field?: string } | undefined;
+    assert.equal(caught.code, 'VALIDATION_ERROR', 'это не INTERNAL: серия невыполнима, движок цел');
+    assert.equal(details?.status, 400, 'явный статус 400 в details (иначе VALIDATION_ERROR — 422)');
+    assert.equal(details?.issue, 'no-occurrence', 'машиночитаемая причина для текста клиента');
+    assert.equal(details?.field, 'schedule');
+    assert.match(caught.message, /no occurrence/i, 'сообщение объясняет причину');
+    return caught;
+  }
+
+  it('yearly 29.02 каждые 4 года от опоры 2026: сетка годов ≡2 mod 4 — 29.02 не бывает', () => {
+    const schedule: ReminderSchedule = { type: 'yearly', month: 2, day: 29, every_years: 4 };
+    const anchor = at('2026-02-15T09:00:00.000Z');
+    expectNoOccurrence(() => normalizeAnchor(schedule, anchor));
+    expectNoOccurrence(() => firstOccurrenceOnOrAfter(schedule, anchor, anchor));
+    expectNoOccurrence(() =>
+      expandOccurrences(schedule, anchor, anchor, at('2060-01-01T00:00:00.000Z'), new Map()),
+    );
+  });
+
+  it('day_of_month 30 каждый 12-й месяц от февральской опоры', () => {
+    const schedule: ReminderSchedule = { type: 'day_of_month', day: 30, every_months: 12 };
+    const anchor = at('2026-02-10T09:00:00.000Z');
+    expectNoOccurrence(() => normalizeAnchor(schedule, anchor));
+  });
+
+  it('day_of_month 31 каждый 12-й месяц от 30-дневного месяца (приходит только через API)', () => {
+    const schedule: ReminderSchedule = { type: 'day_of_month', day: 31, every_months: 12 };
+    const anchor = at('2026-04-10T09:00:00.000Z');
+    expectNoOccurrence(() => normalizeAnchor(schedule, anchor));
+  });
+
+  it('достижимые серии того же семейства по-прежнему дают вхождения', () => {
+    const leap: ReminderSchedule = { type: 'yearly', month: 2, day: 29, every_years: 2 };
+    assert.equal(
+      iso(normalizeAnchor(leap, at('2026-02-15T09:00:00.000Z'))),
+      '2028-02-29T09:00:00.000Z',
+      'шаг 2 года от 2026-й опоры попадает в 2028-й високосный',
+    );
+    const monthly: ReminderSchedule = { type: 'day_of_month', day: 30, every_months: 12 };
+    assert.equal(
+      iso(normalizeAnchor(monthly, at('2026-01-10T09:00:00.000Z'))),
+      '2026-01-30T09:00:00.000Z',
+      'январская опора даёт 30-е число',
+    );
+  });
+});
+
 describe('reminder-repeat: раскрытие периода и исключения (4401beb8, 86cb7451)', () => {
   const schedule: ReminderSchedule = { type: 'weekdays', days: [1, 4] };
   const anchor = at('2025-01-06T09:00:00.000Z'); // понедельник

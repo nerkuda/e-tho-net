@@ -34,6 +34,15 @@
  * dismiss». Сравнение СТРОГОЕ: вхождение скрыто, только если `until` строго
  * больше момента вхождения; вхождение, попавшее ровно в `until`, остаётся
  * видимым (требования 4401beb8/86cb7451).
+ *
+ * Недостижимая серия (0.16.1, приёмка 173f1540): интервал может сделать серию
+ * пустой НАВСЕГДА — «29.02 каждый 4-й год» от сетки годов ≡2 (mod 4), «30-е
+ * число каждый 12-й месяц» от февральской опоры. Это не поломка движка, а
+ * невыполнимое расписание: `expandOccurrences` отдаёт `VALIDATION_ERROR` с
+ * `details.status = 400` и `details.issue = 'no-occurrence'` (текст для
+ * человека — ключ `errors.code.VALIDATION_ERROR.no-occurrence`), а не INTERNAL.
+ * Предохранители от зацикливания, недостижимые по грамматике, остаются
+ * INTERNAL.
  */
 
 import {
@@ -55,6 +64,20 @@ const MAX_YEAR_STEPS = 4_000;
 /** Ошибка грамматики повтора: REST/MCP отвечают 400 (операция ae19b1bf). */
 function grammarError(message: string, field = 'schedule'): never {
   throw new EtnError('VALIDATION_ERROR', message, { status: 400, field });
+}
+
+/**
+ * Отказ недостижимой серии: интервал не даёт вхождений НИКОГДА (комментарий
+ * модуля). Для клиента размечен как грамматическая ошибка поля `schedule`
+ * (`details.issue` — машиночитаемая причина), поэтому REST отвечает 400, а не
+ * INTERNAL; `message` — английский, адресован агентам и журналам.
+ */
+function noOccurrenceSeries(message: string): never {
+  throw new EtnError('VALIDATION_ERROR', message, {
+    status: 400,
+    field: 'schedule',
+    issue: 'no-occurrence',
+  });
 }
 
 /** Момент в UTC-миллисекундах из ISO-инстанса; невалидный вход — 400. */
@@ -388,7 +411,9 @@ export function firstOccurrenceOnOrAfter(
         const instant = instantAt(year, month0, day, time);
         if (instant >= floor) return instant;
       }
-      throw new EtnError('INTERNAL', 'reminder recurrence did not converge (weekday_of_month).');
+      throw noOccurrenceSeries(
+        `Reminder series has no occurrence: no such weekday (nth ${String(schedule.nth)}) in any month of the series (every ${everyMonths} month(s)).`,
+      );
     }
 
     case 'day_of_month':
@@ -408,7 +433,9 @@ export function firstOccurrenceOnOrAfter(
         const instant = instantAt(year, month0, day, time);
         if (instant >= floor) return instant;
       }
-      throw new EtnError('INTERNAL', 'reminder recurrence did not converge (monthly).');
+      throw noOccurrenceSeries(
+        `Reminder series has no occurrence: no matching day in any month of the series (every ${everyMonths} month(s)).`,
+      );
     }
 
     case 'yearly': {
@@ -423,7 +450,9 @@ export function firstOccurrenceOnOrAfter(
         const instant = instantAt(year, schedule.month - 1, schedule.day, time);
         if (instant >= floor) return instant;
       }
-      throw new EtnError('INTERNAL', 'reminder recurrence did not converge (yearly).');
+      throw noOccurrenceSeries(
+        `Reminder series has no occurrence: day ${String(schedule.day)} of month ${String(schedule.month)} is not a valid date in any year of the series (every ${everyYears} year(s)).`,
+      );
     }
   }
 }

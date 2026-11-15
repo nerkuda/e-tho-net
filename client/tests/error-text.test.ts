@@ -117,6 +117,24 @@ describe('errText: дружелюбные сообщения', () => {
     assertFriendly(text);
   });
 
+  it('недостижимая серия напоминания — текст по details.issue, без серверного message', () => {
+    // Сервер объясняет причину агентам по-английски; пользователю нужен текст
+    // словаря по машиночитаемому `details.issue` (приёмка 173f1540).
+    const text = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'Reminder series has no occurrence: day 29 of month 2 is not a valid date in any year of the series (every 4 year(s)).',
+        { status: 400, field: 'schedule', issue: 'no-occurrence' },
+      ),
+    );
+    assert.equal(
+      text,
+      'с указанным интервалом вхождений не будет: выбранной даты не бывает в месяцах или годах этой серии — измените дату или шаг',
+    );
+    assert.doesNotMatch(text, /occurrence|series|schedule/i);
+    assertFriendly(text);
+  });
+
   it('неизвестный код — общий текст, без серверного message (ADR daab6ac4)', () => {
     const err = { code: 'SOME_FUTURE_CODE', message: 'internal diagnostic text' };
     const text = errText(err);

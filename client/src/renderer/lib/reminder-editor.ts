@@ -28,7 +28,10 @@
  *
  * Preview считает ТОТ ЖЕ вычислитель, что сервер: `expandOccurrences` из
  * `@etn/shared` (одна реализация грамматики — preview и `GET /reminders` не
- * расходятся). Время суток вхождений наследуется от опорного момента.
+ * расходятся). Время суток вхождений наследуется от опорного момента. Отказ
+ * движка (недостижимая серия: «29.02 каждый 4-й год» от сетки годов ≡2 mod 4)
+ * preview не роняет — показывает «Вхождений нет», редактор остаётся жив, а
+ * понятный текст 400 приходит при сохранении (приёмка 173f1540).
  *
  * Контролы — только фасады коллекции: `lib/dialog.ts` (каркас), `lib/date-field.ts`
  * + `lib/date-period-dialog.ts` (дата и календарь), `lib/ui/field.ts`
@@ -93,6 +96,15 @@ export const REMINDER_COMMANDS: readonly ReminderCommand[] = [
   'weekday_of_month',
   'yearly',
 ];
+
+/**
+ * Список команд списка «Напомнить»: у существующего напоминания первой идёт
+ * «не напоминать» (удаляет серию), у нового её нет — создавать нечего, а
+ * удалять несуществующее бессмысленно (ТЗ 2026-11-15).
+ */
+export function commandList(existing: Reminder | undefined): ReminderCommand[] {
+  return existing === undefined ? [...REMINDER_COMMANDS] : ['not_remind', ...REMINDER_COMMANDS];
+}
 
 /** Черновик формы: всё, что пользователь выбрал (живёт вне DOM).
  *  Экспортирован ради юнит-проверок чистых частей редактора. */
@@ -259,6 +271,35 @@ export function scheduleOf(draft: ReminderDraft): ReminderSchedule {
   }
 }
 
+/** Подпись заголовка preview («Следующие 5 напоминаний») — из локали. */
+export function previewTitleText(): string {
+  return t('reminder.preview', [String(PREVIEW_LIMIT)]);
+}
+
+/**
+ * Вхождения для preview по черновику — ISO-моменты начала (до `PREVIEW_LIMIT`).
+ *
+ * Считает ТОТ ЖЕ вычислитель, что сервер (`normalizeAnchor` +
+ * `expandOccurrences`), но отказ движка НЕ пробрасывает: недостижимая серия
+ * («29.02 каждый 4-й год» от сетки годов ≡2 mod 4) и команда «не напоминать»
+ * дают пустой список — диалог жив, preview показывает «Вхождений нет», а
+ * понятный отказ 400 приходит при сохранении (ошибка 3ff85ede, приёмка
+ * 173f1540).
+ */
+export function previewOccurrences(draft: ReminderDraft, nowMs: number): string[] {
+  if (draft.command === 'not_remind') return [];
+  try {
+    const schedule = scheduleOf(draft);
+    const normalized = normalizeAnchor(schedule, localInstant(draft.date, draft.time));
+    const from = Math.min(nowMs, normalized);
+    return expandOccurrences(schedule, normalized, from, from + 366 * DAY_MS, new Map())
+      .slice(0, PREVIEW_LIMIT)
+      .map((occurrence) => occurrence.occurrence_at);
+  } catch {
+    return [];
+  }
+}
+
 /** Начальный черновик нового напоминания (дефолты ТЗ 2026-11-15). */
 export function emptyDraft(): ReminderDraft {
   const now = new Date();
@@ -396,10 +437,7 @@ export async function openReminderEditor(options: ReminderEditorOptions): Promis
 
     // Список «Напомнить»: у несуществующего напоминания «не напоминать» нет —
     // создавать нечего, а удалять несуществующее бессмысленно.
-    const commands: ReminderCommand[] = [
-      ...(existing === undefined ? [] : (['not_remind'] as ReminderCommand[])),
-      ...REMINDER_COMMANDS,
-    ];
+    const commands = commandList(existing);
     const commandSelect = fieldSelect({
       options: commands.map((command) => ({ value: command, label: commandLabel(command) })),
       value: draft.command,
@@ -414,10 +452,7 @@ export async function openReminderEditor(options: ReminderEditorOptions): Promis
     const params = div('reminder-params');
     const anchorRow = div('reminder-anchor-row');
     const preview = div(REMINDER_PREVIEW_CLASS);
-    const previewTitle = span(
-      t('reminder.preview', [String(PREVIEW_LIMIT)]),
-      'reminder-preview-title',
-    );
+    const previewTitle = span(previewTitleText(), 'reminder-preview-title');
     body.append(params, anchorRow, previewTitle, preview);
 
     /** Пересобрать поля, зависящие от команды (ТЗ: у каждой свой набор). */
@@ -641,27 +676,17 @@ export async function openReminderEditor(options: ReminderEditorOptions): Promis
       previewTitle.hidden = !active;
       preview.hidden = !active;
       if (!active) return;
-      const schedule = scheduleOf(draft);
-      const anchorMs = localInstant(draft.date, draft.time);
-      const normalized = normalizeAnchor(schedule, anchorMs);
-      const from = Math.min(Date.now(), normalized);
-      const occurrences = expandOccurrences(
-        schedule,
-        normalized,
-        from,
-        from + 366 * DAY_MS,
-        new Map(),
-      ).slice(0, PREVIEW_LIMIT);
+      const occurrences = previewOccurrences(draft, Date.now());
       if (occurrences.length === 0) {
         preview.append(span(t('reminder.previewEmpty'), 'reminder-preview-empty'));
         return;
       }
-      for (const occurrence of occurrences) {
+      for (const occurrenceAt of occurrences) {
         preview.append(
           el(
             'div',
             'reminder-preview-row',
-            formatDateTime(occurrence.occurrence_at, { dateStyle: 'medium', timeStyle: 'short' }),
+            formatDateTime(occurrenceAt, { dateStyle: 'medium', timeStyle: 'short' }),
           ),
         );
       }
@@ -759,6 +784,9 @@ export const reminderEditorInternals = {
   commandOfSchedule,
   commandLabel,
   commands: REMINDER_COMMANDS,
+  commandList,
+  previewTitleText,
+  previewOccurrences,
   localInstant,
   isoWeekdayOf,
   daysInMonthOf,

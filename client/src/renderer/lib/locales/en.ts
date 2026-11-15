@@ -709,6 +709,9 @@ export const en = {
    * an unknown code or reason falls back to the generic text.
    */
   'errors.code.VALIDATION_ERROR': 'check the entered data',
+  /** Refinement of `400 VALIDATION_ERROR` for an unreachable series (`details.issue`). */
+  'errors.code.VALIDATION_ERROR.no-occurrence':
+    'with this interval there will be no occurrences: the chosen date never exists in the months or years of this series - change the date or the step',
   'errors.code.BAD_REQUEST': 'the request cannot be completed',
   'errors.code.UNAUTHORIZED': 'sign-in is required',
   'errors.code.FORBIDDEN': 'not enough permissions for this action',

@@ -712,6 +712,9 @@ export const ru = {
    * `errors.code.<код>.<токен>`; неизвестный код или причина — общий текст.
    */
   'errors.code.VALIDATION_ERROR': 'проверьте введённые данные',
+  /** Уточнение `400 VALIDATION_ERROR` недостижимой серии (`details.issue`). */
+  'errors.code.VALIDATION_ERROR.no-occurrence':
+    'с указанным интервалом вхождений не будет: выбранной даты не бывает в месяцах или годах этой серии — измените дату или шаг',
   'errors.code.BAD_REQUEST': 'запрос не может быть выполнен',
   'errors.code.UNAUTHORIZED': 'требуется вход в систему',
   'errors.code.FORBIDDEN': 'недостаточно прав для этого действия',
