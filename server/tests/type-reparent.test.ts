@@ -773,7 +773,10 @@ describe(
         const layer = await createLayer(ctx, { title: 'Слой 144534c8 — link' });
         await selectLayer(ctx, layer.id);
 
-        // В слое правим описание C — материализуется тень C.
+        // В слое правим цвет C — материализуется тень C. У `link-types`
+        // правятся только свойство-связь и цвет (имена запрещены контрактом), а
+        // лишние ключи тела отвергаются 422 (ошибка 244859b9): раньше
+        // `description` молча отбрасывался, и тень создавалась пустой правкой.
         const ltCGetRes = await ctx.app.inject({
           method: 'GET',
           url: `/api/v1/networks/${nid}/link-types/${ltCId}`,
@@ -785,7 +788,7 @@ describe(
           method: 'PATCH',
           url: `/api/v1/networks/${nid}/link-types/${ltCId}`,
           headers: { ...hLayer, 'If-Match': String(ltCVersion) },
-          payload: { description: 'правим в слое' },
+          payload: { color: '#336699' },
         });
         assert.equal(patchCRes.statusCode, 200, patchCRes.body?.toString());
 

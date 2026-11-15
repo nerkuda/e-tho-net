@@ -212,11 +212,12 @@ export const contractsByName = new Map<string, OperationContract>();
  * приходилось оборачивать вручную (`z.object({...}).strict()`), что легко
  * забыть — теперь гарантия идёт из контракта.
  *
- * REST-контракты (имя с префиксом `rest:`) НЕ делаются strict: они исторически
- * опираются на rest-карту как на единственный источник объявленных полей и
- * могут содержать поля вне общей схемы (например, `create_link` у мыслей или
- * `colors` у слоёв) — strict там дал бы ложные 422 на легитимные REST-вызовы.
- * Для REST строгость — отдельный заход, выходит за рамки этой задачи.
+ * REST-контракты (имя с префиксом `rest:`) НЕ делаются strict: их схема
+ * объединяется с rest-картой, где бывают поля вне общей схемы (например,
+ * `create_link` у мыслей или `colors` у слоёв) — strict на схеме дал бы ложные
+ * 422 на легитимные REST-вызовы. Строгость REST держит парсер: неизвестный
+ * ключ тела отвергает {@link assertKnownBodyFields} в {@link parseRest}
+ * (ошибка 244859b9) — с `details.fields`/`details.allowed`, как у тел мыслей.
  *
  * ZodEffects (схема с `.refine()`) не имеет метода `.strict()`, поэтому для
  * неё нужно заранее ставить `.strict()` ДО `.refine()` (см. `*Fields` ниже —
@@ -471,8 +472,20 @@ export function parseRest<S extends z.ZodObject>(
   const requestId = req.id;
   const out: Record<string, unknown> = {};
   let body: Record<string, unknown> | undefined;
+  const restEntries = Object.entries(contract.rest) as [string, RestFieldSpec][];
+  const hasBodyFields = restEntries.some(([, spec]) => (spec.from?.kind ?? 'body') === 'body');
 
-  for (const [key, spec] of Object.entries(contract.rest) as [string, RestFieldSpec][]) {
+  // Тело читается заранее, если контракт объявляет в нём хотя бы одно поле:
+  // неизвестный ключ — каноническая 422 с `details.fields` (что пришло) и
+  // `details.allowed` (что допустимо), а не молчаливое отбрасывание (ошибка
+  // 244859b9, требование 40efde41). Механика общая для всех REST-тел — та же,
+  // что у тел мыслей после d9ba9e68, но без ручного вызова в каждом роуте.
+  if (hasBodyFields) {
+    body = bodyObject(req.body ?? {}, requestId);
+    assertKnownBodyFields(contract, body, requestId);
+  }
+
+  for (const [key, spec] of restEntries) {
     const from = spec.from ?? { kind: 'body' };
     let raw: unknown;
     if (from.kind === 'body') {
@@ -3857,6 +3870,12 @@ export function parseBody<S extends z.ZodObject>(
  * молчаливого отбрасывания (ошибка d9ba9e68, 0.15.4; та же диагностика, что у
  * требования 40efde41 для тел отбора).
  *
+ * Вызывается из {@link parseRest} для КАЖДОГО REST-тела, у которого контракт
+ * объявляет хотя бы одно поле (ошибка 244859b9): так строгость получают все
+ * роуты сразу — комментарии, вложения, batch-копирование и прочие, — а не
+ * только те, где вызов поставили руками. `allowed` строится по rest-карте,
+ * поэтому подсказка включает и REST-only поля (их нет в общей zod-схеме).
+ *
  * Проверяются только тела-объекты: тип тела (`null`/массив) отклонит
  * {@link parseRest} собственной ошибкой.
  */
@@ -3866,9 +3885,21 @@ export function assertKnownBodyFields(
   requestId: string,
 ): void {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return;
-  const allowed = Object.entries(contract.rest as Record<string, RestFieldSpec>)
-    .filter(([, spec]) => (spec.from ?? { kind: 'body' }).kind === 'body')
-    .map(([key, spec]) => (spec.from as { name?: string }).name ?? key);
+  const restSpecs = contract.rest as Record<string, RestFieldSpec>;
+  // Объявленные поля операции: у тела ключ берётся из `from.name` (если задан),
+  // у полей из пути/query/header — имя поля операции. Присланное в теле
+  // объявленное поле не «неизвестно»: значение всё равно берётся из своего
+  // источника (путь/заголовок), а лишний дубль в теле исторически принимался —
+  // так клиенты и присылают `network_id` вместе с `:networkId` в URL.
+  const declaredFields = Object.entries(restSpecs).flatMap(([key, spec]) => {
+    const from = spec.from ?? { kind: 'body' as const };
+    return from.kind === 'body' ? [from.name ?? key] : [key];
+  });
+  // Поля общей схемы, которых нет в rest-карте, REST тоже читает из тела —
+  // напрямую, доменным парсером по сырому body (например, плоские критерии и
+  // `ast` у `POST /thoughts/query`). Считать их неизвестными нельзя.
+  const schemaOnlyFields = Object.keys(contract.schema.shape).filter((key) => !(key in restSpecs));
+  const allowed = [...new Set([...declaredFields, ...schemaOnlyFields])];
   const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
     throw new EtnError(
@@ -4166,13 +4197,21 @@ export const RestIfMatch = defineContract(
   },
 );
 
-/** Тело focus-переопределения (show_inactive / show_trash). */
+/**
+ * Тело focus-переопределения (show_inactive / show_trash / link_filter).
+ *
+ * `link_filter` в общей схеме не описан и разбирается доменным
+ * `parseLinkTypeFilter` по сырому body (задача c965ad03); в rest-карту он
+ * внесён, чтобы строгость парсера (ошибка 244859b9) не считала легитимное поле
+ * неизвестным.
+ */
 export const RestFocusBody = defineContract(
   'rest:thoughts.focus-body',
   z.object({ show_inactive: z.boolean().optional(), show_trash: z.boolean().optional() }),
   {
     show_inactive: { from: { kind: 'body' } },
     show_trash: { from: { kind: 'body' } },
+    link_filter: { from: { kind: 'body' } },
   },
 );
 
