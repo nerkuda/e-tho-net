@@ -1,0 +1,142 @@
+{
+  "name": "76691a17-toolbar-sticky",
+  "description": "Ошибка 76691a17: меню команд редактора комментария доступно при любой длине текста. Самодостаточен: на HOME заводятся длинный постоянный комментарий (60 разделов, ~4 КБ) и хронологическая запись с задачей (панель «Задачи» делает вкладку «Основное» двухзонной — именно там раньше прокручивалось тело группы, и тулбар уезжал). Шаги: войти в правку, прокрутить тело зоны комментария до конца и убедиться, что верх панели команд не сдвинулся, панель имеет position: sticky и остаётся целиком в видимой области скроллера; двухзонная раскладка (2 группы + сплиттер) на месте. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.76691a17-toolbar-sticky.scenario.json",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "eval": "(() => { const item = document.querySelector(\".networks-list .network-item\"); if (item === null) return false; item.click(); return true; })()"
+    },
+    {
+      "name": "seed-long-comment",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "## Раздел 001\n\nтекст раздела номер 001\n\n## Раздел 002\n\nтекст раздела номер 002\n\n## Раздел 003\n\nтекст раздела номер 003\n\n## Раздел 004\n\nтекст раздела номер 004\n\n## Раздел 005\n\nтекст раздела номер 005\n\n## Раздел 006\n\nтекст раздела номер 006\n\n## Раздел 007\n\nтекст раздела номер 007\n\n## Раздел 008\n\nтекст раздела номер 008\n\n## Раздел 009\n\nтекст раздела номер 009\n\n## Раздел 010\n\nтекст раздела номер 010\n\n## Раздел 011\n\nтекст раздела номер 011\n\n## Раздел 012\n\nтекст раздела номер 012\n\n## Раздел 013\n\nтекст раздела номер 013\n\n## Раздел 014\n\nтекст раздела номер 014\n\n## Раздел 015\n\nтекст раздела номер 015\n\n## Раздел 016\n\nтекст раздела номер 016\n\n## Раздел 017\n\nтекст раздела номер 017\n\n## Раздел 018\n\nтекст раздела номер 018\n\n## Раздел 019\n\nтекст раздела номер 019\n\n## Раздел 020\n\nтекст раздела номер 020\n\n## Раздел 021\n\nтекст раздела номер 021\n\n## Раздел 022\n\nтекст раздела номер 022\n\n## Раздел 023\n\nтекст раздела номер 023\n\n## Раздел 024\n\nтекст раздела номер 024\n\n## Раздел 025\n\nтекст раздела номер 025\n\n## Раздел 026\n\nтекст раздела номер 026\n\n## Раздел 027\n\nтекст раздела номер 027\n\n## Раздел 028\n\nтекст раздела номер 028\n\n## Раздел 029\n\nтекст раздела номер 029\n\n## Раздел 030\n\nтекст раздела номер 030\n\n## Раздел 031\n\nтекст раздела номер 031\n\n## Раздел 032\n\nтекст раздела номер 032\n\n## Раздел 033\n\nтекст раздела номер 033\n\n## Раздел 034\n\nтекст раздела номер 034\n\n## Раздел 035\n\nтекст раздела номер 035\n\n## Раздел 036\n\nтекст раздела номер 036\n\n## Раздел 037\n\nтекст раздела номер 037\n\n## Раздел 038\n\nтекст раздела номер 038\n\n## Раздел 039\n\nтекст раздела номер 039\n\n## Раздел 040\n\nтекст раздела номер 040\n\n## Раздел 041\n\nтекст раздела номер 041\n\n## Раздел 042\n\nтекст раздела номер 042\n\n## Раздел 043\n\nтекст раздела номер 043\n\n## Раздел 044\n\nтекст раздела номер 044\n\n## Раздел 045\n\nтекст раздела номер 045\n\n## Раздел 046\n\nтекст раздела номер 046\n\n## Раздел 047\n\nтекст раздела номер 047\n\n## Раздел 048\n\nтекст раздела номер 048\n\n## Раздел 049\n\nтекст раздела номер 049\n\n## Раздел 050\n\nтекст раздела номер 050\n\n## Раздел 051\n\nтекст раздела номер 051\n\n## Раздел 052\n\nтекст раздела номер 052\n\n## Раздел 053\n\nтекст раздела номер 053\n\n## Раздел 054\n\nтекст раздела номер 054\n\n## Раздел 055\n\nтекст раздела номер 055\n\n## Раздел 056\n\nтекст раздела номер 056\n\n## Раздел 057\n\nтекст раздела номер 057\n\n## Раздел 058\n\nтекст раздела номер 058\n\n## Раздел 059\n\nтекст раздела номер 059\n\n## Раздел 060\n\nтекст раздела номер 060"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "seed-task-record",
+      "api": {
+        "name": "seededRecord",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "title": "Запись с задачей",
+          "body_md": "- [ ] Проверить меню редактора [[#{{homeId}}]]",
+          "valid_from": "2026-11-15"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "chronological"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "open-comment-owner",
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes(\"Раздел 060\") === true"
+    },
+    {
+      "name": "two-zones",
+      "waitFor": "document.querySelectorAll('.main-tab > .group').length >= 2 && document.querySelector('.main-tab > .row-splitter:not([hidden])') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "enter-edit",
+      "click": "[data-action=\"edit\"]"
+    },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "install-scroll-zone-helper",
+      "eval": "(() => {\n  window.__etnScrollZone = (from) => {\n    let el = from.parentElement;\n    while (el !== null && el !== document.body) {\n      const overflowY = getComputedStyle(el).overflowY;\n      if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 2) {\n        return el;\n      }\n      el = el.parentElement;\n    }\n    return null;\n  };\n  return true;\n})()"
+    },
+    {
+      "name": "layout-before",
+      "probe": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  if (bar === null) return null;\n  const sc = window.__etnScrollZone(bar);\n  return {\n    position: getComputedStyle(bar).position,\n    groups: document.querySelectorAll('.main-tab > .group').length,\n    splitter: document.querySelectorAll('.main-tab > .row-splitter:not([hidden])').length,\n    scroller: sc === null ? null : sc.className,\n    scrollable: sc === null ? false : sc.scrollHeight > sc.clientHeight + 2,\n  };\n})()"
+    },
+    {
+      "name": "toolbar-top-before",
+      "probe": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  return bar === null ? null : Math.round(bar.getBoundingClientRect().top);\n})()"
+    },
+    {
+      "name": "scroll-zone-to-tail",
+      "eval": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  if (bar === null) return false;\n  const sc = window.__etnScrollZone(bar);\n  if (sc === null) return false;\n  sc.scrollTop = sc.scrollHeight;\n  return sc.scrollTop > 0;\n})()"
+    },
+    {
+      "name": "scrolled",
+      "waitFor": "(() => { const bar = document.querySelector(\".ui-comment .md-field-toolbar\"); const sc = bar === null ? null : window.__etnScrollZone(bar); return sc !== null && sc.scrollTop > 0; })()"
+    },
+    {
+      "name": "toolbar-top-after",
+      "probe": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  return bar === null ? null : Math.round(bar.getBoundingClientRect().top);\n})()",
+      "expectFrom": "toolbar-top-before"
+    },
+    {
+      "name": "toolbar-inside-viewport",
+      "probe": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  if (bar === null) return false;\n  const sc = window.__etnScrollZone(bar);\n  if (sc === null) return false;\n  const b = bar.getBoundingClientRect();\n  const s = sc.getBoundingClientRect();\n  return b.top >= s.top - 1 && b.bottom <= s.bottom + 1;\n})()",
+      "expect": true
+    },
+    {
+      "name": "scroll-progress",
+      "probe": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  const sc = bar === null ? null : window.__etnScrollZone(bar);\n  if (sc === null) return null;\n  return { scrollTop: Math.round(sc.scrollTop), max: Math.round(sc.scrollHeight - sc.clientHeight) };\n})()"
+    },
+    {
+      "name": "sticky-position",
+      "probe": "(() => { const bar = document.querySelector('.ui-comment .md-field-toolbar'); return bar === null ? null : getComputedStyle(bar).position; })()",
+      "expect": "sticky"
+    },
+    {
+      "name": "layout-after",
+      "probe": "(() => ({\n  groups: document.querySelectorAll('.main-tab > .group').length,\n  splitter: document.querySelectorAll('.main-tab > .row-splitter:not([hidden])').length,\n}))()",
+      "expect": {
+        "groups": 2,
+        "splitter": 1
+      }
+    }
+  ]
+}

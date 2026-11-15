@@ -269,6 +269,20 @@
   overflow-y: visible;
 }
 
+/* Корень оболочки комментария здесь НЕ второй скролл-контейнер (ошибка
+   76691a17): прокручивается тело группы выше, и sticky-тулбар должен цепляться
+   за него. С `overflow: auto` (модификатор `--scroll`) корень создавал
+   неподвижный scrollport, и панель уезжала вместе с текстом. */
+.main-tab .ui-comment--scroll {
+  overflow: visible;
+}
+
+/* Тело зоны прокручивается с верхним отступом (`.group-body`, padding 8px):
+   полосу над прилипшей панелью закрываем фоном, иначе в ней видно текст. */
+.main-tab .ui-comment .md-field-toolbar {
+  box-shadow: 0 calc(-1 * var(--space-4)) 0 0 var(--surface);
+}
+
 /* Панель «Задачи» внутри группы: тело группы — единственный скролл-контейнер. */
 .main-tab .ui-task-panel.is-headless {
   overflow: visible;
@@ -1963,6 +1977,19 @@ input.task-list-item-checkbox:checked,
   padding-bottom: var(--space-1);
   margin-bottom: var(--space-1);
   border-bottom: 1px solid var(--border);
+}
+
+/* Меню правки остаётся доступным при любой длине текста (ошибка 76691a17,
+   0.16.1): панель липнет к верхней кромке прокручиваемой области зоны
+   комментария, текст уезжает под неё. Фон обязателен — под панелью проплывает
+   текст. В ограниченном по высоте поле прокручивается только `.md-field-scroll`
+   (тулбар и так стоит вне его) — sticky там не срабатывает и ничего не меняет,
+   сворачивание зон и сплиттер не затрагиваются: панель остаётся в потоке. */
+.ui-comment .md-field-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
 }
 
 .md-field-toolbar__spacer {
