@@ -15,12 +15,20 @@
  * (preview первых вхождений). Второй реализации грамматики на клиенте нет —
  * иначе preview разошёлся бы с `GET /reminders` (элемент 58cca4f7).
  *
- * Края нормализуются по требованию bbca8f7d:
- *   * 31-е число в коротком месяце и 29.02 в невисокосный год → последний день
- *     месяца;
+ * Края нормализуются по требованию bbca8f7d (уточнено ТЗ 2026-11-15):
+ *   * числа, которого в месяце нет (29/30/31 в коротком месяце), и 29.02 в
+ *     невисокосный год — вхождение ПРОПУСКАЕТСЯ (месяц/год), серия продолжается;
  *   * N-й день недели, которого в месяце нет (5-й четверг), — вхождение
  *     пропускается, серия продолжается по расписанию;
  *   * окончания у серии нет (без `until`/`count`).
+ *
+ * Интервалы серии (0.16.1, редактор по ТЗ 2026-11-15): `every_weeks` у
+ * `weekdays`, `every_months` у `weekday_of_month`, `every_years` у `yearly`;
+ * недели/месяцы/годы считаются от опорного вхождения. Отсутствие поля — 1:
+ * строки, сохранённые до расширения грамматики, читаются как прежде.
+ * `skip_weekends` у `every_days` переносит вхождение с субботы/воскресенья на
+ * ближайший понедельник (серия, шагающая только по выходным, иначе не дала бы
+ * вхождений вовсе).
  *
  * Исключения (`exceptions`) — карта «UTC-момент вхождения → snooze{until} |
  * dismiss». Сравнение СТРОГОЕ: вхождение скрыто, только если `until` строго
@@ -67,6 +75,23 @@ function daysInMonth(year: number, month0: number): number {
 function isoWeekday(ms: number): number {
   const dow = new Date(ms).getUTCDay();
   return dow === 0 ? 7 : dow;
+}
+
+/** Суббота или воскресенье (UTC-момент). */
+function isWeekend(ms: number): boolean {
+  const dow = new Date(ms).getUTCDay();
+  return dow === 0 || dow === 6;
+}
+
+/**
+ * Номер ISO-недели момента (неделя начинается в понедельник). Считается по
+ * номеру календарных суток, а не по «неделе года»: интервал `every_weeks` —
+ * это шаг между неделями от недели опорного вхождения, а не календарная дата.
+ */
+function weekIndex(ms: number): number {
+  const day = Math.floor(ms / MS_PER_DAY);
+  const offset = (((day + 3) % 7) + 7) % 7; // 1970-01-01 — четверг: понедельник недели — day − 3.
+  return Math.floor((day - offset) / 7);
 }
 
 /** Время суток опорного вхождения; его наследуют все вхождения серии. */
@@ -150,7 +175,7 @@ export function validateSchedule(input: unknown): ReminderSchedule {
       assertOnlyKeys(obj, ['type']);
       return { type: 'once' };
     case 'weekdays': {
-      assertOnlyKeys(obj, ['type', 'days']);
+      assertOnlyKeys(obj, ['type', 'days', 'every_weeks']);
       const raw = obj['days'];
       if (!Array.isArray(raw) || raw.length === 0) {
         grammarError('`schedule.days` must be a non-empty array of ISO weekdays (1..7).');
@@ -161,13 +186,21 @@ export function validateSchedule(input: unknown): ReminderSchedule {
         }
         return day;
       });
-      return { type: 'weekdays', days: [...new Set(days)].sort((a, b) => a - b) };
+      return {
+        type: 'weekdays',
+        days: [...new Set(days)].sort((a, b) => a - b),
+        every_weeks: optionalIntIn(obj, 'every_weeks', 1, 520) ?? 1,
+      };
     }
     case 'every_days':
-      assertOnlyKeys(obj, ['type', 'every']);
-      return { type: 'every_days', every: intIn(obj, 'every', 1, 3650) };
+      assertOnlyKeys(obj, ['type', 'every', 'skip_weekends']);
+      return {
+        type: 'every_days',
+        every: intIn(obj, 'every', 1, 3650),
+        skip_weekends: optionalBool(obj, 'skip_weekends') ?? false,
+      };
     case 'weekday_of_month': {
-      assertOnlyKeys(obj, ['type', 'weekday', 'nth']);
+      assertOnlyKeys(obj, ['type', 'weekday', 'nth', 'every_months']);
       const nthRaw = obj['nth'];
       const nth =
         nthRaw === 'last'
@@ -179,6 +212,7 @@ export function validateSchedule(input: unknown): ReminderSchedule {
         type: 'weekday_of_month',
         weekday: intIn(obj, 'weekday', 1, 7),
         nth,
+        every_months: optionalIntIn(obj, 'every_months', 1, 120) ?? 1,
       };
     }
     case 'day_of_month':
@@ -188,13 +222,22 @@ export function validateSchedule(input: unknown): ReminderSchedule {
         day: intIn(obj, 'day', 1, 31),
         every_months: intIn(obj, 'every_months', 1, 120),
       };
-    case 'yearly':
-      assertOnlyKeys(obj, ['type', 'month', 'day']);
+    case 'yearly': {
+      assertOnlyKeys(obj, ['type', 'month', 'day', 'every_years']);
+      const month = intIn(obj, 'month', 1, 12);
+      const day = intIn(obj, 'day', 1, 31);
+      // Дата обязана существовать в своём месяце (в високосный год — для 29.02):
+      // иначе серия не дала бы ни одного вхождения и не сошлась бы никогда.
+      if (day > daysInMonth(2024, month - 1)) {
+        grammarError(`\`schedule.day\` ${day} does not exist in month ${month}.`);
+      }
       return {
         type: 'yearly',
-        month: intIn(obj, 'month', 1, 12),
-        day: intIn(obj, 'day', 1, 31),
+        month,
+        day,
+        every_years: optionalIntIn(obj, 'every_years', 1, 100) ?? 1,
       };
+    }
     case 'last_day_of_month':
       assertOnlyKeys(obj, ['type', 'every_months']);
       return { type: 'last_day_of_month', every_months: intIn(obj, 'every_months', 1, 120) };
@@ -204,6 +247,27 @@ export function validateSchedule(input: unknown): ReminderSchedule {
           'day_of_month, yearly, last_day_of_month.',
       );
   }
+}
+
+/** Необязательное целое в диапазоне; отсутствие поля — `undefined`. */
+function optionalIntIn(
+  obj: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (obj[key] === undefined) return undefined;
+  return intIn(obj, key, min, max);
+}
+
+/** Необязательный булев флаг; отсутствие поля — `undefined`. */
+function optionalBool(obj: Record<string, unknown>, key: string): boolean | undefined {
+  const value = obj[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    grammarError(`\`schedule.${key}\` must be a boolean.`);
+  }
+  return value;
 }
 
 /** Расписание — закрытая схема: лишний ключ означает ошибку грамматики. */
@@ -267,20 +331,40 @@ export function firstOccurrenceOnOrAfter(
       return anchorMs >= targetMs ? anchorMs : null;
 
     case 'every_days': {
-      if (targetMs <= anchorMs) return anchorMs;
       const step = schedule.every * MS_PER_DAY;
-      return anchorMs + Math.ceil((targetMs - anchorMs) / step) * step;
+      const skipWeekends = schedule.skip_weekends === true;
+      // Шаг сетки считается от опорного вхождения, а не от запроса: «каждый 3-й
+      // день» обязан идти той же сеткой при любом targetMs.
+      let stepIndex = targetMs <= anchorMs ? 0 : Math.ceil((targetMs - anchorMs) / step);
+      for (let guard = 0; guard <= MAX_DAY_STEPS; guard++) {
+        let instant = anchorMs + stepIndex * step;
+        if (skipWeekends) {
+          // Выходное вхождение переносится на понедельник (не больше двух суток).
+          for (let shift = 0; shift < 3 && isWeekend(instant); shift++) instant += MS_PER_DAY;
+        }
+        if (instant >= floor) return instant;
+        stepIndex += 1;
+      }
+      throw new EtnError('INTERNAL', 'reminder recurrence did not converge (every_days).');
     }
 
     case 'weekdays': {
       const days = new Set(schedule.days);
+      const everyWeeks = Math.max(1, schedule.every_weeks ?? 1);
+      const anchorWeek = weekIndex(anchorMs);
       const start = new Date(floor);
       let year = start.getUTCFullYear();
       let month0 = start.getUTCMonth();
       let day = start.getUTCDate();
-      for (let i = 0; i <= MAX_DAY_STEPS; i++) {
+      // Окно поиска: до следующей разрешённой недели — не больше `everyWeeks`
+      // недель вперёд плюс запас на конец текущей.
+      const limit = everyWeeks * 7 + 14;
+      for (let i = 0; i <= limit; i++) {
         const instant = instantAt(year, month0, day, time);
-        if (instant >= floor && days.has(isoWeekday(instant))) return instant;
+        if (instant >= floor && days.has(isoWeekday(instant))) {
+          const weekDelta = weekIndex(instant) - anchorWeek;
+          if (weekDelta >= 0 && weekDelta % everyWeeks === 0) return instant;
+        }
         const next = new Date(Date.UTC(year, month0, day + 1));
         year = next.getUTCFullYear();
         month0 = next.getUTCMonth();
@@ -290,12 +374,14 @@ export function firstOccurrenceOnOrAfter(
     }
 
     case 'weekday_of_month': {
+      const everyMonths = Math.max(1, schedule.every_months ?? 1);
       const anchorMonth = Math.max(0, monthDiff(anchorMs, floor));
-      for (let step = 0; step <= MAX_MONTH_STEPS; step++) {
+      const firstStep = Math.floor(anchorMonth / everyMonths);
+      for (let step = firstStep; step <= firstStep + MAX_MONTH_STEPS; step++) {
         const { year, month0 } = addMonths(
           anchor.getUTCFullYear(),
           anchor.getUTCMonth(),
-          anchorMonth + step,
+          step * everyMonths,
         );
         const day = weekdayOfMonthDay(year, month0, schedule.weekday, schedule.nth);
         if (day === null) continue;
@@ -317,7 +403,8 @@ export function firstOccurrenceOnOrAfter(
           step * everyMonths,
         );
         const dim = daysInMonth(year, month0);
-        const day = schedule.type === 'day_of_month' ? Math.min(schedule.day, dim) : dim;
+        if (schedule.type === 'day_of_month' && schedule.day > dim) continue;
+        const day = schedule.type === 'day_of_month' ? schedule.day : dim;
         const instant = instantAt(year, month0, day, time);
         if (instant >= floor) return instant;
       }
@@ -325,12 +412,15 @@ export function firstOccurrenceOnOrAfter(
     }
 
     case 'yearly': {
-      // Целевой год и следующий: дата в текущем году могла уже пройти.
-      const startYear = new Date(floor).getUTCFullYear() - 1;
-      for (let year = startYear; year <= startYear + MAX_YEAR_STEPS; year++) {
+      const everyYears = Math.max(1, schedule.every_years ?? 1);
+      const anchorYear = anchor.getUTCFullYear();
+      const floorYear = new Date(floor).getUTCFullYear();
+      const firstStep = Math.max(0, Math.floor((floorYear - anchorYear) / everyYears));
+      for (let step = firstStep; step <= firstStep + MAX_YEAR_STEPS; step++) {
+        const year = anchorYear + step * everyYears;
         const dim = daysInMonth(year, schedule.month - 1);
-        const day = Math.min(schedule.day, dim);
-        const instant = instantAt(year, schedule.month - 1, day, time);
+        if (schedule.day > dim) continue;
+        const instant = instantAt(year, schedule.month - 1, schedule.day, time);
         if (instant >= floor) return instant;
       }
       throw new EtnError('INTERNAL', 'reminder recurrence did not converge (yearly).');
@@ -340,8 +430,9 @@ export function firstOccurrenceOnOrAfter(
 
 /**
  * Нормализовать опорное вхождение: `anchor_at` хранится как ПЕРВОЕ вхождение
- * серии не раньше запрошенного момента. Это же снимает края («31-е → последний
- * день месяца», «5-го четверга нет — серия начинается со следующего месяца»).
+ * серии не раньше запрошенного момента. Это же снимает края («29/30/31 в
+ * коротком месяце — пропуск месяца», «5-го четверга нет — серия начинается со
+ * следующего месяца», «опора в субботу при `skip_weekends` — понедельник»).
  * Для `once` опорный момент возвращается как есть.
  */
 export function normalizeAnchor(schedule: ReminderSchedule, anchorAtMs: number): number {

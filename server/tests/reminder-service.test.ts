@@ -421,7 +421,7 @@ describe('reminder-service: snooze и dismiss (500d1b3d, 86cb7451)', () => {
     assert.equal(change.reminder.next_at, '2025-01-05T09:00:00.000Z');
     assert.deepEqual(
       change.reminder.schedule,
-      { type: 'every_days', every: 1 },
+      { type: 'every_days', every: 1, skip_weekends: false },
       'серия не меняется',
     );
   });

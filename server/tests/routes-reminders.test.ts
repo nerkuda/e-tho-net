@@ -357,7 +357,11 @@ describe('routes /reminders (b47f1fd2)', { skip: !nativeAvailable() }, () => {
       const snoozed = snooze.json().data as { reminder: ReminderJson; occurrence_at: string };
       assert.equal(snoozed.occurrence_at, ANCHOR);
       assert.equal(snoozed.reminder.next_at, '2030-01-15T20:00:00.000Z');
-      assert.deepEqual(snoozed.reminder.schedule, { type: 'every_days', every: 1 });
+      assert.deepEqual(snoozed.reminder.schedule, {
+        type: 'every_days',
+        every: 1,
+        skip_weekends: false,
+      });
 
       const pastUntil = await ctx.app.inject({
         method: 'POST',
