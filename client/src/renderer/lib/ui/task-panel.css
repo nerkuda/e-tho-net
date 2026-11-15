@@ -8,11 +8,10 @@
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 0;
   min-height: 0;
   max-height: 40vh;
   overflow: auto;
-  padding: var(--space-4) var(--space-6);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -23,10 +22,21 @@
   display: none;
 }
 
+/*
+ * Шапка приклеена к верху панели и не уезжает при прокрутке списка (ошибка
+ * 58c470a3). Прокручивается сама панель, поэтому отступы панели ушли в шапку и
+ * тело: иначе содержимое шло бы под шапкой в полосе отступа.
+ */
 .ui-task-panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 .ui-task-panel-title {
@@ -37,6 +47,13 @@
   letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+.ui-task-panel-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .ui-task-panel-undo,
@@ -63,6 +80,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
 }
 
 .ui-task-group {
@@ -75,6 +93,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  cursor: pointer;
+  user-select: none;
 }
 
 .ui-task-group-title {
@@ -87,6 +107,40 @@
   flex: 1 1 auto;
   font-size: var(--font-size-xs);
   color: var(--text-dim);
+}
+
+.ui-task-group-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Каретка сворачиваемых блоков панели: панель, группы, секции (ошибка d0801eea). */
+.ui-task-caret,
+.ui-task-panel-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  transition: transform var(--transition-hover);
+}
+
+.ui-task-caret.collapsed,
+.ui-task-panel-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+/* Заголовок секции списка — сворачиваемый, как группа (ошибка d0801eea). */
+.ui-task-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ui-task-section-head:hover {
+  color: var(--accent);
 }
 
 /* Команды группы и строки — только при наведении (спека f76ed829). */
@@ -181,13 +235,11 @@
   margin-left: var(--tree-indent);
 }
 
-/* Серая строка: внешнее изменение источника ждёт «Обновить» (0e85b66e). */
+/* Серая строка: правка из панели или внешнее изменение источника ждёт
+ * «Обновить» (0e85b66e). Гасится ТОЛЬКО текст: чекбокс — команда, он работает
+ * и на серой строке (ошибка d318a647). */
 .ui-task-row.is-stale {
   color: var(--text-dim);
-}
-
-.ui-task-row.is-stale .ui-task-row-check {
-  opacity: var(--state-disabled-opacity);
 }
 
 .ui-task-row.is-done .ui-task-row-text {
@@ -279,6 +331,12 @@
   padding: 0;
   background: transparent;
   border-bottom: none;
+}
+
+/* Отступы панели «Дневника» живут в её шапке и теле; в чужой группе редактора
+ * отступы даёт сама группа — тело панели их не добавляет. */
+.ui-task-panel.is-headless .ui-task-panel-body {
+  padding: 0;
 }
 
 .ui-task-flat-sections,

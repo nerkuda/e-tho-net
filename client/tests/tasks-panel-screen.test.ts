@@ -27,6 +27,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
 
 /** Период ленты, который отдаёт экран (`deps.getPeriod`). */
@@ -44,14 +45,30 @@ interface Calls {
   days: string[];
   /** `etn.thoughts.resolve(networkId, ids)` — запрошенные id ID-ссылок. */
   resolved: string[];
+  /** `etn.ui.setState(...)` — сохранённые настройки панели (`ui_state`). */
+  state: string[];
 }
 
 /** Данные, которые «есть в сети» у подставного клиента. */
 interface Fixture {
-  /** Строки проекции задач (одна и та же выдача на все запросы задач). */
+  /** Строки проекции задач в периоде (scope=open). */
   tasks?: Array<Record<string, unknown>>;
+  /** Выполненные строки периода (scope=done), по умолчанию — те же, что `tasks`. */
+  doneTasks?: Array<Record<string, unknown>>;
+  /** Просроченные строки (scope=overdue) — сквозная секция. */
+  overdueTasks?: Array<Record<string, unknown>>;
+  /** Строки без срока (scope=undated) — сквозная секция. */
+  undatedTasks?: Array<Record<string, unknown>>;
   /** Напоминания владельца с уже раскрытыми вхождениями. */
   reminders?: Array<Record<string, unknown>>;
+  /**
+   * Строки ЗАПИСИ для точечного перечитывания (`GET /tasks?comment_id=`), по
+   * адресу комментария: так проверяется обновление снапшота после инлайн-правки
+   * (ошибка 45480290).
+   */
+  commentRows?: Record<string, Array<Record<string, unknown>>>;
+  /** Сохранённые настройки панели в `ui_state` (свёрнутость, показ выполненных). */
+  uiState?: string;
 }
 
 /** Минимальная строка `TaskDTO` в периоде, открытая. */
@@ -169,20 +186,44 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     if (index >= 0) windowListeners.splice(index, 1);
   };
 
-  const calls: Calls = { list: [], patch: [], records: 0, days: [], resolved: [] };
+  const calls: Calls = { list: [], patch: [], records: 0, days: [], resolved: [], state: [] };
   const tasks = fixture.tasks ?? [];
+  const doneTasks = fixture.doneTasks ?? [];
+  const overdueTasks = fixture.overdueTasks ?? [];
+  const undatedTasks = fixture.undatedTasks ?? [];
+  /** Версии комментариев-источников и их тексты (подставной PATCH/update). */
+  const versions = new Map<string, number>();
+  const bodies = new Map<string, string>();
   const api = {
     ui: {
-      getState: async (): Promise<null> => null,
-      setState: async (): Promise<void> => undefined,
+      getState: async (): Promise<string | null> => fixture.uiState ?? null,
+      setState: async (_networkId: string, _key: string, value: string): Promise<void> => {
+        calls.state.push(value);
+      },
     },
     tasks: {
       list: async (_networkId: string, query: Record<string, unknown> = {}) => {
         calls.list.push(query);
+        const commentId = query['comment_id'];
+        if (typeof commentId === 'string') {
+          // Точечное перечитывание записи (после инлайн-правки).
+          return {
+            items: fixture.commentRows?.[commentId] ?? [],
+            cursor: null,
+            max_revision: 2,
+          };
+        }
         // Срезы не смешиваются: «просрочено» и «без срока» — сквозные запросы,
-        // в фикстуре они пусты, чтобы строка периода не считалась трижды.
+        // в фикстуре по умолчанию пусты, чтобы строка периода не считалась трижды.
         const scope = query['scope'];
-        const items = scope === 'open' || scope === 'done' ? tasks : [];
+        const items =
+          scope === 'overdue'
+            ? overdueTasks
+            : scope === 'undated'
+              ? undatedTasks
+              : scope === 'done'
+                ? doneTasks
+                : tasks;
         return {
           items,
           cursor: null,
@@ -191,7 +232,21 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
       },
       patch: async (_networkId: string, input: Record<string, unknown>) => {
         calls.patch.push(input);
-        return { results: [], revision: 2 };
+        const ops = (input['ops'] ?? []) as Array<Record<string, unknown>>;
+        const revisions = ops.map((op) => {
+          const id = String(op['comment_id']);
+          const version = (versions.get(id) ?? 1) + 1;
+          versions.set(id, version);
+          return { id, version };
+        });
+        return {
+          results: ops.map((op) => ({
+            comment_id: op['comment_id'],
+            line_no: op['line_no'],
+            ok: true,
+          })),
+          revisions,
+        };
       },
     },
     reminders: {
@@ -209,8 +264,21 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     },
     comments: {
       list: async () => [],
-      get: async () => ({ id: 'c1', body_md: '- [ ] задача', version: 1 }),
-      update: async () => undefined,
+      get: async (_networkId: string, id: string) => ({
+        id,
+        body_md: bodies.get(id) ?? '- [ ] задача',
+        version: versions.get(id) ?? 1,
+      }),
+      update: async (
+        _networkId: string,
+        id: string,
+        input: { body_md?: string },
+      ): Promise<Record<string, unknown>> => {
+        const version = (versions.get(id) ?? 1) + 1;
+        versions.set(id, version);
+        if (input.body_md !== undefined) bodies.set(id, input.body_md);
+        return { id, body_md: bodies.get(id), version };
+      },
     },
   };
   (globalThis as any).etn = api;
@@ -470,6 +538,282 @@ describe('панель задач: «Перенести… на дату» бе�
   });
 });
 
+describe('панель задач: точечная правка строки (ошибки d318a647/45480290)', () => {
+  /** Узел строки панели по адресу проекции. */
+  function rowOf(h: Harness, key: string): ShimElement {
+    const row = h.host
+      .querySelectorAll('.ui-task-row')
+      .find((node) => node.getAttribute('data-row-key') === key);
+    assert.ok(row, `строка ${key} на панели`);
+    return row as ShimElement;
+  }
+
+  /** Клик по чекбоксу строки: выставить состояние и послать `change`. */
+  function clickCheck(h: Harness, key: string, checked: boolean): void {
+    const check = rowOf(h, key).querySelector('.ui-task-row-check') as unknown as ShimElement;
+    check.checked = checked;
+    check.emit('change');
+  }
+
+  it('чекбокс красит ТОЛЬКО свою строку, соседняя остаётся рабочей', async () => {
+    const h = await setup({
+      tasks: [taskRow({ line_no: 0, text: 'первая' }), taskRow({ line_no: 1, text: 'вторая' })],
+    });
+    try {
+      clickCheck(h, 'c1:0', true);
+      await h.settle();
+      assert.equal(rowOf(h, 'c1:0').classList.contains('is-stale'), true, 'правленая строка серая');
+      assert.equal(
+        rowOf(h, 'c1:1').classList.contains('is-stale'),
+        false,
+        'соседняя строка той же записи остаётся свежей',
+      );
+      assert.ok(rowOf(h, 'c1:0').classList.contains('is-done'), 'галочка показала новое состояние');
+      assert.equal(
+        (rowOf(h, 'c1:1').querySelector('.ui-task-row-check') as unknown as ShimElement).disabled,
+        false,
+        'соседняя строка рабочая',
+      );
+      // Повторный клик снимает отметку: команда работает и на серой строке.
+      clickCheck(h, 'c1:0', false);
+      await h.settle();
+      assert.equal(
+        rowOf(h, 'c1:0').classList.contains('is-done'),
+        false,
+        'повторный клик снял отметку',
+      );
+      const ops = h.calls.patch.map(
+        (input) => (input['ops'] as Array<Record<string, unknown>>)[0]!,
+      );
+      assert.deepEqual(
+        ops.map((op) => op['action']),
+        ['toggle', 'toggle'],
+      );
+      assert.deepEqual(
+        ops.map((op) => op['done']),
+        [true, false],
+      );
+      assert.deepEqual(
+        ops.map((op) => op['expected_revision']),
+        [1, 2],
+        'вторая команда идёт с ревизией, поднятой первой (иначе 409)',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('инлайн-правка перечитывает строку: новый текст, без серости', async () => {
+    keymap.keymapInternals.reset();
+    const h = await setup({
+      tasks: [taskRow({ text: 'старая' })],
+      commentRows: { c1: [taskRow({ text: 'новая', revision: 2, parsed_revision: 2 })] },
+    });
+    try {
+      const row = rowOf(h, 'c1:0');
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
+      assert.ok(field, 'поле правки открылось');
+      field.value = '- [ ] новая';
+      field.focus();
+      keymap.dispatchKeyEvent({
+        key: 'Enter',
+        target: field,
+        preventDefault: (): void => undefined,
+      } as unknown as KeyboardEvent);
+      await h.settle();
+      assert.ok(
+        h.calls.list.some((query) => query['comment_id'] === 'c1'),
+        'строка перечитана точечно по адресу записи',
+      );
+      assert.equal(
+        rowOf(h, 'c1:0').classList.contains('is-stale'),
+        false,
+        'снапшот строки свежий — «Обновить» для неё не нужна',
+      );
+      assert.ok(
+        String(
+          (rowOf(h, 'c1:0').querySelector('.ui-task-row-text') as unknown as ShimElement).innerHTML,
+        ).includes('новая'),
+        'панель показывает новый текст строки',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('панель задач: даты бессрочных строк (ошибки 3f9ea2ee/3cef7466/f517d83a)', () => {
+  /** Строка без срока: ни периода, ни срока. */
+  function undatedRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return taskRow({
+      comment_id: 'c9',
+      line_no: 0,
+      text: 'без срока',
+      period_from: null,
+      period_to: null,
+      due: null,
+      ...overrides,
+    });
+  }
+
+  it('«Перенести на дату» бессрочной строки уходит операцией set_due', async () => {
+    const h = await setup({ undatedTasks: [undatedRow()] });
+    try {
+      h.openRowMenu();
+      h.hover(h.menuItem(tMoveRow));
+      h.menuItem(tMoveDate).click();
+      await h.settle();
+      h.pickDay('2026-11-20');
+      await h.settle();
+      assert.equal(h.calls.patch.length, 1, 'команда ушла один раз');
+      const op = (h.calls.patch[0]!['ops'] as Array<Record<string, unknown>>)[0]!;
+      assert.deepEqual(op, {
+        comment_id: 'c9',
+        line_no: 0,
+        action: 'set_due',
+        date: '2026-11-20',
+        expected_revision: 1,
+      });
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('«Сделать бессрочной» уходит операцией undate', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      h.openRowMenu();
+      h.menuItem(tUndateRow).click();
+      await h.settle();
+      const op = (h.calls.patch[0]!['ops'] as Array<Record<string, unknown>>)[0]!;
+      assert.equal(op['action'], 'undate');
+      assert.equal(op['date'], undefined, 'сдвига у команды нет');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('массовая «Сделать бессрочными за период» уходит командой undate-all', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      h.openTasksMenu();
+      h.menuItem(tUndateAllPeriod).click();
+      await h.settle();
+      h.confirmDialog();
+      await h.settle();
+      assert.equal(h.calls.patch.length, 1, 'команда ушла один раз');
+      assert.equal(h.calls.patch[0]!['action'], 'undate-all');
+      assert.deepEqual(h.calls.patch[0]!['filter'], {
+        scope: 'open',
+        from: PERIOD.from,
+        to: PERIOD.to,
+        today: todayLocalOfScreen(),
+      });
+      assert.equal(h.calls.records, 1, 'лента перечитана после команды');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('секция «Без срока» плоская: вложенной группы «Без даты» нет, счётчик в шапке', async () => {
+    const h = await setup({ undatedTasks: [undatedRow()] });
+    try {
+      const section = h.host
+        .querySelectorAll('.ui-task-section')
+        .find((node) => node.getAttribute('data-section') === 'undated') as ShimElement;
+      assert.ok(section, 'секция «Без срока» на панели');
+      assert.equal(
+        section.querySelector('.ui-task-subgroup'),
+        null,
+        'вложенной группы «Без даты» нет (ошибка f517d83a)',
+      );
+      assert.equal(
+        section.querySelector('.ui-task-section-count')?.textContent,
+        '(1)',
+        'счётчик строк — в шапке секции',
+      );
+      assert.equal(
+        h.host.querySelectorAll('[data-row-key]').length,
+        1,
+        'строка без срока показана',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('панель задач: свёрнутость блоков в ui_state (ошибка d0801eea)', () => {
+  it('сохранённая свёрнутость группы восстанавливается при открытии панели', async () => {
+    // Настройки читаются АСИНХРОННО, уже после монтирования панели: сохранённая
+    // карта обязана примениться к построенным узлам, иначе группа открывалась бы
+    // развёрнутой до перезапуска клиента.
+    const h = await setup({
+      tasks: [taskRow()],
+      uiState: JSON.stringify({ showDone: false, collapsed: { 'group:tasks': true } }),
+    });
+    try {
+      const group = h.host.querySelector('.ui-task-group-tasks') as unknown as ShimElement;
+      assert.equal(
+        group.querySelector('.ui-task-group-sections'),
+        null,
+        'группа свёрнута по сохранённой настройке',
+      );
+      assert.equal(
+        group.querySelector('.ui-task-group-counters')?.textContent,
+        t('tasks.counters', [1, 0]),
+        'счётчик группы виден и в свёрнутом виде',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('сворачивание группы записывается настройкой панели и переживает перечитывание', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      const group = h.host.querySelector('.ui-task-group-tasks') as unknown as ShimElement;
+      (group.querySelector('.ui-task-group-head') as unknown as ShimElement).click();
+      await h.settle();
+      assert.equal(h.calls.state.length, 1, 'настройка сохранена в ui_state');
+      const saved = JSON.parse(h.calls.state[0]!) as {
+        showDone: boolean;
+        collapsed: Record<string, boolean>;
+      };
+      assert.deepEqual(
+        saved.collapsed,
+        { 'group:tasks': true },
+        'ключ блока — в карте свёрнутости',
+      );
+      assert.equal(
+        group.querySelector('.ui-task-group-sections'),
+        null,
+        'тело свёрнутой группы снято с экрана',
+      );
+      assert.equal(
+        group.querySelector('.ui-task-group-counters')?.textContent,
+        t('tasks.counters', [1, 0]),
+        'счётчик группы виден и в свёрнутом виде',
+      );
+      // «Обновить» не раскрывает группу: свёрнутость — состояние экрана, а не
+      // пересобранного списка.
+      (h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement).click();
+      await h.settle();
+      assert.equal(
+        (h.host.querySelector('.ui-task-group-tasks') as unknown as ShimElement).querySelector(
+          '.ui-task-group-sections',
+        ),
+        null,
+        'после перечитывания группа осталась свёрнутой',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
 /** Подписи и «сегодня» берутся из тех же модулей, что и у экрана. */
 const { t } = await import('../src/renderer/lib/i18n.js');
 const { todayLocal } = await import('../src/renderer/screens/chronicle/diary.js');
@@ -479,6 +823,8 @@ const tMoveRow = t('tasks.moveRow');
 const tMoveAllPeriod = t('tasks.moveAllPeriod');
 const tMoveDate = t('tasks.moveDate');
 const tMoveNotNeeded = t('tasks.moveNotNeeded');
+const tUndateRow = t('tasks.undateRow');
+const tUndateAllPeriod = t('tasks.undateAllPeriod');
 tActionConfirm = t('actions.confirm');
 
 /** «Сегодня» экрана (локальные сутки клиента). */

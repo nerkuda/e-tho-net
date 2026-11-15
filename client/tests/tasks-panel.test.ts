@@ -5,7 +5,12 @@
  * Проверяется поведение, которое нельзя выразить чистой моделью:
  *  • секции и строки строятся по снимку, unknown-узлы переживают повторный
  *    render (keyed-сверка);
- *  • чекбокс — одиночный клик, без режима правки; серая строка неактивна;
+ *  • чекбокс — одиночный клик, без режима правки; на серой строке он работает,
+ *    а правка текста — нет (ошибка d318a647);
+ *  • панель, группы и секции сворачиваются штатной группой `lib/ui/collapsible`,
+ *    счётчики видны и в свёрнутом виде, состояние читается у экрана (d0801eea);
+ *  • «Перенести на дату» доступно бессрочной строке, «Сделать бессрочной» —
+ *    только строке с датами (ошибки 3f9ea2ee/3cef7466);
  *  • «Обновить» подсвечивается при устаревании, «Отменить» скрыта без команды;
  *  • двойной клик по тексту открывает инлайн-правку, Escape отменяет её через
  *    общий диспетчер клавиш (ADR b420b08c), сохраняет — Enter/`editLine`.
@@ -262,17 +267,22 @@ describe('панель задач: секции, строки и счётчик�
     destroy();
   });
 
-  it('серая строка неактивна и не открывает правку', () => {
-    const { host, destroy } = mount([taskRow({ stale: true })]);
+  it('серая строка: чекбокс работает, правка текста не открывается', () => {
+    const { host, calls, destroy } = mount([taskRow({ stale: true })]);
     const row = rowsOf(host)[0]!;
     assert.ok(row.classList.contains('is-stale'));
+    const check = row.querySelector('.ui-task-row-check') as unknown as ShimElement;
     assert.equal(
-      (row.querySelector('.ui-task-row-check') as unknown as ShimElement).disabled,
-      true,
+      check.disabled,
+      false,
+      'чекбокс — команда, а не правка текста: он работает и на серой строке (d318a647)',
     );
+    check.checked = true;
+    check.emit('change');
+    assert.deepEqual(calls.toggles, [{ key: 'c1:0', done: true }], 'клик ушёл в экран');
     const text = row.querySelector('.ui-task-row-text') as unknown as ShimElement;
     text.emit('dblclick', {});
-    assert.equal(row.querySelector('.ui-task-row-edit'), null);
+    assert.equal(row.querySelector('.ui-task-row-edit'), null, 'текст серой строки не правится');
     destroy();
   });
 
@@ -454,6 +464,182 @@ describe('панель задач: секции, строки и счётчик�
     undo.click();
     assert.equal(calls.refresh, 1);
     assert.equal(calls.undo, 1);
+    destroy();
+  });
+});
+
+describe('панель задач: сворачивание блоков и команды дат (d0801eea/3f9ea2ee/3cef7466)', () => {
+  beforeEach(() => keymap.keymapInternals.reset());
+
+  /** Состояние свёрнутости «экрана» и журнал записей о нём. */
+  interface CollapseState {
+    map: Map<string, boolean>;
+    saved: Array<[string, boolean]>;
+  }
+
+  /** Смонтировать панель с состоянием свёрнутости, живущим вне компоненты. */
+  function mountCollapsible(rows: TaskPanelRow[] = [taskRow()]): {
+    host: ShimElement;
+    calls: Calls;
+    state: CollapseState;
+    render: (view: TaskPanelView) => void;
+    destroy: () => void;
+  } {
+    const state: CollapseState = { map: new Map(), saved: [] };
+    const mounted = mount(rows, {
+      collapsedOf: (key) => state.map.get(key),
+      setCollapsed: (key, value) => {
+        state.map.set(key, value);
+        state.saved.push([key, value]);
+      },
+    });
+    return {
+      host: mounted.host,
+      calls: mounted.calls,
+      state,
+      render: mounted.render,
+      destroy: mounted.destroy,
+    };
+  }
+
+  it('панель сворачивается в одну шапку, состояние спрашивается у экрана', () => {
+    const { host, state, render, destroy } = mountCollapsible();
+    const head = host.querySelector('.ui-task-panel-head') as unknown as ShimElement;
+    assert.ok(host.querySelector('.ui-task-panel-body'), 'по умолчанию панель развёрнута');
+    head.click();
+    assert.deepEqual(state.saved, [['panel', true]], 'свёрнутость записана состоянием экрана');
+    assert.equal(
+      host.querySelector('.ui-task-panel-body'),
+      null,
+      'свёрнутая панель — только шапка',
+    );
+    assert.ok(host.querySelector('.ui-task-panel-head'), 'шапка осталась');
+    // Сохранённое состояние приходит АСИНХРОННО (`ui_state`): следующая отрисовка
+    // обязана применить его к уже построенной панели.
+    state.map.set('panel', false);
+    render(panelView([taskRow()]));
+    assert.ok(host.querySelector('.ui-task-panel-body'), 'развёрнутость из состояния применена');
+    destroy();
+  });
+
+  it('группа сворачивается: счётчики видны и в свёрнутом виде', () => {
+    const { host, state, destroy } = mountCollapsible([
+      taskRow(),
+      taskRow({ key: 'c1:1', lineNo: 1 }),
+    ]);
+    const group = host.querySelector('.ui-task-group-tasks') as unknown as ShimElement;
+    const head = group.querySelector('.ui-task-group-head') as unknown as ShimElement;
+    const counters = group.querySelector('.ui-task-group-counters') as unknown as ShimElement;
+    assert.equal(counters.textContent, t('tasks.counters', [2, 0]));
+    head.click();
+    assert.deepEqual(state.saved, [['group:tasks', true]]);
+    assert.equal(
+      group.querySelector('.ui-task-group-sections'),
+      null,
+      'тело группы «Задачи периода» снято',
+    );
+    assert.equal(rowsOf(host).length, 0, 'строки свёрнутой группы не показаны');
+    assert.equal(
+      group.querySelector('.ui-task-group-counters')?.textContent,
+      t('tasks.counters', [2, 0]),
+      'счётчики остались в шапке',
+    );
+    destroy();
+  });
+
+  it('секция сворачивается, счётчик строк остаётся в её шапке', () => {
+    const { host, state, destroy } = mountCollapsible();
+    const head = host.querySelector('.ui-task-section-head') as unknown as ShimElement;
+    const count = head.querySelector('.ui-task-section-count') as unknown as ShimElement;
+    assert.equal(count.textContent, '(1)', 'счётчик секции до сворачивания');
+    head.click();
+    assert.deepEqual(state.saved, [['section:task:period', true]]);
+    assert.equal(rowsOf(host).length, 0, 'строки свёрнутой секции не показаны');
+    assert.equal(
+      (host.querySelector('.ui-task-section-head') as unknown as ShimElement).querySelector(
+        '.ui-task-section-count',
+      )?.textContent,
+      '(1)',
+      'счётчик секции виден и в свёрнутом виде',
+    );
+    destroy();
+  });
+
+  it('у бессрочной строки «Перенести на дату» доступно, «Сделать бессрочной» — нет', async () => {
+    const { host, calls, destroy } = mountCollapsible([
+      taskRow({ key: 'c1:2', lineNo: 2, due: null, periodFrom: null, day: null }),
+    ]);
+    const button = host.querySelector('.ui-task-row-menu') as unknown as ShimElement;
+    button.emit('click', {
+      target: button,
+      currentTarget: button,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const undate = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.undateRow')));
+    assert.ok(undate, 'пункт «Сделать бессрочной» в меню строки');
+    assert.ok(undate!.classList.contains('menu-item-disabled'), 'у строки без дат он недоступен');
+    // Подменю «Перенести на…» открывается и для бессрочной строки (3f9ea2ee).
+    const move = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.moveRow')));
+    assert.ok(move, 'пункт «Перенести на…» в меню строки');
+    assert.ok(!move!.classList.contains('menu-item-disabled'), 'перенос доступен без дат');
+    move!.emit('mouseenter');
+    const dateItem = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.moveDate')));
+    assert.ok(dateItem, 'пункт «на дату» в подменю переноса');
+    dateItem!.click();
+    await flush();
+    assert.deepEqual(
+      calls.rowCommands,
+      ['c1:2:move', JSON.stringify({ date: '2026-11-20' })],
+      'экран получает перенос на выбранную дату',
+    );
+    destroy();
+  });
+
+  it('у строки с датами «Сделать бессрочной» доступна и уходит командой строки', () => {
+    const { host, calls, destroy } = mountCollapsible();
+    const button = host.querySelector('.ui-task-row-menu') as unknown as ShimElement;
+    button.emit('click', {
+      target: button,
+      currentTarget: button,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const undate = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.undateRow')));
+    assert.ok(undate);
+    assert.ok(!undate!.classList.contains('menu-item-disabled'));
+    undate!.click();
+    assert.deepEqual(calls.rowCommands, ['c1:0:undate']);
+    destroy();
+  });
+
+  it('массовая команда «Сделать бессрочными» есть в меню группы и уходит фильтром', () => {
+    const { host, calls, destroy } = mountCollapsible();
+    const menuButton = host.querySelector('.ui-task-subgroup-menu') as unknown as ShimElement;
+    menuButton.emit('click', {
+      target: menuButton,
+      currentTarget: menuButton,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const item = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.undateAllGroup')));
+    assert.ok(item, 'пункт «Сделать бессрочными по этой группе» в меню подгруппы');
+    item!.click();
+    assert.equal(calls.bulk.length, 1);
+    assert.equal(calls.bulk[0]!.command, 'undate-all');
     destroy();
   });
 });

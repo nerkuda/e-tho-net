@@ -20,11 +20,14 @@
  * (`scope=open` в периоде, `overdue` и `undated` — сквозные), модель лишь
  * раскладывает строки каждой секции по группам, не смешивая их.
  *
- * **«Устарела» (требование 0e85b66e).** Строка серая, когда ревизия её
- * комментария-источника не равна ревизии, из которой построена проекция
- * (`revision !== parsed_revision`), либо комментарий изменён вне панели
- * (id в наборе событий). Глобальная «Обновить» подсвечивается, если устарела
- * хоть одна строка либо пришло событие напоминаний `reminders.changed`.
+ * **«Устарела» (требование 0e85b66e, уточнение ошибки d318a647).** Серая
+ * строка — снапшот этой СТРОКИ, а не всей записи: правка из панели адресуется
+ * `comment_id`+`line_no` и красит только правленую строку, остальные строки
+ * записи остаются рабочими. Внешнее изменение записи (событие слоя) не знает
+ * номера строки — до «Обновить» устаревшей считается вся запись. Третья
+ * причина — проекция построена из прежней ревизии комментария
+ * (`revision !== parsed_revision`). Глобальная «Обновить» подсвечивается, если
+ * устарела хоть одна строка либо пришло событие напоминаний `reminders.changed`.
  */
 
 import type { Reminder, ReminderListResult, TaskDTO, TaskMassFilter } from '@etn/shared';
@@ -247,29 +250,55 @@ export function taskRowKey(ref: { comment_id: string; line_no: number }): string
 }
 
 /**
- * Строка задачи устарела? Две причины (требование 0e85b66e):
- *  • комментарий-источник изменён вне панели (id в наборе событий);
- *  • проекция построена из прежней ревизии комментария.
+ * Признаки устаревания строк панели (требование 0e85b66e, ошибка d318a647).
+ *
+ * Серость строки — про её СНАПШОТ, а не про всю запись: правка одной строки
+ * записи (чекбокс, перенос, отмена) не блокирует остальные строки той же
+ * записи. Поэтому адресация двух видов:
+ *  • `rows` — строки, изменённые ИЗ САМОЙ панели: адрес `comment_id:line_no`
+ *    ровно тот, что правили (вторая строка записи остаётся свежей);
+ *  • `comments` — записи, изменённые ВНЕ панели: событие слоя не несёт номера
+ *    строки, поэтому до «Обновить» устаревшей считается вся запись.
  */
-export function taskRowIsStale(
-  row: TaskDTO,
-  staleComments: ReadonlySet<string> = new Set(),
-): boolean {
-  return staleComments.has(row.comment_id) || row.revision !== row.parsed_revision;
+export interface TaskPanelStaleness {
+  /** Адреса строк (`comment_id:line_no`), изменённых из панели. */
+  rows?: ReadonlySet<string>;
+  /** Комментарии-источники, изменённые вне панели. */
+  comments?: ReadonlySet<string>;
 }
 
-/** Строка проекции → строка панели. */
+/**
+ * Строка задачи устарела? Три причины (требование 0e85b66e, ошибка d318a647):
+ *  • строка изменена из панели (адрес `comment_id:line_no` в {@link TaskPanelStaleness.rows});
+ *  • комментарий-источник изменён вне панели (id в {@link TaskPanelStaleness.comments});
+ *  • проекция построена из прежней ревизии комментария.
+ */
+export function taskRowIsStale(row: TaskDTO, stale: TaskPanelStaleness = {}): boolean {
+  return (
+    stale.rows?.has(taskRowKey(row)) === true ||
+    stale.comments?.has(row.comment_id) === true ||
+    row.revision !== row.parsed_revision
+  );
+}
+
+/**
+ * Строка проекции → строка панели. `done` — показанное состояние чекбокса для
+ * строки, переключённой из панели: снапшот `state` не перечитывается до
+ * «Обновить», но чекбокс обязан показывать новое состояние (повторный клик
+ * снимает отметку, ошибка d318a647).
+ */
 export function taskRowView(
   row: TaskDTO,
-  staleComments: ReadonlySet<string> = new Set(),
+  stale: TaskPanelStaleness = {},
+  done?: boolean,
 ): TaskPanelRow {
   return {
     key: taskRowKey(row),
     commentId: row.comment_id,
     lineNo: row.line_no,
     text: row.text,
-    done: row.done,
-    stale: taskRowIsStale(row, staleComments),
+    done: done ?? row.done,
+    stale: taskRowIsStale(row, stale),
     subtask: row.subtask,
     periodFrom: row.period_from,
     due: row.due,
@@ -313,12 +342,12 @@ export function orderTaskRowsUndatedFirst<T extends { due: string | null }>(
  */
 export function panelNeedsRefresh(input: {
   rows: readonly TaskDTO[];
-  staleComments?: ReadonlySet<string>;
+  stale?: TaskPanelStaleness;
   remindersChanged?: boolean;
   markerAdvanced?: boolean;
 }): boolean {
   if (input.remindersChanged === true || input.markerAdvanced === true) return true;
-  return input.rows.some((row) => taskRowIsStale(row, input.staleComments));
+  return input.rows.some((row) => taskRowIsStale(row, input.stale));
 }
 
 /**

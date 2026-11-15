@@ -10,6 +10,13 @@
  * (`screens/chronicle/tasks-panel.ts`), а правила группировки/секций/счётчиков
  * живут в чистой модели `task-panel-model.ts`.
  *
+ * **Сворачивание (ошибка d0801eea).** Панель, каждая группа и каждая секция —
+ * штатная сворачиваемая группа `lib/ui/collapsible` с кареткой; счётчик блока
+ * остаётся в шапке и в свёрнутом виде. Состояние — не память компоненты, а
+ * `ui_state` экрана: `collapsedOf(key)`/`setCollapsed(key, collapsed)`. Шапка
+ * панели приклеена к её верху (`sticky`, ошибка 58c470a3) и не прокручивается
+ * со списком.
+ *
  * **Списки инкрементальны.** Группы и строки обновляются keyed-сверкой
  * (`keyed-list.ts`): неизменные узлы не пересоздаются, поэтому hover, фокус и
  * открытая инлайн-правка переживают перечитывание панели (стандарт
@@ -18,22 +25,24 @@
  * обработчика стрелок у панели нет (сторож `guard-list-nav`).
  *
  * **Команды — только при hover.** У строки — команды строки (открыть источник,
- * перенести даты, отменить), у заголовка группы — подменю «⋮»; подвалов с
- * кнопками нет (спека f76ed829). Единственная постоянная кнопка — «Обновить»
- * вверху ПАНЕЛИ: она подсвечивается, когда данные устарели (требование
- * 0e85b66e), и полностью перерисовывает список из записей.
+ * перенести даты, сделать бессрочной, отменить), у заголовка группы — подменю
+ * «⋮»; подвалов с кнопками нет (спека f76ed829). Единственная постоянная
+ * кнопка — «Обновить» вверху ПАНЕЛИ: она подсвечивается, когда данные устарели
+ * (требование 0e85b66e), и полностью перерисовывает список из записей.
  *
- * **Строка задачи и правка.** Чекбокс — одиночный клик без режима правки;
- * двойной клик по тексту — инлайн-правка сырого markdown строки (Esc — отмена,
- * Enter — сохранение). Серая строка (внешнее изменение) не редактируется до
- * «Обновить». Клавиши правки (Enter/Escape) идут через общеклиентский диспетчер
- * контекстов `lib/keymap.ts`: пока поле в фокусе, его контекст на вершине стека
- * (ADR `b420b08c`, сторож `guard-keymap-single-point`).
+ * **Строка задачи и правка.** Чекбокс — одиночный клик без режима правки; это
+ * КОМАНДА, а не правка текста, поэтому он работает и на серой строке
+ * (повторный клик снимает отметку, ошибка d318a647). Двойной клик по тексту —
+ * инлайн-правка сырого markdown строки (Esc — отмена, Enter — сохранение).
+ * Серая строка (правка из панели или внешнее изменение) не редактируется
+ * до «Обновить». Клавиши правки (Enter/Escape) идут через общеклиентский
+ * диспетчер контекстов `lib/keymap.ts`: пока поле в фокусе, его контекст на
+ * вершине стека (ADR `b420b08c`, сторож `guard-keymap-single-point`).
  */
 
 import type { TaskMassFilter } from '@etn/shared';
 
-import { div, el, span } from '../dom.js';
+import { div, span } from '../dom.js';
 import { shiftInstant } from '../dates.js';
 import { t } from '../i18n.js';
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
@@ -48,7 +57,7 @@ import {
 import { badge } from './badge.js';
 import { iconButton, uiButton } from './button.js';
 import { choiceControl } from './choice-row.js';
-import { collapsibleSection } from './collapsible.js';
+import { collapsibleSection, type CollapsibleSection } from './collapsible.js';
 import { loadingState } from './empty-state.js';
 import { fieldInput } from './field.js';
 import { svgIcon } from './icon.js';
@@ -167,7 +176,23 @@ export interface TaskPanelView {
 }
 
 /** Команда строки задачи. */
-export type TaskRowCommand = 'open-source' | 'move' | 'cancel';
+export type TaskRowCommand = 'open-source' | 'move' | 'undate' | 'cancel';
+
+/**
+ * Ключи состояния свёрнутости блоков панели (`ui_state` экрана, ошибка
+ * d0801eea). Экран хранит их как есть — карта «ключ → свёрнут», поэтому
+ * добавление нового блока не требует правок персиста.
+ */
+export const TASK_PANEL_COLLAPSE_KEYS = {
+  /** Вся панель: свёрнутая показывает только шапку. */
+  panel: 'panel',
+  /** Группа «Задачи периода». */
+  tasksGroup: 'group:tasks',
+  /** Группа «Напоминания периода». */
+  remindersGroup: 'group:reminders',
+  /** Секция списка: `section:task:period`, `section:reminder:today`. */
+  section: (kind: 'task' | 'reminder', key: string): string => `section:${kind}:${key}`,
+} as const;
 
 /**
  * Сдвиг дат строки (ровно один вид). `date` — абсолютная дата `YYYY-MM-DD`:
@@ -193,7 +218,20 @@ export interface TaskPanelActions {
   undo(): void;
   /** Переключатель «показывать выполненные». */
   setShowDone(show: boolean): void;
-  /** Чекбокс строки: одиночный клик без режима правки. */
+  /**
+   * Свёрнут ли блок панели (`panel`, `group:tasks`, `section:task:period`) —
+   * состояние экрана из `ui_state` (ошибка d0801eea). `undefined` — записи нет:
+   * блок показывается в состоянии по умолчанию (развёрнут; у секции редактора
+   * мысли — её собственный `collapsed`). Различие важно при загрузке настроек:
+   * пустая карта не должна раскрывать секцию «Выполненные задачи».
+   */
+  collapsedOf?(key: string): boolean | undefined;
+  /** Запомнить свёрнутость блока панели. */
+  setCollapsed?(key: string, collapsed: boolean): void;
+  /**
+   * Чекбокс строки: одиночный клик без режима правки. Команда, а не правка
+   * текста, — доступна и на серой строке (ошибка d318a647).
+   */
   toggle(row: TaskPanelRow, done: boolean): void;
   /**
    * Сырая строка `body_md` для инлайн-правки (с маркером и чекбоксом).
@@ -205,10 +243,17 @@ export interface TaskPanelActions {
    * выходит из правки), `false` — отказ экрана (правка остаётся открытой).
    */
   editLine(row: TaskPanelRow, rawLine: string): Promise<boolean>;
-  /** Команда строки: открыть источник/перенести/отменить. */
+  /** Команда строки: открыть источник/перенести/сделать бессрочной/отменить. */
   rowCommand(row: TaskPanelRow, command: TaskRowCommand, shift?: TaskShift): void;
-  /** Массовая команда группы: отменить всё или перенести всё на сдвиг. */
-  bulk(filter: TaskMassFilter, command: 'cancel-all' | 'move-all', shift?: TaskShift): void;
+  /**
+   * Массовая команда группы: отменить всё, перенести всё на сдвиг или сделать
+   * бессрочными (все date-ссылки строк удаляются).
+   */
+  bulk(
+    filter: TaskMassFilter,
+    command: 'cancel-all' | 'move-all' | 'undate-all',
+    shift?: TaskShift,
+  ): void;
   /** Действие над вхождением напоминания. */
   reminderAction(row: ReminderPanelRow, action: ReminderRowAction, until?: string): void;
   /**
@@ -337,8 +382,6 @@ export function mountTaskPanel(
   /** Сырая строка `body_md` открытой правки (маркер и чекбокс на месте). */
   let editingRaw: string | null = null;
 
-  const root = div(TASK_PANEL_CLASS);
-  if (headless) root.classList.add('is-headless');
   const undoBtn = uiButton({
     label: t('tasks.undo'),
     role: 'ghost',
@@ -355,12 +398,6 @@ export function mountTaskPanel(
     onClick: () => actions.refresh(),
   });
   const tasksMenuBtn = makeMenuButton('tasks');
-  if (!headless) {
-    const head = div('ui-task-panel-head');
-    const title = el('h3', 'ui-task-panel-title', t('tasks.panelTitle'));
-    head.append(title, undoBtn, refreshBtn);
-    root.append(head);
-  }
 
   const body = div('ui-task-panel-body');
   const statusHost = div('ui-task-panel-status');
@@ -368,13 +405,42 @@ export function mountTaskPanel(
   // Панель редактора мысли (headless): группы-обёртки нет — секции лежат прямо
   // в теле, шапку и счётчики даёт группа `main.tasks` редактора.
   const flatHost = div('ui-task-flat-sections');
+  /**
+   * Корень панели. У «Дневника» это корень сворачиваемой группы: шапка с
+   * кареткой и «Обновить»/«Отменить» приклеена к верху, тело — список
+   * (ошибки d0801eea/58c470a3); свёрнутая панель показывает только шапку.
+   */
+  const panelSection = headless
+    ? null
+    : collapsibleSection({
+        title: t('tasks.panelTitle'),
+        getCollapsed: () => collapseState(TASK_PANEL_COLLAPSE_KEYS.panel),
+        onToggle: (collapsed) => {
+          actions.setCollapsed?.(TASK_PANEL_COLLAPSE_KEYS.panel, collapsed);
+          nav?.refresh();
+        },
+        classes: {
+          root: TASK_PANEL_CLASS,
+          header: 'ui-task-panel-head',
+          title: 'ui-task-panel-title',
+          caret: 'ui-task-panel-caret',
+          body: 'ui-task-panel-body',
+          actions: 'ui-task-panel-actions',
+        },
+        actions: [undoBtn, refreshBtn],
+        body,
+      });
+  const root = panelSection === null ? div(TASK_PANEL_CLASS) : panelSection.root;
+  if (headless) {
+    root.classList.add('is-headless');
+    root.append(body);
+  }
   const taskGroup = headless ? null : buildGroup('tasks', tasksMenuBtn);
   const reminderGroup = headless ? null : buildGroup('reminders', makeMenuButton('reminders'));
   body.append(statusHost);
   if (taskGroup !== null) body.append(taskGroup.root);
   else body.append(flatHost);
   if (reminderGroup !== null) body.append(reminderGroup.root);
-  root.append(body);
   host.append(root);
 
   /**
@@ -394,6 +460,34 @@ export function mountTaskPanel(
    * «Обновить» строки свёрнутой секции оставались старыми).
    */
   const flatRowsHosts = new WeakMap<HTMLElement, HTMLElement>();
+  /** Тело секции с подгруппами по узлу секции — по той же причине (свёрнутая). */
+  const sectionLists = new WeakMap<HTMLElement, HTMLElement>();
+  /**
+   * Дескрипторы сворачиваемых секций по их узлу: по ним применяется состояние
+   * `ui_state` при каждой отрисовке. Настройки читаются АСИНХРОННО, уже после
+   * монтирования панели, поэтому начальное состояние узла (аргумент `collapsed`)
+   * не может быть единственным источником — иначе сохранённая свёрнутость не
+   * восстанавливалась бы до перезапуска (ошибка d0801eea).
+   */
+  const sectionHandles = new WeakMap<HTMLElement, CollapsibleSection>();
+  /** Состояние секции при отсутствии записи в `ui_state` (у «Выполненных» — свёрнута). */
+  const sectionDefaults = new WeakMap<HTMLElement, boolean>();
+
+  /**
+   * Состояние блока панели: запись экрана (`ui_state`), иначе — состояние по
+   * умолчанию. Различие «нет записи» и «развёрнут» нужно секциям редактора
+   * мысли: у «Выполненных задач» умолчание — свёрнуто.
+   */
+  function collapseState(key: string, fallback = false): boolean {
+    return actions.collapsedOf?.(key) ?? fallback;
+  }
+
+  /** Сколько строк в секции (счётчик в шапке — и у свёрнутой секции). */
+  function sectionRowCount(section: TaskPanelSectionView | ReminderPanelSectionView): number {
+    const flat = section as TaskPanelSectionView;
+    if (flat.flat === true) return (flat.rows ?? []).length;
+    return section.subgroups.reduce((sum, subgroup) => sum + subgroup.rows.length, 0);
+  }
 
   /** «Перенести… на дату» для массовой команды: произвольная дата. */
   async function pickBulkDate(filter: TaskMassFilter): Promise<void> {
@@ -401,11 +495,14 @@ export function mountTaskPanel(
     if (date !== null) actions.bulk(filter, 'move-all', { date });
   }
 
-  /** «Перенести… на дату» строки: якорь — её срок (или начало периода). */
+  /**
+   * «Перенести… на дату» строки: у строки с датами диалог открывается на её
+   * сроке (начало периода), у бессрочной — на «сегодня»: команда ЗАДАЁТ срок
+   * (`set_due`, ошибка 3f9ea2ee).
+   */
   async function pickRowDate(row: TaskPanelRow): Promise<void> {
     const anchor = row.due ?? row.periodFrom;
-    if (anchor === null) return;
-    const date = await actions.pickDate(anchor);
+    const date = await actions.pickDate(anchor ?? '');
     if (date !== null) actions.rowCommand(row, 'move', { date });
   }
 
@@ -456,6 +553,8 @@ export function mountTaskPanel(
           ),
           menuAction(t('tasks.moveDate'), () => void pickBulkDate(periodFilter)),
         ]),
+        // «Сделать бессрочными» — массовая форма команды строки (3cef7466).
+        menuAction(t('tasks.undateAllPeriod'), () => actions.bulk(periodFilter, 'undate-all')),
         MENU_SEPARATOR,
         menuAction(t('tasks.cancelAllOverdue'), () =>
           actions.bulk({ scope: 'overdue' }, 'cancel-all'),
@@ -479,6 +578,7 @@ export function mountTaskPanel(
         ),
         menuAction(t('tasks.moveDate'), () => void pickBulkDate(filter)),
       ]),
+      menuAction(t('tasks.undateAllGroup'), () => actions.bulk(filter, 'undate-all')),
     ];
   }
 
@@ -513,12 +613,16 @@ export function mountTaskPanel(
           ...TASK_SHIFTS.map((item) =>
             menuAction(t(item.labelKey), () => actions.rowCommand(row, 'move', item.shift)),
           ),
-          menuAction(t('tasks.moveDate'), () => void pickRowDate(row), {
-            disabled: day === null,
-          }),
+          // Для бессрочной строки дата ЗАДАЁТ срок (ошибка 3f9ea2ee) — пункт
+          // доступен, диалог открывается на «сегодня».
+          menuAction(t('tasks.moveDate'), () => void pickRowDate(row)),
         ],
         { disabled: row.stale },
       ),
+      // «Сделать бессрочной» — только у строки с датами (ошибка 3cef7466).
+      menuAction(t('tasks.undateRow'), () => actions.rowCommand(row, 'undate'), {
+        disabled: row.stale || day === null,
+      }),
       menuAction(t('tasks.cancelRow'), () => actions.rowCommand(row, 'cancel'), {
         disabled: row.stale,
       }),
@@ -559,7 +663,8 @@ export function mountTaskPanel(
     node.classList.toggle('is-done', row.done);
     const check = choiceControl('checkbox', {
       checked: row.done,
-      disabled: row.stale,
+      // Чекбокс — КОМАНДА, а не правка текста: доступен и на серой строке,
+      // повторный клик снимает отметку (ошибка d318a647).
       onChange: (checked) => actions.toggle(row, checked),
     });
     check.classList.add('ui-task-row-check');
@@ -573,7 +678,7 @@ export function mountTaskPanel(
       editingRaw = null;
       releaseContext?.();
       releaseContext = null;
-      if (node.isConnected) fillTaskRow(node, row);
+      if (node.isConnected) fillTaskRow(node, currentTaskRow(row.key) ?? row);
     };
     if (editingKey === row.key && editingRaw !== null) {
       // Правится СЫРАЯ строка `body_md` (маркер и чекбокс на месте): снапшот
@@ -692,32 +797,57 @@ export function mountTaskPanel(
     node.replaceChildren(subject, moment, repeat, flags, actionsBox);
   }
 
-  /** Заголовок группы: название, счётчики, меню «⋮» (только при hover). */
+  /**
+   * Заголовок группы: название, счётчики, меню «⋮» (только при hover).
+   * Группа сворачиваемая: каретка в заголовке, счётчики видны и в свёрнутом
+   * виде (ошибка d0801eea).
+   */
   function buildGroup(
     kind: 'tasks' | 'reminders',
     menuBtn: HTMLElement,
   ): {
     root: HTMLElement;
-    head: HTMLElement;
-    title: HTMLElement;
     counters: HTMLElement;
     sections: HTMLElement;
+    section: CollapsibleSection;
   } {
-    const groupRoot = div(TASK_PANEL_GROUP_CLASS);
-    groupRoot.classList.add(kind === 'tasks' ? 'ui-task-group-tasks' : 'ui-task-group-reminders');
-    const groupHead = div('ui-task-group-head');
-    const groupTitle = span(
-      kind === 'tasks' ? t('tasks.groupTitle') : t('tasks.remindersGroupTitle'),
-      'ui-task-group-title',
-    );
     const counters = span('', 'ui-task-group-counters');
-    groupHead.append(groupTitle, counters, menuBtn);
     const sections = div('ui-task-group-sections');
-    groupRoot.append(groupHead, sections);
-    return { root: groupRoot, head: groupHead, title: groupTitle, counters, sections };
+    const key =
+      kind === 'tasks'
+        ? TASK_PANEL_COLLAPSE_KEYS.tasksGroup
+        : TASK_PANEL_COLLAPSE_KEYS.remindersGroup;
+    const group = collapsibleSection({
+      title: kind === 'tasks' ? t('tasks.groupTitle') : t('tasks.remindersGroupTitle'),
+      getCollapsed: () => collapseState(key),
+      onToggle: (collapsed) => {
+        actions.setCollapsed?.(key, collapsed);
+        nav?.refresh();
+      },
+      headerExtra: [counters],
+      actions: [menuBtn],
+      classes: {
+        root: `${TASK_PANEL_GROUP_CLASS} ${
+          kind === 'tasks' ? 'ui-task-group-tasks' : 'ui-task-group-reminders'
+        }`,
+        header: 'ui-task-group-head',
+        title: 'ui-task-group-title',
+        caret: 'ui-task-caret',
+        body: 'ui-task-group-sections',
+        actions: 'ui-task-group-actions',
+      },
+      body: sections,
+    });
+    return { root: group.root, counters, sections, section: group };
   }
 
-  /** Секция списка: заголовок + подгруппы (сразу с содержимым — см. сверку). */
+  /**
+   * Секция списка: сворачиваемый заголовок с кареткой и счётчиком строк +
+   * подгруппы (ошибка d0801eea). Тело секции живёт постоянно и прячется
+   * штатной сворачиваемой группой `lib/ui/collapsible`, поэтому свёрнутость
+   * переживает перерисовку панели, а счётчик обновляется событием
+   * `etn:set-count` (тело может быть снято с экрана).
+   */
   function buildSection(
     section: TaskPanelSectionView | ReminderPanelSectionView,
     kind: 'task' | 'reminder',
@@ -725,47 +855,77 @@ export function mountTaskPanel(
     if (kind === 'task' && (section as TaskPanelSectionView).flat === true) {
       return buildFlatSection(section as TaskPanelSectionView);
     }
-    const node = div(TASK_PANEL_SECTION_CLASS);
-    node.dataset['section'] = section.key;
-    const title = span(section.title, 'ui-task-section-title');
     const list = div('ui-task-subgroup-list');
-    node.append(title, list);
+    const key = TASK_PANEL_COLLAPSE_KEYS.section(kind, section.key);
+    const collapsible = collapsibleSection({
+      title: section.title,
+      count: `(${sectionRowCount(section)})`,
+      getCollapsed: () => collapseState(key),
+      onToggle: (collapsed) => {
+        actions.setCollapsed?.(key, collapsed);
+        nav?.refresh();
+      },
+      classes: {
+        root: TASK_PANEL_SECTION_CLASS,
+        header: 'ui-task-section-head',
+        title: 'ui-task-section-title',
+        count: 'ui-task-section-count',
+        caret: 'ui-task-caret',
+        body: 'ui-task-subgroup-list',
+      },
+      body: list,
+    });
+    const node = collapsible.root;
+    node.dataset['section'] = section.key;
+    sectionLists.set(node, list);
+    sectionHandles.set(node, collapsible);
+    sectionDefaults.set(node, false);
     renderSubgroups(list, section.subgroups, kind);
     return node;
   }
 
   /**
    * Плоская секция (панель редактора мысли): строки без подгрупп. Секция с
-   * `collapsible` — переключатель «Выполненные задачи (n)»: его тело живёт
-   * постоянно и прячется штатной сворачиваемой группой `lib/ui/collapsible`,
-   * поэтому свёрнутость переживает перерисовку панели.
+   * заголовком — сворачиваемая (счётчик в шапке, в том числе у свёрнутой);
+   * секция без заголовка (активные строки панели редактора) — просто строки.
    */
   function buildFlatSection(section: TaskPanelSectionView): HTMLElement {
-    const node = div(`${TASK_PANEL_SECTION_CLASS} ui-task-flat`);
-    node.dataset['section'] = section.key;
-    const rows = div('ui-task-flat-rows');
-    flatRowsHosts.set(node, rows);
-    if (section.collapsible === true) {
+    const rows = section.rows ?? [];
+    const rowsHost = div('ui-task-flat-rows');
+    /** Секция с заголовком сворачивается; без заголовка — плоский список. */
+    const withHeader = section.title !== '' && section.collapsible !== false;
+    const key = TASK_PANEL_COLLAPSE_KEYS.section('task', section.key);
+    let node: HTMLElement;
+    if (withHeader) {
+      const fallbackCollapsed = section.collapsed === true;
       const collapsible = collapsibleSection({
         title: section.title,
-        count: `(${section.rows?.length ?? 0})`,
-        collapsed: section.collapsed === true,
+        count: `(${rows.length})`,
+        getCollapsed: () => collapseState(key, fallbackCollapsed),
+        onToggle: (collapsed) => {
+          actions.setCollapsed?.(key, collapsed);
+          nav?.refresh();
+        },
         classes: {
-          root: 'ui-task-flat-collapsible',
+          root: `${TASK_PANEL_SECTION_CLASS} ui-task-flat ui-task-flat-collapsible`,
           header: 'ui-task-flat-head',
           title: 'ui-task-section-title',
           count: 'ui-task-section-count',
           caret: 'ui-task-flat-caret',
           body: 'ui-task-flat-rows',
         },
-        body: rows,
+        body: rowsHost,
       });
-      node.append(collapsible.root);
+      node = collapsible.root;
+      sectionHandles.set(node, collapsible);
+      sectionDefaults.set(node, fallbackCollapsed);
     } else {
-      if (section.title !== '') node.append(span(section.title, 'ui-task-section-title'));
-      node.append(rows);
+      node = div(`${TASK_PANEL_SECTION_CLASS} ui-task-flat`);
+      node.append(rowsHost);
     }
-    renderFlatRows(rows, section.rows ?? []);
+    node.dataset['section'] = section.key;
+    flatRowsHosts.set(node, rowsHost);
+    renderFlatRows(rowsHost, rows);
     return node;
   }
 
@@ -792,10 +952,7 @@ export function mountTaskPanel(
     const rowsHost =
       flatRowsHosts.get(node) ?? node.querySelector<HTMLElement>('.ui-task-flat-rows');
     if (rowsHost !== null) renderFlatRows(rowsHost, rows);
-    if (section.collapsible !== true) return;
-    const collapsible = node.querySelector('.ui-task-flat-collapsible');
-    if (collapsible === null) return;
-    collapsible.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${rows.length})` }));
+    node.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${rows.length})` }));
   }
 
   /** Подгруппа: заголовок с количеством и меню «⋮» + список строк. */
@@ -816,6 +973,21 @@ export function mountTaskPanel(
     return section.subgroups.flatMap((subgroup) => subgroup.rows);
   }
 
+  /**
+   * Текущий снапшот строки из ПОСЛЕДНЕЙ отрисовки. Замыкание строки хранит
+   * снапшот момента её построения: после инлайн-правки экран уже отрисовал
+   * новый текст (ошибка 45480290), и возврат строки из правки обязан взять
+   * свежий снапшот, иначе на экране остался бы прежний текст.
+   */
+  function currentTaskRow(key: string): TaskPanelRow | null {
+    if (view === null) return null;
+    for (const section of view.taskSections) {
+      const found = sectionRows(section).find((item) => item.key === key);
+      if (found !== undefined) return found;
+    }
+    return null;
+  }
+
   /** Секция попадает в отрисовку, только когда в ней есть строки. */
   function sectionVisible(section: TaskPanelSectionView | ReminderPanelSectionView): boolean {
     const flat = section as TaskPanelSectionView;
@@ -823,13 +995,30 @@ export function mountTaskPanel(
     return section.subgroups.length > 0;
   }
 
+  /**
+   * Секция скрыта свёрнутым блоком? Навигация списка ходит только по ВИДИМЫМ
+   * строкам: клавиши не должны «проваливаться» в строки свёрнутой панели,
+   * группы или секции (ошибка d0801eea).
+   */
+  function sectionCollapsed(kind: 'task' | 'reminder', key: string): boolean {
+    if (headless) return false;
+    if (collapseState(TASK_PANEL_COLLAPSE_KEYS.panel)) return true;
+    const group =
+      kind === 'task'
+        ? TASK_PANEL_COLLAPSE_KEYS.tasksGroup
+        : TASK_PANEL_COLLAPSE_KEYS.remindersGroup;
+    return collapseState(group) || collapseState(TASK_PANEL_COLLAPSE_KEYS.section(kind, key));
+  }
+
   function entries(): PanelEntry[] {
     if (view === null) return [];
     const list: PanelEntry[] = [];
     for (const section of view.taskSections) {
+      if (sectionCollapsed('task', section.key)) continue;
       for (const row of sectionRows(section)) list.push({ key: row.key, kind: 'task' });
     }
     for (const section of view.reminderSections) {
+      if (sectionCollapsed('reminder', section.key)) continue;
       for (const subgroup of section.subgroups) {
         for (const row of subgroup.rows) list.push({ key: row.key, kind: 'reminder' });
       }
@@ -886,6 +1075,13 @@ export function mountTaskPanel(
     root.dataset['stale'] = next.stale ? '1' : '0';
     undoBtn.hidden = !next.canUndo;
     refreshBtn.classList.toggle('is-stale', next.stale);
+    // Сохранённая свёрнутость применяется к уже построенным узлам: настройки
+    // экрана читаются асинхронно, после монтирования панели (ошибка d0801eea).
+    // Переключение пользователя успевает записать состояние ДО `apply()`, так
+    // что повторное применение не спорит с кликом.
+    panelSection?.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.panel));
+    taskGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.tasksGroup));
+    reminderGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.remindersGroup));
 
     if (next.loading) {
       statusHost.hidden = false;
@@ -942,14 +1138,29 @@ export function mountTaskPanel(
         // новых элементов (контракт `keyed-list.ts`).
         build: (section) => buildSection(section, kind),
         update: (node, section) => {
+          // Свёрнутость из `ui_state` применяется и к уже построенному узлу:
+          // настройки приходят после первой отрисовки (ошибка d0801eea).
+          sectionHandles
+            .get(node)
+            ?.setCollapsed(
+              collapseState(
+                TASK_PANEL_COLLAPSE_KEYS.section(kind, section.key),
+                sectionDefaults.get(node) ?? false,
+              ),
+            );
           if (kind === 'task' && (section as TaskPanelSectionView).flat === true) {
             updateFlatSection(node, section as TaskPanelSectionView);
             return;
           }
           const titleNode = node.querySelector('.ui-task-section-title');
           if (titleNode !== null) titleNode.textContent = section.title;
-          const list = node.querySelector('.ui-task-subgroup-list');
-          if (list !== null) renderSubgroups(list as HTMLElement, section.subgroups, kind);
+          // Тело свёрнутой секции снято с экрана — ссылку держит реестр.
+          const list =
+            sectionLists.get(node) ?? node.querySelector<HTMLElement>('.ui-task-subgroup-list');
+          if (list !== null) renderSubgroups(list, section.subgroups, kind);
+          node.dispatchEvent(
+            new CustomEvent('etn:set-count', { detail: `(${sectionRowCount(section)})` }),
+          );
         },
       },
     );

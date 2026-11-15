@@ -12,11 +12,16 @@
  *  • переводит строки в view-модель и раскладывает по секциям/группам;
  *  • исполняет действия (чекбокс, инлайн-правка, команды строки/группы,
  *    отложить/убрать/создать задачу);
- *  • держит «устарело» по событиям слоя: чужая правка источника красит строку
- *    серым и подсвечивает «Обновить», автоперечитывания нет (0e85b66e).
+ *  • держит «устарело»: правка ИЗ панели красит ТОЛЬКО свою строку (адрес
+ *    `comment_id`+`line_no`), внешнее событие слоя — всю запись (номера строки
+ *    в событии нет), эхо собственной правки не красит ничего; состав секций
+ *    пересобирает «Обновить» (0e85b66e, ошибки d318a647/45480290);
+ *  • после инлайн-правки перечитывает строки ОДНОЙ записи: новый текст виден
+ *    сразу, «Обновить» для этого не нужна (ошибка 45480290).
  *
- * Состояние переключателя «показывать выполненные» — L4 `ui_state`
- * (`UI_STATE_KEY.DIARY_TASKS_PANEL`), как прочие механики «Дневника».
+ * Состояние переключателя «показывать выполненные» и карта свёрнутых блоков
+ * панели — L4 `ui_state` (`UI_STATE_KEY.DIARY_TASKS_PANEL`), как прочие
+ * механики «Дневника» (сворачивание — ошибка d0801eea).
  *
  * События читаются через `onRoutedRealtimeEvent` (санкционированный канал
  * побочных эффектов реактивного слоя): ключа запроса здесь нет намеренно —
@@ -26,10 +31,13 @@
 
 import {
   UI_STATE_KEY,
+  type Comment,
   type Reminder,
   type ReminderListResult,
   type TaskDTO,
+  type TaskMassAction,
   type TaskMassFilter,
+  type TaskOpAction,
   type TaskScope,
 } from '@etn/shared';
 
@@ -74,9 +82,11 @@ import {
   taskGroupingMode,
   taskRowKey,
   taskRowView,
+  taskRowsForFilter,
   type PanelGroup,
   type ReminderPanelRow,
   type TaskPanelRow,
+  type TaskPanelStaleness,
 } from '../../lib/ui/task-panel-model.js';
 import { isValidLocalDay } from '../../lib/dates.js';
 import { formatDayLabel, localDayEnd, localDayStart, todayLocal } from './diary.js';
@@ -104,6 +114,11 @@ const TASKS_PAGE_LIMIT = 200;
 /** Локальная настройка панели в `ui_state`. */
 interface TasksPanelSettings {
   showDone: boolean;
+  /**
+   * Свёрнутость блоков панели: ключ → свёрнут (ошибка d0801eea). Карта, а не
+   * поля под каждый блок: новый блок не требует правки формата.
+   */
+  collapsed?: Record<string, boolean>;
 }
 
 /** Состояние одной загрузки: данные + признак устаревания. */
@@ -140,7 +155,27 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
   let loadError: string | null = null;
   let state = emptyState();
   let showDone = false;
+  /** Свёрнутые блоки панели: ключ → свёрнут (ошибка d0801eea). */
+  let collapsed: Record<string, boolean> = {};
+  /**
+   * Строки, изменённые ИЗ ПАНЕЛИ (`comment_id:line_no`): серая только эта
+   * строка, остальные строки записи остаются рабочими (ошибка d318a647).
+   */
+  let staleRows = new Set<string>();
+  /** Записи, изменённые ВНЕ панели: событие слоя не знает номера строки. */
   let staleComments = new Set<string>();
+  /**
+   * Показанное состояние чекбоксов строк, переключённых из панели: снапшот
+   * `state` до «Обновить» не перечитывается, а галочка обязана отвечать на
+   * повторный клик (ошибка d318a647).
+   */
+  const toggledDone = new Map<string, boolean>();
+  /**
+   * Последние известные ревизии комментариев-источников. Своя правка строки
+   * поднимает ревизию ВСЕЙ записи: остальные строки той же записи должны слать
+   * новое `expected_revision`, иначе сервер ответит 409 (ошибка d318a647).
+   */
+  const commentVersions = new Map<string, number>();
   let remindersChanged = false;
   /** Глобальный маркер `max_revision` ушёл вперёд после загрузки (0e85b66e). */
   let markerAdvanced = false;
@@ -149,7 +184,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
   let undoSnapshot: Array<{ id: string; body_md: string; version: number }> | null = null;
   /** Кэш названий субъектов (мысль/публикация) — группировка и строки. */
   const subjectTitles = new Map<string, string>();
-  /** Загружено ли «показывать выполненные» из `ui_state`. */
+  /** Загружены ли настройки панели из `ui_state`. */
   let settingsLoaded = false;
 
   const panel = mountTaskPanel(host, {
@@ -160,6 +195,11 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       showDone = next;
       persistSettings();
       renderView();
+    },
+    collapsedOf: (key) => collapsed[key],
+    setCollapsed: (key, value) => {
+      collapsed = { ...collapsed, [key]: value };
+      persistSettings();
     },
     toggle: (row, done) => void toggleTask(row, done),
     loadRawLine: (row) => loadRawLine(row),
@@ -174,7 +214,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     renderText: (node, row) => renderRowText(node, row),
   });
 
-  /** Прочитать настройку показа выполненных (L4 `ui_state`). */
+  /** Прочитать настройки панели (L4 `ui_state`). */
   async function loadSettings(): Promise<void> {
     try {
       const raw = await etn.ui.getState(requireNetworkId(), UI_STATE_KEY.DIARY_TASKS_PANEL);
@@ -182,23 +222,27 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       if (raw !== null && raw !== '') {
         const parsed = JSON.parse(raw) as Partial<TasksPanelSettings>;
         showDone = parsed.showDone === true;
+        const saved = parsed.collapsed;
+        if (saved !== undefined && saved !== null && typeof saved === 'object') {
+          collapsed = { ...saved };
+        }
       }
     } catch {
-      // Настройки нет или она повреждена — дефолт (выполненные скрыты).
+      // Настройки нет или она повреждена — дефолт (выполненные скрыты, блоки развёрнуты).
     } finally {
       settingsLoaded = true;
       renderView();
     }
   }
 
-  /** Сохранить настройку показа выполненных. */
+  /** Сохранить настройки панели. */
   function persistSettings(): void {
     if (!settingsLoaded) return;
     void etn.ui
       .setState(
         requireNetworkId(),
         UI_STATE_KEY.DIARY_TASKS_PANEL,
-        JSON.stringify({ showDone } satisfies TasksPanelSettings),
+        JSON.stringify({ showDone, collapsed } satisfies TasksPanelSettings),
       )
       .catch(() => undefined);
   }
@@ -283,7 +327,13 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
           donePage.max_revision,
         ),
       };
+      staleRows = new Set<string>();
       staleComments = new Set<string>();
+      toggledDone.clear();
+      commentVersions.clear();
+      for (const row of [...state.period, ...state.overdue, ...state.undated, ...state.done]) {
+        rememberVersion(row.comment_id, row.revision);
+      }
       remindersChanged = false;
       markerAdvanced = false;
       loadError = null;
@@ -385,14 +435,25 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     return filter;
   }
 
-  /** Секция задач: строки → группы порогов → подгруппы вида. */
+  /**
+   * Секция задач: строки → группы порогов → подгруппы вида. «Без срока» —
+   * ПЛОСКАЯ секция: все её строки без дат, и вложенная группа «Без даты»
+   * повторяла бы заголовок секции (ошибка f517d83a). Сворачивается такая
+   * секция как обычная, счётчик строк — в её шапке.
+   */
   function taskSection(
     key: string,
     title: string,
     rows: TaskDTO[],
     scope: TaskScope,
   ): TaskPanelSectionView {
-    const views = rows.map((row) => taskRowView(row, staleComments));
+    const views = rows.map((row) => {
+      const address = taskRowKey(row);
+      return taskRowView(row, staleness(), toggledDone.get(address));
+    });
+    if (scope === 'undated') {
+      return { key, title, flat: true, subgroups: [], rows: views };
+    }
     const mode = taskGroupingMode(views.length);
     const groups = groupPanelRows(views, mode, { firstDayOfWeek: firstDayOfWeek() });
     return {
@@ -460,6 +521,26 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
   }
 
+  /** Признаки устаревания для модели: строки — из панели, записи — снаружи. */
+  function staleness(): TaskPanelStaleness {
+    return { rows: staleRows, comments: staleComments };
+  }
+
+  /** Запомнить ревизию комментария-источника (адрес `expected_revision`). */
+  function rememberVersion(commentId: string, version: number): void {
+    commentVersions.set(commentId, Math.max(commentVersions.get(commentId) ?? 0, version));
+    if (version > state.maxRevision) state.maxRevision = version;
+  }
+
+  /**
+   * Применить новые ревизии источников после операции: их видят последующие
+   * операции и маркер устаревания панели. `revisions` может отсутствовать в
+   * ответе (старый сервер/подставной клиент) — тогда просто ничего не помним.
+   */
+  function applyRevisions(revisions: readonly Comment[] | undefined): void {
+    for (const revision of revisions ?? []) rememberVersion(revision.id, revision.version);
+  }
+
   /** Собрать снимок панели и отрисовать его. */
   function renderView(): void {
     if (disposed) return;
@@ -467,7 +548,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     const counters = taskCounters(taskRows);
     const stale = panelNeedsRefresh({
       rows: taskRows,
-      staleComments,
+      stale: staleness(),
       remindersChanged,
       markerAdvanced,
     });
@@ -531,8 +612,15 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     panel.render(view);
   }
 
-  /** Ревизия источника строки — для `expected_revision` операций. */
+  /**
+   * Ревизия источника строки — для `expected_revision` операций. Сначала
+   * известная ревизия комментария (`commentVersions`): правка ОДНОЙ строки
+   * поднимает ревизию всей записи, и снапшот соседней строки уже отстал
+   * (ошибка d318a647). Снапшот строки — запасной источник.
+   */
   function revisionOf(row: TaskPanelRow): number {
+    const known = commentVersions.get(row.commentId);
+    if (known !== undefined) return known;
     const all = [...state.period, ...state.overdue, ...state.undated, ...state.done];
     const ref = all.find(
       (item) => item.comment_id === row.commentId && item.line_no === row.lineNo,
@@ -541,11 +629,10 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
   }
 
   /**
-   * Абсолютная дата «перенести на…» → серверный сдвиг в днях. Сервер знает
-   * только `days`/`months` (de4cee18), поэтому дата переводится в разницу от
-   * якоря строки: срок (или начало периода) встаёт на выбранную дату, период
-   * строки сохраняется. `null` — дата совпала с якорем: двигать нечего, экран
-   * говорит об этом пользователю, а не закрывает диалог молча.
+   * Абсолютная дата «перенести на…» → серверный сдвиг в днях. Экран считает его
+   * только чтобы отличить «дата совпала с якорем» (статус «Перенос не
+   * требуется») от настоящего переноса: сам сдвиг считает сервер по операции
+   * `set_due`, у которой та же арифметика (`shiftTaskLineDates`).
    */
   function shiftToDate(anchor: string, target: string): TaskShift | null {
     const days = calendarDaysBetween(anchor, target);
@@ -587,9 +674,15 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     return t('tasks.errorGeneric');
   }
 
-  /** Чекбокс: одиночный клик переключает строку источника (без режима правки). */
+  /**
+   * Чекбокс: одиночный клик переключает строку источника (без режима правки).
+   * Это КОМАНДА, а не правка текста, поэтому серая строка тоже переключается
+   * (повторный клик снимает отметку), а серой становится ТОЛЬКО эта строка —
+   * остальные строки записи остаются рабочими (ошибка d318a647).
+   */
   async function toggleTask(row: TaskPanelRow, done: boolean): Promise<void> {
     const networkId = requireNetworkId();
+    const address = row.key;
     try {
       const result = await etn.tasks.patch(networkId, {
         ops: [
@@ -607,12 +700,14 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
         notice(taskErrorText(first.error), 'error');
         return;
       }
+      applyRevisions(result.revisions);
       // Локальная правка НЕ перечитывает список: строка серая, «Обновить»
       // подсвечена — состав секций пересоберёт только явное нажатие (0e85b66e).
-      staleComments.add(row.commentId);
+      staleRows.add(address);
+      toggledDone.set(address, done);
       renderView();
     } catch (err) {
-      staleComments.add(row.commentId);
+      staleRows.add(address);
       renderView();
       notice(t('tasks.errorToggle', [errText(err)]), 'error');
     }
@@ -650,8 +745,16 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
         return false;
       }
       if (next === comment.body_md) return true;
-      await etn.comments.update(networkId, row.commentId, { body_md: next }, comment.version);
-      staleComments.add(row.commentId);
+      const updated = await etn.comments.update(
+        networkId,
+        row.commentId,
+        { body_md: next },
+        comment.version,
+      );
+      // Сохранённая строка перечитывается ТОЧЕЧНО: панель показывает новый
+      // текст сразу и не сереет, остальные строки записи не трогаются
+      // (ошибка 45480290).
+      await refreshCommentRows(row.commentId, updated.version);
       renderView();
       return true;
     } catch (err) {
@@ -660,7 +763,80 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
   }
 
-  /** Команда строки: открыть источник / перенести даты / отменить задачу. */
+  /**
+   * Перечитать строки ОДНОГО комментария-источника (ошибка 45480290): после
+   * инлайн-правки снапшот правленой строки обязан обновиться без «Обновить».
+   * Строки записи раскладываются по тем же секциям, что и при загрузке: правка
+   * могла сменить срок (строка переезжает в «Без срока»/из него) или отметку
+   * (задача уходит в выполненные). Неполная страница (запись длиннее предела)
+   * раскладывается по прежним местам — пересборка секций ждёт «Обновить».
+   */
+  async function refreshCommentRows(commentId: string, version: number): Promise<void> {
+    const networkId = requireNetworkId();
+    rememberVersion(commentId, version);
+    const page = await etn.tasks.list(networkId, {
+      comment_id: commentId,
+      today: todayLocal(),
+      limit: TASKS_PAGE_LIMIT,
+    });
+    const sections: Array<{
+      key: 'period' | 'overdue' | 'undated' | 'done';
+      filter: TaskMassFilter;
+    }> = bucketFilters();
+    if (page.cursor !== null) {
+      // Неполная выборка: заменяем только прочитанные строки, место строки в
+      // секции сохраняем (пересборка по неполным данным потеряла бы строки).
+      const fresh = new Map(page.items.map((item) => [taskRowKey(item), item]));
+      const next = {
+        ...state,
+        period: state.period.map((item) => fresh.get(taskRowKey(item)) ?? item),
+        overdue: state.overdue.map((item) => fresh.get(taskRowKey(item)) ?? item),
+        undated: state.undated.map((item) => fresh.get(taskRowKey(item)) ?? item),
+        done: state.done.map((item) => fresh.get(taskRowKey(item)) ?? item),
+      };
+      state = next;
+      return;
+    }
+    // Полная выборка записи: строки записи уходят из всех секций и встают в те,
+    // которым отвечают сейчас.
+    const next: TasksPanelState = {
+      ...state,
+      period: state.period.filter((item) => item.comment_id !== commentId),
+      overdue: state.overdue.filter((item) => item.comment_id !== commentId),
+      undated: state.undated.filter((item) => item.comment_id !== commentId),
+      done: state.done.filter((item) => item.comment_id !== commentId),
+    };
+    for (const item of page.items) {
+      for (const bucket of sections) {
+        if (taskRowsForFilter([item], bucket.filter).length > 0) next[bucket.key].push(item);
+      }
+    }
+    state = next;
+  }
+
+  /** Фильтры секций панели — те же, что у загрузки (раскладка строки по секциям). */
+  function bucketFilters(): Array<{
+    key: 'period' | 'overdue' | 'undated' | 'done';
+    filter: TaskMassFilter;
+  }> {
+    const period = effectivePeriod();
+    const today = todayLocal();
+    return [
+      {
+        key: 'period',
+        filter: { scope: 'open', from: period.from, to: period.to, today },
+      },
+      { key: 'overdue', filter: { scope: 'overdue', today } },
+      { key: 'undated', filter: { scope: 'undated', today } },
+      { key: 'done', filter: { scope: 'done', from: period.from, to: period.to, today } },
+    ];
+  }
+
+  /**
+   * Команда строки: открыть источник / перенести даты / сделать бессрочной /
+   * отменить задачу. «Перенести на дату» — операция `set_due`: срок задаёт
+   * сервер, поэтому она работает и у строки без дат (ошибка 3f9ea2ee).
+   */
   async function runRowCommand(
     row: TaskPanelRow,
     command: TaskRowCommand,
@@ -672,21 +848,29 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       return;
     }
     const networkId = requireNetworkId();
-    let effectiveShift = shift;
-    if (command === 'move' && shift?.date !== undefined) {
-      const anchor = row.due ?? row.periodFrom;
-      if (anchor === null) {
-        notice(taskErrorText('undated'), 'error');
-        return;
+    let action: TaskOpAction = 'cancel';
+    let payload: { days?: number; months?: number; date?: string } = {};
+    if (command === 'move') {
+      if (shift?.date !== undefined) {
+        const anchor = row.due ?? row.periodFrom;
+        if (anchor !== null && shiftToDate(anchor, shift.date) === null) {
+          // Дата совпала с якорем строки — молчаливое закрытие выглядело бы как
+          // «ничего не произошло» (замечание репроверки 64f7976a).
+          notice(t('tasks.moveNotNeeded'), 'info');
+          return;
+        }
+        // У строки с датами сервер сдвигает все ссылки так, чтобы последняя
+        // встала на выбранную дату (период сохраняется); у бессрочной —
+        // дописывает ссылку в конец строки (ошибка 3f9ea2ee).
+        action = 'set_due';
+        payload = { date: shift.date };
+      } else {
+        action = 'move';
+        payload = shift ?? {};
       }
-      const resolved = shiftToDate(anchor, shift.date);
-      if (resolved === null) {
-        // Дата совпала с якорем строки — молчаливое закрытие выглядело бы как
-        // «ничего не произошло» (замечание репроверки 64f7976a).
-        notice(t('tasks.moveNotNeeded'), 'info');
-        return;
-      }
-      effectiveShift = resolved;
+    } else if (command === 'undate') {
+      // «Сделать бессрочной»: все date-ссылки строки удаляются (ошибка 3cef7466).
+      action = 'undate';
     }
     try {
       const result = await etn.tasks.patch(networkId, {
@@ -694,8 +878,8 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
           {
             comment_id: row.commentId,
             line_no: row.lineNo,
-            action: command === 'move' ? 'move' : 'cancel',
-            ...(effectiveShift !== undefined ? effectiveShift : {}),
+            action,
+            ...payload,
             expected_revision: revisionOf(row),
           },
         ],
@@ -705,17 +889,27 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
         notice(taskErrorText(first.error), 'error');
         return;
       }
-      staleComments.add(row.commentId);
+      applyRevisions(result.revisions);
+      staleRows.add(row.key);
       renderView();
     } catch (err) {
       notice(t('tasks.errorRowCommand', [errText(err)]), 'error');
     }
   }
 
+  /** Ключ вопроса подтверждения массовой команды (по её виду). */
+  function bulkQuestionKey(
+    command: TaskMassAction,
+  ): 'tasks.bulkCancelQuestion' | 'tasks.bulkMoveQuestion' | 'tasks.bulkUndateQuestion' {
+    if (command === 'cancel-all') return 'tasks.bulkCancelQuestion';
+    if (command === 'move-all') return 'tasks.bulkMoveQuestion';
+    return 'tasks.bulkUndateQuestion';
+  }
+
   /** Массовая команда группы: подтверждение со сводкой → команда → undo. */
   async function runBulk(
     filter: TaskMassFilter,
-    command: 'cancel-all' | 'move-all',
+    command: TaskMassAction,
     shift?: TaskShift,
   ): Promise<void> {
     const networkId = requireNetworkId();
@@ -741,9 +935,9 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
     const confirmed = await confirmDialog(
       t('tasks.bulkTitle'),
-      t(command === 'cancel-all' ? 'tasks.bulkCancelQuestion' : 'tasks.bulkMoveQuestion', [
-        plan.rows.length,
-      ]),
+      t(bulkQuestionKey(command), [plan.rows.length]),
+      // Опасной (красной) кнопка подтверждения делается только для снятия
+      // задач: снятие дат обратимо командой «Отменить» в панели.
       command === 'cancel-all',
     );
     if (!confirmed) return;
@@ -937,15 +1131,18 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
     if (event.type === 'comment.updated') {
       const data = event.data as { id?: string; version?: unknown };
+      const version = typeof data.version === 'number' ? data.version : null;
+      // Эхо СОБСТВЕННОЙ правки: ревизия совпадает с той, что мы только что
+      // записали. Строка уже помечена серой точечно (`staleRows`), а запись
+      // серой целиком красить нельзя — соседние строки остаются рабочими
+      // (ошибка d318a647).
+      if (data.id !== undefined && version !== null && commentVersions.get(data.id) === version) {
+        return;
+      }
       // Глобальный маркер проекции: `max_revision` из GET /tasks сравнивается
       // с ревизией события (уточнение e6d65f51 0.16.1). Ушёл вперёд — в сети
       // изменилась запись, панель показывает «Обновить» ещё до загрузки строк.
-      if (
-        panelMarkerAdvanced(
-          typeof data.version === 'number' ? data.version : null,
-          state.maxRevision,
-        )
-      ) {
+      if (panelMarkerAdvanced(version, state.maxRevision)) {
         markerAdvanced = true;
       }
       if (data.id !== undefined && loadedCommentIds().has(data.id)) {

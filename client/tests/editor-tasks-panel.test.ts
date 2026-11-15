@@ -24,6 +24,7 @@ import { beforeEach, describe, it } from 'node:test';
 
 import type { TaskDTO } from '@etn/shared';
 
+import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
 
 /** Минимальный `CustomEvent`: шим не несёт глобального конструктора. */
@@ -69,8 +70,18 @@ interface Harness {
   tasks: TaskDTO[];
   /** Кнопки шапки зоны из `GroupSpec.actions`. */
   headActions: HTMLElement[];
+  /** Входы `PATCH /tasks` (команды строк и массовые). */
+  patches: Array<Record<string, unknown>>;
+  /** Запросы `GET /tasks` (в том числе точечные по `comment_id`). */
+  queries: Array<Record<string, unknown>>;
   settle(): Promise<void>;
   destroy(): void;
+}
+
+/** Дополнительные данные сети: строки записи для точечного перечитывания. */
+interface SetupExtra {
+  /** `GET /tasks?comment_id=` — снапшот записи после правки (ошибка 45480290). */
+  commentRows?: Record<string, TaskDTO[]>;
 }
 
 /** Установить DOM-глобалы до импорта модулей рендерера. */
@@ -111,9 +122,14 @@ function shimDom(): void {
  * Модули грузятся ДИНАМИЧЕСКИ: `lib/etn.ts` читает `window` при каждом доступе,
  * шим обязан стоять до первого монтирования.
  */
-async function setup(initial: TaskDTO[]): Promise<Harness> {
+async function setup(initial: TaskDTO[], extra: SetupExtra = {}): Promise<Harness> {
   shimDom();
   const tasks = [...initial];
+  const patches: Array<Record<string, unknown>> = [];
+  const queries: Array<Record<string, unknown>> = [];
+  /** Версии комментариев и их тексты (подставной PATCH и правка `body_md`). */
+  const versions = new Map<string, number>();
+  const bodies = new Map<string, string>();
 
   const api = {
     ui: {
@@ -121,8 +137,32 @@ async function setup(initial: TaskDTO[]): Promise<Harness> {
       setState: async (): Promise<void> => undefined,
     },
     tasks: {
-      list: async () => ({ items: [...tasks], cursor: null, max_revision: 1 }),
-      patch: async () => ({ results: [], revision: 2 }),
+      list: async (_networkId: string, query: Record<string, unknown> = {}) => {
+        queries.push(query);
+        const commentId = query['comment_id'];
+        if (typeof commentId === 'string') {
+          return { items: extra.commentRows?.[commentId] ?? [], cursor: null, max_revision: 2 };
+        }
+        return { items: [...tasks], cursor: null, max_revision: 1 };
+      },
+      patch: async (_networkId: string, input: Record<string, unknown>) => {
+        patches.push(input);
+        const ops = (input['ops'] ?? []) as Array<Record<string, unknown>>;
+        const revisions = ops.map((op) => {
+          const id = String(op['comment_id']);
+          const version = (versions.get(id) ?? 1) + 1;
+          versions.set(id, version);
+          return { id, version };
+        });
+        return {
+          results: ops.map((op) => ({
+            comment_id: op['comment_id'],
+            line_no: op['line_no'],
+            ok: true,
+          })),
+          revisions,
+        };
+      },
     },
     reminders: { list: async () => ({ reminders: [], from: null, to: null }) },
     thoughts: { get: async (_networkId: string, id: string) => ({ id, title: `Мысль ${id}` }) },
@@ -131,8 +171,21 @@ async function setup(initial: TaskDTO[]): Promise<Harness> {
     },
     publications: { get: async (_networkId: string, id: string) => ({ id, title: id }) },
     comments: {
-      get: async () => ({ id: 'c1', body_md: '- [ ] задача', version: 1 }),
-      update: async () => undefined,
+      get: async (_networkId: string, id: string) => ({
+        id,
+        body_md: bodies.get(id) ?? '- [ ] задача',
+        version: versions.get(id) ?? 1,
+      }),
+      update: async (
+        _networkId: string,
+        id: string,
+        input: { body_md?: string },
+      ): Promise<Record<string, unknown>> => {
+        const version = (versions.get(id) ?? 1) + 1;
+        versions.set(id, version);
+        if (input.body_md !== undefined) bodies.set(id, input.body_md);
+        return { id, body_md: bodies.get(id), version };
+      },
       list: async () => [],
     },
     history: { rotate: async () => undefined },
@@ -172,6 +225,8 @@ async function setup(initial: TaskDTO[]): Promise<Harness> {
     group,
     tasks,
     headActions: spec.actions ?? [],
+    patches,
+    queries,
     settle,
     destroy(): void {
       // Тело панели снимает подписки по dispose; у группы своего teardown нет.
@@ -253,6 +308,167 @@ describe('зона «Задачи» редактора: адрес «Откры�
         commentId: 'c-chrono',
         thoughtId: 't1',
       });
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('зона «Задачи» редактора: точечная правка и даты строк (d318a647/45480290/3f9ea2ee/3cef7466)', () => {
+  beforeEach(() => shimDom());
+
+  /** Узел строки по адресу проекции. */
+  function rowOf(host: ShimElement, key: string): ShimElement {
+    const row = rowsOf(host).find((node) => node.getAttribute('data-row-key') === key);
+    assert.ok(row, `строка ${key} в зоне «Задачи»`);
+    return row as ShimElement;
+  }
+
+  /** Открыть меню «⋮» строки. */
+  function openRowMenu(row: ShimElement): void {
+    const button = row.querySelector('.ui-task-row-menu') as unknown as ShimElement;
+    button.emit('click', {
+      target: button,
+      currentTarget: button,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+  }
+
+  it('чекбокс красит только свою строку, повторный клик идёт с новой ревизией', async () => {
+    const h = await setup([
+      taskRow({ line_no: 0, text: 'первая' }),
+      taskRow({ line_no: 1, text: 'вторая' }),
+    ]);
+    try {
+      const click = (checked: boolean): void => {
+        const check = rowOf(h.group, 'c1:0').querySelector(
+          '.ui-task-row-check',
+        ) as unknown as ShimElement;
+        check.checked = checked;
+        check.emit('change');
+      };
+      click(true);
+      await h.settle();
+      assert.equal(rowOf(h.group, 'c1:0').classList.contains('is-stale'), true);
+      assert.equal(
+        rowOf(h.group, 'c1:1').classList.contains('is-stale'),
+        false,
+        'соседняя строка той же записи остаётся свежей',
+      );
+      click(false);
+      await h.settle();
+      const ops = h.patches.map((input) => (input['ops'] as Array<Record<string, unknown>>)[0]!);
+      assert.deepEqual(
+        ops.map((op) => op['done']),
+        [true, false],
+      );
+      assert.deepEqual(
+        ops.map((op) => op['expected_revision']),
+        [1, 2],
+        'вторая команда идёт с ревизией, поднятой первой',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('«Сделать бессрочной» уходит операцией undate', async () => {
+    const h = await setup([taskRow()]);
+    try {
+      openRowMenu(rowOf(h.group, 'c1:0'));
+      const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+      const item = body
+        .querySelectorAll('.menu-item')
+        .find((node) => node.flatText().includes(t('tasks.undateRow')));
+      assert.ok(item, 'пункт «Сделать бессрочной» в меню строки');
+      item!.click();
+      await h.settle();
+      const op = (h.patches[0]!['ops'] as Array<Record<string, unknown>>)[0]!;
+      assert.equal(op['action'], 'undate');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('«Перенести на дату» бессрочной строки задаёт срок операцией set_due', async () => {
+    const h = await setup([
+      taskRow({ line_no: 0, text: 'без срока', due: null, period_from: null, period_to: null }),
+    ]);
+    try {
+      openRowMenu(rowOf(h.group, 'c1:0'));
+      const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+      const move = body
+        .querySelectorAll('.menu-item')
+        .find((node) => node.flatText().includes(t('tasks.moveRow')));
+      assert.ok(move, 'пункт «Перенести на…» в меню строки');
+      move!.emit('mouseenter');
+      const dateItem = body
+        .querySelectorAll('.menu-item')
+        .find((node) => node.flatText().includes(t('tasks.moveDate')));
+      assert.ok(dateItem, 'пункт «на дату» в подменю');
+      dateItem!.click();
+      await h.settle();
+      // Диалог даты: день выбирается и подтверждается кликом (как в «Дневнике»).
+      const day = (globalThis as unknown as { document: { body: ShimElement } }).document.body
+        .querySelectorAll('.cal-day')
+        .find((node) => String(node.getAttribute('title') ?? node.title) === '2026-11-20');
+      assert.ok(day, 'день 2026-11-20 есть в диалоге даты');
+      day!.emit('click', { detail: 1 });
+      day!.emit('click', { detail: 2 });
+      await h.settle();
+      const op = (h.patches[0]!['ops'] as Array<Record<string, unknown>>)[0]!;
+      assert.equal(op['action'], 'set_due');
+      assert.equal(op['date'], '2026-11-20');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('инлайн-правка перечитывает строку зоны: новый текст без серости', async () => {
+    keymap.keymapInternals.reset();
+    const h = await setup([taskRow({ text: 'старая' })], {
+      commentRows: {
+        c1: [
+          taskRow({
+            text: 'новая',
+            revision: 2,
+            parsed_revision: 2,
+            subject_thoughts: ['t1'],
+          }),
+        ],
+      },
+    });
+    try {
+      const row = rowOf(h.group, 'c1:0');
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
+      assert.ok(field, 'поле правки открылось');
+      field.value = '- [ ] новая';
+      field.focus();
+      keymap.dispatchKeyEvent({
+        key: 'Enter',
+        target: field,
+        preventDefault: (): void => undefined,
+      } as unknown as KeyboardEvent);
+      await h.settle();
+      assert.ok(
+        h.queries.some((query) => query['comment_id'] === 'c1'),
+        'строка перечитана точечно по адресу записи',
+      );
+      assert.equal(
+        rowOf(h.group, 'c1:0').classList.contains('is-stale'),
+        false,
+        'снапшот строки свежий',
+      );
+      assert.ok(
+        String(
+          (rowOf(h.group, 'c1:0').querySelector('.ui-task-row-text') as unknown as ShimElement)
+            .innerHTML,
+        ).includes('новая'),
+        'зона показывает новый текст строки',
+      );
     } finally {
       h.destroy();
     }

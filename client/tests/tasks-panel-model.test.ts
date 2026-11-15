@@ -200,20 +200,45 @@ describe('счётчики и «серая строка» (0e85b66e)', () => {
     assert.deepEqual(taskCounters([]), { open: 0, done: 0 });
   });
 
-  it('строка устарела при рассинхроне ревизий или событии правки источника', () => {
+  it('строка устарела при рассинхроне ревизий или изменении записи снаружи', () => {
     const fresh = task({ comment_id: 'a', revision: 4, parsed_revision: 4 });
     assert.equal(taskRowIsStale(fresh), false);
     const behind = task({ comment_id: 'b', revision: 5, parsed_revision: 4 });
-    assert.equal(taskRowIsStale(behind), true);
-    assert.equal(taskRowIsStale(fresh, new Set(['a'])), true, 'событие правки красит строку');
-    assert.equal(taskRowIsStale(fresh, new Set(['другой'])), false);
+    assert.equal(taskRowIsStale(behind), true, 'проекция отстала от ревизии записи');
+    assert.equal(
+      taskRowIsStale(fresh, { comments: new Set(['a']) }),
+      true,
+      'внешнее изменение записи красит строку',
+    );
+    assert.equal(taskRowIsStale(fresh, { comments: new Set(['другой']) }), false);
+    // Ошибка d318a647: правка ИЗ ПАНЕЛИ адресует строку, а не запись, поэтому
+    // соседняя строка той же записи остаётся свежей и рабочей.
+    const neighbour = task({ comment_id: 'a', line_no: 1, revision: 4, parsed_revision: 4 });
+    assert.equal(taskRowIsStale(fresh, { rows: new Set(['a:0']) }), true);
+    assert.equal(taskRowIsStale(neighbour, { rows: new Set(['a:0']) }), false);
+  });
+
+  it('чекбокс переключённой из панели строки показывает новое состояние (d318a647)', () => {
+    const row = task({ comment_id: 'a', done: false });
+    assert.equal(
+      taskRowView(row, {}, true).done,
+      true,
+      'повторный клик снимает отметку — галочка следует за командой',
+    );
+    assert.equal(taskRowView(row, {}, false).done, false);
+    assert.equal(taskRowView(row).done, false, 'без переопределения — снапшот `done`');
   });
 
   it('«Обновить» нужен при событиях напоминаний или устаревшей строке', () => {
     const rows = [task({ comment_id: 'a', revision: 2, parsed_revision: 2 })];
     assert.equal(panelNeedsRefresh({ rows }), false);
     assert.equal(panelNeedsRefresh({ rows, remindersChanged: true }), true);
-    assert.equal(panelNeedsRefresh({ rows, staleComments: new Set(['a']) }), true);
+    assert.equal(panelNeedsRefresh({ rows, stale: { comments: new Set(['a']) } }), true);
+    assert.equal(
+      panelNeedsRefresh({ rows, stale: { rows: new Set(['a:0']) } }),
+      true,
+      'серая строка подсвечивает «Обновить»',
+    );
     assert.equal(
       panelNeedsRefresh({ rows: [task({ comment_id: 'a', revision: 3, parsed_revision: 2 })] }),
       true,

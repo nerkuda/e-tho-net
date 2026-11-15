@@ -1353,12 +1353,16 @@ export const en = {
   /** Bulk commands for the whole period. */
   'tasks.cancelAllPeriod': 'Cancel all open in the period',
   'tasks.moveAllPeriod': 'Move all open in the period to…',
+  'tasks.undateAllPeriod': 'Make all in the period undated',
   /** Bulk commands for cross-period sections. */
   'tasks.cancelAllOverdue': 'Cancel all overdue',
   'tasks.cancelAllUndated': 'Cancel all without a due date',
   /** Bulk commands for one group. */
   'tasks.cancelAllGroup': 'Cancel all open in this group',
   'tasks.moveAllGroup': 'Move all open in this group to…',
+  'tasks.undateAllGroup': 'Make open in this group undated',
+  /** Bulk command of the thought editor panel. */
+  'tasks.undateAllThought': 'Make all open of this thought undated',
   /** Date shift options. */
   'tasks.shiftDay': 'the next day',
   'tasks.shiftWeek': 'in a week',
@@ -1367,6 +1371,7 @@ export const en = {
   /** Task row commands. */
   'tasks.openSource': 'Open source',
   'tasks.moveRow': 'Move to…',
+  'tasks.undateRow': 'Make undated',
   'tasks.cancelRow': 'Cancel task',
   /** Reminder occurrence commands. */
   'tasks.openSubject': 'Open subject',
@@ -1461,6 +1466,7 @@ export const en = {
   'tasks.bulkTitle': 'Bulk command',
   'tasks.bulkCancelQuestion': 'Cancel tasks in lines: %1? The lines become plain text.',
   'tasks.bulkMoveQuestion': 'Move the dates of lines: %1?',
+  'tasks.bulkUndateQuestion': 'Remove all dates from lines: %1? The tasks become undated.',
   'tasks.bulkEmpty': 'The group has no open tasks.',
   'tasks.bulkPartial': 'Some lines were not changed: %1.',
   'tasks.bulkFailed': 'Bulk command failed: %1',
