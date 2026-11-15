@@ -442,14 +442,22 @@ function Invoke-IssStaticChecks {
             return $null
         }
     }
+    # В Note — фактическое значение ETN_DEPLOYMENT, пустое (файла/узла нет) —
+    # «(нет)». Функции IfStrEmpty в скрипте нет: её вызов был statement-terminating
+    # ошибкой PowerShell, Note обрезался до префикса, а прогон завершался кодом 0
+    # (ошибка f449dcc8). Подстановка прямая, как у соседних проверок.
     $templateDeployment = Get-ServiceDeploymentEnv -Path (Join-Path $installerDir 'service\etn-service.xml')
+    $templateDeploymentText = [string]$templateDeployment
+    if (-not $templateDeploymentText) { $templateDeploymentText = '(нет)' }
     Add-StaticResult -Name 'static:service-deployment-env' `
         -Ok ($templateDeployment -eq 'windows-service') `
-        -Note ('шаблон службы: ETN_DEPLOYMENT=' + (IfStrEmpty ([string]$templateDeployment)))
+        -Note ('шаблон службы: ETN_DEPLOYMENT=' + $templateDeploymentText)
     $fixtureDeployment = Get-ServiceDeploymentEnv -Path (Join-Path $PSScriptRoot 'fixtures\payload\service\etn-service.xml')
+    $fixtureDeploymentText = [string]$fixtureDeployment
+    if (-not $fixtureDeploymentText) { $fixtureDeploymentText = '(нет)' }
     Add-StaticResult -Name 'static:service-fixture-deployment' `
         -Ok ($fixtureDeployment -eq 'windows-service') `
-        -Note ('фикстура: ETN_DEPLOYMENT=' + (IfStrEmpty ([string]$fixtureDeployment)))
+        -Note ('фикстура: ETN_DEPLOYMENT=' + $fixtureDeploymentText)
     # Поля выбора каталога данных быть не должно (ADR 144bcdb0): проверка на
     # отсутствие страницы, а не на наличие.
     Add-StaticResult -Name 'static:no-datadir-choice' `
