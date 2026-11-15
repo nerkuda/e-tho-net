@@ -1442,6 +1442,16 @@ export const ru = {
   'reminder.dayOfMonthEvery': '%1-е число каждые %2 мес.',
   /** Ежегодно (подстановка — «8 марта»). */
   'reminder.yearly': 'ежегодно %1',
+  /** Ежегодно каждые N лет (подстановки — дата, N). */
+  'reminder.yearlyEvery': 'ежегодно %1 каждые %2 г.',
+  /** Дни недели каждые N недель (подстановки — N, перечисление дней). */
+  'reminder.weekdaysEvery': 'каждые %1 нед.: по %2',
+  /** N-й день недели месяца каждые N месяцев (подстановки — день, вхождение, N). */
+  'reminder.weekdayOfMonthEvery': '%1 — %2-е вхождение каждые %3 мес.',
+  /** Последний день недели месяца каждые N месяцев (подстановки — день, N). */
+  'reminder.weekdayOfMonthLastEvery': '%1 — последнее вхождение каждые %2 мес.',
+  /** Приписка к подписи серии, пропускающей выходные. */
+  'reminder.skipWeekendsSuffix': ' (кроме выходных)',
   /** Последний день каждого месяца. */
   'reminder.lastDayOfMonth': 'последний день месяца',
   /** Последний день месяца каждые N месяцев (подстановка — N). */
@@ -1452,29 +1462,33 @@ export const ru = {
   'reminder.createTitle': 'Новое напоминание',
   /** Заголовок диалога правки расписания. */
   'reminder.editTitle': 'Расписание напоминания',
-  /** Группа «Вид» в редакторе. */
-  'reminder.kind': 'Вид',
-  'reminder.kindOne': 'Один раз',
-  'reminder.kindPeriod': 'Период',
-  'reminder.kindRule': 'Повтор',
-  /** Группа «Повтор» в редакторе. */
-  'reminder.repeat': 'Повтор',
-  'reminder.typeWeekdays': 'По дням недели',
-  'reminder.typeEveryDays': 'Каждый N-й день',
-  'reminder.typeWeekdayOfMonth': 'N-й день недели месяца',
-  'reminder.typeDayOfMonth': 'Число месяца',
-  'reminder.typeYearly': 'Ежегодно',
-  'reminder.typeLastDayOfMonth': 'Последний день месяца',
+  /** Список «Напомнить» в редакторе (ТЗ 2026-11-15). */
+  'reminder.command': 'Напомнить',
+  'reminder.cmdNotRemind': 'не напоминать',
+  'reminder.cmdOnce': 'однократно',
+  'reminder.cmdEveryDays': 'каждый день',
+  'reminder.cmdWeekdays': 'каждую неделю',
+  'reminder.cmdDayOfMonth': 'каждое число месяца',
+  'reminder.cmdWeekdayOfMonth': 'каждый месяц в день недели',
+  'reminder.cmdYearly': 'каждый год в указанную дату',
   /** Поля редактора. */
   'reminder.anchorDate': 'Дата',
   'reminder.anchorTime': 'Время',
+  'reminder.startFrom': 'Начиная с',
   'reminder.everyDays': 'Каждый N-й день, N',
+  'reminder.everyWeeks': 'Каждую N-ю неделю, N',
   'reminder.dayField': 'Число месяца',
+  'reminder.dayLast': 'последний день месяца',
   'reminder.everyMonthsField': 'Каждые N месяцев, N',
+  'reminder.everyYears': 'Каждый N-й год, N',
+  'reminder.skipWeekends': 'Пропускать выходные',
   'reminder.weekdayField': 'День недели',
   'reminder.nthField': 'Вхождение в месяце',
   'reminder.nthLast': 'последнее',
-  'reminder.preview': 'Первые вхождения',
+  'reminder.monthField': 'Месяц',
+  'reminder.dayNumberField': 'Дата',
+  /** Подпись списка ближайших вхождений (подстановка — сколько показываем). */
+  'reminder.preview': 'Следующие %1 напоминаний',
   'reminder.previewEmpty': 'Вхождений пока нет',
   'reminder.save': 'Сохранить',
   'reminder.cancel': 'Отмена',

@@ -177,6 +177,14 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
   };
 
   /**
+   * После редактора (сохранение расписания ИЛИ команда «не напоминать»):
+   * перечитать напоминания субъекта и уведомить владельца флага.
+   */
+  const afterEdit = (): void => {
+    void refresh().then(notifyChanged);
+  };
+
+  /**
    * Ближайшее видимое вхождение напоминания: тот же движок, которым сервер
    * считает `next_at` (`nextCandidate`). `null` — вхождений не осталось:
    * «Отложить»/«Убрать» недоступны.
@@ -242,9 +250,8 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
           subjectId: subjectId,
           reminder,
           subjectTitle: subjectTitle,
-          onSaved: () => {
-            void refresh().then(notifyChanged);
-          },
+          onSaved: afterEdit,
+          onRemoved: afterEdit,
         });
       }),
       menuSubmenu(
@@ -274,9 +281,8 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
           subjectType: 'thought',
           subjectId: subjectId,
           subjectTitle: subjectTitle,
-          onSaved: () => {
-            void refresh().then(notifyChanged);
-          },
+          onSaved: afterEdit,
+          onRemoved: afterEdit,
         });
       }),
       MENU_SEPARATOR,
@@ -294,9 +300,8 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
         subjectType: 'thought',
         subjectId: subjectId,
         subjectTitle: subjectTitle,
-        onSaved: () => {
-          void refresh().then(notifyChanged);
-        },
+        onSaved: afterEdit,
+        onRemoved: afterEdit,
       });
       return;
     }

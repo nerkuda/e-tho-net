@@ -1021,6 +1021,10 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
           onSaved: () => {
             void loadPanel();
           },
+          // «Не напоминать» удаляет строку — панель обязана её убрать.
+          onRemoved: () => {
+            void loadPanel();
+          },
         });
         return;
       }

@@ -57,24 +57,44 @@ export function scheduleLabel(schedule: ReminderSchedule): string {
   switch (schedule.type) {
     case 'once':
       return t('reminder.once');
-    case 'weekdays':
-      return t('reminder.weekdays', [schedule.days.map((day) => weekdayLabel(day)).join(', ')]);
-    case 'every_days':
-      return schedule.every === 1
-        ? t('reminder.everyDay')
-        : t('reminder.everyNDays', [schedule.every]);
+    case 'weekdays': {
+      const days = schedule.days.map((day) => weekdayLabel(day)).join(', ');
+      const everyWeeks = schedule.every_weeks ?? 1;
+      return everyWeeks === 1
+        ? t('reminder.weekdays', [days])
+        : t('reminder.weekdaysEvery', [everyWeeks, days]);
+    }
+    case 'every_days': {
+      const label =
+        schedule.every === 1 ? t('reminder.everyDay') : t('reminder.everyNDays', [schedule.every]);
+      // Пропуск выходных — часть смысла серии: подпись обязана её называть.
+      return schedule.skip_weekends === true
+        ? `${label}${t('reminder.skipWeekendsSuffix')}`
+        : label;
+    }
     case 'weekday_of_month': {
       const weekday = weekdayLabel(schedule.weekday, 'long');
-      return schedule.nth === 'last'
-        ? t('reminder.weekdayOfMonthLast', [weekday])
-        : t('reminder.weekdayOfMonth', [weekday, schedule.nth]);
+      const everyMonths = schedule.every_months ?? 1;
+      if (schedule.nth === 'last') {
+        return everyMonths === 1
+          ? t('reminder.weekdayOfMonthLast', [weekday])
+          : t('reminder.weekdayOfMonthLastEvery', [weekday, everyMonths]);
+      }
+      return everyMonths === 1
+        ? t('reminder.weekdayOfMonth', [weekday, schedule.nth])
+        : t('reminder.weekdayOfMonthEvery', [weekday, schedule.nth, everyMonths]);
     }
     case 'day_of_month':
       return schedule.every_months === 1
         ? t('reminder.dayOfMonth', [schedule.day])
         : t('reminder.dayOfMonthEvery', [schedule.day, schedule.every_months]);
-    case 'yearly':
-      return t('reminder.yearly', [monthDayLabel(schedule.month, schedule.day)]);
+    case 'yearly': {
+      const date = monthDayLabel(schedule.month, schedule.day);
+      const everyYears = schedule.every_years ?? 1;
+      return everyYears === 1
+        ? t('reminder.yearly', [date])
+        : t('reminder.yearlyEvery', [date, everyYears]);
+    }
     case 'last_day_of_month':
       return schedule.every_months === 1
         ? t('reminder.lastDayOfMonth')
