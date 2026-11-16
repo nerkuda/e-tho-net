@@ -1495,6 +1495,8 @@ export const en = {
   'tasks.errorNotATask': 'The line is no longer a task.',
   'tasks.errorCommentNotFound': 'Source entry not found.',
   'tasks.errorUndated': 'The line has no dates to move.',
+  'tasks.errorChronicleUndate':
+    'A task from a record takes the period of the record — its dates cannot be removed.',
   'tasks.errorGeneric': 'The row operation failed.',
   'tasks.errorToggle': 'Could not toggle the task: %1',
   'tasks.errorEdit': 'Could not save the line: %1',

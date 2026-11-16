@@ -1243,7 +1243,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects:
       'read-only, no writes. Response `{ items[], cursor, total?, max_revision }` (parity with REST `GET /tasks`). ' +
       'A row is addressed by `{ comment_id, line_no }` (line number of `body_md`, 0-based) and carries `text`, ' +
-      '`due`/`period_from`/`period_to` (`YYYY-MM-DD`), `done`, `subject_thoughts`, `subject_state`, ' +
+      '`due`/`period_from`/`period_to` (`YYYY-MM-DD`), `auto_period` (the period comes from the record, not from ' +
+      'the line), `done`, `subject_thoughts`, `subject_state`, ' +
       '`parent_task`/`subtask`, `revision`/`parsed_revision` and the source owner (`owner_type`/`owner_id`/`kind`). ' +
       'Rows of permanent comments of entities marked for deletion are hidden; `max_revision` is the network ' +
       'projection marker (the client compares it and shows "Refresh").',
@@ -1284,7 +1285,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'tasks.move',
     tool: 'etn.tasks.move',
     group: 'tasks',
-    when: 'shift ALL date links of ONE task line by days or months (the 31st falls back to the last day of the target month, the period is kept)',
+    when: 'shift ALL date links of ONE task line by days or months (the 31st falls back to the last day of the target month, the period is kept); a row of a chronological record without dates gets an explicit date link appended instead (auto period)',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'comment_id', required: true, desc: 'source comment of the line' },
@@ -1302,7 +1303,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects:
       'one new revision of the source comment, `comment.updated`, `{ results[], revisions: [{ id, version }] }`. ' +
       'Only calendar date links `[[YYYY-MM-DD]]` move (inline code and non-date targets stay); a line without date ' +
-      'links gets `results[].ok: false, error: "undated"`.',
+      'links gets `results[].ok: false, error: "undated"` — unless it is a row of a chronological record: its auto ' +
+      'period gives the anchor (the end of the record period) and an explicit `[[date]]` is appended, so the task ' +
+      'gets pinned.',
     errors:
       '`VALIDATION_ERROR` - both or neither of `days`/`months`, a zero/non-integer shift; `VERSION_CONFLICT` (409); ' +
       '`FORBIDDEN` - read-only key.',
@@ -1379,7 +1382,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects:
       'destructive — `etn.ops` requires `confirm: true`. One shift over all selected rows, one new revision per ' +
       'changed source comment, `comment.updated`; response `{ results[], revisions: [{ id, version }] }` with ' +
-      'per-row `undated` for rows without date links.',
+      'per-row `undated` for rows without date links (a row of a chronological record without dates gets a pinned ' +
+      'explicit date instead — its auto period gives the anchor).',
     errors:
       '`VALIDATION_ERROR` - both/neither shift, a bad filter; `BAD_REQUEST` - `scope: overdue` without `today`; ' +
       '`FORBIDDEN` - read-only key.',
@@ -2487,10 +2491,14 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '',
       '## Reading (`tasks.list`)',
       '- `scope` selects the base: `open` (not done), `done`, `overdue` (open with `due`',
-      "  earlier than the client's `today`), `undated` (open without date links); default —",
-      '  all rows. `from`/`to` intersect the task period. `thought_id` keeps rows whose',
-      '  subject is this thought (`[[#uuid]]` ID links only); `comment_id` — rows sourced',
-      '  from one comment.',
+      "  earlier than the client's `today`), `undated` (open without date links AND without a",
+      '  record period); default — all rows. `from`/`to` intersect the task period.',
+      '  `thought_id` keeps rows whose subject is this thought (`[[#uuid]]` ID links and the',
+      '  owner of a permanent comment); `comment_id` — rows sourced from one comment.',
+      '- `auto_period: true` — the row has no date links and takes the period of its',
+      '  chronological record (`valid_from..valid_to`, `due` = the end of that period). Such a',
+      '  row never lands in `undated`, and `undate` is not applicable to it: the period would',
+      '  be restored by re-parsing. `set_due` / `move` pin an explicit `[[date]]`.',
       '- `overdue` / `undated` are CROSS-SECTION: they ignore `from`/`to`, and `overdue`',
       "  REQUIRES `today` (the client's day boundary — the server never guesses the",
       '  timezone). A period view plus the cross-section is two calls (or both scopes).',
@@ -2505,6 +2513,10 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '  shift of ALL date links of the line (`days` XOR `months`; the 31st of a short',
       '  month falls back to its last day, the period is kept). `tasks.cancel` —',
       '  `- [ ] text` → `- text`: the line becomes a checklist item, the text stays.',
+      '- A row of a chronological record WITHOUT date links has an auto period: `move` counts',
+      '  from the end of the record period and APPENDS an explicit `[[date]]` — the task gets',
+      '  pinned. «Make undated» (`undate` of `PATCH /tasks`) is not exposed here and answers',
+      '  `BAD_REQUEST` for such rows.',
       '- Each write returns one new revision per changed source comment',
       '  (`revisions: [{ id, version }]`) and emits `comment.updated` with the full new',
       '  `body_md`. Use the returned `version` as `expected_revision` of the next action.',

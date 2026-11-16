@@ -87,6 +87,8 @@ function taskRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     subtask: false,
     revision: 1,
     parsed_revision: 1,
+    kind: 'permanent',
+    auto_period: false,
     ...overrides,
   };
 }

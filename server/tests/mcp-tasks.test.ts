@@ -209,7 +209,9 @@ describe('MCP etn.tasks.* и meta карточки (22f1ea95)', { skip: !nativeA
           scope: 'open',
         });
         assert.equal(bySubject.items.length, 1, 'субъект отбирает только свою строку');
-        assert.deepEqual(bySubject.items[0]!.subject_thoughts, [subject.id]);
+        // Автосубъекты (уточнение 2026-11-16): строка постоянного комментария
+        // адресована и владельцу-мысли, и ID-ссылке строки (владелец — первый).
+        assert.deepEqual(bySubject.items[0]!.subject_thoughts, [seeded.thoughtId, subject.id]);
         assert.equal(bySubject.items[0]!.due, '2026-11-20');
 
         const done = await listTasks(handle, ctx.networkId, { scope: 'done' });

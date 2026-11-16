@@ -451,6 +451,8 @@ export function mountTaskPanel(
   const subgroupFilters = new WeakMap<HTMLElement, TaskMassFilter>();
   /** Строки напоминаний подгруппы — адрес групповой команды «Отменить все…». */
   const subgroupReminderRows = new WeakMap<HTMLElement, readonly ReminderPanelRow[]>();
+  /** Строки задач подгруппы — от их вида зависит «Сделать бессрочными». */
+  const subgroupTaskRows = new WeakMap<HTMLElement, readonly TaskPanelRow[]>();
   /** Заголовок подгруппы — для вопроса подтверждения групповой команды. */
   const subgroupTitles = new WeakMap<HTMLElement, string>();
   /**
@@ -568,9 +570,16 @@ export function mountTaskPanel(
   }
 
   /** Подгруппа «⋮»: массовые команды по одной группе (по дате/неделе/месяцу/мысли). */
-  function subgroupMenu(kind: 'task' | 'reminder', filter: TaskMassFilter): MenuItem[] {
+  function subgroupMenu(
+    kind: 'task' | 'reminder',
+    filter: TaskMassFilter,
+    rows: readonly TaskPanelRow[] = [],
+  ): MenuItem[] {
     if (kind === 'reminder') return [];
-    return [
+    // Массовая «Сделать бессрочными» в группе из одних строк хроно-записей
+    // ничего не делает (период строк вернёт пере-парс) — команды нет.
+    const undateAllowed = rows.length === 0 || rows.some((row) => row.kind !== 'chronological');
+    const items: MenuItem[] = [
       menuAction(t('tasks.cancelAllGroup'), () => actions.bulk(filter, 'cancel-all')),
       menuSubmenu(t('tasks.moveAllGroup'), [
         ...TASK_SHIFTS.map((item) =>
@@ -578,8 +587,11 @@ export function mountTaskPanel(
         ),
         menuAction(t('tasks.moveDate'), () => void pickBulkDate(filter)),
       ]),
-      menuAction(t('tasks.undateAllGroup'), () => actions.bulk(filter, 'undate-all')),
     ];
+    if (undateAllowed) {
+      items.push(menuAction(t('tasks.undateAllGroup'), () => actions.bulk(filter, 'undate-all')));
+    }
+    return items;
   }
 
   /**
@@ -619,10 +631,18 @@ export function mountTaskPanel(
         ],
         { disabled: row.stale },
       ),
-      // «Сделать бессрочной» — только у строки с датами (ошибка 3cef7466).
-      menuAction(t('tasks.undateRow'), () => actions.rowCommand(row, 'undate'), {
-        disabled: row.stale || day === null,
-      }),
+    );
+    // «Сделать бессрочной» — только у строки с датами ПОСТОЯННОГО комментария:
+    // у строки хроно-записи период вернётся из записи при пере-парсинге, сервер
+    // отвечает 400 — команды в меню нет (уточнение ТЗ 2026-11-16).
+    if (row.kind !== 'chronological') {
+      items.push(
+        menuAction(t('tasks.undateRow'), () => actions.rowCommand(row, 'undate'), {
+          disabled: row.stale || day === null,
+        }),
+      );
+    }
+    items.push(
       menuAction(t('tasks.cancelRow'), () => actions.rowCommand(row, 'cancel'), {
         disabled: row.stale,
       }),
@@ -1200,6 +1220,7 @@ export function mountTaskPanel(
     subgroupFilters.set(node, subgroup.filter);
     subgroupTitles.set(node, subgroup.title);
     if (kind === 'reminder') subgroupReminderRows.set(node, subgroup.rows as ReminderPanelRow[]);
+    else subgroupTaskRows.set(node, subgroup.rows as TaskPanelRow[]);
     const head = node.querySelector('.ui-task-subgroup-head') as HTMLElement;
     if (head.querySelector('.ui-task-subgroup-menu') === null) {
       head.append(
@@ -1213,7 +1234,11 @@ export function mountTaskPanel(
             const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
             const items =
               kind === 'task'
-                ? subgroupMenu('task', subgroupFilters.get(node) ?? {})
+                ? subgroupMenu(
+                    'task',
+                    subgroupFilters.get(node) ?? {},
+                    subgroupTaskRows.get(node) ?? [],
+                  )
                 : reminderSubgroupMenu(
                     subgroupTitles.get(node) ?? '',
                     subgroupReminderRows.get(node) ?? [],

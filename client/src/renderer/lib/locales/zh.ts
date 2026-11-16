@@ -785,6 +785,7 @@ export const zh = {
   'tasks.errorNotATask': '该行已不是任务。',
   'tasks.errorCommentNotFound': '未找到来源记录。',
   'tasks.errorUndated': '该行没有可移动的日期。',
+  'tasks.errorChronicleUndate': '记录中的任务以记录期间为准，无法移除日期。',
   'tasks.errorGeneric': '行操作未执行。',
   'tasks.errorToggle': '无法切换任务：%1',
   'tasks.errorEdit': '无法保存行：%1',

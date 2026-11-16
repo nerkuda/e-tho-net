@@ -671,6 +671,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     if (code === 'not_a_task') return t('tasks.errorNotATask');
     if (code === 'comment_not_found') return t('tasks.errorCommentNotFound');
     if (code === 'undated') return t('tasks.errorUndated');
+    if (code === 'undate_not_allowed') return t('tasks.errorChronicleUndate');
     return t('tasks.errorGeneric');
   }
 

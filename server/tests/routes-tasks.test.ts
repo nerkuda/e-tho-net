@@ -313,5 +313,72 @@ describe(
         await closeRestContext(ctx);
       }
     });
+
+    it('автопериод записи: период строки, undate — 400, set_due закрепляет дату', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const thought = await apiCreateThought(ctx, { title: 'Автопериод' });
+        const thoughtId = thought.data['id'] as string;
+        // Запись с периодом: строка без date-ссылок живёт в периоде записи
+        // (уточнение ТЗ 2026-11-16).
+        const res = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/comments`,
+          headers: authHeaders(ctx),
+          payload: {
+            kind: 'chronological',
+            body_md: '- [ ] Задача записи',
+            valid_from: '2026-11-10',
+            valid_to: '2026-11-20',
+          },
+        });
+        assert.equal(res.statusCode, 201);
+        const comment = res.json().data as { id: string; version: number };
+
+        const page = await getTasks(ctx, { comment_id: comment.id });
+        const row = page.data.items[0]!;
+        assert.deepEqual(
+          [row.period_from, row.period_to, row.due, row.auto_period],
+          ['2026-11-10', '2026-11-20', '2026-11-20', true],
+          'период задачи — весь период записи, срок — его конец',
+        );
+        assert.deepEqual(row.subject_thoughts, [], 'запись не даёт автосубъекта');
+
+        const undate = await patchTasks(ctx, {
+          ops: [
+            {
+              comment_id: comment.id,
+              line_no: 0,
+              action: 'undate',
+              expected_revision: comment.version,
+            },
+          ],
+        });
+        assert.equal(undate.statusCode, 400, 'автопериод вернул бы дату — команда недоступна');
+        assert.equal(undate.code, 'BAD_REQUEST');
+
+        const pinned = await patchTasks(ctx, {
+          ops: [
+            {
+              comment_id: comment.id,
+              line_no: 0,
+              action: 'set_due',
+              date: '2026-11-25',
+              expected_revision: comment.version,
+            },
+          ],
+        });
+        assert.equal(pinned.statusCode, 200);
+        assert.equal(pinned.data.revisions[0]!.body_md, '- [ ] Задача записи [[2026-11-25]]');
+        const after = await getTasks(ctx, { comment_id: comment.id });
+        assert.deepEqual(
+          [after.data.items[0]!.due, after.data.items[0]!.auto_period],
+          ['2026-11-25', false],
+          'строка закреплена явной датой',
+        );
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

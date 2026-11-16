@@ -102,6 +102,7 @@ function taskRow(overrides: Partial<TaskPanelRow> = {}): TaskPanelRow {
     subtask: false,
     periodFrom: null,
     due: '2026-11-14',
+    kind: 'permanent',
     subjectThoughts: [],
     subjectId: null,
     day: '2026-11-14',
@@ -640,6 +641,25 @@ describe('панель задач: сворачивание блоков и ко
     item!.click();
     assert.equal(calls.bulk.length, 1);
     assert.equal(calls.bulk[0]!.command, 'undate-all');
+    destroy();
+  });
+
+  it('у группы из строк хроно-записей массовой «Сделать бессрочными» нет', () => {
+    const { host, destroy } = mountCollapsible([
+      taskRow({ kind: 'chronological', due: '2026-11-14' }),
+    ]);
+    const menuButton = host.querySelector('.ui-task-subgroup-menu') as unknown as ShimElement;
+    menuButton.emit('click', {
+      target: menuButton,
+      currentTarget: menuButton,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const item = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.undateAllGroup')));
+    assert.equal(item, undefined, 'период записи вернул бы пере-парс — команды нет');
     destroy();
   });
 });

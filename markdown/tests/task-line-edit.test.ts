@@ -14,6 +14,7 @@ import { describe, it } from 'node:test';
 import {
   isTaskLineMarker,
   parseTaskLines,
+  removeTaskLineDates,
   removeTaskLineMarker,
   setTaskLineDone,
 } from '../src/index.js';
@@ -58,5 +59,17 @@ describe('markdown: построчные правки пункта задачи'
   it('строки с датами и таблицы не считаются маркером', () => {
     assert.equal(isTaskLineMarker('| [[2026-01-01]] | [[2026-01-02]] |'), false);
     assert.equal(isTaskLineMarker('- [[2026-01-01]] встреча'), false);
+  });
+
+  it('удаление дат: пустой остаток становится пустым пунктом списка, а не задачей', () => {
+    // Уточнение ТЗ 2026-11-16: `- [ ] [[дата]]` → `- ` (пустой пункт списка):
+    // задачи без текста не существует, маркер уходит вместе с датой.
+    assert.equal(removeTaskLineDates('- [ ] [[2026-11-16]]'), '- ');
+    assert.equal(removeTaskLineDates('- [ ] [[2026-11-16]] [[2026-11-17]]'), '- ');
+    assert.equal(removeTaskLineDates('* [x] [[2026-11-16 10:00]]'), '* ');
+    assert.equal(removeTaskLineDates('1. [ ] [[2026-11-16]]'), '1. ');
+    // Текст остался — маркер сохраняется, уходит только ссылка.
+    assert.equal(removeTaskLineDates('- [ ] Задача [[2026-11-16]]'), '- [ ] Задача');
+    assert.equal(removeTaskLineDates('- [ ] [[2026-11-16]] хвост'), '- [ ] хвост');
   });
 });

@@ -21,7 +21,12 @@ import DatabaseConstructor from 'better-sqlite3';
 
 import { BASE_LAYER_ID, ETNX_VERSION, type EtnxManifest } from '@etn/shared';
 
-import { closeNetworkDb, createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
+import {
+  closeNetworkDb,
+  createInMemoryNetworkDb,
+  openNetworkDb,
+  type NetworkDb,
+} from '../src/db/network-db.js';
 import { runMigrations } from '../src/db/migrator.js';
 import { SystemDb } from '../src/db/system-db.js';
 import {
@@ -44,6 +49,7 @@ import {
   rebuildTaskProjection,
   sweepTaskProjection,
   TASK_PROJECTION_SETTING,
+  TASK_PROJECTION_VERSION,
 } from '../src/domain/task-projection.js';
 import { listTasks } from '../src/domain/task-service.js';
 import { getThought } from '../src/domain/thought-service.js';
@@ -723,6 +729,93 @@ describe(
           rmSync(cleanDir, { recursive: true, force: true });
         }
       } finally {
+        rmSync(dataDir, { recursive: true, force: true });
+      }
+    });
+
+    it('свип: версия проекции пере-собирает старые строки — автопериод и автосубъекты', () => {
+      // Миграция 056 сбрасывает маркер сети, поэтому свип при старте сервера
+      // пере-парсит существующие строки: без этого «Просрочено» не пополнилось
+      // бы задачами прошлых записей, а у задач постоянных комментариев не было
+      // бы автосубъекта-владельца (уточнение ТЗ 2026-11-16).
+      const dataDir = mkdtempSync(join(tmpdir(), 'etn-task-sweep-auto-'));
+      const networkId = randomUUID();
+      const handle = new DatabaseConstructor(':memory:');
+      try {
+        handle.pragma('foreign_keys = ON');
+        runMigrations(handle, systemMigrationsDir());
+        const sys = new SystemDb(handle);
+        const owner = randomUUID();
+        sys.createUser({ id: owner, username: 'sweep-auto', displayName: 'Sweep' });
+        sys.createNetworkRow(networkId, owner, 'Сеть с задачами', null);
+
+        const ndb = openNetworkDb(dataDir, networkId, createLogger('silent'));
+        seedThought(ndb, 't-1', 'Мысль');
+        const commentId = write(
+          ndb,
+          () =>
+            createCommentWithTargets(
+              ndb,
+              [{ owner_type: 'thought', owner_id: 't-1' }],
+              {
+                kind: 'chronological',
+                body_md: '- [ ] Задача дня',
+                valid_from: '2026-11-15',
+              },
+              USER,
+            ).id,
+        );
+        // Постоянный комментарий той же мысли: у его строк автосубъект — владелец.
+        const permanentId = write(
+          ndb,
+          () =>
+            createCommentWithTargets(
+              ndb,
+              [{ owner_type: 'thought', owner_id: 't-1' }],
+              { kind: 'permanent', body_md: '- [ ] Постоянная' },
+              USER,
+            ).id,
+        );
+        // Состояние «до уточнения»: строки без автопериода и без автосубъекта,
+        // маркер сети сброшен (как после миграции 056).
+        ndb
+          .prepare(
+            'UPDATE task_rows SET auto_period = 0, period_from = NULL, period_to = NULL, due = NULL',
+          )
+          .run();
+        ndb.prepare('DELETE FROM task_row_subjects').run();
+        ndb.prepare('UPDATE task_projection_state SET max_revision = 0').run();
+        sys.setSetting(TASK_PROJECTION_SETTING, '1');
+
+        sweepTaskProjection(dataDir, sys, createLogger('silent'));
+
+        const row = ndb
+          .prepare('SELECT auto_period, period_from, due FROM task_rows WHERE comment_id = ?')
+          .get(commentId) as {
+          auto_period: number;
+          period_from: string | null;
+          due: string | null;
+        };
+        assert.deepEqual(
+          [row.auto_period, row.period_from, row.due],
+          [1, '2026-11-15', '2026-11-15'],
+          'свип вернул строке период записи и признак auto_period',
+        );
+        assert.equal(sys.getSetting(TASK_PROJECTION_SETTING), TASK_PROJECTION_VERSION);
+        assert.deepEqual(
+          (
+            ndb
+              .prepare(
+                'SELECT thought_id FROM task_row_subjects WHERE comment_id = ? ORDER BY rowid',
+              )
+              .all(permanentId) as Array<{ thought_id: string }>
+          ).map((entry) => entry.thought_id),
+          ['t-1'],
+          'свип вернул строке постоянного комментария автосубъекта-владельца',
+        );
+      } finally {
+        closeNetworkDb(networkId);
+        handle.close();
         rmSync(dataDir, { recursive: true, force: true });
       }
     });

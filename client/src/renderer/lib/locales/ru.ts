@@ -1533,6 +1533,7 @@ export const ru = {
   'tasks.errorNotATask': 'Строка уже не является задачей.',
   'tasks.errorCommentNotFound': 'Запись-источник не найдена.',
   'tasks.errorUndated': 'В строке нет дат для переноса.',
+  'tasks.errorChronicleUndate': 'Задача из записи получает период записи — снять даты нельзя.',
   'tasks.errorGeneric': 'Операция со строкой не выполнена.',
   'tasks.errorToggle': 'Не удалось переключить задачу: %1',
   'tasks.errorEdit': 'Не удалось сохранить строку: %1',

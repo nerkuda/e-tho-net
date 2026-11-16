@@ -21,6 +21,16 @@
  * Слияние слоя (таблицы НЕ мержим): строки слоя удаляются, финальные тексты
  * основы пере-парсятся; «отказаться от изменений» удаляет строки слоя.
  *
+ * **Автопериод и автосубъекты** (уточнение ТЗ 2026-11-16, задача 1f516872).
+ * Строка-задача БЕЗ date-ссылок в хроно-записи получает период самой записи
+ * (`valid_from..valid_to` целиком, срок — конец периода): дата в строке
+ * приоритетнее, дат нет — работают даты записи. Признак — `auto_period`: по
+ * нему правка (PATCH /tasks) различает авто-строку (undate запрещён, set_due
+ * и перенос дописывают явную `[[дату]]`). Субъекты строки постоянного
+ * комментария дополняются владельцем: мысль комментария либо ОБА конца связи
+ * ({@link taskRowContext}). Подзадачи без даты авто-периода не получают —
+ * остаются пунктами чек-листа родителя.
+ *
  * **Актуальность.** `parsed_revision` строки = `version` комментария в момент
  * разбора; глобальный маркер сети — `task_projection_state.max_revision`
  * (максимум ревизий комментариев). Расхождение маркера у клиента — «Обновить».
@@ -36,7 +46,7 @@ import { openNetworkDb, type NetworkDb } from '../db/network-db.js';
 import type { SystemDb } from '../db/system-db.js';
 
 /** Версия схемы проекции: смена пере-парсит сети при старте (как `md.render_version`). */
-export const TASK_PROJECTION_VERSION = '1';
+export const TASK_PROJECTION_VERSION = '2';
 
 /** L1-настройка `_system.db`: последняя развёрнутая версия проекции задач. */
 export const TASK_PROJECTION_SETTING = 'tasks.projection_version';
@@ -57,6 +67,68 @@ export interface ProjectionRow {
   due: string | null;
   dates: Array<{ date: string; time: string | null }>;
   subjects: string[];
+  /** Период взят из записи-источника (в строке дат не было), а не из текста. */
+  autoPeriod: boolean;
+}
+
+/**
+ * Контекст источника для авто-полей строк (уточнение ТЗ 2026-11-16).
+ * Считается по комментарию, а не по тексту строки: период записи и владелец
+ * комментария известны только домену.
+ */
+export interface TaskRowContext {
+  /** Период хроно-записи (`YYYY-MM-DD`); у постоянного комментария — `null`. */
+  autoPeriod: { from: string; to: string } | null;
+  /** Автосубъекты владельца: мысль постоянного комментария либо оба конца связи. */
+  subjects: string[];
+}
+
+/** Поля комментария, из которых считается {@link TaskRowContext}. */
+export interface CommentContextFields {
+  kind: string;
+  owner_type: string;
+  owner_id: string;
+  valid_from: string;
+  valid_to: string | null;
+}
+
+/** Календарная дата UTC-инстанса (`2026-11-16T00:00:00.000Z` → `2026-11-16`). */
+function utcDayOf(instant: string): string {
+  return instant.slice(0, 10);
+}
+
+/** Автосубъекты владельца постоянного комментария (мысль либо оба конца связи). */
+function ownerAutoSubjects(ndb: NetworkDb, ownerType: string, ownerId: string): string[] {
+  if (ownerType === 'thought') return [ownerId];
+  if (ownerType !== 'link') return [];
+  const link = ndb
+    .prepare('SELECT source_id, target_id FROM links WHERE id = ? LIMIT 1 -- layers:physical-read')
+    .get(ownerId) as { source_id: string; target_id: string } | undefined;
+  if (link === undefined) return [];
+  return link.source_id === link.target_id ? [link.source_id] : [link.source_id, link.target_id];
+}
+
+/**
+ * Контекст строк комментария: период хроно-записи и автосубъекты владельца
+ * (уточнение ТЗ 2026-11-16). Даты периода — календарные даты UTC-инстансов:
+ * сервер не знает пояса автора (ADR времени 994d076a), а запись без времени
+ * создаётся на `00:00:00Z` своей даты.
+ */
+export function taskRowContext(ndb: NetworkDb, comment: CommentContextFields): TaskRowContext {
+  if (comment.kind === 'chronological') {
+    const from = utcDayOf(comment.valid_from);
+    const to = utcDayOf(comment.valid_to ?? comment.valid_from);
+    return {
+      // Период записи — ВЕСЬ её интервал; обратный порядок (правка дат вразнобой)
+      // не должен давать период «из будущего в прошлое».
+      autoPeriod: from <= to ? { from, to } : { from: to, to: from },
+      subjects: [],
+    };
+  }
+  return {
+    autoPeriod: null,
+    subjects: ownerAutoSubjects(ndb, comment.owner_type, comment.owner_id),
+  };
 }
 
 /** Значение `layer_id` проекции: `null` — основа. */
@@ -76,14 +148,21 @@ interface ProjectionEntry {
   layerId: string | null;
   bodyMd: string;
   revision: number;
+  /** Авто-поля строк: период записи и автосубъекты владельца. */
+  context: TaskRowContext;
 }
 
 /**
  * Разобрать `body_md` в строки проекции. Ключ строки — `line_no`:
  * нескольких строк парсера с одним номером (таблица с двумя date-ссылками)
  * схлопываются в одну — задача одна, даты и субъекты собираются со всех.
+ *
+ * `context` — авто-поля источника (см. {@link taskRowContext}): строка-задача
+ * без date-ссылок получает период записи, субъекты дополняются владельцем
+ * постоянного комментария. Без контекста (правка строки, тесты грамматики)
+ * разбор выдаёт только текстовые даты.
  */
-export function buildTaskRows(bodyMd: string): ProjectionRow[] {
+export function buildTaskRows(bodyMd: string, context?: TaskRowContext): ProjectionRow[] {
   /** Сырые строки парсера по номеру строки (первая — основа строки). */
   const byLine = new Map<number, ProjectionRow>();
   /** Сырые данные парсера для вычисления родителя-задачи. */
@@ -106,6 +185,7 @@ export function buildTaskRows(bodyMd: string): ProjectionRow[] {
         due: null,
         dates: [],
         subjects: [],
+        autoPeriod: false,
       };
       byLine.set(lineNo, row);
     }
@@ -172,6 +252,22 @@ export function buildTaskRows(bodyMd: string): ProjectionRow[] {
     row.periodTo = last?.date ?? null;
     row.due = last?.date ?? null;
     if (row.subtask) row.isTask = false;
+    // Автопериод: задача БЕЗ дат в строке живёт в периоде записи-источника
+    // (срок — конец периода). Подзадача без даты остаётся пунктом чек-листа —
+    // решение о задаче уже принято по ТЕКСТОВЫМ датам выше.
+    if (row.isTask && row.dates.length === 0 && context?.autoPeriod != null) {
+      const period = context.autoPeriod;
+      row.periodFrom = period.from;
+      row.periodTo = period.to;
+      row.due = period.to;
+      row.autoPeriod = true;
+    }
+    // Автосубъекты владельца постоянного комментария — ПЕРЕД субъектами ссылок
+    // строки: первая мысль строки адресует её в панели «Задачи» владельца.
+    if (context !== undefined && context.subjects.length > 0) {
+      const seeds = context.subjects.filter((id) => !row.subjects.includes(id));
+      if (seeds.length > 0) row.subjects = [...seeds, ...row.subjects];
+    }
     rows.push(row);
   }
   rows.sort((a, b) => a.lineNo - b.lineNo);
@@ -224,8 +320,8 @@ export function deleteTaskProjectionOfComments(
 function replaceProjectionBatch(ndb: NetworkDb, entries: readonly ProjectionEntry[]): void {
   const insertRow = ndb.prepare(
     `INSERT INTO task_rows (comment_id, layer_id, line_no, is_task, text, period_from, period_to,
-                            due, done, depth, parent_line_no, subtask, parsed_revision)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            due, done, depth, parent_line_no, subtask, parsed_revision, auto_period)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertDate = ndb.prepare(
     'INSERT INTO task_row_dates (comment_id, layer_id, line_no, date, time) VALUES (?, ?, ?, ?, ?)',
@@ -236,7 +332,7 @@ function replaceProjectionBatch(ndb: NetworkDb, entries: readonly ProjectionEntr
 
   for (const entry of entries) {
     deleteProjectionRows(ndb, entry.commentId, entry.layerId);
-    for (const row of buildTaskRows(entry.bodyMd)) {
+    for (const row of buildTaskRows(entry.bodyMd, entry.context)) {
       insertRow.run(
         entry.commentId,
         entry.layerId,
@@ -251,6 +347,7 @@ function replaceProjectionBatch(ndb: NetworkDb, entries: readonly ProjectionEntr
         row.parentLineNo,
         row.subtask ? 1 : 0,
         entry.revision,
+        row.autoPeriod ? 1 : 0,
       );
       for (const d of row.dates) {
         insertDate.run(entry.commentId, entry.layerId, row.lineNo, d.date, d.time);
@@ -270,9 +367,23 @@ function replaceProjectionBatch(ndb: NetworkDb, entries: readonly ProjectionEntr
 export function reparseVisibleComment(ndb: NetworkDb, commentId: string): ProjectionEntry | null {
   const contextLayer = currentProjectionLayer(ndb);
   const row = ndb
-    .prepare('SELECT id, layer_id, body_md, version FROM comments_v WHERE id = ? LIMIT 1')
+    .prepare(
+      `SELECT id, layer_id, body_md, version, kind, owner_type, owner_id, valid_from, valid_to
+         FROM comments_v WHERE id = ? LIMIT 1`,
+    )
     .get(commentId) as
-    { id: string; layer_id: string; body_md: string; version: number } | undefined;
+    | {
+        id: string;
+        layer_id: string;
+        body_md: string;
+        version: number;
+        kind: string;
+        owner_type: string;
+        owner_id: string;
+        valid_from: string;
+        valid_to: string | null;
+      }
+    | undefined;
   if (row === undefined) {
     deleteProjectionRows(ndb, commentId, contextLayer);
     return null;
@@ -282,6 +393,7 @@ export function reparseVisibleComment(ndb: NetworkDb, commentId: string): Projec
     layerId: projectionLayerOf(row.layer_id),
     bodyMd: row.body_md,
     revision: row.version,
+    context: taskRowContext(ndb, row),
   };
   // Строки текущего слоя могли остаться от прежней редакции (правка, надгробие
   // удаления, слияние слоя): победитель цепочки теперь в другом слое.
@@ -301,16 +413,35 @@ export function reparseCommentAtLayer(
 ): void {
   const row = ndb
     .prepare(
-      `SELECT id, body_md, version FROM comments -- layers:physical-read
-       WHERE id = ? AND layer_id IS ? AND deleted = 0`,
+      `SELECT id, body_md, version, kind, owner_type, owner_id, valid_from, valid_to
+         FROM comments -- layers:physical-read
+        WHERE id = ? AND layer_id IS ? AND deleted = 0`,
     )
     .get(commentId, layerId ?? BASE_LAYER_ID) as
-    { id: string; body_md: string; version: number } | undefined;
+    | {
+        id: string;
+        body_md: string;
+        version: number;
+        kind: string;
+        owner_type: string;
+        owner_id: string;
+        valid_from: string;
+        valid_to: string | null;
+      }
+    | undefined;
   if (row === undefined) {
     deleteProjectionRows(ndb, commentId, layerId);
     return;
   }
-  replaceProjectionBatch(ndb, [{ commentId, layerId, bodyMd: row.body_md, revision: row.version }]);
+  replaceProjectionBatch(ndb, [
+    {
+      commentId,
+      layerId,
+      bodyMd: row.body_md,
+      revision: row.version,
+      context: taskRowContext(ndb, row),
+    },
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,10 +557,21 @@ export function flushTaskProjection(ndb: NetworkDb): void {
 function rebuildTaskProjectionRows(ndb: NetworkDb): void {
   const rows = ndb
     .prepare(
-      `SELECT id, layer_id, body_md, version FROM comments -- layers:physical-read
-       WHERE deleted = 0`,
+      `SELECT id, layer_id, body_md, version, kind, owner_type, owner_id, valid_from, valid_to
+         FROM comments -- layers:physical-read
+        WHERE deleted = 0`,
     )
-    .all() as Array<{ id: string; layer_id: string; body_md: string; version: number }>;
+    .all() as Array<{
+    id: string;
+    layer_id: string;
+    body_md: string;
+    version: number;
+    kind: string;
+    owner_type: string;
+    owner_id: string;
+    valid_from: string;
+    valid_to: string | null;
+  }>;
   for (const table of ['task_rows', 'task_row_dates', 'task_row_subjects']) {
     ndb.prepare(`DELETE FROM ${table}`).run();
   }
@@ -440,6 +582,7 @@ function rebuildTaskProjectionRows(ndb: NetworkDb): void {
       layerId: projectionLayerOf(row.layer_id),
       bodyMd: row.body_md,
       revision: row.version,
+      context: taskRowContext(ndb, row),
     })),
   );
 }

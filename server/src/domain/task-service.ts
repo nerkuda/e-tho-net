@@ -10,6 +10,14 @@
  *     плюс массовые cancel-all/move-all/undate-all по фильтру;
  *     `expected_revision` → 409.
  *
+ * Автопериод (уточнение ТЗ 2026-11-16): строка-задача без date-ссылок в
+ * хроно-записи живёт в периоде записи (срок — конец периода). Следствия для
+ * правки строк:
+ *   * `undate` («Сделать бессрочной») для строк хроно-записи — `BAD_REQUEST`:
+ *     пере-парс вернул бы период записи, команда ничего не меняет по существу;
+ *   * `set_due` и `move` для авто-строки ДОПИСЫВАЮТ явную `[[дату]]` (срок или
+ *     сдвиг от конца периода) — задача закрепляется в тексте.
+ *
  * Правка идёт в `body_md` источника (текст — источник истины): сервер меняет
  * указанную строку и пишет новую ревизию комментария; таблицы проекции
  * обновляет хук записи. Строки адресуются `comment_id` + `line_no` — номер
@@ -53,7 +61,12 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getVisibleComment, updateComment } from './comment-service.js';
-import { buildTaskRows, readTaskProjectionMarker, type ProjectionRow } from './task-projection.js';
+import {
+  buildTaskRows,
+  readTaskProjectionMarker,
+  taskRowContext,
+  type ProjectionRow,
+} from './task-projection.js';
 
 /** Предел страницы GET /tasks (как у остальных постраничных выборок). */
 export const TASKS_MAX_LIMIT = 200;
@@ -264,6 +277,7 @@ interface TaskRow {
   subtask: number;
   parent_line_no: number | null;
   parsed_revision: number;
+  auto_period: number;
   comment_revision: number;
   owner_type: string;
   owner_id: string;
@@ -271,7 +285,7 @@ interface TaskRow {
 }
 
 const ROW_COLUMNS = `tr.comment_id, tr.layer_id, tr.line_no, tr.text, tr.period_from, tr.period_to,
-       tr.due, tr.done, tr.subtask, tr.parent_line_no, tr.parsed_revision,
+       tr.due, tr.done, tr.subtask, tr.parent_line_no, tr.parsed_revision, tr.auto_period,
        v.version AS comment_revision, v.owner_type, v.owner_id, v.kind`;
 
 /** Прочитать состояния сущностей (мысль/связь/публикация) по id. */
@@ -341,6 +355,7 @@ function toTaskDtos(ndb: NetworkDb, rows: readonly TaskRow[]): TaskDTO[] {
       period_from: row.period_from,
       period_to: row.period_to,
       due: row.due,
+      auto_period: row.auto_period === 1,
       done: row.done === 1,
       subject_thoughts: subjectThoughts,
       subject_state: subjectState,
@@ -598,8 +613,10 @@ export function applyTaskOps(
 
     const lines = comment.body_md.split('\n');
     // Строка адресуется номером С НУЛЯ; `buildTaskRows` уже отдаёт его так же.
+    // Контекст источника нужен авто-строкам: у задачи без дат период берётся из
+    // записи, и перенос обязан закрепить задачу явной датой (уточнение 2026-11-16).
     const rows = new Map<number, ProjectionRow>(
-      buildTaskRows(comment.body_md).map((row) => [row.lineNo, row]),
+      buildTaskRows(comment.body_md, taskRowContext(ndb, comment)).map((row) => [row.lineNo, row]),
     );
     let dirty = false;
 
@@ -631,6 +648,16 @@ export function applyTaskOps(
       } else if (op.action === 'cancel') {
         next = removeTaskLineMarker(line);
       } else if (op.action === 'undate') {
+        // Строка хроно-записи бессрочной не бывает: период вернул бы пере-парс
+        // (уточнение 2026-11-16). Команда недоступна и в UI — 400 страхует
+        // устаревший клиент и агента.
+        if (comment.kind === 'chronological') {
+          throw new EtnError(
+            'BAD_REQUEST',
+            'undate is not allowed for tasks of chronological records: the record period is restored on re-parse; use set_due to pin an explicit date.',
+            { field: 'ops', comment_id: commentId, line_no: op.line_no },
+          );
+        }
         // Дат нет — операция ничего не меняет (успешный no-op): массовая
         // команда «Сделать бессрочными» не падает на уже бессрочных строках.
         next = removeTaskLineDates(line) ?? line;
@@ -639,8 +666,16 @@ export function applyTaskOps(
         next = setTaskLineDue(line, op.date ?? '') ?? line;
       } else {
         const shift = validateShift(op);
-        next = shiftTaskLineDates(line, shift);
-        if (next === null) error = 'undated';
+        // Авто-строка дат в тексте не имеет: перенос отсчитывается от конца
+        // периода записи и ДОПИСЫВАЕТ явную дату — задача закрепляется
+        // (уточнение 2026-11-16: «перенос дописывает дату»).
+        const anchor = row.autoPeriod ? row.periodTo : null;
+        if (anchor !== null) {
+          next = setTaskLineDue(line, shiftIsoDate(anchor, shift)) ?? line;
+        } else {
+          next = shiftTaskLineDates(line, shift);
+          if (next === null) error = 'undated';
+        }
       }
       if (next === null) {
         results.push({
@@ -693,6 +728,10 @@ interface MassRow {
   is_task: number;
   subtask: number;
   parent_line_no: number | null;
+  /** Период взят из записи-источника (даты в тексте нет). */
+  auto_period: number;
+  /** Срок строки: у авто-строки — конец периода записи (якорь переноса). */
+  due: string | null;
 }
 
 /** Строки проекции, попадающие под фильтр массовой команды. */
@@ -707,7 +746,8 @@ function selectMassRows(ndb: NetworkDb, filter: TaskMassFilter): MassRow[] {
   });
   return ndb
     .prepare(
-      `SELECT tr.comment_id, tr.layer_id, tr.line_no, tr.is_task, tr.subtask, tr.parent_line_no
+      `SELECT tr.comment_id, tr.layer_id, tr.line_no, tr.is_task, tr.subtask, tr.parent_line_no,
+              tr.auto_period, tr.due
        ${built.from}
        WHERE ${built.where} AND tr.done = 0
        ORDER BY tr.comment_id, tr.line_no`,
@@ -721,9 +761,12 @@ function selectMassRows(ndb: NetworkDb, filter: TaskMassFilter): MassRow[] {
  * (клиент сохраняет тело до вызова).
  *
  * `cancel-all` снимает маркер у задач и их подстрок-подзадач; `move-all`
- * переносит все date-ссылки выбранных строк единым сдвигом (строки без дат
- * пропускаются с `undated`); `undate-all` удаляет все date-ссылки строк
- * («Сделать бессрочными», ошибка 3cef7466), уже бессрочные строки — no-op.
+ * переносит все date-ссылки выбранных строк единым сдвигом (строки без дат и
+ * без авто-периода пропускаются с `undated`; авто-строки хроно-записи
+ * закрепляются явной датой от конца периода записи); `undate-all` удаляет все
+ * date-ссылки строк («Сделать бессрочными», ошибка 3cef7466), уже бессрочные
+ * строки — no-op, а строки хроно-записей пропускаются с `undate_not_allowed`
+ * (период вернул бы пере-парс, уточнение 2026-11-16).
  */
 export function applyTaskMassCommand(
   ndb: NetworkDb,
@@ -743,11 +786,19 @@ export function applyTaskMassCommand(
   const changed: Comment[] = [];
 
   /** comment_id → строки для правки (с учётом подзадач при отмене). */
-  const byComment = new Map<string, Array<{ line_no: number; task: boolean }>>();
+  const byComment = new Map<
+    string,
+    Array<{ line_no: number; task: boolean; autoDue: string | null }>
+  >();
   const commentLayer = new Map<string, string | null>();
   for (const row of selected) {
     const list = byComment.get(row.comment_id) ?? [];
-    list.push({ line_no: row.line_no, task: row.is_task === 1 });
+    list.push({
+      line_no: row.line_no,
+      task: row.is_task === 1,
+      // Якорь переноса авто-строки — конец периода записи (у обычной строки null).
+      autoDue: row.auto_period === 1 ? row.due : null,
+    });
     byComment.set(row.comment_id, list);
     commentLayer.set(row.comment_id, row.layer_id);
   }
@@ -776,7 +827,7 @@ export function applyTaskMassCommand(
           if (parentSet.has(row.line_no) || row.parent_line_no === null) continue;
           if (!parentSet.has(row.parent_line_no)) continue;
           parentSet.add(row.line_no);
-          list.push({ line_no: row.line_no, task: false });
+          list.push({ line_no: row.line_no, task: false, autoDue: null });
           grown = true;
         }
       }
@@ -818,8 +869,24 @@ export function applyTaskMassCommand(
         next = removeTaskLineMarker(line);
         if (next === null) error = 'not_a_task';
       } else if (command.action === 'undate-all') {
+        // Строка хроно-записи бессрочной не бывает: период вернул бы пере-парс
+        // (уточнение 2026-11-16). Одиночная команда отвечает 400, массовая —
+        // пропускает такие строки, чтобы команда работала по остальным.
+        if (comment.kind === 'chronological') {
+          results.push({
+            comment_id: commentId,
+            line_no: entry.line_no,
+            ok: false,
+            error: 'undate_not_allowed',
+          });
+          continue;
+        }
         // Уже бессрочная строка — успешный no-op (в выборке могут быть такие).
         next = removeTaskLineDates(line) ?? line;
+      } else if (entry.autoDue !== null) {
+        // Авто-строка хроно-записи: дат в тексте нет — перенос отсчитывается от
+        // конца периода записи и дописывает явную дату (задача закрепляется).
+        next = setTaskLineDue(line, shiftIsoDate(entry.autoDue, shift!)) ?? line;
       } else {
         next = shiftTaskLineDates(line, shift!);
         if (next === null) error = 'undated';

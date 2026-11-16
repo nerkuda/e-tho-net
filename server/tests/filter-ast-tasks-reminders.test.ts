@@ -182,7 +182,9 @@ describe(
             USER,
           ).id,
         }));
-        assert.deepEqual(ids(ndb, leaf('tasks', 'not_empty')), [permanent].sort());
+        // Автосубъекты (уточнение 2026-11-16): задача постоянного комментария
+        // адресована ещё и его владельцу — «задачи есть» у обоих.
+        assert.deepEqual(ids(ndb, leaf('tasks', 'not_empty')), [permanent, carrierTwo].sort());
       } finally {
         ndb.close();
       }

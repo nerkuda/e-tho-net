@@ -56,6 +56,7 @@ function task(overrides: Partial<TaskDTO> & { comment_id?: string; line_no?: num
     period_from: null,
     period_to: null,
     due: null,
+    auto_period: false,
     done: false,
     subject_thoughts: [],
     subject_state: 'active',

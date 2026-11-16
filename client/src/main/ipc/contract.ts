@@ -545,7 +545,8 @@ export interface TaskOpInput {
  * снимает маркер задачи (строки становятся `- текст`), `move-all` двигает все
  * date-ссылки строк на один сдвиг (`days`/`months`, ровно один), `undate-all`
  * снимает у строк все date-ссылки («Сделать бессрочными», ошибка 3cef7466) и
- * сдвига не берёт.
+ * сдвига не берёт. Строки хроно-записей в `undate-all` пропускаются
+ * (`undate_not_allowed`): их период вернёт пере-парс (уточнение 2026-11-16).
  */
 export interface TaskMassCommandInput {
   action: TaskMassAction;

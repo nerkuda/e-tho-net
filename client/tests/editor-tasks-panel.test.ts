@@ -49,6 +49,7 @@ function taskRow(overrides: Partial<TaskDTO> = {}): TaskDTO {
     period_from: null,
     period_to: null,
     due: '2026-11-14',
+    auto_period: false,
     done: false,
     subject_thoughts: [],
     subject_state: 'active',
@@ -373,8 +374,8 @@ describe('зона «Задачи» редактора: точечная пра�
     }
   });
 
-  it('«Сделать бессрочной» уходит операцией undate', async () => {
-    const h = await setup([taskRow()]);
+  it('«Сделать бессрочной» уходит операцией undate (только строка постоянного комментария)', async () => {
+    const h = await setup([taskRow({ kind: 'permanent' })]);
     try {
       openRowMenu(rowOf(h.group, 'c1:0'));
       const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
@@ -386,6 +387,20 @@ describe('зона «Задачи» редактора: точечная пра�
       await h.settle();
       const op = (h.patches[0]!['ops'] as Array<Record<string, unknown>>)[0]!;
       assert.equal(op['action'], 'undate');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('у строки хроно-записи «Сделать бессрочной» нет: период вернёт пере-парс', async () => {
+    const h = await setup([taskRow({ kind: 'chronological' })]);
+    try {
+      openRowMenu(rowOf(h.group, 'c1:0'));
+      const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+      const item = body
+        .querySelectorAll('.menu-item')
+        .find((node) => node.flatText().includes(t('tasks.undateRow')));
+      assert.equal(item, undefined, 'команды в меню нет (уточнение 2026-11-16)');
     } finally {
       h.destroy();
     }

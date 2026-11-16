@@ -22,6 +22,7 @@ import { removeTaskLineDates } from '@etn/markdown';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { createCommentWithTargets } from '../src/domain/comment-service.js';
+import { createLink } from '../src/domain/link-service.js';
 import {
   applyTaskMassCommand,
   applyTaskOps,
@@ -105,6 +106,36 @@ function createTaskComment(
   );
 }
 
+/**
+ * Комментарий-источник задач с явной датой записи: автопериод (уточнение
+ * 2026-11-16) делает период записи периодом задачи без дат, поэтому тестам о
+ * «Без срока» и просрочке нужен постоянный комментарий, а тестам о записях —
+ * управляемая дата записи.
+ */
+function createDatedComment(
+  ndb: NetworkDb,
+  thoughtId: string,
+  bodyMd: string,
+  validFrom: string,
+  validTo?: string,
+): string {
+  return write(
+    ndb,
+    () =>
+      createCommentWithTargets(
+        ndb,
+        [{ owner_type: 'thought', owner_id: thoughtId }],
+        {
+          kind: 'chronological',
+          body_md: bodyMd,
+          valid_from: validFrom,
+          ...(validTo === undefined ? {} : { valid_to: validTo }),
+        },
+        USER,
+      ).id,
+  );
+}
+
 describe(
   'задачи: выборка и правка (632eca85)',
   nativeAvailable() ? {} : { skip: 'better-sqlite3 native binding unavailable' },
@@ -143,8 +174,11 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 't-1', 'Мысль');
+        seedThought(ndb, 't-undated', 'Мысль без срока');
         const overdueId = createTaskComment(ndb, 't-1', '- [ ] Просрочено [[2026-11-13]]');
-        const undatedId = createTaskComment(ndb, 't-1', '- [ ] Без даты');
+        // «Без срока» — только у постоянного комментария: строка хроно-записи
+        // получает период записи (автопериод, уточнение 2026-11-16).
+        const undatedId = createTaskComment(ndb, 't-undated', '- [ ] Без даты', 'permanent');
         createTaskComment(ndb, 't-1', '- [ ] Будущее [[2026-12-01]]');
 
         const overdue = listTasks(ndb, {
@@ -192,10 +226,12 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 't-1', 'Мысль');
+        seedThought(ndb, 't-undated', 'Мысль без срока');
         createTaskComment(ndb, 't-1', '- [ ] C [[2026-11-22]]');
         createTaskComment(ndb, 't-1', '- [ ] A [[2026-11-20]]');
         createTaskComment(ndb, 't-1', '- [ ] B [[2026-11-21]]');
-        createTaskComment(ndb, 't-1', '- [ ] Без срока');
+        // Строка «Без срока» — из постоянного комментария (у записи период есть).
+        createTaskComment(ndb, 't-undated', '- [ ] Без срока', 'permanent');
 
         const seen: string[] = [];
         let cursor: string | null = null;
@@ -410,11 +446,12 @@ describe(
       }
     });
 
-    it('move без даты — ok:false undated; cancel снимает маркер', () => {
+    it('move без даты — ok:false undated (постоянный комментарий); cancel снимает маркер', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 't-1', 'Мысль');
-        const undatedId = createTaskComment(ndb, 't-1', '- [ ] Без даты');
+        seedThought(ndb, 't-undated', 'Мысль без срока');
+        const undatedId = createTaskComment(ndb, 't-undated', '- [ ] Без даты', 'permanent');
         const datedId = createTaskComment(ndb, 't-1', '- [ ] С датой [[2026-11-20]]');
 
         const moved = write(ndb, () =>
@@ -524,10 +561,13 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 't-1', 'Мысль');
+        // «Сделать бессрочной» есть только у строк постоянного комментария:
+        // у строки хроно-записи период вернётся из записи (уточнение 2026-11-16).
         const commentId = createTaskComment(
           ndb,
           't-1',
           ['- [ ] Задача [[2026-11-10]] [[2026-11-12]]', '- [ ] Вторая [[2026-11-13]]'].join('\n'),
+          'permanent',
         );
         const result = write(ndb, () =>
           applyTaskOps(
@@ -574,16 +614,24 @@ describe(
       }
     });
 
-    it('массовая undate-all снимает даты у всех выбранных невыполненных строк', () => {
+    it('массовая undate-all снимает даты у выбранных строк постоянного комментария', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 't-1', 'Мысль');
+        // Массовая «Сделать бессрочными» работает по строкам постоянных
+        // комментариев; строки хроно-записей пропускаются (см. следующий тест).
         createTaskComment(
           ndb,
           't-1',
           ['- [ ] Первая [[2026-11-14]]', '- [ ] Вторая [[2026-11-15]]', '- [ ] Третья'].join('\n'),
+          'permanent',
         );
-        const outsideId = createTaskComment(ndb, 't-1', '- [ ] Вне периода [[2026-12-01]]');
+        const outsideId = createDatedComment(
+          ndb,
+          't-1',
+          '- [ ] Вне периода [[2026-12-01]]',
+          '2026-12-01',
+        );
 
         const result = write(ndb, () =>
           applyTaskMassCommand(
@@ -618,6 +666,9 @@ describe(
       const ndb = createInMemoryNetworkDb();
       try {
         seedThought(ndb, 't-1', 'Мысль');
+        // Постоянный комментарий: у строки без даты из записи перенос не
+        // «пропускается», а закрепляет явную дату (уточнение 2026-11-16) —
+        // сценарий undated проверяется на постоянном источнике.
         const commentId = createTaskComment(
           ndb,
           't-1',
@@ -627,6 +678,7 @@ describe(
             '    - [ ] ребёнок [[2026-11-21]]',
             '- [ ] Без даты',
           ].join('\n'),
+          'permanent',
         );
 
         const moved = write(ndb, () =>
@@ -657,6 +709,227 @@ describe(
         assert.equal(listTasks(ndb, { scope: 'open' }).items.length, 0);
         const body = cancelled.revisions[0]!.body_md;
         assert.ok(!body.includes('[ ]'), 'маркеров задач в тексте не осталось');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('автопериод: запись без дат даёт период дня, период записи — весь, дата строки приоритетнее', () => {
+      // ТЗ 2026-11-16: задача строки бросает period_from/period_to записи
+      // (valid_from..valid_to), если в строке нет date-ссылок.
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const dayId = createDatedComment(ndb, 't-1', '- [ ] Задача дня', '2026-11-15');
+        const periodId = createDatedComment(
+          ndb,
+          't-1',
+          '- [ ] Задача периода\n- [ ] Дата строки [[2026-11-02]]',
+          '2026-11-10',
+          '2026-11-20',
+        );
+
+        const page = listTasks(ndb, { scope: 'open' });
+        const byComment = new Map(page.items.map((task) => [task.comment_id, task]));
+        const day = byComment.get(dayId)!;
+        assert.deepEqual(
+          [day.period_from, day.period_to, day.due, day.auto_period],
+          ['2026-11-15', '2026-11-15', '2026-11-15', true],
+          'дневная запись — период дня, срок — конец периода',
+        );
+        const periodRows = page.items.filter((task) => task.comment_id === periodId);
+        const record = periodRows.find((task) => task.line_no === 0)!;
+        const dated = periodRows.find((task) => task.line_no === 1)!;
+        assert.deepEqual(
+          [record.period_from, record.period_to, record.due, record.auto_period],
+          ['2026-11-10', '2026-11-20', '2026-11-20', true],
+          'запись с периодом — весь период записи',
+        );
+        assert.deepEqual(
+          [dated.period_from, dated.period_to, dated.due, dated.auto_period],
+          ['2026-11-02', '2026-11-02', '2026-11-02', false],
+          'дата в строке приоритетнее периода записи',
+        );
+
+        // Автопериод попадает в отборы: просрочка пополняется задачами прошлых
+        // записей (следствие, принятое пользователем).
+        const overdue = listTasks(ndb, { scope: 'overdue', today: '2026-11-16' });
+        assert.deepEqual(
+          overdue.items.map((task) => task.comment_id).sort(),
+          [dayId, periodId].sort(),
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('автопериод: подзадача без даты остаётся пунктом чек-листа, с датой — самостоятельна', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const commentId = createDatedComment(
+          ndb,
+          't-1',
+          ['- [ ] Родитель', '  - [ ] пункт', '  - [ ] подзадача [[2026-11-12]]'].join('\n'),
+          '2026-11-10',
+        );
+        const rows = listTasks(ndb, { commentId }).items;
+        assert.deepEqual(
+          rows.map((task) => [task.line_no, task.subtask, task.auto_period]),
+          [
+            [0, false, true],
+            [2, false, false],
+          ],
+          'пункт чек-листа без даты задачей не стал, подзадача с датой самостоятельна',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('автосубъекты: постоянный комментарий мысли — владелец и ссылки, связи — оба конца', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const linkedId = '55555555-5555-4555-8555-555555555555';
+        seedThought(ndb, linkedId, 'Ссылка строки');
+        const thoughtComment = createTaskComment(
+          ndb,
+          't-1',
+          `- [ ] Задача [[#${linkedId}]]`,
+          'permanent',
+        );
+        const fromThought = listTasks(ndb, { commentId: thoughtComment }).items[0]!;
+        assert.deepEqual(fromThought.subject_thoughts, ['t-1', linkedId]);
+
+        // Панель «Задачи» мысли-владельца видит задачи её постоянного комментария.
+        assert.deepEqual(
+          listTasks(ndb, { thoughtId: 't-1' }).items.map((task) => task.comment_id),
+          [thoughtComment],
+        );
+
+        seedThought(ndb, 't-2', 'Второй конец');
+        const link = write(ndb, () =>
+          createLink(ndb, { source_id: 't-1', target_id: 't-2' }, USER),
+        );
+        const linkComment = write(
+          ndb,
+          () =>
+            createCommentWithTargets(
+              ndb,
+              [{ owner_type: 'link', owner_id: link.id }],
+              { kind: 'permanent', body_md: `- [ ] Общая задача [[2026-11-20]]` },
+              USER,
+            ).id,
+        );
+        const fromLink = listTasks(ndb, { commentId: linkComment }).items[0]!;
+        assert.deepEqual(
+          fromLink.subject_thoughts,
+          ['t-1', 't-2'],
+          'комментарий связи адресует задачу обоим концам',
+        );
+        assert.deepEqual(
+          listTasks(ndb, { thoughtId: 't-2' }).items.map((task) => task.comment_id),
+          [linkComment],
+          'задача связи видна в панели каждого конца',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('undate строки хроно-записи — 400; set_due и перенос закрепляют явную дату', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const commentId = createDatedComment(ndb, 't-1', '- [ ] Задача дня', '2026-11-15');
+
+        assert.throws(
+          () =>
+            write(ndb, () =>
+              applyTaskOps(
+                ndb,
+                [{ comment_id: commentId, line_no: 0, action: 'undate', expected_revision: 1 }],
+                USER,
+              ),
+            ),
+          (err: unknown) => err instanceof EtnError && err.code === 'BAD_REQUEST',
+          'автопериод вернул бы дату при пере-парсинге — команда недоступна',
+        );
+
+        // set_due: дат в строке нет — ссылка дописывается, задача закрепляется.
+        const pinned = write(ndb, () =>
+          applyTaskOps(
+            ndb,
+            [
+              {
+                comment_id: commentId,
+                line_no: 0,
+                action: 'set_due',
+                date: '2026-11-20',
+                expected_revision: 1,
+              },
+            ],
+            USER,
+          ),
+        );
+        assert.equal(pinned.revisions[0]!.body_md, '- [ ] Задача дня [[2026-11-20]]');
+        const row = listTasks(ndb, { commentId }).items[0]!;
+        assert.deepEqual(
+          [row.period_from, row.due, row.auto_period],
+          ['2026-11-20', '2026-11-20', false],
+          'строка закреплена явной датой — период больше не из записи',
+        );
+
+        // «На завтра» (move) авто-строки: отсчёт от конца периода записи.
+        const movedId = createDatedComment(ndb, 't-1', '- [ ] Отложить', '2026-11-15');
+        const moved = write(ndb, () =>
+          applyTaskOps(
+            ndb,
+            [{ comment_id: movedId, line_no: 0, action: 'move', days: 1, expected_revision: 1 }],
+            USER,
+          ),
+        );
+        assert.equal(moved.revisions[0]!.body_md, '- [ ] Отложить [[2026-11-16]]');
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('массовая undate-all пропускает строки хроно-записей, не отменяя команду', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const recordId = createDatedComment(ndb, 't-1', '- [ ] Из записи', '2026-11-15');
+        const permanentId = createTaskComment(
+          ndb,
+          't-1',
+          '- [ ] Из постоянного [[2026-11-16]]',
+          'permanent',
+        );
+
+        const result = write(ndb, () =>
+          applyTaskMassCommand(
+            ndb,
+            {
+              action: 'undate-all',
+              filter: { scope: 'open', from: '2026-11-15', to: '2026-11-20' },
+            },
+            USER,
+          ),
+        );
+        const failed = result.results.filter((entry) => !entry.ok);
+        assert.deepEqual(
+          failed.map((entry) => [entry.comment_id, entry.error]),
+          [[recordId, 'undate_not_allowed']],
+          'строка хроно-записи пропущена с объяснением',
+        );
+        const permanent = listTasks(ndb, { commentId: permanentId }).items[0]!;
+        assert.equal(
+          permanent.period_from,
+          null,
+          'строка постоянного комментария стала бессрочной',
+        );
       } finally {
         ndb.close();
       }

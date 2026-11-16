@@ -30,7 +30,13 @@
  * устарела хоть одна строка либо пришло событие напоминаний `reminders.changed`.
  */
 
-import type { Reminder, ReminderListResult, TaskDTO, TaskMassFilter } from '@etn/shared';
+import type {
+  CommentKind,
+  Reminder,
+  ReminderListResult,
+  TaskDTO,
+  TaskMassFilter,
+} from '@etn/shared';
 
 /** Пороги группировки по количеству элементов (требование 6762adb0). */
 export const TASK_GROUP_THRESHOLDS = {
@@ -240,6 +246,8 @@ export interface TaskPanelRow extends PanelGroupable {
   periodFrom: string | null;
   /** Последняя date-ссылка строки — срок (`YYYY-MM-DD`), `null` — без дат. */
   due: string | null;
+  /** Вид комментария-источника: у хроно-записи «Сделать бессрочной» нет. */
+  kind: CommentKind;
   /** Мысли из ID-ссылок строки (для группировки по мыслям и перехода). */
   subjectThoughts: string[];
 }
@@ -302,6 +310,7 @@ export function taskRowView(
     subtask: row.subtask,
     periodFrom: row.period_from,
     due: row.due,
+    kind: row.kind,
     day: row.due ?? row.period_from,
     subjectThoughts: row.subject_thoughts,
     subjectId: row.subject_thoughts[0] ?? null,
