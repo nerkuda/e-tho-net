@@ -29,11 +29,13 @@ import {
 
 import { shiftInstant } from '../src/renderer/lib/dates.js';
 import { t } from '../src/renderer/lib/i18n.js';
+import { closeMenuOwnedBy, menuAction, showMenuAt } from '../src/renderer/lib/menu.js';
 import { routeRealtimeEvent, resetEventRouter } from '../src/renderer/lib/live/event-router.js';
 import { reminderLabel } from '../src/renderer/lib/reminder-label.js';
 import {
   createReminderFlag,
   resetReminderFlagsForTests,
+  REMINDER_FLAG_MENU_OWNER,
   type ReminderEditorOpener,
 } from '../src/renderer/editor/reminder-flag.js';
 import { store } from '../src/renderer/state.js';
@@ -638,5 +640,54 @@ describe('флаг напоминаний — события', () => {
     routeRealtimeEvent(remindersChanged('00000000-0000-4000-8000-0000000000ff', 7));
     await flush();
     assert.equal(calls.list.length, before, 'чужое событие не перечитывает список');
+  });
+});
+
+describe('флаг напоминаний — перенацеливание шапки не закрывает чужое меню (0ffa00e4)', () => {
+  it('setTarget оставляет открытое меню другого источника и закрывает своё', async () => {
+    installBridge(() => listResult([reminder({ id: 'r1', kind: 'one' })]));
+    const flag = createReminderFlag({
+      networkId: NET,
+      thoughtId: 't1',
+      thoughtTitle: 'Мысль',
+      openEditor: async () => null,
+    });
+    await flush();
+
+    // Пользователь открыл своё меню (например, меню профиля): у него нет метки
+    // владельца, и фоновое событие редактора не имеет права его сносить.
+    showMenuAt(10, 10, [menuAction('Профиль', () => undefined)]);
+    const foreign = body.querySelector('.menu');
+    assert.ok(foreign !== null, 'чужое меню открыто');
+
+    flag.setTarget('t2', 'Другая мысль');
+    await flush();
+    assert.equal(
+      body.querySelector('.menu'),
+      foreign,
+      'перенацеливание шапки редактора не закрывает меню другого источника',
+    );
+
+    // Своё меню флага перенацеливание закрывает: оно относится к прежней цели
+    // и после смены мысли показывает чужие напоминания.
+    const own = openFlagMenu(flag);
+    assert.equal(body.querySelector('.menu'), own, 'меню флага открылось поверх');
+    flag.setTarget('t3', 'Третья мысль');
+    await flush();
+    assert.equal(body.querySelector('.menu'), null, 'своё меню флага закрыто перенацеливанием');
+  });
+
+  it('closeMenuOwnedBy закрывает меню только своему владельцу', () => {
+    showMenuAt(10, 10, [menuAction('Создать напоминание', () => undefined)], {
+      owner: REMINDER_FLAG_MENU_OWNER,
+    });
+    const menu = body.querySelector('.menu');
+    assert.ok(menu !== null, 'меню флага открыто');
+
+    closeMenuOwnedBy('user-menu');
+    assert.equal(body.querySelector('.menu'), menu, 'чужая метка меню флага не закрывает');
+
+    closeMenuOwnedBy(REMINDER_FLAG_MENU_OWNER);
+    assert.equal(body.querySelector('.menu'), null, 'своя метка закрывает меню');
   });
 });

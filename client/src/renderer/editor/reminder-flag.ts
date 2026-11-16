@@ -36,7 +36,13 @@ import {
 } from '@etn/shared';
 
 import { shiftInstant } from '../lib/dates.js';
-import { closeMenu, menuAction, menuSubmenu, showMenuAt, MENU_SEPARATOR } from '../lib/menu.js';
+import {
+  closeMenuOwnedBy,
+  menuAction,
+  menuSubmenu,
+  showMenuAt,
+  MENU_SEPARATOR,
+} from '../lib/menu.js';
 import { openReminderEditor } from '../lib/reminder-editor.js';
 import { reminderLabel, remindersFlagText } from '../lib/reminder-label.js';
 import { errText } from '../lib/dom.js';
@@ -49,6 +55,12 @@ import { store } from '../state.js';
 
 /** Класс флага (DOM-пробы и сторож). */
 export const REMINDER_FLAG_CLASS = 'editor-reminder-flag';
+
+/**
+ * Владелец меню флага в словаре `lib/menu.ts`: по этой метке флаг закрывает
+ * только СВОЁ меню, не задевая открытое пользователем (ошибка 0ffa00e4).
+ */
+export const REMINDER_FLAG_MENU_OWNER = 'reminder-flag';
 
 /** Открытие редактора напоминания (шов подмены в тестах). */
 export type ReminderEditorOpener = typeof openReminderEditor;
@@ -288,7 +300,10 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
       MENU_SEPARATOR,
       ...reminders.map((reminder) => reminderMenu(reminder)),
     ];
-    showMenuAt(rect.left, rect.bottom, items, { keyboard: true });
+    showMenuAt(rect.left, rect.bottom, items, {
+      keyboard: true,
+      owner: REMINDER_FLAG_MENU_OWNER,
+    });
   };
 
   root.addEventListener('click', (event) => {
@@ -321,7 +336,11 @@ export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHa
     setTarget: (thoughtId, thoughtTitle) => {
       subjectId = thoughtId;
       subjectTitle = thoughtTitle;
-      closeMenu();
+      // Перенацеливание шапки — фоновое событие, а не жест пользователя: оно
+      // закрывает ТОЛЬКО меню флага. Чужое меню (пользователя, сети, карты),
+      // открытое в этот момент, остаётся на месте — раньше глобальный closeMenu()
+      // сносил его через 20–40 мс (ошибка 0ffa00e4).
+      closeMenuOwnedBy(REMINDER_FLAG_MENU_OWNER);
       void refresh();
     },
   };
