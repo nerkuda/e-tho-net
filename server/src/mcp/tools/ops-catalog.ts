@@ -49,6 +49,7 @@ import {
   LayersMerge,
   LayersResetOverride,
   LayersUpdate,
+  LinksDelete,
   LinksRestore,
   LocksAcquire,
   LocksClear,
@@ -778,10 +779,27 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     paramsContract: ThoughtsTrash,
   },
   {
+    action: 'links.delete',
+    tool: 'etn.links.delete',
+    group: 'links',
+    when: 'delete one edge — the only way to remove an untyped (structural) edge, which `unlink_parents`/`unlink_children` and `properties.remove` do not touch',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'link_id', required: true, desc: 'link id' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
+    errors:
+      '`VALIDATION_ERROR` — the edge is held by a live layer and cannot be deleted from the base. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
+    paramsContract: LinksDelete,
+  },
+  {
     action: 'links.restore',
     tool: 'etn.links.restore',
     group: 'links',
-    when: 'restore a link from the basket (`trashed: false`) — the only operation of the `etn.links.*` family',
+    when: 'restore a link from the basket (`trashed: false`) — the counterpart of `links.delete` for an edge of the base/ancestor marked in a layer',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'link_id', required: true, desc: 'link id' },

@@ -1418,6 +1418,12 @@ export const ThoughtsTrash = defineContract(
   {},
 );
 
+export const LinksDelete = defineContract(
+  'etn.links.delete',
+  z.object({ network_id: NetworkId, link_id: LinkId }),
+  {},
+);
+
 export const LinksRestore = defineContract(
   'etn.links.restore',
   z.object({ network_id: NetworkId, link_id: LinkId }),

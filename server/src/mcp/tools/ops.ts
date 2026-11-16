@@ -54,6 +54,7 @@ import {
   LayersMerge,
   LayersResetOverride,
   LayersUpdate,
+  LinksDelete,
   LinksRestore,
   LocksAcquire,
   LocksClear,
@@ -110,6 +111,10 @@ import { findPath } from '../../domain/graph-traversal.js';
 import { subgraphAsync, resolveThoughtRefsAsync } from '../../domain/heavy-read.js';
 import { getHomeThoughtId, getThoughtOrThrow, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
 import { getLink, updateLink } from '../../domain/link-service.js';
+import {
+  removeLinkTarget,
+  type LinkRemovalAction,
+} from '../../domain/link-target-removal.js';
 import { findMentions } from '../../domain/search-service.js';
 import { findBacklinks } from '../../domain/backlinks-service.js';
 import { deleteComment, getComment } from '../../domain/comment-service.js';
@@ -179,6 +184,12 @@ export type OpHandler = (
 // ---------------------------------------------------------------------------
 // Обработчики действий
 // ---------------------------------------------------------------------------
+
+/** Итог `links.delete`: что стало с ребром (noop — ребра нет или оно уже в корзине). */
+interface LinkDeleteOutcome {
+  link_id: string;
+  action: LinkRemovalAction | 'noop';
+}
 
 const HANDLERS: Record<string, OpHandler> = {
   // ---- locks ---------------------------------------------------------------
@@ -1234,6 +1245,68 @@ const HANDLERS: Record<string, OpHandler> = {
         version: link.version,
         request_id: String(extra.requestId),
       } satisfies McpMutationResult;
+    });
+  },
+  'links.delete': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof LinksDelete.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      requireWritable(rt);
+      requireWriteBudget(rt);
+      const ndb = openMemberNetwork(rt, a.network_id);
+      const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      const removal = runWrite<LinkDeleteOutcome>(ndb, fx, () => {
+        // Умное удаление (0.14.1, ADR a967d865) — та же процедура, что у удаления
+        // цели свойства-связи: основа и свежее ребро слоя физически
+        // (`link.deleted`); ребро основы/предка при работе в слое — корзина
+        // (`link.updated`), восстановление — `links.restore`.
+        const removed = removeLinkTarget(ndb, a.link_id, rt.deps.auth.userId);
+        const audit = {
+          action: 'etn.links.delete',
+          targetType: 'link',
+          targetId: a.link_id,
+          details: { action: removed?.action ?? 'noop' },
+        };
+        // Идемпотентность (ошибка 7df2b3d1): ребра нет или оно уже в корзине —
+        // no-op без события и без строки журнала.
+        if (removed === null) {
+          return { result: { link_id: a.link_id, action: 'noop' as const }, audit };
+        }
+        if (removed.action === 'deleted') {
+          return {
+            result: { link_id: removed.link_id, action: removed.action },
+            events: [{ type: 'link.deleted' as const, data: { id: removed.link_id } }],
+            activity: [{ kind: 'link' as const, action: 'deleted' as const, link: removed.link }],
+            audit,
+          };
+        }
+        // Корзина слоя: строка уже помечена — событие и журнал показывают
+        // итоговое состояние ребра, как у прочих пометок.
+        const marked = getLink(ndb, removed.link_id);
+        return {
+          result: { link_id: removed.link_id, action: removed.action },
+          ...(marked === null
+            ? {}
+            : {
+                events: [
+                  {
+                    type: 'link.updated' as const,
+                    data: {
+                      id: marked.id,
+                      changes: { marked_for_deletion: true },
+                      version: marked.version,
+                    },
+                  },
+                ],
+                activity: [{ kind: 'link' as const, action: 'trashed' as const, link: marked }],
+              }),
+          audit,
+        };
+      });
+      return {
+        link_id: removal.link_id,
+        action: removal.action,
+        request_id: String(extra.requestId),
+      };
     });
   },
 
