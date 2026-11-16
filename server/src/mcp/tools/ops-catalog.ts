@@ -1228,7 +1228,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
       },
       { name: 'from', desc: 'period start — `YYYY-MM-DD` or a UTC instant (its UTC date is taken)' },
       { name: 'to', desc: 'period end (same forms as `from`)' },
-      { name: 'thought_id', desc: 'only rows where the thought is a subject (`[[#uuid]]`)' },
+      {
+        name: 'thought_id',
+        desc: 'only rows addressed to this thought — its `[[#uuid]]` ID reference in the row or the owner of a permanent comment (a thought, or either end of a link)',
+      },
       { name: 'comment_id', desc: 'only rows sourced from this comment' },
       {
         name: 'today',

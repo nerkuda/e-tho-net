@@ -22,7 +22,7 @@ import { removeTaskLineDates } from '@etn/markdown';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { createCommentWithTargets } from '../src/domain/comment-service.js';
-import { createLink } from '../src/domain/link-service.js';
+import { createLink, updateLink } from '../src/domain/link-service.js';
 import {
   applyTaskMassCommand,
   applyTaskOps,
@@ -832,6 +832,56 @@ describe(
           listTasks(ndb, { thoughtId: 't-2' }).items.map((task) => task.comment_id),
           [linkComment],
           'задача связи видна в панели каждого конца',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('автосубъекты: смена концов связи пере-парсит задачу её комментария (da805de1)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Первый конец');
+        seedThought(ndb, 't-2', 'Второй конец');
+        seedThought(ndb, 't-3', 'Новый конец');
+        const link = write(ndb, () =>
+          createLink(ndb, { source_id: 't-1', target_id: 't-2' }, USER),
+        );
+        const linkComment = write(
+          ndb,
+          () =>
+            createCommentWithTargets(
+              ndb,
+              [{ owner_type: 'link', owner_id: link.id }],
+              { kind: 'permanent', body_md: `- [ ] Общая задача [[2026-11-20]]` },
+              USER,
+            ).id,
+        );
+        assert.deepEqual(
+          listTasks(ndb, { commentId: linkComment }).items[0]!.subject_thoughts,
+          ['t-1', 't-2'],
+          'до перепривязки задача адресована обоим концам',
+        );
+
+        // Перепривязка T1–T2 → T2–T3: строка проекции обязана пере-парситься
+        // (ошибка da805de1), иначе панель «Задачи» держит прежнюю пару концов.
+        write(ndb, () =>
+          updateLink(ndb, link.id, { source_id: 't-2', target_id: 't-3' }, undefined, USER),
+        );
+        assert.deepEqual(
+          listTasks(ndb, { commentId: linkComment }).items[0]!.subject_thoughts,
+          ['t-2', 't-3'],
+          'субъекты задачи следуют новой паре концов',
+        );
+        assert.deepEqual(
+          listTasks(ndb, { thoughtId: 't-3' }).items.map((task) => task.comment_id),
+          [linkComment],
+          'новый конец видит задачу сразу после перепривязки',
+        );
+        assert.deepEqual(
+          listTasks(ndb, { thoughtId: 't-1' }).items.map((task) => task.comment_id),
+          [],
+          'старый конец задачу больше не видит',
         );
       } finally {
         ndb.close();
