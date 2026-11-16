@@ -132,6 +132,33 @@ function withTempDir<T>(prefix: string, run: (dir: string) => T): T {
   }
 }
 
+/**
+ * Разбор раздела `THIRD-PARTY-NOTICES.txt`: число из заголовка и список
+ * записей под ним. Запись — строка без отступа, сразу за которой идёт поле
+ * `Лицензия: …`; абзацы (дисклеймер тем, фраза автора Blue Topaz) такого
+ * поля не имеют и записями не считаются.
+ */
+function noticesSection(notices: string, title: string): { declared: number; rows: string[] } {
+  const lines = notices.split('\n');
+  const headerIndex = lines.findIndex((line) => line.startsWith(`${title} (`));
+  assert.ok(headerIndex >= 0, `в notices нет раздела «${title}»`);
+  const declared = Number(/\((\d+)\)\s*$/.exec(lines[headerIndex] ?? '')?.[1] ?? Number.NaN);
+  assert.ok(Number.isFinite(declared), `в заголовке раздела «${title}» нет числа`);
+  const rows: string[] = [];
+  for (let i = headerIndex + 1; i < lines.length - 1; i += 1) {
+    const line = lines[i] ?? '';
+    if (/^=+$/.test(line)) {
+      // Разделитель сразу после заголовка — часть шапки раздела; следующий
+      // закрывает раздел.
+      if (rows.length > 0) break;
+      continue;
+    }
+    if (line.trim() === '' || line.startsWith(' ')) continue;
+    if ((lines[i + 1] ?? '').startsWith('  Лицензия: ')) rows.push(line);
+  }
+  return { declared, rows };
+}
+
 describe('guard: перечень сторонних компонентов (35b9cc05)', () => {
   it('каждая прямая зависимость клиента описана в lib/third-party.ts', () => {
     const covered = new Set(coveredPackageNames());
@@ -243,8 +270,11 @@ describe('guard: перечень сторонних компонентов (35b
   it('генератор notices включает вендоренные ассеты и полные тексты их лицензий', () => {
     const notices = buildNotices();
     const assets = assetComponents();
+    // Темы интерфейса перечислены отдельным разделом: в разделе ассетов их
+    // нет, поэтому счётчик считается только по не-темам.
+    const plainAssets = assets.filter((asset) => asset.theme === undefined);
     assert.ok(
-      notices.includes(`ВЕНДОРЕННЫЕ АССЕТЫ (${assets.length})`),
+      notices.includes(`ВЕНДОРЕННЫЕ АССЕТЫ (${plainAssets.length})`),
       'в THIRD-PARTY-NOTICES нет раздела вендоренных ассетов',
     );
     for (const asset of assets) {
@@ -342,6 +372,47 @@ describe('guard: перечень сторонних компонентов (35b
     assert.equal(
       disclaimer,
       'Названия тем используются в описательных целях; ETN не связан с авторами тем и не одобрен ими. Все права принадлежат их владельцам.',
+    );
+  });
+
+  it('счётчики разделов notices сходятся с числом строк под ними', () => {
+    const notices = buildNotices();
+
+    // Раздел пакетов: счётчик объявляет ровно столько записей, сколько их
+    // перечислено (страховка от «заголовок врёт» при любом будущем фильтре).
+    const packages = noticesSection(notices, 'ПЕРЕЧЕНЬ СТОРОННИХ КОМПОНЕНТОВ');
+    assert.equal(
+      packages.declared,
+      packages.rows.length,
+      'число в заголовке раздела пакетов не сходится с числом записей',
+    );
+
+    // Вендоренные ассеты: темы вынесены отдельным разделом (задача 3cac16cc),
+    // значит в заголовке и в списке — только шрифты и прочие ассеты.
+    const assets = noticesSection(notices, 'ВЕНДОРЕННЫЕ АССЕТЫ');
+    const plainAssets = assetComponents().filter((asset) => asset.theme === undefined);
+    assert.equal(
+      assets.declared,
+      assets.rows.length,
+      'число в заголовке «ВЕНДОРЕННЫЕ АССЕТЫ» не сходится с числом записей',
+    );
+    assert.deepEqual(
+      [...assets.rows].sort(),
+      plainAssets.map((asset) => asset.title).sort(),
+      'раздел ассетов обязан перечислять ровно не-темы: темы идут отдельным разделом',
+    );
+
+    // Темы: та же связка «счётчик == строки» и полный охват каталога тем.
+    const themes = noticesSection(notices, 'ТЕМЫ ОФОРМЛЕНИЯ');
+    assert.equal(
+      themes.declared,
+      themes.rows.length,
+      'число в заголовке «ТЕМЫ ОФОРМЛЕНИЯ» не сходится с числом записей',
+    );
+    assert.equal(
+      themes.declared,
+      themeComponents().length,
+      'в разделе тем перечислены не все записи каталога',
     );
   });
 

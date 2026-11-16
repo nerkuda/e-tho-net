@@ -1,6 +1,6 @@
 {
   "name": "c6d74fd4-cloud-state-frames",
-  "description": "Задача c6d74fd4 «Доработка рамок состояний: открытая, текущая и выделенная мысли». Стенд: язык сервера ru. Проверено: (1) рамка открытой — 2px кольцо цвета --frame-open (тон курсора, но светлее) + 1px кант темы; (2) три состояния одновременно на карте — разные облачка, цвета попарно ≥ 40 sRGB; (3) на слое ВСЕ три рамки производны от полосы фокуса (создан слой → цвета сменились; правка «Полоса фокуса» #ffd400 → сменились все три); (5) смена режима без перезагрузки — рамки и гало перекрашены тем же тиком store; возврат на «Основу» — снова от токенов темы; (6) со светлыми обоями рамки те же, хотя бы одно кольцо читается ≥ 3 : 1 на подложке из картинки с тинтом. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c6d74fd4-cloud-state-frames.scenario.json --server-language ru --out .tmp/c6d74fd4/out. Перед повторным открытием меню стенд ждёт «устоявшийся» экран: шапка редактора перенацеливается асинхронно, и её хук флага напоминаний зовёт глобальный closeMenu().",
+  "description": "Задача c6d74fd4 «Доработка рамок состояний: открытая, текущая и выделенная мысли». Стенд: язык сервера ru. Проверено: (1) рамка открытой — 2px кольцо цвета --frame-open (тон курсора, но светлее) + 1px кант темы; (2) три состояния одновременно на карте — разные облачка, цвета попарно ≥ 40 sRGB; (3) на слое ВСЕ три рамки производны от полосы фокуса (создан слой → цвета сменились; правка «Полоса фокуса» #ffd400 → сменились все три); (5) смена режима без перезагрузки — рамки и гало перекрашены тем же тиком store; возврат на «Основу» — снова от токенов темы; (6) со светлыми обоями рамки те же, хотя бы одно кольцо читается ≥ 3 : 1 на подложке из картинки с тинтом. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c6d74fd4-cloud-state-frames.scenario.json --server-language ru --out .tmp/c6d74fd4/out. Повторное открытие меню проверяется УСЛОВИЕМ, а не паузой: шаг «ensure-menu-open-*» требует, чтобы меню было открыто по факту и пережило окно гонки, и при необходимости открывает его снова (гонка 0ffa00e4: шапка редактора перенацеливается асинхронно, и её хук флага напоминаний зовёт глобальный closeMenu()).",
   "timeout": 300000,
   "texts": {
     "userMenuTitle": {
@@ -344,17 +344,13 @@
       "eval": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  window.__framesBefore = [f.open, f.current, f.selected];\n  return window.__framesBefore;\n})()"
     },
     {
-      "name": "settle-before-open-user-menu-dark",
-      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
-      "expect": "ok"
-    },
-    {
       "name": "open-user-menu-dark",
       "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
     },
     {
-      "name": "user-menu-visible-dark",
-      "waitFor": "document.querySelector('.menu-item') !== null"
+      "name": "ensure-menu-open-dark",
+      "probe": "(async () => {\n  // Гонка 0ffa00e4: перенацеливание шапки редактора зовёт глобальный\n  // closeMenu() и может снести только что открытое меню. Ждём УСЛОВИЕ —\n  // меню открыто и пережило окно гонки; если его снесло, открываем снова.\n  // 120 мс внутри попытки — страховка перерисовки, а не замена ожиданию.\n  const button = document.querySelector(\"button[title^='{{text:userMenuTitle}}'], .top-right button\");\n  if (button === null) throw new Error('нет кнопки меню');\n  for (let attempt = 1; attempt <= 6; attempt += 1) {\n    if (document.querySelector('.menu-item') === null) button.click();\n    await new Promise((resolve) => setTimeout(resolve, 120));\n    if (document.querySelector('.menu-item') !== null) return 'menu-open';\n  }\n  throw new Error('меню не удержалось: гонка closeMenu (ошибка 0ffa00e4)');\n})()",
+      "expect": "menu-open"
     },
     {
       "name": "open-settings-dark",
@@ -415,17 +411,13 @@
       "waitFor": "document.querySelector('.dialog-backdrop') === null"
     },
     {
-      "name": "settle-before-open-user-menu-light",
-      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
-      "expect": "ok"
-    },
-    {
       "name": "open-user-menu-light",
       "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
     },
     {
-      "name": "user-menu-visible-light",
-      "waitFor": "document.querySelector('.menu-item') !== null"
+      "name": "ensure-menu-open-light",
+      "probe": "(async () => {\n  // Гонка 0ffa00e4: перенацеливание шапки редактора зовёт глобальный\n  // closeMenu() и может снести только что открытое меню. Ждём УСЛОВИЕ —\n  // меню открыто и пережило окно гонки; если его снесло, открываем снова.\n  // 120 мс внутри попытки — страховка перерисовки, а не замена ожиданию.\n  const button = document.querySelector(\"button[title^='{{text:userMenuTitle}}'], .top-right button\");\n  if (button === null) throw new Error('нет кнопки меню');\n  for (let attempt = 1; attempt <= 6; attempt += 1) {\n    if (document.querySelector('.menu-item') === null) button.click();\n    await new Promise((resolve) => setTimeout(resolve, 120));\n    if (document.querySelector('.menu-item') !== null) return 'menu-open';\n  }\n  throw new Error('меню не удержалось: гонка closeMenu (ошибка 0ffa00e4)');\n})()",
+      "expect": "menu-open"
     },
     {
       "name": "open-settings-light",
@@ -477,18 +469,13 @@
       "waitFor": "document.querySelector('.dialog-backdrop') === null"
     },
     {
-      "name": "settle-before-layer-menu",
-      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
-      "expect": "ok"
-    },
-    {
       "name": "layer-menu-open-props",
       "click": "button[title=\"{{text:probeLayerTitle}}\"]"
     },
     {
-      "name": "layer-menu-visible-props",
-      "timeout": 10000,
-      "waitFor": "document.querySelector('.menu-item') !== null"
+      "name": "ensure-layer-menu-props",
+      "probe": "(async () => {\n  // Гонка 0ffa00e4: перенацеливание шапки редактора зовёт глобальный\n  // closeMenu() и может снести только что открытое меню. Ждём УСЛОВИЕ —\n  // меню открыто и пережило окно гонки; если его снесло, открываем снова.\n  // 120 мс внутри попытки — страховка перерисовки, а не замена ожиданию.\n  const button = document.querySelector(\"button[title=\\\"{{text:probeLayerTitle}}\\\"]\");\n  if (button === null) throw new Error('нет кнопки меню');\n  for (let attempt = 1; attempt <= 6; attempt += 1) {\n    if (document.querySelector('.menu-item') === null) button.click();\n    await new Promise((resolve) => setTimeout(resolve, 120));\n    if (document.querySelector('.menu-item') !== null) return 'menu-open';\n  }\n  throw new Error('меню не удержалось: гонка closeMenu (ошибка 0ffa00e4)');\n})()",
+      "expect": "menu-open"
     },
     {
       "name": "layer-props-item",
@@ -619,17 +606,13 @@
       }
     },
     {
-      "name": "settle-before-open-user-menu-wall",
-      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
-      "expect": "ok"
-    },
-    {
       "name": "open-user-menu-wall",
       "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
     },
     {
-      "name": "user-menu-visible-wall",
-      "waitFor": "document.querySelector('.menu-item') !== null"
+      "name": "ensure-menu-open-wall",
+      "probe": "(async () => {\n  // Гонка 0ffa00e4: перенацеливание шапки редактора зовёт глобальный\n  // closeMenu() и может снести только что открытое меню. Ждём УСЛОВИЕ —\n  // меню открыто и пережило окно гонки; если его снесло, открываем снова.\n  // 120 мс внутри попытки — страховка перерисовки, а не замена ожиданию.\n  const button = document.querySelector(\"button[title^='{{text:userMenuTitle}}'], .top-right button\");\n  if (button === null) throw new Error('нет кнопки меню');\n  for (let attempt = 1; attempt <= 6; attempt += 1) {\n    if (document.querySelector('.menu-item') === null) button.click();\n    await new Promise((resolve) => setTimeout(resolve, 120));\n    if (document.querySelector('.menu-item') !== null) return 'menu-open';\n  }\n  throw new Error('меню не удержалось: гонка closeMenu (ошибка 0ffa00e4)');\n})()",
+      "expect": "menu-open"
     },
     {
       "name": "open-settings-wall",

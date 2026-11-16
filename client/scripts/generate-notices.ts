@@ -257,16 +257,17 @@ export function buildNotices(): string {
     out.push('');
   }
 
-  const assets = assetComponents();
+  const allAssets = assetComponents();
+  // Темы оформления перечислены отдельным разделом ниже (задача 3cac16cc):
+  // в счётчике и в списке вендоренных ассетов их нет — иначе число в
+  // заголовке не сходится с числом строк под ним (замечание проверки).
+  const assets = allAssets.filter((asset) => asset.theme === undefined);
   if (assets.length > 0) {
     out.push('='.repeat(72));
     out.push(`ВЕНДОРЕННЫЕ АССЕТЫ (${assets.length})`);
     out.push('='.repeat(72));
     out.push('');
     for (const asset of assets) {
-      // Темы оформления перечислены отдельным разделом ниже — здесь только
-      // шрифты и прочие ассеты, чтобы записи не дублировались.
-      if (asset.theme !== undefined) continue;
       out.push(asset.title);
       out.push(`  Лицензия: ${asset.license}`);
       if (asset.copyright !== '') out.push(`  Copyright: ${asset.copyright}`);
@@ -319,12 +320,12 @@ export function buildNotices(): string {
     }
   }
 
-  if (assets.length > 0) {
+  if (allAssets.length > 0) {
     out.push('='.repeat(72));
     out.push('ПОЛНЫЕ ТЕКСТЫ ЛИЦЕНЗИЙ ВЕНДОРЕННЫХ АССЕТОВ');
     out.push('='.repeat(72));
     out.push('');
-    for (const asset of assets) {
+    for (const asset of allAssets) {
       out.push('-'.repeat(72));
       out.push(`${asset.title} — ${asset.license}`);
       out.push('-'.repeat(72));
