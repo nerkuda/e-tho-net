@@ -1,100 +1,107 @@
 /*
- * Тема «Nordic» — значения из официального референса natowb/obsidian-nordic
- * (`theme.css` + `src/colors.css`). Шрифты референса (дисплейные) НЕ
- * переносятся, easing/анимации — действующие ETN (ADR de24adef).
+ * Тема «Nordic» — значения САМОСТОЯТЕЛЬНО пересобраны из официальной палитры
+ * Nord (MIT, © 2016-present Sven Greb, https://github.com/nordtheme/nord).
+ * Сторонние темы оформления не используются: ни одно значение здесь не взято
+ * из чужого CSS. Имя «Nordic» — описательное, логотип и вордмарк Nord не
+ * применяются.
  *
- * Палитра Nord: полярная ночь `nord0–nord3` (#2e3440…#4c566a), снежная буря
- * `nord4–nord6` (#d8dee9…#eceff4), фрост `nord7–nord10`, аврора
- * `nord11–nord15`. Акцент референса задан как `hsl(210 34% 63%)` — это
- * nord9 `#81a1c1`; на нём читается надпись цвета nord0 (4.64:1).
+ * Палитра: полярная ночь nord0-nord3 (#2E3440…#4C566A), снежная буря
+ * nord4-nord6 (#D8DEE9…#ECEFF4), фрост nord7-nord10, аврора nord11-nord15.
+ * Прямые роли берут цвет палитры как есть; производные тона — смеси двух
+ * цветов палитры (либо палитры с белым/чёрным) с указанной долей второго
+ * (например, «nord4 + 30 % nord3»), поэтому каждый тон проверяемо выводится
+ * из палитры. Контрасты не ниже прежней версии темы: текст на поверхностях
+ * ≥ 4.5 : 1, надпись на акценте 4.64 : 1, кант фокуса ≥ 4.5 : 1, полосы
+ * состояний ≥ 3 : 1.
+ *
  * Характер темы — плоский и сдержанный: тени мягкие, микро-тень
- * (`--shadow-xs-c`) прежней величины (0.15 α), радиусы — базовые Obsidian
- * (4/8/12/16 px), дополнены «пилюлей» шкалы ETN.
+ * (--shadow-xs-c) прежней величины (0.15 α), радиусы — базовая шкала ETN
+ * (4/8/12/16 px) плюс «пилюля».
  *
  * Файл значений СУЩЕСТВУЮЩИХ токенов (ADR de24adef): только объявления
- * переменных, ни одного класса. Селекция — `data-theme='nordic'` +
- * `data-mode` на корне документа. Состав набора токенов обязан совпадать с
- * остальными темами (сторож `guard-ui-theme-tokens`).
+ * переменных, ни одного класса. Селекция — data-theme='nordic' +
+ * data-mode на корне документа. Состав набора токенов обязан совпадать с
+ * остальными темами (сторож guard-ui-theme-tokens).
  */
 
 [data-theme='nordic'][data-mode='light'] {
   color-scheme: light;
 
-  /* palette — Nord, светлый режим (Snow Storm) */
-  --bg: #eceff4;
-  --surface: #f5f5f5;
-  --surface-2: #e5e9f0;
-  --bg-hover: #e5e9f0;
-  --bg-active: #d8dee9;
-  --border: #d8dee9;
-  --border-strong: #c2c9d6;
-  --text: #2e3440;
-  --text-dim: #4c566a;
-  --text-faint: #7a8698;
-  --accent: #81a1c1;
-  --accent-strong: #5e81ac;
-  --accent-pressed: #4c6a94;
-  --accent-soft: #dbe3ec;
-  /* nord9/nord0 = 4.64:1; светлая надпись на акценте давала 2.69:1. */
-  --accent-fg: #2e3440;
+  /* Поверхности — снежная буря: nord6, nord6 + 50 % белого, nord5, nord4. */
+  --bg: #ECEFF4;
+  --surface: #F6F7FA;
+  --surface-2: #E5E9F0;
+  --bg-hover: #E5E9F0;
+  --bg-active: #D8DEE9;
+  --border: #D8DEE9;
+  --border-strong: #AEB5C3;
+  /* Текст — полярная ночь: nord0 / nord3 / nord3 + 33 % nord4. */
+  --text: #2E3440;
+  --text-dim: #4C566A;
+  --text-faint: #7A8394;
+  /* Акцент — фрост: nord9, nord10, nord10 + 30 % nord0. Надпись nord0 на nord9 — 4.64 : 1. */
+  --accent: #81A1C1;
+  --accent-strong: #5E81AC;
+  --accent-pressed: #506A8C;
+  --accent-soft: #DBE3ED;
+  --accent-fg: #2E3440;
   --selection-bg: rgba(129, 161, 193, 0.4);
-  /* nord15 #b48ead, затемнён до #8f5f86 для контраста мелкого текста на
-     светлой поверхности (--surface). */
-  --selection: #8f5f86;
-  /* Пунктир курсора — nord13 (жёлтый авроры), приглушённый для светлого фона. */
-  --cursor: #8a5f1a;
-  --cal-weekend: #b48ead;
-  --cal-marker-records: #4c8fa8;
-  --danger: #bf616a;
-  --danger-soft: #f3e2e4;
-  --ok: #6d8a4e;
-  --ok-soft: #e8f0e2;
-  --warn: #bf9436;
-  --warn-strong: #9a7420;
-  --warn-soft: #f7efdc;
-  --warn-glow: rgba(191, 148, 54, 0.35);
-  --mark-bg: #f3e2b8;
-  --link-default: #9aa8b8;
-  --ft-tone-1: #eaf0f7;
-  --ft-tone-2: #eaf2e6;
-  --ft-tone-3: #f7f1e2;
-  --ft-tone-4: #efeaf4;
-  --ellipse-fill: #b6c8da;
-  --ellipse-fill-border: #81a1c1;
+  /* Состояния — аврора: nord15 + 44 % nord0, nord12 + 58 % nord0, nord15. */
+  --selection: #79667D;
+  --cursor: #725754;
+  --cal-weekend: #B48EAD;
+  --cal-marker-records: #658AAE;
+  /* Статусы — аврора; мягкие подложки — поверхность + 13–19 % краски. */
+  --danger: #BF616A;
+  --danger-soft: #EFE3E7;
+  --ok: #6E806A;
+  --ok-soft: #EAEFEA;
+  --warn: #9F8F6D;
+  --warn-strong: #837862;
+  --warn-soft: #F4EFE5;
+  --warn-glow: rgba(235, 203, 139, 0.35);
+  --mark-bg: #F1E2C4;
+  --link-default: #929AAA;
+  /* Тона облаков — поверхность + краска палитры (8–14 %). */
+  --ft-tone-1: #ECF0F5;
+  --ft-tone-2: #EDF1EE;
+  --ft-tone-3: #F5F1EB;
+  --ft-tone-4: #EEEBF1;
+  --ellipse-fill: #C1D0E0;
+  --ellipse-fill-border: #81A1C1;
+  /* Подложка и служебные слои — nord0 с прозрачностью. */
   --backdrop: rgba(46, 52, 64, 0.35);
   --canvas-dot: rgba(46, 52, 64, 0.14);
-  --focus-accent: #81a1c1;
-  /* Кант открытого: nord0 — чернильный тон палитры, контрастный к светлому
-     фону и к полосе слоя. */
-  --focus-ring-contrast: #2e3440;
-  --md-html-comment: #7a8698;
-  --mark-danger: #bf616a;
-  --mark-network: #5e81ac;
-  --mark-layer: #b48ead;
-  --mark-warn: #ebcb8b;
-  --mark-lock-own: #5e81ac;
-  --badge-bg: #2e3440;
-  --badge-fg: #eceff4;
-  --overlay-fg: #ffffff;
+  --focus-accent: #81A1C1;
+  --focus-ring-contrast: #2E3440;
+  --md-html-comment: #7A8394;
+  /* Метки — аврора/фрост в исходном виде палитры. */
+  --mark-danger: #BF616A;
+  --mark-network: #5E81AC;
+  --mark-layer: #B48EAD;
+  --mark-warn: #EBCB8B;
+  --mark-lock-own: #5E81AC;
+  --badge-bg: #2E3440;
+  --badge-fg: #ECEFF4;
+  --overlay-fg: #FFFFFF;
+  /* Подсветка кода — фрост/аврора в читаемых производных (nord0 как затемнитель). */
+  --hljs-comment: #7A8394;
+  --hljs-keyword: #5E81AC;
+  --hljs-string: #6E806A;
+  --hljs-number: #7E6A81;
+  --hljs-literal: #7E6A81;
+  --hljs-title: #4F6889;
+  --hljs-builtin: #9F6E62;
+  --hljs-attr: #908367;
+  --hljs-type: #637F84;
+  --hljs-tag: #BF616A;
+  --hljs-meta: #5E81AC;
+  --hljs-symbol: #7E6A81;
+  --hljs-section: #506A8C;
+  --hljs-addition: #6E806A;
+  --hljs-deletion: #BF616A;
 
-  /* Подсветка кода — аврора/фрост референса, приглушённая до читаемого
-     контраста на светлой поверхности. */
-  --hljs-comment: #7a8698;
-  --hljs-keyword: #5e81ac;
-  --hljs-string: #6d8a4e;
-  --hljs-number: #b48ead;
-  --hljs-literal: #b48ead;
-  --hljs-title: #4c6a94;
-  --hljs-builtin: #b06a45;
-  --hljs-attr: #b8862f;
-  --hljs-type: #4d8b85;
-  --hljs-tag: #bf616a;
-  --hljs-meta: #5e81ac;
-  --hljs-symbol: #b48ead;
-  --hljs-section: #4c6a94;
-  --hljs-addition: #6d8a4e;
-  --hljs-deletion: #bf616a;
-
+  /* Тени и радиусы — действующая шкала ETN. */
   --shadow-c: rgba(46, 52, 64, 0.16);
   --shadow-sm-c: rgba(46, 52, 64, 0.08);
   --shadow-xs-c: rgba(46, 52, 64, 0.15);
@@ -103,7 +110,6 @@
   --shadow-hover: 0 2px 10px var(--shadow-c);
   --shadow-focus: 0 2px 8px rgba(129, 161, 193, 0.16);
 
-  /* Радиусы — базовые Obsidian (шкала ETN). */
   --radius-s: 4px;
   --radius-m: 8px;
   --radius-l: 12px;
@@ -114,78 +120,81 @@
 [data-theme='nordic'][data-mode='dark'] {
   color-scheme: dark;
 
-  /* palette — Nord, тёмный режим (Polar Night) */
-  --bg: #2e3440;
-  --surface: #3b4252;
-  --surface-2: #434c5e;
-  --bg-hover: #434c5e;
-  --bg-active: #4c566a;
-  --border: #434c5e;
-  --border-strong: #4c566a;
-  --text: #eceff4;
-  --text-dim: #d8dee9;
-  --text-faint: #97a3b6;
-  --accent: #81a1c1;
-  --accent-strong: #88c0d0;
-  --accent-pressed: #5e81ac;
-  --accent-soft: #414b5c;
-  /* nord9/nord0 = 4.64:1 (светлая надпись на акценте давала 2.69:1). */
-  --accent-fg: #2e3440;
+  /* Поверхности — полярная ночь: nord0, nord1, nord2, nord3. */
+  --bg: #2E3440;
+  --surface: #3B4252;
+  --surface-2: #434C5E;
+  --bg-hover: #434C5E;
+  --bg-active: #4C566A;
+  --border: #434C5E;
+  --border-strong: #4C566A;
+  /* Текст — снежная буря: nord6 / nord4 / nord4 + 38 % nord3. */
+  --text: #ECEFF4;
+  --text-dim: #D8DEE9;
+  --text-faint: #A3AAB9;
+  /* Акцент — фрост: nord9, nord8, nord10. Надпись nord0 на nord9 — 4.64 : 1. */
+  --accent: #81A1C1;
+  --accent-strong: #88C0D0;
+  --accent-pressed: #5E81AC;
+  --accent-soft: #3D4C5C;
+  --accent-fg: #2E3440;
   --selection-bg: rgba(129, 161, 193, 0.45);
-  /* nord15 #b48ead, осветлён до #c9a6c9: контраст мелкого текста на тёмной
-     поверхности (--surface) — 4.69:1. */
-  --selection: #c9a6c9;
-  /* Пунктир курсора — nord13 (жёлтый авроры). */
-  --cursor: #ebcb8b;
-  --cal-weekend: #b48ead;
-  --cal-marker-records: #7fa3cf;
-  --danger: #bf616a;
-  --danger-soft: #3d2a2e;
-  --ok: #a3be8c;
-  --ok-soft: #2c3a2c;
-  --warn: #ebcb8b;
-  --warn-strong: #f3ddb2;
-  --warn-soft: #3a3427;
+  /* Состояния — аврора: nord15 + 25 % белого, nord13, nord15. */
+  --selection: #C7AAC2;
+  --cursor: #EBCB8B;
+  --cal-weekend: #B48EAD;
+  --cal-marker-records: #85B1C9;
+  /* Статусы — аврора; мягкие подложки — чёрный + 25–38 % краски (темнее nord0, как прежде). */
+  --danger: #BF616A;
+  --danger-soft: #472428;
+  --ok: #A3BE8C;
+  --ok-soft: #31392A;
+  --warn: #EBCB8B;
+  --warn-strong: #F2DEB5;
+  --warn-soft: #3B3323;
   --warn-glow: rgba(235, 203, 139, 0.3);
   --mark-bg: rgba(235, 203, 139, 0.28);
-  --link-default: #616e88;
-  --ft-tone-1: #333c4b;
-  --ft-tone-2: #2f3a33;
-  --ft-tone-3: #3a372c;
-  --ft-tone-4: #363040;
-  --ellipse-fill: #4c566a;
-  --ellipse-fill-border: #81a1c1;
+  --link-default: #5F7088;
+  /* Тона облаков — чёрный + краска палитры (25–38 %). */
+  --ft-tone-1: #303C48;
+  --ft-tone-2: #31392A;
+  --ft-tone-3: #3E3625;
+  --ft-tone-4: #3B2F39;
+  --ellipse-fill: #4C566A;
+  --ellipse-fill-border: #81A1C1;
+  /* Подложка и служебные слои — чёрный/nord6 с прозрачностью. */
   --backdrop: rgba(0, 0, 0, 0.55);
   --canvas-dot: rgba(236, 239, 244, 0.07);
-  --focus-accent: #88c0d0;
-  --focus-ring-contrast: #eceff4;
-  --md-html-comment: #7b8a9e;
-  --mark-danger: #bf616a;
-  --mark-network: #88c0d0;
-  --mark-layer: #b48ead;
-  --mark-warn: #ebcb8b;
-  --mark-lock-own: #88c0d0;
-  --badge-bg: #2e3440;
-  --badge-fg: #eceff4;
-  --overlay-fg: #ffffff;
+  --focus-accent: #88C0D0;
+  --focus-ring-contrast: #ECEFF4;
+  --md-html-comment: #8B93A3;
+  /* Метки — аврора/фрост в исходном виде палитры. */
+  --mark-danger: #BF616A;
+  --mark-network: #88C0D0;
+  --mark-layer: #B48EAD;
+  --mark-warn: #EBCB8B;
+  --mark-lock-own: #88C0D0;
+  --badge-bg: #2E3440;
+  --badge-fg: #ECEFF4;
+  --overlay-fg: #FFFFFF;
+  /* Подсветка кода — фрост/аврора в исходном виде палитры. */
+  --hljs-comment: #8B93A3;
+  --hljs-keyword: #81A1C1;
+  --hljs-string: #A3BE8C;
+  --hljs-number: #B48EAD;
+  --hljs-literal: #B48EAD;
+  --hljs-title: #88C0D0;
+  --hljs-builtin: #D08770;
+  --hljs-attr: #D08770;
+  --hljs-type: #8FBCBB;
+  --hljs-tag: #BF616A;
+  --hljs-meta: #5E81AC;
+  --hljs-symbol: #B48EAD;
+  --hljs-section: #88C0D0;
+  --hljs-addition: #A3BE8C;
+  --hljs-deletion: #BF616A;
 
-  /* Подсветка кода — аврора/фрост референса в тёмном режиме. */
-  --hljs-comment: #616e88;
-  --hljs-keyword: #81a1c1;
-  --hljs-string: #a3be8c;
-  --hljs-number: #b48ead;
-  --hljs-literal: #b48ead;
-  --hljs-title: #88c0d0;
-  --hljs-builtin: #d08770;
-  --hljs-attr: #d08770;
-  --hljs-type: #8fbcbb;
-  --hljs-tag: #bf616a;
-  --hljs-meta: #5e81ac;
-  --hljs-symbol: #b48ead;
-  --hljs-section: #88c0d0;
-  --hljs-addition: #a3be8c;
-  --hljs-deletion: #bf616a;
-
+  /* Тени и радиусы — действующая шкала ETN. */
   --shadow-c: rgba(0, 0, 0, 0.5);
   --shadow-sm-c: rgba(0, 0, 0, 0.3);
   --shadow-xs-c: rgba(0, 0, 0, 0.18);

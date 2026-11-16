@@ -11,9 +11,9 @@
       "ru": "Настройки",
       "en": "Settings"
     },
-    "settingsClientSection": {
-      "ru": "Клиент",
-      "en": "Client"
+    "appearance": {
+      "ru": "Оформление",
+      "en": "Appearance"
     },
     "layerMenuBase": {
       "ru": "Основа",
@@ -42,6 +42,10 @@
     "probeLayerTitle": {
       "ru": "Проба адаптации",
       "en": "Adaptation probe"
+    },
+    "unsavedApply": {
+      "ru": "Применить",
+      "en": "Apply"
     }
   },
   "steps": [
@@ -138,8 +142,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section",
-      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n  if (nav === undefined) throw new Error('client section not found');\n  nav.click();\n  return true;\n})()"
+      "name": "open-appearance-section",
+      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n  if (nav === undefined) throw new Error('нет раздела «Оформление»');\n  nav.click();\n  return true;\n})()"
     },
     {
       "name": "pick-current-theme",
@@ -159,6 +163,10 @@
     {
       "name": "close-settings",
       "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
     },
     {
       "name": "settings-closed",
@@ -356,8 +364,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section-dark",
-      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n  if (nav === undefined) throw new Error('client section not found');\n  nav.click();\n  return true;\n})()"
+      "name": "open-appearance-section-dark",
+      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n  if (nav === undefined) throw new Error('нет раздела «Оформление»');\n  nav.click();\n  return true;\n})()"
     },
     {
       "name": "pick-dark-mode",
@@ -372,6 +380,10 @@
     {
       "name": "close-settings-dark",
       "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied-dark",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
     },
     {
       "name": "settings-closed-dark",
@@ -461,8 +473,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section-light-repro",
-      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n  if (nav === undefined) throw new Error('client section not found');\n  nav.click();\n  return true;\n})()"
+      "name": "open-appearance-section-light-repro",
+      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n  if (nav === undefined) throw new Error('нет раздела «Оформление»');\n  nav.click();\n  return true;\n})()"
     },
     {
       "name": "pick-light-mode-repro",
@@ -477,6 +489,10 @@
     {
       "name": "close-settings-light-repro",
       "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied-light-repro",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
     },
     {
       "name": "settings-closed-light-repro",

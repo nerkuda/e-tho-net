@@ -1,6 +1,6 @@
 {
   "name": "c6d74fd4-cloud-state-frames",
-  "description": "Задача c6d74fd4 «Доработка рамок состояний: открытая, текущая и выделенная мысли». Стенд: язык сервера ru. Проверено: (1) рамка открытой — 2px кольцо цвета --frame-open (тон курсора, но светлее) + 1px кант темы; (2) три состояния одновременно на карте — разные облачка, цвета попарно ≥ 40 sRGB; (3) на слое ВСЕ три рамки производны от полосы фокуса (создан слой → цвета сменились; правка «Полоса фокуса» #ffd400 → сменились все три); (5) смена режима без перезагрузки — рамки и гало перекрашены тем же тиком store; возврат на «Основу» — снова от токенов темы; (6) со светлыми обоями рамки те же, хотя бы одно кольцо читается ≥ 3 : 1 на подложке из картинки с тинтом. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c6d74fd4-cloud-state-frames.scenario.json --server-language ru --out .tmp/c6d74fd4/out",
+  "description": "Задача c6d74fd4 «Доработка рамок состояний: открытая, текущая и выделенная мысли». Стенд: язык сервера ru. Проверено: (1) рамка открытой — 2px кольцо цвета --frame-open (тон курсора, но светлее) + 1px кант темы; (2) три состояния одновременно на карте — разные облачка, цвета попарно ≥ 40 sRGB; (3) на слое ВСЕ три рамки производны от полосы фокуса (создан слой → цвета сменились; правка «Полоса фокуса» #ffd400 → сменились все три); (5) смена режима без перезагрузки — рамки и гало перекрашены тем же тиком store; возврат на «Основу» — снова от токенов темы; (6) со светлыми обоями рамки те же, хотя бы одно кольцо читается ≥ 3 : 1 на подложке из картинки с тинтом. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.c6d74fd4-cloud-state-frames.scenario.json --server-language ru --out .tmp/c6d74fd4/out. Перед повторным открытием меню стенд ждёт «устоявшийся» экран: шапка редактора перенацеливается асинхронно, и её хук флага напоминаний зовёт глобальный closeMenu().",
   "timeout": 300000,
   "texts": {
     "userMenuTitle": {
@@ -11,9 +11,9 @@
       "ru": "Настройки",
       "en": "Settings"
     },
-    "settingsClientSection": {
-      "ru": "Клиент",
-      "en": "Client"
+    "appearance": {
+      "ru": "Оформление",
+      "en": "Appearance"
     },
     "layerMenuBase": {
       "ru": "Основа",
@@ -38,6 +38,10 @@
     "probeLayerTitle": {
       "ru": "Проба рамок",
       "en": "Frame probe"
+    },
+    "unsavedApply": {
+      "ru": "Применить",
+      "en": "Apply"
     }
   },
   "steps": [
@@ -174,8 +178,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section",
-      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+      "name": "open-appearance-section",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n      if (nav === undefined) throw new Error('нет раздела «Оформление»');\n      nav.click();\n      return true;\n    })()"
     },
     {
       "name": "pick-current-theme",
@@ -195,6 +199,10 @@
     {
       "name": "close-settings",
       "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied-light",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
     },
     {
       "name": "settings-closed",
@@ -336,6 +344,11 @@
       "eval": "(() => {\n  const p = window.__pc;\n  const f = p.frames();\n  window.__framesBefore = [f.open, f.current, f.selected];\n  return window.__framesBefore;\n})()"
     },
     {
+      "name": "settle-before-open-user-menu-dark",
+      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
       "name": "open-user-menu-dark",
       "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
     },
@@ -353,8 +366,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section-dark",
-      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+      "name": "open-appearance-section-dark",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n      if (nav === undefined) throw new Error('нет раздела «Оформление»');\n      nav.click();\n      return true;\n    })()"
     },
     {
       "name": "pick-dark-mode",
@@ -393,9 +406,18 @@
       "key": "Escape"
     },
     {
+      "name": "apply-unapplied-dark",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
+    },
+    {
       "name": "settings-closed-dark",
       "timeout": 10000,
       "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "settle-before-open-user-menu-light",
+      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
+      "expect": "ok"
     },
     {
       "name": "open-user-menu-light",
@@ -415,8 +437,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section-light",
-      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+      "name": "open-appearance-section-light",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n      if (nav === undefined) throw new Error('нет раздела «Оформление»');\n      nav.click();\n      return true;\n    })()"
     },
     {
       "name": "pick-light-mode-back",
@@ -446,9 +468,18 @@
       "key": "Escape"
     },
     {
+      "name": "apply-unapplied-light-back",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
+    },
+    {
       "name": "settings-closed-light",
       "timeout": 10000,
       "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "settle-before-layer-menu",
+      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
+      "expect": "ok"
     },
     {
       "name": "layer-menu-open-props",
@@ -588,6 +619,11 @@
       }
     },
     {
+      "name": "settle-before-open-user-menu-wall",
+      "probe": "(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
       "name": "open-user-menu-wall",
       "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
     },
@@ -605,8 +641,8 @@
       "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
     },
     {
-      "name": "open-client-section-wall",
-      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsClientSection}}');\n      if (nav === undefined) throw new Error('client section not found');\n      nav.click();\n      return true;\n    })()"
+      "name": "open-appearance-section-wall",
+      "eval": "(() => {\n      const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n      if (nav === undefined) throw new Error('нет раздела «Оформление»');\n      nav.click();\n      return true;\n    })()"
     },
     {
       "name": "pick-light-mode-wall",
@@ -621,6 +657,10 @@
     {
       "name": "close-settings-wall",
       "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied-wall",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
     },
     {
       "name": "settings-closed-wall",
