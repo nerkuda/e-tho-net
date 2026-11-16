@@ -251,11 +251,8 @@ describe('сторож: сетка холста — только при отсу
       'сетка поверх картинки обязана краснить',
     );
 
-    // Негативная проба: базовая сетка пропала.
-    const noGrid = canvasCss.replace(
-      '    radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,\n',
-      '',
-    );
+    // Негативная проба: базовая сетка пропала (слой сетки снят из фона).
+    const noGrid = canvasCss.replace(/radial-gradient\(circle,[^;]*?24px 24px,\s*/, '');
     assert.notEqual(noGrid, canvasCss, 'мутация «сетка пропала» не применилась');
     assert.ok(
       gridProblems(noGrid).some((p) => p.includes('потеряна точечная сетка')),

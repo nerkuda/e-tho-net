@@ -356,13 +356,7 @@ describe('layer theme pipeline (store → document root)', () => {
 
 describe('map label (0.6.4 §2.2a)', () => {
   it('never appears on the base layer; appears for a layer with/without colours', () => {
-    const base = layerLabelView(
-      { id: BASE_LAYER_ID, title: 'Основа' },
-      null,
-      'dark',
-      300,
-      1000,
-    );
+    const base = layerLabelView({ id: BASE_LAYER_ID, title: 'Основа' }, null, 'dark', 300, 1000);
     assert.equal(base.visible, false);
 
     const colored = layerLabelView(
@@ -436,12 +430,18 @@ describe('styles.css rules the runtime relies on', () => {
   });
 
   it('the canvas, structures results and chronicle follow --layer-bg', () => {
-    assert.match(css.match(/^\.canvas \{[^}]*\}/m)?.[0] ?? '', /var\(--layer-bg,\s*var\(--bg\)\)/);
+    assert.match(
+      css.match(/^\.canvas \{[^}]*\}/m)?.[0] ?? '',
+      /var\(--layer-bg,\s*(?:var\(--user-canvas-bg,\s*)?var\(--bg\)/,
+    );
     assert.match(
       css.match(/^\.st-results \{[^}]*\}/m)?.[0] ?? '',
       /var\(--layer-bg,\s*var\(--bg\)\)/,
     );
-    assert.match(css.match(/^\.chronicle \{[^}]*\}/m)?.[0] ?? '', /var\(--layer-bg,\s*var\(--bg\)\)/);
+    assert.match(
+      css.match(/^\.chronicle \{[^}]*\}/m)?.[0] ?? '',
+      /var\(--layer-bg,\s*var\(--bg\)\)/,
+    );
   });
 
   it('the focus band and the editor halo follow the focus token chain', () => {

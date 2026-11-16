@@ -15,9 +15,17 @@
      for the zoom level. The zones themselves stay transparent.
      --layer-bg (0.6.4, 13-layers.md §2.2a) recolours the canvas while a
      non-base layer with explicit colours is active; absent — theme default. */
+  /* Пользовательские токены холста (--user-canvas-*, требование e2895c24):
+     фон, картинка и цвет сетки берутся из них с фолбэком на тему — экрана
+     настроек пока нет, значения группы совпадают с темой, а токены остаются
+     рабочим источником (сторож guard-ui-user-tokens требует потребителя у
+     каждого --user-*). Картинка пользователя лежит НАД сеткой (сетка видна
+     сквозь прозрачные участки), обои приоритетнее — своё правило ниже. */
   background:
-    radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
-    var(--layer-bg, var(--bg));
+    var(--user-canvas-image) center / cover no-repeat fixed,
+    radial-gradient(circle, var(--user-canvas-dot, var(--canvas-dot)) 1px, transparent 1.4px) 0 0 /
+      24px 24px,
+    var(--layer-bg, var(--user-canvas-bg, var(--bg)));
 }
 
 /* Пользовательская фоновая картинка (0.16.1, задача 80324150, элемент
@@ -41,7 +49,7 @@
       var(--canvas-wallpaper-tint, transparent)
     ),
     var(--canvas-wallpaper-image) center / cover no-repeat fixed,
-    var(--layer-bg, var(--bg));
+    var(--layer-bg, var(--user-canvas-bg, var(--bg)));
 }
 
 /* The host is focusable (§2.9 keyboard navigation, kbd-nav.ts) — the keyboard

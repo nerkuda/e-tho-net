@@ -1049,10 +1049,11 @@
 .comment-view {
   max-height: 420px;
   overflow-y: auto;
-  /* Размер через переменную: Ctrl+колесо (M9) масштабирует и виджеты
-     редактора, у которых тот же класс. */
-  font-size: var(--md-font-size);
-  line-height: var(--md-line-height);
+  /* Размер и интерлиньяж — пользовательские токены комментария с фолбэком на
+     масштаб markdown (Ctrl+колесо, M9): пока настройки не заданы, вид тот же,
+     а объявленный токен работает (сторож guard-ui-user-tokens). */
+  font-size: var(--user-comment-font-size, var(--md-font-size));
+  line-height: var(--user-comment-line-height, var(--md-line-height));
   overflow-wrap: break-word;
 }
 
@@ -1127,7 +1128,7 @@
    подчёркивания (появляется на hover). */
 .comment-view a,
 .comment-view a:visited {
-  color: var(--accent);
+  color: var(--user-comment-link, var(--accent));
   text-decoration: none;
 }
 

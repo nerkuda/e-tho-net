@@ -291,15 +291,18 @@
   --user-canvas-image: none;
   --user-canvas-dot: var(--canvas-dot);
 
-  /* Стили текста комментариев. */
-  --user-comment-font-size: var(--font-size-s);
-  --user-comment-line-height: var(--line-height-normal);
-  --user-comment-bg: var(--surface);
+  /* Стили текста комментариев. Размер и интерлиньяж по умолчанию идут за
+     масштабом markdown (Ctrl+колесо, M9: `--md-font-size`/`--md-line-height`),
+     фон — прозрачный: комментарий наследует поверхность, на которой лежит
+     (своей заливки у него сейчас нет). */
+  --user-comment-font-size: var(--md-font-size);
+  --user-comment-line-height: var(--md-line-height);
+  --user-comment-bg: transparent;
   --user-comment-color: var(--text);
   --user-comment-link: var(--accent);
 
   font-family: var(--user-font-ui);
-  font-size: var(--font-size-s);
+  font-size: var(--user-font-size);
 }
 
 /* Отключение микроанимаций состояний при reduce-motion (Технические принципы

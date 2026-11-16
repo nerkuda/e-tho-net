@@ -317,7 +317,7 @@ describe('guard: фокус-цвет — только цепочка токен�
     const canvas = ruleBodyOf(sources.get('styles/canvas.css') ?? '', ['.canvas']);
     assert.match(
       canvas ?? '',
-      /var\(--layer-bg,\s*var\(--bg\)\)/,
+      /var\(--layer-bg,\s*(?:var\(--user-canvas-bg,\s*)?var\(--bg\)/,
       'фон холста — пара «основа/слой»',
     );
   });

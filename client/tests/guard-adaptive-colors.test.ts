@@ -679,7 +679,10 @@ function sourceProblems(files: {
   } else if (tintAt > imageAt) {
     problems.push('.canvas с картинкой: тинт оказался под картинкой — модель подложки неверна');
   }
-  if (!wallpaperBackground.includes('var(--layer-bg, var(--bg))')) {
+  // Нижний слой — тема/слой; фон может идти через пользовательский токен
+  // (--user-canvas-bg с фолбэком на --bg), но --layer-bg остаётся первым.
+  const baseLayerChain = wallpaperBackground.replace(/var\(--user-canvas-bg,\s*/g, '');
+  if (!baseLayerChain.includes('var(--layer-bg, var(--bg))')) {
     problems.push('.canvas с картинкой: потерян нижний слой --layer-bg');
   }
 
@@ -909,7 +912,11 @@ describe('сторож: адаптация цветов — оформление
         'box-shadow: inset 2px 0 0 var(--layer-focus-stripe, var(--focus-accent, var(--accent)));',
       ),
     };
-    assert.notEqual(insetOnStripe.screenCss, files.screenCss, 'мутация inset-полоски не применилась');
+    assert.notEqual(
+      insetOnStripe.screenCss,
+      files.screenCss,
+      'мутация inset-полоски не применилась',
+    );
     assert.ok(
       sourceProblems(insetOnStripe).length > 0,
       'inset-полоска на полосе карты обязана ловиться',
@@ -919,7 +926,7 @@ describe('сторож: адаптация цветов — оформление
     const insetNoSurface2 = {
       ...files,
       adaptiveContext: files.adaptiveContext.replace(
-        "[surface, surface2, base]",
+        '[surface, surface2, base]',
         '[surface, base]',
       ),
     };

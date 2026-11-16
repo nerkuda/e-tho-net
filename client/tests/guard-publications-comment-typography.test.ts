@@ -62,15 +62,26 @@ describe('паритет типографики: единый источник -
 
   it('.comment-view берёт line-height и метрики цитаты из токенов', () => {
     const base = ruleBody(EDITOR_CSS, '\n.comment-view {');
-    assert.match(base, /line-height:\s*var\(--md-line-height\)/);
+    // Интерлиньяж — пользовательский токен комментария с фолбэком на общий
+    // токен markdown: пока настройка не задана, действует --md-line-height.
+    assert.match(
+      base,
+      /line-height:\s*(?:var\(--user-comment-line-height,\s*)?var\(--md-line-height\)/,
+    );
     const quotePair = ruleBody(
       EDITOR_CSS,
       '.comment-view blockquote,\n.cm-editor .cm-line.cm-md-quote-line {',
     );
     assert.match(quotePair, /padding-left:\s*var\(--md-quote-indent\)/);
     assert.match(quotePair, /border-left:\s*var\(--md-quote-border-width\)/);
-    assert.match(EDITOR_CSS, /\.cm-editor \.cm-line\.cm-md-quote-first\s*\{[^}]*padding-top:\s*var\(--md-quote-gap\)/s);
-    assert.match(EDITOR_CSS, /\.cm-editor \.cm-line\.cm-md-quote-last\s*\{[^}]*padding-bottom:\s*var\(--md-quote-gap\)/s);
+    assert.match(
+      EDITOR_CSS,
+      /\.cm-editor \.cm-line\.cm-md-quote-first\s*\{[^}]*padding-top:\s*var\(--md-quote-gap\)/s,
+    );
+    assert.match(
+      EDITOR_CSS,
+      /\.cm-editor \.cm-line\.cm-md-quote-last\s*\{[^}]*padding-bottom:\s*var\(--md-quote-gap\)/s,
+    );
   });
 
   it('.comment-view blockquote явно перебивает прозу Web Awesome', () => {
@@ -109,7 +120,8 @@ describe('паритет типографики: единый источник -
 
 describe('документ публикации не переопределяет типографику .comment-view', () => {
   /** Селекторы publications.css, которые трогают markdown-прозу под .pub-doc. */
-  const PROSE_TAGS = /(?:^|[\s,>~+])(?:h[1-6]|p|ul|ol|li|blockquote|strong|b|em|i|code|pre|table)(?=$|[\s,>~+.:#])/;
+  const PROSE_TAGS =
+    /(?:^|[\s,>~+])(?:h[1-6]|p|ul|ol|li|blockquote|strong|b|em|i|code|pre|table)(?=$|[\s,>~+.:#])/;
 
   function proseOverrides(css: string): string[] {
     const out: string[] = [];
@@ -120,7 +132,10 @@ describe('документ публикации не переопределяе�
       // Заголовок/подзаголовок/автор титула — спец-стили, разрешены.
       if (/\.pub-doc-(?:title|subtitle|meta)\b/.test(selector)) continue;
       // Селекторы по markdown-тегам под .pub-doc задавать типографику не должны.
-      if (PROSE_TAGS.test(' ' + selector) && /font-size|font-family|font-weight|line-height|margin|padding/.test(body)) {
+      if (
+        PROSE_TAGS.test(' ' + selector) &&
+        /font-size|font-family|font-weight|line-height|margin|padding/.test(body)
+      ) {
         out.push(`${selector} { ${body.trim().slice(0, 80)} }`);
       }
     }
@@ -129,7 +144,11 @@ describe('документ публикации не переопределяе�
 
   it('нет правил прозы .pub-doc <тег> с типографикой', () => {
     const offenders = proseOverrides(PUBCSS);
-    assert.deepEqual(offenders, [], `документ переопределяет прозу comment-view: ${offenders.join(' | ')}`);
+    assert.deepEqual(
+      offenders,
+      [],
+      `документ переопределяет прозу comment-view: ${offenders.join(' | ')}`,
+    );
   });
 
   it('.pub-doc.comment-view переопределяет только раскладку (max-height)', () => {
