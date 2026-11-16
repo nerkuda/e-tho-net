@@ -782,17 +782,17 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'links.delete',
     tool: 'etn.links.delete',
     group: 'links',
-    when: 'delete one edge — the only way to remove an untyped (structural) edge, which `unlink_parents`/`unlink_children` and `properties.remove` do not touch',
+    when: 'delete one edge by `link_id` — precise address of exactly one edge (for example one of several edges between the same pair of thoughts) with smart deletion by layers; the bulk ops `unlink_parents`/`unlink_children` remove edges of a named thought PAIR (structural ones included) and cannot address one specific edge',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'link_id', required: true, desc: 'link id' },
     ],
-    destructive: false,
+    destructive: true,
     readOnly: false,
     effects:
-      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
     errors:
-      '`VALIDATION_ERROR` — the edge is held by a live layer and cannot be deleted from the base. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
+      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action), or the edge is held by a live layer and cannot be deleted from the base. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
     paramsContract: LinksDelete,
   },
   {

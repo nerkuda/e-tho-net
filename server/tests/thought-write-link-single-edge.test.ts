@@ -26,7 +26,10 @@ import {
   closeMcpContext,
   connectMcpClient,
   nativeAvailable,
+  toolJson,
+  toolText,
   type McpTestContext,
+  type WriteToolResult,
 } from './mcp-helpers.js';
 
 /** Актор прямых доменных вызовов (как в mcp-activity.test.ts). */
@@ -117,6 +120,56 @@ describe(
           const structuralEdges = linksBetween(ctx, structuralId, targetId);
           assert.equal(structuralEdges.length, 1, 'structural-связь ровно одна');
           assert.equal(structuralEdges[0]!.type_id, null, 'у structural-ребра типа нет');
+        } finally {
+          await agent.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('target_ref из local_refs — тоже ровно одно ребро с type_id', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const agent = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const base = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, BASE_LAYER_ID);
+          const linkTypeId = createLinkType(
+            base,
+            { name_forward: 'затрагивает', name_reverse: 'затронуто в' },
+            USER,
+          ).id;
+          const anchor = await callWrite(agent.client, ctx.networkId, [
+            { ref: 'anchor', thought: { title: 'Регресс: якорь local_refs' } },
+          ]);
+          const anchorId = anchor.items[0]!.id;
+
+          // `local_refs` называет СУЩЕСТВУЮЩУЮ мысль; `links[].target_ref`
+          // резолвится по этому имени наравне с `ref` мыслей батча.
+          const res = await agent.client.callTool({
+            name: 'etn.thoughts.write',
+            arguments: {
+              network_id: ctx.networkId,
+              local_refs: { anchor: anchorId },
+              thoughts: [
+                {
+                  ref: 'card',
+                  thought: { title: 'Регресс: карточка через local_refs' },
+                  links: [{ direction: 'child', target_ref: 'anchor', type: 'затрагивает' }],
+                },
+              ],
+            },
+          });
+          assert.equal(res.isError, undefined, toolText(res));
+          const written = toolJson<WriteToolResult>(res);
+          const cardId = written.items[0]!.id;
+          assert.equal(written.items[0]!.links?.length, 1, 'local_refs-связь дала одно ребро');
+
+          const edges = linksBetween(ctx, cardId, anchorId);
+          assert.equal(edges.length, 1, 'в графе ровно одно ребро, безтипового дубля нет');
+          assert.equal(edges[0]!.type_id, linkTypeId, 'ребро несёт тип «затрагивает»');
+          assert.equal(edges[0]!.source_id, cardId);
+          assert.equal(edges[0]!.target_id, anchorId);
         } finally {
           await agent.close();
         }

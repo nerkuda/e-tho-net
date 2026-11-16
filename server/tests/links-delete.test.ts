@@ -1,13 +1,18 @@
 /**
  * MCP-операция `etn.ops { action: "links.delete" }` (ошибка 7df2b3d1, 0.16.1).
  *
- * До 0.16.1 в реестре действий была только `links.restore`: `DELETE /links/{id}`
- * упразднён, `unlink_parents`/`unlink_children` структурные рёбра не трогают,
- * `properties.remove` удаляет лишь ребро свойства-связи — безтиповое
- * (structural) ребро удалить было нечем.
+ * Ценность операции — адресация КОНКРЕТНОГО ребра по `link_id` вместе со
+ * smart deletion по слоям: `DELETE /links/{id}` упразднён, `properties.remove`
+ * удаляет лишь ребро свойства-связи, а bulk-операции
+ * `unlink_parents`/`unlink_children` снимают связи по паре мыслей (structural
+ * включительно), но не выбирают одно ребро из нескольких между парой.
+ *
+ * Физическая ветка необратима — действие `destructive`, вызов требует
+ * `confirm: true`; ветка «в корзину» обратима через `links.restore`.
  *
  * Сценарии (умное удаление по слоям, ADR a967d865):
- *   1. основа, безтиповое ребро — физическое удаление + `link.deleted`;
+ *   1. основа, безтиповое ребро — физическое удаление + `link.deleted`
+ *      (без `confirm` — `VALIDATION_ERROR`);
  *   2. повторный вызов и несуществующее ребро — идемпотентный `noop` без события;
  *   3. слой, ребро из основы — корзина (`link.updated`) + `links.restore`;
  *   4. слой, ребро создано в текущем слое — физическое удаление строки слоя.
@@ -83,11 +88,24 @@ describe(
           const base = openNetworkDb(ctx.dataDir, ctx.networkId, undefined, BASE_LAYER_ID);
           assert.ok(getLink(base, linkId) !== null, 'ребро создано');
 
-          const cursor = eventCursor(ctx);
-          const res = await callOp(agent.client, 'links.delete', {
+          // Действие деструктивное: физическая ветка необратима.
+          const noConfirm = await callOp(agent.client, 'links.delete', {
             network_id: ctx.networkId,
             link_id: linkId,
           });
+          assert.equal(noConfirm.isError, true, 'без confirm удаление запрещено');
+          assert.match(toolText(noConfirm), /confirm: true is required/);
+
+          const cursor = eventCursor(ctx);
+          const res = await callOp(
+            agent.client,
+            'links.delete',
+            {
+              network_id: ctx.networkId,
+              link_id: linkId,
+            },
+            true,
+          );
           assert.equal(res.isError, undefined, toolText(res));
           const out = toolJson<DeleteResult>(res);
           assert.equal(out.link_id, linkId);
@@ -103,19 +121,29 @@ describe(
 
           // Повторный вызов — идемпотентный noop без событий.
           const repeatCursor = eventCursor(ctx);
-          const again = await callOp(agent.client, 'links.delete', {
-            network_id: ctx.networkId,
-            link_id: linkId,
-          });
+          const again = await callOp(
+            agent.client,
+            'links.delete',
+            {
+              network_id: ctx.networkId,
+              link_id: linkId,
+            },
+            true,
+          );
           assert.equal(again.isError, undefined, toolText(again));
           assert.equal(toolJson<DeleteResult>(again).action, 'noop');
           assert.deepEqual(linkEventsAfter(ctx, repeatCursor), [], 'повтор не эмитит link.*');
 
           // Несуществующее ребро — тоже noop (операция идемпотентна).
-          const missing = await callOp(agent.client, 'links.delete', {
-            network_id: ctx.networkId,
-            link_id: randomUUID(),
-          });
+          const missing = await callOp(
+            agent.client,
+            'links.delete',
+            {
+              network_id: ctx.networkId,
+              link_id: randomUUID(),
+            },
+            true,
+          );
           assert.equal(missing.isError, undefined, toolText(missing));
           assert.equal(toolJson<DeleteResult>(missing).action, 'noop');
         } finally {
@@ -145,10 +173,15 @@ describe(
           });
 
           const cursor = eventCursor(ctx);
-          const res = await callOp(agent.client, 'links.delete', {
-            network_id: ctx.networkId,
-            link_id: linkId,
-          });
+          const res = await callOp(
+            agent.client,
+            'links.delete',
+            {
+              network_id: ctx.networkId,
+              link_id: linkId,
+            },
+            true,
+          );
           assert.equal(res.isError, undefined, toolText(res));
           assert.equal(toolJson<DeleteResult>(res).action, 'trashed');
 
@@ -175,10 +208,15 @@ describe(
 
           // Повторный вызов — noop: уже помеченное ребро событий не эмитит.
           const repeatCursor = eventCursor(ctx);
-          const again = await callOp(agent.client, 'links.delete', {
-            network_id: ctx.networkId,
-            link_id: linkId,
-          });
+          const again = await callOp(
+            agent.client,
+            'links.delete',
+            {
+              network_id: ctx.networkId,
+              link_id: linkId,
+            },
+            true,
+          );
           assert.equal(again.isError, undefined, toolText(again));
           assert.equal(toolJson<DeleteResult>(again).action, 'noop');
           assert.deepEqual(linkEventsAfter(ctx, repeatCursor), []);
@@ -224,10 +262,15 @@ describe(
           const linkId = createLink(layerDb, { source_id: sourceId, target_id: targetId }, USER).id;
 
           const cursor = eventCursor(ctx);
-          const res = await callOp(agent.client, 'links.delete', {
-            network_id: ctx.networkId,
-            link_id: linkId,
-          });
+          const res = await callOp(
+            agent.client,
+            'links.delete',
+            {
+              network_id: ctx.networkId,
+              link_id: linkId,
+            },
+            true,
+          );
           assert.equal(res.isError, undefined, toolText(res));
           assert.equal(toolJson<DeleteResult>(res).action, 'deleted');
           assert.equal(getLink(layerDb, linkId), null, 'строка слоя удалена физически');
