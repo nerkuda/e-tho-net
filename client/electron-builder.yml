@@ -44,6 +44,11 @@ extraResources:
     to: migrations
   - from: build/THIRD-PARTY-NOTICES.txt
     to: THIRD-PARTY-NOTICES.txt
+  # Тексты лицензий вендоренных ассетов и тем интерфейса (задача 3cac16cc):
+  # те же файлы едут в asar из `out/renderer/licenses`, а здесь кладутся рядом
+  # с программой — лицензию видно без распаковки.
+  - from: out/renderer/licenses
+    to: licenses
 
 # Native module — rebuilt for Electron ABI by electron-builder automatically.
 asarUnpack:

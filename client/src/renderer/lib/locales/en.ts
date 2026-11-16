@@ -1073,6 +1073,11 @@ export const en = {
   /** Пояснение, где лежит полный перечень с текстами лицензий. */
   'about.thirdPartyHint':
     'The full list with license texts is in the THIRD-PARTY-NOTICES.txt file.',
+  /** Дисклеймер к названиям тем интерфейса (задача 3cac16cc). */
+  'about.themesDisclaimer':
+    'Theme names are used descriptively; ETN is not affiliated with or endorsed by the theme authors. All rights belong to their respective owners.',
+  /** Пометка темы, собранной по палитре без связи с её авторами. */
+  'about.themeUnofficial': 'unofficial theme',
 
   // -- Дерево списков (lib/ui/tree.ts) -------------------------------------
   /** Пустое состояние дерева, когда видимых строк нет. */

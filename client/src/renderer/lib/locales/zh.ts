@@ -529,6 +529,9 @@ export const zh = {
   'about.thirdParty': '第三方组件',
   'about.website': '网站',
   'about.thirdPartyHint': '完整列表及许可证文本见 THIRD-PARTY-NOTICES.txt 文件。',
+  'about.themesDisclaimer':
+    '主题名称仅用于描述目的；ETN 与主题作者无关联，也未获其认可。所有权利归其各自所有者所有。',
+  'about.themeUnofficial': '非官方主题',
   'tree.empty': '未找到结果',
   'tree.emptyHint': '请更改筛选查询。',
   'tree.toggle': '展开/折叠',

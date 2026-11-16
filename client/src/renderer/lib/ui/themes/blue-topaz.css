@@ -10,6 +10,8 @@
  * Радиусы референса: 5 / 7 / 15 px (--radius-s/-m/-l); шкала ETN дополнена
  * `--radius-xl` и «пилюлей».
  *
+ * Partial style(s) is(are) sourced or adapted from Blue Topaz (https://github.com/PKM-er/Blue-Topaz_Obsidian-css), and I would like to express my appreciation to WhyI (https://github.com/whyt-byte) and pkmer.cn (https://pkmer.cn).
+ *
  * Файл значений СУЩЕСТВУЮЩИХ токенов (ADR de24adef): только объявления
  * переменных, ни одного класса. Селекция — `data-theme='blue-topaz'` +
  * `data-mode` на корне документа. Состав набора токенов обязан совпадать с

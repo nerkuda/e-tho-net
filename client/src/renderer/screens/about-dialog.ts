@@ -147,6 +147,9 @@ function thirdPartyBlock(): HTMLElement {
   for (const comp of THIRD_PARTY_COMPONENTS) list.append(thirdPartyRow(comp));
   block.append(list);
 
+  // Названия тем описательные: ETN не связан с их авторами (задача 3cac16cc).
+  // Тот же текст уходит в THIRD-PARTY-NOTICES.txt из словаря (`ru`).
+  block.append(el('p', 'about-third-note muted', t('about.themesDisclaimer')));
   block.append(el('p', 'about-third-hint muted', t('about.thirdPartyHint')));
   return block;
 }
@@ -154,8 +157,12 @@ function thirdPartyBlock(): HTMLElement {
 /** Строка перечня: имя библиотеки — лицензия — ссылка на сайт. */
 function thirdPartyRow(comp: ThirdPartyComponent): HTMLElement {
   const row = div('about-third-row');
+  // Неофициальная тема (решение задачи 3cac16cc по Catppuccin): пометка рядом
+  // с именем, чтобы её не приняли за тему, одобренную авторами палитры.
+  const name =
+    comp.unofficial === true ? `${comp.title} (${t('about.themeUnofficial')})` : comp.title;
   row.append(
-    el('span', 'about-third-name', comp.title),
+    el('span', 'about-third-name', name),
     el('span', 'about-third-license muted', comp.license),
     button(t('about.website'), () => void openLink(comp.url), 'link-btn'),
   );

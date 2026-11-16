@@ -1,6 +1,6 @@
 {
   "name": "76a65602-about-third-party",
-  "description": "Задача 76a65602 «Лицензии вендоренных ассетов в «О программе» и THIRD-PARTY-NOTICES» (версия 0.16.1). Проба диалога «О программе» после подключения и открытия сети: меню пользователя → «О программе»; блок «Сторонние компоненты» обязан показать все записи каталога `lib/third-party.ts`, включая вендоренные шрифты Inter и JetBrains Mono с лицензией OFL-1.1 (задача e622824e): 10 строк, ни одной с пустой лицензией, обе шрифтовые записи на месте, а подсказка ссылается на THIRD-PARTY-NOTICES.txt. Проверка — пробой DOM (не скриншотом). Запуск: npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.76a65602-about-third-party.scenario.json --server-language ru",
+  "description": "Задача 76a65602 «Лицензии вендоренных ассетов в «О программе» и THIRD-PARTY-NOTICES» (версия 0.16.1; расширено задачей 3cac16cc «Атрибуция и лицензии тем интерфейса»). Проба диалога «О программе» после подключения и открытия сети: меню пользователя → «О программе»; блок «Сторонние компоненты» обязан показать все записи каталога `lib/third-party.ts`: 15 строк, ни одной с пустой лицензией; вендоренные шрифты Inter и JetBrains Mono с лицензией OFL-1.1 на месте, пять тем интерфейса (Blue Topaz, Catppuccin, RetroNotes, Wasp, Nordic) видны, ровно у одной — пометка «неофициальная тема» (Catppuccin); под списком — дисклеймер о названиях тем, подсказка ссылается на THIRD-PARTY-NOTICES.txt. Проверка — пробой DOM (не скриншотом). Запуск: npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.76a65602-about-third-party.scenario.json --server-language ru",
   "timeout": 60000,
   "steps": [
     {
@@ -73,12 +73,15 @@
     },
     {
       "name": "third-party-rows",
-      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-about .about-third-row')).map((row) => ({\n    name: (row.querySelector('.about-third-name')?.textContent ?? '').trim(),\n    license: (row.querySelector('.about-third-license')?.textContent ?? '').trim(),\n  }));\n  const hint = (document.querySelector('.dialog-about .about-third-hint')?.textContent ?? '').trim();\n  return {\n    rows: rows.length,\n    emptyLicenses: rows.filter((r) => r.license === '').length,\n    inter: rows.filter((r) => r.name === 'Inter' && r.license === 'OFL-1.1').length,\n    jetbrains: rows.filter((r) => r.name === 'JetBrains Mono' && r.license === 'OFL-1.1').length,\n    hint: hint.includes('THIRD-PARTY-NOTICES'),\n  };\n})()",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-about .about-third-row')).map((row) => ({\n    name: (row.querySelector('.about-third-name')?.textContent ?? '').trim(),\n    license: (row.querySelector('.about-third-license')?.textContent ?? '').trim(),\n  }));\n  const hint = (document.querySelector('.dialog-about .about-third-hint')?.textContent ?? '').trim();\n  const note = (document.querySelector('.dialog-about .about-third-note')?.textContent ?? '').trim();\n  const themeNames = ['Blue Topaz', 'Catppuccin', 'RetroNotes', 'Wasp', 'Nordic'];\n  const present = themeNames.filter((name) =>\n    rows.some((r) => r.name === name || r.name === name + ' (неофициальная тема)'),\n  );\n  return {\n    rows: rows.length,\n    emptyLicenses: rows.filter((r) => r.license === '').length,\n    themes: present.length,\n    unofficial: rows.filter((r) => r.name.endsWith('(неофициальная тема)')).length,\n    inter: rows.filter((r) => r.name === 'Inter' && r.license === 'OFL-1.1').length,\n    jetbrains: rows.filter((r) => r.name === 'JetBrains Mono' && r.license === 'OFL-1.1').length,\n    disclaimer: note.includes('ETN не связан с авторами тем'),\n    hint: hint.includes('THIRD-PARTY-NOTICES'),\n  };\n})()",
       "expect": {
-        "rows": 10,
+        "rows": 15,
         "emptyLicenses": 0,
+        "themes": 5,
+        "unofficial": 1,
         "inter": 1,
         "jetbrains": 1,
+        "disclaimer": true,
         "hint": true
       }
     },

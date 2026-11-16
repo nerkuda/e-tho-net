@@ -15,9 +15,14 @@
  *    (`asset: true` + `licenseFile` внутри `licenses/`), но не то и другое
  *    сразу; пакет не входит одновременно в две записи.
  * 3. **Связка с файлами лицензий ассетов.** Каждый файл из
- *    `src/renderer/public/licenses/` упомянут записью-ассетом, и каждая
- *    запись-ассет указывает на существующий файл: лицензия не едет в поставке
- *    без записи и запись не ссылается в пустоту.
+ *    `src/renderer/public/licenses/` (включая подкаталоги, например
+ *    `licenses/themes/`) упомянут записью-ассетом, и каждая запись-ассет
+ *    указывает на существующий файл: лицензия не едет в поставке без записи и
+ *    запись не ссылается в пустоту.
+ *    **Темы оформления** (задача 3cac16cc) — частный случай ассетов: у каждой
+ *    темы из `UI_THEME_NAMES`, кроме собственной `current`, есть запись
+ *    (поле `theme`) и полный текст MIT с copyright-строкой; те же файлы едут
+ *    в поставку — в `out/renderer/licenses` и в `extraResources`.
  * 4. **Генератор.** `buildNotices()` включает записи-ассеты и полный текст их
  *    лицензий — иначе ассет есть в диалоге, но не в THIRD-PARTY-NOTICES.
  * 5. **Связка со сборкой.** В `client/package.json` есть скрипты `notices`
@@ -35,12 +40,17 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { UI_THEME_NAMES } from '@etn/shared';
+
 import {
+  BLUE_TOPAZ_ATTRIBUTION,
   THIRD_PARTY_COMPONENTS,
   assetComponents,
   coveredPackageNames,
+  themeComponents,
   type ThirdPartyComponent,
 } from '../src/renderer/lib/third-party.js';
+import { ru } from '../src/renderer/lib/locales/ru.js';
 import { buildNotices } from '../scripts/generate-notices.js';
 
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -59,13 +69,21 @@ function directDependencyNames(): string[] {
   return Object.keys(pkg.dependencies ?? {}).filter((n) => !n.startsWith(OWN_SCOPE));
 }
 
-/** Файлы каталога лицензий (имена, отсортированы). */
+/** Файлы каталога лицензий, включая подкаталоги (пути через `/`, отсортированы). */
 function licenseFileNames(dir: string): string[] {
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => entry.name)
-    .sort();
+  const found: string[] = [];
+  const walk = (root: string, prefix: string): void => {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(path.join(root, entry.name), rel);
+        continue;
+      }
+      if (entry.isFile()) found.push(rel);
+    }
+  };
+  walk(dir, '');
+  return found.sort();
 }
 
 /**
@@ -85,13 +103,14 @@ export function licenseLinkProblems(
       problems.push(`ассет «${comp.title}»: не указан licenseFile`);
       continue;
     }
-    if (path.posix.dirname(rel) !== 'licenses') {
+    if (!rel.startsWith('licenses/')) {
       problems.push(`ассет «${comp.title}»: licenseFile «${rel}» вне каталога licenses/`);
       continue;
     }
-    const name = path.posix.basename(rel);
-    mentioned.add(name);
-    if (!fs.existsSync(path.join(dir, name))) {
+    // Путь внутри каталога: допускаются подкаталоги (например, licenses/themes/).
+    const inner = rel.slice('licenses/'.length);
+    mentioned.add(inner);
+    if (!fs.existsSync(path.join(dir, inner))) {
       problems.push(`ассет «${comp.title}»: файл лицензии ${rel} отсутствует в поставке`);
     }
   }
@@ -140,7 +159,7 @@ describe('guard: перечень сторонних компонентов (35b
         );
         assert.match(
           comp.licenseFile ?? '',
-          /^licenses\/[\w.-]+\.txt$/,
+          /^licenses\/(?:[\w.-]+\/)*[\w.-]+\.txt$/,
           `у записи-ассета «${comp.title}» некорректный путь к файлу лицензии`,
         );
       } else {
@@ -270,5 +289,80 @@ describe('guard: перечень сторонних компонентов (35b
       /THIRD-PARTY-NOTICES\.txt/,
       'electron-builder.yml не кладёт THIRD-PARTY-NOTICES.txt в поставку (extraResources)',
     );
+  });
+
+  it('каждая тема интерфейса описана в каталоге и имеет полный текст MIT', () => {
+    const themeCards = themeComponents();
+    // Собственная тема `current` — не сторонняя: её запись не нужна.
+    const expected = UI_THEME_NAMES.filter((name) => name !== 'current').sort();
+    const described = themeCards.map((c) => c.theme).sort();
+    assert.deepEqual(
+      described,
+      expected,
+      `темы без записи в каталоге: ${expected.filter((n) => !described.includes(n)).join(', ')}`,
+    );
+
+    for (const comp of themeCards) {
+      assert.equal(comp.asset, true, `тема «${comp.title}» обязана быть записью-ассетом`);
+      assert.equal(comp.license, 'MIT', `у темы «${comp.title}» ожидалась лицензия MIT`);
+      assert.match(comp.url, /^https:\/\//, `у темы «${comp.title}» нет ссылки на источник`);
+      const rel = comp.licenseFile ?? '';
+      const text = fs
+        .readFileSync(path.join(CLIENT_ROOT, 'src', 'renderer', 'public', rel), 'utf8')
+        .trim();
+      assert.ok(text !== '', `файл лицензии ${rel} пуст`);
+      assert.match(text, /MIT License/, `в ${rel} нет заголовка MIT License`);
+      assert.match(text, /Copyright \(c\)/, `в ${rel} нет copyright-строки`);
+      assert.match(
+        text,
+        /WITHOUT WARRANTY OF ANY KIND/,
+        `в ${rel} не полный текст MIT — только заголовок`,
+      );
+    }
+  });
+
+  it('дисклеймер тем и фраза автора Blue Topaz — в notices и в шапке темы', () => {
+    const notices = buildNotices();
+    const disclaimer = ru['about.themesDisclaimer'];
+    assert.ok(notices.includes(disclaimer), 'в notices нет дисклеймера к названиям тем');
+    assert.ok(notices.includes(BLUE_TOPAZ_ATTRIBUTION), 'в notices нет фразы автора Blue Topaz');
+
+    const css = fs.readFileSync(
+      path.join(CLIENT_ROOT, 'src', 'renderer', 'lib', 'ui', 'themes', 'blue-topaz.css'),
+      'utf8',
+    );
+    assert.ok(css.includes(BLUE_TOPAZ_ATTRIBUTION), 'в шапке blue-topaz.css нет фразы автора');
+
+    // Дословность: текст фразы и дисклеймера менять нельзя (требование автора и
+    // решение задачи 3cac16cc).
+    assert.equal(
+      BLUE_TOPAZ_ATTRIBUTION,
+      'Partial style(s) is(are) sourced or adapted from Blue Topaz (https://github.com/PKM-er/Blue-Topaz_Obsidian-css), and I would like to express my appreciation to WhyI (https://github.com/whyt-byte) and pkmer.cn (https://pkmer.cn).',
+    );
+    assert.equal(
+      disclaimer,
+      'Названия тем используются в описательных целях; ETN не связан с авторами тем и не одобрен ими. Все права принадлежат их владельцам.',
+    );
+  });
+
+  it('файлы лицензий тем едут в сборку и в extraResources', () => {
+    const builder = fs.readFileSync(path.join(CLIENT_ROOT, 'electron-builder.yml'), 'utf8');
+    assert.match(
+      builder,
+      /from:\s*out\/renderer\/licenses/,
+      'electron-builder.yml не кладёт лицензии (out/renderer/licenses) в extraResources',
+    );
+
+    // Собранный клиент: `public/` копируется Vite в `out/renderer`, значит
+    // лицензии тем обязаны быть и там. Проверка включается только при наличии
+    // сборки, чтобы сторож не требовал `npm run build` на чистом дереве.
+    const builtRoot = path.join(CLIENT_ROOT, 'out', 'renderer', 'licenses');
+    if (!fs.existsSync(builtRoot)) return;
+    for (const comp of themeComponents()) {
+      const inner = (comp.licenseFile ?? '').slice('licenses/'.length);
+      const abs = path.join(builtRoot, inner);
+      assert.ok(fs.existsSync(abs), `в сборке нет файла лицензии темы ${inner}`);
+      assert.ok(fs.readFileSync(abs, 'utf8').trim() !== '', `файл лицензии ${inner} в сборке пуст`);
+    }
   });
 });

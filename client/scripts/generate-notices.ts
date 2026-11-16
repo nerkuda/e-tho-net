@@ -25,10 +25,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  BLUE_TOPAZ_ATTRIBUTION,
   assetComponents,
   coveredPackageNames,
+  themeComponents,
   type ThirdPartyComponent,
 } from '../src/renderer/lib/third-party.js';
+import { ru } from '../src/renderer/lib/locales/ru.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_ROOT = path.resolve(here, '..');
@@ -116,18 +119,19 @@ function licenseText(pkg: { license?: unknown; licenses?: unknown }): string {
 
 /** Прямые производственные зависимости клиента (без собственных пакетов). */
 function directDependencyNames(): string[] {
-  const pkg = JSON.parse(
-    fs.readFileSync(path.join(CLIENT_ROOT, 'package.json'), 'utf8'),
-  ) as { dependencies?: Record<string, string> };
+  const pkg = JSON.parse(fs.readFileSync(path.join(CLIENT_ROOT, 'package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>;
+  };
   return Object.keys(pkg.dependencies ?? {}).filter((n) => !n.startsWith(OWN_SCOPE));
 }
 
 /** Обход дерева производственных зависимостей: прямые + транзитивные. */
 function collectPackages(): PackageRecord[] {
   const byName = new Map<string, PackageRecord>();
-  const queue: Array<{ name: string; from: string }> = directDependencyNames().map(
-    (name) => ({ name, from: CLIENT_ROOT }),
-  );
+  const queue: Array<{ name: string; from: string }> = directDependencyNames().map((name) => ({
+    name,
+    from: CLIENT_ROOT,
+  }));
 
   while (queue.length > 0) {
     const { name, from } = queue.shift()!;
@@ -137,9 +141,7 @@ function collectPackages(): PackageRecord[] {
       process.stderr.write(`[notices] не найден установленный пакет ${name}\n`);
       continue;
     }
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(dir, 'package.json'), 'utf8'),
-    ) as {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
       name?: string;
       version?: string;
       dependencies?: Record<string, string>;
@@ -180,7 +182,8 @@ function readLicenseFile(dir: string): string | null {
 }
 
 /** Известные свободные лицензии, полный текст которых кладём в файл. */
-const KNOWN_LICENSE = /^(?:MIT|ISC|Apache-2\.0|BSD-2-Clause|BSD-3-Clause|0BSD|CC0-1\.0|Unlicense|Python-2\.0)\b/;
+const KNOWN_LICENSE =
+  /^(?:MIT|ISC|Apache-2\.0|BSD-2-Clause|BSD-3-Clause|0BSD|CC0-1\.0|Unlicense|Python-2\.0)\b/;
 
 /** Полный текст лицензии вендоренного ассета из поставки (`public/<licenseFile>`). */
 function assetLicenseText(component: ThirdPartyComponent): string {
@@ -190,9 +193,7 @@ function assetLicenseText(component: ThirdPartyComponent): string {
   }
   const abs = path.join(PUBLIC_ROOT, rel);
   if (!fs.existsSync(abs)) {
-    throw new Error(
-      `[notices] лицензия ассета «${component.title}» не найдена в поставке: ${rel}`,
-    );
+    throw new Error(`[notices] лицензия ассета «${component.title}» не найдена в поставке: ${rel}`);
   }
   return fs.readFileSync(abs, 'utf8').trim();
 }
@@ -204,7 +205,9 @@ function keyLicenseTexts(packages: PackageRecord[]): Array<{ id: string; text: s
     .sort();
   const result: Array<{ id: string; text: string }> = [];
   for (const id of ids) {
-    const representative = packages.find((p) => p.license === id && readLicenseFile(p.dir) !== null);
+    const representative = packages.find(
+      (p) => p.license === id && readLicenseFile(p.dir) !== null,
+    );
     if (representative === undefined) continue;
     result.push({ id, text: readLicenseFile(representative.dir)! });
   }
@@ -212,9 +215,9 @@ function keyLicenseTexts(packages: PackageRecord[]): Array<{ id: string; text: s
 }
 
 export function buildNotices(): string {
-  const clientPkg = JSON.parse(
-    fs.readFileSync(path.join(CLIENT_ROOT, 'package.json'), 'utf8'),
-  ) as { version?: string };
+  const clientPkg = JSON.parse(fs.readFileSync(path.join(CLIENT_ROOT, 'package.json'), 'utf8')) as {
+    version?: string;
+  };
   const packages = collectPackages();
 
   // Список не должен протухать: каждая прямая зависимость обязана быть
@@ -261,6 +264,9 @@ export function buildNotices(): string {
     out.push('='.repeat(72));
     out.push('');
     for (const asset of assets) {
+      // Темы оформления перечислены отдельным разделом ниже — здесь только
+      // шрифты и прочие ассеты, чтобы записи не дублировались.
+      if (asset.theme !== undefined) continue;
       out.push(asset.title);
       out.push(`  Лицензия: ${asset.license}`);
       if (asset.copyright !== '') out.push(`  Copyright: ${asset.copyright}`);
@@ -268,6 +274,33 @@ export function buildNotices(): string {
       out.push(`  Файл лицензии в поставке: ${asset.licenseFile ?? '—'}`);
       out.push('');
     }
+  }
+
+  const themes = themeComponents();
+  if (themes.length > 0) {
+    // Темы оформления (задача 3cac16cc): названия описательные, ETN не связан с
+    // авторами; тексты лицензий — ниже, в разделе полных текстов ассетов.
+    out.push('='.repeat(72));
+    out.push(`ТЕМЫ ОФОРМЛЕНИЯ (${themes.length})`);
+    out.push('='.repeat(72));
+    out.push('');
+    // Дисклеймер — тот же текст, что в диалоге «О программе»: берём из словаря
+    // `ru` (задача 3cac16cc), второй копии строки не заводим.
+    out.push(ru['about.themesDisclaimer']);
+    out.push('');
+    for (const theme of themes) {
+      const name =
+        theme.unofficial === true ? `${theme.title} (${ru['about.themeUnofficial']})` : theme.title;
+      out.push(name);
+      out.push(`  Лицензия: ${theme.license}`);
+      if (theme.copyright !== '') out.push(`  Copyright: ${theme.copyright}`);
+      out.push(`  Ссылка: ${theme.url}`);
+      out.push(`  Файл лицензии в поставке: ${theme.licenseFile ?? '—'}`);
+      out.push('');
+    }
+    // Фраза автора Blue Topaz — дословно, как требует лицензия темы.
+    out.push(BLUE_TOPAZ_ATTRIBUTION);
+    out.push('');
   }
 
   const keyLicenses = keyLicenseTexts(packages);
@@ -310,8 +343,7 @@ export function buildNotices(): string {
  * `guard-third-party-notices.test.ts`: импорт из теста ничего не пишет.
  */
 const invokedDirectly =
-  process.argv[1] !== undefined &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
   const target = path.join(CLIENT_ROOT, 'build', 'THIRD-PARTY-NOTICES.txt');
   fs.mkdirSync(path.dirname(target), { recursive: true });
