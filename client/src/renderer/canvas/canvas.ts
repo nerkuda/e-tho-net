@@ -89,6 +89,7 @@ import {
 } from '../lib/layer-colors.js';
 import { subscribeWallpaper } from '../lib/wallpaper-state.js';
 import { WALLPAPER_ATTR } from './wallpaper.js';
+import { logUiEvent } from '../lib/ui-log.js';
 import { store } from '../state.js';
 import {
   releaseCloudIndicatorInterest,
@@ -2353,32 +2354,68 @@ export const ZONE_MEASURE_PASS_LIMIT = 5;
  * Один вызов — до {@link ZONE_MEASURE_PASS_LIMIT} ИТЕРАТИВНЫХ проходов: проход
  * измеряет высоты видимых строк и просит следующий, если они изменились.
  * Итерация, а не рекурсия: осциллирующие высоты не могут исчерпать стек.
+ *
+ * Постработка (набор видимых мыслей и подписка индикаторов, курсор, линии)
+ * выполняется РОВНО ОДИН раз после цикла и при ЛЮБОМ исходе — расклад сошёлся
+ * или лимит исчерпан. Внутри прохода она стояла после раннего «нужен ещё
+ * проход», поэтому на осцилляции не выполнялась вовсе (замечание проверки).
  */
 function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
+  let visibleIds: string[] = [];
+  let exhausted = true;
   for (let pass = 0; pass < ZONE_MEASURE_PASS_LIMIT; pass++) {
-    if (!renderZonePass(dir)) return;
+    const result = renderZonePass(dir);
+    // Рисовать нечего (нет зон, разметки или геометрии) — DOM и набор
+    // индикаторов не трогаем, как и прежде.
+    if (result === null) return;
+    visibleIds = result.visibleIds;
+    if (!result.again) {
+      exhausted = false;
+      break;
+    }
   }
-  // Лимит исчерпан: высоты строк не сошлись. DOM последнего прохода уже
-  // построен — оставляем его как есть: не бросаем и не повторяем пересборку
-  // целиком (дефект dc723634 превращал это в многосекундный фриз).
-  console.warn('[canvas] высоты строк зоны не сошлись за лимит проходов', { // i18n: technical — диагностика для разработчика
-    dir,
-    passes: ZONE_MEASURE_PASS_LIMIT,
-  });
+  if (exhausted) {
+    // Лимит исчерпан: высоты строк не сошлись, на экране остался расклад
+    // последнего прохода — не бросаем и не повторяем пересборку целиком
+    // (дефект dc723634 превращал это в многосекундный фриз). След в ФАЙЛОВОМ
+    // журнале клиента (§9.7): console.warn туда не попадает.
+    logUiEvent('ui.zone_measure_exhausted', { dir, passes: ZONE_MEASURE_PASS_LIMIT });
+  }
+  // Request indicators only AFTER the clouds are in the DOM: a cached value is
+  // applied synchronously and would otherwise patch nothing (the focus row
+  // loads it after mounting for the same reason). Видимый набор зоны заменяет
+  // прежний окно-набор целиком: мысли, ушедшие из окна прокруткой, отпишутся
+  // (ошибка 46bda0e8).
+  zoneVisibleThoughtIds.set(dir, visibleIds);
+  syncCanvasIndicatorInterest();
+  // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
+  syncCanvasCursor();
+  redrawLinks?.();
 }
 
+/** Исход одного прохода раскладки зоны. */
+interface ZonePassResult {
+  /** `true` — измеренные высоты строк изменились, нужен ещё проход. */
+  again: boolean;
+  /** Мысли, реально попавшие в окно виртуализации (набор подписки индикаторов). */
+  visibleIds: string[];
+}
+
+/** Проход, после которого повтор не нужен и в окне нет ни одной мысли. */
+const ZONE_PASS_DONE: ZonePassResult = { again: false, visibleIds: [] };
+
 /**
- * Один проход раскладки зоны. `true` — измеренные высоты строк изменились,
- * нужен ещё проход; `false` — расклад сошёлся (или рисовать нечего).
+ * Один проход раскладки зоны. `null` — рисовать нечего (нет зон, разметки или
+ * геометрии): DOM и набор индикаторов не тронуты.
  */
-function renderZonePass(dir: 'parents' | 'siblings' | 'children'): boolean {
-  if (zones === null) return false;
+function renderZonePass(dir: 'parents' | 'siblings' | 'children'): ZonePassResult | null {
+  if (zones === null) return null;
   const zone = zones[dir];
   const entries = zoneData.get(dir) ?? [];
   const spacer = zone.querySelector<HTMLElement>('.zone-spacer');
   const grid = zone.querySelector<HTMLElement>('.zone-grid');
   const empty = zone.querySelector<HTMLElement>('.zone-empty');
-  if (spacer === null || grid === null || empty === null) return false;
+  if (spacer === null || grid === null || empty === null) return null;
 
   // Effective (zoom-multiplied) sizes; the --cloud-* CSS variables with the
   // same numbers live on the canvas host (applyCanvasScaleVars).
@@ -2393,9 +2430,7 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): boolean {
 
   if (entries.length === 0) {
     // Зона пуста — её прежние облачка уходят из DOM: мысли отписываются от
-    // счётчиков (ошибка 46bda0e8).
-    zoneVisibleThoughtIds.set(dir, []);
-    syncCanvasIndicatorInterest();
+    // счётчиков (ошибка 46bda0e8) постработой цикла (пустой набор видимых id).
     spacer.style.height = '0px';
     empty.classList.remove('hidden');
     clear(grid);
@@ -2415,11 +2450,11 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): boolean {
     if (dir === 'children') {
       if (childrenZonePhase === 'loading') {
         empty.replaceChildren(loadingState());
-        return false;
+        return ZONE_PASS_DONE;
       }
       if (childrenZonePhase === 'error') {
         empty.replaceChildren(errorState(getViewRunError() ?? t('strip.runFailed')));
-        return false;
+        return ZONE_PASS_DONE;
       }
       const viewResult = zone.dataset['viewResult'];
       if (viewResult === 'unresolved') {
@@ -2447,7 +2482,7 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): boolean {
     } else {
       empty.textContent = ZONE_EMPTY_LABELS[dir];
     }
-    return false;
+    return ZONE_PASS_DONE;
   }
   empty.classList.add('hidden');
   // Скрытое пустое состояние не должно хранить разметку прежнего состояния
@@ -2456,7 +2491,7 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): boolean {
   empty.replaceChildren();
 
   const gridInfo = zoneGridOf(dir);
-  if (gridInfo === null) return false;
+  if (gridInfo === null) return null;
   const { cols, rows } = gridInfo;
   const heights = rowHeights.get(dir) ?? [];
   while (heights.length < rows) heights.push(estimate);
@@ -2573,19 +2608,7 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): boolean {
     }
   }
   rowHeights.set(dir, heights);
-  if (measured) return true;
-
-  // Request indicators only AFTER the clouds are in the DOM: a cached value is
-  // applied synchronously and would otherwise patch nothing (the focus row
-  // loads it after mounting for the same reason). Видимый набор зоны заменяет
-  // прежний окно-набор целиком: мысли, ушедшие из окна прокруткой, отпишутся
-  // (ошибка 46bda0e8).
-  zoneVisibleThoughtIds.set(dir, visibleIds);
-  syncCanvasIndicatorInterest();
-  // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
-  syncCanvasCursor();
-  redrawLinks?.();
-  return false;
+  return { again: measured, visibleIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -2885,6 +2908,8 @@ export const canvasInternals = {
   renderCount: () => renderCount,
   /** Число ВХОДОВ в `render()` (до гварда хозяина) — отличает no-op по `host === null` от потерянного микротаска. */
   renderEnterCount: () => renderEnterCount,
+  /** Видимые мысли зоны (набор подписки индикаторов) — тестовый шов ошибки dc723634. */
+  zoneVisibleIds: (dir: ZoneDir): string[] => [...(zoneVisibleThoughtIds.get(dir) ?? [])],
 };
 
 // ---------------------------------------------------------------------------

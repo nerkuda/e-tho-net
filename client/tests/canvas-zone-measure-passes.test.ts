@@ -11,12 +11,19 @@
  * `RangeError: Maximum call stack size exceeded`, внешний catch повторял
  * пересборку целиком — и всё начиналось заново: многосекундный фриз.
  *
- * Гейт держит два инварианта фикса:
- *   1. осциллирующие высоты (`offsetHeight` возвращает 20/40 по очереди на
+ * Гейт держит инварианты фикса:
+ *   1. осциллирующие высоты (`offsetHeight` возвращает 137/111 по очереди на
  *      каждое чтение) НЕ дают переполнения стека: проходы итеративные и
  *      ограничены `ZONE_MEASURE_PASS_LIMIT`, последний построенный расклад
- *      остаётся в DOM, о лимите пишется одно предупреждение;
- *   2. «повтор целиком» ограничен: детерминированный `RangeError` не
+ *      остаётся в DOM;
+ *   2. постработка прохода выполняется ОДИН раз и при любом исходе: при
+ *      исчерпании лимита набор видимых мыслей зоны (подписка индикаторов)
+ *      всё равно актуализируется — новые облачка подписываются, ушедшие id
+ *      не залипают (замечание проверки 5c5e7b39);
+ *   3. исчерпание лимита оставляет след в ФАЙЛОВОМ журнале меткой
+ *      `ui.zone_measure_exhausted {dir, passes}` — `console.warn` туда не
+ *      попадает, поэтому консольной строки недостаточно;
+ *   4. «повтор целиком» ограничен: детерминированный `RangeError` не
  *      повторяется вовсе (повтор умножил бы фриз), а прочий сбой пересборки —
  *      не больше `REBUILD_RETRY_LIMIT` раз (`REBUILD_RETRY_LIMIT + 1` вход в
  *      `render()`).
@@ -49,16 +56,22 @@ const NETWORK_ID = '00000000-0000-4000-8000-000000000001';
 const TYPE_ID = '00000000-0000-4000-8000-000000000010';
 const FOCUS_ID = '00000000-0000-4000-8000-000000000100';
 const PARENT_ID = '00000000-0000-4000-8000-000000000200';
+const FOCUS_B_ID = '00000000-0000-4000-8000-000000000101';
+const PARENT_B_ID = '00000000-0000-4000-8000-000000000201';
 
 let currentHost: ShimElement | null = null;
+
+/** Метки, доставленные мостом файлового журнала `window.etn.logEvent`. */
+const logged: Array<{ name: string; data?: Record<string, unknown> }> = [];
 
 /** Сколько раз код прочитал `offsetHeight` (одно чтение = одно облачко за проход). */
 let heightReads = 0;
 /**
  * Поведение высоты облачка:
  *  - `stable` — всегда 20 px (расклад сходится за один проход);
- *  - `oscillate` — 20/40 по очереди на КАЖДОЕ чтение: высота строки меняется в
- *    каждом проходе, расклад не сходится (живой сценарий ошибки dc723634);
+ *  - `oscillate` — 137/111 px по очереди на КАЖДОЕ чтение: высота строки
+ *    меняется в каждом проходе, расклад не сходится (живой сценарий ошибки
+ *    dc723634);
  *  - `stack-overflow` — бросает `RangeError`, как переполнение стека;
  *  - `boom` — бросает обычную ошибку (проверка лимита повторов).
  */
@@ -132,6 +145,10 @@ function focusResponse(): FocusResponse {
 
 function installFakeApi(): unknown {
   return {
+    // Мост файлового журнала клиента: ровно то, чем пишутся метки `ui.*`.
+    logEvent: (name: string, data?: Record<string, unknown>): void => {
+      logged.push({ name, data });
+    },
     ui: {
       getState: async () => null,
       setState: async () => undefined,
@@ -292,6 +309,7 @@ beforeEach(async () => {
   installEtn();
   heightMode = 'stable';
   heightReads = 0;
+  logged.length = 0;
   store.update({ networkId: NETWORK_ID, focus: null, canvasZoom: 1, cloudWidth: 180 });
   // Сброс удержанного полосой фокуса между тестами: `dispose()` не зовёт
   // `renderStrip(null)`, и следующий фокус с тем же id считался бы прежним.
@@ -310,6 +328,7 @@ describe('высоты строк зоны не уводят раскладку 
 
     heightMode = 'oscillate';
     heightReads = 0;
+    logged.length = 0;
     const rendersBefore = canvas.canvasInternals.renderCount();
     const capture = captureConsole();
     try {
@@ -348,11 +367,69 @@ describe('высоты строк зоны не уводят раскладку 
       `пересборка не должна падать: ${capture.errors.join(' | ')}`,
     );
     assert.ok(
-      capture.warns.some((line) => line.includes('[canvas] высоты строк зоны не сошлись')),
-      'исчерпание лимита проходов обязано попадать в журнал',
+      logged.some((event) => event.name === 'ui.zone_measure_exhausted'),
+      'исчерпание лимита проходов обязано попадать в файловый журнал меткой ui.zone_measure_exhausted',
     );
     // Последний построенный расклад остаётся на экране (не бросаем, не чистим).
     assert.ok(zone!.querySelector('.cloud') !== null, 'облачко последнего прохода осталось в DOM');
+
+    heightMode = 'stable';
+    dispose();
+  });
+
+  it('при исчерпании лимита набор индикаторов зоны всё равно актуализируется', async () => {
+    const { dispose } = await mountWithParent();
+    await settle();
+    assert.deepEqual(
+      canvas.canvasInternals.zoneVisibleIds('parents'),
+      [PARENT_ID],
+      'стабильный расклад подписал индикаторы на видимого родителя',
+    );
+
+    // Другая окрестность: у нового фокуса другой родитель. Расклад не сойдётся,
+    // но набор «что сейчас на экране» обязан смениться — иначе индикаторы новых
+    // облачков не подпишутся, а id прежних залипнут в наборе (замечание
+    // проверки 5c5e7b39: постработка стояла после раннего «нужен ещё проход»).
+    heightMode = 'oscillate';
+    const next = focusResponse();
+    next.focused = thought(FOCUS_B_ID, 'Другой фокус');
+    next.parents = [neighbor(PARENT_B_ID, 'link-parent-b', 'Другой родитель')];
+    store.update({ focus: next });
+    await settle();
+
+    assert.deepEqual(
+      canvas.canvasInternals.zoneVisibleIds('parents'),
+      [PARENT_B_ID],
+      'при исчерпании лимита набор видимых мыслей зоны обязан быть актуальным',
+    );
+    assert.ok(
+      !canvas.canvasInternals.zoneVisibleIds('parents').includes(PARENT_ID),
+      'id прежней окрестности выпадают из набора индикаторов',
+    );
+
+    heightMode = 'stable';
+    dispose();
+  });
+
+  it('исчерпание лимита оставляет след в файловом журнале меткой ui.zone_measure_exhausted', async () => {
+    const { host, dispose } = await mountWithParent();
+    await settle();
+    assert.ok(host.querySelector('.zone-parents')?.querySelector('.cloud') !== null);
+
+    heightMode = 'oscillate';
+    logged.length = 0;
+    canvas.requestCanvasRepaint();
+    await settle();
+
+    const marks = logged.filter((event) => event.name === 'ui.zone_measure_exhausted');
+    assert.ok(
+      marks.length >= 1,
+      `исчерпание лимита обязано попасть в файловый журнал: ${JSON.stringify(logged)}`,
+    );
+    const expected = { dir: 'parents', passes: canvas.ZONE_MEASURE_PASS_LIMIT };
+    for (const mark of marks) {
+      assert.deepEqual(mark.data, expected, 'метка называет зону и число проходов');
+    }
 
     heightMode = 'stable';
     dispose();
