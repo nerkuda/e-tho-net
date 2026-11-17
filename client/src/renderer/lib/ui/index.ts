@@ -500,3 +500,17 @@ export type {
   ReminderPanelRow,
   ReminderSectionKind,
 } from './task-panel-model.js';
+
+// Единая компонента списка задач (0.16.1, задача 7446eb25): общий контроллер
+// «источник → загрузка → операции → устаревание → realtime» для панели
+// «Дневника» и зоны «Задачи» карточки мысли. Рендер — `task-panel.ts`, правила
+// — `task-panel-model.ts`; экраны остаются тонкими обвязками.
+export { TASK_LIST_HEIGHT, mountTaskList } from './task-list.js';
+export type {
+  TaskListSource,
+  TaskListViewOptions,
+  TaskListActions,
+  TaskListPersistence,
+  TaskListOptions,
+  TaskListHandle,
+} from './task-list.js';

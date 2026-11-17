@@ -230,6 +230,9 @@ export function groupPanelRows<T extends PanelGroupable>(
 /** Строка задачи в панели (view-модель): данные для отрисовки и действий. */
 export interface TaskPanelRow extends PanelGroupable {
   commentId: string;
+  /** Владелец комментария-источника — адрес «Открыть источник» (0.16.1). */
+  ownerType: TaskDTO['owner_type'];
+  ownerId: string;
   /** Номер строки `body_md` с нуля (адрес `PATCH /tasks`). */
   lineNo: number;
   /**
@@ -279,6 +282,11 @@ export interface TaskPanelChildRow {
   depth: number;
   /** Пункт чек-листа (`- [ ]`), а не обычная строка текста. */
   checkbox: boolean;
+  /**
+   * Отметка пункта чек-листа (0.16.1, задача 7446eb25): панель показывает
+   * пункт настоящим чекбоксом, а не маркированной строкой.
+   */
+  done?: boolean;
 }
 
 /**
@@ -299,6 +307,7 @@ export function nestedLinesByParent(
       text: line.text,
       depth: line.depth,
       checkbox: line.checkbox,
+      done: line.done === true,
     });
     byParent.set(key, list);
   }
@@ -363,6 +372,8 @@ export function taskRowView(
   return {
     key: taskRowKey(row),
     commentId: row.comment_id,
+    ownerType: row.owner_type,
+    ownerId: row.owner_id,
     lineNo: row.line_no,
     text: row.text,
     done: isDone,
@@ -498,6 +509,46 @@ export function replaceTaskLine(bodyMd: string, lineNo: number, line: string): s
   if (lines[lineNo] === line) return bodyMd;
   lines[lineNo] = line;
   return lines.join('\n');
+}
+
+/**
+ * Заменить ДИАПАЗОН строк `body_md` (блочная правка «как трансклюзия», 0.16.1,
+ * задача 7446eb25): строка задачи и все её вложенные строки правятся одним
+ * куском, как блок трансклюзии. `start`/`end` — включительно, `text` — новые
+ * строки блока (разделитель `\n`; пустая строка удаляет диапазон).
+ * `null` — диапазон выходит за границы источника.
+ */
+export function replaceTaskLineRange(
+  bodyMd: string,
+  start: number,
+  end: number,
+  text: string,
+): string | null {
+  const lines = bodyMd.split('\n');
+  if (start < 0 || end < start || end >= lines.length) return null;
+  const block = text === '' ? [] : text.split('\n');
+  if (block.length === end - start + 1 && block.every((line, i) => line === lines[start + i])) {
+    return bodyMd;
+  }
+  lines.splice(start, end - start + 1, ...block);
+  return lines.join('\n');
+}
+
+/** Строка пункта чек-листа (`- [ ]` / `- [x]`) с отступом. */
+const CHECKLIST_LINE_RE = /^(\s*[-*+]\s+\[)([ xX])(\])/;
+
+/**
+ * Поставить/снять отметку пункта чек-листа в СЫРОЙ строке `body_md`
+ * (0.16.1, задача 7446eb25). Пункт чек-листа под задачей — не задача проекции:
+ * `PATCH /tasks` отвечает на него `not_a_task`, поэтому отметка ставится
+ * правкой текста источника. `null` — строка не пункт чек-листа.
+ */
+export function setChecklistLineDone(line: string, done: boolean): string | null {
+  const match = CHECKLIST_LINE_RE.exec(line);
+  if (match === null) return null;
+  const head = match[1] ?? '';
+  const tail = match[3] ?? '';
+  return `${head}${done ? 'x' : ' '}${tail}${line.slice(match[0].length)}`;
 }
 
 /** Календарных дней от `from` до `to` (обе даты `YYYY-MM-DD`). */

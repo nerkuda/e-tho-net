@@ -91,6 +91,7 @@ import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js'
 import { initCompatibilityDialog } from './lib/compatibility-dialog.js';
 import { openServerUpdateDialog } from './lib/server-update-dialog.js';
 import { initLockReconnect } from './lib/lock-guard.js';
+import { requireNetworkId } from './lib/network-id.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
@@ -232,22 +233,35 @@ async function openNetworkBody(
   const canvasLinkFilterPref = prefs.find((p) => p.key === PREF_KEY.CANVAS_LINK_FILTER);
   const canvasLinkFilter = parseStoredCanvasLinkFilter(canvasLinkFilterPref?.value);
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw, heightsRaw, chronicleHeightsRaw] =
-    await Promise.all([
-      etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
-      etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
-      etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_POSITION),
-      etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_COLLAPSED_GROUPS),
-      etn.ui.getState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID),
-      etn.ui.getState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID),
-      etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
-      etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
-      etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
-      etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
-      etn.pins.list(networkId),
-      etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
-      etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_LIST_HEIGHTS),
-    ]);
+  const [
+    cloudWidthRaw,
+    cloudGapRaw,
+    posRaw,
+    collapsedRaw,
+    focusRaw,
+    linkTypeRaw,
+    layoutRaw,
+    canvasLayoutRaw,
+    canvasZoomRaw,
+    activeViewRaw,
+    pinsRaw,
+    heightsRaw,
+    chronicleHeightsRaw,
+  ] = await Promise.all([
+    etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
+    etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
+    etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_POSITION),
+    etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_COLLAPSED_GROUPS),
+    etn.ui.getState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID),
+    etn.ui.getState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID),
+    etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
+    etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
+    etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
+    etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
+    etn.pins.list(networkId),
+    etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
+    etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_LIST_HEIGHTS),
+  ]);
   if (!isCurrentOpenNetwork(seq)) return;
 
   const editorPosition = (
@@ -320,12 +334,11 @@ async function openNetworkBody(
   const viewFromTab = activeTabView;
   const knownView = (value: string | null): value is WorkspaceView =>
     value === 'structures' || value === 'chronicle' || value === 'publications';
-  const resolvedView: WorkspaceView =
-    knownView(viewFromTab)
-      ? viewFromTab
-      : knownView(activeViewRaw)
-        ? activeViewRaw
-        : 'map';
+  const resolvedView: WorkspaceView = knownView(viewFromTab)
+    ? viewFromTab
+    : knownView(activeViewRaw)
+      ? activeViewRaw
+      : 'map';
 
   // Публикация сети/вкладки/экрана — только если этот запуск ещё актуален:
   // запоздавший ответ прежней сети не откатывает уже открытую (ошибка
@@ -370,7 +383,10 @@ async function openNetworkBody(
   // применяется, только если сеть всё ещё активна (проверка внутри модуля).
   void syncLanguageForNetwork(networkId);
   // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
-  setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
+  setQueryData(
+    queryKeys.pins(),
+    (pinsRaw ?? []).map((p) => p.thought_id),
+  );
 
   // Холодная синхронизация захватов (0.12.2, задача 8e4e3dc5): клик по
   // легаси-ссылке проверяет, не захвачена ли цель другим пользователем, а
@@ -424,7 +440,13 @@ async function openNetworkBody(
   } else {
     const root = await findRootThought(networkId);
     if (!isCurrentOpenNetwork(seq)) return;
-    await loadFocusForTab(root.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq), focusSeq);
+    await loadFocusForTab(
+      root.id,
+      networkId,
+      activeTabId,
+      () => isCurrentOpenNetwork(seq),
+      focusSeq,
+    );
   }
   if (!isCurrentOpenNetwork(seq)) return;
 
@@ -611,7 +633,9 @@ async function runFocusPipeline(id: string): Promise<void> {
   if (tabId !== null) {
     void etn.tabs.updateState(tabId, { focus_id: id }).catch(() => undefined);
   } else {
-    void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+    void etn.ui
+      .setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id)
+      .catch(() => undefined);
   }
 }
 
@@ -676,10 +700,7 @@ export function scheduleRefresh(cause?: InvalidationCause): void {
       // Жёсткий срок волны — от первого события, поток его не продлевает
       // (иначе fallback так же голодал бы, как реестр до блокера 96d7f05d).
       if (refreshMaxWaitTimer === null) {
-        refreshMaxWaitTimer = window.setTimeout(
-          runFallbackRefresh,
-          REALTIME_REFETCH_MAX_WAIT_MS,
-        );
+        refreshMaxWaitTimer = window.setTimeout(runFallbackRefresh, REALTIME_REFETCH_MAX_WAIT_MS);
       }
     }
     return;
@@ -850,12 +871,13 @@ export async function disconnect(): Promise<void> {
   showScreen('onboarding');
 }
 
-/** The current network id, or throws (callers require an open network). */
-export function requireNetworkId(): string {
-  const id = store.state.networkId;
-  if (id === null) throw new Error(t('app.networkNotOpen'));
-  return id;
-}
+/**
+ * Идентификатор текущей сети — реэкспорт низкоуровневого источника
+ * (`lib/network-id.ts`): тело переехало туда в 0.16.1 (задача `7446eb25`),
+ * чтобы единая компонента списка задач не замыкала цикл на `app.ts`. Публичная
+ * точка импорта остаётся здесь — потребители не меняются.
+ */
+export { requireNetworkId };
 
 /**
  * Actor-side cleanup after deleting a thought (workplan L4). B1 техпроекта

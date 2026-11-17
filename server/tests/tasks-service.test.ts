@@ -1055,6 +1055,17 @@ describe(
           ],
           'вложенные строки идут по порядку и несут уровень',
         );
+        // Отметка пункта чек-листа — из проекции: панель рисует пункт настоящим
+        // чекбоксом и не парсит источник ради галочки (0.16.1, задача 7446eb25).
+        assert.deepEqual(
+          nested.map((line) => [line.checkbox, line.done]),
+          [
+            [true, true],
+            [false, false],
+            [false, false],
+          ],
+          'пункт `- [x]` приходит с отметкой `done`; обычные строки отметки не несут',
+        );
         for (const line of nested) {
           assert.equal(line.comment_id, commentId);
           assert.equal(line.parent.comment_id, commentId);

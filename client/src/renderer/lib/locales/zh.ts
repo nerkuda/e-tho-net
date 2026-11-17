@@ -692,6 +692,7 @@ export const zh = {
   'tasks.groupCommands': '分组命令',
   'tasks.rowChildren': '嵌套行',
   'tasks.editLineAria': '编辑任务行（原始 Markdown）',
+  'tasks.editBlockAria': '编辑包含嵌套行的任务块（原始 Markdown）',
   'tasks.pickDateTitle': '移至日期',
   'tasks.sectionMain': '本期间',
   'tasks.sectionOverdue': '已逾期',

@@ -97,6 +97,8 @@ function taskRow(overrides: Partial<TaskPanelRow> = {}): TaskPanelRow {
   return {
     key: 'c1:0',
     commentId: 'c1',
+    ownerType: 'thought',
+    ownerId: 't1',
     lineNo: 0,
     text: 'задача',
     done: false,
@@ -1231,5 +1233,124 @@ describe('панель задач: высота панели (пункт B)', ()
     handle.render(panelView([taskRow()]));
     assert.equal(handle.panelCollapsed(), true, 'панель сообщает свёрнутость экрану');
     handle.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.16.1, замечания пользователя 2026-11-18 (задача 7446eb25): пункты 3 и 4.
+// ---------------------------------------------------------------------------
+
+describe('панель задач: блочная правка строки-задачи (замечание 3 ТЗ 2026-11-18)', () => {
+  beforeEach(() => keymap.keymapInternals.reset());
+
+  /** Строка задачи с двумя вложенными строками (пункт чек-листа и текст). */
+  const withChildren = (): TaskPanelRow =>
+    taskRow({
+      children: [
+        { key: 'c1:1', lineNo: 1, text: 'пункт', depth: 1, checkbox: true, done: false },
+        { key: 'c1:2', lineNo: 2, text: 'текст', depth: 1, checkbox: false, done: false },
+      ],
+    });
+
+  it('двойной клик по строке с детьми открывает МНОГОСТРОЧНОЕ поле всего блока', async () => {
+    const block = '- [ ] задача\n  - [ ] пункт\n  текст';
+    const { host, calls, destroy } = mount([withChildren()], {
+      loadRawBlock: async (row) => ({ start: row.lineNo, end: 2, text: block }),
+    });
+    const row = rowsOf(host)[0]!;
+    (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+    await flush();
+    const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
+    assert.ok(field, 'открылось поле блочной правки');
+    assert.equal(field.value, block, 'в поле — строка задачи И все её вложенные строки');
+    assert.equal(calls.rawLines, 0, 'блочная правка не читает одну строку: блок читает экран');
+    destroy();
+  });
+
+  it('Enter в блочном поле — перевод строки, сохраняет Ctrl+Enter; диапазон — до последнего ребёнка', async () => {
+    const saved: Array<{ start: number; end: number; text: string }> = [];
+    const { host, destroy } = mount([withChildren()], {
+      loadRawBlock: async () => ({
+        start: 0,
+        end: 2,
+        text: '- [ ] задача\n  - [ ] пункт\n  текст',
+      }),
+      editBlock: async (_row, range, text) => {
+        saved.push({ start: range.start, end: range.end, text });
+        return true;
+      },
+    });
+    const row = rowsOf(host)[0]!;
+    (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+    await flush();
+    const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
+    field.value = '- [ ] задача\n  - [x] пункт\n  текст';
+    field.focus();
+    assert.equal(
+      keymap.dispatchKeyEvent({
+        key: 'Enter',
+        target: field,
+        preventDefault: (): void => undefined,
+      } as unknown as KeyboardEvent),
+      false,
+      'Enter без модификатора — перевод строки, а не сохранение',
+    );
+    assert.deepEqual(saved, [], 'перевод строки не пишет источник');
+    keymap.dispatchKeyEvent({
+      key: 'Enter',
+      ctrlKey: true,
+      target: field,
+      preventDefault: (): void => undefined,
+    } as unknown as KeyboardEvent);
+    await flush();
+    assert.deepEqual(
+      saved,
+      [{ start: 0, end: 2, text: '- [ ] задача\n  - [x] пункт\n  текст' }],
+      'сохранён весь блок строки-задачи включительно с вложенными строками',
+    );
+    assert.equal(
+      row.querySelector('.ui-task-row-block-edit'),
+      null,
+      'после сохранения поле закрыто',
+    );
+    destroy();
+  });
+});
+
+describe('панель задач: пункт чек-листа под задачей (замечание 4 ТЗ 2026-11-18)', () => {
+  const children = [
+    { key: 'c1:1', lineNo: 1, text: 'пункт', depth: 1, checkbox: true, done: true },
+    { key: 'c1:2', lineNo: 2, text: 'текст', depth: 1, checkbox: false, done: false },
+  ];
+
+  it('пункт чек-листа — чекбокс с отметкой источника, обычная строка — без контрола', () => {
+    const { host, destroy } = mount([taskRow({ children })]);
+    const row = rowsOf(host)[0]!;
+    (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+    const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
+    assert.ok(check, 'у пункта чек-листа есть настоящий чекбокс');
+    assert.equal(check.checked, true, 'отметка взята из снапшота, а не выдумана панелью');
+    assert.equal(
+      row.querySelectorAll('.ui-task-child-check').length,
+      1,
+      'у обычной вложенной строки контрола нет',
+    );
+    destroy();
+  });
+
+  it('клик по чекбоксу пункта отдаёт команду экрану (`toggleChild`)', () => {
+    const toggles: Array<{ key: string; child: number; done: boolean }> = [];
+    const { host, destroy } = mount([taskRow({ children })], {
+      toggleChild: (row, child, done) => {
+        toggles.push({ key: row.key, child: child.lineNo, done });
+      },
+    });
+    const row = rowsOf(host)[0]!;
+    (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+    const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
+    check.checked = false;
+    check.emit('change', { target: check });
+    assert.deepEqual(toggles, [{ key: 'c1:0', child: 1, done: false }]);
+    destroy();
   });
 });

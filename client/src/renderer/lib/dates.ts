@@ -12,7 +12,13 @@
  * Дата принадлежности записи считается в ЛОКАЛЬНОМ поясе наблюдателя
  * (ADR времени 994d076a), а арифметика календарных дней — в UTC (без переходов
  * DST), поэтому «голая дата» здесь однозначна.
+ *
+ * Подписи дней и границы локальных суток переехали сюда из `diary.ts` в 0.16.1
+ * (задача `7446eb25`): их использует единая компонента списка задач
+ * (`lib/ui/task-list.ts`), а библиотека не может зависеть от экрана.
  */
+
+import { formatDateParts, getLang } from './i18n.js';
 
 /** «Голая дата» `YYYY-MM-DD`. */
 export const BARE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -345,4 +351,43 @@ export function monthEdge(firstOfMonth: string, edge: 'start' | 'end'): string {
   if (m === null) return '';
   if (edge === 'start') return firstOfMonth;
   return new Date(Date.UTC(Number(m[1]), Number(m[2]), 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * Подпись календарного дня (локализованная, с днём недели). Локаль суток и
+ * порядок частей — общий форматтер клиента (`formatDateParts`); хвостовые
+ * литералы («г.») снимаются, первая буква поднимается. `day` — как есть, если
+ * форматтер ничего не дал.
+ */
+export function formatDayLabel(day: string): string {
+  const parts = formatDateParts(new Date(`${day}T00:00:00`), {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  if (parts.length === 0) return day;
+  while (parts.length > 1 && parts[parts.length - 1]?.type === 'literal') parts.pop();
+  const text = parts
+    .map((part) => part.value)
+    .join('')
+    .trim();
+  if (text === '') return day;
+  return text.charAt(0).toLocaleUpperCase(getLang()) + text.slice(1);
+}
+
+/** Начало локального дня наблюдателя как полный UTC-инстанс. */
+export function localDayStart(day: string): string {
+  const m = BARE_DATE_RE.exec(day.trim());
+  if (m === null) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+/** Конец локального дня наблюдателя как полный UTC-инстанс (включительно). */
+export function localDayEnd(day: string): string {
+  const m = BARE_DATE_RE.exec(day.trim());
+  if (m === null) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
 }

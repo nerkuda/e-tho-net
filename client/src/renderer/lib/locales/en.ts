@@ -1396,6 +1396,8 @@ export const en = {
   'tasks.groupCommands': 'Group commands',
   'tasks.rowChildren': 'Nested lines',
   'tasks.editLineAria': 'Edit task line (raw markdown)',
+  /** Accessible name of the block-edit field (task + its nested lines). */
+  'tasks.editBlockAria': 'Edit task block with nested lines (raw markdown)',
   'tasks.pickDateTitle': 'Move to date',
   /** Task section titles. */
   'tasks.sectionMain': 'In this period',

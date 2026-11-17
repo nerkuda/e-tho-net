@@ -38,6 +38,8 @@ import {
   reminderRowKey,
   reminderSectionOf,
   replaceTaskLine,
+  replaceTaskLineRange,
+  setChecklistLineDone,
   shiftDay,
   taskCounters,
   taskGroupingMode,
@@ -330,6 +332,49 @@ describe('счётчики и «серая строка» (0e85b66e)', () => {
     assert.equal(calendarDaysBetween('2026-12-31', '2027-01-01'), 1);
   });
 
+  // 0.16.1, замечания 3 и 4 ТЗ 2026-11-18 (задача 7446eb25).
+
+  it('блочная правка заменяет диапазон строк включительно и умеет удалять блок', () => {
+    const body = '- [ ] задача\n  - [ ] пункт\n  текст\n- [ ] соседняя';
+    assert.equal(
+      replaceTaskLineRange(body, 0, 2, '- [ ] задача\n  - [x] пункт\n  текст'),
+      '- [ ] задача\n  - [x] пункт\n  текст\n- [ ] соседняя',
+      'правится весь блок: строка задачи и её вложенные строки',
+    );
+    assert.equal(
+      replaceTaskLineRange(body, 0, 2, ''),
+      '- [ ] соседняя',
+      'пустой текст удаляет блок целиком',
+    );
+    assert.equal(
+      replaceTaskLineRange(body, 0, 2, '- [ ] задача\n  - [ ] пункт\n  текст'),
+      body,
+      'тот же блок — тот же текст (лишней ревизии не будет)',
+    );
+    assert.equal(replaceTaskLineRange(body, 0, 9, 'x'), null, 'диапазон за границей — отказ');
+    assert.equal(replaceTaskLineRange(body, 2, 1, 'x'), null, 'обратный диапазон — отказ');
+  });
+
+  it('отметка пункта чек-листа правит ровно маркер `[ ]`→`[x]`, сохраняя отступ и текст', () => {
+    assert.equal(setChecklistLineDone('  - [ ] пункт', true), '  - [x] пункт');
+    assert.equal(setChecklistLineDone('  - [x] пункт', false), '  - [ ] пункт');
+    assert.equal(
+      setChecklistLineDone('- [X] пункт', false),
+      '- [ ] пункт',
+      'заглавная отметка снимается',
+    );
+    assert.equal(
+      setChecklistLineDone('- [ ] пункт **[ссылка]**', true),
+      '- [x] пункт **[ссылка]**',
+      'хвост строки не задет',
+    );
+    assert.equal(
+      setChecklistLineDone('- обычная строка', true),
+      null,
+      'не пункт чек-листа — отказ',
+    );
+  });
+
   it('строка панели несёт адрес проекции, день срока и субъекта', () => {
     const view = taskRowView(
       task({
@@ -518,6 +563,7 @@ describe('вложенные строки под задачей (пункт F Т
         text: 'пункт чек-листа',
         depth: 1,
         checkbox: true,
+        done: false,
       },
       {
         comment_id: 'c1',
@@ -526,6 +572,7 @@ describe('вложенные строки под задачей (пункт F Т
         text: 'вложенный текст',
         depth: 1,
         checkbox: false,
+        done: false,
       },
       {
         comment_id: 'c1',
@@ -534,6 +581,7 @@ describe('вложенные строки под задачей (пункт F Т
         text: 'у другой задачи',
         depth: 1,
         checkbox: false,
+        done: false,
       },
     ]);
     assert.deepEqual(

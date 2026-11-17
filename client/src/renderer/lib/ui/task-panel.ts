@@ -59,7 +59,7 @@ import { iconButton, uiButton } from './button.js';
 import { choiceControl } from './choice-row.js';
 import { collapsibleSection, type CollapsibleSection } from './collapsible.js';
 import { loadingState } from './empty-state.js';
-import { fieldInput } from './field.js';
+import { fieldInput, fieldTextarea } from './field.js';
 import { svgIcon } from './icon.js';
 import { reconcileKeyed } from './keyed-list.js';
 import { createListNav, type ListNavHandle } from './list.js';
@@ -68,6 +68,7 @@ import type {
   ReminderPanelRow,
   ReminderSectionKind,
   TaskGroupingMode,
+  TaskPanelChildRow,
   TaskPanelRow,
 } from './task-panel-model.js';
 
@@ -75,6 +76,7 @@ export type {
   ReminderPanelRow,
   ReminderSectionKind,
   TaskGroupingMode,
+  TaskPanelChildRow,
   TaskPanelRow,
 } from './task-panel-model.js';
 
@@ -324,6 +326,24 @@ export interface TaskPanelActions {
   panelHeight?(): number | null;
   /** Запомнить высоту панели (пишет экран, по образцу `editor_list_heights`). */
   setPanelHeight?(height: number): void;
+  /**
+   * Чекбокс пункта чек-листа под задачей (0.16.1, задача 7446eb25). Пункт
+   * чек-листа — не задача проекции: команды `PATCH /tasks` на него нет, отметка
+   * ставится правкой текста источника (экран решает, как именно).
+   */
+  toggleChild?(row: TaskPanelRow, child: TaskPanelChildRow, done: boolean): void;
+  /**
+   * Сырой блок источника для БЛОЧНОЙ правки «как трансклюзия» (0.16.1, задача
+   * 7446eb25): строка задачи и все её вложенные строки одним куском.
+   * `null` — блок прочитать не удалось (экран уже показал ошибку).
+   */
+  loadRawBlock?(row: TaskPanelRow): Promise<{ start: number; end: number; text: string } | null>;
+  /** Сохранить блочную правку диапазона строк (включительно); `false` — отказ. */
+  editBlock?(
+    row: TaskPanelRow,
+    range: { start: number; end: number },
+    text: string,
+  ): Promise<boolean>;
 }
 
 /** Настройка монтирования панели. */
@@ -378,10 +398,15 @@ const INLINE_EDIT_CONTEXT_ID = 'task-panel-inline-edit';
 interface InlineEditCommand {
   commit(): void;
   cancel(): void;
+  /**
+   * Поле многострочное (блочная правка «как трансклюзия»): `Enter` вставляет
+   * перевод строки, сохранение — `Ctrl+Enter` (0.16.1, задача 7446eb25).
+   */
+  multiline?: boolean;
 }
 
 /** Открытые правки по полю ввода: событие адресуется цели нажатия. */
-const inlineEditCommands = new WeakMap<HTMLInputElement, InlineEditCommand>();
+const inlineEditCommands = new WeakMap<HTMLElement, InlineEditCommand>();
 
 /**
  * Объявить контекст клавиш инлайн-правки (Enter/Escape) в диспетчере.
@@ -394,6 +419,11 @@ function ensureInlineEditContext(): void {
     id: INLINE_EDIT_CONTEXT_ID,
     bindings: [
       { command: 'taskRow.commit', chord: 'Enter', run: handleInlineEditKey },
+      // Блочная правка: Enter — перевод строки, сохраняет `Ctrl+Enter` (на
+      // macOS — `Cmd+Enter`): диспетчер различает платформенные модификаторы,
+      // а `Mod` в хордах проекта не поддерживается (образец — панель отбора).
+      { command: 'taskRow.commitBlock', chord: 'Ctrl+Enter', run: handleInlineEditKey },
+      { command: 'taskRow.commitBlock', chord: 'Meta+Enter', run: handleInlineEditKey },
       { command: 'taskRow.cancel', chord: 'Escape', run: handleInlineEditKey },
     ],
   });
@@ -403,12 +433,14 @@ function ensureInlineEditContext(): void {
 function handleInlineEditKey(event: KeyboardEvent): boolean {
   const source = event.target as unknown;
   if (source === null || typeof source !== 'object') return false;
-  const command = inlineEditCommands.get(source as HTMLInputElement);
+  const command = inlineEditCommands.get(source as HTMLElement);
   if (command === undefined) return false;
   if (event.key === 'Escape') {
     command.cancel();
     return true;
   }
+  // Многострочная правка: `Enter` — перевод строки, сохраняет `Ctrl+Enter`.
+  if (command.multiline === true && event.ctrlKey !== true && event.metaKey !== true) return false;
   command.commit();
   return true;
 }
@@ -429,6 +461,12 @@ export function mountTaskPanel(
   let editingKey: string | null = null;
   /** Сырая строка `body_md` открытой правки (маркер и чекбокс на месте). */
   let editingRaw: string | null = null;
+  /**
+   * Диапазон строк открытой БЛОЧНОЙ правки (0.16.1, задача 7446eb25): строка
+   * задачи и все вложенные строки правятся одним куском «как трансклюзия».
+   * `null` — правится одна строка.
+   */
+  let editingRange: { start: number; end: number } | null = null;
   /**
    * Ключи строк с раскрытыми вложенными строками (пункт F ТЗ 2026-11-17).
    * По умолчанию строка СВЁРНУТА: пользователь раскрывает её сам, состояние
@@ -776,41 +814,101 @@ export function mountTaskPanel(
     const closeEdit = (): void => {
       editingKey = null;
       editingRaw = null;
+      editingRange = null;
       releaseContext?.();
       releaseContext = null;
       if (node.isConnected) fillTaskRow(node, currentTaskRow(row.key) ?? row);
+    };
+    /**
+     * Открыть БЛОЧНУЮ правку строки (0.16.1, задача 7446eb25): вложенные строки
+     * правятся вместе со строкой задачи, как блок трансклюзии. Источник читает
+     * экран (`loadRawBlock`), компонент рисует многострочное поле.
+     */
+    const beginBlockEdit = (): void => {
+      if (row.stale || editingKey === row.key || actions.loadRawBlock === undefined) return;
+      editingKey = row.key;
+      editingRaw = null;
+      editingRange = null;
+      void actions.loadRawBlock(row).then((block) => {
+        if (editingKey !== row.key) return;
+        if (block === null) {
+          closeEdit();
+          return;
+        }
+        editingRaw = block.text;
+        editingRange = { start: block.start, end: block.end };
+        fillTaskRow(node, row);
+        const field = node.querySelector<HTMLTextAreaElement>('.ui-task-row-block-edit');
+        field?.focus();
+        field?.select();
+      });
     };
     if (editingKey === row.key && editingRaw !== null) {
       // Правится СЫРАЯ строка `body_md` (маркер и чекбокс на месте): снапшот
       // `row.text` маркера не содержит, и запись его как всей строки уничтожила
       // бы задачу (блокер приёмки 64f7976a).
-      const field = fieldInput({
-        value: editingRaw,
-        extraClass: 'ui-task-row-edit',
-        ariaLabel: t('tasks.editLineAria'),
-      });
       ensureInlineEditContext();
-      inlineEditCommands.set(field, {
-        commit: () => {
-          void actions.editLine(row, field.value).then((saved) => {
-            if (saved) closeEdit();
-          });
-        },
-        cancel: closeEdit,
-      });
-      field.addEventListener('focus', () => {
-        releaseContext ??= pushKeyContext(INLINE_EDIT_CONTEXT_ID);
-      });
-      field.addEventListener('blur', () => {
-        if (editingKey === row.key) closeEdit();
-      });
-      textHost.append(field);
+      if (editingRange !== null) {
+        // Блочная правка: многострочное поле, `Enter` — перевод строки,
+        // сохранение — `Ctrl+Enter` (образец блочной правки трансклюзии).
+        const range = editingRange;
+        const field = fieldTextarea({
+          value: editingRaw,
+          rows: Math.min(12, Math.max(2, editingRaw.split('\n').length)),
+          extraClass: 'ui-task-row-edit ui-task-row-block-edit',
+          ariaLabel: t('tasks.editBlockAria'),
+        });
+        inlineEditCommands.set(field, {
+          multiline: true,
+          commit: () => {
+            void actions.editBlock?.(row, range, field.value).then((saved) => {
+              if (saved) closeEdit();
+            });
+          },
+          cancel: closeEdit,
+        });
+        field.addEventListener('focus', () => {
+          releaseContext ??= pushKeyContext(INLINE_EDIT_CONTEXT_ID);
+        });
+        field.addEventListener('blur', () => {
+          if (editingKey === row.key) closeEdit();
+        });
+        textHost.append(field);
+      } else {
+        const field = fieldInput({
+          value: editingRaw,
+          extraClass: 'ui-task-row-edit',
+          ariaLabel: t('tasks.editLineAria'),
+        });
+        inlineEditCommands.set(field, {
+          commit: () => {
+            void actions.editLine(row, field.value).then((saved) => {
+              if (saved) closeEdit();
+            });
+          },
+          cancel: closeEdit,
+        });
+        field.addEventListener('focus', () => {
+          releaseContext ??= pushKeyContext(INLINE_EDIT_CONTEXT_ID);
+        });
+        field.addEventListener('blur', () => {
+          if (editingKey === row.key) closeEdit();
+        });
+        textHost.append(field);
+      }
     } else {
       actions.renderText(textHost, row);
       textHost.addEventListener('dblclick', () => {
+        // Строка с вложенными строками правится БЛОКОМ: правка одной строки
+        // оставила бы детей висеть на прежнем тексте (замечание 3 ТЗ 2026-11-18).
+        if (row.children.length > 0) {
+          beginBlockEdit();
+          return;
+        }
         if (row.stale || editingKey === row.key) return;
         editingKey = row.key;
         editingRaw = null;
+        editingRange = null;
         // Сырую строку читает экран: компонент не знает сети. Пока ответа нет,
         // строка остаётся снапшотом; ответ пришёл — перерисовываем поле.
         void actions.loadRawLine(row).then((raw) => {
@@ -879,21 +977,40 @@ export function mountTaskPanel(
     }
     node.replaceChildren(check, textHost, dates, rowActions);
     if (leading.length > 0) node.prepend(...leading);
-    if (hasChildren && expanded) node.append(buildChildRows(row));
+    // Дети не дублируются под открытой блочной правкой: они уже в поле.
+    if (hasChildren && expanded && !(editingKey === row.key && editingRange !== null)) {
+      node.append(buildChildRows(row, beginBlockEdit));
+    }
   }
 
   /**
-   * Вложенные не-задачные строки под задачей (пункт F ТЗ 2026-11-17): текст с
-   * отступом по уровню списка. Правки и команд у них нет — они не задачи.
+   * Вложенные не-задачные строки под задачей (пункт F ТЗ 2026-11-17): пункт
+   * чек-листа — настоящий чекбокс с отметкой источника (замечание 4 ТЗ
+   * 2026-11-18), обычная строка — текст с отступом по уровню списка.
+   *
+   * Двойной клик по любому пункту открывает БЛОЧНУЮ правку родителя «как
+   * трансклюзия» (замечание 3): блок правится одним куском.
    */
-  function buildChildRows(row: TaskPanelRow): HTMLElement {
+  function buildChildRows(row: TaskPanelRow, onEditBlock: () => void): HTMLElement {
     const box = div('ui-task-row-children');
     for (const child of row.children) {
       const line = div('ui-task-child-row');
       line.dataset['depth'] = String(child.depth);
       line.classList.toggle('is-checkbox', child.checkbox);
+      line.classList.toggle('is-done', child.done === true);
+      if (child.checkbox) {
+        // Пункт чек-листа — ЧЕКБОКС, а не маркированная строка: отметка
+        // приходит из проекции, клик — команда экрана (0.16.1, 7446eb25).
+        const check = choiceControl('checkbox', {
+          checked: child.done === true,
+          onChange: (checked) => actions.toggleChild?.(row, child, checked),
+        });
+        check.classList.add('ui-task-child-check');
+        line.append(check);
+      }
       const text = div('ui-task-child-text');
       text.textContent = child.text;
+      text.addEventListener('dblclick', () => onEditBlock());
       line.append(text);
       box.append(line);
     }
@@ -1272,6 +1389,7 @@ export function mountTaskPanel(
     if (editingKey !== null && !entries().some((entry) => entry.key === editingKey)) {
       editingKey = null;
       editingRaw = null;
+      editingRange = null;
     }
     root.dataset['stale'] = next.stale ? '1' : '0';
     undoBtn.hidden = !next.canUndo;

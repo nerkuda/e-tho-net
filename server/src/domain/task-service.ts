@@ -408,7 +408,7 @@ function loadNestedLines(ndb: NetworkDb, page: readonly TaskRow[]): TaskNestedLi
   const placeholders = commentIds.map(() => '?').join(', ');
   const all = ndb
     .prepare(
-      `SELECT tr.comment_id, tr.line_no, tr.text, tr.is_task, tr.depth, tr.parent_line_no
+      `SELECT tr.comment_id, tr.line_no, tr.text, tr.is_task, tr.done, tr.depth, tr.parent_line_no
        ${visibility.from}
        WHERE v.id IN (${placeholders})
        ORDER BY tr.comment_id, tr.line_no`,
@@ -418,6 +418,7 @@ function loadNestedLines(ndb: NetworkDb, page: readonly TaskRow[]): TaskNestedLi
     line_no: number;
     text: string;
     is_task: number;
+    done: number;
     depth: number;
     parent_line_no: number | null;
   }>;
@@ -479,6 +480,9 @@ function loadNestedLines(ndb: NetworkDb, page: readonly TaskRow[]): TaskNestedLi
         depth: row.depth,
         // Чекбокс строки — единственный признак пункта чек-листа в проекции.
         checkbox: row.parent_line_no !== null,
+        // Отметка пункта — из проекции: панель показывает пункт чекбоксом
+        // (0.16.1, задача 7446eb25) и не парсит источник ради галочки.
+        done: row.done === 1,
       });
     }
   }

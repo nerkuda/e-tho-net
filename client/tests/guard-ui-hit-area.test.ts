@@ -82,6 +82,10 @@ const THIN_SEAMS: Array<{ file: string; selector: string }> = [
   { file: 'styles.css', selector: '.event-area-resizer' },
   { file: 'styles.css', selector: '.fp-splitter.fp-side' },
   { file: 'styles.css', selector: '.fp-splitter.fp-top' },
+  // Слайдер высоты панели «Задачи и напоминания» (0.16.1, задача 7446eb25):
+  // шов 6px, зона захвата — псевдоэлемент. Без него элемент был высотой 0 и
+  // высоту панели нельзя было изменить мышью (замечание 1 ТЗ 2026-11-18).
+  { file: 'styles.css', selector: '.chron-tasks-splitter' },
 ];
 
 /**
@@ -94,7 +98,11 @@ const THIN_SEAMS: Array<{ file: string; selector: string }> = [
  * `THIN_SEAMS` по `.fp-splitter.*` этого не заметят.
  */
 const FRAME_SEAMS: Array<{ screen: string; file: string; seamClass: string }> = [
-  { screen: 'Структуры мыслей', file: 'screens/structures/structures.ts', seamClass: 'st-splitter' },
+  {
+    screen: 'Структуры мыслей',
+    file: 'screens/structures/structures.ts',
+    seamClass: 'st-splitter',
+  },
   { screen: 'Активность', file: 'screens/activity/activity.ts', seamClass: 'activity-splitter' },
   { screen: 'Хроника', file: 'screens/chronicle/chronicle.ts', seamClass: 'chron-splitter' },
 ];
@@ -103,7 +111,7 @@ const FRAME_SEAMS: Array<{ screen: string; file: string; seamClass: string }> = 
 function declarationBlock(css: string, selector: string): string | null {
   const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
   const m = new RegExp(`${escapeRe(selector)}\\s*\\{([^{}]*)\\}`).exec(code);
-  return m === null ? null : m[1] ?? null;
+  return m === null ? null : (m[1] ?? null);
 }
 
 /**
@@ -271,7 +279,7 @@ describe('guard: тач-зоны lib/ui (e45ca252, требование 5677bc3d
     );
     assert.equal(
       symmetricSeamAfter(
-        ".editor-resizer::after { left: 3px; inline-size: calc(var(--hit-area) - 3px); }",
+        '.editor-resizer::after { left: 3px; inline-size: calc(var(--hit-area) - 3px); }',
       ).length,
       0,
       'асимметричное расширение шва не должно считаться нарушением',

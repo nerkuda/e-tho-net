@@ -221,6 +221,12 @@
   min-width: 0;
 }
 
+/* Облачко группы-мысли — живой субъект: клик ведёт к мысли, правый клик
+ * открывает меню (замечание 5 ТЗ 2026-11-18). */
+.ui-task-subgroup-subject {
+  cursor: pointer;
+}
+
 .ui-task-subgroup-icon {
   color: var(--text-dim);
 }
@@ -341,9 +347,20 @@
   margin-left: calc(var(--tree-indent) * 3);
 }
 
-.ui-task-child-row.is-checkbox .ui-task-child-text::before {
-  content: '·';
-  margin-right: var(--space-2);
+.ui-task-child-row.is-checkbox .ui-task-child-text {
+  /* Пункт чек-листа — настоящий чекбокс (0.16.1, задача 7446eb25): маркер
+   * списка больше не рисуется, отметку показывает контрол слева. */
+  flex: 1 1 auto;
+}
+
+.ui-task-child-check {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.ui-task-child-row.is-done .ui-task-child-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
 }
 
 .ui-task-child-text {
@@ -385,6 +402,18 @@
 
 .ui-task-row-edit {
   width: 100%;
+}
+
+/* Блочная правка «как трансклюзия» (0.16.1, задача 7446eb25): многострочное
+ * поле занимает всю строку — под ним строки-дети не дублируются. */
+.ui-task-row-block-edit {
+  flex: 1 0 100%;
+  width: 100%;
+  min-block-size: calc(var(--hit-area) * 2);
+  resize: vertical;
+  font-family: var(--md-mono);
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-snug);
 }
 
 .ui-task-row-dates {

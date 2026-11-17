@@ -25,7 +25,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
-import { afterEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import * as keymap from '../src/renderer/lib/keymap.js';
 import type { TasksPanelHandle } from '../src/renderer/screens/chronicle/tasks-panel.js';
@@ -50,6 +50,8 @@ interface Calls {
   state: string[];
   /** `deps.onPanelCollapsed(...)` — свёрнутость панели для слайдера (пункт B). */
   collapsed: boolean[];
+  /** `etn.comments.update(...)` — сырые тексты, записанные в источники. */
+  commentUpdates: string[];
 }
 
 /** Данные, которые «есть в сети» у подставного клиента. */
@@ -74,6 +76,8 @@ interface Fixture {
   uiState?: string;
   /** Вложенные не-задачные строки, которые отдаёт сервер по `include_nested`. */
   nested?: Array<Record<string, unknown>>;
+  /** Тексты комментариев-источников (`comments.get`) — сырой `body_md`. */
+  commentBodies?: Record<string, string>;
   /** Период ленты для экрана (по умолчанию `PERIOD`); одна дата — плоские секции. */
   period?: { from: string; to: string };
 }
@@ -207,6 +211,7 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     resolved: [],
     state: [],
     collapsed: [],
+    commentUpdates: [],
   };
   const tasks = fixture.tasks ?? [];
   const doneTasks = fixture.doneTasks ?? [];
@@ -301,7 +306,7 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
       list: async () => [],
       get: async (_networkId: string, id: string) => ({
         id,
-        body_md: bodies.get(id) ?? '- [ ] задача',
+        body_md: bodies.get(id) ?? fixture.commentBodies?.[id] ?? '- [ ] задача',
         version: versions.get(id) ?? 1,
       }),
       update: async (
@@ -311,7 +316,10 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
       ): Promise<Record<string, unknown>> => {
         const version = (versions.get(id) ?? 1) + 1;
         versions.set(id, version);
-        if (input.body_md !== undefined) bodies.set(id, input.body_md);
+        if (input.body_md !== undefined) {
+          bodies.set(id, input.body_md);
+          calls.commentUpdates.push(input.body_md);
+        }
         return { id, body_md: bodies.get(id), version };
       },
     },
@@ -1165,6 +1173,212 @@ describe('панель задач: форма секций при смене п�
         'секции снова плоские — узлы пересобраны',
       );
       assert.ok(group.findAll('ui-task-flat').length >= 1);
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.16.1, замечания пользователя 2026-11-18 (задача 7446eb25): пункты 2, 3, 4.
+// ---------------------------------------------------------------------------
+
+/** Событие слоя для проверки маркера «Обновить» (сеть теста — `n1`). */
+function realtimeEvent(
+  type: 'comment.updated' | 'comment.created' | 'reminders.changed',
+  data: Record<string, unknown>,
+  seq: number,
+): Parameters<
+  (typeof import('../src/renderer/lib/live/event-router.js'))['routeRealtimeEvent']
+>[0] {
+  return { type, network_id: 'n1', seq, data } as never;
+}
+
+describe('панель задач: маркер «Обновить» по любому изменению сети (замечание 2 ТЗ 2026-11-18)', () => {
+  it('эхо СВОЕЙ правки не красит запись целиком: серая только своя строка', async () => {
+    // Две строки ОДНОЙ записи: правка одной не должна сереть соседнюю.
+    const h = await setup({
+      tasks: [taskRow(), taskRow({ line_no: 1, text: 'вторая', due: '2026-11-12' })],
+    });
+    try {
+      const { resetEventRouter, routeRealtimeEvent } =
+        await import('../src/renderer/lib/live/event-router.js');
+      resetEventRouter();
+
+      const first = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      const second = h.host.querySelector('[data-row-key="c1:1"]') as unknown as ShimElement;
+      const check = first.querySelector('.ui-task-row-check') as unknown as ShimElement;
+      check.checked = true;
+      check.emit('change', { target: check });
+      await h.settle();
+      assert.equal(first.classList.contains('is-stale'), true, 'своя строка серая');
+      assert.equal(second.classList.contains('is-stale'), false, 'соседняя строка записи не серая');
+
+      // Эхо своей операции: ревизия 2 — токен `c1:2` из ответа `PATCH`.
+      routeRealtimeEvent(
+        realtimeEvent('comment.updated', { id: 'c1', version: 2, changes: {} }, 1),
+      );
+      await h.settle();
+      assert.equal(
+        second.classList.contains('is-stale'),
+        false,
+        'эхо СВОЕЙ правки не превращается во внешнее изменение записи',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('чужая правка НЕзагруженной записи всё равно поднимает маркер «Обновить»', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      const { resetEventRouter, routeRealtimeEvent } =
+        await import('../src/renderer/lib/live/event-router.js');
+      resetEventRouter();
+      const refreshBtn = (): ShimElement =>
+        h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.equal(
+        refreshBtn().classList.contains('is-stale'),
+        false,
+        'до событий маркер не горит',
+      );
+
+      routeRealtimeEvent(
+        realtimeEvent('comment.updated', { id: 'c-unknown', version: 1, changes: {} }, 1),
+      );
+      await h.settle();
+      assert.equal(
+        refreshBtn().classList.contains('is-stale'),
+        true,
+        'правка записи, которой панель НЕ загружала, тоже требует пересборки состава',
+      );
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      assert.equal(
+        row.classList.contains('is-stale'),
+        false,
+        'загруженная строка чужой записи серой не становится',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('чужая правка загруженной записи поднимает маркер и красит запись целиком', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      const { resetEventRouter, routeRealtimeEvent } =
+        await import('../src/renderer/lib/live/event-router.js');
+      resetEventRouter();
+
+      routeRealtimeEvent(
+        realtimeEvent('comment.updated', { id: 'c1', version: 9, changes: {} }, 1),
+      );
+      await h.settle();
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      assert.equal(row.classList.contains('is-stale'), true, 'строка изменённой записи серая');
+      const refreshBtn = h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.equal(refreshBtn.classList.contains('is-stale'), true, 'маркер «Обновить» горит');
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('панель задач: пункт чек-листа правит источник (замечание 4 ТЗ 2026-11-18)', () => {
+  it('клик по чекбоксу пункта ставит `[x]` правкой `body_md` (серверного toggle у пункта нет)', async () => {
+    const h = await setup({
+      tasks: [taskRow()],
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт',
+          depth: 1,
+          checkbox: true,
+          done: false,
+        },
+      ],
+      commentBodies: { c1: '- [ ] задача\n  - [ ] пункт' },
+      commentRows: { c1: [taskRow({ revision: 2 })] },
+    });
+    try {
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+      const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
+      assert.ok(check, 'пункт чек-листа показан чекбоксом');
+      check.checked = true;
+      check.emit('change', { target: check });
+      await h.settle();
+
+      assert.deepEqual(
+        h.calls.commentUpdates,
+        ['- [ ] задача\n  - [x] пункт'],
+        'отметка ставится правкой текста источника, а не `PATCH /tasks`',
+      );
+      assert.deepEqual(h.calls.patch, [], 'команд задач по пункту чек-листа не было');
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('панель задач: блочная правка «как трансклюзия» (замечание 3 ТЗ 2026-11-18)', () => {
+  beforeEach(() => keymap.keymapInternals.reset());
+
+  it('двойной клик по строке с детьми правит ВЕСЬ блок источника одним сохранением', async () => {
+    const body = '- [ ] задача\n  - [ ] пункт\n  текст\n- [ ] соседняя';
+    const h = await setup({
+      tasks: [taskRow()],
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт',
+          depth: 1,
+          checkbox: true,
+          done: false,
+        },
+        {
+          comment_id: 'c1',
+          line_no: 2,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'текст',
+          depth: 1,
+          checkbox: false,
+          done: false,
+        },
+      ],
+      commentBodies: { c1: body },
+      commentRows: { c1: [taskRow({ revision: 2 })] },
+    });
+    try {
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
+      assert.ok(field, 'блочное поле открылось');
+      assert.equal(
+        field.value,
+        '- [ ] задача\n  - [ ] пункт\n  текст',
+        'в поле — строка задачи и обе вложенные строки (диапазон до последнего ребёнка)',
+      );
+      field.value = '- [ ] задача\n  - [x] пункт\n  текст';
+      field.focus();
+      keymap.dispatchKeyEvent({
+        key: 'Enter',
+        ctrlKey: true,
+        target: field,
+        preventDefault: (): void => undefined,
+      } as unknown as KeyboardEvent);
+      await h.settle();
+
+      assert.deepEqual(
+        h.calls.commentUpdates,
+        ['- [ ] задача\n  - [x] пункт\n  текст\n- [ ] соседняя'],
+        'заменён ровно блок строки-задачи; соседняя строка не тронута',
+      );
     } finally {
       h.destroy();
     }

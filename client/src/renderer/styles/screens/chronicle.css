@@ -65,7 +65,39 @@
  * вертикальный сплиттер между панелью и лентой. Скрыт, пока панель свёрнута
  * (атрибут `hidden` ставит экран по `onPanelCollapsed`). */
 .chron-tasks-splitter {
-  flex: 0 0 auto;
+  /* Тонкий шов-слайдер высоты панели «Задачи и напоминания» (0.16.1, замечание
+   * 1 ТЗ 2026-11-18): видимая полоска 6px, зона захвата — `--hit-area` (18px)
+   * невидимым псевдоэлементом. Прежнее правило `flex: 0 0 auto` без размера
+   * давало элемент высотой 0 — за него нельзя было взяться мышью. */
+  position: relative;
+  /* Подъём над соседями: иначе позиционированная лента перекрывает внешнюю
+   * половину зоны захвата (ошибка ec02c553). */
+  z-index: 1;
+  flex: 0 0 6px;
+  block-size: 6px;
+  background: var(--border);
+  border-radius: 2px;
+  cursor: row-resize;
+  transition: background var(--transition-hover) ease;
+}
+
+.chron-tasks-splitter:hover,
+.chron-tasks-splitter:active,
+.chron-tasks-splitter.dragging,
+.chron-tasks-splitter:focus-visible {
+  background: var(--accent);
+}
+
+/* Хит-зона шва: зона нажатия не меньше токена тач-таргета (требование 5677bc3d),
+ * полоса прокрутки ленты вертикальная — горизонтальному шву пересекать её нечем. */
+.chron-tasks-splitter::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  block-size: max(100%, var(--hit-area));
+  transform: translateY(-50%);
 }
 
 .chron-tasks-splitter[hidden] {
