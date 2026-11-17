@@ -185,8 +185,18 @@ export interface TaskListActions {
   onRecordsChanged?(): void;
   /** Панель свёрнута/развёрнута: экран прячет слайдер высоты. */
   onPanelCollapsed?(collapsed: boolean): void;
-  /** Состояние зоны (карточка мысли: пустая панель скрывает группу). */
-  onViewState?(state: { rowCount: number; loading: boolean; hasError: boolean }): void;
+  /**
+   * Состояние зоны (карточка мысли: пустая панель скрывает группу).
+   * `canUndo` — доступна отмена последней массовой команды: зона остаётся
+   * видимой, иначе «Отменить» в шапке скрытой группы недоступна (вердикт
+   * репроверки `7448ac21`).
+   */
+  onViewState?(state: {
+    rowCount: number;
+    loading: boolean;
+    hasError: boolean;
+    canUndo: boolean;
+  }): void;
 }
 
 /** Персист панели в `ui_state` (`persistence` не задан — состояние не хранится). */
@@ -924,6 +934,8 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       rowCount: view.inactiveRows === 'filter' ? visibleRows(taskRows).length : taskRows.length,
       loading,
       hasError: loadError !== null,
+      // Отмена живёт в шапке группы: пока она доступна, зона не скрывается.
+      canUndo: withUndo && undoSnapshot !== null,
     });
   }
 

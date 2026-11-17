@@ -449,31 +449,44 @@ export function panelMarkerAdvanced(
  * пустая панель не показывается — комментарий занимает вкладку целиком.
  * Пока идёт загрузка или панель не прочиталась (ошибка), зона видима: иначе
  * пользователь не увидит ни строк, ни сообщения и не дотянется до «Обновить».
+ * Доступная отмена массовой команды держит зону видимой тоже: строки ушли, но
+ * «Отменить» живёт в шапке группы — скрытая группа делает её недоступной
+ * (вердикт репроверки `7448ac21`).
  */
 export function taskZoneVisible(state: {
   rowCount: number;
   loading: boolean;
   hasError: boolean;
+  canUndo: boolean;
 }): boolean {
-  return state.rowCount > 0 || state.loading || state.hasError;
+  return state.rowCount > 0 || state.loading || state.hasError || state.canUndo;
 }
 
 /**
  * Строки задач, попадающие под фильтр массовой команды (требование e6af8b9e):
  * зеркало серверного отбора `GET /tasks` — тот же фильтр уходит в
  * `PATCH /tasks`, поэтому подтверждение и undo считают те же строки.
+ *
+ * Сквозные секции `overdue`/`undated` границы периода НЕ применяют — так же,
+ * как серверный `buildFilter`: иначе строка без дат не попадала ни в одну
+ * секцию при точечном перечитывании записи и молча исчезала из панели
+ * (вердикт репроверки `7448ac21`).
  */
 export function taskRowsForFilter(rows: readonly TaskDTO[], filter: TaskMassFilter): TaskDTO[] {
+  // `overdue`/`undated` — сквозные выборки: `from`/`to` для них игнорируются.
+  const skipsPeriodBounds = filter.scope === 'overdue' || filter.scope === 'undated';
   return rows.filter((row) => {
     if (filter.comment_id !== undefined && row.comment_id !== filter.comment_id) return false;
     if (filter.thought_id !== undefined && !row.subject_thoughts.includes(filter.thought_id)) {
       return false;
     }
-    if (filter.from !== undefined && (row.period_to === null || row.period_to < filter.from)) {
-      return false;
-    }
-    if (filter.to !== undefined && (row.period_from === null || row.period_from > filter.to)) {
-      return false;
+    if (!skipsPeriodBounds) {
+      if (filter.from !== undefined && (row.period_to === null || row.period_to < filter.from)) {
+        return false;
+      }
+      if (filter.to !== undefined && (row.period_from === null || row.period_from > filter.to)) {
+        return false;
+      }
     }
     if (filter.scope === 'open' && row.done) return false;
     if (filter.scope === 'done' && !row.done) return false;

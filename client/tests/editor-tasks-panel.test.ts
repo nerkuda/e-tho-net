@@ -830,3 +830,69 @@ describe('зона «Задачи» редактора: СВОЯ правка н
     }
   });
 });
+
+describe('зона «Задачи» редактора: «Отменить» после массового снятия (вердикт 7448ac21)', () => {
+  beforeEach(() => shimDom());
+
+  it('пустая после команды зона остаётся видимой, «Отменить» кликабельна и возвращает строки', async () => {
+    // Блокер: массовое снятие задач опустошает выборку (`rowCount === 0`), и
+    // группа `main.tasks` скрывалась вместе с шапкой — «Отменить» в headActions
+    // становилась недоступной (undo.hidden=false при group.hidden=true).
+    const body = '- [ ] задача [[2026-11-14]]';
+    const row = taskRow({ subject_thoughts: ['t1'] });
+    const h = await setup([row], { commentBodies: { c1: body } });
+    try {
+      const undo = h.headActions.find((node) =>
+        (node as unknown as ShimElement).classList.contains('ui-task-panel-undo'),
+      ) as unknown as ShimElement | undefined;
+      assert.ok(undo, 'кнопка «Отменить» отдана в шапку зоны');
+      const menuBtn = h.headActions.find((node) =>
+        (node as unknown as ShimElement).classList.contains('ui-task-group-menu'),
+      ) as unknown as ShimElement | undefined;
+      assert.ok(menuBtn, 'кнопка «⋮» шапки зоны');
+      menuBtn.emit('click', {
+        target: menuBtn,
+        currentTarget: menuBtn,
+        preventDefault: (): void => undefined,
+        stopPropagation: (): void => undefined,
+      });
+      const bodyNode = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+      const item = bodyNode
+        .querySelectorAll('.menu-item')
+        .find((node) => node.flatText().includes(t('tasks.cancelAllThought')));
+      assert.ok(item, 'пункт «Отменить все невыполненные по мысли»');
+      item.click();
+      await h.settle();
+      // План команды уже посчитан; сервер после снятия задач отдаёт пустую
+      // выборку — панель остаётся без строк, но с доступной отменой.
+      h.tasks.length = 0;
+      const confirm = bodyNode
+        .querySelectorAll('.ui-btn')
+        .find((node) => node.flatText().trim() === t('actions.confirm'));
+      assert.ok(confirm, 'кнопка подтверждения в диалоге');
+      confirm.emit('click', {
+        target: confirm,
+        currentTarget: confirm,
+        preventDefault: (): void => undefined,
+        stopPropagation: (): void => undefined,
+      });
+      await h.settle();
+
+      assert.equal(rowsOf(h.group).length, 0, 'строк после снятия задач нет');
+      assert.equal(undo.hidden, false, '«Отменить» доступна');
+      assert.equal(h.group.hidden, false, 'зона с шапкой не скрыта — кнопку можно нажать');
+
+      // Отмена: сервер вернул строки, клик по кнопке перечитывает панель.
+      h.tasks.push(row);
+      const queriesBefore = h.queries.length;
+      undo.emit('click', { target: undo, currentTarget: undo });
+      await h.settle();
+      assert.ok(h.queries.length > queriesBefore, 'клик по «Отменить» перечитал панель');
+      assert.equal(rowsOf(h.group).length, 1, 'строки вернулись в зону');
+      assert.equal(h.group.hidden, false, 'зона со строками видима');
+      assert.equal(undo.hidden, true, 'после отмены кнопка снова скрыта');
+    } finally {
+      h.destroy();
+    }
+  });
+});

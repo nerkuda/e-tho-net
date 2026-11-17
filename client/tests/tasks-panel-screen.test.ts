@@ -220,6 +220,19 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
   /** Версии комментариев-источников и их тексты (подставной PATCH/update). */
   const versions = new Map<string, number>();
   const bodies = new Map<string, string>();
+  /**
+   * Вложенные строки, попадающие в страницу `GET /tasks`: как у сервера — только
+   * те, чьи родители-задачи в неё попали (пункт F ТЗ 2026-11-17). Общая для
+   * срезов и для точечного перечитывания записи (`include_nested`).
+   */
+  const nestedOf = (items: Array<Record<string, unknown>>): Array<Record<string, unknown>> =>
+    (fixture.nested ?? []).filter((line) =>
+      items.some(
+        (item) =>
+          item['comment_id'] === (line['parent'] as Record<string, unknown>)['comment_id'] &&
+          item['line_no'] === (line['parent'] as Record<string, unknown>)['line_no'],
+      ),
+    );
   const api = {
     ui: {
       getState: async (): Promise<string | null> => fixture.uiState ?? null,
@@ -233,10 +246,12 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
         const commentId = query['comment_id'];
         if (typeof commentId === 'string') {
           // Точечное перечитывание записи (после инлайн-правки).
+          const items = fixture.commentRows?.[commentId] ?? [];
           return {
-            items: fixture.commentRows?.[commentId] ?? [],
+            items,
             cursor: null,
             max_revision: 2,
+            ...(query['include_nested'] === true ? { nested: nestedOf(items) } : {}),
           };
         }
         // Срезы не смешиваются: «просрочено» и «без срока» — сквозные запросы,
@@ -254,20 +269,7 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
           items,
           cursor: null,
           max_revision: 1,
-          // Как у сервера: вложенные строки отдаются только той странице, чьи
-          // задачи в неё попали (пункт F ТЗ 2026-11-17).
-          ...(query['include_nested'] === true
-            ? {
-                nested: (fixture.nested ?? []).filter((line) =>
-                  items.some(
-                    (item) =>
-                      item['comment_id'] ===
-                        (line['parent'] as Record<string, unknown>)['comment_id'] &&
-                      item['line_no'] === (line['parent'] as Record<string, unknown>)['line_no'],
-                  ),
-                ),
-              }
-            : {}),
+          ...(query['include_nested'] === true ? { nested: nestedOf(items) } : {}),
         };
       },
       patch: async (_networkId: string, input: Record<string, unknown>) => {
@@ -1373,6 +1375,90 @@ describe('панель задач: пункт чек-листа правит и�
   });
 });
 
+describe('панель задач: своя правка бессрочной строки не теряет строки (вердикт 7448ac21)', () => {
+  /** Бессрочная строка постоянного комментария (нет ни периода, ни срока). */
+  function undatedPermanentRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return taskRow({ period_from: null, period_to: null, due: null, ...overrides });
+  }
+
+  it('отметка пункта в строке «Без срока» оставляет строки записи в панели', async () => {
+    // Воспроизведение блокера: постоянный комментарий с блоком и соседней
+    // строкой; обе — бессрочные (секция «Без срока»). Своя правка перечитывает
+    // запись точечно и раньше прогоняла undated-строки через периодный фильтр —
+    // они исчезали из панели (rowTexts → пусто при stale=0).
+    const blockRow = undatedPermanentRow({ line_no: 0, text: 'блок-П 7446EB25' });
+    const singleRow = undatedPermanentRow({ line_no: 2, text: 'одиночная-П 7446EB25' });
+    const h = await setup({
+      undatedTasks: [blockRow, singleRow],
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт',
+          depth: 1,
+          checkbox: true,
+          done: false,
+        },
+      ],
+      commentBodies: { c1: '- [ ] блок-П 7446EB25\n  - [ ] пункт\n- [ ] одиночная-П 7446EB25' },
+      commentRows: {
+        c1: [
+          { ...blockRow, revision: 2, parsed_revision: 2 },
+          { ...singleRow, revision: 2, parsed_revision: 2 },
+        ],
+      },
+    });
+    try {
+      // Текст строки экран рисует markdown-рендером в `innerHTML` — шим его в
+      // `flatText()` не переносит, поэтому читаем разметку строки.
+      const rowText = (key: string): string => {
+        const node = h.host.querySelector(`[data-row-key="${key}"]`);
+        assert.ok(node, `строка ${key} на панели`);
+        const text = node.querySelector('.ui-task-row-text') as unknown as ShimElement;
+        return String(text.innerHTML);
+      };
+      assert.ok(
+        rowText('c1:0').includes('блок-П 7446EB25'),
+        'до правки бессрочная строка-блок на панели',
+      );
+      assert.ok(
+        rowText('c1:2').includes('одиночная-П 7446EB25'),
+        'до правки соседняя бессрочная строка на панели',
+      );
+
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+      const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
+      assert.ok(check, 'пункт чек-листа показан чекбоксом');
+      check.checked = true;
+      check.emit('change', { target: check });
+      await h.settle();
+
+      assert.ok(
+        h.calls.list.some((query) => query['comment_id'] === 'c1'),
+        'своя правка перечитала строки записи точечно',
+      );
+      assert.ok(
+        rowText('c1:0').includes('блок-П 7446EB25'),
+        'после отметки пункта строка-блок осталась в панели',
+      );
+      assert.ok(
+        rowText('c1:2').includes('одиночная-П 7446EB25'),
+        'после отметки пункта соседняя строка осталась в панели',
+      );
+      const refresh = h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.equal(
+        refresh.classList.contains('is-stale'),
+        false,
+        'перечитывание своей правки не зажигает «Обновить»',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
 describe('панель задач: блочная правка «как трансклюзия» (замечание 3 ТЗ 2026-11-18)', () => {
   beforeEach(() => keymap.keymapInternals.reset());
 
@@ -1429,6 +1515,75 @@ describe('панель задач: блочная правка «как тран
         ['- [ ] задача\n  - [x] пункт\n  текст\n- [ ] соседняя'],
         'заменён ровно блок строки-задачи; соседняя строка не тронута',
       );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('Ctrl+Enter блока сохраняет правку, а не применяет отбор «Дневника» (вердикт 7448ac21)', async () => {
+    // Блокер: `focusin` контейнера вида приходит ПОСЛЕ `focus` поля и кладёт
+    // хорду `chronicle-apply` выше контекста правки — Ctrl+Enter уходил в
+    // перезапрос ленты, поле висело, `body_md` не менялся.
+    const body = '- [ ] задача\n  - [ ] пункт\n- [ ] соседняя';
+    const h = await setup({
+      tasks: [taskRow()],
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт',
+          depth: 1,
+          checkbox: true,
+          done: false,
+        },
+      ],
+      commentBodies: { c1: body },
+      commentRows: { c1: [taskRow({ revision: 2 })] },
+    });
+    try {
+      const { wireChronicleApplyShortcut } =
+        await import('../src/renderer/screens/chronicle/filter-panel.js');
+      let applies = 0;
+      wireChronicleApplyShortcut(h.host as unknown as HTMLElement, () => {
+        applies += 1;
+      });
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
+      assert.ok(field, 'блочное поле открылось');
+      field.value = '- [ ] задача\n  - [x] пункт';
+      field.focus();
+      // Порядок реального DOM: `focus` поля (контекст правки) → `focusin`
+      // контейнера вида (контекст отбора ложится выше).
+      h.host.emit('focusin', {});
+
+      const event = {
+        ctrlKey: true,
+        key: 'Enter',
+        target: field,
+        defaultPrevented: false,
+        prevented: false,
+        preventDefault(): void {
+          event.prevented = true;
+        },
+      };
+      const handled = keymap.dispatchKeyEvent(event as unknown as KeyboardEvent);
+      await h.settle();
+
+      assert.equal(applies, 0, 'Ctrl+Enter не ушёл в «применить отбор»');
+      assert.deepEqual(
+        h.calls.commentUpdates,
+        ['- [ ] задача\n  - [x] пункт\n- [ ] соседняя'],
+        'блок сохранён правкой `body_md`',
+      );
+      assert.equal(
+        row.querySelector('.ui-task-row-block-edit'),
+        null,
+        'поле закрылось после сохранения',
+      );
+      assert.equal(handled, true, 'клавишу обработал контекст блочной правки');
     } finally {
       h.destroy();
     }

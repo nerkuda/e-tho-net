@@ -539,13 +539,34 @@ describe('порядок панели редактора мысли (элеме�
 
 describe('видимость зоны «Задачи» вкладки «Основное» (f3893859)', () => {
   it('пустая панель скрывается — комментарий занимает вкладку', () => {
-    assert.equal(taskZoneVisible({ rowCount: 0, loading: false, hasError: false }), false);
+    assert.equal(
+      taskZoneVisible({ rowCount: 0, loading: false, hasError: false, canUndo: false }),
+      false,
+    );
   });
 
   it('строки, загрузка и ошибка держат зону видимой', () => {
-    assert.equal(taskZoneVisible({ rowCount: 2, loading: false, hasError: false }), true);
-    assert.equal(taskZoneVisible({ rowCount: 0, loading: true, hasError: false }), true);
-    assert.equal(taskZoneVisible({ rowCount: 0, loading: false, hasError: true }), true);
+    assert.equal(
+      taskZoneVisible({ rowCount: 2, loading: false, hasError: false, canUndo: false }),
+      true,
+    );
+    assert.equal(
+      taskZoneVisible({ rowCount: 0, loading: true, hasError: false, canUndo: false }),
+      true,
+    );
+    assert.equal(
+      taskZoneVisible({ rowCount: 0, loading: false, hasError: true, canUndo: false }),
+      true,
+    );
+  });
+
+  it('доступная отмена массовой команды держит зону видимой (вердикт 7448ac21)', () => {
+    // Массовое снятие задач опустошило панель, но «Отменить» живёт в шапке
+    // группы: скрытая зона сделала бы её недоступной.
+    assert.equal(
+      taskZoneVisible({ rowCount: 0, loading: false, hasError: false, canUndo: true }),
+      true,
+    );
   });
 });
 

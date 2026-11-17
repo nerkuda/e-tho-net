@@ -101,6 +101,9 @@ export const REMINDER_PANEL_ROW_CLASS = 'ui-task-row ui-reminder-row';
 /** Состояние «строка устарела» (серая, не редактируется). */
 export const TASK_PANEL_ROW_STALE_CLASS = 'is-stale';
 
+/** Класс поля БЛОЧНОЙ правки строки (многострочный режим, 0.16.1). */
+export const TASK_ROW_BLOCK_EDIT_CLASS = 'ui-task-row-block-edit';
+
 /**
  * Устаревшая строка задачи, внутри которой лежит `node` (`null` — строка
  * свежая). Серая строка адресует ПРЕЖНЮЮ ревизию источника, поэтому команды,
@@ -443,6 +446,27 @@ function handleInlineEditKey(event: KeyboardEvent): boolean {
   if (command.multiline === true && event.ctrlKey !== true && event.metaKey !== true) return false;
   command.commit();
   return true;
+}
+
+/**
+ * Клавиша адресована полю БЛОЧНОЙ правки строки? У неё `Ctrl+Enter` —
+ * сохранение (хорда контекста {@link INLINE_EDIT_CONTEXT_ID}), поэтому
+ * глобальный шорткат «применить отбор» (`filter-panel.ts`) обязан в этом
+ * случае молчать. Диспетчер разрешает контексты по вершине стека, а `focusin`
+ * контейнера вида приходит ПОСЛЕ `focus` поля и кладёт `chronicle-apply` выше —
+ * без гарда комбинация уходила в перезапрос ленты вместо сохранения блока
+ * (вердикт репроверки `7448ac21`). Однострочной правке гард не нужен: у неё
+ * хорда `Enter`, `Ctrl+Enter` она не заявляет.
+ */
+export function isBlockEditTarget(target: HTMLElement | null): boolean {
+  // Обход предков вручную (включая само поле): `closest` тестового шима
+  // начинает с родителя, а `instanceof` требует глобального `HTMLElement`.
+  let current = target;
+  while (current !== null) {
+    if (current.classList?.contains(TASK_ROW_BLOCK_EDIT_CLASS) === true) return true;
+    current = current.parentElement ?? null;
+  }
+  return false;
 }
 
 /**
@@ -855,7 +879,7 @@ export function mountTaskPanel(
         const field = fieldTextarea({
           value: editingRaw,
           rows: Math.min(12, Math.max(2, editingRaw.split('\n').length)),
-          extraClass: 'ui-task-row-edit ui-task-row-block-edit',
+          extraClass: `ui-task-row-edit ${TASK_ROW_BLOCK_EDIT_CLASS}`,
           ariaLabel: t('tasks.editBlockAria'),
         });
         inlineEditCommands.set(field, {

@@ -84,6 +84,7 @@ import {
   type SavedFilterRow,
 } from '../../lib/saved-filter-controller.js';
 import { segmentedControl } from '../../lib/ui/segmented.js';
+import { isBlockEditTarget } from '../../lib/ui/task-panel.js';
 import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
 import { getRtStatus, store } from '../../state.js';
 import {
@@ -1264,6 +1265,13 @@ let chronicleApplySeq = 0;
 /**
  * Global Ctrl+Enter shortcut for the diary view (hosted by the feed).
  * `onApply` вынесена параметром с дефолтом только ради наблюдаемости в тестах.
+ *
+ * Комбинация молчит, когда клавиша адресована правке:
+ *  - редактору записи ленты (`isFeedRecordEditorTarget`, ошибка f5809943);
+ *  - полю БЛОЧНОЙ правки строки панели задач «Дневника»: у него `Ctrl+Enter` —
+ *    сохранение блока, а его контекст лежит НИЖЕ `chronicle-apply` (`focusin`
+ *    контейнера приходит после `focus` поля). Без гарда комбинация уходила в
+ *    перезапрос ленты, правка не сохранялась (вердикт репроверки `7448ac21`).
  */
 export function wireChronicleApplyShortcut(
   container: HTMLElement,
@@ -1279,6 +1287,7 @@ export function wireChronicleApplyShortcut(
         run: (event) => {
           if (event.defaultPrevented) return false;
           if (isFeedRecordEditorTarget(event.target as HTMLElement | null)) return false;
+          if (isBlockEditTarget(event.target as HTMLElement | null)) return false;
           onApply();
           return true;
         },
