@@ -49,6 +49,7 @@ import {
 } from './lib/live/query-registry.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
+import { measureSegment, segmentStart } from './lib/slow-segment.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
@@ -499,10 +500,57 @@ export async function loadFocusForTab(
  */
 
 /**
+ * Установка фокуса, которая УЖЕ идёт (ошибка dc723634).
+ *
+ * Двойной клик по облачку может позвать `focusFromUi` дважды подряд: в журнале
+ * клиента перед фризом — два `ui.cloud.click` через 1–2 мс и ДВА запроса
+ * `thoughts/focus` одной и той же мысли. Две параллельные цепочки одновременно
+ * тянут сеть, историю и перерисовку карты — конвейер сталкивается сам с собой, и
+ * на большой сети это выливалось в фриз рендерера ~15 с (`ui.focus.applied
+ * ms:15808` при ответе сервера 4 мс). Второй клик по ТОЙ ЖЕ мысли не заводит
+ * свою цепочку, а ждёт уже идущую: результат у него ровно тот же.
+ */
+let inFlightFocus: { id: string; promise: Promise<void> } | null = null;
+
+/**
  * Focuses a thought (H5): fetches the focus response, rotates local history
  * (H7) and persists the L4 current-focus key.
+ *
+ * Повторный вызов для мысли, установка которой ещё в полёте, игнорируется (см.
+ * {@link inFlightFocus}). Номер операции `beginFocusOp` берёт только ПЕРВЫЙ
+ * запуск: иначе дедуплицированный клик отменил бы собственную же цепочку как
+ * «устаревшую» и фокус не применился бы вовсе.
  */
 export async function setFocus(id: string): Promise<void> {
+  if (inFlightFocus !== null && inFlightFocus.id === id) {
+    // Метка нужна журналу: без неё второй клик выглядел как «клик без
+    // реакции» — неотличимо от зависания (та же логика, что у `ui.focus.noop`).
+    logUiEvent('ui.focus.noop', { id, reason: 'focus_in_flight' });
+    // Отказ уже идущей цепочки обработает её собственный вызывающий
+    // (`focusFromUi` показывает тост один раз) — второй тост не нужен.
+    await inFlightFocus.promise.catch(() => undefined);
+    return;
+  }
+  const promise = runFocusPipeline(id);
+  inFlightFocus = { id, promise };
+  try {
+    await promise;
+  } finally {
+    if (inFlightFocus?.promise === promise) inFlightFocus = null;
+  }
+}
+
+/**
+ * Цепочка установки фокуса: `thoughts.focus` → история → публикация ответа →
+ * подписчики стора.
+ *
+ * Сегментные замеры (ошибка dc723634): итоговая метка `ui.focus.applied` несёт
+ * длительность каждой ноги, а нога дольше порога пишется отдельной меткой
+ * `ui.slow_segment`. Так следующий фриз называет виновника — ожидание IPC,
+ * запись истории, публикацию ответа или синхронную работу подписчиков стора, —
+ * вместо «где-то между ответом сервера и применением фокуса».
+ */
+async function runFocusPipeline(id: string): Promise<void> {
   const startedAt = Date.now();
   const networkId = requireNetworkId();
   const tabId = store.state.activeTabId;
@@ -513,7 +561,9 @@ export async function setFocus(id: string): Promise<void> {
   // и дерево фокуса показывало прежнюю мысль с её детьми).
   const focusSeq = beginFocusOp();
   const pair = currentScreenPair();
+  const requestAt = segmentStart();
   const response = await etn.thoughts.focus(networkId, id);
+  const requestMs = measureSegment('focus.request', requestAt, { id });
   // Проверка ДО истории: иначе запоздавший клик писал бы поворот истории в
   // чужую (более новую) вкладку/сеть.
   if (!isFocusOpCurrent(focusSeq)) return;
@@ -523,7 +573,9 @@ export async function setFocus(id: string): Promise<void> {
   // without moving the focus) — not necessarily the old focus. Must run
   // before the store update below (same reasoning as before: the history bar
   // re-renders from store changes, so this needs to land first).
+  const historyAt = segmentStart();
   await noteThoughtWillOpen(id);
+  const historyMs = measureSegment('focus.history', historyAt, { id });
   // `noteThoughtWillOpen` тоже ждёт сеть/запись — за это время операция могла
   // устареть. Повторная сверка перед публикацией.
   if (!isFocusOpCurrent(focusSeq)) return;
@@ -531,18 +583,28 @@ export async function setFocus(id: string): Promise<void> {
   // Слой данных (G2): ответ фокуса кладётся в кэш `focus:@id` (мутатор-путь),
   // активная окрестность подписывается на ключ. Ручного перечитывания
   // окрестности нет — холст перерисовывается из кэша.
+  const publishAt = segmentStart();
   publishFocusResponse(response, focusSeq);
   activateFocusQuery(networkId, id);
+  const publishMs = measureSegment('focus.publish', publishAt, { id });
+  const storeAt = segmentStart();
   store.update({
     editorTarget: null,
     selectedLinkId: null,
     structuresActiveThoughtId: null,
     structuresActiveThought: null,
   });
+  const storeMs = measureSegment('focus.store', storeAt, { id });
   // Milestone journal mark (task 92b89e6f): the focus response has landed and
   // the canvas/store now render it — the closing bracket of the
-  // `ui.cloud.click` → `ui.focus.applied` pipeline.
-  logUiEvent('ui.focus.applied', { id, ms: Date.now() - startedAt });
+  // `ui.cloud.click` → `ui.focus.applied` pipeline. Сегменты (ошибка
+  // dc723634) — чтобы итоговая строка сама называла съеденное время: фриз
+  // часто укладывается целиком в одну ногу.
+  logUiEvent('ui.focus.applied', {
+    id,
+    ms: Date.now() - startedAt,
+    seg: { request: requestMs, history: historyMs, publish: publishMs, store: storeMs },
+  });
   // Q4: persist focus_id on the tab row so it survives restarts and tab
   // switches. Falls back to the legacy ui_state key when no tab is active
   // (shouldn't happen post-Q3, but defensible).

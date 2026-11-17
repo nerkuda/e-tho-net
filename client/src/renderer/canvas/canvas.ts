@@ -47,6 +47,7 @@ import {
 } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { notice } from '../lib/notice.js';
+import { measureSegment, segmentStart } from '../lib/slow-segment.js';
 // Канон стиля/значка облачка и отложенный одиночный клик живут в общей
 // фабрике (задача b28ab6d6): облачка холста собирает `createThoughtCloud`,
 // `deferSingleClick`/`SINGLE_CLICK_DELAY_MS` реэкспортируются для
@@ -976,6 +977,11 @@ async function render(): Promise<void> {
   // Проиграл гонку — уступил более свежему рендеру: DOM не трогаем вовсе
   // (иначе две дорисовки пересобирали бы расклад по очереди и облачка мелькали).
   if (generation !== renderGeneration) return;
+  // Замер синхронной пересборки расклада (ошибка dc723634): дольше порога
+  // пишется отдельной меткой журнала. Смена фокуса пересобирает зоны одним
+  // синхронным проходом — единственное место холста, способное долго держать
+  // главный поток.
+  const rebuildAt = segmentStart();
   try {
     // Смена фокуса: прежняя позиция прокрутки принадлежит прежнему набору
     // соседей. Без сброса окно виртуализации считается по старому `scrollTop`
@@ -1022,6 +1028,7 @@ async function render(): Promise<void> {
     scheduleRebuildRetry();
     return;
   }
+  measureSegment('canvas.rebuild', rebuildAt, { focus: focus.focused.id });
   // Totals for the count indicators (async) — a fresh focus seeds every
   // sector's counters; a fresh response for the SAME focus is reconciled by
   // `syncZoneTotalsWithFreshFocus` from the store subscriber.
