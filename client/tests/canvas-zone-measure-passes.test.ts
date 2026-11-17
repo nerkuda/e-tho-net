@@ -26,7 +26,16 @@
  *   4. «повтор целиком» ограничен: детерминированный `RangeError` не
  *      повторяется вовсе (повтор умножил бы фриз), а прочий сбой пересборки —
  *      не больше `REBUILD_RETRY_LIMIT` раз (`REBUILD_RETRY_LIMIT + 1` вход в
- *      `render()`).
+ *      `render()`);
+ *   5. геометрия зоны не зависит от собственных измерений: `.zone` резервирует
+ *      жёлоб полосы прокрутки (`scrollbar-gutter: stable`), а зонный
+ *      `ResizeObserver` наблюдает `border-box` — переключение полосы от высоты
+ *      `.zone-spacer` не меняет content-box, число колонок и окно;
+ *   6. пограничная строка (высота облачка зависит от ширины зоны, ширина — от
+ *      высоты содержимого) НЕ перезапускает серию раскладки из кадра в кадр:
+ *      за 20 асинхронных тиков число серий и входов в `render()` остаётся
+ *      единицами, а проходы измерения не пересобирают облачка (DOM строится
+ *      один раз на состав окна) — иначе это и есть мерцание дефекта dc723634.
  *
  * Тест монтирует РЕАЛЬНЫЙ `mountCanvas` в DOM-шим: холст с одним родителем в
  * верхней зоне (одно облачко на проход) и управляемой высотой облачка.
@@ -37,7 +46,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { beforeEach, before, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import type { FocusNeighbor, FocusResponse, Thought } from '@etn/shared';
 
@@ -64,6 +76,26 @@ let currentHost: ShimElement | null = null;
 /** Метки, доставленные мостом файлового журнала `window.etn.logEvent`. */
 const logged: Array<{ name: string; data?: Record<string, unknown> }> = [];
 
+// --- Модель контура «высоты → spacer → полоса → content-box → колонки» ------
+
+/** Ширина классической вертикальной полосы прокрутки (Chromium на Windows). */
+const SCROLLBAR_PX = 15;
+/** Content-box зоны, когда полоса прокрутки места не занимает. */
+const ZONE_BASE_WIDTH = 800;
+/** Видимая высота зоны (content-box) в модели. */
+const ZONE_HEIGHT = 380;
+/** Отступ `.zone` (совпадает с ZONE_PADDING_PX в canvas.ts). */
+const ZONE_PADDING = 12;
+/** Порог «широкая зона»: 800 px без полосы против 785 px с полосой. */
+const WIDE_ZONE_MIN = ZONE_BASE_WIDTH - SCROLLBAR_PX + 1;
+/** Высота облачка пограничной строки: в широкой зоне (4 колонки) и в узкой (3). */
+const BOUNDARY_TALL = 200;
+const BOUNDARY_SHORT = 100;
+/** Сколько родителей в сценарии пограничной строки (4 колонки → 2 ряда). */
+const BOUNDARY_PARENTS = 7;
+/** Ширина content-box последнего чтения `clientWidth` зоны (для высоты облачка). */
+let zoneWidthNow = 0;
+
 /** Сколько раз код прочитал `offsetHeight` (одно чтение = одно облачко за проход). */
 let heightReads = 0;
 /**
@@ -72,10 +104,13 @@ let heightReads = 0;
  *  - `oscillate` — 137/111 px по очереди на КАЖДОЕ чтение: высота строки
  *    меняется в каждом проходе, расклад не сходится (живой сценарий ошибки
  *    dc723634);
+ *  - `boundary` — высота зависит от ширины зоны (200 px в широкой, 100 px в
+ *    узкой): пограничная строка, у которой высота и ширина зоны зависят друг от
+ *    друга (триггер пользователя: «добавил мысль рядом — проблема исчезла»);
  *  - `stack-overflow` — бросает `RangeError`, как переполнение стека;
  *  - `boom` — бросает обычную ошибку (проверка лимита повторов).
  */
-let heightMode: 'stable' | 'oscillate' | 'stack-overflow' | 'boom' = 'stable';
+let heightMode: 'stable' | 'oscillate' | 'boundary' | 'stack-overflow' | 'boom' = 'stable';
 
 function thought(id: string, title: string): Thought {
   return {
@@ -190,6 +225,11 @@ function installGlobals(): void {
       heightReads += 1;
       if (heightMode === 'stack-overflow') throw new RangeError('Maximum call stack size exceeded');
       if (heightMode === 'boom') throw new Error('boom');
+      // Пограничная строка: высота облачка зависит от ширины зоны — и это
+      // замыкает контур на собственные измерения (ошибка dc723634).
+      if (heightMode === 'boundary') {
+        return zoneWidthNow >= WIDE_ZONE_MIN ? BOUNDARY_TALL : BOUNDARY_SHORT;
+      }
       // Значения заведомо не совпадают ни с оценкой невидимой строки, ни друг
       // с другом: каждый проход видит «новую» высоту — расклад не сходится.
       return heightMode === 'oscillate' ? (heightReads % 2 === 1 ? 137 : 111) : 20;
@@ -238,6 +278,168 @@ async function settle(times = 25): Promise<void> {
   for (let i = 0; i < times; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// ---------------------------------------------------------------------------
+// Управляемый ResizeObserver и модель коробки зоны
+// ---------------------------------------------------------------------------
+
+/** Одно наблюдение фейкового `ResizeObserver`. */
+interface ObservedTarget {
+  el: ShimElement;
+  box: 'content-box' | 'border-box';
+  /** Последняя доставленная коробка: уведомление — только при её смене. */
+  last: { width: number; height: number } | null;
+}
+
+interface ObservationRecord {
+  callback: ResizeObserverCallback;
+  targets: ObservedTarget[];
+}
+
+/** Все наблюдения фейкового `ResizeObserver` в текущем тесте. */
+const observations: ObservationRecord[] = [];
+
+/**
+ * Модель измеряемой коробки: `null` — брать числа шима. Зона в сценарии
+ * осцилляции моделируется функцией из {@link modelBoundaryZone}.
+ */
+let modelledBox:
+  | ((
+      el: ShimElement,
+      box: 'content-box' | 'border-box',
+    ) => { width: number; height: number } | null)
+  | null = null;
+
+/**
+ * Подменяет глобальный `ResizeObserver` управляемым. Заглушка из
+ * `installGlobals` не уведомляет никогда, а гейту нужно ровно поведение
+ * браузера: уведомление ПОСЛЕ раскладки и только при смене наблюдаемой коробки.
+ */
+function installRecordingResizeObserver(): () => void {
+  const previous = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+  observations.length = 0;
+  (globalThis as Record<string, unknown>).ResizeObserver = class {
+    private readonly record: ObservationRecord;
+    constructor(callback: ResizeObserverCallback) {
+      this.record = { callback, targets: [] };
+      observations.push(this.record);
+    }
+    observe(el: Element, options?: { box?: 'content-box' | 'border-box' }): void {
+      this.record.targets.push({
+        el: el as unknown as ShimElement,
+        box: options?.box ?? 'content-box',
+        last: null,
+      });
+    }
+    unobserve(el: Element): void {
+      this.record.targets = this.record.targets.filter(
+        (target) => (target.el as unknown as Element) !== el,
+      );
+    }
+    disconnect(): void {
+      this.record.targets = [];
+    }
+  };
+  return () => {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = previous;
+    observations.length = 0;
+    modelledBox = null;
+  };
+}
+
+/**
+ * Доставляет наблюдателям уведомления о смене коробки — как браузер после
+ * раскладки. Первое наблюдение уведомляет всегда (RO доставляет начальный
+ * размер), дальше — только при изменении.
+ */
+function flushResizeObservers(): void {
+  for (const record of observations) {
+    const entries: ResizeObserverEntry[] = [];
+    for (const target of record.targets) {
+      const sized = target.el as unknown as { clientWidth: number; clientHeight: number };
+      const size = modelledBox?.(target.el, target.box) ?? {
+        width: sized.clientWidth,
+        height: sized.clientHeight,
+      };
+      if (
+        target.last !== null &&
+        target.last.width === size.width &&
+        target.last.height === size.height
+      ) {
+        continue;
+      }
+      target.last = size;
+      entries.push({
+        target: target.el,
+        contentRect: { width: size.width, height: size.height },
+      } as unknown as ResizeObserverEntry);
+    }
+    if (entries.length > 0) {
+      record.callback(entries, record as unknown as ResizeObserver);
+    }
+  }
+}
+
+/** `settle` с доставкой уведомлений `ResizeObserver` после каждого тика. */
+async function settleWithObservers(times = 20): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushResizeObservers();
+  }
+}
+
+/**
+ * Геометрия зоны сценария: content-box зависит от собственной полосы прокрутки
+ * (если жёлоб не зарезервирован), `border-box` — нет. `clientWidth` зоны читает
+ * раскладка (`zoneGridOf` → число колонок), поэтому именно эта зависимость и
+ * замыкала контур «высоты ↔ полоса ↔ колонки ↔ окно» (ошибка dc723634).
+ */
+function modelBoundaryZone(zone: ShimElement, options: { gutterStable: boolean }): void {
+  const contentWidth = (): number => {
+    const spacer = zone.querySelector('.zone-spacer');
+    const spacerHeight = Number.parseFloat(spacer?.style.height ?? '0') || 0;
+    const hasScrollbar = spacerHeight > ZONE_HEIGHT;
+    const reserved = options.gutterStable || hasScrollbar ? SCROLLBAR_PX : 0;
+    zoneWidthNow = ZONE_BASE_WIDTH - reserved;
+    return zoneWidthNow;
+  };
+  Object.defineProperty(zone, 'clientWidth', { configurable: true, get: contentWidth });
+  Object.defineProperty(zone, 'clientHeight', { configurable: true, get: () => ZONE_HEIGHT });
+  modelledBox = (el, box) => {
+    if (el !== zone) return null;
+    if (box === 'border-box') {
+      // Жёлоб полосы «съедает» padding-box: рамка зоны от неё не меняется.
+      return { width: ZONE_BASE_WIDTH + 2 * ZONE_PADDING, height: ZONE_HEIGHT };
+    }
+    return { width: contentWidth(), height: ZONE_HEIGHT };
+  };
+}
+
+/** Тело правила `.zone { … }` из canvas.css (сторож геометрии полосы). */
+function zoneRuleBody(): string {
+  const clientRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const css = fs.readFileSync(
+    path.join(clientRoot, 'src', 'renderer', 'styles', 'canvas.css'),
+    'utf8',
+  );
+  const match = /(?:^|\n)\s*\.zone\s*\{([^}]*)\}/.exec(css);
+  assert.ok(match !== null, 'в canvas.css не найдено правило .zone');
+  return match[1] ?? '';
+}
+
+/** Идентификатор `i`-го родителя сценария пограничной строки. */
+function boundaryParentId(i: number): string {
+  return `00000000-0000-4000-8000-0000000002${String(i).padStart(2, '0')}`;
+}
+
+/** Окрестность из `count` родителей — «многострочная» зона. */
+function focusResponseWithParents(count: number): FocusResponse {
+  const response = focusResponse();
+  response.parents = Array.from({ length: count }, (_, i) =>
+    neighbor(boundaryParentId(i), `link-parent-${i}`, `Родитель ${i + 1}`),
+  );
+  return response;
+}
+
 function makeHost(): ShimElement {
   const host = new ShimElement('section', 'canvas-host');
   currentHost = host;
@@ -265,6 +467,29 @@ async function mountWithParent(): Promise<{ host: ShimElement; dispose: () => vo
   store.update({ networkId: NETWORK_ID, focus: focusResponse() });
   await settle();
   return { host, dispose };
+}
+
+/**
+ * Монтирует холст со сценарием пограничной строки: `BOUNDARY_PARENTS` родителей
+ * и геометрия зоны, зависящая от её собственной полосы прокрутки. Резервирует
+ * ли жёлоб полосы настоящий `.zone` — читаем из canvas.css, как это сделал бы
+ * браузер: снятый из CSS фикс обязан вернуть цикл.
+ */
+async function mountBoundaryZone(): Promise<{
+  host: ShimElement;
+  zone: ShimElement;
+  dispose: () => void;
+}> {
+  const gutterStable = /scrollbar-gutter\s*:\s*stable/.test(zoneRuleBody());
+  const host = makeHost();
+  const dispose = canvas.mountCanvas(host as unknown as HTMLElement);
+  sizeDom(host);
+  const zone = host.querySelector('.zone-parents');
+  assert.ok(zone !== null, 'верхняя зона смонтирована');
+  modelBoundaryZone(zone!, { gutterStable });
+  store.update({ networkId: NETWORK_ID, focus: focusResponseWithParents(BOUNDARY_PARENTS) });
+  await settleWithObservers();
+  return { host, zone: zone!, dispose };
 }
 
 interface ConsoleCapture {
@@ -352,6 +577,12 @@ describe('высоты строк зоны не уводят раскладку 
       canvas.ZONE_MEASURE_PASS_LIMIT <= HARD_PASS_CAP,
       `лимит проходов обязан остаться жёстким: ${canvas.ZONE_MEASURE_PASS_LIMIT} > ${HARD_PASS_CAP}`,
     );
+    // Эпсилон — только для субпиксельного дрожания: пиксельный порог скрыл бы
+    // настоящую смену высоты строки (раскладка разошлась бы с DOM).
+    assert.ok(
+      canvas.ZONE_MEASURE_EPSILON_PX <= 1,
+      `порог высоты обязан остаться субпиксельным: ${canvas.ZONE_MEASURE_EPSILON_PX}`,
+    );
     const limit = HARD_PASS_CAP * clouds * renders;
     assert.ok(
       reads <= limit,
@@ -426,9 +657,16 @@ describe('высоты строк зоны не уводят раскладку 
       marks.length >= 1,
       `исчерпание лимита обязано попасть в файловый журнал: ${JSON.stringify(logged)}`,
     );
-    const expected = { dir: 'parents', passes: canvas.ZONE_MEASURE_PASS_LIMIT };
     for (const mark of marks) {
-      assert.deepEqual(mark.data, expected, 'метка называет зону и число проходов');
+      assert.equal(mark.data?.['dir'], 'parents', 'метка называет зону');
+      // Осцилляция высот возвращает раскладку в уже виденное состояние, поэтому
+      // серия обрывается повтором состояния, не дожидаясь лимита проходов.
+      assert.equal(mark.data?.['reason'], 'cycle', 'причина — повтор состояния прохода');
+      const passes = Number(mark.data?.['passes']);
+      assert.ok(
+        passes >= 2 && passes <= canvas.ZONE_MEASURE_PASS_LIMIT,
+        `число проходов в пределах лимита: ${passes}`,
+      );
     }
 
     heightMode = 'stable';
@@ -494,5 +732,128 @@ describe('высоты строк зоны не уводят раскладку 
     canvas.requestCanvasRepaint();
     await settle();
     dispose();
+  });
+
+  it('проходы измерения высот не пересобирают облачка (DOM строится на состав окна)', async () => {
+    const { dispose } = await mountWithParent();
+    await settle();
+
+    heightMode = 'oscillate';
+    const buildsBefore = canvas.canvasInternals.zoneCloudBuilds();
+    const readsBefore = heightReads;
+    canvas.requestCanvasRepaint();
+    await settle();
+
+    assert.ok(
+      heightReads - readsBefore > 1,
+      `серия обязана сделать больше одного прохода (чтений ${heightReads - readsBefore})`,
+    );
+    // Облачка строятся ОДИН раз на серию (первый проход), а не в каждом проходе.
+    const builds = canvas.canvasInternals.zoneCloudBuilds() - buildsBefore;
+    const reads = heightReads - readsBefore;
+    assert.ok(builds >= 1, `первый проход серии обязан построить облачко: ${builds}`);
+    assert.ok(
+      builds < reads,
+      `измерение высот не пересобирает облачка: пересборок ${builds}, чтений высоты ${reads}`,
+    );
+
+    heightMode = 'stable';
+    dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Осцилляция раскладки: пограничная строка (ошибка dc723634, мерцание)
+// ---------------------------------------------------------------------------
+
+describe('осцилляция раскладки зоны: устойчивая геометрия (ошибка dc723634)', () => {
+  it('ширина зоны не зависит от её собственной полосы прокрутки', async () => {
+    assert.match(
+      zoneRuleBody(),
+      /scrollbar-gutter\s*:\s*stable/,
+      '.zone обязан резервировать жёлоб полосы прокрутки: иначе content-box (и число колонок) зависит от высоты .zone-spacer',
+    );
+
+    const restoreObserver = installRecordingResizeObserver();
+    try {
+      const { zone, dispose } = await mountBoundaryZone();
+      const zoneRecord = observations.find((record) =>
+        record.targets.some((target) => target.el === zone),
+      );
+      assert.ok(zoneRecord !== undefined, 'зонный ResizeObserver зарегистрирован');
+      const target = zoneRecord!.targets.find((item) => item.el === zone)!;
+      assert.equal(
+        target.box,
+        'border-box',
+        'зонный ResizeObserver обязан наблюдать border-box: переключение полосы прокрутки меняет только content-box',
+      );
+      dispose();
+    } finally {
+      restoreObserver();
+    }
+  });
+
+  it('пограничная строка не перезапускает раскладку кадр за кадром', async () => {
+    const restoreObserver = installRecordingResizeObserver();
+    try {
+      const { zone, dispose } = await mountBoundaryZone();
+      assert.equal(
+        zone.querySelectorAll('.cloud').length,
+        BOUNDARY_PARENTS,
+        'окно зоны построено целиком',
+      );
+
+      // Триггер пользователя: новая мысль рядом с фокусной строкой и высота
+      // пограничной строки, зависящая от ширины зоны (ширина — от высоты
+      // содержимого). Без размыкания контура серия раскладки перезапускается
+      // на каждом кадре и облачка пересобираются — это и есть мерцание.
+      heightMode = 'boundary';
+      logged.length = 0;
+      const rendersBefore = canvas.canvasInternals.renderEnterCount();
+      const runsBefore = canvas.canvasInternals.zoneLayoutRuns();
+      const buildsBefore = canvas.canvasInternals.zoneCloudBuilds();
+
+      canvas.requestCanvasRepaint();
+      await settleWithObservers(20);
+
+      const renders = canvas.canvasInternals.renderEnterCount() - rendersBefore;
+      const runs = canvas.canvasInternals.zoneLayoutRuns() - runsBefore;
+      const builds = canvas.canvasInternals.zoneCloudBuilds() - buildsBefore;
+
+      assert.ok(
+        renders <= 2,
+        `входов в render() за 20 тиков должно остаться единицы, а не десятки: ${renders}`,
+      );
+      assert.ok(
+        runs <= 6,
+        `серий раскладки за 20 тиков должно остаться единицы, а не десятки: ${runs}`,
+      );
+      // Окно строится ОДИН раз на серию: 7 облачков, а не 7 на каждый проход.
+      assert.ok(
+        builds > 0 && builds <= BOUNDARY_PARENTS,
+        `окно строится один раз на серию: построено ${builds} при ${BOUNDARY_PARENTS} мыслях`,
+      );
+      assert.equal(
+        zone.querySelectorAll('.cloud').length,
+        BOUNDARY_PARENTS,
+        'состав окна не потерялся',
+      );
+      assert.ok(
+        !logged.some((event) => event.name === 'ui.zone_measure_exhausted'),
+        `расклад обязан сойтись, а не исчерпывать лимит: ${JSON.stringify(logged)}`,
+      );
+      // Сошлось на узкой геометрии: 3 колонки × 3 ряда по 100 px + промежутки.
+      const spacer = zone.querySelector('.zone-spacer');
+      assert.equal(
+        spacer?.style.height,
+        `${3 * (BOUNDARY_SHORT + 12)}px`,
+        'высота spacer отражает измеренные высоты трёх рядов',
+      );
+
+      heightMode = 'stable';
+      dispose();
+    } finally {
+      restoreObserver();
+    }
   });
 });

@@ -795,6 +795,16 @@ let renderCount = 0;
  */
 let renderEnterCount = 0;
 
+/**
+ * Счётчики раскладки зон (ошибка dc723634): число серий `renderZoneContent` и
+ * число фактически построенных облачков (`buildCloud`). Тестовые швы гейта
+ * «осцилляция раскладки»: серия, перезапускаемая внешним триггером, взлетает в
+ * первом счётчике, пересборка DOM на каждом проходе — во втором
+ * ({@link canvasInternals}.zoneLayoutRuns / .zoneCloudBuilds).
+ */
+let zoneLayoutRunCount = 0;
+let zoneCloudBuildCount = 0;
+
 /** Отметка «рендер уже запланирован на текущий тик» — схлопывает все
  *  синхронные триггеры в один `render()` (см. {@link scheduleRender}). */
 let renderScheduled = false;
@@ -2198,9 +2208,17 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   // scrollbar (ошибка 1deced69). Deliberately re-laid out in place instead of
   // through `render()`: `render()` starts with `finishFocusTransition()`, so a
   // resize mid-flight would snap a running focus animation.
+  //
+  // Наблюдается `border-box`, а не content-box: переключение полосы прокрутки
+  // (spacer вырос/уменьшился) меняет ТОЛЬКО content-box, а раскладка зоны зависит
+  // именно от него (`zone.clientWidth` → число колонок → окно виртуализации).
+  // Наблюдение content-box замыкало контур «измерили высоты → вырос spacer →
+  // появилась полоса → сузился content-box → новый renderZoneContent сам собой»:
+  // сотни серий проходов и мерцание облачков (ошибка dc723634). Ширину держит и
+  // `scrollbar-gutter: stable` у `.zone` — жёлоб полосы зарезервирован всегда.
   new ResizeObserver(() => {
     if (host?.isConnected === true) void renderZoneContent(dir);
-  }).observe(zone);
+  }).observe(zone, { box: 'border-box' });
 
   // Zone context menu (sorting, H15). Cloud drag-n-drop is wired once on the
   // canvas host in mountCanvas.
@@ -2243,10 +2261,19 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
 
 /** Renders a zone from the current focus data. */
 function renderZone(dir: 'parents' | 'siblings' | 'children', entries: ZoneEntry[]): void {
+  const previous = zoneData.get(dir);
+  // Тот же состав строк (перерисовка от инвалидации ref/индикаторов) сохраняет
+  // измеренные высоты: сброс к оценкам в каждом полном рендере заново двигал
+  // `.zone-spacer`, переключал полосу прокрутки и — через content-box — число
+  // колонок; вместе с зонным `ResizeObserver` это держало самоподдерживающийся
+  // цикл перестроек (ошибка dc723634). Неверны высоты становятся только при
+  // смене состава: строки переставляются вместе с колонками.
+  const sameEntries =
+    previous !== undefined &&
+    previous.length === entries.length &&
+    previous.every((entry, i) => entry.id === entries[i]?.id);
   zoneData.set(dir, entries);
-  // The entry set changed — per-row height measurements no longer apply
-  // (rows shift with the order and the column count).
-  rowHeights.delete(dir);
+  if (!sameEntries) rowHeights.delete(dir);
   renderZoneContent(dir);
 }
 
@@ -2338,6 +2365,15 @@ function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
 const rowHeights = new Map<'parents' | 'siblings' | 'children', number[]>();
 
 /**
+ * Подпись окна, построенного ПРЕДЫДУЩИМ проходом текущей серии (id видимых
+ * мыслей по порядку). Проход перестраивает облачка только при смене состава
+ * окна: измерение высот само по себе DOM не трогает (мерцание дефекта
+ * dc723634 — облачка, пересозданные в каждом проходе). На старте серии подпись
+ * сбрасывается.
+ */
+const zoneBuiltIds = new Map<'parents' | 'siblings' | 'children', string>();
+
+/**
  * Сколько проходов измерения высот допускает одна перерисовка зоны (ошибка
  * dc723634). Высоты строк не обязаны сходиться (см. {@link rowHeights}), а
  * прежний самовызов из каждого прохода на такой осцилляции уходил в
@@ -2349,6 +2385,15 @@ const rowHeights = new Map<'parents' | 'siblings' | 'children', number[]>();
 export const ZONE_MEASURE_PASS_LIMIT = 5;
 
 /**
+ * Порог, ниже которого разница измеренных высот строки не считается изменением
+ * раскладки (ошибка dc723634). `offsetHeight` округляется до целого, но высота
+ * приходит и из дробных источников (масштаб канвы, тестовый шим): дрожание
+ * меньше пикселя — не повод запускать ещё один проход, иначе серия «не
+ * сходится» на неизменной геометрии и держит контур перестроек живым.
+ */
+export const ZONE_MEASURE_EPSILON_PX = 1;
+
+/**
  * Renders the visible window of one zone (virtualized grid, auto rows).
  *
  * Один вызов — до {@link ZONE_MEASURE_PASS_LIMIT} ИТЕРАТИВНЫХ проходов: проход
@@ -2357,29 +2402,51 @@ export const ZONE_MEASURE_PASS_LIMIT = 5;
  *
  * Постработка (набор видимых мыслей и подписка индикаторов, курсор, линии)
  * выполняется РОВНО ОДИН раз после цикла и при ЛЮБОМ исходе — расклад сошёлся
- * или лимит исчерпан. Внутри прохода она стояла после раннего «нужен ещё
+ * или серия прервана. Внутри прохода она стояла после раннего «нужен ещё
  * проход», поэтому на осцилляции не выполнялась вовсе (замечание проверки).
+ *
+ * Серия обрывается не только по лимиту проходов, но и по ПОВТОРУ состояния
+ * прохода: раскладка, вернувшаяся в уже виденное состояние, будет повторять
+ * цикл до конца лимита (ошибка dc723634: «высоты ↔ полоса прокрутки ↔ число
+ * колонок ↔ окно» — мерцание вместо фриза).
  */
 function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
+  zoneLayoutRunCount += 1;
+  // Переиспользование облачков действует ТОЛЬКО внутри серии: между сериями
+  // DOM строится заново. За серию проходы меняют лишь измеренные высоты, а
+  // между сериями мог измениться любой вход облачка (инвалидация ref, бейдж
+  // удаления, сортировка, сокращение имён) — устаревшее облачко показало бы
+  // старые данные.
+  zoneBuiltIds.delete(dir);
   let visibleIds: string[] = [];
-  let exhausted = true;
+  /** Почему серия не сошлась: исчерпан лимит проходов или состояние повторилось. */
+  let exhausted: 'passes' | 'cycle' | null = 'passes';
+  let passes = 0;
+  /** Состояния проходов этой серии: повтор означает цикл (см. `cycleKey`). */
+  const seen = new Set<string>();
   for (let pass = 0; pass < ZONE_MEASURE_PASS_LIMIT; pass++) {
     const result = renderZonePass(dir);
     // Рисовать нечего (нет зон, разметки или геометрии) — DOM и набор
     // индикаторов не трогаем, как и прежде.
     if (result === null) return;
+    passes = pass + 1;
     visibleIds = result.visibleIds;
     if (!result.again) {
-      exhausted = false;
+      exhausted = null;
       break;
     }
+    if (seen.has(result.cycleKey)) {
+      exhausted = 'cycle';
+      break;
+    }
+    seen.add(result.cycleKey);
   }
-  if (exhausted) {
-    // Лимит исчерпан: высоты строк не сошлись, на экране остался расклад
-    // последнего прохода — не бросаем и не повторяем пересборку целиком
-    // (дефект dc723634 превращал это в многосекундный фриз). След в ФАЙЛОВОМ
-    // журнале клиента (§9.7): console.warn туда не попадает.
-    logUiEvent('ui.zone_measure_exhausted', { dir, passes: ZONE_MEASURE_PASS_LIMIT });
+  if (exhausted !== null) {
+    // Серия не сошлась: на экране остался расклад последнего прохода — не
+    // бросаем и не повторяем пересборку целиком (дефект dc723634 превращал
+    // это в многосекундный фриз). След в ФАЙЛОВОМ журнале клиента (§9.7):
+    // console.warn туда не попадает.
+    logUiEvent('ui.zone_measure_exhausted', { dir, passes, reason: exhausted });
   }
   // Request indicators only AFTER the clouds are in the DOM: a cached value is
   // applied synchronously and would otherwise patch nothing (the focus row
@@ -2399,10 +2466,16 @@ interface ZonePassResult {
   again: boolean;
   /** Мысли, реально попавшие в окно виртуализации (набор подписки индикаторов). */
   visibleIds: string[];
+  /**
+   * Состояние, из которого проход построил расклад: колонки, прокрутка, состав
+   * окна и измеренные высоты строк. Повтор ключа в одной серии означает, что
+   * следующий проход даст ровно тот же расклад, — серия зациклилась.
+   */
+  cycleKey: string;
 }
 
 /** Проход, после которого повтор не нужен и в окне нет ни одной мысли. */
-const ZONE_PASS_DONE: ZonePassResult = { again: false, visibleIds: [] };
+const ZONE_PASS_DONE: ZonePassResult = { again: false, visibleIds: [], cycleKey: '' };
 
 /**
  * Один проход раскладки зоны. `null` — рисовать нечего (нет зон, разметки или
@@ -2565,31 +2638,53 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): ZonePassResul
   grid.style.width = `${contentWidth}px`;
   grid.style.transform = `translate(${origin.x}px, ${origin.y + prefix[startRow]!}px)`;
 
-  clear(grid);
-  // Row-major fill (08-ui-spec.md §2.1.1): DOM order = entries order
-  // (`entries[i]`); CSS Grid `grid-auto-flow: row` (fixed above) lays them
-  // out left-to-right within a row, then advances to the next row. Visual
-  // slot `(col = i % cols, row = floor(i / cols))` therefore contains the
-  // entry with row-major index i — i.e. the same position it occupies in
-  // the server-returned neighbours array (zoneOrder). This matches the
-  // keyboard cursor model (↑/↓/←/→ step by row-major index) and
-  // `Ctrl+Shift+↑/↓` (which moves by one position in zoneOrder).
-  const showPosition = dir !== 'siblings' && store.state.zoneSorts[dir].sort === 'manual';
+  // Окно виртуализации — состав, который обязан быть в DOM. Собираем его
+  // подписью (id по порядку): если проход не изменил состав окна, облачка
+  // ПЕРЕИСПОЛЬЗУЮТСЯ. Измерение высот — не повод пересобирать DOM: облачка,
+  // пересозданные в каждом проходе, и есть видимое мерцание дефекта dc723634
+  // (серия проходов перезапускалась внешним триггером сотни раз).
   const first = startRow * cols;
-  const last = endRow * cols;
-  const rowClouds = new Map<number, HTMLElement[]>();
+  const last = Math.min(entries.length, endRow * cols);
   const visibleIds: string[] = [];
   for (let i = first; i < last; i++) {
     const entry = entries[i];
-    if (entry === undefined) continue;
-    visibleIds.push(entry.id);
-    const position = showPosition ? (entry.links[0]?.manual_position ?? null) : null;
-    const cloud = buildCloud(entry, dir, position);
-    const r = Math.floor(i / cols);
+    if (entry !== undefined) visibleIds.push(entry.id);
+  }
+  const windowSignature = visibleIds.join('\u0001');
+  let built: HTMLElement[];
+  if (zoneBuiltIds.get(dir) === windowSignature && grid.childElementCount === visibleIds.length) {
+    built = Array.from(grid.children as unknown as HTMLElement[]);
+  } else {
+    // Row-major fill (08-ui-spec.md §2.1.1): DOM order = entries order
+    // (`entries[i]`); CSS Grid `grid-auto-flow: row` (fixed above) lays them
+    // out left-to-right within a row, then advances to the next row. Visual
+    // slot `(col = i % cols, row = floor(i / cols))` therefore contains the
+    // entry with row-major index i — i.e. the same position it occupies in
+    // the server-returned neighbours array (zoneOrder). This matches the
+    // keyboard cursor model (↑/↓/←/→ step by row-major index) and
+    // `Ctrl+Shift+↑/↓` (which moves by one position in zoneOrder).
+    const showPosition = dir !== 'siblings' && store.state.zoneSorts[dir].sort === 'manual';
+    clear(grid);
+    built = [];
+    for (let i = first; i < last; i++) {
+      const entry = entries[i];
+      if (entry === undefined) continue;
+      const position = showPosition ? (entry.links[0]?.manual_position ?? null) : null;
+      const cloud = buildCloud(entry, dir, position);
+      built.push(cloud);
+      grid.append(cloud);
+    }
+    zoneBuiltIds.set(dir, windowSignature);
+  }
+  // Строка → её облачка. Индекс в DOM-окне отсчитывается от `first`
+  // (startRow * cols), поэтому строка = startRow + floor(индекс / cols).
+  const rowClouds = new Map<number, HTMLElement[]>();
+  for (let i = 0; i < built.length; i++) {
+    const r = startRow + Math.floor(i / cols);
+    const cloud = built[i]!;
     const clouds = rowClouds.get(r);
     if (clouds === undefined) rowClouds.set(r, [cloud]);
     else clouds.push(cloud);
-    grid.append(cloud);
   }
 
   // Measure the rendered rows and ask for another pass when any height
@@ -2602,13 +2697,19 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): ZonePassResul
     if (clouds === undefined) continue;
     let h = estimate;
     for (const cloud of clouds) h = Math.max(h, cloud.offsetHeight);
-    if (heights[r] !== h) {
-      heights[r] = h;
-      measured = true;
-    }
+    const next = Math.round(h);
+    const previous = heights[r] ?? estimate;
+    if (next === previous) continue;
+    heights[r] = next;
+    // Дрожание меньше ZONE_MEASURE_EPSILON_PX раскладкой не считается: серия
+    // обязана сходиться на неизменной геометрии (ошибка dc723634).
+    if (Math.abs(next - previous) >= ZONE_MEASURE_EPSILON_PX) measured = true;
   }
   rowHeights.set(dir, heights);
-  return { again: measured, visibleIds };
+  // Ключ состояния: геометрия + окно + измеренные высоты строк. Повтор в одной
+  // серии = цикл, следующий проход ничего не изменит (см. renderZoneContent).
+  const cycleKey = `${cols}|${zone.scrollTop}|${windowSignature}|${heights.slice(0, rows).join(',')}`;
+  return { again: measured, visibleIds, cycleKey };
 }
 
 // ---------------------------------------------------------------------------
@@ -2621,6 +2722,7 @@ function buildCloud(
   dir: 'parents' | 'siblings' | 'children',
   position: number | null,
 ): HTMLElement {
+  zoneCloudBuildCount += 1;
   const ref = entry.ref;
   // The live neighbour carries a fresh `active` flag in every focus response —
   // prefer it over the cached ref, which can lag after a local toggle until the
@@ -2910,6 +3012,10 @@ export const canvasInternals = {
   renderEnterCount: () => renderEnterCount,
   /** Видимые мысли зоны (набор подписки индикаторов) — тестовый шов ошибки dc723634. */
   zoneVisibleIds: (dir: ZoneDir): string[] => [...(zoneVisibleThoughtIds.get(dir) ?? [])],
+  /** Число серий раскладки зон (вызовов `renderZoneContent`) — шов гейта осцилляции. */
+  zoneLayoutRuns: () => zoneLayoutRunCount,
+  /** Число фактически построенных облачков (`buildCloud`) — шов гейта осцилляции. */
+  zoneCloudBuilds: () => zoneCloudBuildCount,
 };
 
 // ---------------------------------------------------------------------------
