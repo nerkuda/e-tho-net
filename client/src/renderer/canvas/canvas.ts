@@ -824,6 +824,10 @@ function scheduleRender(): void {
       // render()` оставлял исключение необработанным отказом, и сбой выглядел
       // как «зависание» без реакции. Логируем и повторяем расклад целиком.
       console.error('[canvas] рендер прерван — повтор на следующем тике', error); // i18n: technical — диагностика для разработчика
+      // Переполнение стека детерминировано: повтор целиком прогонит ту же
+      // раскладку и снова упрётся в тот же предел стека (ошибка dc723634).
+      // Оставляем расклад до следующего внешнего триггера.
+      if (error instanceof RangeError) return;
       rebuildFailures += 1;
       scheduleRebuildRetry();
     });
@@ -843,7 +847,7 @@ function scheduleRender(): void {
  * `REBUILD_RETRY_LIMIT = 3` — это число ПОВТОРОВ после первой неудачной
  * пересборки: итого до 4 входов в render() — сама попытка + 3 повтора.
  */
-const REBUILD_RETRY_LIMIT = 3;
+export const REBUILD_RETRY_LIMIT = 3;
 /** Сколько подряд пересборок упало — сбрасывается успешной. */
 let rebuildFailures = 0;
 /** Повтор уже стоит в очереди — не плодим таймеры одной пачки триггеров. */
@@ -1024,6 +1028,13 @@ async function render(): Promise<void> {
     // двигаем), следующий тик повторяет render() целиком. Без этого фокус
     // оставался новым, а зоны — прежними до следующего внешнего триггера.
     console.error('[canvas] пересборка расклада прервана — повтор целиком', error); // i18n: technical — диагностика для разработчика
+    // Переполнение стека — ДЕТЕРМИНИРОВАННЫЙ сбой входа (ошибка dc723634): та
+    // же раскладка на тех же данных упрётся в тот же предел стека, и «повтор
+    // целиком» лишь умножит фриз на число повторов. Оставляем расклад до
+    // следующего внешнего триггера (уведомление стора, resize, realtime).
+    if (error instanceof RangeError) return;
+    // Число повторов ограничено REBUILD_RETRY_LIMIT (scheduleRebuildRetry),
+    // так что и общий сбой посередине пересборки не крутит микротаски вечно.
     rebuildFailures += 1;
     scheduleRebuildRetry();
     return;
@@ -2313,22 +2324,61 @@ function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
 /**
  * Measured heights of a zone's grid rows (px, gap excluded). Rows that were
  * never rendered fall back to the one-line estimate; every render re-measures
- * its visible rows and re-runs the layout once when anything changed, so the
- * virtualization never diverges from the DOM. A cloud's height depends only
- * on its title, the fixed cloud width and the zoom — deterministic per row,
- * so the re-run converges immediately.
+ * its visible rows and re-runs the layout while anything changed, so the
+ * virtualization never diverges from the DOM. A row's height is NOT
+ * deterministic, though: the measured heights set the spacer's height, which
+ * toggles the zone's scrollbar and changes its content box — that feeds back
+ * into the column count, the virtualization window and the very rows being
+ * measured (ошибка dc723634). The re-run is therefore capped at
+ * {@link ZONE_MEASURE_PASS_LIMIT} passes; a non-converging (oscillating)
+ * layout keeps its last built result instead of recursing until the stack
+ * overflows.
  */
 const rowHeights = new Map<'parents' | 'siblings' | 'children', number[]>();
 
-/** Renders the visible window of one zone (virtualized grid, auto rows). */
+/**
+ * Сколько проходов измерения высот допускает одна перерисовка зоны (ошибка
+ * dc723634). Высоты строк не обязаны сходиться (см. {@link rowHeights}), а
+ * прежний самовызов из каждого прохода на такой осцилляции уходил в
+ * переполнение стека (`RangeError`), которое внешний catch встречал повтором
+ * всей пересборки — до многосекундного фриза. Лимит делает проходы конечными:
+ * последний построенный расклад остаётся на экране, а следующий внешний
+ * триггер (уведомление стора, resize, realtime) пробует расклад заново.
+ */
+export const ZONE_MEASURE_PASS_LIMIT = 5;
+
+/**
+ * Renders the visible window of one zone (virtualized grid, auto rows).
+ *
+ * Один вызов — до {@link ZONE_MEASURE_PASS_LIMIT} ИТЕРАТИВНЫХ проходов: проход
+ * измеряет высоты видимых строк и просит следующий, если они изменились.
+ * Итерация, а не рекурсия: осциллирующие высоты не могут исчерпать стек.
+ */
 function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
-  if (zones === null) return;
+  for (let pass = 0; pass < ZONE_MEASURE_PASS_LIMIT; pass++) {
+    if (!renderZonePass(dir)) return;
+  }
+  // Лимит исчерпан: высоты строк не сошлись. DOM последнего прохода уже
+  // построен — оставляем его как есть: не бросаем и не повторяем пересборку
+  // целиком (дефект dc723634 превращал это в многосекундный фриз).
+  console.warn('[canvas] высоты строк зоны не сошлись за лимит проходов', { // i18n: technical — диагностика для разработчика
+    dir,
+    passes: ZONE_MEASURE_PASS_LIMIT,
+  });
+}
+
+/**
+ * Один проход раскладки зоны. `true` — измеренные высоты строк изменились,
+ * нужен ещё проход; `false` — расклад сошёлся (или рисовать нечего).
+ */
+function renderZonePass(dir: 'parents' | 'siblings' | 'children'): boolean {
+  if (zones === null) return false;
   const zone = zones[dir];
   const entries = zoneData.get(dir) ?? [];
   const spacer = zone.querySelector<HTMLElement>('.zone-spacer');
   const grid = zone.querySelector<HTMLElement>('.zone-grid');
   const empty = zone.querySelector<HTMLElement>('.zone-empty');
-  if (spacer === null || grid === null || empty === null) return;
+  if (spacer === null || grid === null || empty === null) return false;
 
   // Effective (zoom-multiplied) sizes; the --cloud-* CSS variables with the
   // same numbers live on the canvas host (applyCanvasScaleVars).
@@ -2365,11 +2415,11 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     if (dir === 'children') {
       if (childrenZonePhase === 'loading') {
         empty.replaceChildren(loadingState());
-        return;
+        return false;
       }
       if (childrenZonePhase === 'error') {
         empty.replaceChildren(errorState(getViewRunError() ?? t('strip.runFailed')));
-        return;
+        return false;
       }
       const viewResult = zone.dataset['viewResult'];
       if (viewResult === 'unresolved') {
@@ -2397,7 +2447,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     } else {
       empty.textContent = ZONE_EMPTY_LABELS[dir];
     }
-    return;
+    return false;
   }
   empty.classList.add('hidden');
   // Скрытое пустое состояние не должно хранить разметку прежнего состояния
@@ -2406,7 +2456,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   empty.replaceChildren();
 
   const gridInfo = zoneGridOf(dir);
-  if (gridInfo === null) return;
+  if (gridInfo === null) return false;
   const { cols, rows } = gridInfo;
   const heights = rowHeights.get(dir) ?? [];
   while (heights.length < rows) heights.push(estimate);
@@ -2507,8 +2557,10 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     grid.append(cloud);
   }
 
-  // Measure the rendered rows and re-run the layout once when any height
-  // changed (heights are deterministic — the re-run converges immediately).
+  // Measure the rendered rows and ask for another pass when any height
+  // changed. The wrapper caps the passes: measured heights CAN oscillate (see
+  // rowHeights), and a self-call here recursed until the stack overflowed —
+  // the freeze of ошибка dc723634.
   let measured = false;
   for (let r = startRow; r < endRow; r++) {
     const clouds = rowClouds.get(r);
@@ -2521,10 +2573,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     }
   }
   rowHeights.set(dir, heights);
-  if (measured) {
-    renderZoneContent(dir);
-    return;
-  }
+  if (measured) return true;
 
   // Request indicators only AFTER the clouds are in the DOM: a cached value is
   // applied synchronously and would otherwise patch nothing (the focus row
@@ -2536,6 +2585,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
   syncCanvasCursor();
   redrawLinks?.();
+  return false;
 }
 
 // ---------------------------------------------------------------------------
