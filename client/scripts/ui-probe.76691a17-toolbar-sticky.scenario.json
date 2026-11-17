@@ -93,7 +93,7 @@
     },
     {
       "name": "install-scroll-zone-helper",
-      "eval": "(() => {\n  window.__etnScrollZone = (from) => {\n    let el = from.parentElement;\n    while (el !== null && el !== document.body) {\n      const overflowY = getComputedStyle(el).overflowY;\n      if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 2) {\n        return el;\n      }\n      el = el.parentElement;\n    }\n    return null;\n  };\n  return true;\n})()"
+      "eval": "(() => {\n  window.__etnScrollZone = () => {\n    const field = document.querySelector('.ui-comment .md-field');\n    if (field === null) return null;\n    const inner = field.querySelector('.md-field-scroll');\n    if (inner !== null && inner.scrollHeight > inner.clientHeight + 2) return inner;\n    let el = field.parentElement;\n    while (el !== null && el !== document.body) {\n      const overflowY = getComputedStyle(el).overflowY;\n      if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 2) {\n        return el;\n      }\n      el = el.parentElement;\n    }\n    return null;\n  };\n  return true;\n})()"
     },
     {
       "name": "layout-before",
@@ -118,7 +118,12 @@
     },
     {
       "name": "toolbar-inside-viewport",
-      "probe": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  if (bar === null) return false;\n  const sc = window.__etnScrollZone(bar);\n  if (sc === null) return false;\n  const b = bar.getBoundingClientRect();\n  const s = sc.getBoundingClientRect();\n  return b.top >= s.top - 1 && b.bottom <= s.bottom + 1;\n})()",
+      "probe": "(() => {\n  const bar = document.querySelector('.ui-comment .md-field-toolbar');\n  if (bar === null) return false;\n  const field = bar.closest('.md-field');\n  if (field === null) return false;\n  const b = bar.getBoundingClientRect();\n  const f = field.getBoundingClientRect();\n  return b.top >= f.top - 1 && b.bottom <= f.bottom + 1;\n})()",
+      "expect": true
+    },
+    {
+      "name": "footer-stays-at-bottom",
+      "probe": "(() => {\n  const field = document.querySelector('.ui-comment .md-field--editing');\n  if (field === null) return false;\n  const footer = field.querySelector(':scope > .md-field-actions');\n  const zone = field.closest('.group-body');\n  if (footer === null || zone === null) return false;\n  const f = footer.getBoundingClientRect();\n  const z = zone.getBoundingClientRect();\n  return z.bottom - f.bottom <= 12 && f.top >= z.top - 1;\n})()",
       "expect": true
     },
     {

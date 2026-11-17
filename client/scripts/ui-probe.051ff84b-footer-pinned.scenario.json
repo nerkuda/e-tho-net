@@ -1,0 +1,99 @@
+{
+  "name": "051ff84b-footer-pinned",
+  "description": "Ошибка 051ff84b: кнопки «Отмена»/«Сохранить» редактора комментария прижаты к низу зоны, а не стоят в потоке под текстом. Самодостаточен: на HOME заводятся КОРОТКИЙ постоянный комментарий (одна строка) и хронологическая запись с задачей (панель «Задачи» делает вкладку «Основное» двухзонной). Шаги: войти в правку и замерить зазор между низом футера и низом зоны комментария, высоты оболочки/поля/области правки; затем эксперимент — включить зоне `display: flex` инъекцией стиля и замерить снова (доказывает, что прижатие даёт flex-колонка зоны). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.051ff84b-footer-pinned.scenario.json",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "eval": "(() => { const item = document.querySelector(\".networks-list .network-item\"); if (item === null) return false; item.click(); return true; })()"
+    },
+    {
+      "name": "seed-short-comment",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "Короткий комментарий для проверки футера."
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "seed-task-record",
+      "api": {
+        "name": "seededRecord",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "chronological",
+          "title": "Запись с задачей",
+          "body_md": "- [ ] Проверить футер редактора [[#{{homeId}}]]",
+          "valid_from": "2026-11-17"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "chronological"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    { "name": "open-comment-owner", "click": "[data-id=\"{{homeId}}\"].cloud" },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view')?.textContent?.includes(\"Короткий комментарий\") === true"
+    },
+    {
+      "name": "two-zones",
+      "waitFor": "document.querySelectorAll('.main-tab > .group').length >= 2 && document.querySelector('.main-tab > .row-splitter:not([hidden])') !== null",
+      "timeout": 15000
+    },
+    { "name": "enter-edit", "click": "[data-action=\"edit\"]" },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "install-measure-helper",
+      "eval": "(() => {\n  window.__etnFooterMetrics = () => {\n    const root = document.querySelector('.ui-comment');\n    if (root === null) return null;\n    const zone = root.parentElement;\n    const field = root.querySelector('.md-field--editing');\n    const footer = field === null ? null : field.querySelector(':scope > .md-field-actions');\n    if (zone === null || field === null || footer === null) return null;\n    const z = zone.getBoundingClientRect();\n    const f = footer.getBoundingClientRect();\n    const fld = field.getBoundingClientRect();\n    const area = field.querySelector(':scope > .md-field-area');\n    const a = area === null ? null : area.getBoundingClientRect();\n    return {\n      zoneDisplay: getComputedStyle(zone).display,\n      zoneOverflow: getComputedStyle(zone).overflowY,\n      rootHeight: Math.round(root.getBoundingClientRect().height),\n      zoneContentHeight: Math.round(z.height - 16),\n      zoneHeight: Math.round(z.height),\n      fieldHeight: Math.round(fld.height),\n      areaHeight: a === null ? null : Math.round(a.height),\n      footerPosition: getComputedStyle(footer).position,\n      footerBottomGap: Math.round(z.bottom - f.bottom),\n      footerUnderText: a !== null && a.bottom <= f.top + 1,\n    };\n  };\n  return true;\n})()"
+    },
+    { "name": "metrics-footer", "probe": "window.__etnFooterMetrics()" },
+    {
+      "name": "zone-is-flex-column",
+      "probe": "(() => { const m = window.__etnFooterMetrics(); return m !== null && m.zoneDisplay === 'flex' && m.zoneOverflow === 'hidden'; })()",
+      "expect": true
+    },
+    {
+      "name": "root-fills-zone",
+      "probe": "(() => { const m = window.__etnFooterMetrics(); return m !== null && m.rootHeight >= m.zoneContentHeight - 2; })()",
+      "expect": true
+    },
+    {
+      "name": "footer-pinned-to-bottom",
+      "probe": "(() => { const m = window.__etnFooterMetrics(); return m !== null && m.footerBottomGap <= 10 && m.footerUnderText; })()",
+      "expect": true
+    },
+    {
+      "name": "footer-not-scrolled-with-text",
+      "probe": "(() => { const m = window.__etnFooterMetrics(); return m !== null && m.footerPosition === 'static'; })()",
+      "expect": true
+    }
+  ]
+}
