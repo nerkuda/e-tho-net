@@ -944,7 +944,7 @@ describe('панель редактора мысли: headless, плоские �
     destroy();
   });
 
-  it('headActions: «Обновить» и «⋮» отдаются наружу и работают', () => {
+  it('headActions: «Отменить», «Обновить» и «⋮» отдаются наружу и работают', () => {
     let menuCalls = 0;
     const { calls, headActions, destroy } = mountHeadless(flatView([taskRow()], []), {
       headMenu: () => {
@@ -952,12 +952,19 @@ describe('панель редактора мысли: headless, плоские �
         return [];
       },
     });
-    assert.equal(headActions.length, 2, 'кнопки шапки: «Обновить» и «⋮»');
-    headActions[0]!.click();
+    assert.equal(
+      headActions.length,
+      3,
+      'кнопки шапки: «Отменить» (скрыта без команды), «Обновить» и «⋮»',
+    );
+    const undo = headActions[0] as unknown as ShimElement;
+    assert.equal(undo.classList.contains('ui-task-panel-undo'), true, 'первая — «Отменить»');
+    assert.equal(undo.hidden, true, 'без массовой команды «Отменить» скрыта');
+    headActions[1]!.click();
     assert.equal(calls.refresh, 1);
-    (headActions[1] as unknown as ShimElement).emit('click', {
-      target: headActions[1],
-      currentTarget: headActions[1],
+    (headActions[2] as unknown as ShimElement).emit('click', {
+      target: headActions[2],
+      currentTarget: headActions[2],
       preventDefault: (): void => undefined,
       stopPropagation: (): void => undefined,
     });

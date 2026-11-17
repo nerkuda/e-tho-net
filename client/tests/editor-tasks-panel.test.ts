@@ -83,6 +83,18 @@ interface Harness {
 interface SetupExtra {
   /** `GET /tasks?comment_id=` — снапшот записи после правки (ошибка 45480290). */
   commentRows?: Record<string, TaskDTO[]>;
+  /** Вложенные не-задачные строки (`include_nested`): пункты чек-листа и текст. */
+  nested?: Array<Record<string, unknown>>;
+  /** Вложенные строки записи для точечного перечитывания (снапшот после правки). */
+  commentNested?: Array<Record<string, unknown>>;
+  /** Тексты комментариев-источников (`comments.get`) — сырой `body_md`. */
+  commentBodies?: Record<string, string>;
+  /**
+   * Хук «сервер опубликовал событие ДО ответа на запись»: ревизия возвращается
+   * из ответа, а `comment.updated` приходит по WebSocket раньше (замечание 3
+   * вердикта `e984a2db`).
+   */
+  beforeResponse?: (commentId: string, version: number) => void;
 }
 
 /** Установить DOM-глобалы до импорта модулей рендерера. */
@@ -141,10 +153,26 @@ async function setup(initial: TaskDTO[], extra: SetupExtra = {}): Promise<Harnes
       list: async (_networkId: string, query: Record<string, unknown> = {}) => {
         queries.push(query);
         const commentId = query['comment_id'];
-        if (typeof commentId === 'string') {
-          return { items: extra.commentRows?.[commentId] ?? [], cursor: null, max_revision: 2 };
-        }
-        return { items: [...tasks], cursor: null, max_revision: 1 };
+        const items =
+          typeof commentId === 'string' ? (extra.commentRows?.[commentId] ?? []) : [...tasks];
+        // Как у сервера: вложенные строки отдаются той странице, чьи задачи в
+        // неё попали (пункт F ТЗ 2026-11-17).
+        const nestedSource =
+          typeof commentId === 'string'
+            ? (extra.commentNested ?? extra.nested ?? [])
+            : (extra.nested ?? []);
+        const nested = nestedSource.filter((line) =>
+          items.some((item) => {
+            const parent = line['parent'] as Record<string, unknown>;
+            return item.comment_id === parent['comment_id'] && item.line_no === parent['line_no'];
+          }),
+        );
+        return {
+          items,
+          cursor: null,
+          max_revision: 2,
+          ...(query['include_nested'] === true ? { nested } : {}),
+        };
       },
       patch: async (_networkId: string, input: Record<string, unknown>) => {
         patches.push(input);
@@ -155,6 +183,9 @@ async function setup(initial: TaskDTO[], extra: SetupExtra = {}): Promise<Harnes
           versions.set(id, version);
           return { id, version };
         });
+        for (const revision of revisions) {
+          extra.beforeResponse?.(revision.id, revision.version);
+        }
         return {
           results: ops.map((op) => ({
             comment_id: op['comment_id'],
@@ -174,7 +205,7 @@ async function setup(initial: TaskDTO[], extra: SetupExtra = {}): Promise<Harnes
     comments: {
       get: async (_networkId: string, id: string) => ({
         id,
-        body_md: bodies.get(id) ?? '- [ ] задача',
+        body_md: bodies.get(id) ?? extra.commentBodies?.[id] ?? '- [ ] задача',
         version: versions.get(id) ?? 1,
       }),
       update: async (
@@ -185,6 +216,7 @@ async function setup(initial: TaskDTO[], extra: SetupExtra = {}): Promise<Harnes
         const version = (versions.get(id) ?? 1) + 1;
         versions.set(id, version);
         if (input.body_md !== undefined) bodies.set(id, input.body_md);
+        extra.beforeResponse?.(id, version);
         return { id, body_md: bodies.get(id), version };
       },
       list: async () => [],
@@ -205,6 +237,8 @@ async function setup(initial: TaskDTO[], extra: SetupExtra = {}): Promise<Harnes
 
   const { createEditorTasksSection } = await import('../src/renderer/editor/tasks-panel.js');
   const { groupSection } = await import('../src/renderer/editor/group.js');
+  const { resetEventRouter } = await import('../src/renderer/lib/live/event-router.js');
+  resetEventRouter();
 
   const lifecycle = { onDispose: (): void => undefined, onShow: (): void => undefined };
   const ctx = {
@@ -263,7 +297,11 @@ describe('зона «Задачи» редактора: счётчики шап�
         taskRow({ comment_id: 'c2', line_no: 0, text: 'вторая' }),
         taskRow({ comment_id: 'c3', line_no: 0, text: 'выполненная', done: true }),
       );
-      h.headActions[0]!.click();
+      const refresh = h.headActions.find((node) =>
+        (node as unknown as ShimElement).classList.contains('ui-task-panel-refresh'),
+      );
+      assert.ok(refresh, 'кнопка «Обновить» в шапке зоны');
+      (refresh as unknown as ShimElement).click();
       await h.settle();
 
       assert.equal(
@@ -336,7 +374,7 @@ describe('зона «Задачи» редактора: точечная пра�
     });
   }
 
-  it('чекбокс красит только свою строку, повторный клик идёт с новой ревизией', async () => {
+  it('чекбокс не серит строку: команда не трогает снапшот текста, повторный клик идёт с новой ревизией', async () => {
     const h = await setup([
       taskRow({ line_no: 0, text: 'первая' }),
       taskRow({ line_no: 1, text: 'вторая' }),
@@ -351,14 +389,30 @@ describe('зона «Задачи» редактора: точечная пра�
       };
       click(true);
       await h.settle();
-      assert.equal(rowOf(h.group, 'c1:0').classList.contains('is-stale'), true);
+      assert.equal(
+        rowOf(h.group, 'c1:0').classList.contains('is-stale'),
+        false,
+        'своя команда строку серой не делает (вердикт e984a2db)',
+      );
       assert.equal(
         rowOf(h.group, 'c1:1').classList.contains('is-stale'),
         false,
-        'соседняя строка той же записи остаётся свежей',
+        'соседняя строка той же записи тоже свежая',
+      );
+      assert.ok(rowOf(h.group, 'c1:0').classList.contains('is-done'), 'галочка показала отметку');
+      const refresh = h.group.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.equal(
+        refresh.classList.contains('is-stale'),
+        false,
+        '«Обновить» собственной командой не зажигается',
       );
       click(false);
       await h.settle();
+      assert.equal(
+        rowOf(h.group, 'c1:0').classList.contains('is-done'),
+        false,
+        'повторный клик снял отметку',
+      );
       const ops = h.patches.map((input) => (input['ops'] as Array<Record<string, unknown>>)[0]!);
       assert.deepEqual(
         ops.map((op) => op['done']),
@@ -538,5 +592,241 @@ describe('зона «Задачи» редактора: ID-ссылка стро
       thoughtId,
       'data-wiki-id сохранён — делегированный клик работает',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Микродоработка по вердикту e984a2db (задача 7446eb25): своя правка — не повод
+// для серости и «Обновить», undo массовых команд есть и в карточке мысли.
+// ---------------------------------------------------------------------------
+
+/** Событие слоя в сети теста (`n1`) — как его доставляет WebSocket. */
+function routedEvent(
+  type: 'comment.updated',
+  data: Record<string, unknown>,
+  seq: number,
+): Parameters<
+  (typeof import('../src/renderer/lib/live/event-router.js'))['routeRealtimeEvent']
+>[0] {
+  return { type, network_id: 'n1', seq, data } as never;
+}
+
+describe('зона «Задачи» редактора: СВОЯ правка не серит строку (вердикт e984a2db)', () => {
+  beforeEach(() => shimDom());
+
+  /** Строка зоны по адресу проекции. */
+  function rowOf(host: ShimElement, key: string): ShimElement {
+    const row = rowsOf(host).find((node) => node.getAttribute('data-row-key') === key);
+    assert.ok(row, `строка ${key} в зоне «Задачи»`);
+    return row as ShimElement;
+  }
+
+  /** Кнопка «Обновить» зоны (маркер устаревания). */
+  function refreshBtn(host: ShimElement): ShimElement {
+    const button = host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement | null;
+    assert.ok(button, 'кнопка «Обновить» в шапке зоны');
+    return button;
+  }
+
+  it('отметка пункта чек-листа: эхо раньше ответа не серит строку и не зажигает «Обновить»', async () => {
+    const { routeRealtimeEvent } = await import('../src/renderer/lib/live/event-router.js');
+    let seq = 1;
+    /** Пункт чек-листа в загруженном снапшоте и в проекции после правки. */
+    const child = (done: boolean): Record<string, unknown> => ({
+      comment_id: 'c1',
+      line_no: 1,
+      parent: { comment_id: 'c1', line_no: 0 },
+      text: 'пункт',
+      depth: 1,
+      checkbox: true,
+      done,
+    });
+    const h = await setup([taskRow({ subject_thoughts: ['t1'] })], {
+      nested: [child(false)],
+      // Проекция сервера уже видит отметку: перечитывание обязано её подхватить.
+      commentNested: [child(true)],
+      commentRows: {
+        c1: [taskRow({ subject_thoughts: ['t1'], revision: 2, parsed_revision: 2 })],
+      },
+      commentBodies: { c1: '- [ ] задача\n  - [ ] пункт' },
+      // Сервер публикует событие ДО ответа на запись: эхо приходит без токена.
+      beforeResponse: (id, version) => {
+        routeRealtimeEvent(routedEvent('comment.updated', { id, version, changes: {} }, seq++));
+      },
+    });
+    try {
+      const row = rowOf(h.group, 'c1:0');
+      (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+      const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
+      assert.ok(check, 'чекбокс пункта чек-листа раскрыт');
+      check.checked = true;
+      check.emit('change', { target: check });
+      await h.settle();
+
+      assert.equal(
+        rowOf(h.group, 'c1:0').classList.contains('is-stale'),
+        false,
+        'строка своей операции серой не становится',
+      );
+      assert.equal(
+        refreshBtn(h.group).classList.contains('is-stale'),
+        false,
+        'эхо своей правки не зажигает «Обновить»',
+      );
+      const panelRoot = h.group.querySelector('.ui-task-panel') as unknown as ShimElement | null;
+      assert.ok(panelRoot, 'корень панели в зоне');
+      assert.equal(
+        (panelRoot as unknown as { dataset: Record<string, string> }).dataset['stale'],
+        '0',
+        'панель не помечена устаревшей',
+      );
+      const childRow = rowOf(h.group, 'c1:0').querySelector(
+        '.ui-task-child-row',
+      ) as unknown as ShimElement;
+      assert.equal(
+        childRow.classList.contains('is-done'),
+        true,
+        'перечитывание подхватило отметку проекции',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('сохранение блока: строка свежая, блочная правка открывается повторно без «Обновить»', async () => {
+    keymap.keymapInternals.reset();
+    const { routeRealtimeEvent } = await import('../src/renderer/lib/live/event-router.js');
+    let seq = 1;
+    const h = await setup([taskRow({ subject_thoughts: ['t1'] })], {
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт',
+          depth: 1,
+          checkbox: true,
+          done: false,
+        },
+      ],
+      commentBodies: { c1: '- [ ] задача\n  - [ ] пункт' },
+      commentRows: {
+        c1: [
+          taskRow({
+            subject_thoughts: ['t1'],
+            text: 'задача правленая',
+            revision: 2,
+            parsed_revision: 2,
+          }),
+        ],
+      },
+      beforeResponse: (id, version) => {
+        routeRealtimeEvent(routedEvent('comment.updated', { id, version, changes: {} }, seq++));
+      },
+    });
+    try {
+      const row = rowOf(h.group, 'c1:0');
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      let field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
+      assert.ok(field, 'блочная правка открылась');
+      field.value = '- [ ] задача правленая\n  - [ ] пункт';
+      field.focus();
+      keymap.dispatchKeyEvent({
+        key: 'Enter',
+        ctrlKey: true,
+        target: field,
+        preventDefault: (): void => undefined,
+      } as unknown as KeyboardEvent);
+      await h.settle();
+
+      assert.equal(
+        rowOf(h.group, 'c1:0').classList.contains('is-stale'),
+        false,
+        'после сохранения блока строка не серая',
+      );
+      assert.equal(
+        refreshBtn(h.group).classList.contains('is-stale'),
+        false,
+        'эхо своего сохранения не зажигает «Обновить»',
+      );
+      assert.ok(
+        String(
+          (rowOf(h.group, 'c1:0').querySelector('.ui-task-row-text') as unknown as ShimElement)
+            .innerHTML,
+        ).includes('задача правленая'),
+        'перечитывание показало новый текст блока сразу',
+      );
+
+      // Повторная блочная правка: ранний выход по `row.stale` не срабатывает.
+      (rowOf(h.group, 'c1:0').querySelector('.ui-task-row-text') as unknown as ShimElement).emit(
+        'dblclick',
+        {},
+      );
+      await h.settle();
+      field = rowOf(h.group, 'c1:0').querySelector(
+        '.ui-task-row-block-edit',
+      ) as unknown as ShimElement;
+      assert.ok(field, 'блочная правка открылась повторно без «Обновить»');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('массовая команда: «Отменить» появляется в шапке зоны и возвращает прежний текст', async () => {
+    const body = '- [ ] задача [[2026-11-14]]';
+    const h = await setup([taskRow({ subject_thoughts: ['t1'] })], {
+      commentBodies: { c1: body },
+    });
+    try {
+      const undo = h.headActions.find((node) =>
+        (node as unknown as ShimElement).classList.contains('ui-task-panel-undo'),
+      ) as unknown as ShimElement | undefined;
+      assert.ok(undo, 'кнопка «Отменить» отдана в шапку зоны');
+      assert.equal(undo.hidden, true, 'до команды «Отменить» скрыта');
+
+      // Меню «⋮» шапки зоны: команда по всем задачам мысли.
+      const menuBtn = h.headActions.find((node) =>
+        (node as unknown as ShimElement).classList.contains('ui-task-group-menu'),
+      ) as unknown as ShimElement | undefined;
+      assert.ok(menuBtn, 'кнопка «⋮» шапки зоны');
+      menuBtn.emit('click', {
+        target: menuBtn,
+        currentTarget: menuBtn,
+        preventDefault: (): void => undefined,
+        stopPropagation: (): void => undefined,
+      });
+      const bodyNode = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+      const item = bodyNode
+        .querySelectorAll('.menu-item')
+        .find((node) => node.flatText().includes(t('tasks.cancelAllThought')));
+      assert.ok(item, 'пункт «Отменить все невыполненные по мысли»');
+      item.click();
+      await h.settle();
+      // Диалог подтверждения: основная кнопка.
+      const confirm = bodyNode
+        .querySelectorAll('.ui-btn')
+        .find((node) => node.flatText().trim() === t('actions.confirm'));
+      assert.ok(confirm, 'кнопка подтверждения в диалоге');
+      confirm.emit('click', {
+        target: confirm,
+        currentTarget: confirm,
+        preventDefault: (): void => undefined,
+        stopPropagation: (): void => undefined,
+      });
+      await h.settle();
+
+      assert.equal(undo.hidden, false, 'после массовой команды «Отменить» видна');
+      undo.emit('click', { target: undo, currentTarget: undo });
+      await h.settle();
+      assert.equal(
+        h.queries.filter((query) => query['thought_id'] === 't1').length >= 2,
+        true,
+        'после отмены панель перечитана',
+      );
+      assert.equal(undo.hidden, true, 'после отмены кнопка снова скрыта');
+    } finally {
+      h.destroy();
+    }
   });
 });

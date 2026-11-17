@@ -621,24 +621,35 @@ describe('панель задач: точечная правка строки (�
     check.emit('change');
   }
 
-  it('чекбокс красит ТОЛЬКО свою строку, соседняя остаётся рабочей', async () => {
+  it('чекбокс не серит строку: соседняя строка рабочая, «Обновить» не зажигается', async () => {
     const h = await setup({
       tasks: [taskRow({ line_no: 0, text: 'первая' }), taskRow({ line_no: 1, text: 'вторая' })],
     });
     try {
       clickCheck(h, 'c1:0', true);
       await h.settle();
-      assert.equal(rowOf(h, 'c1:0').classList.contains('is-stale'), true, 'правленая строка серая');
+      assert.equal(
+        rowOf(h, 'c1:0').classList.contains('is-stale'),
+        false,
+        'своя команда строку серой не делает (вердикт e984a2db)',
+      );
       assert.equal(
         rowOf(h, 'c1:1').classList.contains('is-stale'),
         false,
-        'соседняя строка той же записи остаётся свежей',
+        'соседняя строка той же записи тоже свежая',
       );
       assert.ok(rowOf(h, 'c1:0').classList.contains('is-done'), 'галочка показала новое состояние');
       assert.equal(
         (rowOf(h, 'c1:1').querySelector('.ui-task-row-check') as unknown as ShimElement).disabled,
         false,
         'соседняя строка рабочая',
+      );
+      assert.equal(
+        (
+          h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement
+        ).classList.contains('is-stale'),
+        false,
+        'собственная команда «Обновить» не зажигает',
       );
       // Повторный клик снимает отметку: команда работает и на серой строке.
       clickCheck(h, 'c1:0', false);
@@ -663,6 +674,36 @@ describe('панель задач: точечная правка строки (�
         ops.map((op) => op['expected_revision']),
         [1, 2],
         'вторая команда идёт с ревизией, поднятой первой (иначе 409)',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('«Сделать бессрочной» перечитывает запись: строка не серая, «Обновить» не горит', async () => {
+    const h = await setup({
+      tasks: [taskRow()],
+      commentRows: { c1: [taskRow({ revision: 2, parsed_revision: 2 })] },
+    });
+    try {
+      h.openRowMenu();
+      h.menuItem(tUndateRow).click();
+      await h.settle();
+      assert.ok(
+        h.calls.list.some((query) => query['comment_id'] === 'c1'),
+        'строки записи перечитаны после СВОЕЙ команды',
+      );
+      assert.equal(
+        rowOf(h, 'c1:0').classList.contains('is-stale'),
+        false,
+        'своя команда строку серой не делает (вердикт e984a2db)',
+      );
+      assert.equal(
+        (
+          h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement
+        ).classList.contains('is-stale'),
+        false,
+        '«Обновить» своей командой не зажигается',
       );
     } finally {
       h.destroy();
@@ -1195,7 +1236,7 @@ function realtimeEvent(
 }
 
 describe('панель задач: маркер «Обновить» по любому изменению сети (замечание 2 ТЗ 2026-11-18)', () => {
-  it('эхо СВОЕЙ правки не красит запись целиком: серая только своя строка', async () => {
+  it('эхо СВОЕЙ правки не красит запись и не зажигает «Обновить»', async () => {
     // Две строки ОДНОЙ записи: правка одной не должна сереть соседнюю.
     const h = await setup({
       tasks: [taskRow(), taskRow({ line_no: 1, text: 'вторая', due: '2026-11-12' })],
@@ -1211,7 +1252,11 @@ describe('панель задач: маркер «Обновить» по люб
       check.checked = true;
       check.emit('change', { target: check });
       await h.settle();
-      assert.equal(first.classList.contains('is-stale'), true, 'своя строка серая');
+      assert.equal(
+        first.classList.contains('is-stale'),
+        false,
+        'своя команда строку серой не делает (вердикт e984a2db)',
+      );
       assert.equal(second.classList.contains('is-stale'), false, 'соседняя строка записи не серая');
 
       // Эхо своей операции: ревизия 2 — токен `c1:2` из ответа `PATCH`.
@@ -1219,6 +1264,11 @@ describe('панель задач: маркер «Обновить» по люб
         realtimeEvent('comment.updated', { id: 'c1', version: 2, changes: {} }, 1),
       );
       await h.settle();
+      assert.equal(
+        first.classList.contains('is-stale'),
+        false,
+        'эхо СВОЕЙ правки не серит свою строку',
+      );
       assert.equal(
         second.classList.contains('is-stale'),
         false,

@@ -1621,7 +1621,9 @@ export function mountTaskPanel(
   return {
     render,
     headActions(): HTMLElement[] {
-      return headless ? [refreshBtn, tasksMenuBtn] : [];
+      // Шапка headless-панели (карточка мысли): «Отменить» живёт здесь же —
+      // иначе массовая команда в зоне остаётся без отмены (вердикт e984a2db).
+      return headless ? [undoBtn, refreshBtn, tasksMenuBtn] : [];
     },
     destroy(): void {
       nav?.destroy();

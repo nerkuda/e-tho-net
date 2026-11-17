@@ -20,14 +20,16 @@
  *    устранено.
  *
  * **Устаревание и «Обновить»** (требование `0e85b66e`, уточнение замечания 2 ТЗ
- * 2026-11-18). Серая строка — снапшот ЭТОЙ строки (правка из панели адресуется
- * `comment_id`+`line_no`); внешнее изменение записи красит всю запись. Кнопка
- * «Обновить» светится при ЛЮБОМ изменении в сети: `comment.updated`/`created`/
- * `deleted` и `reminders.changed` поднимают маркер панели, в том числе для
- * записей, которых панель не загружала (в сети появилась новая задача периода).
- * Эхо своей правки гасится ТОЛЬКО по токену операции (`comment_id:version`
- * ответа на запись): прежнее сравнение с сохранённой версией глушило и чужие
- * события.
+ * 2026-11-18, замечание 3 вердикта `e984a2db`). Серая строка — снапшот ЭТОЙ
+ * строки (правка из панели адресуется `comment_id`+`line_no`); внешнее изменение
+ * записи красит всю запись. Кнопка «Обновить» светится при ЛЮБОМ изменении в
+ * сети: `comment.updated`/`created`/`deleted` и `reminders.changed` поднимают
+ * маркер панели, в том числе для записей, которых панель не загружала (в сети
+ * появилась новая задача периода). Эхо своей правки гасится ТОЛЬКО по токену
+ * операции (`comment_id:version` ответа на запись) либо по признаку «своя
+ * запись ещё в полёте»: сервер публикует событие ДО ответа, поэтому эхо может
+ * прийти раньше токена. СВОЯ правка строку серой не делает — снапшот текста
+ * перечитывается сразу (дух ошибки `45480290`).
  *
  * **Кэш субъектов и живые облачка** (замечания ТЗ 2026-11-17 C/E и 2026-11-18
  * 5). Снапшоты мыслей/публикаций строк и групп кэшируются на сессию панели;
@@ -161,6 +163,12 @@ export interface TaskListViewOptions {
    * серым (поведение карточки мысли).
    */
   inactiveRows?: 'off' | 'filter';
+  /**
+   * «Отменить» последнюю массовую команду (по умолчанию `true` — обе панели:
+   * в «Дневнике» кнопка в шапке группы, в карточке мысли — в шапке зоны).
+   * `false` — панель без отмены (например, встроенная в чужой экран).
+   */
+  undo?: boolean;
   /** Отрисовка снапшота текста строки (markdown + кликабельные ссылки). */
   renderText(host: HTMLElement, row: TaskPanelRow): void;
 }
@@ -262,7 +270,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   const { source, view, actions = {}, persistence } = options;
   const doneSection = view.doneSection ?? (source.kind === 'period' ? 'toggle' : 'collapsed');
   const withReminders = view.reminders === true;
-  const withUndo = source.kind === 'period';
+  const withUndo = view.undo !== false;
   const heightLimits = persistence?.height ?? TASK_LIST_HEIGHT;
 
   let disposed = false;
@@ -285,6 +293,15 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    * (совпадение версий) маркер панели поднимает (замечание 2 ТЗ 2026-11-18).
    */
   const ownOpTokens = new Set<string>();
+  /**
+   * Комментарии с НЕЗАВЕРШЁННОЙ своей записью. Сервер публикует событие слоя до
+   * ответа на запись, поэтому эхо приходит раньше, чем известен его токен
+   * `comment_id:version` (замечание 3 вердикта `e984a2db`): пока запись в
+   * полёте, событие этого комментария считается своим.
+   */
+  const pendingOwnWrites = new Set<string>();
+  /** Ревизии, пришедшие эхом раньше ответа: их токен уже не нужен. */
+  const echoedOwnVersions = new Set<string>();
   let remindersChanged = false;
   /** В сети изменилась запись/напоминание — «Обновить» светится. */
   let foreignChange = false;
@@ -452,6 +469,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       for (const row of allRows()) rememberVersion(row.comment_id, row.revision);
       remindersChanged = false;
       foreignChange = false;
+      echoedOwnVersions.clear();
       loadError = null;
       await resolveSubjects(seq);
     } catch (err) {
@@ -982,9 +1000,25 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     if (version > state.maxRevision) state.maxRevision = version;
   }
 
-  /** Запомнить токен СВОЕЙ операции: по нему гасится только её эхо. */
+  /**
+   * Запомнить токен СВОЕЙ операции: по нему гасится только её эхо. Эхо,
+   * пришедшее ДО ответа (событие публикуется сервером раньше ответа), уже
+   * погашено признаком «запись в полёте» — токен для него не нужен.
+   */
   function rememberOwnOp(commentId: string, version: number): void {
-    ownOpTokens.add(`${commentId}:${version}`);
+    const token = `${commentId}:${version}`;
+    if (echoedOwnVersions.delete(token)) return;
+    ownOpTokens.add(token);
+  }
+
+  /** Выполнить свою запись: её событие до ответа считается своим эхом. */
+  async function withOwnWrite<T>(commentId: string, run: () => Promise<T>): Promise<T> {
+    pendingOwnWrites.add(commentId);
+    try {
+      return await run();
+    } finally {
+      pendingOwnWrites.delete(commentId);
+    }
   }
 
   /** Применить новые ревизии источников после операции. */
@@ -1022,32 +1056,35 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   /**
    * Чекбокс: одиночный клик переключает строку источника (без режима правки).
    * Это КОМАНДА, а не правка текста, поэтому серая строка тоже переключается,
-   * а серой становится ТОЛЬКО эта строка (ошибка d318a647).
+   * а серой становится ТОЛЬКО эта строка (ошибка d318a647). Серая она была
+   * из-за собственной операции; теперь своя команда снапшот текста не
+   * устаревает (маркер `[ ]`/`[x]` в показываемый текст не входит), поэтому
+   * строка остаётся в списке свежей и повторный клик снимает отметку
+   * (замечание 3 вердикта `e984a2db`).
    */
   async function toggleTask(row: TaskPanelRow, done: boolean): Promise<void> {
     const networkId = requireNetworkId();
     const address = row.key;
     try {
-      const result = await etn.tasks.patch(networkId, {
-        ops: [
-          {
-            comment_id: row.commentId,
-            line_no: row.lineNo,
-            action: 'toggle',
-            done,
-            expected_revision: revisionOf(row),
-          },
-        ],
-      });
+      const result = await withOwnWrite(row.commentId, () =>
+        etn.tasks.patch(networkId, {
+          ops: [
+            {
+              comment_id: row.commentId,
+              line_no: row.lineNo,
+              action: 'toggle',
+              done,
+              expected_revision: revisionOf(row),
+            },
+          ],
+        }),
+      );
       const first = result.results[0];
       if (first !== undefined && !first.ok) {
         notice(taskErrorText(first.error), 'error');
         return;
       }
       applyRevisions(result.revisions);
-      // Локальная правка НЕ перечитывает список: строка серая, «Обновить»
-      // подсвечена — состав секций пересоберёт только явное нажатие (0e85b66e).
-      staleRows.add(address);
       toggledDone.set(address, done);
       renderView();
     } catch (err) {
@@ -1082,15 +1119,17 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return;
       }
       if (next === line) return;
-      const updated = await etn.comments.update(
-        networkId,
-        row.commentId,
-        { body_md: replaceTaskLine(comment.body_md, child.lineNo, next) ?? comment.body_md },
-        comment.version,
+      const updated = await withOwnWrite(row.commentId, () =>
+        etn.comments.update(
+          networkId,
+          row.commentId,
+          { body_md: replaceTaskLine(comment.body_md, child.lineNo, next) ?? comment.body_md },
+          comment.version,
+        ),
       );
       rememberVersion(row.commentId, updated.version);
       rememberOwnOp(row.commentId, updated.version);
-      await refreshCommentRows(row.commentId, updated.version);
+      await refreshAfterOwnOp(row.commentId, updated.version);
       renderView();
     } catch (err) {
       notice(t('tasks.errorEdit', [errText(err)]), 'error');
@@ -1151,17 +1190,14 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return false;
       }
       if (next === comment.body_md) return true;
-      const updated = await etn.comments.update(
-        networkId,
-        row.commentId,
-        { body_md: next },
-        comment.version,
+      const updated = await withOwnWrite(row.commentId, () =>
+        etn.comments.update(networkId, row.commentId, { body_md: next }, comment.version),
       );
       rememberVersion(row.commentId, updated.version);
       rememberOwnOp(row.commentId, updated.version);
       // Сохранённая строка перечитывается ТОЧЕЧНО: панель показывает новый
       // текст сразу и не сереет (ошибка 45480290).
-      await refreshCommentRows(row.commentId, updated.version);
+      await refreshAfterOwnOp(row.commentId, updated.version);
       renderView();
       return true;
     } catch (err) {
@@ -1185,15 +1221,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return false;
       }
       if (next === comment.body_md) return true;
-      const updated = await etn.comments.update(
-        networkId,
-        row.commentId,
-        { body_md: next },
-        comment.version,
+      const updated = await withOwnWrite(row.commentId, () =>
+        etn.comments.update(networkId, row.commentId, { body_md: next }, comment.version),
       );
       rememberVersion(row.commentId, updated.version);
       rememberOwnOp(row.commentId, updated.version);
-      await refreshCommentRows(row.commentId, updated.version);
+      await refreshAfterOwnOp(row.commentId, updated.version);
       renderView();
       return true;
     } catch (err) {
@@ -1208,9 +1241,9 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    * со строками обновляются вложенные строки записи (пункт F) — правка блока
    * могла изменить пункты чек-листа.
    */
-  async function refreshCommentRows(commentId: string, version: number): Promise<void> {
+  async function refreshCommentRows(commentId: string, version?: number): Promise<void> {
     const networkId = requireNetworkId();
-    rememberVersion(commentId, version);
+    if (version !== undefined) rememberVersion(commentId, version);
     const fresh: TaskDTO[] = [];
     const freshNested: TaskNestedLine[] = [];
     let cursor: string | undefined;
@@ -1299,6 +1332,20 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     for (const item of fresh) rememberVersion(item.comment_id, item.revision);
   }
 
+  /**
+   * Перечитать строки после СВОЕЙ операции. Сбой перечитывания запись не
+   * отменяет, но снапшот тогда честно устарел: запись помечается серой, и
+   * «Обновить» поднимется (маркер — следствие реальной потери актуальности, а не
+   * собственной правки).
+   */
+  async function refreshAfterOwnOp(commentId: string, version?: number): Promise<void> {
+    try {
+      await refreshCommentRows(commentId, version);
+    } catch {
+      staleComments.add(commentId);
+    }
+  }
+
   /** Абсолютная дата «перенести на…» → серверный сдвиг в днях. */
   function shiftToDate(anchor: string, target: string): TaskShift | null {
     const days = calendarDaysBetween(anchor, target);
@@ -1369,24 +1416,30 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       action = 'undate';
     }
     try {
-      const result = await etn.tasks.patch(networkId, {
-        ops: [
-          {
-            comment_id: row.commentId,
-            line_no: row.lineNo,
-            action,
-            ...payload,
-            expected_revision: revisionOf(row),
-          },
-        ],
-      });
+      const result = await withOwnWrite(row.commentId, () =>
+        etn.tasks.patch(networkId, {
+          ops: [
+            {
+              comment_id: row.commentId,
+              line_no: row.lineNo,
+              action,
+              ...payload,
+              expected_revision: revisionOf(row),
+            },
+          ],
+        }),
+      );
       const first = result.results[0];
       if (first !== undefined && !first.ok) {
         notice(taskErrorText(first.error), 'error');
         return;
       }
       applyRevisions(result.revisions);
-      staleRows.add(row.key);
+      // Команда переписала текст строки (даты) — это снапшот, а не внешняя
+      // правка: строки записи перечитываются сразу, без серости и «Обновить»
+      // (дух ошибки 45480290, замечание 3 вердикта e984a2db).
+      const revision = result.revisions.find((item) => item.id === row.commentId)?.version;
+      await refreshAfterOwnOp(row.commentId, revision);
       renderView();
     } catch (err) {
       notice(t('tasks.errorRowCommand', [errText(err)]), 'error');
@@ -1444,6 +1497,9 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       command === 'cancel-all',
     );
     if (!confirmed || disposed) return;
+    // Массовая команда — тоже СВОЯ запись: пока она в полёте, её события не
+    // считаются внешним изменением (сервер публикует их раньше ответа).
+    for (const id of plan.commentIds) pendingOwnWrites.add(id);
     try {
       // Прежние тексты — для отмены команды (undo): правки идут в записях-
       // источниках, поэтому откат — восстановление `body_md` с новой ревизией.
@@ -1462,6 +1518,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         filter,
         ...(effectiveShift !== undefined ? effectiveShift : {}),
       });
+      applyRevisions(result.revisions);
       const failed = result.results.filter((item) => !item.ok);
       if (failed.length > 0) {
         notice(t('tasks.bulkPartial', [failed.length]), 'warning');
@@ -1471,6 +1528,8 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     } catch (err) {
       undoSnapshot = null;
       notice(t('tasks.bulkFailed', [errText(err)]), 'error');
+    } finally {
+      for (const id of plan.commentIds) pendingOwnWrites.delete(id);
     }
   }
 
@@ -1707,11 +1766,20 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       const data = event.data as { id?: string; version?: unknown };
       const version = typeof data.version === 'number' ? data.version : null;
       const id = data.id;
-      // Эхо СВОЕЙ операции гасится только по её токену: строка уже помечена
-      // серой точечно, а запись целиком красить нельзя (ошибка d318a647).
-      // Сравнение с сохранённой версией глушило чужие события (замечание 2).
-      if (id !== undefined && version !== null && ownOpTokens.delete(`${id}:${version}`)) {
-        return;
+      if (id !== undefined && version !== null) {
+        // Сервер публикует событие ДО ответа на запись: пока своя запись в
+        // полёте, её эхо узнаётся по признаку записи, а не по токену версии.
+        if (pendingOwnWrites.has(id)) {
+          echoedOwnVersions.add(`${id}:${version}`);
+          return;
+        }
+        // Эхо СВОЕЙ операции гасится только по её токену: запись целиком
+        // красить нельзя — соседние строки остаются рабочими (ошибка d318a647).
+        // Сравнение с сохранённой версией глушило чужие события (замечание 2).
+        if (ownOpTokens.delete(`${id}:${version}`)) return;
+        // Ревизия не новее загруженной: изменение уже отражено снапшотом
+        // (позднее эхо своей операции после перечитывания).
+        if (version <= (commentVersions.get(id) ?? 0)) return;
       }
       // ЛЮБОЕ чужое изменение записи поднимает маркер панели — в том числе у
       // комментария, которого панель не загружала (новая задача в периоде).
