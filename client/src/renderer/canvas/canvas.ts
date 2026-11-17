@@ -2266,8 +2266,10 @@ function renderZone(dir: 'parents' | 'siblings' | 'children', entries: ZoneEntry
   // измеренные высоты: сброс к оценкам в каждом полном рендере заново двигал
   // `.zone-spacer`, переключал полосу прокрутки и — через content-box — число
   // колонок; вместе с зонным `ResizeObserver` это держало самоподдерживающийся
-  // цикл перестроек (ошибка dc723634). Неверны высоты становятся только при
-  // смене состава: строки переставляются вместе с колонками.
+  // цикл перестроек (ошибка dc723634). Смена СОСТАВА делает высоты неверными
+  // здесь; смена ГЕОМЕТРИИ (масштаб, ширина облачка, число колонок) — тоже, но
+  // видна и без полного рендера, поэтому проверяется на старте серии
+  // ({@link rowHeightsGeometry}).
   const sameEntries =
     previous !== undefined &&
     previous.length === entries.length &&
@@ -2365,6 +2367,22 @@ function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
 const rowHeights = new Map<'parents' | 'siblings' | 'children', number[]>();
 
 /**
+ * Геометрия, для которой измерены высоты строк зоны: масштаб канвы, ширина
+ * облачка и число колонок. Первые две меняют размер и перенос заголовка, третья
+ * — состав строки; при любом изменении измеренные высоты устаревают
+ * (замечание проверки 835815ac). Без этого после смены `canvasZoom` невидимые
+ * строки оставались с высотами прежнего масштаба: `.zone-spacer` был занижен, и
+ * первая прокрутка «досчитывала» строки прыжком.
+ */
+const rowHeightsGeometry = new Map<'parents' | 'siblings' | 'children', string>();
+
+/** Текущий ключ геометрии зоны — входы, от которых зависят высоты строк. */
+function zoneMeasuredGeometry(dir: 'parents' | 'siblings' | 'children'): string {
+  const cols = zoneGridOf(dir)?.cols ?? 0;
+  return `${store.state.canvasZoom}|${store.state.cloudWidth}|${cols}`;
+}
+
+/**
  * Подпись окна, построенного ПРЕДЫДУЩИМ проходом текущей серии (id видимых
  * мыслей по порядку). Проход перестраивает облачка только при смене состава
  * окна: измерение высот само по себе DOM не трогает (мерцание дефекта
@@ -2385,15 +2403,6 @@ const zoneBuiltIds = new Map<'parents' | 'siblings' | 'children', string>();
 export const ZONE_MEASURE_PASS_LIMIT = 5;
 
 /**
- * Порог, ниже которого разница измеренных высот строки не считается изменением
- * раскладки (ошибка dc723634). `offsetHeight` округляется до целого, но высота
- * приходит и из дробных источников (масштаб канвы, тестовый шим): дрожание
- * меньше пикселя — не повод запускать ещё один проход, иначе серия «не
- * сходится» на неизменной геометрии и держит контур перестроек живым.
- */
-export const ZONE_MEASURE_EPSILON_PX = 1;
-
-/**
  * Renders the visible window of one zone (virtualized grid, auto rows).
  *
  * Один вызов — до {@link ZONE_MEASURE_PASS_LIMIT} ИТЕРАТИВНЫХ проходов: проход
@@ -2412,6 +2421,16 @@ export const ZONE_MEASURE_EPSILON_PX = 1;
  */
 function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   zoneLayoutRunCount += 1;
+  // Смена геометрии зоны (масштаб/ширина облачка/число колонок) устаревает
+  // измеренные высоты, даже когда состав строк тот же. Проверка на старте серии
+  // покрывает оба входа: полный рендер и ресайз зоны (только RO), — иначе
+  // spacer остаётся заниженным, а первая прокрутка «досчитывает» строки
+  // прыжком (замечание проверки 835815ac).
+  const geometry = zoneMeasuredGeometry(dir);
+  if (rowHeightsGeometry.get(dir) !== geometry) {
+    rowHeights.delete(dir);
+    rowHeightsGeometry.set(dir, geometry);
+  }
   // Переиспользование облачков действует ТОЛЬКО внутри серии: между сериями
   // DOM строится заново. За серию проходы меняют лишь измеренные высоты, а
   // между сериями мог измениться любой вход облачка (инвалидация ref, бейдж
@@ -2697,13 +2716,13 @@ function renderZonePass(dir: 'parents' | 'siblings' | 'children'): ZonePassResul
     if (clouds === undefined) continue;
     let h = estimate;
     for (const cloud of clouds) h = Math.max(h, cloud.offsetHeight);
+    // Высота облачка целочисленная (`offsetHeight`), `Math.round` — страховка
+    // от дробных источников (масштаб канвы, тестовый шим): любое отличие от
+    // прежнего значения требует ещё одного прохода.
     const next = Math.round(h);
-    const previous = heights[r] ?? estimate;
-    if (next === previous) continue;
+    if ((heights[r] ?? estimate) === next) continue;
     heights[r] = next;
-    // Дрожание меньше ZONE_MEASURE_EPSILON_PX раскладкой не считается: серия
-    // обязана сходиться на неизменной геометрии (ошибка dc723634).
-    if (Math.abs(next - previous) >= ZONE_MEASURE_EPSILON_PX) measured = true;
+    measured = true;
   }
   rowHeights.set(dir, heights);
   // Ключ состояния: геометрия + окно + измеренные высоты строк. Повтор в одной

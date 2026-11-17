@@ -35,7 +35,11 @@
  *      высоты содержимого) НЕ перезапускает серию раскладки из кадра в кадр:
  *      за 20 асинхронных тиков число серий и входов в `render()` остаётся
  *      единицами, а проходы измерения не пересобирают облачка (DOM строится
- *      один раз на состав окна) — иначе это и есть мерцание дефекта dc723634.
+ *      один раз на состав окна) — иначе это и есть мерцание дефекта dc723634;
+ *   7. измеренные высоты строк устаревают и при смене ГЕОМЕТРИИ (масштаб канвы,
+ *      ширина облачка, число колонок), а не только состава строк: после смены
+ *      масштаба spacer равен сумме измеренных высот, а не досчитывается первой
+ *      прокруткой (замечание проверки 835815ac).
  *
  * Тест монтирует РЕАЛЬНЫЙ `mountCanvas` в DOM-шим: холст с одним родителем в
  * верхней зоне (одно облачко на проход) и управляемой высотой облачка.
@@ -53,6 +57,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { FocusNeighbor, FocusResponse, Thought } from '@etn/shared';
 
+import { CLOUD_TITLE_LINES_MIN, cloudGeom, cloudHeight } from '../src/renderer/lib/pure.js';
 import { store } from '../src/renderer/state.js';
 import { ShimElement } from './dom-shim.js';
 
@@ -107,10 +112,14 @@ let heightReads = 0;
  *  - `boundary` — высота зависит от ширины зоны (200 px в широкой, 100 px в
  *    узкой): пограничная строка, у которой высота и ширина зоны зависят друг от
  *    друга (триггер пользователя: «добавил мысль рядом — проблема исчезла»);
+ *  - `estimate` — облачко рендерится ровно в оценочную высоту строки
+ *    (`cloudHeight`, минимальная строка) при текущем масштабе и ширине: измерение
+ *    не расходится с оценкой, поэтому spacer обязан равняться сумме оценок;
  *  - `stack-overflow` — бросает `RangeError`, как переполнение стека;
  *  - `boom` — бросает обычную ошибку (проверка лимита повторов).
  */
-let heightMode: 'stable' | 'oscillate' | 'boundary' | 'stack-overflow' | 'boom' = 'stable';
+let heightMode: 'stable' | 'oscillate' | 'boundary' | 'estimate' | 'stack-overflow' | 'boom' =
+  'stable';
 
 function thought(id: string, title: string): Thought {
   return {
@@ -229,6 +238,11 @@ function installGlobals(): void {
       // замыкает контур на собственные измерения (ошибка dc723634).
       if (heightMode === 'boundary') {
         return zoneWidthNow >= WIDE_ZONE_MIN ? BOUNDARY_TALL : BOUNDARY_SHORT;
+      }
+      // Облачко ровно в оценочную высоту строки: масштаб меняет и оценку, и
+      // измерение одинаково (вход геометрии для rowHeights).
+      if (heightMode === 'estimate') {
+        return cloudHeight(store.state.cloudWidth, store.state.canvasZoom, CLOUD_TITLE_LINES_MIN);
       }
       // Значения заведомо не совпадают ни с оценкой невидимой строки, ни друг
       // с другом: каждый проход видит «новую» высоту — расклад не сходится.
@@ -577,12 +591,6 @@ describe('высоты строк зоны не уводят раскладку 
       canvas.ZONE_MEASURE_PASS_LIMIT <= HARD_PASS_CAP,
       `лимит проходов обязан остаться жёстким: ${canvas.ZONE_MEASURE_PASS_LIMIT} > ${HARD_PASS_CAP}`,
     );
-    // Эпсилон — только для субпиксельного дрожания: пиксельный порог скрыл бы
-    // настоящую смену высоты строки (раскладка разошлась бы с DOM).
-    assert.ok(
-      canvas.ZONE_MEASURE_EPSILON_PX <= 1,
-      `порог высоты обязан остаться субпиксельным: ${canvas.ZONE_MEASURE_EPSILON_PX}`,
-    );
     const limit = HARD_PASS_CAP * clouds * renders;
     assert.ok(
       reads <= limit,
@@ -854,6 +862,70 @@ describe('осцилляция раскладки зоны: устойчивая
       dispose();
     } finally {
       restoreObserver();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Устаревание высот строк при смене геометрии (замечание проверки 835815ac)
+// ---------------------------------------------------------------------------
+
+describe('высоты строк зоны устаревают при смене геометрии (ошибка dc723634)', () => {
+  it('смена масштаба пересчитывает высоты строк того же состава', async () => {
+    const PARENTS = 240;
+    // Высота облачка равна оценке строки: тогда верная высота spacer'а — сумма
+    // оценок, и любое расхождение сразу выдаёт устаревшие измерения.
+    heightMode = 'estimate';
+    const host = makeHost();
+    const dispose = canvas.mountCanvas(host as unknown as HTMLElement);
+    sizeDom(host);
+    try {
+      const zone = host.querySelector('.zone-parents');
+      assert.ok(zone !== null, 'верхняя зона смонтирована');
+      store.update({ networkId: NETWORK_ID, focus: focusResponseWithParents(PARENTS) });
+      await settle();
+
+      /** Верная высота spacer'а при текущем масштабе (все строки = оценка). */
+      const expectedSpacer = (): string => {
+        const geom = cloudGeom(
+          store.state.cloudWidth,
+          store.state.cloudGap,
+          store.state.canvasZoom,
+        );
+        const estimate = cloudHeight(
+          store.state.cloudWidth,
+          store.state.canvasZoom,
+          CLOUD_TITLE_LINES_MIN,
+        );
+        // `sizeDom` задаёт зоне clientWidth 800 (вместе с отступами зоны).
+        const avail = Math.max(80, ZONE_BASE_WIDTH - 2 * ZONE_PADDING);
+        const cols = Math.max(1, Math.floor(avail / (geom.width + geom.gap)));
+        const rows = Math.ceil(PARENTS / cols);
+        return `${rows * (estimate + geom.gap)}px`;
+      };
+      const spacer = zone!.querySelector('.zone-spacer');
+      assert.ok(spacer !== null, 'spacer зоны существует');
+      assert.equal(spacer!.style.height, expectedSpacer(), 'масштаб 1: высоты строк измерены');
+
+      // Тот же состав строк, ДРУГОЙ масштаб канвы: меняются высота облачка,
+      // перенос заголовка и число колонок — измерения прежнего масштаба
+      // устарели целиком, а не только у видимых строк.
+      store.update({ canvasZoom: 2 });
+      await settle();
+      assert.equal(
+        spacer!.style.height,
+        expectedSpacer(),
+        'масштаб 2: spacer обязан равняться сумме высот нового масштаба, а не остатку прежних',
+      );
+
+      // Прокрутка ничего не «досчитывает»: высоты уже верны.
+      zone!.scrollTop = 400;
+      zone!.dispatchEvent({ type: 'scroll' });
+      await settle();
+      assert.equal(spacer!.style.height, expectedSpacer(), 'прокрутка не изменила высоту spacer');
+    } finally {
+      heightMode = 'stable';
+      dispose();
     }
   });
 });
