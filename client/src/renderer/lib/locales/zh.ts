@@ -913,6 +913,8 @@ export const zh = {
   'stats.row.thoughts': '想法',
   'stats.row.links': '链接',
   'stats.row.publications': '出版物',
+  'stats.row.tasks': '任务',
+  'stats.row.reminders': '提醒',
   'stats.row.shelves': '书架',
   'stats.row.layers': '层',
   'stats.attachments': '附件：%1，文件 %2，总大小 %3',

@@ -1742,6 +1742,10 @@ export const en = {
   'stats.row.links': 'Links',
   /** Строка «Публикации». */
   'stats.row.publications': 'Publications',
+  /** Строка «Задачи» (0.16.1). */
+  'stats.row.tasks': 'Tasks',
+  /** Строка «Напоминания» (0.16.1). */
+  'stats.row.reminders': 'Reminders',
   /** Строка «Полки». */
   'stats.row.shelves': 'Shelves',
   /** Строка «Слои». */

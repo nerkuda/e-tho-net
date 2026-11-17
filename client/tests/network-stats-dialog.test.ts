@@ -111,6 +111,8 @@ describe('модель строк статистики (c69b078d)', () => {
         'Мысли',
         'Связи',
         'Публикации',
+        'Задачи',
+        'Напоминания',
         'Полки',
         'Слои',
       ],
@@ -124,15 +126,17 @@ describe('модель строк статистики (c69b078d)', () => {
         'thoughts',
         'links',
         'publications',
+        'tasks',
+        'reminders',
         'shelves',
         'layers',
       ],
     );
   });
 
-  it('разбивка заполнена только у мыслей, связей и публикаций; у онтологии, полок и слоёв — пусто', () => {
+  it('разбивка заполнена только у мыслей, связей, публикаций и задач; у напоминаний, онтологии, полок и слоёв — пусто', () => {
     const byKey = new Map(buildStatisticsRows(FIXTURE).map((r) => [r.key, r]));
-    for (const key of ['thought_types', 'properties', 'shelves', 'layers']) {
+    for (const key of ['thought_types', 'properties', 'reminders', 'shelves', 'layers']) {
       const row = byKey.get(key)!;
       assert.equal(row.active, null, `${key}: нет разбивки`);
       assert.equal(row.inactive, null);
@@ -166,6 +170,34 @@ describe('модель строк статистики (c69b078d)', () => {
       key: 'shelves',
       label: 'Полки',
       total: 3,
+      active: null,
+      inactive: null,
+      trashed: null,
+    });
+  });
+
+  it('строки «Задачи» и «Напоминания» показывают поля DTO (ошибка 7ccde558)', () => {
+    // Данные нарочно расходятся с FIXTURE: у задач в колонках актуальности —
+    // открытые/выполненные, а не subjects_active/subjects_inactive (для разбивки
+    // по субъектам в пятиколоночном формате нет колонки).
+    const stats: NetworkStats = {
+      ...FIXTURE,
+      tasks: { total: 10, open: 7, done: 3, subjects_active: 9, subjects_inactive: 1 },
+      reminders: 4,
+    };
+    const byKey = new Map(buildStatisticsRows(stats).map((r) => [r.key, r]));
+    assert.deepEqual(byKey.get('tasks'), {
+      key: 'tasks',
+      label: 'Задачи',
+      total: 10,
+      active: 7,
+      inactive: 3,
+      trashed: null,
+    });
+    assert.deepEqual(byKey.get('reminders'), {
+      key: 'reminders',
+      label: 'Напоминания',
+      total: 4,
       active: null,
       inactive: null,
       trashed: null,
