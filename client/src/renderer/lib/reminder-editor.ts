@@ -11,7 +11,8 @@
  *   • однократно — дата;
  *   • каждый день — «начиная с <дата> каждый <n> день» + «пропускать выходные»;
  *   • каждую неделю — «каждую <n> неделю» + дни недели (порядок от первого дня
- *     недели сети, требование 1b77decd);
+ *     недели сети, требование 1b77decd; каждый день — тумблер вида `glyph` с
+ *     видимой заливкой состояния во всех темах, ошибка cbac920b);
  *   • каждое число месяца — «каждый <n> месяц» + число (1..30 | последний день);
  *   • каждый месяц в день недели — «каждый <n> месяц» + порядок (1..5 | последний)
  *     + день недели;
@@ -300,6 +301,59 @@ export function previewOccurrences(draft: ReminderDraft, nowMs: number): string[
   }
 }
 
+/**
+ * Новый набор отмеченных дней недели после клика по флажку: включение
+ * добавляет день и держит порядок по ISO (1 = пн … 7 = вс), выключение —
+ * убирает. Чистый редьюсер: и редактор, и тест работают одним кодом.
+ */
+export function toggleWeekdayDays(
+  days: readonly number[],
+  day: number,
+  pressed: boolean,
+): number[] {
+  return pressed
+    ? [...new Set([...days, day])].sort((a, b) => a - b)
+    : days.filter((value) => value !== day);
+}
+
+/** Опции ряда дней недели команды «каждую неделю». */
+export interface WeekdayToggleRowOptions {
+  /** Отмеченные дни (ISO 1..7). */
+  days: readonly number[];
+  /** Первый день недели сети (ISO 1..7) — порядок флажков (требование 1b77decd). */
+  startDay: number;
+  /** Клик по дню: новое состояние флажка. */
+  onToggle: (day: number, pressed: boolean) => void;
+}
+
+/**
+ * Ряд дней недели — семь тумблеров-кнопок `lib/ui` с видимым состоянием.
+ *
+ * Режим `glyph` — единственный вид тумблера с кожей (граница, фон, заливка
+ * нажатого): базовый `.ui-toggle` пуст, а глобальный сброс `button` в
+ * `tokens.css` снимает фон/границы/отступы. Без режима семь дней выглядели
+ * слитной строкой «пн вт ср чт пт сб вс» без отметок во всех темах (ошибка
+ * cbac920b). Заливка нажатого — `--accent-soft`/`--accent` из темы, поэтому
+ * состояние видно в каждой из шести тем в обоих режимах.
+ */
+export function weekdayToggleRow(options: WeekdayToggleRowOptions): HTMLDivElement {
+  const row = div('reminder-weekdays');
+  for (let index = 0; index < 7; index += 1) {
+    const day = ((options.startDay - 1 + index) % 7) + 1;
+    row.append(
+      toggleButton({
+        label: weekdayLabel(day),
+        title: weekdayLabel(day, 'long'),
+        pressed: options.days.includes(day),
+        variant: 'glyph',
+        extraClass: 'reminder-weekday',
+        onChange: (pressed) => options.onToggle(day, pressed),
+      }).root,
+    );
+  }
+  return row;
+}
+
 /** Начальный черновик нового напоминания (дефолты ТЗ 2026-11-15). */
 export function emptyDraft(): ReminderDraft {
   const now = new Date();
@@ -515,25 +569,19 @@ export async function openReminderEditor(options: ReminderEditorOptions): Promis
         case 'weekdays': {
           params.append(intervalRow('reminder.everyWeeks'));
           // Порядок флажков — с первого дня недели сети (требование 1b77decd).
-          const start = firstDayOfWeek();
-          const row = div('reminder-weekdays');
-          for (let index = 0; index < 7; index += 1) {
-            const day = ((start - 1 + index) % 7) + 1;
-            const toggle = toggleButton({
-              label: weekdayLabel(day),
-              title: weekdayLabel(day, 'long'),
-              pressed: draft.days.includes(day),
-              extraClass: 'reminder-weekday',
-              onChange: (pressed) => {
-                draft.days = pressed
-                  ? [...new Set([...draft.days, day])].sort((a, b) => a - b)
-                  : draft.days.filter((value) => value !== day);
-                renderPreview();
-              },
-            });
-            row.append(toggle.root);
-          }
-          params.append(fieldRow({ label: t('reminder.weekdayField'), control: row }));
+          params.append(
+            fieldRow({
+              label: t('reminder.weekdayField'),
+              control: weekdayToggleRow({
+                days: draft.days,
+                startDay: firstDayOfWeek(),
+                onToggle: (day, pressed) => {
+                  draft.days = toggleWeekdayDays(draft.days, day, pressed);
+                  renderPreview();
+                },
+              }),
+            }),
+          );
           return;
         }
         case 'day_of_month': {
@@ -787,6 +835,8 @@ export const reminderEditorInternals = {
   commandList,
   previewTitleText,
   previewOccurrences,
+  weekdayToggleRow,
+  toggleWeekdayDays,
   localInstant,
   isoWeekdayOf,
   daysInMonthOf,
