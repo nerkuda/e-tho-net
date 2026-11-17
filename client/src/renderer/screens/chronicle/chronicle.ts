@@ -873,6 +873,12 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   // Слайдер высоты панели (пункт B ТЗ 2026-11-17): вертикальный сплиттер
   // между панелью и лентой, доступен только у развёрнутой панели.
   const tasksSplitter = splitterElement('chron-tasks-splitter');
+  // Доступное имя грифа ставится СРАЗУ при создании: до первого взаимодействия
+  // экранный диктор и подсказка обязаны называть элемент, а `plan()` вызывается
+  // только началом драга/клавиатурной сессии (замечание проверки 2026-11-17).
+  // В `plan()` имя лишь обновляется — на случай смены языка.
+  tasksSplitter.title = t('tasks.panelHeightHint');
+  tasksSplitter.setAttribute('aria-label', t('tasks.panelHeightAria'));
   wireSplitter(tasksSplitter, {
     stateClass: 'resizing',
     stateHost: () => main,

@@ -44,7 +44,7 @@ import type { TaskMassFilter } from '@etn/shared';
 
 import { div, el, span } from '../dom.js';
 import { shiftInstant } from '../dates.js';
-import { t } from '../i18n.js';
+import { t, tp } from '../i18n.js';
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
 import {
   MENU_SEPARATOR,
@@ -1314,7 +1314,8 @@ export function mountTaskPanel(
     }
     if (reminderGroup !== null) {
       reminderGroup.root.hidden = next.reminderSections.length === 0 && next.reminderCount === 0;
-      reminderGroup.counters.textContent = t('tasks.reminderCount', [next.reminderCount]);
+      // Счётчик вхождений склоняется: «1 вхождение / 3 вхождения / 5 вхождений».
+      reminderGroup.counters.textContent = tp('plurals.reminderOccurrence', next.reminderCount);
     }
 
     renderSections(taskGroup?.sections ?? flatHost, next.taskSections, 'task');
@@ -1324,12 +1325,31 @@ export function mountTaskPanel(
     nav?.refresh();
   }
 
-  /** Отрисовать секции одного списка (задачи или напоминания). */
+  /**
+   * Отрисовать секции одного списка (задачи или напоминания).
+   *
+   * Форма секции — часть identity её узла: плоский список и список с
+   * подгруппами несовместимы по внутренней структуре (заголовок-счётчик,
+   * реестры строк, обработчики). `reconcileKeyed` обновляет узел по ключу и
+   * форму не меняет, поэтому узел другой формы снимается перед сверкой — она
+   * строит его заново. Без этого при смене периода «одна дата ⇄ несколько»
+   * секции «Просрочено»/«Сегодня» оставались плоскими до перезагрузки
+   * (блокер проверки 2026-11-17).
+   */
   function renderSections(
     hostEl: HTMLElement,
     sections: ReadonlyArray<TaskPanelSectionView | ReminderPanelSectionView>,
     kind: 'task' | 'reminder',
   ): void {
+    const wanted = new Map(sections.map((section) => [section.key, section]));
+    for (const node of Array.from(hostEl.children) as HTMLElement[]) {
+      const section = wanted.get(node.getAttribute('data-section') ?? '');
+      // Секции, которых нет в снимке, удалит сама сверка (у них другой путь).
+      if (section === undefined) continue;
+      if (node.classList.contains('ui-task-flat') !== (section.flat === true)) {
+        hostEl.removeChild(node);
+      }
+    }
     reconcileKeyed(
       hostEl,
       sections.filter((section) => sectionVisible(section)),

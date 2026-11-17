@@ -261,7 +261,9 @@ describe('панель задач: секции, строки и счётчик�
   it('счётчики группы и количество строк в подгруппе на месте', () => {
     const { host, render, destroy } = mount([taskRow(), taskRow({ key: 'c1:1', lineNo: 1 })]);
     const counters = host.querySelector('.ui-task-group-counters');
-    assert.equal(counters?.textContent, t('tasks.counters', [2, 0]));
+    // Формат заголовка группы — DoD E: «Задачи (n открыто · n выполнено)»;
+    // скобки — часть строки словаря (замечание проверки 2026-11-17).
+    assert.equal(counters?.textContent, '(2 открыто · 0 выполнено)');
     render(panelView([taskRow()]));
     assert.equal(host.querySelector('.ui-task-subgroup-count')?.textContent, '1');
     destroy();
@@ -1090,6 +1092,27 @@ describe('панель задач: напоминания плоским спи�
       1,
       'просроченное вхождение помечено',
     );
+    destroy();
+  });
+
+  it('счётчик вхождений склоняется: «3 вхождения», а не «3 вхождений»', () => {
+    // Замечание проверки 2026-11-17: счётчик был неграмотным («3 вхождений»).
+    // Плюральный ключ `plurals.reminderOccurrence` даёт форму по числу.
+    const rows = [
+      reminderRow('r1', '2026-11-17T09:00:00.000Z'),
+      reminderRow('r2', '2026-11-17T10:00:00.000Z'),
+      reminderRow('r3', '2026-11-17T11:00:00.000Z'),
+    ];
+    const { host, render, destroy } = mount([]);
+    render(
+      panelView([], {
+        reminderCount: rows.length,
+        reminderSections: [{ key: 'today', title: 'Сегодня', flat: true, subgroups: [], rows }],
+      }),
+    );
+    const group = host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
+    const counters = group.querySelector('.ui-task-group-counters');
+    assert.equal(counters?.textContent, '3 вхождения', 'форма для 3 — «вхождения»');
     destroy();
   });
 });

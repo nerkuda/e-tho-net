@@ -1354,10 +1354,11 @@ export const en = {
   'tasks.moveAllThought': 'Move all open of this thought to…',
   /** Title of the period reminders group. */
   'tasks.remindersGroupTitle': 'Reminders of the period',
-  /** Task group counters (open, done). */
-  'tasks.counters': '%1 open · %2 done',
-  /** Reminder occurrences counter. */
-  'tasks.reminderCount': '%1 occurrences',
+  /**
+   * Task group counters (open, done). Brackets are part of the string: the group
+   * header reads as “Tasks (n open · n done)” (spec E, review note).
+   */
+  'tasks.counters': '(%1 open · %2 done)',
   /** Show completed tasks toggle. */
   'tasks.showDone': 'Show completed',
   /** Bulk commands for the whole period. */
@@ -4204,5 +4205,10 @@ export const enPlurals = {
   'plurals.orphanedChildren': {
     one: 'Warning: %1 child will be left without parents.',
     other: 'Warning: %1 children will be left without parents.',
+  },
+  /** Reminder occurrences counter of the period reminders group. */
+  'plurals.reminderOccurrence': {
+    one: '%1 occurrence',
+    other: '%1 occurrences',
   },
 } satisfies PluralCatalog;

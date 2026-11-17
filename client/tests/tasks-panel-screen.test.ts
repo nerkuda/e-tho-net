@@ -151,6 +151,8 @@ interface Harness {
   body(): ShimElement;
   /** Дескриптор панели для экрана (высота, свёрнутость). */
   handle: TasksPanelHandle;
+  /** Сменить период ленты и перечитать панель (как «Применить» в фильтре). */
+  setPeriod(next: { from: string; to: string }): Promise<void>;
   destroy(): void;
 }
 
@@ -326,7 +328,7 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
   const { mountTasksPanel } = await import('../src/renderer/screens/chronicle/tasks-panel.js');
 
   const host = new ShimElement('div');
-  const period = fixture.period ?? PERIOD;
+  let period = fixture.period ?? PERIOD;
   const handle = mountTasksPanel(host as unknown as HTMLElement, {
     getPeriod: () => period,
     openDay: (day) => calls.days.push(day),
@@ -402,6 +404,11 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
       // Одиночный клик выбирает день, двойной — подтверждает выбор (609deba0).
       cell.emit('click', { detail: 1 });
       cell.emit('click', { detail: 2 });
+    },
+    async setPeriod(next: { from: string; to: string }): Promise<void> {
+      period = next;
+      handle.refresh();
+      await settle();
     },
     destroy(): void {
       handle.destroy();
@@ -895,6 +902,23 @@ function tomorrowStartIso(): string {
   return date.toISOString();
 }
 
+/** Локальный день со сдвигом от сегодняшнего (`YYYY-MM-DD`). */
+function localDayShifted(days: number): string {
+  const date = new Date(`${todayLocal()}T09:00:00`);
+  date.setDate(date.getDate() + days);
+  return todayLocal(date);
+}
+
+/** Вчерашние сутки — вхождение в сквозную секцию «Просрочено». */
+function yesterdayLocalOfScreen(): string {
+  return localDayShifted(-1);
+}
+
+/** Завтрашние сутки — второй день периода для проверки формы секций. */
+function tomorrowLocalOfScreen(): string {
+  return localDayShifted(1);
+}
+
 // ---------------------------------------------------------------------------
 // 0.16.1, замечания пользователя 2026-11-17 (задача 01998381): пункты B, C, D, F.
 // ---------------------------------------------------------------------------
@@ -1035,6 +1059,112 @@ describe('панель задач: высота панели в ui_state (пун
     try {
       assert.deepEqual(h.calls.collapsed, [true], 'стартовая свёрнутость сообщена экрану');
       assert.equal(h.handle.panelCollapsed(), true);
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('сохранённая высота ниже минимума поднимается до нижней границы', async () => {
+    // Нижняя граница — часть контракта слайдера (пункт B ТЗ 2026-11-17):
+    // панель ниже 120px нечитаема. Число в ожидании задано явно: тест обязан
+    // краснеть, если границу в коде сдвинут (мутационная проба TASKS_PANEL_H_MIN).
+    const h = await setup({ tasks: [taskRow()], uiState: JSON.stringify({ height: 50 }) });
+    try {
+      const root = h.host.querySelector('.ui-task-panel') as unknown as ShimElement;
+      assert.equal(
+        root.style.getPropertyValue('--task-panel-height'),
+        '120px',
+        'высота из настроек ограничена снизу',
+      );
+      assert.equal(h.handle.panelHeight(), 120);
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Доработка по вердикту проверки 2026-11-17 (блокер): форма секций.
+// ---------------------------------------------------------------------------
+
+describe('панель задач: форма секций при смене периода (блокер проверки 2026-11-17)', () => {
+  it('смена «одна дата → несколько» пересобирает плоские секции в подгруппы', async () => {
+    // Секции напоминаний плоские только при ОДНОЙ выбранной дате (пункт D ТЗ).
+    // При расширении периода форма меняется: узел секции обязан пересобраться,
+    // иначе «Просрочено»/«Сегодня» остаются плоскими до перезагрузки (блокер).
+    const today = todayLocal();
+    const tomorrow = tomorrowLocalOfScreen();
+    const yesterday = yesterdayLocalOfScreen();
+    const h = await setup({
+      period: { from: today, to: today },
+      reminders: [
+        reminder({
+          id: 'r-yesterday',
+          occurrences: [{ occurrence_at: `${yesterday}T09:00:00`, status: 'active', until: null }],
+        }),
+        reminder({
+          id: 'r-today',
+          occurrences: [{ occurrence_at: `${today}T09:00:00`, status: 'active', until: null }],
+        }),
+        reminder({
+          id: 'r-tomorrow',
+          occurrences: [{ occurrence_at: `${tomorrow}T09:00:00`, status: 'active', until: null }],
+        }),
+      ],
+    });
+    try {
+      const group = h.host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
+      assert.ok(group, 'группа напоминаний на панели');
+      assert.ok(
+        group.findAll('ui-task-flat').length >= 1,
+        'при одной дате секции плоские (подгрупп нет)',
+      );
+      assert.equal(group.findAll('ui-task-subgroup').length, 0);
+
+      await h.setPeriod({ from: today, to: tomorrow });
+
+      assert.equal(
+        group.findAll('ui-task-flat').length,
+        0,
+        'плоских секций не осталось — форма пересобрана',
+      );
+      assert.ok(
+        group.findAll('ui-task-subgroup').length >= 2,
+        'секции «Просрочено»/«Сегодня» стали группами, а не остались плоскими',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('обратная смена «несколько дат → одна» снова собирает плоские секции', async () => {
+    const today = todayLocal();
+    const yesterday = yesterdayLocalOfScreen();
+    const h = await setup({
+      period: { from: today, to: tomorrowLocalOfScreen() },
+      reminders: [
+        reminder({
+          id: 'r-yesterday',
+          occurrences: [{ occurrence_at: `${yesterday}T09:00:00`, status: 'active', until: null }],
+        }),
+        reminder({
+          id: 'r-today',
+          occurrences: [{ occurrence_at: `${today}T09:00:00`, status: 'active', until: null }],
+        }),
+      ],
+    });
+    try {
+      const group = h.host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
+      assert.ok(group.findAll('ui-task-subgroup').length >= 1, 'до смены периода — подгруппы');
+
+      await h.setPeriod({ from: today, to: today });
+
+      assert.equal(
+        group.findAll('ui-task-subgroup').length,
+        0,
+        'секции снова плоские — узлы пересобраны',
+      );
+      assert.ok(group.findAll('ui-task-flat').length >= 1);
     } finally {
       h.destroy();
     }

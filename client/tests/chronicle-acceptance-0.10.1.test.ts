@@ -52,6 +52,17 @@ describe('приёмка «Дневника» 0.10.1: компоновка (пу
     assert.match(CHRONICLE, /main\.append\(addBar, tasksHost, tasksSplitter, feedWrap\)/);
     assert.match(CHRONICLE, /diary\.addRecord/);
   });
+
+  it('гриф высоты панели назван сразу при создании, а не только при драге', () => {
+    // Доступное имя (title + aria-label) обязано стоять ДО первого
+    // взаимодействия: `plan()` зовётся только началом драга, поэтому имя,
+    // выставленное лишь там, не читается экранным диктором в покое
+    // (замечание проверки 2026-11-17).
+    assert.match(
+      CHRONICLE,
+      /tasksSplitter\.title = t\('tasks\.panelHeightHint'\);\s*\n\s*tasksSplitter\.setAttribute\('aria-label', t\('tasks\.panelHeightAria'\)\);\s*\n\s*wireSplitter\(/,
+    );
+  });
 });
 
 describe('приёмка «Дневника» 0.10.1: JS-ошибка data-row-key (пункт 2)', () => {

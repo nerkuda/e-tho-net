@@ -663,8 +663,7 @@ export const zh = {
   'tasks.cancelAllThought': '取消此想法的所有未完成任务',
   'tasks.moveAllThought': '将此想法的所有未完成任务移至…',
   'tasks.remindersGroupTitle': '期间提醒',
-  'tasks.counters': '%1 项未完成 · %2 项已完成',
-  'tasks.reminderCount': '%1 个触发',
+  'tasks.counters': '(%1 项未完成 · %2 项已完成)',
   'tasks.showDone': '显示已完成',
   'tasks.cancelAllPeriod': '取消期间内所有未完成任务',
   'tasks.moveAllPeriod': '将期间内所有未完成任务移至…',
@@ -2861,5 +2860,9 @@ export const zhPlurals = {
   /** Предупреждение панели использования об осиротевших потомках (aca92904). */
   'plurals.orphanedChildren': {
     other: '注意：%1 个子想法将失去父级。',
+  },
+  /** 期间提醒分组的触发次数计数。 */
+  'plurals.reminderOccurrence': {
+    other: '%1 次触发',
   },
 } satisfies PluralCatalog;
