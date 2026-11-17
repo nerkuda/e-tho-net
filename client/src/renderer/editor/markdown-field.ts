@@ -77,6 +77,7 @@ import {
 import { createCommentSearch } from './comment-search.js';
 import { registerCommentField } from './comment-source.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
+import type { TaskHintContext } from './md-live.js';
 import { annotateMentions, resolveMentionsExcludeThoughtId } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
@@ -785,6 +786,13 @@ export function createMarkdownField(opts: {
    */
   placeholder?: string;
   /**
+   * Контекст владельца строк для тихой подсказки задачи (ошибка f720cfff, ТЗ
+   * 2026-11-17 пункт A): хроно-вкладка записи и карточка Дневника передают
+   * период записи (`owner: 'chronological'`), постоянный комментарий мысли —
+   * `owner: 'permanent'`. Не задано — контекст неизвестен.
+   */
+  taskHintContext?: TaskHintContext;
+  /**
    * Просмотр рендерит сам единый рендерер `@etn/markdown` с разметкой позиций
    * (`renderMarkdown(md, { sourceMap: true })`), а не серверный HTML: узлы
    * несут диапазоны исходных смещений, поэтому двойной клик в просмотре
@@ -1481,6 +1489,8 @@ export function createMarkdownField(opts: {
     const store = nestedStore;
     cancelled = false;
     editor = createMdEditor(currentMd, {
+      // Контекст владельца строк — тихая подсказка задачи (ошибка f720cfff).
+      ...(opts.taskHintContext !== undefined ? { taskHintContext: opts.taskHintContext } : {}),
       onInput: (md) => opts.onInput?.(md),
       onEscape: () => {
         finishEdit(true);

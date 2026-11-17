@@ -67,7 +67,7 @@ import {
 } from '../../editor/wiki-link-resolver.js';
 import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
-import { isValidLocalDay } from '../../lib/dates.js';
+import { isValidLocalDay, localDayOfInstant } from '../../lib/dates.js';
 import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
@@ -98,7 +98,7 @@ import { commentShell } from '../../lib/ui/comment.js';
 import { bindWikiCreateContext } from '../../lib/wiki-create-context.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
-import { splitterElement } from '../../lib/ui/splitter.js';
+import { splitterElement, wireSplitter, type SplitterPlan } from '../../lib/ui/splitter.js';
 import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
 import { store } from '../../state.js';
@@ -185,7 +185,13 @@ import {
 import { type RecordTitleHandle } from './record-title.js';
 import { buildRecordHead, createRecordChips } from './record-head.js';
 import { parseChronicleState } from './state.js';
-import { mountTasksPanel, type TasksPanelHandle } from './tasks-panel.js';
+import {
+  mountTasksPanel,
+  TASKS_PANEL_FEED_MIN,
+  TASKS_PANEL_H_MAX,
+  TASKS_PANEL_H_MIN,
+  type TasksPanelHandle,
+} from './tasks-panel.js';
 import { renderRecordView } from './record-body.js';
 import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
 
@@ -864,14 +870,40 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   // Панель «Задачи и напоминания» — НАД лентой, вне блоков дней; при любом
   // периоде одна (0.16.1, задача 64f7976a, спека f76ed829/15f8ea2f).
   const tasksHost = div('chron-tasks-panel-host');
+  // Слайдер высоты панели (пункт B ТЗ 2026-11-17): вертикальный сплиттер
+  // между панелью и лентой, доступен только у развёрнутой панели.
+  const tasksSplitter = splitterElement('chron-tasks-splitter');
+  wireSplitter(tasksSplitter, {
+    stateClass: 'resizing',
+    stateHost: () => main,
+    plan: (): SplitterPlan | null => {
+      if (tasksPanel === null || tasksPanel.panelCollapsed()) return null;
+      tasksSplitter.title = t('tasks.panelHeightHint');
+      tasksSplitter.setAttribute('aria-label', t('tasks.panelHeightAria'));
+      // Стартовая метрика — фактическая высота панели: у панели ещё не было
+      // сохранённой высоты, и по умолчанию её задаёт CSS (`40vh`).
+      const start = tasksPanel.panelHeight() ?? tasksHost.getBoundingClientRect().height;
+      const max = Math.min(
+        TASKS_PANEL_H_MAX,
+        Math.max(TASKS_PANEL_H_MIN + 1, main.clientHeight - TASKS_PANEL_FEED_MIN),
+      );
+      return { axis: 'y', sign: 1, start, min: TASKS_PANEL_H_MIN, max };
+    },
+    apply: (size) => tasksPanel?.setPanelHeight(size),
+  });
+  tasksSplitter.hidden = true;
   tasksPanel?.destroy();
   tasksPanel = mountTasksPanel(tasksHost, {
     getPeriod: () => currentFromTo(),
     openDay: (day) => void openChronicleDay(day),
     onRecordsChanged: () => void refreshFeedAndCalendar(),
+    // Свёрнутая панель не имеет высоты: слайдер прячется (пункт B ТЗ).
+    onPanelCollapsed: (collapsed) => {
+      tasksSplitter.hidden = collapsed;
+    },
   });
 
-  main.append(addBar, tasksHost, feedWrap);
+  main.append(addBar, tasksHost, tasksSplitter, feedWrap);
   void refreshCalendarMarkers(calendarMarkersSnapshot());
 
   // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
@@ -1754,6 +1786,13 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       md: bodyDraft,
       html: bodyHtml,
       placeholder: t('diary.emptyRecordHint'),
+      // Тихая подсказка задачи знает период записи (ошибка f720cfff): строка
+      // без своих дат живёт в периоде этой хроно-записи.
+      taskHintContext: {
+        owner: 'chronological',
+        fromDay: localDayOfInstant(row.valid_from),
+        toDay: localDayOfInstant(row.valid_to ?? row.valid_from),
+      },
       // Каретка/выделение при входе в правку — в месте клика в просмотре
       // (требование bac754e4, задача 189da39e).
       sourceMapView: true,

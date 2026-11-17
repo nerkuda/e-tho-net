@@ -36,6 +36,7 @@ import type {
   ReminderListResult,
   TaskDTO,
   TaskMassFilter,
+  TaskNestedLine,
 } from '@etn/shared';
 
 /** Пороги группировки по количеству элементов (требование 6762adb0). */
@@ -250,6 +251,58 @@ export interface TaskPanelRow extends PanelGroupable {
   kind: CommentKind;
   /** Мысли из ID-ссылок строки (для группировки по мыслям и перехода). */
   subjectThoughts: string[];
+  /**
+   * Срок строки в прошлом (`due` раньше `today`): строка показывается красным
+   * (уточнение ТЗ 2026-11-17, пункт D). У выполненной строки признак снят —
+   * просроченного дела нет.
+   */
+  overdue: boolean;
+  /**
+   * Вложенные не-задачные строки под задачей (уточнение ТЗ 2026-11-17, пункт F):
+   * пункты чек-листа и обычные вложенные строки источника. Пустой список —
+   * строка не сворачивается.
+   */
+  children: TaskPanelChildRow[];
+}
+
+/**
+ * Вложенная не-задачная строка под задачей (пункт F): пункт чек-листа родителя
+ * либо обычная вложенная строка списка. Правки/команды у неё нет — только текст
+ * с отступом по уровню вложенности.
+ */
+export interface TaskPanelChildRow {
+  /** Стабильный ключ строки (`comment_id:line_no`). */
+  key: string;
+  lineNo: number;
+  text: string;
+  /** Уровень вложенности списка: 1 — первый отступ под задачей. */
+  depth: number;
+  /** Пункт чек-листа (`- [ ]`), а не обычная строка текста. */
+  checkbox: boolean;
+}
+
+/**
+ * Вложенные строки источника, разложенные по адресу родителя-задачи
+ * (`comment_id:line_no`). Порядок строк — как в источнике (сервер уже отдал
+ * их по `line_no`).
+ */
+export function nestedLinesByParent(
+  nested: readonly TaskNestedLine[] | undefined,
+): Map<string, TaskPanelChildRow[]> {
+  const byParent = new Map<string, TaskPanelChildRow[]>();
+  for (const line of nested ?? []) {
+    const key = `${line.parent.comment_id}:${line.parent.line_no}`;
+    const list = byParent.get(key) ?? [];
+    list.push({
+      key: `${line.comment_id}:${line.line_no}`,
+      lineNo: line.line_no,
+      text: line.text,
+      depth: line.depth,
+      checkbox: line.checkbox,
+    });
+    byParent.set(key, list);
+  }
+  return byParent;
 }
 
 /** Ключ строки задачи: адрес проекции (`comment_id` + `line_no`). */
@@ -294,18 +347,25 @@ export function taskRowIsStale(row: TaskDTO, stale: TaskPanelStaleness = {}): bo
  * строки, переключённой из панели: снапшот `state` не перечитывается до
  * «Обновить», но чекбокс обязан показывать новое состояние (повторный клик
  * снимает отметку, ошибка d318a647).
+ *
+ * `today` — граница просрочки (локальный день клиента): срок раньше неё и
+ * незакрытая строка показываются красным (пункт D ТЗ 2026-11-17).
+ * `children` — вложенные не-задачные строки под задачей (пункт F).
  */
 export function taskRowView(
   row: TaskDTO,
   stale: TaskPanelStaleness = {},
   done?: boolean,
+  options: { today?: string | null; children?: readonly TaskPanelChildRow[] } = {},
 ): TaskPanelRow {
+  const isDone = done ?? row.done;
+  const today = options.today ?? null;
   return {
     key: taskRowKey(row),
     commentId: row.comment_id,
     lineNo: row.line_no,
     text: row.text,
-    done: done ?? row.done,
+    done: isDone,
     stale: taskRowIsStale(row, stale),
     subtask: row.subtask,
     periodFrom: row.period_from,
@@ -314,6 +374,8 @@ export function taskRowView(
     day: row.due ?? row.period_from,
     subjectThoughts: row.subject_thoughts,
     subjectId: row.subject_thoughts[0] ?? null,
+    overdue: !isDone && row.due !== null && today !== null && row.due < today,
+    children: [...(options.children ?? [])],
   };
 }
 
@@ -461,6 +523,11 @@ export interface ReminderPanelRow extends PanelGroupable {
   status: 'active' | 'snoozed';
   /** Человекочитаемое описание повтора. */
   repeat: string;
+  /**
+   * Вхождение просрочено (момент показа раньше начала местных суток клиента):
+   * строка и дата показываются красным (пункт D ТЗ 2026-11-17).
+   */
+  overdue?: boolean;
 }
 
 /** Ключ строки вхождения: напоминание + момент вхождения по расписанию. */
@@ -485,6 +552,25 @@ export function reminderSectionOf(
   if (moment < todayStartMs) return 'overdue';
   if (moment < todayEndMs) return 'today';
   return 'period';
+}
+
+/**
+ * Вхождение напоминания просрочено (уточнение ТЗ 2026-11-17, пункт D): момент
+ * показа раньше НАЧАЛА местных суток клиента. Границу передаёт экран — часовой
+ * пояс считает клиент (требование fcdcd75f), модель его не угадывает.
+ */
+export function reminderRowOverdue(row: ReminderPanelRow, todayStartMs: number): boolean {
+  const moment = Date.parse(row.moment);
+  return Number.isFinite(moment) && moment < todayStartMs;
+}
+
+/**
+ * Плоский хронологический список вхождений (пункт D ТЗ 2026-11-17): при ОДНОЙ
+ * выбранной дате панель показывает напоминания без групп по датам и мыслям —
+ * порядок по моменту показа, ближайшее сверху.
+ */
+export function flatReminderRows(rows: readonly ReminderPanelRow[]): ReminderPanelRow[] {
+  return [...rows].sort((left, right) => Date.parse(left.moment) - Date.parse(right.moment));
 }
 
 /** Сколько дней назад смотреть сработавшие напоминания (секция «Просрочено»
@@ -514,17 +600,21 @@ export function dueReminderCount(result: ReminderListResult, todayEndMs: number)
  * Разложить вхождения напоминаний на строки панели: одно вхождение — одна
  * строка, момент показа отложенного вхождения — `until`. Названия субъектов
  * приходят готовыми (`titles`), описание повтора даёт экран словарём.
+ *
+ * `todayStartMs` — начало местных суток клиента: помечает просроченные вхождения
+ * (пункт D ТЗ 2026-11-17). Не задано — признак не считается.
  */
 export function reminderPanelRows(
   result: ReminderListResult,
   titles: ReadonlyMap<string, string>,
   repeatLabel: (reminder: Reminder) => string,
+  todayStartMs?: number,
 ): ReminderPanelRow[] {
   const rows: ReminderPanelRow[] = [];
   for (const reminder of result.reminders) {
     for (const occurrence of reminder.occurrences ?? []) {
       const moment = occurrence.until ?? occurrence.occurrence_at;
-      rows.push({
+      const row: ReminderPanelRow = {
         key: reminderRowKey(reminder.id, occurrence.occurrence_at),
         reminderId: reminder.id,
         subjectType: reminder.subject_type,
@@ -537,7 +627,9 @@ export function reminderPanelRows(
         status: occurrence.status,
         repeat: repeatLabel(reminder),
         day: moment.slice(0, 10),
-      });
+      };
+      if (todayStartMs !== undefined) row.overdue = reminderRowOverdue(row, todayStartMs);
+      rows.push(row);
     }
   }
   return rows;

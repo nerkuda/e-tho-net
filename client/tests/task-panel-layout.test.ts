@@ -82,4 +82,54 @@ describe('панель задач: шапка, свёрнутость и сер�
     );
     assert.match(ruleBody('.ui-task-row.is-stale'), /color:\s*var\(--text-dim\)/, 'гасится текст');
   });
+
+  // Пункт E ТЗ 2026-11-17: заголовок группы крупнее на полшага шкалы, фон
+  // полосы панели — «элемент UI» (светлее в тёмной теме, темнее в светлой).
+  it('заголовок группы — плюс полшага шкалы токенов (пункт E)', () => {
+    assert.match(
+      ruleBody('.ui-task-group-title'),
+      /font-size:\s*calc\(\s*var\(--font-size-s\)\s*\+\s*var\(--font-size-step-half\)\s*\)/,
+      'полшага — токен шкалы, а не литерал px',
+    );
+    assert.match(
+      ruleBody('.ui-task-group-title'),
+      /font-weight:\s*var\(--font-weight-semibold\)/,
+      'насыщенность заголовка не потеряна',
+    );
+  });
+
+  it('фон полосы панели смешан от темы и текста, а не взят поверхностью (пункт E)', () => {
+    const panel = ruleBody('.ui-task-panel');
+    assert.match(
+      panel,
+      /background:\s*color-mix\(\s*in srgb,\s*var\(--text\)\s+4%,\s*var\(--surface\)\s*\)/,
+      'светлее в тёмной / темнее в светлой теме без правки файлов тем',
+    );
+    assert.match(panel, /height:\s*var\(--task-panel-height, auto\)/, 'высота панели из настроек');
+    assert.match(panel, /max-height:\s*var\(--task-panel-height, 40vh\)/, 'умолчание высоты');
+  });
+
+  it('просроченные строки и даты — красным токеном темы (пункт D)', () => {
+    assert.match(
+      ruleBody(
+        '.ui-task-row.is-overdue .ui-task-row-text,\n.ui-task-row.is-overdue .ui-task-row-date',
+      ),
+      /color:\s*var\(--danger\)/,
+      'просрочка красная в обеих темах (токен, не литерал)',
+    );
+  });
+
+  it('вложенные строки: каретка и блок детей со своим отступом (пункт F)', () => {
+    assert.match(
+      ruleBody('.ui-task-row.has-children'),
+      /flex-wrap:\s*wrap/,
+      'дети уходят блоком под строку, адрес `data-row-key` остаётся у строки',
+    );
+    assert.match(ruleBody('.ui-task-row-children'), /padding-left:\s*var\(--tree-indent\)/);
+    assert.match(ruleBody(".ui-task-child-row[data-depth='1']"), /margin-left/);
+    assert.match(
+      ruleBody(".ui-task-child-row[data-depth='2']"),
+      /calc\(var\(--tree-indent\) \* 2\)/,
+    );
+  });
 });

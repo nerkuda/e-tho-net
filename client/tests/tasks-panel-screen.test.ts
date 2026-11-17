@@ -28,6 +28,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
 import * as keymap from '../src/renderer/lib/keymap.js';
+import type { TasksPanelHandle } from '../src/renderer/screens/chronicle/tasks-panel.js';
 import { ShimElement } from './dom-shim.js';
 
 /** Период ленты, который отдаёт экран (`deps.getPeriod`). */
@@ -47,6 +48,8 @@ interface Calls {
   resolved: string[];
   /** `etn.ui.setState(...)` — сохранённые настройки панели (`ui_state`). */
   state: string[];
+  /** `deps.onPanelCollapsed(...)` — свёрнутость панели для слайдера (пункт B). */
+  collapsed: boolean[];
 }
 
 /** Данные, которые «есть в сети» у подставного клиента. */
@@ -69,6 +72,10 @@ interface Fixture {
   commentRows?: Record<string, Array<Record<string, unknown>>>;
   /** Сохранённые настройки панели в `ui_state` (свёрнутость, показ выполненных). */
   uiState?: string;
+  /** Вложенные не-задачные строки, которые отдаёт сервер по `include_nested`. */
+  nested?: Array<Record<string, unknown>>;
+  /** Период ленты для экрана (по умолчанию `PERIOD`); одна дата — плоские секции. */
+  period?: { from: string; to: string };
 }
 
 /** Минимальная строка `TaskDTO` в периоде, открытая. */
@@ -142,6 +149,8 @@ interface Harness {
   pickDay(day: string): void;
   /** Дочерние узлы `document.body`. */
   body(): ShimElement;
+  /** Дескриптор панели для экрана (высота, свёрнутость). */
+  handle: TasksPanelHandle;
   destroy(): void;
 }
 
@@ -188,7 +197,15 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     if (index >= 0) windowListeners.splice(index, 1);
   };
 
-  const calls: Calls = { list: [], patch: [], records: 0, days: [], resolved: [], state: [] };
+  const calls: Calls = {
+    list: [],
+    patch: [],
+    records: 0,
+    days: [],
+    resolved: [],
+    state: [],
+    collapsed: [],
+  };
   const tasks = fixture.tasks ?? [];
   const doneTasks = fixture.doneTasks ?? [];
   const overdueTasks = fixture.overdueTasks ?? [];
@@ -230,6 +247,20 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
           items,
           cursor: null,
           max_revision: 1,
+          // Как у сервера: вложенные строки отдаются только той странице, чьи
+          // задачи в неё попали (пункт F ТЗ 2026-11-17).
+          ...(query['include_nested'] === true
+            ? {
+                nested: (fixture.nested ?? []).filter((line) =>
+                  items.some(
+                    (item) =>
+                      item['comment_id'] ===
+                        (line['parent'] as Record<string, unknown>)['comment_id'] &&
+                      item['line_no'] === (line['parent'] as Record<string, unknown>)['line_no'],
+                  ),
+                ),
+              }
+            : {}),
         };
       },
       patch: async (_networkId: string, input: Record<string, unknown>) => {
@@ -295,12 +326,14 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
   const { mountTasksPanel } = await import('../src/renderer/screens/chronicle/tasks-panel.js');
 
   const host = new ShimElement('div');
+  const period = fixture.period ?? PERIOD;
   const handle = mountTasksPanel(host as unknown as HTMLElement, {
-    getPeriod: () => PERIOD,
+    getPeriod: () => period,
     openDay: (day) => calls.days.push(day),
     onRecordsChanged: () => {
       calls.records += 1;
     },
+    onPanelCollapsed: (collapsed) => calls.collapsed.push(collapsed),
   });
 
   const settle = async (): Promise<void> => {
@@ -322,6 +355,7 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     status,
     settle,
     body: () => body,
+    handle,
     openTasksMenu(): void {
       const group = host.querySelector('.ui-task-group-tasks') as unknown as ShimElement;
       assert.ok(group, 'группа «Задачи периода» на панели');
@@ -394,6 +428,11 @@ describe('панель задач: экранная загрузка и пери
         'четыре запроса проекции: период, просрочено, без срока, выполненные',
       );
       assert.deepEqual(
+        h.calls.list.map((query) => query['include_nested']),
+        [true, true, true, true],
+        'вложенные строки запрашиваются вместе с задачами (пункт F ТЗ)',
+      );
+      assert.deepEqual(
         { from: h.calls.list[0]!['from'], to: h.calls.list[0]!['to'] },
         PERIOD,
         '«за период» адресуется периодом ленты',
@@ -457,11 +496,21 @@ describe('панель задач: подгруппы напоминаний п�
     try {
       const group = h.host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
       assert.ok(group, 'группа «Напоминания периода» на панели');
-      const titles = group.findAll('ui-task-subgroup-title').map((node) => node.flatText().trim());
+      // Группа-мысль показывается облачком с названием (пункт E ТЗ 2026-11-17):
+      // мысль — чип `lib/thought-cloud` (`.prc-title`), публикация — облачко
+      // публикации (`.ui-pub-cloud-title`). Текста-заголовка больше нет.
+      const titles = group
+        .findAll('ui-task-subgroup-subject')
+        .map((node) => node.flatText().trim());
       assert.deepEqual(titles, [`Мысль ${thoughtId}`, `Публикация ${publicationId}`]);
+      assert.deepEqual(
+        group.findAll('ui-task-subgroup-title').map((node) => node.flatText().trim()),
+        ['', ''],
+        'заголовок-строка у группы-мысли скрыт — имя несёт облачко',
+      );
       assert.ok(
         !titles.some((title) => /^[0-9a-f-]{36}$/.test(title)),
-        'в заголовках подгрупп нет GUID',
+        'в облачках подгрупп нет GUID',
       );
     } finally {
       h.destroy();
@@ -845,3 +894,149 @@ function tomorrowStartIso(): string {
   date.setDate(date.getDate() + 1);
   return date.toISOString();
 }
+
+// ---------------------------------------------------------------------------
+// 0.16.1, замечания пользователя 2026-11-17 (задача 01998381): пункты B, C, D, F.
+// ---------------------------------------------------------------------------
+
+describe('панель задач: вложенные строки задачи (пункт F ТЗ 2026-11-17)', () => {
+  it('сервер отдаёт вложенные строки, панель сворачивает их по умолчанию', async () => {
+    const h = await setup({
+      tasks: [taskRow()],
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт чек-листа',
+          depth: 1,
+          checkbox: true,
+        },
+      ],
+    });
+    try {
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      assert.ok(row, 'строка задачи в панели');
+      assert.equal(
+        h.host.findAll('ui-task-child-row').length,
+        0,
+        'по умолчанию вложенные строки свёрнуты',
+      );
+      const caret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
+      assert.ok(caret, 'у строки с вложенными строками есть каретка');
+      caret.click();
+      assert.deepEqual(
+        h.host.findAll('ui-task-child-row').map((node) => node.flatText().trim()),
+        ['пункт чек-листа'],
+        'раскрытие показывает вложенную строку из выдачи сервера',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('панель задач: одна дата — напоминания плоским списком (пункты C и D)', () => {
+  it('секции напоминаний без подгрупп, каждая строка — облачко мысли', async () => {
+    const day = '2026-11-12';
+    const h = await setup({
+      period: { from: day, to: day },
+      reminders: [
+        reminder({
+          id: 'r-a',
+          subject_id: '11111111-1111-4111-8111-111111111111',
+          occurrences: [{ occurrence_at: `${day}T09:00:00`, status: 'active', until: null }],
+        }),
+        reminder({
+          id: 'r-b',
+          subject_id: '22222222-2222-4222-8222-222222222222',
+          occurrences: [{ occurrence_at: `${day}T18:00:00`, status: 'active', until: null }],
+        }),
+      ],
+    });
+    try {
+      const group = h.host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
+      assert.ok(group, 'группа напоминаний на панели');
+      assert.equal(group.findAll('ui-task-subgroup').length, 0, 'подгрупп по датам/мыслям нет');
+      assert.deepEqual(
+        group
+          .findAll('prc-title')
+          .map((node) => node.flatText().trim())
+          .sort(),
+        [
+          'Мысль 11111111-1111-4111-8111-111111111111',
+          'Мысль 22222222-2222-4222-8222-222222222222',
+        ].sort(),
+        'каждая строка — облачко своей мысли',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('просроченное вхождение помечается классом is-overdue (красный)', async () => {
+    const overdueMoment = new Date(`${todayLocal()}T09:00:00`);
+    overdueMoment.setDate(overdueMoment.getDate() - 1);
+    const h = await setup({
+      reminders: [
+        reminder({
+          occurrences: [
+            { occurrence_at: overdueMoment.toISOString(), status: 'active', until: null },
+          ],
+        }),
+      ],
+    });
+    try {
+      const overdue = h.host
+        .findAll('ui-reminder-row')
+        .filter((node) => node.className.includes('is-overdue'));
+      assert.equal(overdue.length, 1, 'просроченная строка помечена для красной даты');
+    } finally {
+      h.destroy();
+    }
+  });
+});
+
+describe('панель задач: высота панели в ui_state (пункт B ТЗ 2026-11-17)', () => {
+  it('сохранённая высота применяется переменной панели', async () => {
+    const h = await setup({ tasks: [taskRow()], uiState: JSON.stringify({ height: 300 }) });
+    try {
+      const root = h.host.querySelector('.ui-task-panel') as unknown as ShimElement;
+      assert.equal(
+        root.style.getPropertyValue('--task-panel-height'),
+        '300px',
+        'высота из ui_state выставлена на панель',
+      );
+      assert.equal(h.handle.panelHeight(), 300, 'дескриптор отдаёт высоту экрану');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('новая высота слайдера пишется в ui_state', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      h.handle.setPanelHeight(420);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const saved = h.calls.state.map((raw) => JSON.parse(raw) as { height?: number });
+      assert.equal(saved[saved.length - 1]?.height, 420, 'высота записана в настройку панели');
+      const root = h.host.querySelector('.ui-task-panel') as unknown as ShimElement;
+      assert.equal(root.style.getPropertyValue('--task-panel-height'), '420px');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('свёрнутая панель сообщает экрану — слайдер прячется', async () => {
+    const h = await setup({
+      tasks: [taskRow()],
+      uiState: JSON.stringify({ collapsed: { panel: true } }),
+    });
+    try {
+      assert.deepEqual(h.calls.collapsed, [true], 'стартовая свёрнутость сообщена экрану');
+      assert.equal(h.handle.panelCollapsed(), true);
+    } finally {
+      h.destroy();
+    }
+  });
+});

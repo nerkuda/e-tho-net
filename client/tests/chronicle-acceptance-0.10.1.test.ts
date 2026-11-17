@@ -47,8 +47,9 @@ describe('приёмка «Дневника» 0.10.1: компоновка (пу
   it('кнопка добавления — в верхней панели над лентой', () => {
     assert.match(CHRONICLE, /div\('chron-addbar'\)/);
     // 0.16.1 (задача 64f7976a): между панелью добавления и лентой стоит
-    // панель «Задачи и напоминания» — одна при любом периоде, вне блоков дней.
-    assert.match(CHRONICLE, /main\.append\(addBar, tasksHost, feedWrap\)/);
+    // панель «Задачи и напоминания» — одна при любом периоде, вне блоков дней;
+    // под ней — слайдер её высоты (0.16.1, пункт B ТЗ).
+    assert.match(CHRONICLE, /main\.append\(addBar, tasksHost, tasksSplitter, feedWrap\)/);
     assert.match(CHRONICLE, /diary\.addRecord/);
   });
 });

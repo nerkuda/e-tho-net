@@ -1015,5 +1015,72 @@ describe(
         ndb.close();
       }
     });
+    /**
+     * Вложенные не-задачные строки (уточнение ТЗ 2026-11-17, пункт F): панель
+     * показывает под задачей пункты чек-листа и обычные вложенные строки.
+     */
+    it('include_nested отдаёт пункты чек-листа и вложенный текст под задачей', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const commentId = createTaskComment(
+          ndb,
+          't-1',
+          [
+            '- [ ] Родитель [[2026-11-20]]',
+            '  - [x] Пункт чек-листа',
+            '  - обычная вложенная строка',
+            '    - глубже: вложенный текст',
+            '- [ ] Второй родитель [[2026-11-21]]',
+          ].join('\n'),
+        );
+
+        const plain = listTasks(ndb, { scope: 'open' });
+        assert.equal(plain.nested, undefined, 'без флага вложенных строк нет');
+        assert.deepEqual(
+          plain.items.map((task) => task.text),
+          ['Родитель [[2026-11-20]]', 'Второй родитель [[2026-11-21]]'],
+          'в выборке только задачи',
+        );
+
+        const page = listTasks(ndb, { scope: 'open', includeNested: true });
+        const parent = page.items.find((task) => task.text.startsWith('Родитель'))!;
+        const nested = (page.nested ?? []).filter((line) => line.parent.line_no === parent.line_no);
+        assert.deepEqual(
+          nested.map((line) => [line.text, line.depth, line.checkbox]),
+          [
+            ['Пункт чек-листа', 1, true],
+            ['обычная вложенная строка', 1, false],
+            ['глубже: вложенный текст', 2, false],
+          ],
+          'вложенные строки идут по порядку и несут уровень',
+        );
+        for (const line of nested) {
+          assert.equal(line.comment_id, commentId);
+          assert.equal(line.parent.comment_id, commentId);
+        }
+
+        // Задача страницы не попала в выборку — её вложенные строки не отдаются.
+        const onlySecond = listTasks(ndb, { scope: 'open', commentId });
+        const filtered = listTasks(ndb, {
+          scope: 'open',
+          from: '2026-11-21',
+          to: '2026-11-21',
+          includeNested: true,
+        });
+        assert.deepEqual(
+          filtered.items.map((task) => task.text),
+          ['Второй родитель [[2026-11-21]]'],
+        );
+        assert.deepEqual(
+          (filtered.nested ?? []).map((line) => line.text),
+          [],
+          'вложенные строки других задач страницы не отдаются',
+        );
+        assert.equal(onlySecond.items.length, 2, 'выборка по comment_id видит обе задачи');
+      } finally {
+        ndb.close();
+      }
+    });
   },
 );

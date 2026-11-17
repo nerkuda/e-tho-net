@@ -2604,6 +2604,8 @@ export class RestClient {
     if (query.cursor !== undefined) q['cursor'] = query.cursor;
     if (query.limit !== undefined) q['limit'] = query.limit;
     if (query.count !== undefined) q['count'] = query.count ? 'true' : 'false';
+    if (query.include_nested !== undefined)
+      q['include_nested'] = query.include_nested ? 'true' : 'false';
     return this.request('GET', `/networks/${encodeURIComponent(networkId)}/tasks`, {
       query: Object.keys(q).length > 0 ? q : undefined,
     });

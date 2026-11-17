@@ -15,8 +15,10 @@ import {
   isInRangeInclusive,
   isNearInline,
   livePreview,
+  taskHintContext,
   taskHintText,
   wikiLabel,
+  type TaskHintContext,
 } from '../src/renderer/editor/md-live.js';
 import { t } from '../src/renderer/lib/i18n.js';
 import { ShimElement } from './dom-shim.js';
@@ -471,15 +473,90 @@ test('taskHintText: роль строки, период/срок и место �
   assert.match(text, /05\.11\.2026/);
   assert.ok(text.includes(t('editor.taskHint.appearsPeriod')), text);
 
+  // Строка без своих дат: место решает владелец (ошибка f720cfff).
   const undated = parseTaskLines('- [ ] задача без дат').find((row) => row.isTask);
   assert.ok(undated);
-  const undatedText = taskHintText(undated);
-  assert.ok(undatedText.includes(t('editor.taskHint.undated')), undatedText);
-  assert.ok(undatedText.includes(t('editor.taskHint.appearsUndated')), undatedText);
+  const permanentText = taskHintText(undated, { owner: 'permanent' });
+  assert.ok(permanentText.includes(t('editor.taskHint.undatedAllPeriods')), permanentText);
+  const recordText = taskHintText(undated, {
+    owner: 'chronological',
+    fromDay: '2026-11-10',
+    toDay: '2026-11-12',
+  });
+  assert.ok(
+    recordText.includes(t('editor.taskHint.recordPeriod', ['10.11.2026 – 12.11.2026'])),
+    recordText,
+  );
+  assert.ok(recordText.includes(t('editor.taskHint.appearsPeriod')), recordText);
+  const unknownText = taskHintText(undated);
+  assert.ok(unknownText.includes(t('editor.taskHint.undatedAllPeriods')), unknownText);
 
   const done = parseTaskLines('- [x] [[2026-11-02]]').find((row) => row.isTask);
   assert.ok(done);
   assert.ok(taskHintText(done).startsWith(t('editor.taskHint.done')), taskHintText(done));
+});
+
+/** Собрать состояние редактора с фасетом контекста владельца строк. */
+function buildStateWithHintContext(
+  doc: string,
+  context: TaskHintContext,
+  selection = 0,
+): EditorState {
+  return createParsedState(() =>
+    EditorState.create({
+      doc,
+      selection: { anchor: selection },
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [wikiLinkLanguage()] }),
+        livePreview,
+        taskHintContext.of(context),
+      ],
+    }),
+  );
+}
+
+test('тихая подсказка: контекст владельца строки (ошибка f720cfff, пункт A ТЗ)', () => {
+  // Строка БЕЗ своих дат: фасет поля решает, где она окажется.
+  const doc = '- [ ] задача без дат';
+  const hintOf = (context: TaskHintContext): string => {
+    const state = buildStateWithHintContext(doc, context, doc.length);
+    const hint = allSpecs(state).find((r) => r.spec.block === true);
+    assert.ok(hint, 'подсказка под строкой задачи');
+    return widgetDomAt(state, hint.from, hint.from).textContent;
+  };
+
+  const record = hintOf({ owner: 'chronological', fromDay: '2026-11-10', toDay: '2026-11-12' });
+  assert.ok(
+    record.includes(t('editor.taskHint.recordPeriod', ['10.11.2026 – 12.11.2026'])),
+    record,
+  );
+  assert.ok(record.includes(t('editor.taskHint.appearsPeriod')), record);
+
+  const permanent = hintOf({ owner: 'permanent' });
+  assert.ok(permanent.includes(t('editor.taskHint.undatedAllPeriods')), permanent);
+
+  const unknown = hintOf({ owner: 'unknown' });
+  assert.ok(unknown.includes(t('editor.taskHint.undatedAllPeriods')), unknown);
+
+  // Без фасета — контекст неизвестен: та же формулировка «срок не задан…».
+  const state = buildState(doc, doc.length);
+  const hint = allSpecs(state).find((r) => r.spec.block === true);
+  assert.ok(hint, 'подсказка есть и без фасета');
+  assert.ok(
+    widgetDomAt(state, hint.from, hint.from).textContent.includes(
+      t('editor.taskHint.undatedAllPeriods'),
+    ),
+  );
+
+  // С датами контекст не влияет: период и срок из строки, как раньше.
+  const datedDoc = '- [ ] [[2026-11-02]]..[[2026-11-05]] задача';
+  const dated = buildStateWithHintContext(datedDoc, { owner: 'permanent' }, datedDoc.length);
+  const datedHint = allSpecs(dated).find((r) => r.spec.block === true);
+  assert.ok(datedHint, 'подсказка у строки с датами');
+  const datedText = widgetDomAt(dated, datedHint.from, datedHint.from).textContent;
+  assert.match(datedText, /02\.11\.2026/);
+  assert.match(datedText, /05\.11\.2026/);
+  assert.ok(!datedText.includes(t('editor.taskHint.undatedAllPeriods')), datedText);
 });
 
 // ---------------------------------------------------------------------------

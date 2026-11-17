@@ -13,7 +13,7 @@
  */
 
 import { syntaxTree } from '@codemirror/language';
-import { EditorState, StateField, type Range, type SelectionRange } from '@codemirror/state';
+import { EditorState, Facet, StateField, type Range, type SelectionRange } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 
 import { renderMarkdown } from '@etn/markdown';
@@ -420,27 +420,74 @@ function hintDate(iso: string): string {
 }
 
 /**
+ * Владелец строки задачи — контекст тихой подсказки (ошибка f720cfff, ТЗ
+ * 2026-11-17 пункт A): от него зависит, где окажется строка БЕЗ собственных дат.
+ *  • `chronological` — хроно-запись: строка попадает в её период записи;
+ *  • `permanent` — постоянный комментарий: строка видна во всех периодах;
+ *  • `unknown` — контекст не известен (новая строка до сохранения, чужое поле):
+ *    обещать период нельзя, работает та же формулировка «срок не задан…».
+ */
+export type TaskHintOwner = 'chronological' | 'permanent' | 'unknown';
+
+/** Контекст владельца строки для {@link taskHintText}. */
+export interface TaskHintContext {
+  owner: TaskHintOwner;
+  /** Первый день периода записи-владельца (`YYYY-MM-DD`), `null` — неизвестен. */
+  fromDay?: string | null;
+  /** Последний день периода записи-владельца (`YYYY-MM-DD`), `null` — как `fromDay`. */
+  toDay?: string | null;
+}
+
+/** Контекст по умолчанию: поле не знает своего владельца. */
+export const DEFAULT_TASK_HINT_CONTEXT: TaskHintContext = { owner: 'unknown' };
+
+/**
+ * Фасет контекста подсказки: поле задаёт владельца при монтировании редактора
+ * (`MdEditorCallbacks.taskHintContext`), live preview читает его при сборке
+ * декораций. Значение по умолчанию — {@link DEFAULT_TASK_HINT_CONTEXT}.
+ */
+export const taskHintContext = Facet.define<TaskHintContext, TaskHintContext>({
+  combine: (values) => values[0] ?? DEFAULT_TASK_HINT_CONTEXT,
+});
+
+/**
  * Текст тихой подсказки строки задачи по разбору парсера (элемент 8773d9df):
  * роль строки, период/срок и где она появится. Никаких диалогов и действий.
+ *
+ * Строка БЕЗ своих дат не «бессрочная»: серверная проекция отдаёт ей период
+ * записи-владельца (автопериод, уточнение ТЗ 2026-11-16). Поэтому подсказка
+ * обязана знать контекст владельца (`context`): у хроно-записи — её период,
+ * у постоянного комментария — «во всех периодах» (ошибка f720cfff).
  */
-export function taskHintText(row: TaskLine): string {
+export function taskHintText(
+  row: TaskLine,
+  context: TaskHintContext = DEFAULT_TASK_HINT_CONTEXT,
+): string {
   const parts: string[] = [];
   if (row.subtask) {
     parts.push(t('editor.taskHint.checklist'));
   } else {
     parts.push(row.done ? t('editor.taskHint.done') : t('editor.taskHint.task'));
-    if (row.undated) {
-      parts.push(t('editor.taskHint.undated'));
-    } else {
+    if (!row.undated) {
       if (row.periodFrom !== null && row.periodTo !== null && row.periodFrom !== row.periodTo) {
         parts.push(t('editor.taskHint.period', [hintDate(row.periodFrom), hintDate(row.periodTo)]));
       }
       if (row.due !== null) parts.push(t('editor.taskHint.due', hintDate(row.due)));
+      parts.push(t('editor.taskHint.appearsPeriod'));
+    } else if (context.owner === 'chronological' && context.fromDay != null) {
+      // Хроно-запись: строка живёт в периоде записи — показываем его.
+      const toDay = context.toDay ?? context.fromDay;
+      const range =
+        toDay === context.fromDay
+          ? hintDate(context.fromDay)
+          : `${hintDate(context.fromDay)} – ${hintDate(toDay)}`;
+      parts.push(t('editor.taskHint.recordPeriod', [range]));
+      parts.push(t('editor.taskHint.appearsPeriod'));
+    } else {
+      // Постоянный комментарий (или контекст неизвестен) — задача видна везде.
+      parts.push(t('editor.taskHint.undatedAllPeriods'));
     }
   }
-  parts.push(
-    row.undated ? t('editor.taskHint.appearsUndated') : t('editor.taskHint.appearsPeriod'),
-  );
   return parts.join(' · ');
 }
 
@@ -449,7 +496,10 @@ export function taskHintText(row: TaskLine): string {
  * нашёл её). Парсер вызывается только когда в текущей/предыдущей строке есть
  * маркер чекбокса: обычный текст не платит за разбор документа.
  */
-function taskHintAt(state: EditorState): { pos: number; text: string } | null {
+function taskHintAt(
+  state: EditorState,
+  context: TaskHintContext,
+): { pos: number; text: string } | null {
   const line = state.doc.lineAt(state.selection.main.head);
   const previous = line.number > 1 ? state.doc.line(line.number - 1) : null;
   if (
@@ -460,7 +510,7 @@ function taskHintAt(state: EditorState): { pos: number; text: string } | null {
   }
   const row = parseTaskLines(state.doc.toString()).find((item) => item.lineNo === line.number);
   if (row === undefined || !row.hasCheckbox) return null;
-  return { pos: line.to, text: taskHintText(row) };
+  return { pos: line.to, text: taskHintText(row, context) };
 }
 
 /** Строит набор декораций для текущего состояния. */
@@ -821,7 +871,7 @@ function buildDecorations(state: EditorState): DecorationSet {
 
   // Тихая подсказка строки задачи в фокусе (элемент 8773d9df): блок под
   // строкой, не участвует в вводе и кликах.
-  const hint = taskHintAt(state);
+  const hint = taskHintAt(state, state.facet(taskHintContext));
   if (hint !== null) {
     parts.push(
       Decoration.widget({ widget: new TaskHintWidget(hint.text), block: true, side: 2 }).range(

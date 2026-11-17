@@ -42,7 +42,7 @@
 
 import type { TaskMassFilter } from '@etn/shared';
 
-import { div, span } from '../dom.js';
+import { div, el, span } from '../dom.js';
 import { shiftInstant } from '../dates.js';
 import { t } from '../i18n.js';
 import { defineKeyContext, pushKeyContext } from '../keymap.js';
@@ -112,6 +112,19 @@ export function staleTaskRowOf(node: HTMLElement): HTMLElement | null {
   return row.classList.contains(TASK_PANEL_ROW_STALE_CLASS) ? row : null;
 }
 
+/**
+ * Субъект группы/строки для показа облачком мысли (уточнение ТЗ 2026-11-17,
+ * пункты C и E): панель не знает фабрику облачка — элемент рисует экран через
+ * {@link TaskPanelActions.renderSubject}, а сюда кладутся данные для него.
+ */
+export interface TaskPanelSubject {
+  /** Вид субъекта: мысль или публикация. */
+  kind: 'thought' | 'publication';
+  id: string;
+  /** Название — подпись облачка. */
+  title: string;
+}
+
 /** Подгруппа списка: заголовок + фильтр массовой команды + строки. */
 export interface TaskPanelSubgroupView<T> {
   key: string;
@@ -120,6 +133,13 @@ export interface TaskPanelSubgroupView<T> {
   /** Фильтр адресации массовой команды группы (требование e6af8b9e). */
   filter: TaskMassFilter;
   rows: T[];
+  /**
+   * Группа-мысль: заголовок показывается её облачком с иконкой (пункт E ТЗ
+   * 2026-11-17), формат — как у чипов полей ввода свойств.
+   */
+  subject?: TaskPanelSubject | null;
+  /** Значок перед заголовком группы-даты: календарик (пункт E). */
+  icon?: 'calendar';
 }
 
 /** Секция списка задач. */
@@ -146,6 +166,14 @@ export interface ReminderPanelSectionView {
   key: ReminderSectionKind;
   title: string;
   subgroups: TaskPanelSubgroupView<ReminderPanelRow>[];
+  /**
+   * Плоская секция (пункт D ТЗ 2026-11-17): при ОДНОЙ выбранной дате периода
+   * напоминания показываются одним хронологическим списком облачков, без групп
+   * по датам и мыслям.
+   */
+  flat?: boolean;
+  /** Строки плоской секции (заполняется при `flat`). */
+  rows?: ReminderPanelRow[];
 }
 
 /** Что видит компонент при отрисовке (готовит экран). */
@@ -282,6 +310,20 @@ export interface TaskPanelActions {
   headMenu?(): MenuItem[];
   /** Отрисовка снапшота текста строки (markdown + кликабельные ссылки). */
   renderText(host: HTMLElement, row: TaskPanelRow): void;
+  /**
+   * Отрисовка субъекта облачком мысли (пункты C и E ТЗ 2026-11-17): строки
+   * напоминаний и заголовки групп-мыслей. Панель не знает фабрику облачка —
+   * элемент собирает экран (эталонный компонент из коллекции), поэтому здесь
+   * только данные. Не задано — рисуется название строкой.
+   */
+  renderSubject?(host: HTMLElement, subject: TaskPanelSubject): void;
+  /**
+   * Высота панели «Дневника» из `ui_state` (пункт B ТЗ 2026-11-17), `null` — не
+   * задана: панель живёт на собственной высоте по умолчанию (`lib/ui/task-panel.css`).
+   */
+  panelHeight?(): number | null;
+  /** Запомнить высоту панели (пишет экран, по образцу `editor_list_heights`). */
+  setPanelHeight?(height: number): void;
 }
 
 /** Настройка монтирования панели. */
@@ -305,6 +347,12 @@ export interface TaskPanelHandle {
   headActions(): HTMLElement[];
   /** Снять слушателей и навигацию. */
   destroy(): void;
+  /** Свёрнута ли вся панель (пункт B: слайдер высоты доступен только развёрнутой). */
+  panelCollapsed(): boolean;
+  /** Высота панели по умолчанию (запись `ui_state`), `null` — не задана. */
+  panelHeight(): number | null;
+  /** Запомнить высоту панели (пишет `ui_state` и CSS-переменную). */
+  setPanelHeight(height: number): void;
 }
 
 /** Сдвиги, предлагаемые командой «Перенести на…». */
@@ -381,6 +429,12 @@ export function mountTaskPanel(
   let editingKey: string | null = null;
   /** Сырая строка `body_md` открытой правки (маркер и чекбокс на месте). */
   let editingRaw: string | null = null;
+  /**
+   * Ключи строк с раскрытыми вложенными строками (пункт F ТЗ 2026-11-17).
+   * По умолчанию строка СВЁРНУТА: пользователь раскрывает её сам, состояние
+   * живёт в компоненте и переживает перерисовку панели (в `ui_state` не пишется).
+   */
+  const expandedChildren = new Set<string>();
 
   const undoBtn = uiButton({
     label: t('tasks.undo'),
@@ -444,6 +498,20 @@ export function mountTaskPanel(
   host.append(root);
 
   /**
+   * Применить сохранённую высоту панели (пункт B ТЗ 2026-11-17): экран держит
+   * её в `ui_state` (`diary_tasks_panel`), панель только выставляет переменную.
+   * Высота не задана — работает высота по умолчанию из `lib/ui/task-panel.css`.
+   */
+  function applyPanelHeight(): void {
+    const height = actions.panelHeight?.() ?? null;
+    if (height !== null && Number.isFinite(height) && height > 0) {
+      root.style.setProperty('--task-panel-height', `${height}px`);
+    } else {
+      root.style.removeProperty('--task-panel-height');
+    }
+  }
+
+  /**
    * Текущий фильтр подгруппы. Кнопка «⋮» подгруппы создаётся один раз
    * (keyed-сверка), поэтому адрес массовой команды читается из реестра в момент
    * открытия меню: замыкание держало бы фильтр первого построения.
@@ -484,10 +552,23 @@ export function mountTaskPanel(
     return actions.collapsedOf?.(key) ?? fallback;
   }
 
+  /**
+   * Строки плоской секции (`null` — секция с подгруппами). Плоскость есть у
+   * обеих форм: у секции задач панели редактора и у секции напоминаний при одной
+   * выбранной дате (пункт D ТЗ 2026-11-17) — счётчик и навигация считают их
+   * одинаково.
+   */
+  function flatRowsOf(
+    section: TaskPanelSectionView | ReminderPanelSectionView,
+  ): readonly { key: string }[] | null {
+    if (section.flat !== true) return null;
+    return section.rows ?? [];
+  }
+
   /** Сколько строк в секции (счётчик в шапке — и у свёрнутой секции). */
   function sectionRowCount(section: TaskPanelSectionView | ReminderPanelSectionView): number {
-    const flat = section as TaskPanelSectionView;
-    if (flat.flat === true) return (flat.rows ?? []).length;
+    const flat = flatRowsOf(section);
+    if (flat !== null) return flat.length;
     return section.subgroups.reduce((sum, subgroup) => sum + subgroup.rows.length, 0);
   }
 
@@ -676,7 +757,6 @@ export function mountTaskPanel(
     fillTaskRow(node, row);
     return node;
   }
-
   /** Собрать/обновить содержимое строки задачи под `row`. */
   function fillTaskRow(node: HTMLElement, row: TaskPanelRow): void {
     node.classList.toggle(TASK_PANEL_ROW_STALE_CLASS, row.stale);
@@ -775,7 +855,49 @@ export function mountTaskPanel(
         },
       }),
     );
+    // Строка с вложенными строками сворачиваемая и по умолчанию СВЁРНУТА:
+    // каретка слева от чекбокса, дети — отдельным блоком ниже (пункт F ТЗ).
+    const hasChildren = row.children.length > 0;
+    const expanded = hasChildren && expandedChildren.has(row.key);
+    node.classList.toggle('is-overdue', row.overdue);
+    node.classList.toggle('has-children', hasChildren);
+    const leading: HTMLElement[] = [];
+    if (hasChildren) {
+      const caret = el('button', 'ui-task-row-caret');
+      caret.setAttribute('type', 'button');
+      caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      caret.setAttribute('aria-label', t('tasks.rowChildren'));
+      caret.append(svgIcon('chevron-down', 11));
+      caret.classList.toggle('collapsed', !expanded);
+      caret.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (expandedChildren.has(row.key)) expandedChildren.delete(row.key);
+        else expandedChildren.add(row.key);
+        fillTaskRow(node, currentTaskRow(row.key) ?? row);
+      });
+      leading.push(caret);
+    }
     node.replaceChildren(check, textHost, dates, rowActions);
+    if (leading.length > 0) node.prepend(...leading);
+    if (hasChildren && expanded) node.append(buildChildRows(row));
+  }
+
+  /**
+   * Вложенные не-задачные строки под задачей (пункт F ТЗ 2026-11-17): текст с
+   * отступом по уровню списка. Правки и команд у них нет — они не задачи.
+   */
+  function buildChildRows(row: TaskPanelRow): HTMLElement {
+    const box = div('ui-task-row-children');
+    for (const child of row.children) {
+      const line = div('ui-task-child-row');
+      line.dataset['depth'] = String(child.depth);
+      line.classList.toggle('is-checkbox', child.checkbox);
+      const text = div('ui-task-child-text');
+      text.textContent = child.text;
+      line.append(text);
+      box.append(line);
+    }
+    return box;
   }
 
   /** Строка вхождения напоминания: субъект, момент, повтор, метка, команды. */
@@ -786,8 +908,22 @@ export function mountTaskPanel(
   }
 
   function fillReminderRow(node: HTMLElement, row: ReminderPanelRow): void {
-    const subject = span(row.title, 'ui-task-row-text');
+    // Строка напоминания — уже мысль: субъект показывается облачком мысли
+    // (пункт C ТЗ 2026-11-17), формат — как у чипов полей ввода свойств.
+    // Фабрику облачка знает экран (`renderSubject`); без неё — название строкой.
+    const subject = div('ui-task-row-subject');
+    if (actions.renderSubject !== undefined) {
+      actions.renderSubject(subject, {
+        kind: row.subjectType,
+        id: row.subjectId,
+        title: row.title,
+      });
+    } else {
+      subject.append(span(row.title, 'ui-task-row-text'));
+    }
     subject.addEventListener('click', () => actions.reminderAction(row, 'open-subject'));
+    // Просроченное вхождение (дата напоминания в прошлом) — красным (пункт D).
+    node.classList.toggle('is-overdue', row.overdue === true);
     const moment = span(formatMoment(row.moment), 'ui-task-row-date');
     const repeat = span(row.repeat, 'ui-task-row-repeat');
     const flags = div('ui-task-row-flags');
@@ -872,9 +1008,7 @@ export function mountTaskPanel(
     section: TaskPanelSectionView | ReminderPanelSectionView,
     kind: 'task' | 'reminder',
   ): HTMLElement {
-    if (kind === 'task' && (section as TaskPanelSectionView).flat === true) {
-      return buildFlatSection(section as TaskPanelSectionView);
-    }
+    if (section.flat === true) return buildFlatSection(section, kind);
     const list = div('ui-task-subgroup-list');
     const key = TASK_PANEL_COLLAPSE_KEYS.section(kind, section.key);
     const collapsible = collapsibleSection({
@@ -905,19 +1039,25 @@ export function mountTaskPanel(
   }
 
   /**
-   * Плоская секция (панель редактора мысли): строки без подгрупп. Секция с
-   * заголовком — сворачиваемая (счётчик в шапке, в том числе у свёрнутой);
-   * секция без заголовка (активные строки панели редактора) — просто строки.
+   * Плоская секция: строки без подгрупп — панель редактора мысли (секция задач
+   * без подгрупп) и «Напоминания периода» при ОДНОЙ выбранной дате (пункт D ТЗ
+   * 2026-11-17: облачка одним хронологическим списком). Секция с заголовком
+   * сворачиваемая (счётчик в шапке, в том числе у свёрнутой); секция без
+   * заголовка (активные строки панели редактора) — просто строки.
    */
-  function buildFlatSection(section: TaskPanelSectionView): HTMLElement {
+  function buildFlatSection(
+    section: TaskPanelSectionView | ReminderPanelSectionView,
+    kind: 'task' | 'reminder',
+  ): HTMLElement {
     const rows = section.rows ?? [];
     const rowsHost = div('ui-task-flat-rows');
+    const taskSection = section as TaskPanelSectionView;
     /** Секция с заголовком сворачивается; без заголовка — плоский список. */
-    const withHeader = section.title !== '' && section.collapsible !== false;
-    const key = TASK_PANEL_COLLAPSE_KEYS.section('task', section.key);
+    const withHeader = section.title !== '' && taskSection.collapsible !== false;
+    const key = TASK_PANEL_COLLAPSE_KEYS.section(kind, section.key);
     let node: HTMLElement;
     if (withHeader) {
-      const fallbackCollapsed = section.collapsed === true;
+      const fallbackCollapsed = taskSection.collapsed === true;
       const collapsible = collapsibleSection({
         title: section.title,
         count: `(${rows.length})`,
@@ -945,8 +1085,18 @@ export function mountTaskPanel(
     }
     node.dataset['section'] = section.key;
     flatRowsHosts.set(node, rowsHost);
-    renderFlatRows(rowsHost, rows);
+    paintFlatRows(rowsHost, rows, kind);
     return node;
+  }
+
+  /** Отрисовать строки плоской секции в форме своего списка. */
+  function paintFlatRows(
+    hostEl: HTMLElement,
+    rows: readonly unknown[],
+    kind: 'task' | 'reminder',
+  ): void {
+    if (kind === 'task') renderFlatRows(hostEl, rows as readonly TaskPanelRow[]);
+    else renderFlatReminderRows(hostEl, rows as readonly ReminderPanelRow[]);
   }
 
   /** Отрисовать строки плоской секции (keyed-сверка по адресу проекции). */
@@ -962,16 +1112,30 @@ export function mountTaskPanel(
     });
   }
 
+  /** Отрисовать строки плоской секции напоминаний (пункт D ТЗ 2026-11-17). */
+  function renderFlatReminderRows(hostEl: HTMLElement, rows: readonly ReminderPanelRow[]): void {
+    reconcileKeyed(hostEl, rows, {
+      keyAttr: TABLE_ROW_KEY_ATTR,
+      key: (row) => row.key,
+      build: (row) => buildReminderRow(row),
+      update: (rowNode, row) => fillReminderRow(rowNode, row),
+    });
+  }
+
   /**
    * Обновить плоскую секцию при повторной отрисовке: строки и счётчик
    * сворачиваемой секции (заголовок и свёрнутость узла не пересоздаются).
    */
-  function updateFlatSection(node: HTMLElement, section: TaskPanelSectionView): void {
+  function updateFlatSection(
+    node: HTMLElement,
+    section: TaskPanelSectionView | ReminderPanelSectionView,
+    kind: 'task' | 'reminder',
+  ): void {
     const rows = section.rows ?? [];
     // Свёрнутая секция держит тело вне DOM — берём ссылку, сохранённую сборкой.
     const rowsHost =
       flatRowsHosts.get(node) ?? node.querySelector<HTMLElement>('.ui-task-flat-rows');
-    if (rowsHost !== null) renderFlatRows(rowsHost, rows);
+    if (rowsHost !== null) paintFlatRows(rowsHost, rows, kind);
     node.dispatchEvent(new CustomEvent('etn:set-count', { detail: `(${rows.length})` }));
   }
 
@@ -979,7 +1143,19 @@ export function mountTaskPanel(
   function buildSubgroupBucket(): HTMLElement {
     const subgroup = div(TASK_PANEL_SUBGROUP_CLASS);
     const head = div('ui-task-subgroup-head');
-    head.append(span('', 'ui-task-subgroup-title'), span('', 'ui-task-subgroup-count'));
+    // Значок группы-даты (календарик) и слот облачка группы-мысли (пункт E ТЗ
+    // 2026-11-17): оба места постоянные, поэтому сверка только показывает/
+    // скрывает их и перерисовывает содержимое.
+    const icon = span('', 'ui-task-subgroup-icon');
+    icon.hidden = true;
+    const subject = span('', 'ui-task-subgroup-subject');
+    subject.hidden = true;
+    head.append(
+      icon,
+      subject,
+      span('', 'ui-task-subgroup-title'),
+      span('', 'ui-task-subgroup-count'),
+    );
     subgroup.append(head, div('ui-task-subgroup-rows'));
     return subgroup;
   }
@@ -1010,8 +1186,8 @@ export function mountTaskPanel(
 
   /** Секция попадает в отрисовку, только когда в ней есть строки. */
   function sectionVisible(section: TaskPanelSectionView | ReminderPanelSectionView): boolean {
-    const flat = section as TaskPanelSectionView;
-    if (flat.flat === true) return (flat.rows ?? []).length > 0;
+    const flat = flatRowsOf(section);
+    if (flat !== null) return flat.length > 0;
     return section.subgroups.length > 0;
   }
 
@@ -1039,6 +1215,11 @@ export function mountTaskPanel(
     }
     for (const section of view.reminderSections) {
       if (sectionCollapsed('reminder', section.key)) continue;
+      const flat = flatRowsOf(section);
+      if (flat !== null) {
+        for (const row of flat) list.push({ key: row.key, kind: 'reminder' });
+        continue;
+      }
       for (const subgroup of section.subgroups) {
         for (const row of subgroup.rows) list.push({ key: row.key, kind: 'reminder' });
       }
@@ -1100,6 +1281,7 @@ export function mountTaskPanel(
     // Переключение пользователя успевает записать состояние ДО `apply()`, так
     // что повторное применение не спорит с кликом.
     panelSection?.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.panel));
+    applyPanelHeight();
     taskGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.tasksGroup));
     reminderGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.remindersGroup));
 
@@ -1168,8 +1350,8 @@ export function mountTaskPanel(
                 sectionDefaults.get(node) ?? false,
               ),
             );
-          if (kind === 'task' && (section as TaskPanelSectionView).flat === true) {
-            updateFlatSection(node, section as TaskPanelSectionView);
+          if (section.flat === true) {
+            updateFlatSection(node, section, kind);
             return;
           }
           const titleNode = node.querySelector('.ui-task-section-title');
@@ -1214,8 +1396,34 @@ export function mountTaskPanel(
     kind: 'task' | 'reminder',
   ): void {
     const titleNode = node.querySelector('.ui-task-subgroup-title');
-    if (titleNode !== null) titleNode.textContent = subgroup.title;
     const countNode = node.querySelector('.ui-task-subgroup-count');
+    const iconNode = node.querySelector<HTMLElement>('.ui-task-subgroup-icon');
+    const subjectNode = node.querySelector<HTMLElement>('.ui-task-subgroup-subject');
+    // Группа-мысль показывает название облачком с иконкой (пункт E ТЗ
+    // 2026-11-17) — формат как у чипов полей ввода свойств; рисовать облачко
+    // умеет экран (`renderSubject`), панель только освобождает место.
+    const subject = subgroup.subject ?? null;
+    const cloud = subject !== null && actions.renderSubject !== undefined;
+    if (iconNode !== null) {
+      const calendar = subgroup.icon === 'calendar';
+      iconNode.hidden = !calendar;
+      if (calendar && iconNode.childElementCount === 0) {
+        iconNode.append(svgIcon('calendar-month', 12));
+      }
+    }
+    if (subjectNode !== null) {
+      subjectNode.hidden = !cloud;
+      if (cloud && subject !== null) {
+        subjectNode.replaceChildren();
+        actions.renderSubject?.(subjectNode, subject);
+      } else if (!cloud) {
+        subjectNode.replaceChildren();
+      }
+    }
+    if (titleNode !== null) {
+      titleNode.textContent = cloud ? '' : subgroup.title;
+      if (titleNode instanceof HTMLElement) titleNode.hidden = cloud;
+    }
     if (countNode !== null) countNode.textContent = String(subgroup.rows.length);
     subgroupFilters.set(node, subgroup.filter);
     subgroupTitles.set(node, subgroup.title);
@@ -1281,6 +1489,17 @@ export function mountTaskPanel(
       nav?.destroy();
       nav = null;
       host.replaceChildren();
+    },
+    panelCollapsed(): boolean {
+      return collapseState(TASK_PANEL_COLLAPSE_KEYS.panel);
+    },
+    panelHeight(): number | null {
+      return actions.panelHeight?.() ?? null;
+    },
+    setPanelHeight(height: number): void {
+      actions.setPanelHeight?.(height);
+      applyPanelHeight();
+      nav?.refresh();
     },
   };
 }

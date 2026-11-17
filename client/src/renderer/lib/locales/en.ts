@@ -1341,10 +1341,12 @@ export const en = {
   'tasks.panelTitle': 'Tasks and reminders',
   /** Undo the last bulk command. */
   'tasks.undo': 'Undo',
+  'tasks.panelHeightHint': 'Panel height',
+  'tasks.panelHeightAria': 'Resize the tasks and reminders panel',
   /** The only panel button: re-read all lists from entries. */
   'tasks.refresh': 'Refresh',
   /** Title of the period tasks group. */
-  'tasks.groupTitle': 'Tasks of the period',
+  'tasks.groupTitle': 'Tasks',
   /** Completed rows section of the editor tasks panel. */
   'tasks.doneGroup': 'Completed tasks',
   /** Bulk commands of the editor panel: open rows of this thought. */
@@ -1391,10 +1393,11 @@ export const en = {
   /** Menu button tooltips. */
   'tasks.rowCommands': 'Row commands',
   'tasks.groupCommands': 'Group commands',
+  'tasks.rowChildren': 'Nested lines',
   'tasks.editLineAria': 'Edit task line (raw markdown)',
   'tasks.pickDateTitle': 'Move to date',
   /** Task section titles. */
-  'tasks.sectionMain': 'Main',
+  'tasks.sectionMain': 'In this period',
   'tasks.sectionOverdue': 'Overdue',
   'tasks.sectionUndated': 'No due date',
   /** Reminder section titles. */
@@ -2616,9 +2619,9 @@ export const en = {
   'editor.taskHint.checklist': 'checklist item',
   'editor.taskHint.period': 'period %1–%2',
   'editor.taskHint.due': 'due %1',
-  'editor.taskHint.undated': 'no due date',
-  'editor.taskHint.appearsPeriod': 'will appear in “Tasks of the period”',
-  'editor.taskHint.appearsUndated': 'will appear in “No due date”',
+  'editor.taskHint.recordPeriod': 'record period %1',
+  'editor.taskHint.undatedAllPeriods': 'no due date, the task is shown in all periods',
+  'editor.taskHint.appearsPeriod': 'will appear in “Tasks”',
   'editor.label.sprava': 'Right',
   'editor.label.sleva': 'Left',
   'editor.label.sverhu': 'Top',

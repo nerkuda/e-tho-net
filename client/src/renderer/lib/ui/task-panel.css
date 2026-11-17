@@ -10,9 +10,16 @@
   flex-direction: column;
   gap: 0;
   min-height: 0;
-  max-height: 40vh;
+  /* Высота панели «Дневника» — из `ui_state` через переменную (пункт B ТЗ
+   * 2026-11-17); по умолчанию её задаёт `40vh`, а `auto` держит панель по
+   * содержимому, когда высоту не выбирали. */
+  height: var(--task-panel-height, auto);
+  max-height: var(--task-panel-height, 40vh);
   overflow: auto;
-  background: var(--surface);
+  /* Фон полосы панели — «элемент UI», а не часть списка (пункт E ТЗ): в тёмной
+   * теме светлее поверхности, в светлой — темнее. Один `color-mix` от цвета
+   * текста даёт оба направления без правки файлов тем. */
+  background: color-mix(in srgb, var(--text) 4%, var(--surface));
   border-bottom: 1px solid var(--border);
 }
 
@@ -98,7 +105,9 @@
 }
 
 .ui-task-group-title {
-  font-size: var(--font-size-s);
+  /* Заголовок группы на полшага типографской шкалы крупнее строки (пункт E
+   * ТЗ 2026-11-17): полшага — токен, а не литерал (сторож guard-ui-tokens). */
+  font-size: calc(var(--font-size-s) + var(--font-size-step-half));
   font-weight: var(--font-weight-semibold);
   color: var(--text);
 }
@@ -202,6 +211,26 @@
   color: var(--text);
 }
 
+/* Значок группы-даты (календарик) и облачко группы-мысли (пункт E ТЗ
+ * 2026-11-17). Облачко — эталонный чип поля свойств: он не должен раздувать
+ * заголовок, имя обрезается многоточием по своей ширине (профиль `container`). */
+.ui-task-subgroup-icon,
+.ui-task-subgroup-subject {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ui-task-subgroup-icon {
+  color: var(--text-dim);
+}
+
+.ui-task-subgroup-icon[hidden],
+.ui-task-subgroup-subject[hidden],
+.ui-task-subgroup-title[hidden] {
+  display: none;
+}
+
 .ui-task-subgroup-count {
   font-size: var(--font-size-2xs);
   color: var(--text-faint);
@@ -245,6 +274,91 @@
 .ui-task-row.is-done .ui-task-row-text {
   color: var(--text-faint);
   text-decoration: line-through;
+}
+
+/* Просроченная строка (срок задачи или момент напоминания в прошлом) — красным
+ * (пункт D ТЗ 2026-11-17). Красный — токен темы, не литерал. */
+.ui-task-row.is-overdue .ui-task-row-text,
+.ui-task-row.is-overdue .ui-task-row-date {
+  color: var(--danger);
+}
+
+/* Строка с вложенными строками: каретка слева, дети — блоком ниже (пункт F ТЗ
+ * 2026-11-17). Раскрытие по умолчанию СВЁРНУТО; каретка видна всегда — это
+ * единственная подсказка о вложенности. */
+.ui-task-row.has-children {
+  flex-wrap: wrap;
+}
+
+.ui-task-row-caret {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--hit-area);
+  height: var(--hit-area);
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.ui-task-row-caret:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.ui-task-row-caret.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.ui-task-row-children {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--tree-indent);
+}
+
+.ui-task-child-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-snug);
+}
+
+/* Отступ по уровню вложенности списка: глубина приходит из проекции. */
+.ui-task-child-row[data-depth='1'] {
+  margin-left: var(--tree-indent);
+}
+
+.ui-task-child-row[data-depth='2'] {
+  margin-left: calc(var(--tree-indent) * 2);
+}
+
+.ui-task-child-row[data-depth='3'] {
+  margin-left: calc(var(--tree-indent) * 3);
+}
+
+.ui-task-child-row.is-checkbox .ui-task-child-text::before {
+  content: '·';
+  margin-right: var(--space-2);
+}
+
+.ui-task-child-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Субъект строки напоминания — облачко мысли (пункт C ТЗ 2026-11-17): строка
+ * уже мысль, отдельный заголовок группы не нужен. */
+.ui-task-row-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 }
 
 .ui-task-row-check {

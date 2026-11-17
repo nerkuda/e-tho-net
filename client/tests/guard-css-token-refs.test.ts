@@ -75,6 +75,10 @@ const RUNTIME_TOKENS = new Set([
   '--usage-dock-w',
   // screens/structures/structures.ts
   '--st-indent',
+  // lib/ui/task-panel.ts — высота панели «Задачи и напоминания» на «Дневнике»
+  // из `ui_state` (пункт B ТЗ 2026-11-17): число считает слайдер экрана, CSS
+  // только читает переменную.
+  '--task-panel-height',
   // screens/publications/workspace.ts
   '--pub-doc-width',
   // canvas/wallpaper.ts — подложка холста карты (0.16.1, задача 80324150):

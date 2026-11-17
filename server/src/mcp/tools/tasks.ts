@@ -203,6 +203,7 @@ export const TASK_OPS_HANDLERS: Record<string, OpHandler> = {
         ...(a.cursor !== undefined ? { cursor: a.cursor } : {}),
         ...(a.limit !== undefined ? { limit: a.limit } : {}),
         ...(a.count !== undefined ? { count: a.count } : {}),
+        ...(a.include_nested !== undefined ? { includeNested: a.include_nested } : {}),
       });
     });
   },

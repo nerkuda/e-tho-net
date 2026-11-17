@@ -6409,6 +6409,8 @@ export const RestTaskList = defineContract(
     cursor: z.string().min(1).optional(),
     limit: z.number().int().min(1).max(TASKS_MAX_LIMIT).optional(),
     count: z.boolean().optional(),
+    /** Дополнить страницу вложенными не-задачными строками её задач (ТЗ F). */
+    include_nested: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -6421,6 +6423,7 @@ export const RestTaskList = defineContract(
     cursor: { from: { kind: 'query' }, parse: singleQueryValue },
     limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
     count: { from: { kind: 'query', coerce: 'bool' } },
+    include_nested: { from: { kind: 'query', coerce: 'bool' } },
   },
 );
 

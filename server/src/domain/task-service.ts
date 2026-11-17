@@ -45,6 +45,7 @@ import {
   type TaskListPage,
   type TaskMassAction,
   type TaskMassFilter,
+  type TaskNestedLine,
   type TaskOpAction,
   type TaskOpResult,
   type TaskPatchResult,
@@ -85,6 +86,13 @@ export interface TaskListOptions {
   count?: boolean;
   /** Граница «сегодня» (локальные сутки клиента): `YYYY-MM-DD` или UTC-инстанс. */
   today?: string;
+  /**
+   * Дополнить страницу вложенными НЕ-задачными строками её задач (уточнение ТЗ
+   * 2026-11-17, пункт F): пункты чек-листа родителя и обычные вложенные строки
+   * списка. Проекция не меняется — вложенность восстанавливается по `depth` и
+   * порядку строк комментария.
+   */
+  includeNested?: boolean;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -376,6 +384,108 @@ function toTaskDtos(ndb: NetworkDb, rows: readonly TaskRow[]): TaskDTO[] {
 }
 
 /**
+ * Вложенные НЕ-задачные строки страницы (уточнение ТЗ 2026-11-17, пункт F).
+ *
+ * Проекция (`task_rows`) хранит ВСЕ пункты списка, но выборка задач берёт только
+ * `is_task = 1`. Пользователь обязан видеть под задачей её пункты чек-листа и
+ * обычные вложенные строки, поэтому по флагу `include_nested` сервер дочитывает
+ * строки тех же комментариев (`is_task = 0`) и привязывает их к ближайшей
+ * вышестоящей ЗАДАЧЕ страницы.
+ *
+ * Вложенность восстанавливается без изменения проекции: строки комментария идут
+ * в порядке `line_no`, уровень — `depth` парсера. Для пункта чек-листа есть
+ * готовый `parent_line_no` (цепочка пунктов), для обычной строки текста —
+ * ближайший по стеку предок с меньшим `depth`. Вложенные строки задач, которых
+ * нет на странице (чужая страница/секция), не отдаются: панель рисует только
+ * строки своих родителей.
+ */
+function loadNestedLines(ndb: NetworkDb, page: readonly TaskRow[]): TaskNestedLine[] {
+  if (page.length === 0) return [];
+  const commentIds = [...new Set(page.map((row) => row.comment_id))];
+  const pageSet = new Set(page.map((row) => `${row.comment_id}:${row.line_no}`));
+  // Тот же JOIN видимости слоя, что у выборки задач (params — [BASE_LAYER_ID]).
+  const visibility = buildFilter({});
+  const placeholders = commentIds.map(() => '?').join(', ');
+  const all = ndb
+    .prepare(
+      `SELECT tr.comment_id, tr.line_no, tr.text, tr.is_task, tr.depth, tr.parent_line_no
+       ${visibility.from}
+       WHERE v.id IN (${placeholders})
+       ORDER BY tr.comment_id, tr.line_no`,
+    )
+    .all(...visibility.params, ...commentIds) as Array<{
+    comment_id: string;
+    line_no: number;
+    text: string;
+    is_task: number;
+    depth: number;
+    parent_line_no: number | null;
+  }>;
+
+  /** Задачи комментария (для разрешения цепочки чек-листа) и его строки по порядку. */
+  const byComment = new Map<string, typeof all>();
+  for (const row of all) {
+    const list = byComment.get(row.comment_id) ?? [];
+    list.push(row);
+    byComment.set(row.comment_id, list);
+  }
+
+  const nested: TaskNestedLine[] = [];
+  for (const [commentId, rows] of byComment) {
+    /** Задачи комментария — цель привязки вложенной строки. */
+    const taskAt = new Set(rows.filter((row) => row.is_task === 1).map((row) => row.line_no));
+    /** Все строки комментария по номеру — цепочка пунктов чек-листа. */
+    const rowAt = new Map(rows.map((row) => [row.line_no, row]));
+    /** Стек предков текущей строки по `depth` (только строгие предки). */
+    const stack: Array<{ lineNo: number; depth: number }> = [];
+    for (const row of rows) {
+      while (stack.length > 0 && stack[stack.length - 1]!.depth >= row.depth) stack.pop();
+      if (row.is_task === 1) {
+        stack.push({ lineNo: row.line_no, depth: row.depth });
+        continue;
+      }
+      // Пункт чек-листа знает своего предка явно, но цепочка пунктов может быть
+      // длиннее одного уровня — до задачи идём по `parent_line_no`.
+      let parentTask: number | null = null;
+      let cursor = row.parent_line_no;
+      const seen = new Set<number>();
+      while (cursor !== null && !seen.has(cursor)) {
+        seen.add(cursor);
+        if (taskAt.has(cursor)) {
+          parentTask = cursor;
+          break;
+        }
+        cursor = rowAt.get(cursor)?.parent_line_no ?? null;
+      }
+      // Обычная вложенная строка (`- текст`) предка в проекции не несёт —
+      // ближайшая задача берётся из стека по `depth`.
+      if (parentTask === null) {
+        for (let index = stack.length - 1; index >= 0; index -= 1) {
+          const ancestor = stack[index]!;
+          if (taskAt.has(ancestor.lineNo)) {
+            parentTask = ancestor.lineNo;
+            break;
+          }
+        }
+      }
+      stack.push({ lineNo: row.line_no, depth: row.depth });
+      if (parentTask === null) continue;
+      if (!pageSet.has(`${commentId}:${parentTask}`)) continue;
+      nested.push({
+        comment_id: commentId,
+        line_no: row.line_no,
+        parent: { comment_id: commentId, line_no: parentTask },
+        text: row.text,
+        depth: row.depth,
+        // Чекбокс строки — единственный признак пункта чек-листа в проекции.
+        checkbox: row.parent_line_no !== null,
+      });
+    }
+  }
+  return nested;
+}
+
+/**
  * Выборка страницы задач (GET /tasks). Читается только проекция; парсинг при
  * чтении не выполняется (ADR d0c07f33).
  */
@@ -425,6 +535,7 @@ export function listTasks(ndb: NetworkDb, options: TaskListOptions = {}): TaskLi
     items: toTaskDtos(ndb, page),
     cursor,
     ...(total !== undefined ? { total } : {}),
+    ...(options.includeNested === true ? { nested: loadNestedLines(ndb, page) } : {}),
     max_revision: readTaskProjectionMarker(ndb),
   };
 }

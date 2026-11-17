@@ -88,6 +88,8 @@ interface Calls {
   reminderGroupDismiss: string[];
   days: string[];
   rawLines: number;
+  /** Высоты панели, записанные экраном (пункт B ТЗ 2026-11-17). */
+  panelHeights: number[];
 }
 
 /** Строка панели (view-модель) с адресом проекции. */
@@ -106,6 +108,8 @@ function taskRow(overrides: Partial<TaskPanelRow> = {}): TaskPanelRow {
     subjectThoughts: [],
     subjectId: null,
     day: '2026-11-14',
+    overdue: false,
+    children: [],
     ...overrides,
   };
 }
@@ -166,6 +170,7 @@ function mount(
     reminderGroupDismiss: [],
     days: [],
     rawLines: 0,
+    panelHeights: [],
   };
   const actions: TaskPanelActions = {
     refresh: () => {
@@ -208,6 +213,11 @@ function mount(
     },
     renderText: (node, row) => {
       node.textContent = row.text;
+    },
+    // Высота панели (пункт B ТЗ 2026-11-17): экран хранит её сам, панель читает.
+    panelHeight: () => calls.panelHeights[calls.panelHeights.length - 1] ?? null,
+    setPanelHeight: (height) => {
+      calls.panelHeights.push(height);
     },
   };
   const handle = mountTaskPanel(host as unknown as HTMLElement, { ...actions, ...overrides });
@@ -814,6 +824,7 @@ function mountHeadless(
     reminderGroupDismiss: [],
     days: [],
     rawLines: 0,
+    panelHeights: [],
   };
   const actions: TaskPanelActions = {
     refresh: () => {
@@ -968,5 +979,234 @@ describe('панель редактора мысли: headless, плоские �
     chip.click();
     assert.deepEqual(calls.days, ['source:c1:0']);
     destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.16.1, замечания пользователя 2026-11-17 (задача 01998381): пункты B, C, D, E, F.
+// ---------------------------------------------------------------------------
+
+describe('панель задач: вложенные строки строки-задачи (пункт F)', () => {
+  it('строка с детьми по умолчанию СВЁРНУТА, каретка раскрывает и сворачивает', () => {
+    const children = [
+      { key: 'c1:1', lineNo: 1, text: 'пункт чек-листа', depth: 1, checkbox: true },
+      { key: 'c1:2', lineNo: 2, text: 'вложенный текст', depth: 1, checkbox: false },
+    ];
+    const { host, destroy } = mount([taskRow({ children })]);
+    const row = host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+    assert.equal(
+      host.findAll('ui-task-row-children').length,
+      0,
+      'по умолчанию вложенные строки свёрнуты',
+    );
+    const caret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
+    assert.ok(caret, 'у строки с детьми есть каретка раскрытия');
+    assert.equal(caret.getAttribute('aria-expanded'), 'false');
+
+    caret.click();
+    const expandedCaret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
+    const visible = host.findAll('ui-task-child-row').map((node) => node.flatText().trim());
+    assert.deepEqual(visible, ['пункт чек-листа', 'вложенный текст'], 'раскрытие показывает детей');
+    assert.equal(expandedCaret.getAttribute('aria-expanded'), 'true', 'каретка сообщает состояние');
+
+    expandedCaret.click();
+    assert.equal(host.findAll('ui-task-row-children').length, 0, 'повторный клик сворачивает');
+    destroy();
+  });
+
+  it('строка без детей не сворачивается: каретки и блока детей нет', () => {
+    const { host, destroy } = mount([taskRow()]);
+    assert.equal(host.findAll('ui-task-row-caret').length, 0);
+    assert.equal(host.findAll('ui-task-row-children').length, 0);
+    destroy();
+  });
+});
+
+describe('панель задач: напоминания плоским списком и просрочка (пункты C и D)', () => {
+  function reminderRow(key: string, moment: string, overdue = false): ReminderPanelRow {
+    return {
+      key: `${key}:${moment}`,
+      reminderId: key,
+      subjectType: 'thought',
+      subjectId: 't1',
+      title: `Мысль ${key}`,
+      moment,
+      occurrenceAt: moment,
+      status: 'active',
+      repeat: '',
+      day: moment.slice(0, 10),
+      ...(overdue ? { overdue: true } : {}),
+    };
+  }
+
+  it('плоская секция рисует облачка строк без подгрупп', () => {
+    const rows = [
+      reminderRow('r1', '2026-11-17T09:00:00.000Z'),
+      reminderRow('r2', '2026-11-17T10:00:00.000Z'),
+    ];
+    const clouds: string[] = [];
+    const { host, render, destroy } = mount([], {
+      renderSubject: (node, subject) => {
+        clouds.push(subject.title);
+        const chip = new ShimElement('span', 'prop-ref-cloud');
+        const title = new ShimElement('span', 'prc-title');
+        title.textContent = subject.title;
+        chip.append(title);
+        node.append(chip as unknown as Node);
+      },
+    });
+    render(
+      panelView([], {
+        reminderCount: rows.length,
+        reminderSections: [{ key: 'today', title: 'Сегодня', flat: true, subgroups: [], rows }],
+      }),
+    );
+    const group = host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
+    assert.ok(group, 'группа напоминаний на панели');
+    assert.equal(group.findAll('ui-task-subgroup').length, 0, 'плоская секция без подгрупп');
+    assert.deepEqual(
+      group.findAll('prc-title').map((node) => node.flatText().trim()),
+      ['Мысль r1', 'Мысль r2'],
+      'каждая строка — облачко мысли',
+    );
+    assert.deepEqual(clouds, ['Мысль r1', 'Мысль r2'], 'облачко рисует экран (renderSubject)');
+    destroy();
+  });
+
+  it('просроченная строка и её дата — класс is-overdue (красный)', () => {
+    const rows = [reminderRow('r1', '2026-11-16T09:00:00.000Z', true)];
+    const { host, render, destroy } = mount([]);
+    render(
+      panelView([], {
+        reminderCount: 1,
+        reminderSections: [
+          { key: 'overdue', title: 'Просрочено', flat: true, subgroups: [], rows },
+        ],
+      }),
+    );
+    assert.equal(
+      host.findAll('ui-reminder-row').filter((node) => node.className.includes('is-overdue'))
+        .length,
+      1,
+      'просроченное вхождение помечено',
+    );
+    destroy();
+  });
+});
+
+describe('панель задач: заголовки групп и облачка (пункт E)', () => {
+  it('группа-дата получает календарик, группа-мысль — облачко', () => {
+    const views: string[] = [];
+    const { host, render, destroy } = mount([], {
+      renderSubject: (node, subject) => {
+        views.push(subject.title);
+        const chip = new ShimElement('span', 'prop-ref-cloud');
+        const title = new ShimElement('span', 'prc-title');
+        title.textContent = subject.title;
+        chip.append(title);
+        node.append(chip as unknown as Node);
+      },
+    });
+    render(
+      panelView([taskRow()], {
+        taskSections: [
+          {
+            key: 'period',
+            title: 'section-main',
+            subgroups: [
+              {
+                key: 'date:2026-11-14',
+                title: '14.11.2026',
+                kind: 'dates',
+                filter: {},
+                rows: [taskRow()],
+                icon: 'calendar',
+              },
+              {
+                key: 'thought:t1',
+                title: 'Мысль',
+                kind: 'thoughts',
+                filter: { scope: 'open', thought_id: 't1' },
+                rows: [taskRow({ key: 'c2:0', subjectId: 't1' })],
+                subject: { kind: 'thought', id: 't1', title: 'Мысль' },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const icons = host.findAll('ui-task-subgroup-icon');
+    assert.equal(icons.length, 2, 'слот значка есть у каждой подгруппы');
+    assert.equal(
+      icons.filter((node) => !node.hidden && node.childElementCount > 0).length,
+      1,
+      'календарик ровно у группы-даты',
+    );
+    assert.deepEqual(views, ['Мысль'], 'облачко рисуется только у группы-мысли');
+    const titles = host.findAll('ui-task-subgroup-title').map((node) => node.flatText().trim());
+    assert.deepEqual(titles, ['14.11.2026', ''], 'у группы-мысли заголовок-строка скрыт');
+    destroy();
+  });
+});
+
+describe('панель задач: высота панели (пункт B)', () => {
+  it('без сохранённой высоты переменная не ставится (работает CSS-умолчание)', () => {
+    const { host, calls, render, destroy } = mount([taskRow()], { panelHeight: () => null });
+    const root = host.querySelector('.ui-task-panel') as unknown as ShimElement;
+    assert.equal(root.style.getPropertyValue('--task-panel-height'), '', 'высота по умолчанию');
+    render(panelView([taskRow()]));
+    assert.equal(root.style.getPropertyValue('--task-panel-height'), '', 'умолчание не перебито');
+    assert.equal(calls.panelHeights.length, 0, 'без драга высота не пишется');
+    destroy();
+  });
+
+  it('handle: свёрнутость из настроек, высота читается и применяется', () => {
+    installShim();
+    keymap.keymapInternals.reset();
+    const host = new ShimElement('div');
+    let height: number | null = 320;
+    let collapsed = false;
+    const handle = mountTaskPanel(
+      host as unknown as HTMLElement,
+      {
+        refresh: () => undefined,
+        undo: () => undefined,
+        setShowDone: () => undefined,
+        collapsedOf: () => collapsed,
+        toggle: () => undefined,
+        loadRawLine: async () => '',
+        editLine: async () => true,
+        rowCommand: () => undefined,
+        bulk: () => undefined,
+        reminderAction: () => undefined,
+        reminderGroupDismiss: () => undefined,
+        pickDate: async () => null,
+        pickDateTime: async () => null,
+        openDay: () => undefined,
+        renderText: (node, row) => {
+          node.textContent = row.text;
+        },
+        panelHeight: () => height,
+        setPanelHeight: (next) => {
+          height = next;
+        },
+      } as TaskPanelActions,
+    );
+    handle.render(panelView([taskRow()]));
+    const root = host.querySelector('.ui-task-panel') as unknown as ShimElement;
+    assert.equal(handle.panelHeight(), 320, 'высота читается из настроек экрана');
+    assert.equal(
+      root.style.getPropertyValue('--task-panel-height'),
+      '320px',
+      'высота выставлена переменной панели',
+    );
+    handle.setPanelHeight(480);
+    assert.equal(handle.panelHeight(), 480, 'новая высота записана экрану');
+    assert.equal(root.style.getPropertyValue('--task-panel-height'), '480px');
+
+    collapsed = true;
+    handle.render(panelView([taskRow()]));
+    assert.equal(handle.panelCollapsed(), true, 'панель сообщает свёрнутость экрану');
+    handle.destroy();
   });
 });

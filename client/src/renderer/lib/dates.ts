@@ -28,6 +28,21 @@ export function todayLocal(now: Date = new Date()): string {
 }
 
 /**
+ * Календарный день (локальные сутки наблюдателя) из UTC-инстанса — например,
+ * из `valid_from`/`valid_to` хроно-записи. «Голая дата» возвращается как есть;
+ * неразборчивое значение — `null` (период записи неизвестен).
+ */
+export function localDayOfInstant(iso: string | null | undefined): string | null {
+  if (iso === null || iso === undefined) return null;
+  const value = iso.trim();
+  if (value === '') return null;
+  if (BARE_DATE_RE.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+/**
  * Локальная дата `YYYY-MM-DD` корректна (такая дата существует в календаре).
  * Общий валидатор «голых дат»: им пользуются диалог «Дата/период» и
  * компонентное поле даты (`lib/date-field.ts`) — одна точка правды
@@ -45,11 +60,7 @@ export function isValidLocalDay(value: string): boolean {
  * началу (валидация периода — «По» не меньше «С»). Общая точка правды для
  * диалога даты/периода и полей «Даты» панели отбора (итерация приёмки №8, п.4).
  */
-export function setPeriodFrom(
-  from: string,
-  to: string,
-  day: string,
-): { from: string; to: string } {
+export function setPeriodFrom(from: string, to: string, day: string): { from: string; to: string } {
   return { from: day, to: to < day ? day : to };
 }
 
@@ -57,11 +68,7 @@ export function setPeriodFrom(
  * Назначить «По» периода: при «По» < «С» начало автоматически становится равно
  * концу (валидация периода).
  */
-export function setPeriodTo(
-  from: string,
-  to: string,
-  day: string,
-): { from: string; to: string } {
+export function setPeriodTo(from: string, to: string, day: string): { from: string; to: string } {
   return { from: day < from ? day : from, to: day };
 }
 
@@ -204,11 +211,7 @@ export interface CalendarWeek {
  * «срединного» дня строки (4-го): при `firstDayOfWeek = 1` это четверг той же
  * ISO-недели, что и прежний расчёт по понедельнику строки, — номер не меняется.
  */
-export function buildMonthWeeks(
-  year: number,
-  month: number,
-  firstDayOfWeek = 1,
-): CalendarWeek[] {
+export function buildMonthWeeks(year: number, month: number, firstDayOfWeek = 1): CalendarWeek[] {
   const first = firstOfMonth(year, month);
   const lead = weekStartOffset(first, firstDayOfWeek);
   let cursor = addDays(first, -lead);

@@ -37,6 +37,7 @@ import {
   type TaskDTO,
   type TaskMassAction,
   type TaskMassFilter,
+  type TaskNestedLine,
   type TaskOpAction,
   type TaskScope,
 } from '@etn/shared';
@@ -54,15 +55,22 @@ import { etn } from '../../lib/etn.js';
 import { formatDateParts, getLang, t } from '../../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../../lib/live/event-router.js';
 import { notice } from '../../lib/notice.js';
+import {
+  createPublicationCloud,
+  type PublicationCloudInput,
+} from '../../lib/ui/publication-cloud.js';
+import { createThoughtCloud, type ThoughtCloudInput } from '../../lib/thought-cloud.js';
 import { openReminderEditor } from '../../lib/reminder-editor.js';
 import { store } from '../../state.js';
 import {
   REMINDER_PANEL_ROW_CLASS,
+  TASK_PANEL_COLLAPSE_KEYS,
   TASK_PANEL_ROW_CLASS,
   mountTaskPanel,
   type ReminderPanelSectionView,
   type ReminderRowAction,
   type TaskPanelSectionView,
+  type TaskPanelSubject,
   type TaskPanelView,
   type TaskRowCommand,
   type TaskShift,
@@ -70,7 +78,9 @@ import {
 import {
   REMINDERS_OVERDUE_DAYS,
   calendarDaysBetween,
+  flatReminderRows,
   groupPanelRows,
+  nestedLinesByParent,
   panelMarkerAdvanced,
   panelNeedsRefresh,
   planTaskBulk,
@@ -85,6 +95,7 @@ import {
   taskRowsForFilter,
   type PanelGroup,
   type ReminderPanelRow,
+  type TaskPanelChildRow,
   type TaskPanelRow,
   type TaskPanelStaleness,
 } from '../../lib/ui/task-panel-model.js';
@@ -98,6 +109,11 @@ export interface TasksPanelDeps {
   openDay(day: string): void;
   /** Правки в записях изменились — лента «Дневника» перечитывается. */
   onRecordsChanged(): void;
+  /**
+   * Панель свёрнута/развёрнута штатной кареткой: «Дневник» прячет слайдер
+   * высоты, доступный только развёрнутой панели (пункт B ТЗ 2026-11-17).
+   */
+  onPanelCollapsed?(collapsed: boolean): void;
 }
 
 /** Дескриптор панели для экрана. */
@@ -106,10 +122,27 @@ export interface TasksPanelHandle {
   refresh(): void;
   /** Снять подписки и размонтировать компоненту. */
   destroy(): void;
+  /**
+   * Панель свёрнута штатной кареткой: слайдер высоты прячется (пункт B ТЗ
+   * 2026-11-17 — высота доступна только развёрнутой панели).
+   */
+  panelCollapsed(): boolean;
+  /** Высота панели из `ui_state`, `null` — высота по умолчанию. */
+  panelHeight(): number | null;
+  /** Запомнить высоту панели (слайдер) и применить её сразу. */
+  setPanelHeight(height: number): void;
 }
 
 /** Предел строк на один запрос списка задач (сервер: `TASKS_MAX_LIMIT`). */
 const TASKS_PAGE_LIMIT = 200;
+
+/** Границы высоты панели, px: ниже — нечитаемо, выше — не оставляет ленты. */
+export const TASKS_PANEL_H_MIN = 120;
+export const TASKS_PANEL_H_MAX = 900;
+/** Минимум места для ленты при перетаскивании слайдера, px. */
+export const TASKS_PANEL_FEED_MIN = 160;
+/** Задержка записи настроек панели после драга слайдера, мс. */
+const PERSIST_DEBOUNCE_MS = 400;
 
 /** Локальная настройка панели в `ui_state`. */
 interface TasksPanelSettings {
@@ -119,6 +152,8 @@ interface TasksPanelSettings {
    * поля под каждый блок: новый блок не требует правки формата.
    */
   collapsed?: Record<string, boolean>;
+  /** Высота панели, px (пункт B ТЗ 2026-11-17). Не задана — по умолчанию. */
+  height?: number;
 }
 
 /** Состояние одной загрузки: данные + признак устаревания. */
@@ -130,6 +165,8 @@ interface TasksPanelState {
   doneTotal: number;
   reminders: ReminderListResult;
   maxRevision: number;
+  /** Вложенные не-задачные строки страниц (`include_nested`, пункт F ТЗ). */
+  nested: TaskNestedLine[];
 }
 
 /** Пустое состояние до первой загрузки. */
@@ -142,6 +179,7 @@ function emptyState(): TasksPanelState {
     doneTotal: 0,
     reminders: { reminders: [], from: null, to: null },
     maxRevision: 0,
+    nested: [],
   };
 }
 
@@ -182,10 +220,17 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
   let loadSeq = 0;
   /** Снимок текстов для отмены массовой команды (требование e6af8b9e). */
   let undoSnapshot: Array<{ id: string; body_md: string; version: number }> | null = null;
-  /** Кэш названий субъектов (мысль/публикация) — группировка и строки. */
-  const subjectTitles = new Map<string, string>();
+  /**
+   * Кэш субъектов строк: снапшот мысли/публикации для облачка и названий
+   * (пункты C и E ТЗ 2026-11-17). Ключ — `<вид>:<id>`, как в раскладке строк.
+   */
+  const subjectData = new Map<string, ThoughtCloudInput | PublicationCloudInput>();
   /** Загружены ли настройки панели из `ui_state`. */
   let settingsLoaded = false;
+  /** Высота панели из `ui_state` (пункт B ТЗ 2026-11-17), `null` — по умолчанию. */
+  let panelHeightValue: number | null = null;
+  /** Таймер отложенной записи настроек: слайдер пишет их на каждом тике драга. */
+  let persistTimer: number | null = null;
 
   const panel = mountTaskPanel(host, {
     refresh: () => void loadPanel(),
@@ -200,6 +245,8 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     setCollapsed: (key, value) => {
       collapsed = { ...collapsed, [key]: value };
       persistSettings();
+      // Свёрнутость всей панели ведёт доступность слайдера высоты (пункт B).
+      if (key === TASK_PANEL_COLLAPSE_KEYS.panel) deps.onPanelCollapsed?.(value);
     },
     toggle: (row, done) => void toggleTask(row, done),
     loadRawLine: (row) => loadRawLine(row),
@@ -212,6 +259,13 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     pickDateTime: (initialIso) => pickDateTime(initialIso),
     openDay: (day) => deps.openDay(day),
     renderText: (node, row) => renderRowText(node, row),
+    renderSubject: (node, subject) => renderSubject(node, subject),
+    panelHeight: () => panelHeightValue,
+    setPanelHeight: (height) => {
+      panelHeightValue = height;
+      // Драг зовёт `setPanelHeight` на каждом тике: пишем `ui_state` отложенно.
+      schedulePersist();
+    },
   });
 
   /** Прочитать настройки панели (L4 `ui_state`). */
@@ -226,25 +280,49 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
         if (saved !== undefined && saved !== null && typeof saved === 'object') {
           collapsed = { ...saved };
         }
+        // Высота панели (пункт B ТЗ 2026-11-17): только положительное число в
+        // допустимых границах, иначе — высота по умолчанию.
+        const height = parsed.height;
+        if (typeof height === 'number' && Number.isFinite(height)) {
+          panelHeightValue = Math.min(TASKS_PANEL_H_MAX, Math.max(TASKS_PANEL_H_MIN, height));
+        }
       }
     } catch {
       // Настройки нет или она повреждена — дефолт (выполненные скрыты, блоки развёрнуты).
     } finally {
       settingsLoaded = true;
+      // Стартовая свёрнутость панели (из `ui_state`) — сразу же решает, виден
+      // ли слайдер высоты (пункт B ТЗ 2026-11-17).
+      deps.onPanelCollapsed?.(collapsed[TASK_PANEL_COLLAPSE_KEYS.panel] === true);
       renderView();
     }
   }
 
   /** Сохранить настройки панели. */
   function persistSettings(): void {
+    if (persistTimer !== null) {
+      window.clearTimeout(persistTimer);
+      persistTimer = null;
+    }
     if (!settingsLoaded) return;
+    const payload: TasksPanelSettings = { showDone, collapsed };
+    if (panelHeightValue !== null) payload.height = panelHeightValue;
     void etn.ui
-      .setState(
-        requireNetworkId(),
-        UI_STATE_KEY.DIARY_TASKS_PANEL,
-        JSON.stringify({ showDone, collapsed } satisfies TasksPanelSettings),
-      )
+      .setState(requireNetworkId(), UI_STATE_KEY.DIARY_TASKS_PANEL, JSON.stringify(payload))
       .catch(() => undefined);
+  }
+
+  /**
+   * Отложенная запись настроек: драг слайдера высоты даёт десятки вызовов в
+   * секунду, а `ui_state` — запись в БД. Переключатели панели пишутся сразу
+   * ({@link persistSettings}), слайдер — через этот таймер.
+   */
+  function schedulePersist(): void {
+    if (persistTimer !== null) window.clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(() => {
+      persistTimer = null;
+      persistSettings();
+    }, PERSIST_DEBOUNCE_MS);
   }
 
   /** Окно раскрытия напоминаний: период ленты, «сегодня» и запас просрочки. */
@@ -289,18 +367,21 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
           today,
           limit: TASKS_PAGE_LIMIT,
           count: true,
+          include_nested: true,
         }),
         etn.tasks.list(networkId, {
           scope: 'overdue',
           today,
           limit: TASKS_PAGE_LIMIT,
           count: true,
+          include_nested: true,
         }),
         etn.tasks.list(networkId, {
           scope: 'undated',
           today,
           limit: TASKS_PAGE_LIMIT,
           count: true,
+          include_nested: true,
         }),
         etn.tasks.list(networkId, {
           scope: 'done',
@@ -309,6 +390,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
           today,
           limit: TASKS_PAGE_LIMIT,
           count: true,
+          include_nested: true,
         }),
         etn.reminders.list(networkId, { from: window.from, to: window.to }),
       ]);
@@ -326,6 +408,12 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
           undatedPage.max_revision,
           donePage.max_revision,
         ),
+        nested: [
+          ...(periodPage.nested ?? []),
+          ...(overduePage.nested ?? []),
+          ...(undatedPage.nested ?? []),
+          ...(donePage.nested ?? []),
+        ],
       };
       staleRows = new Set<string>();
       staleComments = new Set<string>();
@@ -349,7 +437,10 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
   }
 
-  /** Доразрешить названия субъектов задач и напоминаний (кэш на сессию панели). */
+  /**
+   * Доразрешить субъектов задач и напоминаний: снапшоты мыслей и публикаций
+   * (кэш на сессию панели) — из них берутся названия групп и облачка строк.
+   */
   async function resolveSubjects(seq: number): Promise<void> {
     const networkId = requireNetworkId();
     const ids = new Set<string>();
@@ -361,18 +452,17 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       if (reminder.subject_type === 'thought') ids.add(reminder.subject_id);
       else publicationIds.add(reminder.subject_id);
     }
-    const missingThoughts = [...ids].filter((id) => !subjectTitles.has(`thought:${id}`));
+    const missingThoughts = [...ids].filter((id) => !subjectData.has(`thought:${id}`));
     const missingPublications = [...publicationIds].filter(
-      (id) => !subjectTitles.has(`publication:${id}`),
+      (id) => !subjectData.has(`publication:${id}`),
     );
     await Promise.allSettled([
       ...missingThoughts.map(async (id) => {
-        const thought = await etn.thoughts.get(networkId, id);
-        subjectTitles.set(`thought:${id}`, thought.title);
+        subjectData.set(`thought:${id}`, await etn.thoughts.get(networkId, id));
       }),
       ...missingPublications.map(async (id) => {
         const publication = await etn.publications.get(networkId, id);
-        subjectTitles.set(`publication:${id}`, publication.title);
+        subjectData.set(`publication:${id}`, { id: publication.id, title: publication.title });
       }),
     ]);
     if (seq === loadSeq) renderView();
@@ -380,7 +470,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
 
   /** Название субъекта строки (мысль/публикация) с фолбэком на id. */
   function subjectTitle(kind: 'thought' | 'publication', id: string): string {
-    return subjectTitles.get(`${kind}:${id}`) ?? id;
+    return subjectData.get(`${kind}:${id}`)?.title ?? id;
   }
 
   /**
@@ -420,6 +510,46 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     return text.charAt(0).toLocaleUpperCase(getLang()) + text.slice(1);
   }
 
+  /**
+   * Оформление заголовка подгруппы (пункт E ТЗ 2026-11-17): группа-мысль —
+   * облачко мысли/публикации с иконкой, группа-дата (дни, недели, месяцы) —
+   * иконка календарика перед названием.
+   */
+  function subgroupDecoration(
+    group: PanelGroup<TaskPanelRow | ReminderPanelRow>,
+    subjectKind: 'thought' | 'publication',
+  ): { subject?: TaskPanelSubject | null; icon?: 'calendar' } {
+    if (group.kind === 'thoughts') {
+      if (group.subjectId === null) return {};
+      return {
+        subject: {
+          kind: subjectKind,
+          id: group.subjectId,
+          title: subjectTitle(subjectKind, group.subjectId),
+        },
+      };
+    }
+    return { icon: 'calendar' };
+  }
+
+  /**
+   * Облачко субъекта (пункт C ТЗ 2026-11-17): строки напоминаний и заголовки
+   * групп-мыслей. Мысль — эталонное облачко `lib/thought-cloud` в профиле чипа
+   * поля свойств; публикация — облачко публикации `lib/ui`. Панель фабрик не
+   * знает: экран рисует по данным `renderSubject`.
+   */
+  function renderSubject(host: HTMLElement, subject: TaskPanelSubject): void {
+    if (subject.kind === 'publication') {
+      host.append(
+        createPublicationCloud({ id: subject.id, title: subject.title }, { width: 'container' }),
+      );
+      return;
+    }
+    const data = subjectData.get(`${subject.kind}:${subject.id}`);
+    const input: ThoughtCloudInput = data ?? { id: subject.id, title: subject.title };
+    host.append(createThoughtCloud(input, { profile: 'chip', width: 'container' }));
+  }
+
   /** Фильтр массовой команды группы: адресация проекцией (требование e6af8b9e). */
   function groupFilter(
     group: PanelGroup<TaskPanelRow | ReminderPanelRow>,
@@ -446,10 +576,15 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     title: string,
     rows: TaskDTO[],
     scope: TaskScope,
+    children: ReadonlyMap<string, readonly TaskPanelChildRow[]>,
   ): TaskPanelSectionView {
+    const today = todayLocal();
     const views = rows.map((row) => {
       const address = taskRowKey(row);
-      return taskRowView(row, staleness(), toggledDone.get(address));
+      return taskRowView(row, staleness(), toggledDone.get(address), {
+        today,
+        children: children.get(address) ?? [],
+      });
     });
     if (scope === 'undated') {
       return { key, title, flat: true, subgroups: [], rows: views };
@@ -465,6 +600,7 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
         kind: group.kind,
         filter: groupFilter(group, scope),
         rows: group.rows,
+        ...subgroupDecoration(group, 'thought'),
       })),
     };
   }
@@ -475,20 +611,29 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     title: string,
     rows: ReminderPanelRow[],
   ): ReminderPanelSectionView {
+    // Пункт D ТЗ 2026-11-17: при ОДНОЙ выбранной дате периода напоминания
+    // показываются плоским хронологическим списком — без групп по датам/мыслям.
+    if (effectivePeriod().from === effectivePeriod().to) {
+      return { key, title, flat: true, subgroups: [], rows: flatReminderRows(rows) };
+    }
     const mode = taskGroupingMode(rows.length);
     const groups = groupPanelRows(rows, mode, { firstDayOfWeek: firstDayOfWeek() });
     return {
       key,
       title,
-      subgroups: groups.map((group) => ({
-        key: group.key,
+      subgroups: groups.map((group) => {
         // Вид субъекта берём у СТРОК группы, а не угадываем: в группе «по
         // мыслям» лежат и мысли, и публикации (строки уже несут `subjectType`).
-        title: groupTitle(group, group.rows[0]?.subjectType ?? 'thought'),
-        kind: group.kind,
-        filter: {},
-        rows: group.rows,
-      })),
+        const subjectKind = group.rows[0]?.subjectType ?? 'thought';
+        return {
+          key: group.key,
+          title: groupTitle(group, subjectKind),
+          kind: group.kind,
+          filter: {},
+          rows: group.rows,
+          ...subgroupDecoration(group, subjectKind),
+        };
+      }),
     };
   }
 
@@ -553,9 +698,24 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       markerAdvanced,
     });
 
-    const reminderRows = reminderPanelRows(state.reminders, subjectTitles, repeatLabel);
     const todayStart = Date.parse(localDayStart(todayLocal()));
     const todayEnd = Date.parse(localDayEnd(todayLocal()));
+    /** Названия субъектов напоминаний — ключ `<вид>:<id>` (кэш экрана). */
+    const reminderTitles = new Map<string, string>();
+    for (const reminder of state.reminders.reminders) {
+      reminderTitles.set(
+        `${reminder.subject_type}:${reminder.subject_id}`,
+        subjectTitle(reminder.subject_type, reminder.subject_id),
+      );
+    }
+    // Просроченные вхождения (момент показа раньше начала местных суток) —
+    // признак строки и красная дата (пункт D ТЗ 2026-11-17).
+    const reminderRows = reminderPanelRows(
+      state.reminders,
+      reminderTitles,
+      repeatLabel,
+      todayStart,
+    );
     const buckets: Record<'overdue' | 'today' | 'period', ReminderPanelRow[]> = {
       overdue: [],
       today: [],
@@ -577,6 +737,8 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     }
 
     const period = effectivePeriod();
+    // Вложенные не-задачные строки страниц по адресу родителя (пункт F ТЗ).
+    const nestedChildren = nestedLinesByParent(state.nested);
     const view: TaskPanelView = {
       stale,
       // «За период» адресуется теми же границами, что показаны лентой; без
@@ -597,12 +759,29 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
           t('tasks.sectionMain'),
           [...state.period, ...(showDone ? state.done : [])],
           'open',
+          nestedChildren,
         ),
         ...(state.overdue.length > 0
-          ? [taskSection('overdue', t('tasks.sectionOverdue'), state.overdue, 'overdue')]
+          ? [
+              taskSection(
+                'overdue',
+                t('tasks.sectionOverdue'),
+                state.overdue,
+                'overdue',
+                nestedChildren,
+              ),
+            ]
           : []),
         ...(state.undated.length > 0
-          ? [taskSection('undated', t('tasks.sectionUndated'), state.undated, 'undated')]
+          ? [
+              taskSection(
+                'undated',
+                t('tasks.sectionUndated'),
+                state.undated,
+                'undated',
+                nestedChildren,
+              ),
+            ]
           : []),
       ],
       reminderSections: sections,
@@ -1186,8 +1365,21 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     },
     destroy(): void {
       disposed = true;
+      if (persistTimer !== null) {
+        window.clearTimeout(persistTimer);
+        persistTimer = null;
+      }
       unsubscribe();
       panel.destroy();
+    },
+    panelCollapsed(): boolean {
+      return panel.panelCollapsed();
+    },
+    panelHeight(): number | null {
+      return panelHeightValue;
+    },
+    setPanelHeight(height: number): void {
+      panel.setPanelHeight(height);
     },
   };
 }

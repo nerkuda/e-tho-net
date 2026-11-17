@@ -46,6 +46,7 @@ export function createTasksRoutes(deps: RouteDeps): FastifyPluginAsync {
           ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
           ...(input.count !== undefined ? { count: input.count } : {}),
+          ...(input.include_nested !== undefined ? { includeNested: input.include_nested } : {}),
         });
         sendSuccess(reply, page, { request_id: req.id });
       },

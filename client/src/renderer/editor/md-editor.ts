@@ -21,14 +21,27 @@ import {
   type Extension,
   type SelectionRange,
 } from '@codemirror/state';
-import { Decoration, drawSelection, EditorView, keymap, tooltips, type DecorationSet } from '@codemirror/view';
+import {
+  Decoration,
+  drawSelection,
+  EditorView,
+  keymap,
+  tooltips,
+  type DecorationSet,
+} from '@codemirror/view';
 
 import { findMatches } from './text-search.js';
 import {
   toggleCollapseAtCaret as runCollapseToggle,
   type CollapseToggleMode,
 } from './comment-collapse.js';
-import { livePreview, mdWidgetClick } from './md-live.js';
+import {
+  DEFAULT_TASK_HINT_CONTEXT,
+  livePreview,
+  mdWidgetClick,
+  taskHintContext,
+  type TaskHintContext,
+} from './md-live.js';
 import { wikiLinkAutocompletion, wikiLinkLanguage } from './wiki-link.js';
 import { wikiIdExtensions } from './wiki-id-plugin.js';
 import {
@@ -61,6 +74,13 @@ export interface MdEditorCallbacks {
    * команд поля комментария через `Prec.high` — задача ab0c4470).
    */
   extraExtensions?: Extension[];
+  /**
+   * Контекст владельца строк для тихой подсказки задачи (ошибка f720cfff, ТЗ
+   * 2026-11-17 пункт A): хроно-запись передаёт свой период записи, постоянный
+   * комментарий — вид `permanent`. Не задано — подсказка считает контекст
+   * неизвестным и пишет «срок не задан, задача отображается во всех периодах».
+   */
+  taskHintContext?: TaskHintContext;
 }
 
 /** Снимок текста и главного выделения редактора. */
@@ -398,6 +418,9 @@ export function mdEditorExtensions(
   listeners: Set<() => void> = new Set(),
 ): Extension[] {
   return [
+    // Контекст владельца строк для тихой подсказки задачи (ошибка f720cfff):
+    // фасет несёт само поле, live preview читает его при сборке декораций.
+    taskHintContext.of(cb.taskHintContext ?? DEFAULT_TASK_HINT_CONTEXT),
     // Esc cancels the edit (unless the autocomplete dropdown is open —
     // then the completion keymap closes it first). Ctrl/Cmd+Enter
     // commits and returns to the view (M10).

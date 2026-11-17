@@ -30,7 +30,10 @@ import {
   panelMarkerAdvanced,
   panelNeedsRefresh,
   planTaskBulk,
+  flatReminderRows,
+  nestedLinesByParent,
   reminderPanelRows,
+  reminderRowOverdue,
   dueReminderCount,
   reminderRowKey,
   reminderSectionOf,
@@ -45,6 +48,7 @@ import {
   taskZoneVisible,
   weekStartOf,
   type PanelGroupable,
+  type ReminderPanelRow,
 } from '../src/renderer/lib/ui/task-panel-model.js';
 
 /** Строка проекции с минимально нужными полями. */
@@ -497,5 +501,163 @@ describe('видимость зоны «Задачи» вкладки «Осно
     assert.equal(taskZoneVisible({ rowCount: 2, loading: false, hasError: false }), true);
     assert.equal(taskZoneVisible({ rowCount: 0, loading: true, hasError: false }), true);
     assert.equal(taskZoneVisible({ rowCount: 0, loading: false, hasError: true }), true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.16.1, замечания пользователя 2026-11-17 (задача 01998381): пункты D и F.
+// ---------------------------------------------------------------------------
+
+describe('вложенные строки под задачей (пункт F ТЗ 2026-11-17)', () => {
+  it('вложенные строки раскладываются по адресу родителя и несут уровень списка', () => {
+    const map = nestedLinesByParent([
+      {
+        comment_id: 'c1',
+        line_no: 1,
+        parent: { comment_id: 'c1', line_no: 0 },
+        text: 'пункт чек-листа',
+        depth: 1,
+        checkbox: true,
+      },
+      {
+        comment_id: 'c1',
+        line_no: 2,
+        parent: { comment_id: 'c1', line_no: 0 },
+        text: 'вложенный текст',
+        depth: 1,
+        checkbox: false,
+      },
+      {
+        comment_id: 'c1',
+        line_no: 5,
+        parent: { comment_id: 'c1', line_no: 4 },
+        text: 'у другой задачи',
+        depth: 1,
+        checkbox: false,
+      },
+    ]);
+    assert.deepEqual(
+      (map.get('c1:0') ?? []).map((child) => [child.text, child.depth, child.checkbox]),
+      [
+        ['пункт чек-листа', 1, true],
+        ['вложенный текст', 1, false],
+      ],
+      'дети первой задачи идут в порядке источника',
+    );
+    assert.deepEqual(
+      (map.get('c1:4') ?? []).map((child) => child.key),
+      ['c1:5'],
+      'дети второй задачи — своими',
+    );
+    assert.equal(map.size, 2, 'лишних адресов нет');
+    assert.equal(nestedLinesByParent(undefined).size, 0, 'без флага вложенных строк нет');
+  });
+
+  it('строка строки задачи несёт детей и признак просрочки (пункты D и F)', () => {
+    const view = taskRowView(
+      task({ due: '2026-11-10', period_from: '2026-11-10', period_to: '2026-11-10' }),
+      {},
+      undefined,
+      {
+        today: '2026-11-17',
+        children: [{ key: 'c1:1', lineNo: 1, text: 'подпункт', depth: 1, checkbox: true }],
+      },
+    );
+    assert.equal(view.overdue, true, 'срок в прошлом — строка красная');
+    assert.deepEqual(
+      view.children.map((child) => child.text),
+      ['подпункт'],
+      'дети доехали до строки панели',
+    );
+
+    const fresh = taskRowView(task({ due: '2026-11-20' }), {}, undefined, { today: '2026-11-17' });
+    assert.equal(fresh.overdue, false, 'будущий срок не просрочен');
+    assert.deepEqual(fresh.children, [], 'без детей строка не сворачивается');
+
+    const done = taskRowView(task({ due: '2026-11-10', done: true }), {}, undefined, {
+      today: '2026-11-17',
+    });
+    assert.equal(done.overdue, false, 'выполненная задача не просрочена');
+  });
+
+  it('без границы «сегодня» просрочка не считается (сутки считает клиент)', () => {
+    const view = taskRowView(task({ due: '2020-01-01' }));
+    assert.equal(view.overdue, false);
+  });
+});
+
+describe('напоминания при одной дате и просрочка (пункт D ТЗ 2026-11-17)', () => {
+  function reminderRow(moment: string): ReminderPanelRow {
+    return {
+      key: `r:${moment}`,
+      reminderId: 'r',
+      subjectType: 'thought',
+      subjectId: 't1',
+      title: 'Мысль',
+      moment,
+      occurrenceAt: moment,
+      status: 'active',
+      repeat: '',
+      day: moment.slice(0, 10),
+    };
+  }
+
+  it('плоский список — по моменту показа, ближайшее сверху', () => {
+    const rows = [
+      reminderRow('2026-11-17T18:00:00.000Z'),
+      reminderRow('2026-11-17T09:00:00.000Z'),
+      reminderRow('2026-11-17T12:00:00.000Z'),
+    ];
+    assert.deepEqual(
+      flatReminderRows(rows).map((row) => row.moment),
+      ['2026-11-17T09:00:00.000Z', '2026-11-17T12:00:00.000Z', '2026-11-17T18:00:00.000Z'],
+    );
+    assert.deepEqual(
+      rows.map((row) => row.moment),
+      ['2026-11-17T18:00:00.000Z', '2026-11-17T09:00:00.000Z', '2026-11-17T12:00:00.000Z'],
+      'исходный массив не мутируется',
+    );
+  });
+
+  it('просроченность вхождения — момент раньше начала местных суток', () => {
+    const todayStart = Date.parse('2026-11-17T00:00:00.000Z');
+    assert.equal(reminderRowOverdue(reminderRow('2026-11-16T23:59:00.000Z'), todayStart), true);
+    assert.equal(reminderRowOverdue(reminderRow('2026-11-17T00:00:00.000Z'), todayStart), false);
+    assert.equal(reminderRowOverdue(reminderRow('2026-11-17T09:00:00.000Z'), todayStart), false);
+  });
+
+  it('строки напоминаний получают признак просрочки только при переданной границе', () => {
+    const result: ReminderListResult = {
+      reminders: [
+        {
+          id: 'r1',
+          user_id: 'u1',
+          subject_type: 'thought',
+          subject_id: 't1',
+          subject_state: 'active',
+          kind: 'one',
+          schedule: { type: 'once' },
+          anchor_at: '2026-11-16T09:00:00.000Z',
+          next_at: '2026-11-16T09:00:00.000Z',
+          exceptions: {},
+          state: 'active',
+          occurrences: [
+            { occurrence_at: '2026-11-16T09:00:00.000Z', status: 'active', until: null },
+          ],
+          created_at: '2026-11-01T00:00:00.000Z',
+          updated_at: '2026-11-01T00:00:00.000Z',
+        },
+      ],
+      from: null,
+      to: null,
+    };
+    const titles = new Map([['thought:t1', 'Мысль']]);
+    const todayStart = Date.parse('2026-11-17T00:00:00.000Z');
+    assert.equal(reminderPanelRows(result, titles, () => '', todayStart)[0]?.overdue, true);
+    assert.equal(
+      reminderPanelRows(result, titles, () => '')[0]?.overdue,
+      undefined,
+      'без границы признак не считается',
+    );
   });
 });
