@@ -1421,6 +1421,8 @@ export const ru = {
   'tasks.sectionMain': 'В этом периоде',
   'tasks.sectionOverdue': 'Просрочено',
   'tasks.sectionUndated': 'Без срока',
+  /** Секция «Срочные» — сплошной список датированных строк (пункт 6). */
+  'tasks.sectionUrgent': 'Срочные',
   /** Заголовки секций напоминаний. */
   'tasks.remindersOverdue': 'Просрочено',
   'tasks.remindersToday': 'Сегодня',

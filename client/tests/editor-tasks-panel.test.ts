@@ -22,10 +22,47 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
+import { EditorView } from '@codemirror/view';
+
 import type { TaskDTO } from '@etn/shared';
 
+import { markdownFieldValue } from '../src/renderer/editor/markdown-field.js';
 import * as keymap from '../src/renderer/lib/keymap.js';
 import { ShimElement } from './dom-shim.js';
+
+/** Текст поля правки (CM6): компонента держит его у себя, а не в `value`. */
+function fieldText(field: HTMLElement): string {
+  return markdownFieldValue(field);
+}
+
+/**
+ * Заменить текст поля правки — так же, как печатает пользователь: транзакцией
+ * CM6 (иначе снапшот поля остался бы прежним).
+ */
+function typeIntoField(field: HTMLElement, text: string): void {
+  const content = field.querySelector<HTMLElement>('.cm-content');
+  assert.ok(content, 'поле CM6 смонтировано');
+  const view = EditorView.findFromDOM(content);
+  assert.ok(view, 'вид CM6 найден по DOM');
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+}
+
+/** Ctrl+Enter по корню поля: capture-перехват компоненты (п.1 ТЗ 2026-11-18). */
+function pressCommit(field: HTMLElement): { prevented: boolean; stopped: boolean } {
+  const state = { prevented: false, stopped: false };
+  (field as unknown as ShimElement).emit('keydown', {
+    key: 'Enter',
+    ctrlKey: true,
+    metaKey: false,
+    preventDefault: (): void => {
+      state.prevented = true;
+    },
+    stopPropagation: (): void => {
+      state.stopped = true;
+    },
+  });
+  return state;
+}
 
 /** Минимальный `CustomEvent`: шим не несёт глобального конструктора. */
 class ShimCustomEvent {
@@ -103,17 +140,55 @@ function shimDom(): void {
   (globalThis as any).HTMLElement = ShimElement;
   (globalThis as any).CustomEvent = ShimCustomEvent;
   (globalThis as any).getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
-  (globalThis as any).document = {
+  const doc: Record<string, any> = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     createTextNode: (text: string) => new ShimElement('#text', undefined, text),
-    documentElement: { style: {} },
+    documentElement: new ShimElement('html'),
+    // CodeMirror монтирует стили в `document.head` (`StyleSet.mount`).
+    head: new ShimElement('head'),
     body,
+    adoptedStyleSheets: [],
     activeElement: null,
     addEventListener: (): void => undefined,
     removeEventListener: (): void => undefined,
     dispatchEvent: (): boolean => true,
     querySelector: (): null => null,
+    // CM6 (правка строки компонентой, пункт 1) спрашивает выделение, фокус и диапазон.
+    getSelection: () => null,
+    hasFocus: () => false,
+    createRange: () => ({
+      setStart: (): void => undefined,
+      setEnd: (): void => undefined,
+      getClientRects: () => [],
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }),
+    }),
+  };
+  (globalThis as any).document = doc;
+  // CM6 читает `ownerDocument.defaultView` и `getSelection` у шим-элементов.
+  (ShimElement.prototype as any).ownerDocument = doc;
+  (ShimElement.prototype as any).getSelection = () => null;
+  (globalThis as any).MutationObserver = class {
+    observe(): void {
+      /* no-op */
+    }
+    disconnect(): void {
+      /* no-op */
+    }
+    takeRecords(): unknown[] {
+      return [];
+    }
+  };
+  const ls = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => ls.get(key) ?? null,
+    setItem: (key: string, value: string) => void ls.set(key, value),
+    removeItem: (key: string) => void ls.delete(key),
+    clear: () => ls.clear(),
+    key: (index: number) => [...ls.keys()][index] ?? null,
+    get length() {
+      return ls.size;
+    },
   };
   const win = ((globalThis as any).window ??= {}) as Record<string, any>;
   win.innerWidth = 1200;
@@ -128,6 +203,12 @@ function shimDom(): void {
     addEventListener: (): void => undefined,
     removeEventListener: (): void => undefined,
   });
+  // Связка «документ ↔ окно» и кадры: CM6 читает `defaultView` и планирует замеры.
+  doc.defaultView = win;
+  win.document = doc;
+  win.getSelection = () => null;
+  win.requestAnimationFrame = () => 1;
+  win.cancelAnimationFrame = (): void => undefined;
 }
 
 /**
@@ -403,8 +484,8 @@ describe('зона «Задачи» редактора: точечная пра�
       const refresh = h.group.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
       assert.equal(
         refresh.classList.contains('is-stale'),
-        false,
-        '«Обновить» собственной командой не зажигается',
+        true,
+        'отметка зажигает «Обновить» (пункт 4): списки пересобираются только по кнопке',
       );
       click(false);
       await h.settle();
@@ -513,14 +594,9 @@ describe('зона «Задачи» редактора: точечная пра�
       (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
       await h.settle();
       const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
-      assert.ok(field, 'поле правки открылось');
-      field.value = '- [ ] новая';
-      field.focus();
-      keymap.dispatchKeyEvent({
-        key: 'Enter',
-        target: field,
-        preventDefault: (): void => undefined,
-      } as unknown as KeyboardEvent);
+      assert.ok(field, 'поле правки открылось (компонента комментария)');
+      typeIntoField(field as unknown as HTMLElement, '- [ ] новая');
+      pressCommit(field as unknown as HTMLElement);
       await h.settle();
       assert.ok(
         h.queries.some((query) => query['comment_id'] === 'c1'),
@@ -730,14 +806,14 @@ describe('зона «Задачи» редактора: СВОЯ правка н
       await h.settle();
       let field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
       assert.ok(field, 'блочная правка открылась');
-      field.value = '- [ ] задача правленая\n  - [ ] пункт';
-      field.focus();
-      keymap.dispatchKeyEvent({
-        key: 'Enter',
-        ctrlKey: true,
-        target: field,
-        preventDefault: (): void => undefined,
-      } as unknown as KeyboardEvent);
+      assert.equal(
+        fieldText(field as unknown as HTMLElement),
+        '- [ ] задача\n  - [ ] пункт',
+        'в поле — блок источника',
+      );
+      typeIntoField(field as unknown as HTMLElement, '- [ ] задача правленая\n  - [ ] пункт');
+      const commit = pressCommit(field as unknown as HTMLElement);
+      assert.equal(commit.prevented, true, 'Ctrl+Enter перехвачен компонентой правки');
       await h.settle();
 
       assert.equal(

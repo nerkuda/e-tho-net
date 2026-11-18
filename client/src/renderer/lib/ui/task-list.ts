@@ -61,13 +61,7 @@ import {
 
 import { requireNetworkId } from '../network-id.js';
 import { store } from '../../state.js';
-import {
-  formatDayLabel,
-  isValidLocalDay,
-  localDayEnd,
-  localDayStart,
-  todayLocal,
-} from '../dates.js';
+import { isValidLocalDay, localDayEnd, localDayStart, todayLocal } from '../dates.js';
 import {
   datePeriodValueFromInstants,
   openDatePeriodDialog,
@@ -76,7 +70,7 @@ import {
 import { confirmDialog } from '../dialog.js';
 import { errText } from '../dom.js';
 import { etn } from '../etn.js';
-import { formatDateParts, getLang, t } from '../i18n.js';
+import { t } from '../i18n.js';
 import { onRoutedRealtimeEvent } from '../live/event-router.js';
 import { MENU_SEPARATOR, menuAction, menuSubmenu, type MenuItem } from '../menu.js';
 import { notice } from '../notice.js';
@@ -95,29 +89,26 @@ import {
   type TaskPanelSubject,
   type TaskPanelView,
   type TaskRowCommand,
+  type TaskRowEditorFactory,
   type TaskShift,
 } from './task-panel.js';
 import {
   REMINDERS_OVERDUE_DAYS,
   calendarDaysBetween,
   flatReminderRows,
-  groupPanelRows,
   nestedLinesByParent,
   orderTaskRowsUndatedFirst,
   panelNeedsRefresh,
   planTaskBulk,
   reminderPanelRows,
-  reminderSectionOf,
   replaceTaskLine,
   replaceTaskLineRange,
   setChecklistLineDone,
   shiftDay,
   taskCounters,
-  taskGroupingMode,
   taskRowKey,
   taskRowView,
   taskRowsForFilter,
-  type PanelGroup,
   type TaskPanelChildRow,
   type TaskPanelStaleness,
 } from './task-panel-model.js';
@@ -213,6 +204,12 @@ export interface TaskListOptions {
   view: TaskListViewOptions;
   actions?: TaskListActions;
   persistence?: TaskListPersistence;
+  /**
+   * Фабрика правки строки — КОМПОНЕНТА РЕДАКТИРОВАНИЯ КОММЕНТАРИЯ (0.16.1,
+   * задача `cfb8cb72`, пункт 1). Даёт экран: `lib/ui` не тянет CodeMirror,
+   * поэтому панель получает поле правки параметром, а не импортом.
+   */
+  createRowEditor?: TaskRowEditorFactory;
 }
 
 /** Публичный дескриптор панели. */
@@ -315,6 +312,25 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   let remindersChanged = false;
   /** В сети изменилась запись/напоминание — «Обновить» светится. */
   let foreignChange = false;
+  /**
+   * СВОЯ операция изменила то, что видно только полной пересборкой (срок строки,
+   * состав списка, отметка выполнения) — «Обновить» светится (0.16.1, задача
+   * `cfb8cb72`, пункты 2 и 4). Пока маркер не погашен, списки не пересобираются:
+   * строка остаётся на своём месте.
+   */
+  let ownRebuildPending = false;
+  /**
+   * Держать порядок строк панели последней отрисовки до «Обновить» (пункт 2:
+   * после `Ctrl+Enter` строка не прыгает вниз списка). Снимается `loadPanel`.
+   */
+  let holdTaskOrder = false;
+  /** Секции задач последней отрисовки — источник порядка при `holdTaskOrder`. */
+  let heldTaskSections: TaskPanelSectionView[] | null = null;
+  /**
+   * Вхождения напоминаний, отмеченные из панели (ключи строк): dismiss ушёл,
+   * а до «Обновить» строка держит отметку (пункт 7).
+   */
+  const reminderDoneKeys = new Set<string>();
   let loadSeq = 0;
   /** Снимок текстов для отмены массовой команды. */
   let undoSnapshot: Array<{ id: string; body_md: string; version: number }> | null = null;
@@ -348,6 +364,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       rowCommand: (row, command, shift) => void runRowCommand(row, command, shift),
       bulk: (filter, command, shift) => void runBulk(filter, command, shift),
       reminderAction: (row, action, until) => void runReminderAction(row, action, until),
+      reminderDone: (row) => void markReminderDone(row),
       reminderGroupDismiss: (title, rows) => void runReminderGroupDismiss(title, rows),
       pickDate: (initial) => pickDate(initial),
       pickDateTime: (initialIso) => pickDateTime(initialIso),
@@ -365,7 +382,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       loadRawBlock: (row) => loadRawBlock(row),
       editBlock: (row, range, text) => editBlock(row, range, text),
     },
-    { headless: view.headless === true },
+    { headless: view.headless === true, createRowEditor: options.createRowEditor },
   );
 
   // -------------------------------------------------------------------------
@@ -480,6 +497,11 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       remindersChanged = false;
       foreignChange = false;
       echoedOwnVersions.clear();
+      // Полная пересборка состоялась: держанный порядок снят, отметки
+      // напоминаний и маркер своей операции погашены (пункты 2, 4, 7).
+      ownRebuildPending = false;
+      holdTaskOrder = false;
+      reminderDoneKeys.clear();
       loadError = null;
       await resolveSubjects(seq);
     } catch (err) {
@@ -652,159 +674,88 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     return subjectData.get(`${kind}:${id}`)?.title ?? id;
   }
 
-  /** Первый день недели сети (ISO 1 = пн … 7 = вс, требование 1b77decd). */
-  function firstDayOfWeek(): number {
-    const value = store.state.network?.first_day_of_week;
-    return typeof value === 'number' && value >= 1 && value <= 7 ? value : 1;
-  }
-
-  /** Подпись месяца: месяц и год без «г.» (тот же приём, что у дней ленты). */
-  function monthLabel(day: string): string {
-    const parts = formatDateParts(new Date(`${day}T00:00:00`), {
-      year: 'numeric',
-      month: 'long',
-    });
-    while (parts.length > 1 && parts[parts.length - 1]?.type === 'literal') parts.pop();
-    const text = parts
-      .map((part) => part.value)
-      .join('')
-      .trim();
-    if (text === '') return day;
-    return text.charAt(0).toLocaleUpperCase(getLang()) + text.slice(1);
-  }
-
-  /**
-   * Заголовок группы по режиму и диапазону (локализованный). Вид субъекта —
-   * параметр: режим «по мыслям» группирует строки и мыслей, и публикаций, а
-   * ключ названия у видов разный (`thought:<id>` / `publication:<id>`).
-   */
-  function groupTitle(
-    group: PanelGroup<TaskPanelRow | ReminderPanelRow>,
-    subjectKind: 'thought' | 'publication' = 'thought',
-  ): string {
-    if (group.kind === 'thoughts') {
-      if (group.subjectId === null) return t('tasks.groupNoThought');
-      return subjectTitle(subjectKind, group.subjectId);
-    }
-    if (group.from === null || group.to === null) return t('tasks.groupNoDate');
-    if (group.kind === 'dates') return formatDayLabel(group.from);
-    if (group.kind === 'weeks') {
-      return t('tasks.weekRange', [formatDayLabel(group.from), formatDayLabel(group.to)]);
-    }
-    return monthLabel(group.from);
-  }
-
-  /**
-   * Оформление заголовка подгруппы: группа-мысль — облачко мысли/публикации,
-   * группа-дата — иконка календарика перед названием.
-   */
-  function subgroupDecoration(
-    group: PanelGroup<TaskPanelRow | ReminderPanelRow>,
-    subjectKind: 'thought' | 'publication',
-  ): { subject?: TaskPanelSubject | null; icon?: 'calendar' } {
-    if (group.kind === 'thoughts') {
-      if (group.subjectId === null) return {};
-      return {
-        subject: {
-          kind: subjectKind,
-          id: group.subjectId,
-          title: subjectTitle(subjectKind, group.subjectId),
-        },
-      };
-    }
-    return { icon: 'calendar' };
-  }
-
-  /** Фильтр массовой команды группы: адресация проекцией. */
-  function groupFilter(
-    group: PanelGroup<TaskPanelRow | ReminderPanelRow>,
-    scope: TaskScope,
-  ): TaskMassFilter {
-    const filter: TaskMassFilter = { scope, today: todayLocal() };
-    if (group.kind === 'thoughts') {
-      if (group.subjectId !== null) filter.thought_id = group.subjectId;
-    } else if (group.from !== null && group.to !== null) {
-      filter.from = group.from;
-      filter.to = group.to;
-    }
-    return filter;
-  }
-
   /** Признаки устаревания для модели. */
   function staleness(): TaskPanelStaleness {
     return { rows: staleRows, comments: staleComments };
   }
 
-  /**
-   * Секция задач: строки → группы порогов → подгруппы вида. «Без срока» —
-   * ПЛОСКАЯ секция: все её строки без дат, и вложенная группа «Без даты»
-   * повторяла бы заголовок секции.
-   */
-  function taskSection(
-    key: string,
-    title: string,
-    rows: TaskDTO[],
-    scope: TaskScope,
-    children: ReadonlyMap<string, readonly TaskPanelChildRow[]>,
-  ): TaskPanelSectionView {
-    const today = todayLocal();
-    const views = rows.map((row) => {
-      const address = taskRowKey(row);
-      return taskRowView(row, staleness(), toggledDone.get(address), {
-        today,
-        children: children.get(address) ?? [],
-      });
-    });
-    if (scope === 'undated') {
-      return { key, title, flat: true, subgroups: [], rows: views };
-    }
-    const mode = taskGroupingMode(views.length);
-    const groups = groupPanelRows(views, mode, { firstDayOfWeek: firstDayOfWeek() });
-    return {
-      key,
-      title,
-      subgroups: groups.map((group) => ({
-        key: group.key,
-        title: groupTitle(group),
-        kind: group.kind,
-        filter: groupFilter(group, scope),
-        rows: group.rows,
-        ...subgroupDecoration(group, 'thought'),
-      })),
-    };
+  /** Загруженные строки одного комментария-источника (до своей правки). */
+  function rowsOfComment(commentId: string): TaskDTO[] {
+    return allRows().filter((row) => row.comment_id === commentId);
   }
 
-  /** Секция напоминаний: вхождения → группы порогов → подгруппы вида. */
-  function reminderSection(
-    key: ReminderPanelSectionView['key'],
-    title: string,
-    rows: ReminderPanelRow[],
-  ): ReminderPanelSectionView {
-    // При ОДНОЙ выбранной дате периода напоминания показываются плоским
-    // хронологическим списком — без групп по датам/мыслям.
-    const period = effectivePeriod();
-    if (period.from === period.to) {
-      return { key, title, flat: true, subgroups: [], rows: flatReminderRows(rows) };
+  /**
+   * Своя правка изменила то, что видно только полной пересборкой (пункт 2):
+   * строки записи появились/исчезли или сменили срок. Текст, маркер и пункты
+   * чек-листа пересборки не требуют — они обновляются точечно.
+   */
+  function ownEditStructureChanged(
+    before: readonly TaskDTO[],
+    fresh: readonly TaskDTO[],
+    commentId: string,
+  ): boolean {
+    const beforeRows = before.filter((row) => row.comment_id === commentId);
+    const afterRows = fresh.filter((row) => row.comment_id === commentId);
+    if (beforeRows.length !== afterRows.length) return true;
+    const afterByKey = new Map(afterRows.map((row) => [taskRowKey(row), row]));
+    for (const row of beforeRows) {
+      const next = afterByKey.get(taskRowKey(row));
+      if (next === undefined) return true;
+      if (next.due !== row.due) return true;
+      if (next.period_from !== row.period_from || next.period_to !== row.period_to) return true;
+      if (next.done !== row.done) return true;
     }
-    const mode = taskGroupingMode(rows.length);
-    const groups = groupPanelRows(rows, mode, { firstDayOfWeek: firstDayOfWeek() });
-    return {
-      key,
-      title,
-      subgroups: groups.map((group) => {
-        // Вид субъекта берём у СТРОК группы, а не угадываем: в группе «по
-        // мыслям» лежат и мысли, и публикации.
-        const subjectKind = group.rows[0]?.subjectType ?? 'thought';
-        return {
-          key: group.key,
-          title: groupTitle(group, subjectKind),
-          kind: group.kind,
-          filter: {},
-          rows: group.rows,
-          ...subgroupDecoration(group, subjectKind),
-        };
-      }),
-    };
+    return false;
+  }
+
+  /**
+   * Строка проекции → строка панели. Общий путь секций периода и мысли:
+   * снапшот текста, вложенные строки и показанная отметка чекбокса.
+   */
+  function viewRowOf(
+    row: TaskDTO,
+    children: ReadonlyMap<string, readonly TaskPanelChildRow[]>,
+  ): TaskPanelRow {
+    const address = taskRowKey(row);
+    return taskRowView(row, staleness(), toggledDone.get(address), {
+      today: todayLocal(),
+      children: children.get(address) ?? [],
+    });
+  }
+
+  /**
+   * ПЛОСКАЯ секция задач (0.16.1, задача `cfb8cb72`, пункт 6): подгрупп нет,
+   * список сплошной — одинаковый при любом периоде. Порядок строк задаёт
+   * вызывающий (готовые представления приходят уже упорядоченными).
+   */
+  function flatTaskSection(
+    key: string,
+    title: string,
+    rows: readonly TaskPanelRow[],
+  ): TaskPanelSectionView {
+    return { key, title, flat: true, subgroups: [], rows: [...rows] };
+  }
+
+  /**
+   * ЕДИНЫЙ список напоминаний (пункт 6): одна хронологическая секция без
+   * подгрупп, просроченные строки в ней же и красные.
+   */
+  function flatReminderSection(rows: readonly ReminderPanelRow[]): ReminderPanelSectionView {
+    return { key: 'all', title: '', flat: true, subgroups: [], rows: flatReminderRows(rows) };
+  }
+
+  /**
+   * Строки задач в порядке срока (без даты — в конец): «Срочные» — сплошной
+   * список, поэтому порядок задаёт срок, а не подгруппы. Сортировка
+   * устойчива — строки с одинаковым сроком сохраняют серверный порядок.
+   */
+  function orderByDue(rows: readonly TaskPanelRow[]): TaskPanelRow[] {
+    return [...rows].sort((left, right) => {
+      if (left.due === right.due) return 0;
+      if (left.due === null) return 1;
+      if (right.due === null) return -1;
+      return left.due < right.due ? -1 : 1;
+    });
   }
 
   /** Подпись повтора напоминания (закрытая грамматика bbca8f7d). */
@@ -833,21 +784,15 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   /** Секции панели карточки мысли: активные плоским списком, выполненные — свёрнуто. */
   function thoughtSections(): TaskPanelSectionView[] {
     const rows = visibleRows(state.rows);
-    const today = todayLocal();
     const children = nestedLinesByParent(state.nested);
     const viewRow = (row: TaskDTO): TaskPanelRow => {
-      const address = taskRowKey(row);
-      const mapped = taskRowView(row, staleness(), toggledDone.get(address), {
-        today,
-        children: children.get(address) ?? [],
-      });
+      const mapped = viewRowOf(row, children);
+      // Неактуальный субъект карточки мысли — серая строка (настройка сети).
       if (row.subject_state === 'inactive') mapped.stale = true;
       return mapped;
     };
-    const ordered = <T extends { due: string | null }>(list: readonly T[]): T[] =>
-      orderTaskRowsUndatedFirst(list);
-    const active = ordered(rows.filter((row) => !row.done)).map(viewRow);
-    const done = ordered(rows.filter((row) => row.done)).map(viewRow);
+    const active = orderTaskRowsUndatedFirst(rows.filter((row) => !row.done)).map(viewRow);
+    const done = orderTaskRowsUndatedFirst(rows.filter((row) => row.done)).map(viewRow);
     const sections: TaskPanelSectionView[] = [];
     if (active.length > 0) {
       sections.push({ key: 'active', title: '', flat: true, subgroups: [], rows: active });
@@ -870,11 +815,17 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   function renderView(): void {
     if (disposed) return;
     const todayStart = Date.parse(localDayStart(todayLocal()));
-    const todayEnd = Date.parse(localDayEnd(todayLocal()));
 
     /** Секции задач: у «Дневника» — срезы периода, у карточки мысли — плоские. */
-    const taskSections: TaskPanelSectionView[] =
+    const freshTaskSections: TaskPanelSectionView[] =
       source.kind === 'period' ? periodTaskSections() : thoughtSections();
+    // Пока порядок держится (своя инлайн-правка, пункт 2), секции берутся из
+    // последней отрисовки: строка остаётся на месте, текст обновляется.
+    const taskSections =
+      holdTaskOrder && heldTaskSections !== null
+        ? holdSections(heldTaskSections, freshTaskSections)
+        : freshTaskSections;
+    heldTaskSections = taskSections;
 
     const taskRows = allRows();
     const counters = taskCounters(
@@ -884,7 +835,9 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       rows: taskRows,
       stale: staleness(),
       remindersChanged,
-      markerAdvanced: foreignChange,
+      // Своя операция тоже поднимает маркер: отметка выполнения (пункт 4),
+      // смена срока/состава строк (пункт 2) видны только пересборкой списков.
+      markerAdvanced: foreignChange || ownRebuildPending,
     });
 
     /** Названия субъектов напоминаний — ключ `<вид>:<id>`. */
@@ -896,26 +849,18 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       );
     }
     const reminderRows = withReminders
-      ? reminderPanelRows(state.reminders, reminderTitles, repeatLabel, todayStart)
+      ? reminderPanelRows(
+          state.reminders,
+          reminderTitles,
+          repeatLabel,
+          todayStart,
+          reminderDoneKeys,
+        )
       : [];
-    const buckets: Record<'overdue' | 'today' | 'period', ReminderPanelRow[]> = {
-      overdue: [],
-      today: [],
-      period: [],
-    };
-    for (const row of reminderRows) {
-      buckets[reminderSectionOf(row, todayStart, todayEnd)].push(row);
-    }
-    const sections: ReminderPanelSectionView[] = [];
-    if (buckets.overdue.length > 0) {
-      sections.push(reminderSection('overdue', t('tasks.remindersOverdue'), buckets.overdue));
-    }
-    if (buckets.today.length > 0) {
-      sections.push(reminderSection('today', t('tasks.remindersToday'), buckets.today));
-    }
-    if (buckets.period.length > 0) {
-      sections.push(reminderSection('period', t('tasks.remindersPeriod'), buckets.period));
-    }
+    // «Напоминания» — ОДИН список без подгрупп при любом периоде (пункт 6):
+    // просроченные строки стоят в нём же и красятся красным.
+    const sections: ReminderPanelSectionView[] =
+      reminderRows.length > 0 ? [flatReminderSection(reminderRows)] : [];
 
     const snapshot: TaskPanelView = {
       stale,
@@ -939,41 +884,64 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     });
   }
 
-  /** Секции задач панели «Дневника» (срезы периода). */
+  /**
+   * Секции задач панели «Дневника» (0.16.1, задача `cfb8cb72`, пункт 6): две
+   * сплошные секции — «Без срока», затем «Срочные», одинаково для любого
+   * периода. «Срочные» несут и просроченные строки (они красные), порядок —
+   * по сроку. Строка, попавшая и в период, и в сквозную выборку «просрочено»,
+   * показывается ОДИН раз: сплошной список не терпит дублей.
+   */
   function periodTaskSections(): TaskPanelSectionView[] {
     const nestedChildren = nestedLinesByParent(state.nested);
     const showDoneRows = showDone && doneSection === 'toggle';
-    return [
-      taskSection(
-        'period',
-        t('tasks.sectionMain'),
-        [...state.period, ...(showDoneRows ? state.done : [])],
-        'open',
-        nestedChildren,
-      ),
-      ...(state.overdue.length > 0
-        ? [
-            taskSection(
-              'overdue',
-              t('tasks.sectionOverdue'),
-              state.overdue,
-              'overdue',
-              nestedChildren,
-            ),
-          ]
-        : []),
-      ...(state.undated.length > 0
-        ? [
-            taskSection(
-              'undated',
-              t('tasks.sectionUndated'),
-              state.undated,
-              'undated',
-              nestedChildren,
-            ),
-          ]
-        : []),
-    ];
+    const undated: TaskDTO[] = [...state.undated];
+    const dated: TaskDTO[] = [...state.period, ...state.overdue];
+    if (showDoneRows) {
+      for (const row of state.done) {
+        if (row.period_from === null) undated.push(row);
+        else dated.push(row);
+      }
+    }
+    const seen = new Set<string>();
+    const unique = (rows: readonly TaskDTO[]): TaskDTO[] =>
+      rows.filter((row) => {
+        const key = taskRowKey(row);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    const undatedViews = orderTaskRowsUndatedFirst(
+      unique(undated).map((row) => viewRowOf(row, nestedChildren)),
+    );
+    const datedViews = orderByDue(unique(dated).map((row) => viewRowOf(row, nestedChildren)));
+    const sections: TaskPanelSectionView[] = [];
+    if (undatedViews.length > 0) {
+      sections.push(flatTaskSection('undated', t('tasks.sectionUndated'), undatedViews));
+    }
+    if (datedViews.length > 0) {
+      sections.push(flatTaskSection('urgent', t('tasks.sectionUrgent'), datedViews));
+    }
+    return sections;
+  }
+
+  /**
+   * Секции с ДЕРЖАННЫМ порядком (пункт 2): берём порядок прошлой отрисовки,
+   * подставляя свежие представления строк по ключу. Строка, которой в свежих
+   * данных нет (перестала быть задачей), остаётся с прежним снапшотом до
+   * «Обновить»; новая строка появится после «Обновить» — маркер уже зажжён.
+   */
+  function holdSections(
+    held: readonly TaskPanelSectionView[],
+    fresh: readonly TaskPanelSectionView[],
+  ): TaskPanelSectionView[] {
+    const byKey = new Map<string, TaskPanelRow>();
+    for (const section of fresh) {
+      for (const row of section.rows ?? []) byKey.set(row.key, row);
+    }
+    return held.map((section) => ({
+      ...section,
+      rows: (section.rows ?? []).map((row) => byKey.get(row.key) ?? row),
+    }));
   }
 
   /** Базовый фильтр выборки: «за период» или «по мысли». */
@@ -1068,11 +1036,14 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   /**
    * Чекбокс: одиночный клик переключает строку источника (без режима правки).
    * Это КОМАНДА, а не правка текста, поэтому серая строка тоже переключается,
-   * а серой становится ТОЛЬКО эта строка (ошибка d318a647). Серая она была
-   * из-за собственной операции; теперь своя команда снапшот текста не
-   * устаревает (маркер `[ ]`/`[x]` в показываемый текст не входит), поэтому
-   * строка остаётся в списке свежей и повторный клик снимает отметку
-   * (замечание 3 вердикта `e984a2db`).
+   * а серой становится ТОЛЬКО эта строка (ошибка d318a647). Своя команда
+   * снапшот текста не устаревает (маркер `[ ]`/`[x]` в показываемый текст не
+   * входит), поэтому строка остаётся в списке свежей и повторный клик снимает
+   * отметку (замечание 3 вердикта `e984a2db`).
+   *
+   * **Маркер (0.16.1, задача `cfb8cb72`, пункт 4 — пересмотр решения 45480290).**
+   * Отметка выполнения меняет состав секций (строка уходит из открытых),
+   * поэтому она зажигает «Обновить»: списки пересобираются только по кнопке.
    */
   async function toggleTask(row: TaskPanelRow, done: boolean): Promise<void> {
     const networkId = requireNetworkId();
@@ -1098,6 +1069,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       }
       applyRevisions(result.revisions);
       toggledDone.set(address, done);
+      ownRebuildPending = true;
       renderView();
     } catch (err) {
       staleRows.add(address);
@@ -1202,14 +1174,20 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return false;
       }
       if (next === comment.body_md) return true;
+      const beforeRows = rowsOfComment(row.commentId);
       const updated = await withOwnWrite(row.commentId, () =>
         etn.comments.update(networkId, row.commentId, { body_md: next }, comment.version),
       );
       rememberVersion(row.commentId, updated.version);
       rememberOwnOp(row.commentId, updated.version);
       // Сохранённая строка перечитывается ТОЧЕЧНО: панель показывает новый
-      // текст сразу и не сереет (ошибка 45480290).
-      await refreshAfterOwnOp(row.commentId, updated.version);
+      // текст сразу и не сереет (ошибка 45480290). Порядок строк при этом
+      // ДЕРЖИТСЯ: после Ctrl+Enter строка не прыгает вниз списка (пункт 2).
+      const fresh = await refreshAfterOwnOp(row.commentId, updated.version);
+      holdTaskOrder = true;
+      if (fresh === null || ownEditStructureChanged(beforeRows, fresh, row.commentId)) {
+        ownRebuildPending = true;
+      }
       renderView();
       return true;
     } catch (err) {
@@ -1233,12 +1211,19 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return false;
       }
       if (next === comment.body_md) return true;
+      const beforeRows = rowsOfComment(row.commentId);
       const updated = await withOwnWrite(row.commentId, () =>
         etn.comments.update(networkId, row.commentId, { body_md: next }, comment.version),
       );
       rememberVersion(row.commentId, updated.version);
       rememberOwnOp(row.commentId, updated.version);
-      await refreshAfterOwnOp(row.commentId, updated.version);
+      // Блочная правка тоже держит порядок (пункт 2): пересборка — по «Обновить»,
+      // маркер зажигается, если изменились сроки/состав строк записи.
+      const fresh = await refreshAfterOwnOp(row.commentId, updated.version);
+      holdTaskOrder = true;
+      if (fresh === null || ownEditStructureChanged(beforeRows, fresh, row.commentId)) {
+        ownRebuildPending = true;
+      }
       renderView();
       return true;
     } catch (err) {
@@ -1253,7 +1238,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    * со строками обновляются вложенные строки записи (пункт F) — правка блока
    * могла изменить пункты чек-листа.
    */
-  async function refreshCommentRows(commentId: string, version?: number): Promise<void> {
+  async function refreshCommentRows(commentId: string, version?: number): Promise<TaskDTO[]> {
     const networkId = requireNetworkId();
     if (version !== undefined) rememberVersion(commentId, version);
     const fresh: TaskDTO[] = [];
@@ -1342,6 +1327,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       };
     }
     for (const item of fresh) rememberVersion(item.comment_id, item.revision);
+    return fresh;
   }
 
   /**
@@ -1350,11 +1336,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    * «Обновить» поднимется (маркер — следствие реальной потери актуальности, а не
    * собственной правки).
    */
-  async function refreshAfterOwnOp(commentId: string, version?: number): Promise<void> {
+  async function refreshAfterOwnOp(commentId: string, version?: number): Promise<TaskDTO[] | null> {
     try {
-      await refreshCommentRows(commentId, version);
+      return await refreshCommentRows(commentId, version);
     } catch {
       staleComments.add(commentId);
+      return null;
     }
   }
 
@@ -1447,11 +1434,16 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return;
       }
       applyRevisions(result.revisions);
-      // Команда переписала текст строки (даты) — это снапшот, а не внешняя
-      // правка: строки записи перечитываются сразу, без серости и «Обновить»
-      // (дух ошибки 45480290, замечание 3 вердикта e984a2db).
+      // Команда переписала даты строки: сами строки перечитываются сразу (без
+      // серости — ошибка 45480290), но СЕКЦИИ пересобираются только по
+      // «Обновить» (0.16.1, задача cfb8cb72, пункт 2): смена срока зажигает
+      // маркер, строка остаётся на месте.
+      const beforeRows = rowsOfComment(row.commentId);
       const revision = result.revisions.find((item) => item.id === row.commentId)?.version;
-      await refreshAfterOwnOp(row.commentId, revision);
+      const fresh = await refreshAfterOwnOp(row.commentId, revision);
+      if (fresh === null || ownEditStructureChanged(beforeRows, fresh, row.commentId)) {
+        ownRebuildPending = true;
+      }
       renderView();
     } catch (err) {
       notice(t('tasks.errorRowCommand', [errText(err)]), 'error');
@@ -1607,6 +1599,24 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return;
       }
       await loadPanel();
+    } catch (err) {
+      notice(t('tasks.reminderActionFailed', [errText(err)]), 'error');
+    }
+  }
+
+  /**
+   * Чекбокс вхождения напоминания (0.16.1, задача `cfb8cb72`, пункт 7): отметка
+   * «выполнено» = отработал вхождение, то есть dismiss по `occurrence_at`.
+   * Серия напоминания НЕ удаляется. «Обновить» светится, а вхождение уходит из
+   * списка только после полного перечитывания (списки пересобираются по кнопке).
+   */
+  async function markReminderDone(row: ReminderPanelRow): Promise<void> {
+    const networkId = requireNetworkId();
+    try {
+      await etn.reminders.dismiss(networkId, row.reminderId, row.occurrenceAt);
+      reminderDoneKeys.add(row.key);
+      ownRebuildPending = true;
+      renderView();
     } catch (err) {
       notice(t('tasks.reminderActionFailed', [errText(err)]), 'error');
     }

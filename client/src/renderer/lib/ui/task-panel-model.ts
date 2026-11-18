@@ -3,22 +3,24 @@
  * (0.16.1, задача 64f7976a; элементы f76ed829/15f8ea2f/498f23e0, требования
  * 6762adb0/0e85b66e/e6af8b9e/3616cfec/db1d9548).
  *
- * Зачем отдельный модуль. Пороги группировки, состав секций, счётчики,
- * признак «строка устарела» и раскладка напоминаний по «сегодня/просрочено» —
- * правила, которые обязаны проверяться тестами без DOM и сети. Компонент
- * `task-panel.ts` только рисует то, что здесь посчитано; экран
- * `screens/chronicle/tasks-panel.ts` только загружает данные и зовёт действия.
+ * Зачем отдельный модуль. Состав секций, счётчики, признак «строка устарела»,
+ * порядок строк и раскладка напоминаний — правила, которые обязаны проверяться
+ * тестами без DOM и сети. Компонент `task-panel.ts` только рисует то, что здесь
+ * посчитано; экран `screens/chronicle/tasks-panel.ts` только загружает данные и
+ * зовёт действия.
  *
- * **Пороги (требование 6762adb0).** 1 элемент — по мыслям (субъектным
- * строкам), 2–14 — по датам, 15–50 — по неделям, больше 50 — по месяцам.
- * Неделя начинается с первого дня недели сети (требование 1b77decd: его
- * учитывают ВСЕ календарные виджеты), поэтому режим принимает номер ISO-дня
- * явно. Строки без даты собираются в хвостовую группу «Без даты», строки без
- * субъекта — в группу «Без мысли»; эта группа всегда последняя.
+ * **Порогов группировки больше нет (уточнение 2026-11-18, задача `cfb8cb72`,
+ * пункт 6).** Прежние подгруппы «по мыслям / датам / неделям / месяцам»
+ * (требование 6762adb0) отменены: списки панели — СПЛОШНЫЕ, одинаковые при
+ * любом периоде. «Задачи» — секции «Без срока» и «Срочные» (вторая несёт и
+ * просроченные строки — они красные), «Напоминания» — один хронологический
+ * список. Заголовки подгрупп, их фильтры массовых команд и ключи групп из
+ * модели удалены; способность компоненты рисовать подгруппы осталась
+ * опциональной формой её API.
  *
  * **Секции.** Секции приходят готовыми: сервер отдаёт их РАЗНЫМИ запросами
  * (`scope=open` в периоде, `overdue` и `undated` — сквозные), модель лишь
- * раскладывает строки каждой секции по группам, не смешивая их.
+ * раскладывает строки каждой секции, не смешивая их.
  *
  * **«Устарела» (требование 0e85b66e, уточнение ошибки d318a647).** Серая
  * строка — снапшот этой СТРОКИ, а не всей записи: правка из панели адресуется
@@ -39,31 +41,12 @@ import type {
   TaskNestedLine,
 } from '@etn/shared';
 
-/** Пороги группировки по количеству элементов (требование 6762adb0). */
-export const TASK_GROUP_THRESHOLDS = {
-  /** 1 элемент — по мыслям. */
-  thoughts: 1,
-  /** 2–14 — по датам (верхняя граница). */
-  dates: 14,
-  /** 15–50 — по неделям (верхняя граница). */
-  weeks: 50,
-} as const;
-
-/** Режим группировки списка. */
-export type TaskGroupingMode = 'thoughts' | 'dates' | 'weeks' | 'months';
-
 /**
- * Режим группировки по количеству элементов: 1 — по мыслям, 2–14 — по датам,
- * 15–50 — по неделям, больше 50 — по месяцам (требование 6762adb0).
+ * Что модель знает о строке для адресации и порядка: стабильный ключ, календарный
+ * день и субъект (мысль). Прежние пороги группировки (6762adb0) отменены
+ * уточнением 2026-11-18 (задача `cfb8cb72`, пункт 6): поля остались адресом
+ * строки и признаком «срок есть», а не режимом групп.
  */
-export function taskGroupingMode(count: number): TaskGroupingMode {
-  if (count <= TASK_GROUP_THRESHOLDS.thoughts) return 'thoughts';
-  if (count <= TASK_GROUP_THRESHOLDS.dates) return 'dates';
-  if (count <= TASK_GROUP_THRESHOLDS.weeks) return 'weeks';
-  return 'months';
-}
-
-/** Что модель знает о строке для группировки. */
 export interface PanelGroupable {
   /** Стабильный ключ строки (переживает перерисовку). */
   key: string;
@@ -72,26 +55,6 @@ export interface PanelGroupable {
   /** Субъект строки (мысль/публикация), `null` — субъекта нет. */
   subjectId: string | null;
 }
-
-/** Группа строк одного списка: режим, диапазон и строки в исходном порядке. */
-export interface PanelGroup<T extends PanelGroupable> {
-  /** Стабильный ключ группы (строится из режима и значения). */
-  key: string;
-  kind: TaskGroupingMode;
-  /** Начало диапазона группы по датам (`YYYY-MM-DD`), `null` — без даты. */
-  from: string | null;
-  /** Конец диапазона группы по датам (`YYYY-MM-DD`), `null` — без даты. */
-  to: string | null;
-  /** Субъект группы режима «по мыслям». */
-  subjectId: string | null;
-  rows: T[];
-}
-
-/** Ключ группы «строки без субъекта». */
-export const TASK_GROUP_NO_SUBJECT = 'no-subject';
-
-/** Ключ группы «строки без даты». */
-export const TASK_GROUP_NO_DATE = 'no-date';
 
 /** Разобрать `YYYY-MM-DD` в UTC-дату (только календарная арифметика). */
 function parseDay(day: string): Date {
@@ -104,127 +67,16 @@ function formatDay(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** Сдвиг календарного дня на `delta` дней (невалидный день возвращается как есть). */
+/**
+ * Сдвиг календарного дня на `delta` дней (невалидный день возвращается как
+ * есть). Общий помощник панели: окно раскрытия напоминаний и календарная
+ * арифметика переноса дат — без DOM и без часового пояса.
+ */
 export function shiftDay(day: string, delta: number): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
   const base = parseDay(day);
   base.setUTCDate(base.getUTCDate() + delta);
   return formatDay(base);
-}
-
-/**
- * Начало недели, содержащей `day`, при первом дне недели `firstDayOfWeek`
- * (ISO: 1 = понедельник … 7 = воскресенье). Возвращает `YYYY-MM-DD`.
- */
-export function weekStartOf(day: string, firstDayOfWeek: number): string {
-  const first = firstDayOfWeek >= 1 && firstDayOfWeek <= 7 ? firstDayOfWeek : 1;
-  const iso = parseDay(day).getUTCDay();
-  const weekday = iso === 0 ? 7 : iso;
-  return shiftDay(day, -((weekday - first + 7) % 7));
-}
-
-/** Ключ месяца (`YYYY-MM`) календарного дня. */
-export function monthKeyOf(day: string): string {
-  return day.slice(0, 7);
-}
-
-/** Последний день месяца `YYYY-MM` (`YYYY-MM-DD`). */
-export function lastDayOfMonth(month: string): string {
-  const [year, monthNo] = month.split('-').map(Number) as [number, number];
-  return formatDay(new Date(Date.UTC(year, monthNo, 0)));
-}
-
-/** Группа без даты — хвостовая, всегда последняя. */
-function noDateGroup<T extends PanelGroupable>(mode: TaskGroupingMode): PanelGroup<T> {
-  return { key: TASK_GROUP_NO_DATE, kind: mode, from: null, to: null, subjectId: null, rows: [] };
-}
-
-/**
- * Разложить строки списка по группам согласно режиму (пороги 6762adb0).
- *
- * Порядок строк внутри группы — исходный (сервер уже отсортировал по сроку);
- * группы идут в порядке первого появления, хвостовая группа «Без даты» —
- * последней. Каждая группа несёт диапазон `from`/`to`, по которому экран
- * строит фильтр массовой команды: «отменить/перенести всё по этой группе»
- * адресуется проекцией, а не перечнем строк (требование e6af8b9e).
- */
-export function groupPanelRows<T extends PanelGroupable>(
-  rows: readonly T[],
-  mode: TaskGroupingMode,
-  options: { firstDayOfWeek: number },
-): PanelGroup<T>[] {
-  const groups = new Map<string, PanelGroup<T>>();
-  let tail: PanelGroup<T> | null = null;
-
-  /** Взять (или создать) группу по ключу. */
-  const take = (group: PanelGroup<T>): PanelGroup<T> => {
-    const existing = groups.get(group.key);
-    if (existing !== undefined) return existing;
-    if (group.from === null && group.key === TASK_GROUP_NO_DATE) tail = group;
-    groups.set(group.key, group);
-    return group;
-  };
-
-  for (const row of rows) {
-    let group: PanelGroup<T>;
-    if (mode === 'thoughts') {
-      const subject = row.subjectId;
-      group = take({
-        key: subject === null ? TASK_GROUP_NO_SUBJECT : `thought:${subject}`,
-        kind: mode,
-        from: row.day,
-        to: row.day,
-        subjectId: subject,
-        rows: [],
-      });
-      // Диапазон группы-мысли — объединение дней её строк (для фильтра
-      // массовой команды он не нужен: там адресация по `thought_id`).
-      if (row.day !== null) {
-        if (group.from === null || row.day < group.from) group.from = row.day;
-        if (group.to === null || row.day > group.to) group.to = row.day;
-      }
-    } else if (row.day === null) {
-      group = take(noDateGroup<T>(mode));
-    } else if (mode === 'dates') {
-      group = take({
-        key: `date:${row.day}`,
-        kind: mode,
-        from: row.day,
-        to: row.day,
-        subjectId: null,
-        rows: [],
-      });
-    } else if (mode === 'weeks') {
-      const start = weekStartOf(row.day, options.firstDayOfWeek);
-      group = take({
-        key: `week:${start}`,
-        kind: mode,
-        from: start,
-        to: shiftDay(start, 6),
-        subjectId: null,
-        rows: [],
-      });
-    } else {
-      const month = monthKeyOf(row.day);
-      group = take({
-        key: `month:${month}`,
-        kind: mode,
-        from: `${month}-01`,
-        to: lastDayOfMonth(month),
-        subjectId: null,
-        rows: [],
-      });
-    }
-    group.rows.push(row);
-  }
-
-  const ordered: PanelGroup<T>[] = [];
-  for (const group of groups.values()) {
-    if (group === tail) continue;
-    ordered.push(group);
-  }
-  if (tail !== null) ordered.push(tail);
-  return ordered;
 }
 
 /** Строка задачи в панели (view-модель): данные для отрисовки и действий. */
@@ -252,7 +104,7 @@ export interface TaskPanelRow extends PanelGroupable {
   due: string | null;
   /** Вид комментария-источника: у хроно-записи «Сделать бессрочной» нет. */
   kind: CommentKind;
-  /** Мысли из ID-ссылок строки (для группировки по мыслям и перехода). */
+  /** Мысли из ID-ссылок строки (облачка субъектов рядом с датой, п.6 ТЗ 2026-11-18). */
   subjectThoughts: string[];
   /**
    * Срок строки в прошлом (`due` раньше `today`): строка показывается красным
@@ -592,30 +444,17 @@ export interface ReminderPanelRow extends PanelGroupable {
    * строка и дата показываются красным (пункт D ТЗ 2026-11-17).
    */
   overdue?: boolean;
+  /**
+   * Вхождение отработано: чекбокс строки стоит (0.16.1, задача `cfb8cb72`,
+   * пункт 7). Отметка = dismiss вхождения по `occurrence_at`; до «Обновить»
+   * строка остаётся в списке отмеченной, после — уходит из выдачи.
+   */
+  done?: boolean;
 }
 
 /** Ключ строки вхождения: напоминание + момент вхождения по расписанию. */
 export function reminderRowKey(reminderId: string, occurrenceAt: string): string {
   return `${reminderId}:${occurrenceAt}`;
-}
-
-/** Секция напоминания по локальным суткам клиента (требование 6762adb0). */
-export type ReminderSectionKind = 'overdue' | 'today' | 'period';
-
-/**
- * Секция вхождения по моменту показа: границы МЕСТНЫХ суток передаёт экран —
- * часовой пояс считает клиент, модель его не угадывает.
- */
-export function reminderSectionOf(
-  row: ReminderPanelRow,
-  todayStartMs: number,
-  todayEndMs: number,
-): ReminderSectionKind {
-  const moment = Date.parse(row.moment);
-  if (!Number.isFinite(moment)) return 'period';
-  if (moment < todayStartMs) return 'overdue';
-  if (moment < todayEndMs) return 'today';
-  return 'period';
 }
 
 /**
@@ -629,9 +468,10 @@ export function reminderRowOverdue(row: ReminderPanelRow, todayStartMs: number):
 }
 
 /**
- * Плоский хронологический список вхождений (пункт D ТЗ 2026-11-17): при ОДНОЙ
- * выбранной дате панель показывает напоминания без групп по датам и мыслям —
- * порядок по моменту показа, ближайшее сверху.
+ * Хронологический список вхождений (0.16.1, задача `cfb8cb72`, пункт 6):
+ * «Напоминания» — ОДИН список без подгрупп при любом периоде, порядок по
+ * моменту показа, ближайшее сверху. Просроченные строки остаются в нём и
+ * красятся красным (их признак — {@link ReminderPanelRow.overdue}).
  */
 export function flatReminderRows(rows: readonly ReminderPanelRow[]): ReminderPanelRow[] {
   return [...rows].sort((left, right) => Date.parse(left.moment) - Date.parse(right.moment));
@@ -643,10 +483,9 @@ export const REMINDERS_OVERDUE_DAYS = 30;
 
 /**
  * Сколько вхождений «на сегодня или просрочено» в выдаче списка: момент показа
- * раньше конца местных суток (тот же предел, что у секции «Сегодня» в
- * {@link reminderSectionOf}) — сегодняшнее либо просроченное. Счётчик бейджа
+ * раньше конца местных суток — сегодняшнее либо просроченное. Счётчик бейджа
  * «сегодня» на закладке «Дневник» (элемент 23887005) считает ТЕ ЖЕ вхождения,
- * что секции «Просрочено»/«Сегодня» панели, — второй формулы счёта нет.
+ * что показывал прежний список напоминаний панели, — второй формулы счёта нет.
  * Вхождения с неразборчивым моментом не считаются.
  */
 export function dueReminderCount(result: ReminderListResult, todayEndMs: number): number {
@@ -666,20 +505,24 @@ export function dueReminderCount(result: ReminderListResult, todayEndMs: number)
  * приходят готовыми (`titles`), описание повтора даёт экран словарём.
  *
  * `todayStartMs` — начало местных суток клиента: помечает просроченные вхождения
- * (пункт D ТЗ 2026-11-17). Не задано — признак не считается.
+ * (пункт D ТЗ 2026-11-17). `doneKeys` — ключи ({@link reminderRowKey}) вхождений,
+ * отмеченных из панели: их чекбокс стоит до «Обновить» (уточнение 2026-11-18,
+ * задача `cfb8cb72`, пункт 7). Оба параметра необязательны.
  */
 export function reminderPanelRows(
   result: ReminderListResult,
   titles: ReadonlyMap<string, string>,
   repeatLabel: (reminder: Reminder) => string,
   todayStartMs?: number,
+  doneKeys?: ReadonlySet<string>,
 ): ReminderPanelRow[] {
   const rows: ReminderPanelRow[] = [];
   for (const reminder of result.reminders) {
     for (const occurrence of reminder.occurrences ?? []) {
       const moment = occurrence.until ?? occurrence.occurrence_at;
+      const key = reminderRowKey(reminder.id, occurrence.occurrence_at);
       const row: ReminderPanelRow = {
-        key: reminderRowKey(reminder.id, occurrence.occurrence_at),
+        key,
         reminderId: reminder.id,
         subjectType: reminder.subject_type,
         subjectId: reminder.subject_id,
@@ -693,6 +536,7 @@ export function reminderPanelRows(
         day: moment.slice(0, 10),
       };
       if (todayStartMs !== undefined) row.overdue = reminderRowOverdue(row, todayStartMs);
+      if (doneKeys?.has(key) === true) row.done = true;
       rows.push(row);
     }
   }

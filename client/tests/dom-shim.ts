@@ -514,6 +514,35 @@ export class ShimElement {
     return this.nodes[0] ?? null;
   }
 
+  /**
+   * Следующий узел того же родителя (`Node.nextSibling`); конец списка и
+   * оторванный узел — `null`. Нужен CodeMirror: сверка строк вида
+   * `insertBefore(child.dom, next)` читает `prev.nextSibling` и без геттера
+   * получает `undefined`, на котором `insertBefore` падает.
+   */
+  get nextSibling(): ShimElement | null {
+    const parent = this.parent;
+    if (parent === null) return null;
+    const index = parent.nodes.indexOf(this);
+    return index < 0 ? null : (parent.nodes[index + 1] ?? null);
+  }
+
+  /** Предыдущий узел того же родителя (`Node.previousSibling`); начало — `null`. */
+  get previousSibling(): ShimElement | null {
+    const parent = this.parent;
+    if (parent === null) return null;
+    const index = parent.nodes.indexOf(this);
+    return index <= 0 ? null : (parent.nodes[index - 1] ?? null);
+  }
+
+  /**
+   * Родительский узел (`Node.parentNode`) — то же, что {@link parent}. Нужен
+   * DOM-операциям CodeMirror, которые читают `parentNode` (а не `parent`).
+   */
+  get parentNode(): ShimElement | null {
+    return this.parent;
+  }
+
   /** Первый дочерний УЗЕЛ-элемент (текстовые узлы пропускаются, как в DOM). */
   get firstElementChild(): ShimElement | null {
     return this.nodes.find((child) => !child.isTextNode) ?? null;

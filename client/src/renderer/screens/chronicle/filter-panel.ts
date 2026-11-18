@@ -84,7 +84,6 @@ import {
   type SavedFilterRow,
 } from '../../lib/saved-filter-controller.js';
 import { segmentedControl } from '../../lib/ui/segmented.js';
-import { isBlockEditTarget } from '../../lib/ui/task-panel.js';
 import type { SuggestEntry, SuggestSource } from '../../lib/suggest-dropdown.js';
 import { getRtStatus, store } from '../../state.js';
 import {
@@ -1286,8 +1285,10 @@ export function wireChronicleApplyShortcut(
         chord: 'Ctrl+Enter',
         run: (event) => {
           if (event.defaultPrevented) return false;
+          // Редактор комментария (в том числе поле правки строки задачи) сам
+          // владеет `Ctrl+Enter` (0.16.1, задача cfb8cb72, пункт 1): глобальное
+          // «Применить» в нём молчит.
           if (isFeedRecordEditorTarget(event.target as HTMLElement | null)) return false;
-          if (isBlockEditTarget(event.target as HTMLElement | null)) return false;
           onApply();
           return true;
         },

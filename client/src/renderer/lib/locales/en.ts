@@ -1403,6 +1403,8 @@ export const en = {
   'tasks.sectionMain': 'In this period',
   'tasks.sectionOverdue': 'Overdue',
   'tasks.sectionUndated': 'No due date',
+  /** "Urgent" section — flat list of dated rows (item 6). */
+  'tasks.sectionUrgent': 'Urgent',
   /** Reminder section titles. */
   'tasks.remindersOverdue': 'Overdue',
   'tasks.remindersToday': 'Today',

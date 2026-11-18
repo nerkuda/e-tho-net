@@ -383,6 +383,13 @@
   margin: 0;
 }
 
+/* Чекбокс вхождения напоминания (0.16.1, задача cfb8cb72, пункт 7): отметка =
+ * «отработал» (dismiss вхождения), серия напоминания остаётся. */
+.ui-reminder-row-check {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
 .ui-task-row-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -404,16 +411,52 @@
   width: 100%;
 }
 
+/* Правка строки — КОМПОНЕНТА РЕДАКТИРОВАНИЯ КОММЕНТАРИЯ (0.16.1, задача
+ * cfb8cb72, пункт 1): внутри строки списка поле показывается компактно —
+ * без просмотра, панели форматирования и кнопок режима (сохранение — один
+ * Ctrl+Enter, отмена — Esc). Контекстное меню правого клика работает и без
+ * панели: его открывает сам редактор. */
+.ui-task-row-md .md-field-view,
+.ui-task-row-md .md-field-toolbar,
+.ui-task-row-md .md-field-actions {
+  display: none;
+}
+
+.ui-task-row-md .md-field-area {
+  padding: 0;
+}
+
+.ui-task-row-md .md-field-scroll {
+  max-block-size: none;
+  overflow: visible;
+}
+
+.ui-task-row-md .cm-editor {
+  min-block-size: 0;
+}
+
 /* Блочная правка «как трансклюзия» (0.16.1, задача 7446eb25): многострочное
  * поле занимает всю строку — под ним строки-дети не дублируются. */
 .ui-task-row-block-edit {
   flex: 1 0 100%;
   width: 100%;
   min-block-size: calc(var(--hit-area) * 2);
-  resize: vertical;
-  font-family: var(--md-mono);
+}
+
+/* Облачка связанных мыслей строки рядом с датой (пункт 6 ТЗ 2026-11-18). */
+.ui-task-row-subjects {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 40%;
+  overflow: hidden;
+}
+
+.ui-task-row-subject-cloud {
+  display: inline-flex;
+  min-width: 0;
   font-size: var(--font-size-2xs);
-  line-height: var(--line-height-snug);
 }
 
 .ui-task-row-dates {

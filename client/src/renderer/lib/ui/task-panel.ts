@@ -33,11 +33,12 @@
  * **Строка задачи и правка.** Чекбокс — одиночный клик без режима правки; это
  * КОМАНДА, а не правка текста, поэтому он работает и на серой строке
  * (повторный клик снимает отметку, ошибка d318a647). Двойной клик по тексту —
- * инлайн-правка сырого markdown строки (Esc — отмена, Enter — сохранение).
- * Серая строка (правка из панели или внешнее изменение) не редактируется
- * до «Обновить». Клавиши правки (Enter/Escape) идут через общеклиентский
- * диспетчер контекстов `lib/keymap.ts`: пока поле в фокусе, его контекст на
- * вершине стека (ADR `b420b08c`, сторож `guard-keymap-single-point`).
+ * инлайн-правка сырого markdown строки КОМПОНЕНТОЙ РЕДАКТИРОВАНИЯ КОММЕНТАРИЯ
+ * (0.16.1, задача `cfb8cb72`, пункт 1): фабрику правки даёт экран
+ * ({@link TaskPanelOptions.createRowEditor}), потому что CodeMirror живёт в слое
+ * `editor/`, а `lib/ui` его не тянет. Сохранение у строки одно — `Ctrl+Enter`;
+ * `Tab`/`Shift+Tab` — отступ/сдвиг, а не выход из правки. Серая строка (правка
+ * из панели или внешнее изменение) не редактируется до «Обновить».
  */
 
 import type { TaskMassFilter } from '@etn/shared';
@@ -45,7 +46,6 @@ import type { TaskMassFilter } from '@etn/shared';
 import { div, el, span } from '../dom.js';
 import { shiftInstant } from '../dates.js';
 import { t, tp } from '../i18n.js';
-import { defineKeyContext, pushKeyContext } from '../keymap.js';
 import {
   MENU_SEPARATOR,
   menuAction,
@@ -59,26 +59,13 @@ import { iconButton, uiButton } from './button.js';
 import { choiceControl } from './choice-row.js';
 import { collapsibleSection, type CollapsibleSection } from './collapsible.js';
 import { loadingState } from './empty-state.js';
-import { fieldInput, fieldTextarea } from './field.js';
 import { svgIcon } from './icon.js';
 import { reconcileKeyed } from './keyed-list.js';
 import { createListNav, type ListNavHandle } from './list.js';
 import { TABLE_ROW_KEY_ATTR } from './table.js';
-import type {
-  ReminderPanelRow,
-  ReminderSectionKind,
-  TaskGroupingMode,
-  TaskPanelChildRow,
-  TaskPanelRow,
-} from './task-panel-model.js';
+import type { ReminderPanelRow, TaskPanelChildRow, TaskPanelRow } from './task-panel-model.js';
 
-export type {
-  ReminderPanelRow,
-  ReminderSectionKind,
-  TaskGroupingMode,
-  TaskPanelChildRow,
-  TaskPanelRow,
-} from './task-panel-model.js';
+export type { ReminderPanelRow, TaskPanelChildRow, TaskPanelRow } from './task-panel-model.js';
 
 /** Корневой класс панели (адрес CSS и тестов). */
 export const TASK_PANEL_CLASS = 'ui-task-panel';
@@ -134,7 +121,12 @@ export interface TaskPanelSubject {
 export interface TaskPanelSubgroupView<T> {
   key: string;
   title: string;
-  kind: TaskGroupingMode;
+  /**
+   * Вид группы прежних порогов (мысль/дата/неделя/месяц). Списки панели теперь
+   * сплошные (уточнение 2026-11-18, задача `cfb8cb72`, пункт 6), поэтому вид —
+   * необязательная подсказка оформления для тех, кто ещё передаёт подгруппы.
+   */
+  kind?: string;
   /** Фильтр адресации массовой команды группы (требование e6af8b9e). */
   filter: TaskMassFilter;
   rows: T[];
@@ -168,13 +160,13 @@ export interface TaskPanelSectionView {
 
 /** Секция списка напоминаний. */
 export interface ReminderPanelSectionView {
-  key: ReminderSectionKind;
+  /** Ключ секции (для свёрнутости/тестов); подгрупп у напоминаний больше нет. */
+  key: string;
   title: string;
   subgroups: TaskPanelSubgroupView<ReminderPanelRow>[];
   /**
-   * Плоская секция (пункт D ТЗ 2026-11-17): при ОДНОЙ выбранной дате периода
-   * напоминания показываются одним хронологическим списком облачков, без групп
-   * по датам и мыслям.
+   * Плоская секция (0.16.1, задача `cfb8cb72`, пункт 6): «Напоминания» — ОДИН
+   * хронологический список без подгрупп при любом периоде.
    */
   flat?: boolean;
   /** Строки плоской секции (заполняется при `flat`). */
@@ -210,6 +202,36 @@ export interface TaskPanelView {
 
 /** Команда строки задачи. */
 export type TaskRowCommand = 'open-source' | 'move' | 'undate' | 'cancel';
+
+/**
+ * Настройка правки строки задачи: панель отдаёт данные и колбэки, а поле
+ * СОЗДАЁТ ЭКРАН. Контракт объявлен здесь (а не в `editor/`), потому что
+ * `lib/ui` — фасады визуальных компонент и не тянет CodeMirror; реализацию
+ * (компоненту редактирования комментария) даёт `editor/task-row-editor.ts`.
+ * 0.16.1, задача `cfb8cb72`, пункт 1.
+ */
+export interface TaskRowEditorOptions {
+  /** Начальный markdown: СЫРАЯ строка/блок `body_md` (маркер и чекбокс на месте). */
+  md: string;
+  /** Класс поля: `ui-task-row-edit` (строка) или `ui-task-row-block-edit` (блок). */
+  className: string;
+  /** Подпись для скринридера. */
+  ariaLabel: string;
+  /** Сохранить правку; `false` — отказ (поле остаётся в правке). */
+  save(md: string): Promise<boolean>;
+  /** Правка закрыта (сохранена, отменена, клик вне) — панель перерисует строку. */
+  closed(): void;
+}
+
+/** Поле правки строки задачи (дескриптор, который держит панель). */
+export interface TaskRowEditor {
+  root: HTMLElement;
+  focus(): void;
+  dispose(): void;
+}
+
+/** Фабрика правки строки: даёт экран (компонента комментария). */
+export type TaskRowEditorFactory = (options: TaskRowEditorOptions) => TaskRowEditor;
 
 /**
  * Ключи состояния свёрнутости блоков панели (`ui_state` экрана, ошибка
@@ -290,6 +312,13 @@ export interface TaskPanelActions {
   /** Действие над вхождением напоминания. */
   reminderAction(row: ReminderPanelRow, action: ReminderRowAction, until?: string): void;
   /**
+   * Чекбокс вхождения напоминания (0.16.1, задача `cfb8cb72`, пункт 7): отметка
+   * «выполнено» = dismiss вхождения по `occurrence_at`. Панель показывает
+   * отметку сразу, а «Обновить» зажигается — после перечитывания вхождение
+   * уходит из выдачи, серия напоминания остаётся.
+   */
+  reminderDone?(row: ReminderPanelRow): void;
+  /**
    * Групповая команда «Отменить все напоминания по группе»: убрать КАЖДОЕ
    * вхождение строк группы (одна операция dismiss на вхождение, требование
    * 500d1b3d). `title` — заголовок группы для вопроса подтверждения.
@@ -357,6 +386,12 @@ export interface TaskPanelOptions {
    * компонента отдаёт через {@link TaskPanelHandle.headActions}.
    */
   headless?: boolean;
+  /**
+   * Фабрика правки строки задачи — КОМПОНЕНТА РЕДАКТИРОВАНИЯ КОММЕНТАРИЯ
+   * (0.16.1, задача `cfb8cb72`, пункт 1). Даёт экран: `lib/ui` не тянет
+   * CodeMirror. Не задана — двойной клик по строке правку не открывает.
+   */
+  createRowEditor?: TaskRowEditorFactory;
 }
 
 /** Публичный дескриптор панели. */
@@ -394,80 +429,13 @@ interface PanelEntry {
   kind: 'task' | 'reminder';
 }
 
-/** Контекст диспетчера клавиш для инлайн-правки строки. */
-const INLINE_EDIT_CONTEXT_ID = 'task-panel-inline-edit';
-
-/** Команды открытой правки: сохранить или отменить. */
-interface InlineEditCommand {
-  commit(): void;
-  cancel(): void;
-  /**
-   * Поле многострочное (блочная правка «как трансклюзия»): `Enter` вставляет
-   * перевод строки, сохранение — `Ctrl+Enter` (0.16.1, задача 7446eb25).
-   */
-  multiline?: boolean;
-}
-
-/** Открытые правки по полю ввода: событие адресуется цели нажатия. */
-const inlineEditCommands = new WeakMap<HTMLElement, InlineEditCommand>();
-
 /**
- * Объявить контекст клавиш инлайн-правки (Enter/Escape) в диспетчере.
- * Объявление идемпотентно (`defineKeyContext` перезаписывает тот же id),
- * поэтому состояние «уже объявлен» не хранится: после сброса реестра (тесты,
- * переустановка клавиатуры) контекст объявится снова.
- */
-function ensureInlineEditContext(): void {
-  defineKeyContext({
-    id: INLINE_EDIT_CONTEXT_ID,
-    bindings: [
-      { command: 'taskRow.commit', chord: 'Enter', run: handleInlineEditKey },
-      // Блочная правка: Enter — перевод строки, сохраняет `Ctrl+Enter` (на
-      // macOS — `Cmd+Enter`): диспетчер различает платформенные модификаторы,
-      // а `Mod` в хордах проекта не поддерживается (образец — панель отбора).
-      { command: 'taskRow.commitBlock', chord: 'Ctrl+Enter', run: handleInlineEditKey },
-      { command: 'taskRow.commitBlock', chord: 'Meta+Enter', run: handleInlineEditKey },
-      { command: 'taskRow.cancel', chord: 'Escape', run: handleInlineEditKey },
-    ],
-  });
-}
-
-/** Enter — сохранить строку, Escape — отменить; остальные клавиши не наши. */
-function handleInlineEditKey(event: KeyboardEvent): boolean {
-  const source = event.target as unknown;
-  if (source === null || typeof source !== 'object') return false;
-  const command = inlineEditCommands.get(source as HTMLElement);
-  if (command === undefined) return false;
-  if (event.key === 'Escape') {
-    command.cancel();
-    return true;
-  }
-  // Многострочная правка: `Enter` — перевод строки, сохраняет `Ctrl+Enter`.
-  if (command.multiline === true && event.ctrlKey !== true && event.metaKey !== true) return false;
-  command.commit();
-  return true;
-}
-
-/**
- * Клавиша адресована полю БЛОЧНОЙ правки строки? У неё `Ctrl+Enter` —
- * сохранение (хорда контекста {@link INLINE_EDIT_CONTEXT_ID}), поэтому
- * глобальный шорткат «применить отбор» (`filter-panel.ts`) обязан в этом
- * случае молчать. Диспетчер разрешает контексты по вершине стека, а `focusin`
- * контейнера вида приходит ПОСЛЕ `focus` поля и кладёт `chronicle-apply` выше —
- * без гарда комбинация уходила в перезапрос ленты вместо сохранения блока
- * (вердикт репроверки `7448ac21`). Однострочной правке гард не нужен: у неё
- * хорда `Enter`, `Ctrl+Enter` она не заявляет.
- */
-export function isBlockEditTarget(target: HTMLElement | null): boolean {
-  // Обход предков вручную (включая само поле): `closest` тестового шима
-  // начинает с родителя, а `instanceof` требует глобального `HTMLElement`.
-  let current = target;
-  while (current !== null) {
-    if (current.classList?.contains(TASK_ROW_BLOCK_EDIT_CLASS) === true) return true;
-    current = current.parentElement ?? null;
-  }
-  return false;
-}
+ * Клавиши правки строки принадлежат КОМПОНЕНТЕ РЕДАКТИРОВАНИЯ КОММЕНТАРИЯ
+ * (0.16.1, задача `cfb8cb72`, пункт 1): `Ctrl+Enter` — сохранение, `Enter` —
+ * перевод строки, `Tab`/`Shift+Tab` — отступ/сдвиг, `Escape` — отмена. Панель
+ * своих хорд не объявляет: контекст поля и его keymap живут в поле, а
+ * глобальный шорткат «применить отбор» молчит по `defaultPrevented`/`.md-field`
+ * (`filter-panel.ts`).
 
 /**
  * Смонтировать панель в `host`. Панель монтируется один раз при сборке экрана;
@@ -753,12 +721,15 @@ export function mountTaskPanel(
   function taskRowMenu(row: TaskPanelRow): MenuItem[] {
     const items: MenuItem[] = [];
     const day = row.due ?? row.periodFrom;
-    if (day !== null) {
-      items.push(
-        menuAction(t('tasks.openSource'), () =>
-          actions.openRowSource !== undefined ? actions.openRowSource(row) : actions.openDay(day),
-        ),
-      );
+    // «Открыть источник» есть и у хроно-строки БЕЗ дат (0.16.1, задача
+    // `cfb8cb72`, пункт 3): раньше команда появлялась только при дате, и строку
+    // из дневниковой записи без дат было не открыть. Адрес перехода знает
+    // экран (`openRowSource`); чип даты — прежний путь по дню.
+    if (actions.openRowSource !== undefined) {
+      items.push(menuAction(t('tasks.openSource'), () => actions.openRowSource?.(row)));
+      items.push(MENU_SEPARATOR);
+    } else if (day !== null) {
+      items.push(menuAction(t('tasks.openSource'), () => actions.openDay(day)));
       items.push(MENU_SEPARATOR);
     }
     items.push(
@@ -832,21 +803,50 @@ export function mountTaskPanel(
     check.classList.add('ui-task-row-check');
     const textHost = div('ui-task-row-text');
     textHost.tabIndex = 0;
-    /** Снятие контекста клавиш правки (пока поле в фокусе). */
-    let releaseContext: (() => void) | null = null;
+    /** Поле открытой правки строки (создаёт экран фабрикой компоненты). */
+    let rowEditor: TaskRowEditor | null = null;
     /** Вернуть строку к виду снапшота (локально, без полной сверки списка). */
     const closeEdit = (): void => {
       editingKey = null;
       editingRaw = null;
       editingRange = null;
-      releaseContext?.();
-      releaseContext = null;
+      rowEditor?.dispose();
+      rowEditor = null;
       if (node.isConnected) fillTaskRow(node, currentTaskRow(row.key) ?? row);
+    };
+    /**
+     * Собрать поле правки для загруженного текста. Поле даёт фабрика экрана
+     * (компонента редактирования комментария), панель только отдаёт данные и
+     * колбэки (0.16.1, задача `cfb8cb72`, пункт 1). `null` — фабрики нет:
+     * правка недоступна, строка остаётся текстом.
+     */
+    const createEditor = (
+      raw: string,
+      range: { start: number; end: number } | null,
+    ): TaskRowEditor | null => {
+      const factory = options.createRowEditor;
+      if (factory === undefined) return null;
+      const blockEdit = range !== null;
+      return factory({
+        md: raw,
+        className: blockEdit ? `ui-task-row-edit ${TASK_ROW_BLOCK_EDIT_CLASS}` : 'ui-task-row-edit',
+        ariaLabel: t(blockEdit ? 'tasks.editBlockAria' : 'tasks.editLineAria'),
+        save: async (md) => {
+          if (range !== null) {
+            const saved = await actions.editBlock?.(row, range, md);
+            return saved === true;
+          }
+          return actions.editLine(row, md);
+        },
+        closed: () => {
+          if (editingKey === row.key) closeEdit();
+        },
+      });
     };
     /**
      * Открыть БЛОЧНУЮ правку строки (0.16.1, задача 7446eb25): вложенные строки
      * правятся вместе со строкой задачи, как блок трансклюзии. Источник читает
-     * экран (`loadRawBlock`), компонент рисует многострочное поле.
+     * экран (`loadRawBlock`), компонент рисует поле.
      */
     const beginBlockEdit = (): void => {
       if (row.stale || editingKey === row.key || actions.loadRawBlock === undefined) return;
@@ -861,64 +861,22 @@ export function mountTaskPanel(
         }
         editingRaw = block.text;
         editingRange = { start: block.start, end: block.end };
-        fillTaskRow(node, row);
-        const field = node.querySelector<HTMLTextAreaElement>('.ui-task-row-block-edit');
-        field?.focus();
-        field?.select();
+        // Правка — состояние КОМПОНЕНТЫ, а не данных строки: сверка по ключу его
+        // не увидит, поэтому строку перерисовываем напрямую.
+        if (node.isConnected) fillTaskRow(node, row);
       });
     };
     if (editingKey === row.key && editingRaw !== null) {
       // Правится СЫРАЯ строка `body_md` (маркер и чекбокс на месте): снапшот
       // `row.text` маркера не содержит, и запись его как всей строки уничтожила
       // бы задачу (блокер приёмки 64f7976a).
-      ensureInlineEditContext();
-      if (editingRange !== null) {
-        // Блочная правка: многострочное поле, `Enter` — перевод строки,
-        // сохранение — `Ctrl+Enter` (образец блочной правки трансклюзии).
-        const range = editingRange;
-        const field = fieldTextarea({
-          value: editingRaw,
-          rows: Math.min(12, Math.max(2, editingRaw.split('\n').length)),
-          extraClass: `ui-task-row-edit ${TASK_ROW_BLOCK_EDIT_CLASS}`,
-          ariaLabel: t('tasks.editBlockAria'),
-        });
-        inlineEditCommands.set(field, {
-          multiline: true,
-          commit: () => {
-            void actions.editBlock?.(row, range, field.value).then((saved) => {
-              if (saved) closeEdit();
-            });
-          },
-          cancel: closeEdit,
-        });
-        field.addEventListener('focus', () => {
-          releaseContext ??= pushKeyContext(INLINE_EDIT_CONTEXT_ID);
-        });
-        field.addEventListener('blur', () => {
-          if (editingKey === row.key) closeEdit();
-        });
-        textHost.append(field);
+      const editor = createEditor(editingRaw, editingRange);
+      if (editor === null) {
+        actions.renderText(textHost, row);
       } else {
-        const field = fieldInput({
-          value: editingRaw,
-          extraClass: 'ui-task-row-edit',
-          ariaLabel: t('tasks.editLineAria'),
-        });
-        inlineEditCommands.set(field, {
-          commit: () => {
-            void actions.editLine(row, field.value).then((saved) => {
-              if (saved) closeEdit();
-            });
-          },
-          cancel: closeEdit,
-        });
-        field.addEventListener('focus', () => {
-          releaseContext ??= pushKeyContext(INLINE_EDIT_CONTEXT_ID);
-        });
-        field.addEventListener('blur', () => {
-          if (editingKey === row.key) closeEdit();
-        });
-        textHost.append(field);
+        rowEditor = editor;
+        textHost.append(editor.root);
+        editor.focus();
       }
     } else {
       actions.renderText(textHost, row);
@@ -942,12 +900,7 @@ export function mountTaskPanel(
             return;
           }
           editingRaw = raw;
-          // Правка — состояние КОМПОНЕНТЫ, а не данных строки: сверка по ключу
-          // его не увидит, поэтому строку перерисовываем напрямую.
-          fillTaskRow(node, row);
-          const field = node.querySelector<HTMLInputElement>('.ui-task-row-edit');
-          field?.focus();
-          field?.select();
+          if (node.isConnected) fillTaskRow(node, row);
         });
       });
     }
@@ -962,6 +915,18 @@ export function mountTaskPanel(
         else actions.openDay(day);
       });
       dates.append(chip);
+    }
+    // Облачка связанных мыслей рядом с датой задачи (0.16.1, задача
+    // `cfb8cb72`, пункт 6): строка показывает свои субъектные ссылки облачками
+    // (эталонный компонент, фабрику даёт экран `renderSubject`), а не только
+    // текстом. Нет фабрики — облачков не рисуем.
+    const subjects = div('ui-task-row-subjects');
+    if (actions.renderSubject !== undefined) {
+      for (const id of row.subjectThoughts) {
+        const cloud = span('', 'ui-task-row-subject-cloud');
+        actions.renderSubject(cloud, { kind: 'thought', id, title: id });
+        if (cloud.childNodes.length > 0) subjects.append(cloud);
+      }
     }
     const rowActions = div('ui-task-row-actions');
     rowActions.append(
@@ -999,7 +964,7 @@ export function mountTaskPanel(
       });
       leading.push(caret);
     }
-    node.replaceChildren(check, textHost, dates, rowActions);
+    node.replaceChildren(check, textHost, dates, subjects, rowActions);
     if (leading.length > 0) node.prepend(...leading);
     // Дети не дублируются под открытой блочной правкой: они уже в поле.
     if (hasChildren && expanded && !(editingKey === row.key && editingRange !== null)) {
@@ -1049,6 +1014,19 @@ export function mountTaskPanel(
   }
 
   function fillReminderRow(node: HTMLElement, row: ReminderPanelRow): void {
+    // Чекбокс вхождения (0.16.1, задача `cfb8cb72`, пункт 7): отметка =
+    // отработал (dismiss вхождения), серия напоминания остаётся. Контрол
+    // ОДНОСТОРОННИЙ — снятие отметки вернуло бы вхождение, которого сервер уже
+    // не отдаёт; поэтому после отметки чекбокс только показывает состояние.
+    const done = choiceControl('checkbox', {
+      checked: row.done === true,
+      onChange: (checked) => {
+        if (checked && row.done !== true) actions.reminderDone?.(row);
+        else if (!checked) check.checked = row.done === true;
+      },
+    });
+    done.classList.add('ui-reminder-row-check');
+    const check = done;
     // Строка напоминания — уже мысль: субъект показывается облачком мысли
     // (пункт C ТЗ 2026-11-17), формат — как у чипов полей ввода свойств.
     // Фабрику облачка знает экран (`renderSubject`); без неё — название строкой.
@@ -1091,7 +1069,7 @@ export function mountTaskPanel(
         },
       }),
     );
-    node.replaceChildren(subject, moment, repeat, flags, actionsBox);
+    node.replaceChildren(check, subject, moment, repeat, flags, actionsBox);
   }
 
   /**

@@ -125,16 +125,28 @@ describe('сторож: единая компонента списка зада�
     );
   });
 
-  it('блочная правка и чек-лист-пункт реализованы в рендере и модели (замечания 3, 4)', () => {
+  it('правка строки и чек-лист-пункт реализованы в рендере, компоненте и модели (пункты 1, 3, 4)', () => {
     const render = source(RENDER);
-    assert.ok(render.includes('fieldTextarea('), 'блочная правка — многострочное поле рендера');
     assert.ok(
-      render.includes("chord: 'Ctrl+Enter'") && render.includes("chord: 'Meta+Enter'"),
-      'блочная правка сохраняется Ctrl+Enter (Cmd+Enter), Enter — перевод строки',
+      render.includes('options.createRowEditor'),
+      'правка строки — поле КОМПОНЕНТЫ РЕДАКТИРОВАНИЯ КОММЕНТАРИЯ, фабрику даёт экран (пункт 1)',
     );
     assert.ok(
-      render.includes('taskRow.commitBlock'),
-      'команда сохранения блока объявлена в едином диспетчере клавиш (`lib/keymap`)',
+      render.includes("'ui-task-row-edit'") && render.includes('ui-task-row-block-edit'),
+      'строка и блок правки помечены своими классами',
+    );
+    assert.ok(
+      !render.includes('defineKeyContext'),
+      'панель не объявляет своих хорд: Ctrl+Enter/Enter/Tab принадлежат полю',
+    );
+    const editor = source('editor/task-row-editor.ts');
+    assert.ok(
+      editor.includes('ctrlKey') && editor.includes('stopPropagation'),
+      'Ctrl/Cmd+Enter погашается в capture-фазе до keymap CM6 (пункт 1)',
+    );
+    assert.ok(
+      editor.includes('markdownFieldValue'),
+      'сохраняется текст поля компоненты, а не снапшот строки',
     );
     assert.ok(
       render.includes("choiceControl('checkbox'") && render.includes('toggleChild'),
@@ -145,6 +157,10 @@ describe('сторож: единая компонента списка зада�
     assert.ok(
       model.includes('setChecklistLineDone'),
       'модель умеет ставить/снимать отметку пункта',
+    );
+    assert.ok(
+      model.includes('doneKeys'),
+      'модель несёт отметки вхождений напоминаний до «Обновить» (пункт 7)',
     );
   });
 });

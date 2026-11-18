@@ -93,6 +93,13 @@ const LEGACY_KEYDOWN_SITES: readonly LegacyKeydownSite[] = [
     category: 'boundary',
     reason: 'Capture-перехват нажатия для записи сочетания — задача исключает editor/**.',
   },
+  {
+    file: 'editor/task-row-editor.ts',
+    count: 1,
+    category: 'boundary',
+    reason:
+      'Ctrl+Enter сохранения строки задачи перехватывается в capture-фазе на корне поля — жест обязан обогнать keymap CM6 (п.1 ТЗ 2026-11-18). Каталог editor/** вне границ fd3d84f4.',
+  },
 
   // --- mechanism: механизм диспетчера не выражает событие -------------------
   {

@@ -56,10 +56,12 @@ import {
   commitMarkdownField,
   createMarkdownField,
   editMarkdownField,
+  focusMarkdownFieldLineStart,
   focusMarkdownFieldStart,
   insertMentionLinkIntoField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
+import { wireTaskCheckboxes } from '../../editor/task-checkbox-toggle.js';
 import {
   paintWikiIdsInSnippet,
   resolveWikiIdsInSnippet,
@@ -275,6 +277,13 @@ interface CardEditor {
   openTitle(): void;
   /** Войти в правку с фокусом в теле. */
   openBody(): void;
+  /**
+   * Войти в единую правку тела и поставить каретку в НАЧАЛО строки `lineNo`
+   * (с нуля) — переход «Открыть источник» строки задачи из панели «Дневника»
+   * (0.16.1, задача `cfb8cb72`, пункт 3). Тело дочитывается точечно, как и при
+   * обычном входе в правку.
+   */
+  editLine(lineNo: number): void;
   /**
    * Синхронизировать ШАПКУ карточки со свежей строкой модели (дата/период и
    * облачка привязок), не пересобирая карточку и не отсоединяя живой редактор.
@@ -902,6 +911,16 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   tasksPanel = mountTasksPanel(tasksHost, {
     getPeriod: () => currentFromTo(),
     openDay: (day) => void openChronicleDay(day),
+    // «Открыть источник» строки: хроно-строка ведёт в свою запись (правка на
+    // строке задачи, пункт 3), прочие — прежним путём по дню строки.
+    openRowSource: (row) => {
+      if (row.kind === 'chronological') {
+        void openChronicleTaskLine(row);
+        return;
+      }
+      const day = row.due ?? row.periodFrom;
+      if (day !== null) void openChronicleDay(day);
+    },
     onRecordsChanged: () => void refreshFeedAndCalendar(),
     // Свёрнутая панель не имеет высоты: слайдер прячется (пункт B ТЗ).
     onPanelCollapsed: (collapsed) => {
@@ -1746,6 +1765,20 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     // ПРОСМОТРА ссылки на мысли невидимы (в правке имя подтягивает wikiIdPlugin).
     void resolveWikiLinksInDom(recordView, collapseNetworkId);
     decorateCommentView(recordView, createCommentCollapseState(collapseNetworkId, row.id));
+    // Чекбоксы задач в СТАТИЧНОМ просмотре записи кликабельны (0.16.1, задача
+    // `cfb8cb72`, пункт 8): клик переключает `- [ ]` ↔ `- [x]` в `body_md`
+    // источника. Панели задач/напоминаний светят «Обновить» штатно — запись
+    // публикует `comment.updated`, отдельной проводки из ленты нет.
+    wireTaskCheckboxes(recordView, () => ({
+      commentId: row.id,
+      onSaved: (md, html) => {
+        row.body_html = html;
+        row.snippet = recordTitleFromBody(md);
+        bodyDraft = md;
+        bodyLoaded = true;
+        invalidateQueries(queryKeys.chronicleFeedAll());
+      },
+    }));
   }
 
   /**
@@ -1912,6 +1945,18 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     if (focus === 'title') title?.beginEdit(true);
   };
 
+  /**
+   * Войти в единую правку тела и поставить каретку в НАЧАЛО строки `lineNo`
+   * (0.16.1, задача `cfb8cb72`, пункт 3): тело дочитывается тем же штатным
+   * `ensureWidget`, вход в правку и позиция каретки — жестом поля
+   * (`focusMarkdownFieldLineStart`), второй копии разбора смещений нет.
+   */
+  const enterBodyEditAtLine = async (lineNo: number): Promise<void> => {
+    const w = await ensureWidget();
+    if (w === null) return;
+    focusMarkdownFieldLineStart(w, lineNo);
+  };
+
   /** ЕДИНАЯ запись обоих полей одним PATCH (требование 26f0aa52). */
   const saveBoth = async (md: string): Promise<string> => {
     const networkId = requireNetworkId();
@@ -2005,6 +2050,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     // Вход в правку заголовка через компонент: он же откроет и тело (`onBeginEdit`).
     openTitle: () => title?.beginEdit(true),
     openBody: () => void enterBodyEdit('body'),
+    // «Открыть источник» строки задачи (пункт 3): та же единая правка, каретка —
+    // в начало строки задачи.
+    editLine: (lineNo: number) => void enterBodyEditAtLine(lineNo),
     // Шапка вне правки: свежая строка модели обновляет дату/период и облачка
     // привязок НА МЕСТЕ (карточка не пересобирается — живой редактор цел).
     syncHead: (next: ChronicleRow): void => {
@@ -2717,6 +2765,63 @@ export interface ChronicleRecordRef {
   id: string;
   valid_from: string;
   valid_to: string | null;
+}
+
+/**
+ * Открыть ИСТОЧНИК строки задачи из панели «Задачи и напоминания» (0.16.1,
+ * задача `cfb8cb72`, пункт 3): запись → текущая, лента — в самый верх, режим
+ * правки тела, каретка в начало строки задачи. Запись не отображается в ленте —
+ * сначала общий переход поиска (сброс отбора при необходимости, период записи,
+ * дата в календарике, прокрутка к записи), затем тот же вход в правку.
+ *
+ * Единый вход для пунктов меню и чипа даты, адресация — `comment_id` + `line_no`
+ * проекции строки (`line_no` — номер строки `body_md` С НУЛЯ, как в `TaskDTO`
+ * и `PATCH /tasks`; поле переводит его в смещение символа само).
+ */
+export async function openChronicleTaskLine(ref: {
+  commentId: string;
+  lineNo: number;
+}): Promise<void> {
+  // Ленивый импорт: статический замкнул бы цикл active-view → chronicle.
+  const { setActiveView } = await import('../active-view.js');
+  setActiveView('chronicle');
+  await ensureChronicleInitialised();
+  let record = rows.find((item) => item.id === ref.commentId);
+  if (record === undefined) {
+    // Дату начала записи знает только сам источник: лента её не несёт, пока
+    // запись не загружена. Точечное чтение — как у входа в правку тела.
+    try {
+      const comment = await etn.comments.get(requireNetworkId(), ref.commentId);
+      await jumpToRecord({
+        id: comment.id,
+        valid_from: comment.valid_from,
+        valid_to: comment.valid_to,
+      });
+    } catch (err) {
+      notice(t('diary.loadFailed', [errText(err)]), 'error');
+      return;
+    }
+    record = rows.find((item) => item.id === ref.commentId);
+    if (record === undefined) return;
+    editRecordLine(record.id, ref.lineNo);
+    return;
+  }
+  const day = localDay(record.valid_from);
+  if (day === '') return;
+  // Запись УЖЕ в ленте: текущая + развёрнутое тело (иначе поле правки скрыто
+  // свёрнутой карточкой), лента — в самое начало.
+  feedNav?.selectRecord(record.id, day);
+  setRecordCollapsed(day, record.id, false);
+  if (feedWrap !== null) feedWrap.scrollTop = 0;
+  editRecordLine(record.id, ref.lineNo);
+}
+
+/** Войти в правку тела записи на строке `lineNo` (карточка адресуется по id). */
+function editRecordLine(id: string, lineNo: number): void {
+  if (feedList === null) return;
+  const card = feedList.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
+  if (card === null) return;
+  cardEditors.get(card)?.editLine(lineNo);
 }
 
 /**

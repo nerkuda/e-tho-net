@@ -27,9 +27,46 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
+import { EditorView } from '@codemirror/view';
+
 import * as keymap from '../src/renderer/lib/keymap.js';
+import { markdownFieldValue } from '../src/renderer/editor/markdown-field.js';
 import type { TasksPanelHandle } from '../src/renderer/screens/chronicle/tasks-panel.js';
 import { ShimElement } from './dom-shim.js';
+
+/** Текст поля правки (CM6): компонента держит его у себя, а не в `value`. */
+function fieldText(field: HTMLElement): string {
+  return markdownFieldValue(field);
+}
+
+/**
+ * Заменить текст поля правки — тем же путём, что печатает пользователь:
+ * транзакцией CM6 (иначе снапшот поля остался бы прежним и правка «не грязная»).
+ */
+function typeIntoField(field: HTMLElement, text: string): void {
+  const content = field.querySelector<HTMLElement>('.cm-content');
+  assert.ok(content, 'поле CM6 смонтировано');
+  const view = EditorView.findFromDOM(content);
+  assert.ok(view, 'вид CM6 найден по DOM');
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+}
+
+/** Ctrl+Enter по корню поля: capture-перехват компоненты (п.1 ТЗ 2026-11-18). */
+function pressCommit(field: HTMLElement): { prevented: boolean; stopped: boolean } {
+  const state = { prevented: false, stopped: false };
+  (field as unknown as ShimElement).emit('keydown', {
+    key: 'Enter',
+    ctrlKey: true,
+    metaKey: false,
+    preventDefault: (): void => {
+      state.prevented = true;
+    },
+    stopPropagation: (): void => {
+      state.stopped = true;
+    },
+  });
+  return state;
+}
 
 /** Период ленты, который отдаёт экран (`deps.getPeriod`). */
 const PERIOD = { from: '2026-11-10', to: '2026-11-12' };
@@ -170,17 +207,57 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
   const windowListeners: Array<{ type: string; listener: (event: any) => void }> = [];
   (globalThis as any).HTMLElement = class {};
   (globalThis as any).getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
-  (globalThis as any).document = {
+  const doc: Record<string, any> = {
     createElement: (tag: string) => new ShimElement(tag),
     createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
     createTextNode: (text: string) => new ShimElement('#text', undefined, text),
-    documentElement: { style: {} },
+    // `documentElement`/`head` — настоящие узлы шима: CodeMirror монтирует
+    // свои стили в `document.head` (`StyleSet.mount`).
+    documentElement: new ShimElement('html'),
+    head: new ShimElement('head'),
     body,
+    adoptedStyleSheets: [],
     activeElement: null,
     addEventListener: (): void => undefined,
     removeEventListener: (): void => undefined,
     dispatchEvent: (): boolean => true,
     querySelector: (): null => null,
+    // CodeMirror (правка строки компонентой) спрашивает выделение/фокус/диапазон.
+    getSelection: () => null,
+    hasFocus: () => false,
+    createRange: () => ({
+      setStart: (): void => undefined,
+      setEnd: (): void => undefined,
+      getClientRects: () => [],
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }),
+    }),
+  };
+  (globalThis as any).document = doc;
+  // CodeMirror читает `ownerDocument.defaultView` у шим-элементов.
+  (ShimElement.prototype as any).ownerDocument = doc;
+  (ShimElement.prototype as any).getSelection = () => null;
+  // Наблюдатель мутаций/локальное хранилище нужны CM6; раскладка полю не нужна.
+  (globalThis as any).MutationObserver = class {
+    observe(): void {
+      /* no-op */
+    }
+    disconnect(): void {
+      /* no-op */
+    }
+    takeRecords(): unknown[] {
+      return [];
+    }
+  };
+  const ls = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => ls.get(key) ?? null,
+    setItem: (key: string, value: string) => void ls.set(key, value),
+    removeItem: (key: string) => void ls.delete(key),
+    clear: () => ls.clear(),
+    key: (index: number) => [...ls.keys()][index] ?? null,
+    get length() {
+      return ls.size;
+    },
   };
   const win = ((globalThis as any).window ??= {}) as Record<string, any>;
   win.innerWidth = 1200;
@@ -202,6 +279,12 @@ async function setup(fixture: Fixture = {}): Promise<Harness> {
     );
     if (index >= 0) windowListeners.splice(index, 1);
   };
+  // Связка «документ ↔ окно» и кадры: CM6 читает `defaultView` и планирует замеры.
+  doc.defaultView = win;
+  win.document = doc;
+  win.getSelection = () => null;
+  win.requestAnimationFrame = () => 1;
+  win.cancelAnimationFrame = (): void => undefined;
 
   const calls: Calls = {
     list: [],
@@ -488,14 +571,12 @@ describe('панель задач: экранная загрузка и пери
   });
 });
 
-describe('панель задач: подгруппы напоминаний по видам субъектов (блокер 64f7976a)', () => {
-  it('мысль и публикация показывают названия, не GUID', async () => {
+describe('панель задач: единый список напоминаний с названиями субъектов (пункт 6)', () => {
+  it('мысль и публикация — облачка в ОДНОМ списке, без подгрупп и GUID', async () => {
     const thoughtId = '11111111-1111-4111-8111-111111111111';
     const publicationId = '22222222-2222-4222-8222-222222222222';
     const h = await setup({
       reminders: [
-        // Оба вхождения в разных секциях («сегодня» и «период»), чтобы в каждой
-        // секции была РОВНО одна строка: порог 1 элемент — группировка по мыслям.
         reminder({
           id: 'r-thought',
           subject_type: 'thought',
@@ -513,28 +594,21 @@ describe('панель задач: подгруппы напоминаний п�
     try {
       const group = h.host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
       assert.ok(group, 'группа «Напоминания периода» на панели');
-      // Группа-мысль показывается облачком с названием (пункт E ТЗ 2026-11-17):
-      // мысль — чип `lib/thought-cloud` (`.prc-title`), публикация — облачко
-      // публикации (`.ui-pub-cloud-title`). Текста-заголовка больше нет.
+      assert.equal(group.findAll('ui-task-subgroup').length, 0, 'подгрупп по видам субъектов нет');
       const titles = group
-        .findAll('ui-task-subgroup-subject')
-        .map((node) => node.flatText().trim());
+        .findAll('ui-task-row-subject')
+        .map((node) => node.flatText().trim())
+        .filter((title) => title !== '');
       assert.deepEqual(titles, [`Мысль ${thoughtId}`, `Публикация ${publicationId}`]);
-      assert.deepEqual(
-        group.findAll('ui-task-subgroup-title').map((node) => node.flatText().trim()),
-        ['', ''],
-        'заголовок-строка у группы-мысли скрыт — имя несёт облачко',
-      );
       assert.ok(
         !titles.some((title) => /^[0-9a-f-]{36}$/.test(title)),
-        'в облачках подгрупп нет GUID',
+        'в облачках строк нет GUID',
       );
     } finally {
       h.destroy();
     }
   });
 });
-
 describe('панель задач: ID-ссылка строки красится по готовому DOM (блокер 399c25d5)', () => {
   it('пустой span data-wiki-id получает подпись мысли и остаётся кликабельным', async () => {
     const h = await setup({});
@@ -623,7 +697,7 @@ describe('панель задач: точечная правка строки (�
     check.emit('change');
   }
 
-  it('чекбокс не серит строку: соседняя строка рабочая, «Обновить» не зажигается', async () => {
+  it('чекбокс зажигает «Обновить» (пункт 4), но строки остаются свежими и рабочими', async () => {
     const h = await setup({
       tasks: [taskRow({ line_no: 0, text: 'первая' }), taskRow({ line_no: 1, text: 'вторая' })],
     });
@@ -650,8 +724,8 @@ describe('панель задач: точечная правка строки (�
         (
           h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement
         ).classList.contains('is-stale'),
-        false,
-        'собственная команда «Обновить» не зажигает',
+        true,
+        'отметка выполнения зажигает «Обновить»: списки пересобираются только по кнопке',
       );
       // Повторный клик снимает отметку: команда работает и на серой строке.
       clickCheck(h, 'c1:0', false);
@@ -682,10 +756,22 @@ describe('панель задач: точечная правка строки (�
     }
   });
 
-  it('«Сделать бессрочной» перечитывает запись: строка не серая, «Обновить» не горит', async () => {
+  it('«Сделать бессрочной» перечитывает запись и зажигает «Обновить» (срок изменился)', async () => {
     const h = await setup({
       tasks: [taskRow()],
-      commentRows: { c1: [taskRow({ revision: 2, parsed_revision: 2 })] },
+      // После «Сделать бессрочной» запись перечитывается БЕЗ срока — структура
+      // секций изменилась, поэтому «Обновить» зажигается (пункт 2).
+      commentRows: {
+        c1: [
+          taskRow({
+            due: null,
+            period_from: null,
+            period_to: null,
+            revision: 2,
+            parsed_revision: 2,
+          }),
+        ],
+      },
     });
     try {
       h.openRowMenu();
@@ -704,8 +790,8 @@ describe('панель задач: точечная правка строки (�
         (
           h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement
         ).classList.contains('is-stale'),
-        false,
-        '«Обновить» своей командой не зажигается',
+        true,
+        'смена срока зажигает «Обновить»: секции пересобираются только по кнопке (пункт 2)',
       );
     } finally {
       h.destroy();
@@ -723,14 +809,9 @@ describe('панель задач: точечная правка строки (�
       (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
       await h.settle();
       const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
-      assert.ok(field, 'поле правки открылось');
-      field.value = '- [ ] новая';
-      field.focus();
-      keymap.dispatchKeyEvent({
-        key: 'Enter',
-        target: field,
-        preventDefault: (): void => undefined,
-      } as unknown as KeyboardEvent);
+      assert.ok(field, 'поле правки открылось (компонента комментария)');
+      typeIntoField(field as unknown as HTMLElement, '- [ ] новая');
+      pressCommit(field as unknown as HTMLElement);
       await h.settle();
       assert.ok(
         h.calls.list.some((query) => query['comment_id'] === 'c1'),
@@ -1138,11 +1219,8 @@ describe('панель задач: высота панели в ui_state (пун
 // Доработка по вердикту проверки 2026-11-17 (блокер): форма секций.
 // ---------------------------------------------------------------------------
 
-describe('панель задач: форма секций при смене периода (блокер проверки 2026-11-17)', () => {
-  it('смена «одна дата → несколько» пересобирает плоские секции в подгруппы', async () => {
-    // Секции напоминаний плоские только при ОДНОЙ выбранной дате (пункт D ТЗ).
-    // При расширении периода форма меняется: узел секции обязан пересобраться,
-    // иначе «Просрочено»/«Сегодня» остаются плоскими до перезагрузки (блокер).
+describe('панель задач: единая форма списков при любом периоде (пункт 6 ТЗ 2026-11-18)', () => {
+  it('напоминания — ОДИН список без подгрупп и после смены периода', async () => {
     const today = todayLocal();
     const tomorrow = tomorrowLocalOfScreen();
     const yesterday = yesterdayLocalOfScreen();
@@ -1166,56 +1244,71 @@ describe('панель задач: форма секций при смене п�
     try {
       const group = h.host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
       assert.ok(group, 'группа напоминаний на панели');
-      assert.ok(
-        group.findAll('ui-task-flat').length >= 1,
-        'при одной дате секции плоские (подгрупп нет)',
-      );
-      assert.equal(group.findAll('ui-task-subgroup').length, 0);
+      assert.equal(group.findAll('ui-task-subgroup').length, 0, 'подгрупп нет при одной дате');
+      assert.equal(group.querySelectorAll('.ui-reminder-row').length, 3, 'в списке все вхождения');
 
       await h.setPeriod({ from: today, to: tomorrow });
 
       assert.equal(
-        group.findAll('ui-task-flat').length,
+        group.findAll('ui-task-subgroup').length,
         0,
-        'плоских секций не осталось — форма пересобрана',
+        'подгрупп нет и при расширенном периоде: форма списка одна',
       );
-      assert.ok(
-        group.findAll('ui-task-subgroup').length >= 2,
-        'секции «Просрочено»/«Сегодня» стали группами, а не остались плоскими',
+      assert.equal(
+        group.querySelectorAll('.ui-reminder-row').length,
+        3,
+        'список остался сплошным, вхождения не потеряны',
       );
     } finally {
       h.destroy();
     }
   });
 
-  it('обратная смена «несколько дат → одна» снова собирает плоские секции', async () => {
+  it('задачи — «Без срока» и «Срочные» без подгрупп при любом периоде', async () => {
     const today = todayLocal();
-    const yesterday = yesterdayLocalOfScreen();
+    const undated = taskRow({
+      comment_id: 'c-undated',
+      line_no: 0,
+      text: 'без срока',
+      period_from: null,
+      period_to: null,
+      due: null,
+    });
+    const dated = taskRow({ comment_id: 'c-dated', line_no: 0, text: 'срочная' });
     const h = await setup({
-      period: { from: today, to: tomorrowLocalOfScreen() },
-      reminders: [
-        reminder({
-          id: 'r-yesterday',
-          occurrences: [{ occurrence_at: `${yesterday}T09:00:00`, status: 'active', until: null }],
-        }),
-        reminder({
-          id: 'r-today',
-          occurrences: [{ occurrence_at: `${today}T09:00:00`, status: 'active', until: null }],
-        }),
-      ],
+      period: { from: today, to: today },
+      tasks: [dated],
+      undatedTasks: [undated],
     });
     try {
-      const group = h.host.querySelector('.ui-task-group-reminders') as unknown as ShimElement;
-      assert.ok(group.findAll('ui-task-subgroup').length >= 1, 'до смены периода — подгруппы');
+      const tasksGroup = h.host.querySelector('.ui-task-group-tasks') as unknown as ShimElement;
+      assert.ok(tasksGroup, 'группа задач на панели');
+      assert.equal(
+        tasksGroup.findAll('ui-task-subgroup').length,
+        0,
+        'подгрупп по датам/мыслям больше нет (пороги 6762adb0 отменены)',
+      );
+      const titles = tasksGroup
+        .findAll('ui-task-section-title')
+        .map((node) => node.flatText().trim());
+      assert.deepEqual(
+        titles,
+        [t('tasks.sectionUndated'), t('tasks.sectionUrgent')],
+        'ровно две сплошные секции: «Без срока», затем «Срочные»',
+      );
 
-      await h.setPeriod({ from: today, to: today });
+      await h.setPeriod({ from: today, to: tomorrowLocalOfScreen() });
 
       assert.equal(
-        group.findAll('ui-task-subgroup').length,
+        tasksGroup.findAll('ui-task-subgroup').length,
         0,
-        'секции снова плоские — узлы пересобраны',
+        'смена периода форму секций не меняет',
       );
-      assert.ok(group.findAll('ui-task-flat').length >= 1);
+      assert.deepEqual(
+        tasksGroup.findAll('ui-task-section-title').map((node) => node.flatText().trim()),
+        [t('tasks.sectionUndated'), t('tasks.sectionUrgent')],
+        'те же две секции и после смены периода',
+      );
     } finally {
       h.destroy();
     }
@@ -1459,7 +1552,7 @@ describe('панель задач: своя правка бессрочной с
   });
 });
 
-describe('панель задач: блочная правка «как трансклюзия» (замечание 3 ТЗ 2026-11-18)', () => {
+describe('панель задач: блочная правка компонентой комментария (замечание 3 ТЗ 2026-11-18)', () => {
   beforeEach(() => keymap.keymapInternals.reset());
 
   it('двойной клик по строке с детьми правит ВЕСЬ блок источника одним сохранением', async () => {
@@ -1493,21 +1586,16 @@ describe('панель задач: блочная правка «как тран
       const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
       (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
       await h.settle();
-      const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
+      const field = row.querySelector('.ui-task-row-block-edit') as unknown as HTMLElement;
       assert.ok(field, 'блочное поле открылось');
       assert.equal(
-        field.value,
+        fieldText(field),
         '- [ ] задача\n  - [ ] пункт\n  текст',
         'в поле — строка задачи и обе вложенные строки (диапазон до последнего ребёнка)',
       );
-      field.value = '- [ ] задача\n  - [x] пункт\n  текст';
-      field.focus();
-      keymap.dispatchKeyEvent({
-        key: 'Enter',
-        ctrlKey: true,
-        target: field,
-        preventDefault: (): void => undefined,
-      } as unknown as KeyboardEvent);
+      typeIntoField(field, '- [ ] задача\n  - [x] пункт\n  текст');
+      const commit = pressCommit(field);
+      assert.equal(commit.prevented, true, 'Ctrl+Enter перехвачен компонентой правки');
       await h.settle();
 
       assert.deepEqual(
@@ -1515,15 +1603,17 @@ describe('панель задач: блочная правка «как тран
         ['- [ ] задача\n  - [x] пункт\n  текст\n- [ ] соседняя'],
         'заменён ровно блок строки-задачи; соседняя строка не тронута',
       );
+      assert.equal(
+        row.querySelector('.ui-task-row-block-edit'),
+        null,
+        'поле закрылось после сохранения',
+      );
     } finally {
       h.destroy();
     }
   });
 
   it('Ctrl+Enter блока сохраняет правку, а не применяет отбор «Дневника» (вердикт 7448ac21)', async () => {
-    // Блокер: `focusin` контейнера вида приходит ПОСЛЕ `focus` поля и кладёт
-    // хорду `chronicle-apply` выше контекста правки — Ctrl+Enter уходил в
-    // перезапрос ленты, поле висело, `body_md` не менялся.
     const body = '- [ ] задача\n  - [ ] пункт\n- [ ] соседняя';
     const h = await setup({
       tasks: [taskRow()],
@@ -1551,39 +1641,35 @@ describe('панель задач: блочная правка «как тран
       const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
       (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
       await h.settle();
-      const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
+      const field = row.querySelector('.ui-task-row-block-edit') as unknown as HTMLElement;
       assert.ok(field, 'блочное поле открылось');
-      field.value = '- [ ] задача\n  - [x] пункт';
-      field.focus();
-      // Порядок реального DOM: `focus` поля (контекст правки) → `focusin`
-      // контейнера вида (контекст отбора ложится выше).
+      typeIntoField(field, '- [ ] задача\n  - [x] пункт');
+      // Порядок реального DOM: фокус поля, затем focusin вида (контекст отбора
+      // ложится выше). Компонента гасит жест в capture-фазе.
       h.host.emit('focusin', {});
-
-      const event = {
+      const commit = pressCommit(field);
+      assert.equal(commit.prevented, true, 'жест погашен компонентой');
+      assert.equal(commit.stopped, true, 'событие не всплывает до диспетчера');
+      const handled = keymap.dispatchKeyEvent({
         ctrlKey: true,
         key: 'Enter',
         target: field,
-        defaultPrevented: false,
-        prevented: false,
-        preventDefault(): void {
-          event.prevented = true;
-        },
-      };
-      const handled = keymap.dispatchKeyEvent(event as unknown as KeyboardEvent);
+        defaultPrevented: true,
+      } as unknown as KeyboardEvent);
       await h.settle();
 
       assert.equal(applies, 0, 'Ctrl+Enter не ушёл в «применить отбор»');
+      assert.equal(handled, false, 'после preventDefault диспетчер молчит');
       assert.deepEqual(
         h.calls.commentUpdates,
         ['- [ ] задача\n  - [x] пункт\n- [ ] соседняя'],
-        'блок сохранён правкой `body_md`',
+        'блок сохранён правкой body_md',
       );
       assert.equal(
         row.querySelector('.ui-task-row-block-edit'),
         null,
         'поле закрылось после сохранения',
       );
-      assert.equal(handled, true, 'клавишу обработал контекст блочной правки');
     } finally {
       h.destroy();
     }

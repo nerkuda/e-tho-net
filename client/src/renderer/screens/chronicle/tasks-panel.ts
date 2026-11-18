@@ -17,8 +17,13 @@
 import { UI_STATE_KEY } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
+import { createTaskRowEditor } from '../../editor/task-row-editor.js';
 import { renderMarkdownWithWikiLinks } from '../../editor/wiki-link-resolver.js';
-import { REMINDER_PANEL_ROW_CLASS, TASK_PANEL_ROW_CLASS } from '../../lib/ui/task-panel.js';
+import {
+  REMINDER_PANEL_ROW_CLASS,
+  TASK_PANEL_ROW_CLASS,
+  type TaskPanelRow,
+} from '../../lib/ui/task-panel.js';
 import { TASK_LIST_HEIGHT, mountTaskList } from '../../lib/ui/task-list.js';
 import { taskRowKey } from '../../lib/ui/task-panel-model.js';
 
@@ -28,6 +33,12 @@ export interface TasksPanelDeps {
   getPeriod(): { from: string; to: string };
   /** Открыть день ленты (переход к записи-источнику строки). */
   openDay(day: string): void;
+  /**
+   * Открыть ИСТОЧНИК хроно-строки (0.16.1, задача `cfb8cb72`, пункт 3): запись
+   * становится текущей, лента — в верх, тело — в правке на строке задачи
+   * (`openChronicleTaskLine`). Прочие строки экран решает сам (день/карточка).
+   */
+  openRowSource?(row: TaskPanelRow): void;
   /** Правки в записях изменились — лента «Дневника» перечитывается. */
   onRecordsChanged(): void;
   /** Панель свёрнута/развёрнута: экран прячет слайдер высоты. */
@@ -68,9 +79,17 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
     },
     actions: {
       openDay: (day) => deps.openDay(day),
+      // «Открыть источник» строки: запись → правка тела на строке задачи.
+      // Экран решает адрес, панель только передаёт строку (пункт 3).
+      ...(deps.openRowSource !== undefined
+        ? { openRowSource: (row: TaskPanelRow) => deps.openRowSource?.(row) }
+        : {}),
       onRecordsChanged: () => deps.onRecordsChanged(),
       onPanelCollapsed: (collapsed) => deps.onPanelCollapsed?.(collapsed),
     },
+    // Правка строки — компонента редактирования комментария (пункт 1); её
+    // реализацию даёт слой редактора, панель о CodeMirror не знает.
+    createRowEditor: createTaskRowEditor,
     persistence: {
       uiStateKey: UI_STATE_KEY.DIARY_TASKS_PANEL,
       height: {

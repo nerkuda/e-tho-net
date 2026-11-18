@@ -471,35 +471,20 @@ export type {
   ReminderRowAction,
 } from './task-panel.js';
 
-// Модель панели задач и напоминаний — чистые правила группировки (пороги
-// 6762adb0), секций, счётчиков и признака «строка устарела» (0e85b66e).
+// Модель панели задач и напоминаний — чистые правила секций, счётчиков и
+// признака «строка устарела» (0e85b66e). Группировки по порогам больше нет
+// (уточнение 2026-11-18, задача cfb8cb72, пункт 6).
 export {
-  TASK_GROUP_THRESHOLDS,
-  TASK_GROUP_NO_SUBJECT,
-  TASK_GROUP_NO_DATE,
-  taskGroupingMode,
-  weekStartOf,
-  monthKeyOf,
-  lastDayOfMonth,
   shiftDay,
-  groupPanelRows,
   taskRowKey,
   taskRowIsStale,
   taskRowView,
   taskCounters,
   panelNeedsRefresh,
   reminderRowKey,
-  reminderSectionOf,
   reminderPanelRows,
 } from './task-panel-model.js';
-export type {
-  TaskGroupingMode,
-  PanelGroupable,
-  PanelGroup,
-  TaskPanelRow,
-  ReminderPanelRow,
-  ReminderSectionKind,
-} from './task-panel-model.js';
+export type { PanelGroupable, TaskPanelRow, ReminderPanelRow } from './task-panel-model.js';
 
 // Единая компонента списка задач (0.16.1, задача 7446eb25): общий контроллер
 // «источник → загрузка → операции → устаревание → realtime» для панели

@@ -32,6 +32,9 @@ import {
   type TaskPanelActions,
   type TaskPanelRow,
   type TaskPanelView,
+  type TaskRowEditor,
+  type TaskRowEditorFactory,
+  type TaskRowEditorOptions,
 } from '../src/renderer/lib/ui/task-panel.js';
 import { replaceTaskLine } from '../src/renderer/lib/ui/task-panel-model.js';
 import { ShimElement } from './dom-shim.js';
@@ -90,6 +93,37 @@ interface Calls {
   rawLines: number;
   /** Высоты панели, записанные экраном (пункт B ТЗ 2026-11-17). */
   panelHeights: number[];
+  /** Открытые поля правки строки: панель отдаёт данные фабрике компоненты. */
+  rowEditors: Array<{ options: TaskRowEditorOptions; root: ShimElement }>;
+}
+
+/**
+ * Подделка компоненты редактирования комментария: панель получает поле
+ * ФАБРИКОЙ (§1 ТЗ 2026-11-18), поэтому её собственные тесты проверяют проводку
+ * «двойной клик → сырая строка → сохранение/закрытие», а поведение Ctrl+Enter,
+ * Tab/Shift+Tab и CM6 — тест самой компоненты (`task-row-editor.test.ts`).
+ */
+function fakeRowEditor(calls: Calls): TaskRowEditorFactory {
+  return (options: TaskRowEditorOptions): TaskRowEditor => {
+    const root = new ShimElement('div', 'md-field ui-task-row-md');
+    for (const cls of options.className.split(/\s+/)) {
+      if (cls !== '') root.classList.add(cls);
+    }
+    calls.rowEditors.push({ options, root });
+    return {
+      root: root as unknown as HTMLElement,
+      focus: () => undefined,
+      dispose: () => root.remove(),
+    };
+  };
+}
+
+/** Сохранить открытую правку так, как это делает компонента: `save` → `closed`. */
+async function commitRowEditor(calls: Calls, md: string): Promise<void> {
+  const editor = calls.rowEditors[calls.rowEditors.length - 1];
+  assert.ok(editor, 'поле правки открыто');
+  if (await editor.options.save(md)) editor.options.closed();
+  await flush();
 }
 
 /** Строка панели (view-модель) с адресом проекции. */
@@ -173,6 +207,7 @@ function mount(
     days: [],
     rawLines: 0,
     panelHeights: [],
+    rowEditors: [],
   };
   const actions: TaskPanelActions = {
     refresh: () => {
@@ -222,7 +257,13 @@ function mount(
       calls.panelHeights.push(height);
     },
   };
-  const handle = mountTaskPanel(host as unknown as HTMLElement, { ...actions, ...overrides });
+  const handle = mountTaskPanel(
+    host as unknown as HTMLElement,
+    { ...actions, ...overrides },
+    {
+      createRowEditor: fakeRowEditor(calls),
+    },
+  );
   handle.render(panelView(rows));
   return {
     host,
@@ -618,6 +659,56 @@ describe('панель задач: сворачивание блоков и ко
     destroy();
   });
 
+  it('«Открыть источник» есть у хроно-строки БЕЗ дат (пункт 3 ТЗ 2026-11-18)', async () => {
+    const { host, calls, destroy } = mount(
+      [
+        taskRow({
+          kind: 'chronological',
+          due: null,
+          periodFrom: null,
+          day: null,
+          text: 'задача из записи',
+        }),
+      ],
+      {
+        openRowSource: (row) => {
+          calls.days.push(`source:${row.key}`);
+        },
+      },
+    );
+    const button = host.querySelector('.ui-task-row-menu') as unknown as ShimElement;
+    button.emit('click', {
+      target: button,
+      currentTarget: button,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const item = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.openSource')));
+    assert.ok(item, 'команда «Открыть источник» доступна строке записи без дат');
+    item!.click();
+    await flush();
+    assert.deepEqual(calls.days, ['source:c1:0'], 'переход адресован строке, а не дню');
+    destroy();
+  });
+
+  it('рядом с датой строки — облачка связанных мыслей (пункт 6)', () => {
+    const rendered: string[] = [];
+    const { host, destroy } = mount([taskRow({ subjectThoughts: ['t1', 't2'] })], {
+      renderSubject: (node, subject) => {
+        rendered.push(subject.id);
+        node.textContent = subject.id;
+      },
+    });
+    const row = rowsOf(host)[0]!;
+    const clouds = row.querySelectorAll('.ui-task-row-subject-cloud');
+    assert.equal(clouds.length, 2, 'по облачку на каждую связанную мысль');
+    assert.deepEqual(rendered, ['t1', 't2'], 'облачко рисует экран (renderSubject)');
+    destroy();
+  });
+
   it('у строки с датами «Сделать бессрочной» доступна и уходит командой строки', () => {
     const { host, calls, destroy } = mountCollapsible();
     const button = host.querySelector('.ui-task-row-menu') as unknown as ShimElement;
@@ -678,48 +769,36 @@ describe('панель задач: сворачивание блоков и ко
   });
 });
 
-describe('панель задач: инлайн-правка строки (498f23e0)', () => {
+describe('панель задач: инлайн-правка строки компонентой комментария (пункт 1 ТЗ 2026-11-18)', () => {
   beforeEach(() => keymap.keymapInternals.reset());
 
-  it('двойной клик открывает поле с сырой строкой источника, Escape отменяет', async () => {
+  it('двойной клик отдаёт фабрике СЫРУЮ строку источника, отмена закрывает без записи', async () => {
     // `row.text` — снапшот БЕЗ маркера; в поле обязан попасть `body_md`.
     const { host, calls, destroy } = mount([taskRow({ text: 'задача' })]);
     const row = rowsOf(host)[0]!;
     (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
     await flush();
-    const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
-    assert.ok(field, 'поле правки открылось');
-    assert.equal(field.value, '- [ ] задача', 'правится СЫРАЯ строка с маркером');
+    assert.ok(row.querySelector('.ui-task-row-edit'), 'поле правки открылось');
     assert.equal(calls.rawLines, 1, 'сырую строку читает экран, а не снапшот');
-    field.focus();
+    assert.equal(calls.rowEditors.length, 1, 'поле создаёт фабрика компоненты, а не панель');
     assert.equal(
-      keymap.dispatchKeyEvent({
-        key: 'Escape',
-        target: field,
-        preventDefault: (): void => undefined,
-      } as unknown as KeyboardEvent),
-      true,
-      'Escape обработан диспетчером контекста правки',
+      calls.rowEditors[0]?.options.md,
+      '- [ ] задача',
+      'в поле — СЫРАЯ строка с маркером',
     );
+    // Отмена (Esc) — жест самой компоненты: поле закрывается без записи.
+    calls.rowEditors[0]?.options.closed();
     assert.equal(row.querySelector('.ui-task-row-edit'), null, 'правка закрыта');
     assert.deepEqual(calls.edits, [], 'отмена не сохраняет');
     destroy();
   });
 
-  it('Enter сохраняет СЫРУЮ строку через `editLine` и закрывает правку', async () => {
+  it('сохранение из компоненты записывает СЫРУЮ строку через `editLine` и закрывает правку', async () => {
     const { host, calls, destroy } = mount([taskRow({ text: 'старый' })]);
     const row = rowsOf(host)[0]!;
     (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
     await flush();
-    const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
-    field.value = '- [x] новый';
-    field.focus();
-    keymap.dispatchKeyEvent({
-      key: 'Enter',
-      target: field,
-      preventDefault: (): void => undefined,
-    } as unknown as KeyboardEvent);
-    await flush();
+    await commitRowEditor(calls, '- [x] новый');
     assert.deepEqual(calls.edits, [{ key: 'c1:0', text: '- [x] новый' }]);
     assert.equal(row.querySelector('.ui-task-row-edit'), null, 'после сохранения правка закрыта');
     destroy();
@@ -727,7 +806,7 @@ describe('панель задач: инлайн-правка строки (498f2
 
   it('сквозная правка: сырая строка сохраняется в body_md вместе с маркером', async () => {
     let body = '- [ ] задача [[2026-11-14]]\n- [x] вторая';
-    const { host, destroy } = mount([taskRow({ text: 'задача [[2026-11-14]]' })], {
+    const { host, calls, destroy } = mount([taskRow({ text: 'задача [[2026-11-14]]' })], {
       loadRawLine: async () => body.split('\n')[0]!,
       editLine: async (row, raw) => {
         const next = replaceTaskLine(body, row.lineNo, raw);
@@ -739,21 +818,27 @@ describe('панель задач: инлайн-правка строки (498f2
     const row = rowsOf(host)[0]!;
     (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
     await flush();
-    const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
-    assert.equal(field.value, '- [ ] задача [[2026-11-14]]');
-    field.value = '- [ ] задача перенесена [[2026-11-15]]';
-    field.focus();
-    keymap.dispatchKeyEvent({
-      key: 'Enter',
-      target: field,
-      preventDefault: (): void => undefined,
-    } as unknown as KeyboardEvent);
-    await flush();
+    assert.equal(calls.rowEditors[0]?.options.md, '- [ ] задача [[2026-11-14]]');
+    await commitRowEditor(calls, '- [ ] задача перенесена [[2026-11-15]]');
     assert.deepEqual(
       body.split('\n'),
       ['- [ ] задача перенесена [[2026-11-15]]', '- [x] вторая'],
       'маркер задачи и соседняя строка не потеряны',
     );
+    destroy();
+  });
+
+  it('отказ экрана оставляет правку открытой (текст не теряется)', async () => {
+    const { host, calls, destroy } = mount([taskRow()], {
+      editLine: async () => false,
+    });
+    const row = rowsOf(host)[0]!;
+    (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+    await flush();
+    const editor = calls.rowEditors[0]!;
+    // Компонента сохраняет сама и закрывает поле только при успехе (§1).
+    assert.equal(await editor.options.save('- [ ] изменённая'), false);
+    assert.ok(row.querySelector('.ui-task-row-edit'), 'при отказе поле осталось в правке');
     destroy();
   });
 
@@ -829,6 +914,7 @@ function mountHeadless(
     days: [],
     rawLines: 0,
     panelHeights: [],
+    rowEditors: [],
   };
   const actions: TaskPanelActions = {
     refresh: () => {
@@ -869,7 +955,10 @@ function mountHeadless(
     },
     ...overrides,
   };
-  const handle = mountTaskPanel(host as unknown as HTMLElement, actions, { headless: true });
+  const handle = mountTaskPanel(host as unknown as HTMLElement, actions, {
+    headless: true,
+    createRowEditor: fakeRowEditor(calls),
+  });
   handle.render(view);
   return {
     host,
@@ -1084,6 +1173,34 @@ describe('панель задач: напоминания плоским спи�
     destroy();
   });
 
+  it('чекбокс вхождения отдаёт `reminderDone` — dismiss, а серия остаётся (пункт 7)', () => {
+    const rows = [
+      reminderRow('r1', '2026-11-17T09:00:00.000Z'),
+      reminderRow('r2', '2026-11-16T09:00:00.000Z', true),
+    ];
+    const done: string[] = [];
+    const { host, render, destroy } = mount([], {
+      reminderDone: (row) => done.push(row.key),
+    });
+    render(
+      panelView([], {
+        reminderCount: rows.length,
+        reminderSections: [{ key: 'all', title: '', flat: true, subgroups: [], rows }],
+      }),
+    );
+    const checks = host.findAll('ui-reminder-row-check');
+    assert.equal(checks.length, 2, 'чекбокс есть у каждого вхождения, включая просроченное');
+    const check = checks[1]!;
+    check.checked = true;
+    check.emit('change', { target: check });
+    assert.deepEqual(done, [rows[1]!.key], 'отметка — команда `reminderDone` (dismiss)');
+    // Контрол односторонний: снятие отметки не возвращает вхождение.
+    check.checked = false;
+    check.emit('change', { target: check });
+    assert.deepEqual(done, [rows[1]!.key], 'снятие отметки — no-op');
+    destroy();
+  });
+
   it('просроченная строка и её дата — класс is-overdue (красный)', () => {
     const rows = [reminderRow('r1', '2026-11-16T09:00:00.000Z', true)];
     const { host, render, destroy } = mount([]);
@@ -1259,7 +1376,7 @@ describe('панель задач: блочная правка строки-за
       ],
     });
 
-  it('двойной клик по строке с детьми открывает МНОГОСТРОЧНОЕ поле всего блока', async () => {
+  it('двойной клик по строке с детьми открывает правку ВСЕГО блока компонентой', async () => {
     const block = '- [ ] задача\n  - [ ] пункт\n  текст';
     const { host, calls, destroy } = mount([withChildren()], {
       loadRawBlock: async (row) => ({ start: row.lineNo, end: 2, text: block }),
@@ -1267,16 +1384,19 @@ describe('панель задач: блочная правка строки-за
     const row = rowsOf(host)[0]!;
     (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
     await flush();
-    const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
-    assert.ok(field, 'открылось поле блочной правки');
-    assert.equal(field.value, block, 'в поле — строка задачи И все её вложенные строки');
+    assert.ok(row.querySelector('.ui-task-row-block-edit'), 'открылось поле блочной правки');
+    assert.equal(calls.rowEditors[0]?.options.md, block, 'в поле — строка задачи И дети');
+    assert.ok(
+      calls.rowEditors[0]?.options.className.includes('ui-task-row-block-edit'),
+      'поле помечено классом блочной правки',
+    );
     assert.equal(calls.rawLines, 0, 'блочная правка не читает одну строку: блок читает экран');
     destroy();
   });
 
-  it('Enter в блочном поле — перевод строки, сохраняет Ctrl+Enter; диапазон — до последнего ребёнка', async () => {
+  it('сохранение блока передаёт диапазон до последнего ребёнка и закрывает поле', async () => {
     const saved: Array<{ start: number; end: number; text: string }> = [];
-    const { host, destroy } = mount([withChildren()], {
+    const { host, calls, destroy } = mount([withChildren()], {
       loadRawBlock: async () => ({
         start: 0,
         end: 2,
@@ -1290,26 +1410,7 @@ describe('панель задач: блочная правка строки-за
     const row = rowsOf(host)[0]!;
     (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
     await flush();
-    const field = row.querySelector('.ui-task-row-block-edit') as unknown as ShimElement;
-    field.value = '- [ ] задача\n  - [x] пункт\n  текст';
-    field.focus();
-    assert.equal(
-      keymap.dispatchKeyEvent({
-        key: 'Enter',
-        target: field,
-        preventDefault: (): void => undefined,
-      } as unknown as KeyboardEvent),
-      false,
-      'Enter без модификатора — перевод строки, а не сохранение',
-    );
-    assert.deepEqual(saved, [], 'перевод строки не пишет источник');
-    keymap.dispatchKeyEvent({
-      key: 'Enter',
-      ctrlKey: true,
-      target: field,
-      preventDefault: (): void => undefined,
-    } as unknown as KeyboardEvent);
-    await flush();
+    await commitRowEditor(calls, '- [ ] задача\n  - [x] пункт\n  текст');
     assert.deepEqual(
       saved,
       [{ start: 0, end: 2, text: '- [ ] задача\n  - [x] пункт\n  текст' }],

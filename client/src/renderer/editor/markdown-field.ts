@@ -77,6 +77,7 @@ import {
 import { createCommentSearch } from './comment-search.js';
 import { registerCommentField } from './comment-source.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
+import { wireTaskCheckboxes } from './task-checkbox-toggle.js';
 import type { TaskHintContext } from './md-live.js';
 import { annotateMentions, resolveMentionsExcludeThoughtId } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -117,6 +118,8 @@ export interface AttachmentsOwner {
 interface MarkdownFieldHandle {
   showEdit(md?: string): void;
   set(md: string, html: string): void;
+  /** Текущий markdown поля: текст правки, если поле в правке, иначе снапшот. */
+  value(): string;
   /**
    * Переключает поле в правку и ставит каретку: по вхождению `findText` в
    * исходнике markdown (вхождение выделяется — слово, кликнутое в ленте
@@ -152,6 +155,14 @@ interface MarkdownFieldHandle {
    * сохраняется.
    */
   focusStart(): void;
+  /**
+   * Переключает поле в правку и ставит каретку в НАЧАЛО строки `lineNo`
+   * (с нуля) — переход «Открыть источник» строки задачи из панели «Дневника»
+   * (0.16.1, задача `cfb8cb72`, пункт 3). Номер строки адресует `body_md`
+   * записи: панель и карточка знают строку задачи, а её смещение в исходнике
+   * считает само поле.
+   */
+  focusLineStart(lineNo: number): void;
   /**
    * «Вставить ссылку на <мысль>» из меню авто-подсветки упоминания: заменяет
    * первое вхождение `matchedText` в исходнике на wiki-ссылку и сохраняет (см.
@@ -888,6 +899,8 @@ export function createMarkdownField(opts: {
   let commitPending = false;
   /** Счётчик рендеров просмотра — защита от гонок асинхронной развёртки трансклюзий (a2b68d72). */
   let renderSeq = 0;
+  /** Отключение живых чекбоксов просмотра (0.16.1, задача `cfb8cb72`, п.8). */
+  let detachTaskCheckboxes: (() => void) | null = null;
   /**
    * Карта смещений текущего просмотра с развёрнутыми трансклюзиями (ошибка
    * 0fdd8c86): разметка позиций идёт в координатах развёрнутого текста, карта
@@ -1199,6 +1212,29 @@ export function createMarkdownField(opts: {
       // приложение — поля пересоздаются, «подписка на поле» текла бы.
       decorateViewTransclusionLocks(view);
       wireViewTransclusionLocks();
+      // Чекбоксы задач в режиме просмотра кликабельны (0.16.1, задача
+      // `cfb8cb72`, пункт 8): клик переключает `- [ ]` ↔ `- [x]` в `body_md`
+      // источника тем же `etn.comments.update`. Подключение повторяется на
+      // каждой перерисовке просмотра (разметка пересоздаётся), прежнее —
+      // снимается.
+      detachTaskCheckboxes?.();
+      detachTaskCheckboxes = null;
+      const commentIdOfView = opts.commentContext?.getCommentId;
+      if (commentIdOfView !== undefined) {
+        detachTaskCheckboxes = wireTaskCheckboxes(view, () => {
+          const commentId = commentIdOfView();
+          if (commentId === null) return null;
+          return {
+            commentId,
+            onSaved: (md, html) => {
+              // Снапшот просмотра — новый: следующая правка начнётся с него,
+              // а разметку чекбоксов уже переключил сам клик.
+              currentMd = md;
+              currentHtml = html;
+            },
+          };
+        });
+      }
     } else if (opts.placeholder !== undefined && opts.placeholder !== '') {
       // Пустой комментарий — показываем плейсхолдер (задача 8ab775d9).
       const ph = el('div', 'md-field-placeholder', opts.placeholder);
@@ -1837,6 +1873,7 @@ export function createMarkdownField(opts: {
   handles.set(root, {
     showEdit,
     insertMentionLink,
+    value: () => (editing && editor !== null ? editor.getValue() : currentMd),
     set: (md, html) => {
       currentMd = md;
       currentHtml = html;
@@ -1877,8 +1914,24 @@ export function createMarkdownField(opts: {
       editor.setCaret(0);
       editor.focus();
     },
+    focusLineStart: (lineNo: number) => {
+      if (!editing || editor === null) {
+        showEdit();
+        if (editor === null) return;
+      }
+      // Смещение начала строки в текущем исходнике: редактор держит тот же
+      // `currentMd`, что и поле. Строки вне документа — каретка в начало.
+      const lines = (editor.getValue() ?? '').split('\n');
+      let offset = 0;
+      const limit = Math.max(0, Math.min(lineNo, lines.length - 1));
+      for (let i = 0; i < limit; i += 1) offset += (lines[i]?.length ?? 0) + 1;
+      editor.setCaret(offset);
+      editor.focus();
+    },
     dispose: () => {
       detachOutsidePointer();
+      detachTaskCheckboxes?.();
+      detachTaskCheckboxes = null;
       // Поле снимают вместе с экраном/диалогом — слой `Escape` правки не должен
       // пережить его и отнимать нажатие у следующего диалога.
       editEscapeOverlay?.release();
@@ -1951,9 +2004,27 @@ export function focusMarkdownFieldStart(root: HTMLElement): void {
   handles.get(root)?.focusStart();
 }
 
+/**
+ * Переводит поле в правку и ставит каретку в НАЧАЛО строки `lineNo` (с нуля) —
+ * переход «Открыть источник» строки задачи из панели «Дневника» (0.16.1,
+ * задача `cfb8cb72`, пункт 3): запись разворачивается в правке на своей строке.
+ */
+export function focusMarkdownFieldLineStart(root: HTMLElement, lineNo: number): void {
+  handles.get(root)?.focusLineStart(lineNo);
+}
+
 /** Updates an already-built field's content (e.g. after an external change). */
 export function setMarkdownField(root: HTMLElement, md: string, html: string): void {
   handles.get(root)?.set(md, html);
+}
+
+/**
+ * Текущий markdown поля: текст правки, пока поле в правке, иначе снапшот
+ * просмотра. Нужен строке задачи (`editor/task-row-editor.ts`): она сохраняется
+ * своим основанием (`Ctrl+Enter`), а не общим коммитом поля.
+ */
+export function markdownFieldValue(root: HTMLElement): string {
+  return handles.get(root)?.value() ?? '';
 }
 
 /**

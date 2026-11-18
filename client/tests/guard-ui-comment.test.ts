@@ -34,8 +34,13 @@ import { assertGuardClean, listSourceFiles, type GuardRule } from './guard-helpe
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RENDERER_ROOT = path.join(CLIENT_ROOT, 'src', 'renderer');
 
-/** Общий модуль поля markdown — не точка входа комментария (см. шапку). */
-const ALLOW_ENTRY = new Set(['editor/markdown-field.ts']);
+/**
+ * Общий модуль поля markdown — не точка входа комментария (см. шапку).
+ * `editor/task-row-editor.ts` — правка СТРОКИ задачи компонентой комментария:
+ * он переиспользует поле, а не строит собственную оболочку комментария (§1
+ * ТЗ 2026-11-18).
+ */
+const ALLOW_ENTRY = new Set(['editor/markdown-field.ts', 'editor/task-row-editor.ts']);
 
 /** Строка — комментарий? (в пояснениях имена классов допустимы). */
 function isComment(line: string): boolean {

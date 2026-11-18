@@ -28,6 +28,7 @@ import type { TaskPanelRow } from '../lib/ui/task-panel.js';
 import { taskZoneVisible } from '../lib/ui/task-panel-model.js';
 import { mountTaskList } from '../lib/ui/task-list.js';
 import { requireNetworkId } from '../app.js';
+import { createTaskRowEditor } from './task-row-editor.js';
 import {
   openLinkInEditor,
   openRecordInEditor,
@@ -71,6 +72,9 @@ export function createEditorTasksSection(
       openRowSource: (row) => void openSource(row),
       onViewState: (state) => syncZone(host, taskZoneVisible(state)),
     },
+    // Правка строки — компонента редактирования комментария (0.16.1, задача
+    // cfb8cb72, пункт 1); реализация — в слое редактора.
+    createRowEditor: createTaskRowEditor,
   });
   lifecycle.onDispose(() => list.destroy());
   return {

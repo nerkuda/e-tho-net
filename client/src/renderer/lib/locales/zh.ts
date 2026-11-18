@@ -697,6 +697,7 @@ export const zh = {
   'tasks.sectionMain': '本期间',
   'tasks.sectionOverdue': '已逾期',
   'tasks.sectionUndated': '无期限',
+  'tasks.sectionUrgent': '紧急',
   'tasks.remindersOverdue': '已逾期',
   'tasks.remindersToday': '今天',
   'tasks.remindersPeriod': '期间',

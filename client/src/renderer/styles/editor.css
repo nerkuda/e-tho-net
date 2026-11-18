@@ -1377,6 +1377,18 @@ input.task-list-item-checkbox:checked,
   color: var(--accent-fg);
 }
 
+/* Чекбокс задачи в режиме ПРОСМОТРА кликабелен (0.16.1, задача cfb8cb72,
+   пункт 8): класс ставит `editor/task-checkbox-toggle.ts`, снимая `disabled`.
+   Курсор и подсветка при наведении показывают, что отметка — действие, а не
+   индикатор; размер и цвета остаются прежними (правило выше). */
+input.task-list-item-checkbox.ui-task-checkbox-live {
+  cursor: pointer;
+}
+
+input.task-list-item-checkbox.ui-task-checkbox-live:hover {
+  border-color: var(--accent);
+}
+
 /* ТП1: выделение `==…==` (`<mark>`) — тем же фоном, что подсветка поиска,
    а не жёлтым по умолчанию Web Awesome (`@layer wa-native`). Класс
    `cm-md-mark` в правке ставит `editor/md-live.ts`. */
