@@ -77,7 +77,11 @@ describe('лента «Дневника»: высота не теряется (�
 
     const feed = bodiesOf(css, '.chron-feed-wrap').join('\n');
     assert.ok(feed.length > 0, 'правило .chron-feed-wrap на месте');
-    assert.match(feed, /flex:\s*1 1 auto/, 'лента растягивается на остаток высоты');
+    assert.match(
+      feed,
+      /flex:\s*1 1 var\(--tasks-panel-feed-min, 160px\)/,
+      'лента растягивается на остаток, а базис — её минимум (репроверка 7775bca4)',
+    );
     assert.match(feed, /max-height:\s*none/, 'лента снимает прежний потолок таблицы (240px)');
     assert.match(feed, /overflow:\s*auto/, 'лента — прокручиваемый контейнер');
   });

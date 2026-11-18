@@ -827,7 +827,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     maxSizeTop: 800,
     // Резерв полотна под панелью отбора: панель добавления + минимум панели
     // задач, её шов, минимум ленты + шов панели отбора (tasks-panel-geometry.ts).
-    resultsMinSize: () => filterPanelReserve(addBarHeight()),
+    // Высота полотна — фактическая: на низком полотне резерв упирается в
+    // минимальную рабочую высоту отбора и не выдавливает его содержимое.
+    resultsMinSize: () => filterPanelReserve(frameHost.clientHeight, addBarHeight()),
   });
 
   // Строка поиска дневниковых записей — переиспользуемый компонент
