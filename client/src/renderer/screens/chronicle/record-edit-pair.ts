@@ -60,3 +60,37 @@ export const recordEditPair = {
     actions.enterBodyEdit();
   },
 } as const;
+
+/** Запросить следующий кадр отрисовки; вне браузера — выполнить сразу. */
+function requestFrame(callback: () => void): void {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(callback);
+    return;
+  }
+  callback();
+}
+
+/**
+ * Поставить ленту «Дневника» в самый верх и УДЕРЖАТЬ её там после отложенной
+ * прокрутки правки (блокер Б2-Н репроверки `4b755c93` по задаче `cfb8cb72`).
+ *
+ * **Что было не так.** «Открыть источник» ждал `editLine`, но промис
+ * завершается на установке каретки: CodeMirror прокручивает поле к каретке
+ * отдельным кадром (`scrollIntoView`), уже ПОСЛЕ промиса, и сдвигал ленту на
+ * 111px (`cardTopInWrap -18`). Одиночное `scrollTop = 0` после `await` этот
+ * кадр не переживало.
+ *
+ * **Правило.** Ставим верх сразу и повторяем в двух следующих кадрах: первый
+ * перекрывает прокрутку CM текущего кадра, второй — её возможную вторую волну
+ * (измерение после отрисовки). `schedule` — точка подмены в тесте.
+ */
+export function pinFeedTop(
+  setScrollTop: (top: number) => void,
+  schedule: (callback: () => void) => void = requestFrame,
+): void {
+  setScrollTop(0);
+  schedule(() => {
+    setScrollTop(0);
+    schedule(() => setScrollTop(0));
+  });
+}

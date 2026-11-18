@@ -15,9 +15,9 @@
  *  2. DOM на настоящих компонентах: `createRecordTitle` + `createMarkdownField`
  *     входят в правку строки `lineNo` — каретка в `.cm-content` на этой строке, а
  *     не в `INPUT` заголовка; `Escape` закрывает правку и закрывает заголовок.
- *  3. Структура экрана (`chronicle.ts` под Node не поднимается): прокрутка ленты
- *     применяется ПОСЛЕ входа в правку, `editLine` возвращает промис, вход с
- *     заголовка идёт через правило пары.
+ *  3. Поведение прокрутки: `pinFeedTop` переустанавливает `scrollTop` после
+ *     отложенной прокрутки правки (Б2-Н), экран зовёт его после `editRecordLine`
+ *     в обоих путях «Открыть источник».
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -31,6 +31,7 @@ import { EditorView } from '@codemirror/view';
 
 import * as keymap from '../src/renderer/lib/keymap.js';
 import {
+  pinFeedTop,
   recordEditPair,
   type RecordEditPairActions,
 } from '../src/renderer/screens/chronicle/record-edit-pair.js';
@@ -361,19 +362,43 @@ describe('экран «Дневник»: порядок входа в правк
     );
   });
 
-  it('прокрутка ленты в начало — ПОСЛЕ входа в правку (оба пути)', () => {
+  it('лента остаётся вверху, хотя правка прокручивает её кадром позже (Б2-Н)', () => {
+    const frames: Array<() => void> = [];
+    const feed = { scrollTop: 40 };
+    pinFeedTop(
+      (top) => {
+        feed.scrollTop = top;
+      },
+      (callback) => frames.push(callback),
+    );
+    assert.equal(feed.scrollTop, 0, 'сразу после правки лента в самом верху');
+    assert.equal(frames.length, 1, 'первый кадр запланирован');
+    // CodeMirror прокручивает поле к каретке отдельным кадром ПОСЛЕ промиса
+    // `editLine` — именно это и оставляло scrollTop 111 / cardTopInWrap -18.
+    feed.scrollTop = 111;
+    frames.shift()?.();
+    assert.equal(feed.scrollTop, 0, 'первый кадр возвращает ленту наверх');
+    assert.equal(frames.length, 1, 'второй кадр запланирован');
+    // Вторая волна отложенной прокрутки (измерение после отрисовки).
+    feed.scrollTop = 111;
+    frames.shift()?.();
+    assert.equal(feed.scrollTop, 0, 'лента остаётся вверху и после второй волны');
+  });
+
+  it('экран зовёт `pinFeedTop` после `editRecordLine` в обоих путях', () => {
     const start = CHRONICLE.indexOf('export async function openChronicleTaskLine');
     assert.ok(start > 0, 'точка входа «Открыть источник» на месте');
-    const body = CHRONICLE.slice(start, start + 2600);
+    const body = CHRONICLE.slice(start, start + 3000);
     const firstEdit = body.indexOf('await editRecordLine(');
-    const firstScroll = body.indexOf('feedWrap.scrollTop = 0');
+    const firstPin = body.indexOf('pinFeedTop(');
     assert.ok(firstEdit > 0, 'вход в правку в теле функции');
-    assert.ok(firstScroll > firstEdit, '`scrollTop` ставится после входа в правку');
+    assert.ok(firstPin > firstEdit, 'прокрутка ставится ПОСЛЕ входа в правку');
     // Путь записи, отсутствовавшей в ленте (после `jumpToRecord`), — тот же порядок.
     const secondEdit = body.indexOf('await editRecordLine(', firstEdit + 1);
-    const secondScroll = body.indexOf('feedWrap.scrollTop = 0', firstScroll + 1);
+    const secondPin = body.indexOf('pinFeedTop(', firstPin + 1);
     assert.ok(secondEdit > firstEdit, 'второй путь: вход в правку');
-    assert.ok(secondScroll > secondEdit, 'второй путь: прокрутка после входа');
+    assert.ok(secondPin > secondEdit, 'второй путь: прокрутка после входа');
+    assert.doesNotMatch(body, /feedWrap\.scrollTop = 0/, 'одноразовый сброс не вернулся');
   });
 
   it('вход с заголовка идёт через правило пары, а не напрямую в тело', () => {

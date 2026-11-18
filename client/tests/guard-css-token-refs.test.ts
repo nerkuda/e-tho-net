@@ -84,6 +84,11 @@ const RUNTIME_TOKENS = new Set([
   // `TASKS_PANEL_FEED_MIN` (`screens/chronicle/tasks-panel.ts`), чтобы потолок
   // панели и минимум ленты не разъезжались.
   '--tasks-panel-feed-min',
+  // lib/filter-panel-frame.ts — резерв результатов панели отбора в верхнем
+  // положении (замечание Н1 репроверки 4b755c93 по задаче cfb8cb72): «Дневник»
+  // подставляет фактический резерв колонки (панель добавления, минимум панели
+  // задач, швы, минимум ленты), остальные экраны — фолбэк 160px.
+  '--fp-results-min',
   // screens/publications/workspace.ts
   '--pub-doc-width',
   // canvas/wallpaper.ts — подложка холста карты (0.16.1, задача 80324150):

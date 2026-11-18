@@ -185,7 +185,7 @@ import {
   type RecordGroupLabels,
 } from './record-groups.js';
 import { type RecordTitleHandle } from './record-title.js';
-import { recordEditPair, type RecordEditPairActions } from './record-edit-pair.js';
+import { pinFeedTop, recordEditPair, type RecordEditPairActions } from './record-edit-pair.js';
 import { buildRecordHead, createRecordChips } from './record-head.js';
 import { parseChronicleState } from './state.js';
 import {
@@ -195,6 +195,7 @@ import {
   TASKS_PANEL_H_MIN,
   type TasksPanelHandle,
 } from './tasks-panel.js';
+import { filterPanelReserve, tasksPanelMaxHeight } from './tasks-panel-geometry.js';
 import { renderRecordView } from './record-body.js';
 import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
 
@@ -765,6 +766,41 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   // запускает инициализацию нового хоста.
   networkIdSeen = null;
 
+  // Верхняя (непрокручиваемая) панель над лентой: кнопка «Добавить
+  // хроно-запись» и компактные иконки «Развернуть все»/«Свернуть все» рядом
+  // (0.10.1, приёмка №2 — кнопки не во всю ширину). Создаётся ДО каркаса панели
+  // отбора: фактическая высота строки входит в резерв результатов (замечание Н1
+  // репроверки 4b755c93), а геттер резерва мерит узел при каждом `apply()`.
+  const addBar = div('chron-addbar');
+  addBar.append(div('chron-addbar-actions'));
+  /** Фактическая высота панели добавления, px (0, пока она не в DOM). */
+  const addBarHeight = (): number => addBar.getBoundingClientRect().height;
+  const addActions = addBar.firstElementChild as HTMLElement;
+  addActions.append(
+    uiButton({
+      label: t('diary.addRecord'),
+      role: 'primary',
+      class: 'diary-add-btn',
+      onClick: () => void addRecord(),
+    }),
+    iconButton({
+      icon: svgIcon('chevrons-down', 16),
+      title: t('diary.expandAll'),
+      role: 'ghost',
+      size: 's',
+      class: 'diary-expand-all',
+      onClick: () => setAllDaysCollapsed(false),
+    }),
+    iconButton({
+      icon: svgIcon('chevrons-up', 16),
+      title: t('diary.collapseAll'),
+      role: 'ghost',
+      size: 's',
+      class: 'diary-collapse-all',
+      onClick: () => setAllDaysCollapsed(true),
+    }),
+  );
+
   const filterArea = div('chron-filter-area');
   const splitter = splitterElement('chron-splitter');
   const main = div('chron-main');
@@ -780,7 +816,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   const frameHost = div('chron-frame');
   hostEl.append(searchArea, frameHost);
   frameHost.append(filterArea, splitter, main);
-  mountFilterPanelFrame({
+  const filterFrame = mountFilterPanelFrame({
     container: frameHost,
     panel: filterArea,
     splitter,
@@ -789,6 +825,9 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     maxSize: CHRONICLE_FILTER_MAX_W,
     minSizeTop: 80,
     maxSizeTop: 800,
+    // Резерв полотна под панелью отбора: панель добавления + минимум панели
+    // задач, её шов, минимум ленты + шов панели отбора (tasks-panel-geometry.ts).
+    resultsMinSize: () => filterPanelReserve(addBarHeight()),
   });
 
   // Строка поиска дневниковых записей — переиспользуемый компонент
@@ -829,37 +868,6 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       jumpToRecord: (row) => void jumpToRecord(row),
     },
     { header: [calWrap] },
-  );
-
-  // Верхняя (непрокручиваемая) панель над лентой: кнопка «Добавить
-  // хроно-запись» и компактные иконки «Развернуть все»/«Свернуть все» рядом
-  // (0.10.1, приёмка №2 — кнопки не во всю ширину).
-  const addBar = div('chron-addbar');
-  addBar.append(div('chron-addbar-actions'));
-  const addActions = addBar.firstElementChild as HTMLElement;
-  addActions.append(
-    uiButton({
-      label: t('diary.addRecord'),
-      role: 'primary',
-      class: 'diary-add-btn',
-      onClick: () => void addRecord(),
-    }),
-    iconButton({
-      icon: svgIcon('chevrons-down', 16),
-      title: t('diary.expandAll'),
-      role: 'ghost',
-      size: 's',
-      class: 'diary-expand-all',
-      onClick: () => setAllDaysCollapsed(false),
-    }),
-    iconButton({
-      icon: svgIcon('chevrons-up', 16),
-      title: t('diary.collapseAll'),
-      role: 'ghost',
-      size: 's',
-      class: 'diary-collapse-all',
-      onClick: () => setAllDaysCollapsed(true),
-    }),
   );
 
   // Центр: лента, сгруппированная по локальным дням.
@@ -906,9 +914,11 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       // Стартовая метрика — фактическая высота панели: у панели ещё не было
       // сохранённой высоты, и по умолчанию её задаёт CSS (`40vh`).
       const start = tasksPanel.panelHeight() ?? tasksHost.getBoundingClientRect().height;
+      // Потолок — остаток колонки центра после панели добавления, шва и ленты
+      // (tasks-panel-geometry.ts): тот же резерв, что у панели отбора.
       const max = Math.min(
         TASKS_PANEL_H_MAX,
-        Math.max(TASKS_PANEL_H_MIN + 1, main.clientHeight - TASKS_PANEL_FEED_MIN),
+        Math.max(TASKS_PANEL_H_MIN + 1, tasksPanelMaxHeight(main.clientHeight, addBarHeight())),
       );
       return { axis: 'y', sign: 1, start, min: TASKS_PANEL_H_MIN, max };
     },
@@ -937,6 +947,10 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   });
 
   main.append(addBar, tasksHost, tasksSplitter, feedWrap);
+  // Пересчёт каркаса после вставки в DOM: до неё высота панели добавления была
+  // 0, и резерв результатов оказался заниженным (замечание Н1 репроверки
+  // 4b755c93). `apply()` мерит узел заново и обновляет `--fp-results-min`.
+  filterFrame.apply();
   void refreshCalendarMarkers(calendarMarkersSnapshot());
 
   // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
@@ -2825,9 +2839,12 @@ export async function openChronicleTaskLine(ref: {
     record = rows.find((item) => item.id === ref.commentId);
     if (record === undefined) return;
     await editRecordLine(record.id, ref.lineNo);
-    // В самый верх — ПОСЛЕ входа в правку: фокус поля прокручивает карточку к
-    // себе, и `scrollTop`, выставленный до правки, был бы перебит (блокер 84c71c37).
-    if (feedWrap !== null) feedWrap.scrollTop = 0;
+    // В самый верх — ПОСЛЕ входа в правку И её отложенного скролла: CodeMirror
+    // прокручивает поле к каретке уже после завершения `editLine`, поэтому
+    // одного `scrollTop = 0` мало (блокер Б2-Н репроверки 4b755c93): значение
+    // переустанавливается в следующих кадрах (`pinFeedTop`).
+    const wrap = feedWrap;
+    if (wrap !== null) pinFeedTop((top) => (wrap.scrollTop = top));
     return;
   }
   const day = localDay(record.valid_from);
@@ -2838,8 +2855,9 @@ export async function openChronicleTaskLine(ref: {
   setRecordCollapsed(day, record.id, false);
   await editRecordLine(record.id, ref.lineNo);
   // Лента встаёт в самое начало уже после того, как каретка заняла строку
-  // задачи: иначе прокрутка к сфокусированному полю отменяет переход (84c71c37).
-  if (feedWrap !== null) feedWrap.scrollTop = 0;
+  // задачи, и удерживается там через отложенный скролл правки (Б2-Н).
+  const localWrap = feedWrap;
+  if (localWrap !== null) pinFeedTop((top) => (localWrap.scrollTop = top));
 }
 
 /**

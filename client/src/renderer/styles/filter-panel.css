@@ -56,13 +56,18 @@
  * результатов, срабатывает `max-height` — дерево условий прокручивается
  * внутри `.ft`, а футер остаётся в нижней части панели.
  *
- * `calc(100% - 160px)` — тот же резерв результатов, что `resultsMinSize` в
- * lib/filter-panel-frame.ts (значение по умолчанию у всех трёх экранов).
+ * `calc(100% - var(--fp-results-min, 160px))` — тот же резерв результатов, что
+ * `resultsMinSize` в lib/filter-panel-frame.ts: каркас ставит переменную на
+ * полотно вида из фактической раскладки (фолбэк 160px — значение по умолчанию
+ * у «Структур мыслей» и «Событий»). «Дневник» отдаёт в резерв ещё и панель
+ * задач, её шов и минимум ленты (`screens/chronicle/tasks-panel-geometry.ts`) —
+ * иначе панель отбора выдавливала колонку центра (замечание Н1 репроверки
+ * `4b755c93` по задаче `cfb8cb72`).
  */
 .fp-host.fp-top > .fp-panel {
   flex: 0 1 auto;
   flex-basis: auto;
-  max-height: calc(100% - 160px);
+  max-height: calc(100% - var(--fp-results-min, 160px));
   border-bottom: 1px solid var(--border);
   border-right: none;
 }

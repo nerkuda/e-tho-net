@@ -1335,6 +1335,23 @@ export function serializeFilterPanelState(state: FilterPanelState): string {
   });
 }
 
+/**
+ * Потолок высоты панели отбора в ВЕРХНЕМ положении: полотно минус резерв
+ * результатов. Резерв — не только видимые результаты экрана, а всё, что
+ * обязано остаться ниже панели (панель добавления, минимум панели задач, швы,
+ * минимум ленты) — на «Дневнике» его считает `tasks-panel-geometry.ts`
+ * (замечание Н1 репроверки `4b755c93` по задаче `cfb8cb72`).
+ *
+ * Чистая функция: каркас панели отбора спрашивает её и в `limitsOf()` (границы
+ * перетаскивания), и при подстановке CSS-переменной `--fp-results-min`, по
+ * которой CSS ограничивает панель до первого перетаскивания.
+ */
+export function filterPanelTopLimit(canvasHeight: number, resultsMinSize: number): number {
+  const canvas = Number.isFinite(canvasHeight) && canvasHeight > 0 ? canvasHeight : 0;
+  const reserve = Number.isFinite(resultsMinSize) && resultsMinSize > 0 ? resultsMinSize : 0;
+  return Math.max(0, canvas - reserve);
+}
+
 /** Ограничивает размер панели диапазоном перетаскивания (px). */
 export function clampFilterPanelSize(value: number, min: number, max: number): number {
   const rounded = Math.round(value);
