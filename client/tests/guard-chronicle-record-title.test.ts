@@ -221,7 +221,11 @@ describe('сторож: единая шапка и единая правка з�
   it('карточка объявляет единую модель правки: editGroup, commitOnBlur, onEnter/onEscape', () => {
     assert.match(CHRONICLE, /editGroup: \(\) => card/, 'группа правки — карточка');
     assert.match(CHRONICLE, /commitOnBlur: false/, 'blur правку не закрывает');
-    assert.match(CHRONICLE, /onBeginEdit: \(\) => void enterBodyEdit\('title'\)/, 'вход в тело из заголовка');
+    assert.match(
+      CHRONICLE,
+      /onBeginEdit: \(\) => recordEditPair\.titleBegan\(recordEditActions\)/,
+      'вход в тело из заголовка: правило пары не перебивает фокус тела',
+    );
     assert.match(CHRONICLE, /onEnter: \(event\) =>/, 'Enter заголовка — хозяину');
     assert.match(CHRONICLE, /onEscape: \(\) => cancelEdit\(\)/, 'Escape — откат обоих полей');
     assert.match(CHRONICLE, /title: \{[\s\S]*?value: row\.title \?\? ''/, 'заголовок — поле ввода');

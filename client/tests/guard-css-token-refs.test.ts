@@ -79,6 +79,11 @@ const RUNTIME_TOKENS = new Set([
   // из `ui_state` (пункт B ТЗ 2026-11-17): число считает слайдер экрана, CSS
   // только читает переменную.
   '--task-panel-height',
+  // screens/chronicle/chronicle.ts — минимум места для ленты «Дневника» под
+  // панелью задач (замечание Н1 вердикта 84c71c37): значение берётся из
+  // `TASKS_PANEL_FEED_MIN` (`screens/chronicle/tasks-panel.ts`), чтобы потолок
+  // панели и минимум ленты не разъезжались.
+  '--tasks-panel-feed-min',
   // screens/publications/workspace.ts
   '--pub-doc-width',
   // canvas/wallpaper.ts — подложка холста карты (0.16.1, задача 80324150):

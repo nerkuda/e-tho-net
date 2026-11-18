@@ -106,9 +106,7 @@ interface Calls {
 function fakeRowEditor(calls: Calls): TaskRowEditorFactory {
   return (options: TaskRowEditorOptions): TaskRowEditor => {
     const root = new ShimElement('div', 'md-field ui-task-row-md');
-    for (const cls of options.className.split(/\s+/)) {
-      if (cls !== '') root.classList.add(cls);
-    }
+    for (const cls of options.classes) root.classList.add(cls);
     calls.rowEditors.push({ options, root });
     return {
       root: root as unknown as HTMLElement,
@@ -1387,7 +1385,7 @@ describe('панель задач: блочная правка строки-за
     assert.ok(row.querySelector('.ui-task-row-block-edit'), 'открылось поле блочной правки');
     assert.equal(calls.rowEditors[0]?.options.md, block, 'в поле — строка задачи И дети');
     assert.ok(
-      calls.rowEditors[0]?.options.className.includes('ui-task-row-block-edit'),
+      calls.rowEditors[0]?.options.classes.includes('ui-task-row-block-edit'),
       'поле помечено классом блочной правки',
     );
     assert.equal(calls.rawLines, 0, 'блочная правка не читает одну строку: блок читает экран');

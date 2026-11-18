@@ -27,7 +27,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { EditorView } from '@codemirror/view';
+import { EditorView, runScopeHandlers } from '@codemirror/view';
 
 import * as keymap from '../src/renderer/lib/keymap.js';
 import { markdownFieldValue } from '../src/renderer/editor/markdown-field.js';
@@ -832,6 +832,139 @@ describe('панель задач: точечная правка строки (�
       h.destroy();
     }
   });
+  it('поле правки получает фокус ПОСЛЕ вставки в строку (блокер 84c71c37)', async () => {
+    keymap.keymapInternals.reset();
+    const h = await setup({ tasks: [taskRow()] });
+    const originalFocus = ShimElement.prototype.focus;
+    /** Ставился ли фокус, когда поле уже стояло в строке документа. */
+    const focusedInRow: boolean[] = [];
+    /** Есть ли над узлом строка задачи (у оторванного узла фокус — no-op). */
+    const insideTaskRow = (start: ShimElement): boolean => {
+      let node: ShimElement | null = start;
+      while (node !== null) {
+        if (node.classList.contains('ui-task-row')) return true;
+        node = node.parentNode;
+      }
+      return false;
+    };
+    ShimElement.prototype.focus = function (this: ShimElement): void {
+      focusedInRow.push(insideTaskRow(this));
+      originalFocus.call(this);
+    };
+    try {
+      const row = rowOf(h, 'c1:0');
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      assert.ok(
+        focusedInRow.includes(true),
+        'фокус выставлен, когда поле уже в строке (в оторванном узле он — no-op)',
+      );
+      const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
+      assert.ok(field, 'поле правки открылось');
+      const content = field.querySelector('.cm-content') as unknown as ShimElement;
+      assert.equal(content.focused, true, 'каретка в поле правки, а не в body');
+      // Enter без клика в поле: правка живая, keymap компоненты работает сразу.
+      const view = EditorView.findFromDOM(content as unknown as HTMLElement);
+      assert.ok(view, 'вид CM6 найден по DOM');
+      runScopeHandlers(
+        view,
+        {
+          key: 'Enter',
+          keyCode: 13,
+          ctrlKey: false,
+          metaKey: false,
+          shiftKey: false,
+          altKey: false,
+          preventDefault: (): void => undefined,
+          stopPropagation: (): void => undefined,
+        } as unknown as KeyboardEvent,
+        'editor',
+      );
+      assert.equal(view.state.doc.lines, 2, 'Enter дописал строку без клика в поле');
+    } finally {
+      ShimElement.prototype.focus = originalFocus;
+      h.destroy();
+    }
+  });
+
+  it('Ctrl+Enter со сменой срока: строка на месте, «Обновить» зажжена, порядок — по кнопке', async () => {
+    keymap.keymapInternals.reset();
+    /** Поздняя строка: по ней видно, что порядок пересобирается по сроку. */
+    const lateRow = taskRow({
+      comment_id: 'c2',
+      text: 'поздняя',
+      period_from: '2026-11-20',
+      period_to: '2026-11-20',
+      due: '2026-11-20',
+    });
+    const fixture = {
+      tasks: [taskRow({ text: 'первая' }), lateRow],
+      commentBodies: { c1: '- [ ] первая [[2026-11-18]]', c2: '- [ ] поздняя [[2026-11-20]]' },
+      commentRows: {
+        // После правки источник отдаёт НОВЫЙ срок: порядок по сроку изменился бы.
+        c1: [
+          taskRow({
+            text: 'первая',
+            period_from: '2099-01-01',
+            period_to: '2099-01-01',
+            due: '2099-01-01',
+            revision: 2,
+            parsed_revision: 2,
+          }),
+        ],
+      },
+    };
+    const h = await setup(fixture);
+    try {
+      const order = (): Array<string | null> =>
+        h.host.querySelectorAll('.ui-task-row').map((node) => node.getAttribute('data-row-key'));
+      assert.deepEqual(order(), ['c1:0', 'c2:0'], 'исходный порядок — по сроку строки');
+
+      const row = rowOf(h, 'c1:0');
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-edit') as unknown as ShimElement;
+      assert.ok(field, 'поле правки открылось');
+      typeIntoField(field as unknown as HTMLElement, '- [ ] первая [[2099-01-01]]');
+      pressCommit(field as unknown as HTMLElement);
+      await h.settle();
+
+      assert.deepEqual(
+        order(),
+        ['c1:0', 'c2:0'],
+        'строка НЕ прыгает после Ctrl+Enter: порядок пересобирается только по «Обновить»',
+      );
+      const refresh = h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.ok(refresh, 'кнопка «Обновить» на панели');
+      assert.ok(
+        refresh.classList.contains('is-stale'),
+        'смена срока зажгла «Обновить» (пункт 2): маркер не «своя правка прощается»',
+      );
+
+      // Пользователь нажал «Обновить»: лента отдаёт запись с новым сроком.
+      fixture.tasks.splice(
+        0,
+        fixture.tasks.length,
+        taskRow({
+          text: 'первая',
+          period_from: '2099-01-01',
+          period_to: '2099-01-01',
+          due: '2099-01-01',
+        }),
+        lateRow,
+      );
+      refresh.emit('click', {
+        target: refresh,
+        currentTarget: refresh,
+        preventDefault: (): void => undefined,
+        stopPropagation: (): void => undefined,
+      });
+      await h.settle();
+      assert.deepEqual(order(), ['c2:0', 'c1:0'], 'по кнопке порядок пересобран по новому сроку');
+    } finally {
+      h.destroy();
+    }
+  });
 });
 
 describe('панель задач: даты бессрочных строк (ошибки 3f9ea2ee/3cef7466/f517d83a)', () => {
@@ -1588,6 +1721,13 @@ describe('панель задач: блочная правка компонен�
       await h.settle();
       const field = row.querySelector('.ui-task-row-block-edit') as unknown as HTMLElement;
       assert.ok(field, 'блочное поле открылось');
+      // ОБА класса реального поля (блокер 84c71c37): строка через пробел в одном
+      // `classList.add` бросала InvalidCharacterError и правка не открывалась.
+      assert.ok(field.classList.contains('ui-task-row-edit'), 'общий класс строки задачи');
+      assert.ok(
+        field.classList.contains('ui-task-row-block-edit'),
+        'класс блочной правки — оба токена на месте',
+      );
       assert.equal(
         fieldText(field),
         '- [ ] задача\n  - [ ] пункт\n  текст',

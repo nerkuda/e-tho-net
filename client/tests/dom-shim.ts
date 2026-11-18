@@ -307,19 +307,36 @@ export class ShimClassList {
     if (this.owner !== null) this.owner.className = [...tokens].join(' ');
   }
 
-  add(...names: string[]): void {
-    const tokens = this.tokens();
-    for (const name of names) {
-      for (const token of name.split(/\s+/).filter((t) => t !== '')) tokens.add(token);
+  /**
+   * Проверка токена по спецификации `DOMTokenList`: пустой — `SyntaxError`,
+   * с ASCII-пробелом — `InvalidCharacterError`. Мягкое разбиение по пробелам
+   * прятало реальный дефект открытия блочной правки строки задачи:
+   * `classList.add('ui-task-row-edit ui-task-row-block-edit')` падал только в
+   * Chromium, а тесты оставались зелёными (блокер 84c71c37).
+   */
+  private static check(token: string): void {
+    if (token === '') {
+      throw new DOMException('The token provided must not be empty.', 'SyntaxError');
     }
+    if (/[\t\n\f\r ]/.test(token)) {
+      throw new DOMException(
+        `The token provided ('${token}') contains HTML space characters, which are not valid in tokens.`,
+        'InvalidCharacterError',
+      );
+    }
+  }
+
+  add(...names: string[]): void {
+    for (const name of names) ShimClassList.check(name);
+    const tokens = this.tokens();
+    for (const name of names) tokens.add(name);
     this.write(tokens);
   }
 
   remove(...names: string[]): void {
+    for (const name of names) ShimClassList.check(name);
     const tokens = this.tokens();
-    for (const name of names) {
-      for (const token of name.split(/\s+/).filter((t) => t !== '')) tokens.delete(token);
-    }
+    for (const name of names) tokens.delete(name);
     this.write(tokens);
   }
 
@@ -338,6 +355,7 @@ export class ShimClassList {
   }
 
   toggle(name: string, force?: boolean): void {
+    ShimClassList.check(name);
     const tokens = this.tokens();
     const next = force ?? !tokens.has(name);
     if (next) tokens.add(name);

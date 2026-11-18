@@ -44,8 +44,13 @@ import {
 export interface TaskRowEditorOptions {
   /** Начальный markdown: СЫРАЯ строка/блок `body_md` (маркер и чекбокс на месте). */
   md: string;
-  /** Классы поля: `ui-task-row-edit` (строка) или `ui-task-row-block-edit` (блок). */
-  className: string;
+  /**
+   * Классы поля СПИСКОМ: `ui-task-row-edit` и, у блочной правки, ещё
+   * `ui-task-row-block-edit`. Список, а не строка через пробел: `DOMTokenList.add`
+   * отвергает токен с пробелом (`InvalidCharacterError`) — строка из двух классов
+   * роняла открытие блочной правки (блокер 84c71c37).
+   */
+  classes: readonly string[];
   /** Подпись для скринридера («Правка строки задачи» / «Правка блока»). */
   ariaLabel: string;
   /**
@@ -94,7 +99,7 @@ export function createTaskRowEditor(options: TaskRowEditorOptions): TaskRowEdito
     onCancel: () => notifyClosed(),
   });
 
-  root.classList.add('ui-task-row-md', options.className);
+  root.classList.add('ui-task-row-md', ...options.classes);
   root.setAttribute('aria-label', options.ariaLabel);
 
   /** Записать правку и закрыть поле; отказ экрана оставляет правку открытой. */

@@ -717,3 +717,33 @@ describe('DOM-шим: живые итераторы и регистр insertAdja
     }
   });
 });
+
+/**
+ * Круг 4 (блокер 84c71c37): строгость `DOMTokenList`. `add`/`remove`/`toggle`
+ * отвергают токен с ASCII-пробелом (`InvalidCharacterError`) и пустую строку
+ * (`SyntaxError`). Мягкое разбиение по пробелам прятало реальный дефект:
+ * `classList.add('ui-task-row-edit ui-task-row-block-edit')` бросал исключение
+ * только в Chromium, а тест блочной правки на шиме оставался зелёным.
+ */
+describe('DOM-шим: DOMTokenList отвергает пробел в токене (84c71c37)', () => {
+  it('add/remove/toggle: пробел — InvalidCharacterError, пустой токен — SyntaxError', () => {
+    const host = new ShimElement('div', 'a');
+    for (const method of ['add', 'remove'] as const) {
+      assert.throws(() => host.classList[method]('x y'), { name: 'InvalidCharacterError' }, method);
+      assert.throws(() => host.classList[method](''), { name: 'SyntaxError' }, method);
+    }
+    assert.throws(() => host.classList.toggle('x y'), { name: 'InvalidCharacterError' });
+    assert.throws(() => host.classList.toggle(''), { name: 'SyntaxError' });
+    assert.equal(host.className, 'a', 'отвергнутые вызовы ничего не записали');
+  });
+
+  it('валидные токены: add принимает несколько токенов раздельными аргументами', () => {
+    const host = new ShimElement('div');
+    host.classList.add('ui-task-row-edit', 'ui-task-row-block-edit');
+    assert.equal(host.className, 'ui-task-row-edit ui-task-row-block-edit');
+    host.classList.remove('ui-task-row-edit');
+    assert.equal(host.className, 'ui-task-row-block-edit');
+    host.classList.toggle('is-done', true);
+    assert.equal(host.classList.contains('is-done'), true);
+  });
+});

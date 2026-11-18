@@ -185,6 +185,7 @@ import {
   type RecordGroupLabels,
 } from './record-groups.js';
 import { type RecordTitleHandle } from './record-title.js';
+import { recordEditPair, type RecordEditPairActions } from './record-edit-pair.js';
 import { buildRecordHead, createRecordChips } from './record-head.js';
 import { parseChronicleState } from './state.js';
 import {
@@ -281,9 +282,11 @@ interface CardEditor {
    * Войти в единую правку тела и поставить каретку в НАЧАЛО строки `lineNo`
    * (с нуля) — переход «Открыть источник» строки задачи из панели «Дневника»
    * (0.16.1, задача `cfb8cb72`, пункт 3). Тело дочитывается точечно, как и при
-   * обычном входе в правку.
+   * обычном входе в правку. Промис завершается, когда правка уже открыта и
+   * каретка поставлена: вызывающий скроллит ленту ПОСЛЕ этого (иначе прокрутка
+   * к полю перебивает намеренный переход в начало — блокер `84c71c37`).
    */
-  editLine(lineNo: number): void;
+  editLine(lineNo: number): Promise<void>;
   /**
    * Синхронизировать ШАПКУ карточки со свежей строкой модели (дата/период и
    * облачка привязок), не пересобирая карточку и не отсоединяя живой редактор.
@@ -765,6 +768,11 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   const filterArea = div('chron-filter-area');
   const splitter = splitterElement('chron-splitter');
   const main = div('chron-main');
+  // Минимум места для ленты при auto-высоте панели задач (замечание Н1 вердикта
+  // 84c71c37): панель без потолка выдавливала ленту до 22px при окне 761px.
+  // Значение — TASKS_PANEL_FEED_MIN (тот же, что у слайдера высоты панели), оно
+  // нужно обоим детям колонки (панель и лента) — переменная на общем родителе.
+  main.style.setProperty('--tasks-panel-feed-min', `${TASKS_PANEL_FEED_MIN}px`);
   // Строка поиска записей — над панелью отбора и лентой, во всю ширину области
   // дневника (0.10.1, задача 46057359). Каркас панели отбора переезжает на
   // внутренний контейнер: полотно вида остаётся колонкой (строка + каркас).
@@ -1742,6 +1750,22 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   let widget: HTMLElement | null = null;
   let title: RecordTitleHandle | null = null;
 
+  /**
+   * Действия пары «заголовок ↔ тело» единой правки: правило фокуса живёт в
+   * `record-edit-pair.ts` (проверяется без Electron), экран даёт реализации.
+   * 0.16.1, блокер `84c71c37`: программно открытый заголовок фокус не забирает.
+   */
+  const recordEditActions: RecordEditPairActions = {
+    bodyEditing: () => editing,
+    titleEditing: () => title?.isEditing() === true,
+    openTitle: () => title?.beginEdit(false),
+    closeTitle: () => title?.endEdit(false, false),
+    // Вход начался с ЗАГОЛОВКА: тело открывается, фокус остаётся в заголовке —
+    // так решает `enterBodyEdit('title')` (дочитывание тела его не перебивает).
+    enterBodyEdit: () => void enterBodyEdit('title'),
+    focusFeedNavigation: () => feedNav?.focusNavigation(),
+  };
+
   const shell = commentShell({ variant: 'plain' });
   const body = div('diary-record-body');
   // Тело просмотра — статичный `body_html`; декорируем его теми же шагами, что и
@@ -1873,14 +1897,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       onEditChange: (isEdit) => {
         editing = isEdit;
         shell.setMode(isEdit ? 'edit' : 'view');
-        if (isEdit) {
-          // Единая правка: вход в тело открывает и заголовок (без кражи фокуса).
-          if (title !== null && !title.isEditing()) title.beginEdit(false);
-        } else {
-          if (title !== null && title.isEditing()) title.endEdit(false, false);
-          // Выход из правки — фокус возвращается в навигацию записи.
-          feedNav?.focusNavigation();
-        }
+        // Заголовок присоединяется к правке тела БЕЗ фокуса, а на выходе
+        // закрывается вместе с ней: вход в тело владеет фокусом (блокер 84c71c37).
+        recordEditPair.bodyChanged(recordEditActions, isEdit);
       },
     });
     shell.setField(widget);
@@ -2030,7 +2049,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
         toggleRecordCollapsed(d, row.id);
       },
       // Двойной клик / вход в правку заголовка открывает и тело записи.
-      onBeginEdit: () => void enterBodyEdit('title'),
+      // Вход с заголовка открывает и тело; тело УЖЕ в правке — заголовок лишь
+      // присоединился, фокус не перебиваем (блокер 84c71c37).
+      onBeginEdit: () => recordEditPair.titleBegan(recordEditActions),
       // Enter в заголовке: Ctrl/Cmd — записать оба поля, иначе — фокус в тело,
       // курсор в позицию 0.
       onEnter: (event) => {
@@ -2052,7 +2073,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     openBody: () => void enterBodyEdit('body'),
     // «Открыть источник» строки задачи (пункт 3): та же единая правка, каретка —
     // в начало строки задачи.
-    editLine: (lineNo: number) => void enterBodyEditAtLine(lineNo),
+    editLine: (lineNo: number) => enterBodyEditAtLine(lineNo),
     // Шапка вне правки: свежая строка модели обновляет дату/период и облачка
     // привязок НА МЕСТЕ (карточка не пересобирается — живой редактор цел).
     syncHead: (next: ChronicleRow): void => {
@@ -2803,25 +2824,34 @@ export async function openChronicleTaskLine(ref: {
     }
     record = rows.find((item) => item.id === ref.commentId);
     if (record === undefined) return;
-    editRecordLine(record.id, ref.lineNo);
+    await editRecordLine(record.id, ref.lineNo);
+    // В самый верх — ПОСЛЕ входа в правку: фокус поля прокручивает карточку к
+    // себе, и `scrollTop`, выставленный до правки, был бы перебит (блокер 84c71c37).
+    if (feedWrap !== null) feedWrap.scrollTop = 0;
     return;
   }
   const day = localDay(record.valid_from);
   if (day === '') return;
   // Запись УЖЕ в ленте: текущая + развёрнутое тело (иначе поле правки скрыто
-  // свёрнутой карточкой), лента — в самое начало.
+  // свёрнутой карточкой).
   feedNav?.selectRecord(record.id, day);
   setRecordCollapsed(day, record.id, false);
+  await editRecordLine(record.id, ref.lineNo);
+  // Лента встаёт в самое начало уже после того, как каретка заняла строку
+  // задачи: иначе прокрутка к сфокусированному полю отменяет переход (84c71c37).
   if (feedWrap !== null) feedWrap.scrollTop = 0;
-  editRecordLine(record.id, ref.lineNo);
 }
 
-/** Войти в правку тела записи на строке `lineNo` (карточка адресуется по id). */
-function editRecordLine(id: string, lineNo: number): void {
+/**
+ * Войти в правку тела записи на строке `lineNo` (карточка адресуется по id).
+ * Промис завершается, когда правка открыта и каретка поставлена, — порядок
+ * нужен вызывающему для прокрутки ленты после входа (блокер `84c71c37`).
+ */
+async function editRecordLine(id: string, lineNo: number): Promise<void> {
   if (feedList === null) return;
   const card = feedList.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
   if (card === null) return;
-  cardEditors.get(card)?.editLine(lineNo);
+  await cardEditors.get(card)?.editLine(lineNo);
 }
 
 /**

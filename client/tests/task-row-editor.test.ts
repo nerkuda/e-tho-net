@@ -175,7 +175,11 @@ interface Field {
 }
 
 /** Открыть правку строки с заданным исходным markdown и исходом сохранения. */
-function openField(md: string, saveResult = true): Field {
+function openField(
+  md: string,
+  saveResult = true,
+  classes: readonly string[] = ['ui-task-row-edit'],
+): Field {
   const field: Field = {
     root: null as unknown as HTMLElement,
     saved: [],
@@ -184,7 +188,7 @@ function openField(md: string, saveResult = true): Field {
   };
   const handle = createTaskRowEditor({
     md,
-    className: 'ui-task-row-edit',
+    classes,
     ariaLabel: 'Правка строки задачи',
     save: async (next) => {
       field.saved.push(next);
@@ -217,6 +221,26 @@ describe('правка строки задачи компонентой комм
         '- [ ] задача',
         'в поле — markdown строки как есть (маркер задачи на месте)',
       );
+    } finally {
+      field.dispose();
+    }
+  });
+
+  it('блочная правка получает ОБА класса списком (блокер 84c71c37)', () => {
+    // `classList.add('ui-task-row-edit ui-task-row-block-edit')` в Chromium бросает
+    // InvalidCharacterError — блочная правка не открывалась вовсе. Классы идут
+    // списком, каждый добавляется своим токеном.
+    const field = openField('- [ ] задача\n  - [ ] пункт', true, [
+      'ui-task-row-edit',
+      'ui-task-row-block-edit',
+    ]);
+    try {
+      assert.ok(field.root.classList.contains('ui-task-row-edit'), 'общий класс строки');
+      assert.ok(
+        field.root.classList.contains('ui-task-row-block-edit'),
+        'класс блочной правки: детей правит одно поле',
+      );
+      assert.equal(viewOf(field.root).state.doc.lines, 2, 'в поле — весь блок источника');
     } finally {
       field.dispose();
     }

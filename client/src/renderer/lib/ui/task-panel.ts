@@ -213,8 +213,13 @@ export type TaskRowCommand = 'open-source' | 'move' | 'undate' | 'cancel';
 export interface TaskRowEditorOptions {
   /** Начальный markdown: СЫРАЯ строка/блок `body_md` (маркер и чекбокс на месте). */
   md: string;
-  /** Класс поля: `ui-task-row-edit` (строка) или `ui-task-row-block-edit` (блок). */
-  className: string;
+  /**
+   * Классы поля СПИСКОМ: `ui-task-row-edit` и, у блочной правки, ещё
+   * `ui-task-row-block-edit`. Не строка через пробел: `DOMTokenList.add` с
+   * пробелом бросает `InvalidCharacterError` и правка не открывалась (блокер
+   * 84c71c37).
+   */
+  classes: readonly string[];
   /** Подпись для скринридера. */
   ariaLabel: string;
   /** Сохранить правку; `false` — отказ (поле остаётся в правке). */
@@ -829,7 +834,7 @@ export function mountTaskPanel(
       const blockEdit = range !== null;
       return factory({
         md: raw,
-        className: blockEdit ? `ui-task-row-edit ${TASK_ROW_BLOCK_EDIT_CLASS}` : 'ui-task-row-edit',
+        classes: blockEdit ? ['ui-task-row-edit', TASK_ROW_BLOCK_EDIT_CLASS] : ['ui-task-row-edit'],
         ariaLabel: t(blockEdit ? 'tasks.editBlockAria' : 'tasks.editLineAria'),
         save: async (md) => {
           if (range !== null) {
@@ -876,7 +881,6 @@ export function mountTaskPanel(
       } else {
         rowEditor = editor;
         textHost.append(editor.root);
-        editor.focus();
       }
     } else {
       actions.renderText(textHost, row);
@@ -970,6 +974,10 @@ export function mountTaskPanel(
     if (hasChildren && expanded && !(editingKey === row.key && editingRange !== null)) {
       node.append(buildChildRows(row, beginBlockEdit));
     }
+    // Фокус правки — ПОСЛЕ сборки строки (блокер 84c71c37): пока поле не в
+    // документе, `.focus()` — no-op, и правка открывалась без каретки (Enter и
+    // Ctrl+Enter до клика в поле не работали).
+    if (rowEditor !== null) rowEditor.focus();
   }
 
   /**
