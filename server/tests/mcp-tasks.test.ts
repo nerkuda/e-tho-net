@@ -241,6 +241,14 @@ describe('MCP etn.tasks.* и meta карточки (22f1ea95)', { skip: !nativeA
         });
         assert.equal(noToday.isError, true);
         assert.match(toolText(noToday), /BAD_REQUEST/);
+        // Некалендарная дата (форма верна, месяца/дня нет) — VALIDATION_ERROR,
+        // а не молчаливая пустая выборка (ошибка 47600057).
+        const badFrom = await callOp(handle.client, 'tasks.list', {
+          network_id: ctx.networkId,
+          from: '2026-13-45',
+        });
+        assert.equal(badFrom.isError, true);
+        assert.match(toolText(badFrom), /VALIDATION_ERROR/);
         const overdue = await listTasks(handle, ctx.networkId, {
           scope: 'overdue',
           today: '2026-11-21',

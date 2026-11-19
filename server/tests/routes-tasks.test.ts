@@ -314,6 +314,31 @@ describe(
       }
     });
 
+    it('некалендарные from/to/today — 422 VALIDATION_ERROR (ошибка 47600057)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const cases: Array<Record<string, string>> = [
+          { from: '2026-13-45' },
+          { to: '2026-13-45' },
+          { scope: 'overdue', today: '2026-13-45' },
+        ];
+        for (const query of cases) {
+          const res = await getTasks(ctx, query);
+          assert.equal(
+            res.statusCode,
+            422,
+            `${Object.keys(query).join('/')} некалендарной датой — 422, а не тихая выборка`,
+          );
+          assert.equal(res.code, 'VALIDATION_ERROR');
+        }
+        // Календарный период по-прежнему принимается.
+        const ok = await getTasks(ctx, { from: '2026-02-28', to: '2026-03-01' });
+        assert.equal(ok.statusCode, 200);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('автопериод записи: период строки, undate — 400, set_due закрепляет дату', async () => {
       const ctx = await buildRestContext();
       try {

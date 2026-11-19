@@ -55,6 +55,7 @@ import {
 import {
   findDateLinkSpans,
   isTaskLineMarker,
+  parseDateLinkTarget,
   removeTaskLineDates,
   removeTaskLineMarker,
   setTaskLineDone,
@@ -103,7 +104,22 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
  */
 function dayOf(value: string | undefined, field: string): string | null {
   if (value === undefined || value === '') return null;
-  if (DAY_RE.test(value)) return value;
+  if (DAY_RE.test(value)) {
+    // Календарная сверка (0.16.1, ошибка 47600057): форма `YYYY-MM-DD` ещё не
+    // значит существующую дату — «2026-13-45» уходила в SQL-сравнение и молча
+    // давала пустую или произвольную выборку. Правило календаря берём у
+    // date-ссылок (`@etn/markdown`): месяц 1–12, день — по месяцу и високосности.
+    if (parseDateLinkTarget(value) === null) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        `${field} must be a calendar date (YYYY-MM-DD) or a UTC instant.`,
+        {
+          field,
+        },
+      );
+    }
+    return value;
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     throw new EtnError(

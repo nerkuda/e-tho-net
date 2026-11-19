@@ -222,6 +222,43 @@ describe(
       }
     });
 
+    it('некалендарные from/to/today — VALIDATION_ERROR (ошибка 47600057)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        createTaskComment(ndb, 't-1', '- [ ] Задача [[2026-11-20]]');
+        // Форма `YYYY-MM-DD` верна, но дат 13-го месяца и 45-го дня не
+        // существует: раньше значение уходило в SQL-сравнение и молча давало
+        // пустую или произвольную выборку.
+        const cases: Array<[string, Parameters<typeof listTasks>[1]]> = [
+          ['from', { from: '2026-13-45' }],
+          ['to', { to: '2026-13-45' }],
+          ['today', { scope: 'overdue', today: '2026-13-45' }],
+        ];
+        for (const [field, options] of cases) {
+          assert.throws(
+            () => listTasks(ndb, options),
+            (err: unknown) =>
+              err instanceof EtnError &&
+              err.code === 'VALIDATION_ERROR' &&
+              (err.details as { field?: string } | undefined)?.field === field,
+            `${field} некалендарной датой — VALIDATION_ERROR с details.field`,
+          );
+        }
+        // Несуществующий день короткого месяца — тоже отказ (високосность
+        // проверяет тот же общий календарный разбор @etn/markdown).
+        assert.throws(
+          () => listTasks(ndb, { from: '2026-02-29' }),
+          (err: unknown) => err instanceof EtnError && err.code === 'VALIDATION_ERROR',
+          '29.02 невисокосного года — не календарная дата',
+        );
+        // Календарная дата проходит как раньше.
+        assert.equal(listTasks(ndb, { from: '2026-02-28' }).items.length, 1);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('keyset-обход отдаёт все строки по порядку due→period_from→id без дублей', () => {
       const ndb = createInMemoryNetworkDb();
       try {

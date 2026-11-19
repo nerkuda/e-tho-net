@@ -1127,9 +1127,12 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
         name: 'schedule',
         required: true,
         desc:
-          'closed repeat grammar: `{type:"once"}`; `{type:"weekdays",days:[1..7]}`; `{type:"every_days",every}`; ' +
-          '`{type:"weekday_of_month",weekday,nth:1..5|"last"}`; `{type:"day_of_month",day,every_months}`; ' +
-          '`{type:"yearly",month,day}`; `{type:"last_day_of_month",every_months}`',
+          'closed repeat grammar (interval ranges and edge behavior - `etn.guide { topic: "reminders" }`): ' +
+          '`{type:"once"}`; `{type:"weekdays",days:[1..7],every_weeks?}`; ' +
+          '`{type:"every_days",every,skip_weekends?}`; ' +
+          '`{type:"weekday_of_month",weekday,nth:1..5|"last",every_months?}`; ' +
+          '`{type:"day_of_month",day,every_months}`; `{type:"yearly",month,day,every_years?}`; ' +
+          '`{type:"last_day_of_month",every_months}`',
       },
       {
         name: 'anchor_at',
@@ -1156,7 +1159,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'reminder_id', required: true, desc: 'reminder id' },
       { name: 'kind', desc: 'new `kind` (must match the resulting `schedule.type`)' },
-      { name: 'schedule', desc: 'new repeat schedule (closed grammar)' },
+      { name: 'schedule', desc: 'new repeat schedule (closed grammar - see the `reminders` topic)' },
       { name: 'anchor_at', desc: 'new reference occurrence (ISO-8601 UTC)' },
     ],
     destructive: false,
@@ -1177,6 +1180,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'reminder_id', required: true, desc: 'reminder id' },
+      {
+        name: 'occurrence_at',
+        desc: 'the occurrence instant of the series (ISO-8601 UTC); omitted - the nearest active occurrence',
+      },
     ],
     destructive: false,
     readOnly: false,
@@ -1202,6 +1209,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
         name: 'until',
         required: true,
         desc: 'new showing moment (ISO-8601 UTC, must be in the future)',
+      },
+      {
+        name: 'occurrence_at',
+        desc: 'the occurrence instant of the series (ISO-8601 UTC); omitted - the nearest active occurrence',
       },
     ],
     destructive: false,
@@ -1258,6 +1269,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
       { name: 'cursor', desc: 'keyset cursor of the next page (from the previous response)' },
       { name: 'limit', desc: 'page size (1..200, default 50)' },
       { name: 'count', desc: '`true` — also return `total` (a COUNT query)' },
+      {
+        name: 'include_nested',
+        desc: '`true` - also read the lines of nested checklists of a row (`parent_task`/`subtask`); default `false`',
+      },
     ],
     destructive: false,
     readOnly: true,
@@ -2421,12 +2436,15 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '| `schedule.type` | shape | `kind` |',
       '|---|---|---|',
       '| `once` | `{}` | `one` |',
-      '| `weekdays` | `{ days: [1..7] }` (ISO, 1 = Mon) | `rule` |',
-      '| `every_days` | `{ every: 1..3650 }` | `period` |',
-      '| `weekday_of_month` | `{ weekday: 1..7, nth: 1..5 or "last" }` | `rule` |',
-      '| `day_of_month` | `{ day: 1..31, every_months: 1..120 }` | `period` |',
-      '| `yearly` | `{ month: 1..12, day: 1..31 }` | `rule` |',
-      '| `last_day_of_month` | `{ every_months: 1..120 }` | `period` |',
+      '| `weekdays` | `{ days: [1..7], every_weeks: 1..520 }` (ISO, 1 = Mon; default `1` = every week) | `rule` |',
+      '| `every_days` | `{ every: 1..3650, skip_weekends: boolean }` (default `false`) | `period` |',
+      '| `weekday_of_month` | `{ weekday: 1..7, nth: 1..5 or "last", every_months: 1..120 }` (default `1`) | `rule` |',
+      '| `day_of_month` | `{ day: 1..31, every_months: 1..120 }` (required) | `period` |',
+      '| `yearly` | `{ month: 1..12, day: 1..31, every_years: 1..100 }` (default `1`; `day` must exist in the month) | `rule` |',
+      '| `last_day_of_month` | `{ every_months: 1..120 }` (required) | `period` |',
+      '',
+      'Interval fields are OPTIONAL and default to `1` (every week/month/year); a value outside',
+      'its range, or a key outside the row shape, is `VALIDATION_ERROR`.',
       '',
       '`kind` is a coarse view of the same series and MUST match `schedule.type` — a mismatch is',
       '`VALIDATION_ERROR` (`details.field = "kind"`, HTTP 400 on REST).',
@@ -2435,9 +2453,14 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '- `anchor_at` is a reference instant. The server NORMALIZES it to the FIRST occurrence of the',
       '  series on or after the requested moment and stores that value. The time of day of the anchor',
       '  is inherited by every occurrence of the series.',
-      '- Edges: the 31st in a short month and 29.02 in a non-leap year fall back to the LAST day of the',
-      '  month; an absent N-th weekday of a month (a 5th Thursday) skips that occurrence and the series',
-      '  continues; `once` keeps the anchor as given.',
+      '- Edges are SKIPPED, not clamped: `day_of_month` 31 fires only in a month that HAS a 31st (a',
+      '  short month is skipped - the series continues in the next suitable month); `yearly` 29.02',
+      '  fires only in leap years (non-leap years are skipped). An absent N-th weekday of a month',
+      '  (a 5th Thursday) skips that occurrence and the series continues. `last_day_of_month` is the',
+      '  explicit "last day" kind. `every_days` with `skip_weekends: true` moves a Sat/Sun occurrence',
+      '  to the next Monday (the time of day is kept). `once` keeps the anchor as given. A series that',
+      '  can never produce an occurrence is rejected at write time with `VALIDATION_ERROR` (HTTP 400,',
+      '  `details.issue = "no-occurrence"`).',
       '- `next_at` is the moment of the nearest visible SHOWING (for a snoozed occurrence — its `until`)',
       '  and never points into the past: it is recomputed lazily from `anchor_at` plus the exceptions on',
       '  every read. Reads do NOT write to the database; `next_at` in the row is updated by writes only.',
