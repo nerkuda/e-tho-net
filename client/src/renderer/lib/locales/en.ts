@@ -1392,6 +1392,7 @@ export const en = {
   'tasks.snoozeDateTime': 'date and time…',
   'tasks.snoozeDateTimeTitle': 'Snooze reminder',
   'tasks.createTask': 'Create a task for today',
+  'tasks.createdForToday': 'Task created for %1',
   /** Menu button tooltips. */
   'tasks.rowCommands': 'Row commands',
   'tasks.groupCommands': 'Group commands',

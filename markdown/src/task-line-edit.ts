@@ -17,7 +17,7 @@
  */
 
 import { findDateLinkSpans } from './date-links.js';
-import { TASK_MARKER_PATTERN } from './task-list.js';
+import { TASK_MARKER_PATTERN, TASK_MARKER_UNCHECKED } from './task-list.js';
 
 /**
  * Маркер пункта списка с чекбоксом: необязательный маркер списка (`-`, `*`,
@@ -27,6 +27,9 @@ import { TASK_MARKER_PATTERN } from './task-list.js';
 const TASK_LINE_MARKER_RE = new RegExp(
   String.raw`^([ \t]*(?:[-*+]|\d{1,9}[.)])?[ \t]*)${TASK_MARKER_PATTERN}(?=\s|$)`,
 );
+
+/** Маркер списка с обязательным отделяющим пробелом (`- `, `1. `). */
+const TASK_LIST_PREFIX_RE = /^([ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/;
 
 /** Есть ли в строке маркер пункта задачи. */
 export function isTaskLineMarker(line: string): boolean {
@@ -63,8 +66,10 @@ export function setTaskLineDone(line: string, done: boolean): string | null {
 
 /**
  * Отменить задачу: убрать маркер, оставив пункт списка (`- [ ] текст` →
- * `- текст`). Одиночный маркер без текста превращается в пустой пункт (`-`).
- * `null` — в строке нет маркера.
+ * `- текст`). Одиночный маркер без текста превращается в ПУСТОЙ ПУНКТ списка
+ * (`- `) — как у «Сделать бессрочной» (`removeTaskLineDates`, решение
+ * 2026-11-16): пустая задача без текста существовать не должна, а голый `-`
+ * читался бы как обрезок. `null` — в строке нет маркера.
  */
 export function removeTaskLineMarker(line: string): string | null {
   const match = TASK_LINE_MARKER_RE.exec(line);
@@ -73,7 +78,28 @@ export function removeTaskLineMarker(line: string): string | null {
   // Отделяющий пробел после маркера убирается ровно один; отступ строки перед
   // маркером (`  [ ] текст` — маркер на строке содержимого) сохраняется.
   const rest = line.slice(match[0].length).replace(/^[ \t]/, '');
-  return `${prefix}${rest}`.replace(/[ \t]+$/, '');
+  if (rest.trim() !== '') return `${prefix}${rest}`.replace(/[ \t]+$/, '');
+  // Текста нет: остаётся пустой пункт списка `- ` (у строки содержимого
+  // `  [ ]` маркер списка добавляется, отступ сохраняется).
+  if (prefix.trim() === '') return `${prefix}- `;
+  return `${prefix.trimEnd()} `;
+}
+
+/**
+ * Вернуть строке маркер задачи: `- текст` → `- [ ] текст` (обратная операция
+ * к {@link removeTaskLineMarker}). Нужна «Создать задачу на сегодня» (0.16.1,
+ * пачка 4, пункт 4): отменённую строку этого же субъекта за день не дублируют
+ * второй строкой, а возвращают ей чекбокс — иначе повторные «Создать» и
+ * «Отменить» копили бы мусорные пункты.
+ *
+ * `null` — строка не пункт списка (маркера списка нет); уже задача возвращается
+ * как есть, поэтому повторный вызов безопасен.
+ */
+export function addTaskLineMarker(line: string): string | null {
+  if (isTaskLineMarker(line)) return line;
+  const match = TASK_LIST_PREFIX_RE.exec(line);
+  if (match === null) return null;
+  return `${match[0]}${TASK_MARKER_UNCHECKED}${line.slice(match[0].length)}`;
 }
 
 /**

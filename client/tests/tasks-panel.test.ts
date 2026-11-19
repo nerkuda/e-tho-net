@@ -30,6 +30,7 @@ import {
   staleTaskRowOf,
   type ReminderPanelRow,
   type TaskPanelActions,
+  type TaskPanelOptions,
   type TaskPanelRow,
   type TaskPanelView,
   type TaskRowEditor,
@@ -184,6 +185,7 @@ function panelView(rows: TaskPanelRow[], overrides: Partial<TaskPanelView> = {})
 function mount(
   rows: TaskPanelRow[] = [taskRow()],
   overrides: Partial<TaskPanelActions> = {},
+  options: TaskPanelOptions = {},
 ): {
   host: ShimElement;
   calls: Calls;
@@ -261,6 +263,7 @@ function mount(
     { ...actions, ...overrides },
     {
       createRowEditor: fakeRowEditor(calls),
+      ...options,
     },
   );
   handle.render(panelView(rows));
@@ -723,6 +726,58 @@ describe('панель задач: сворачивание блоков и ко
     item!.click();
     await flush();
     assert.deepEqual(calls.days, ['source:c1:0'], 'переход адресован строке, а не дню');
+    destroy();
+  });
+
+  it('облачка строк отключаются флагом: зона «Задачи» редактора мысли (пачка 4, п.1)', () => {
+    const rendered: string[] = [];
+    const { host, destroy } = mount(
+      [taskRow({ subjectThoughts: ['t1', 't2'] })],
+      {
+        renderSubject: (node, subject) => {
+          rendered.push(subject.id);
+          node.textContent = subject.id;
+        },
+      },
+      { rowSubjectClouds: false },
+    );
+    const row = rowsOf(host)[0]!;
+    assert.equal(
+      row.querySelector('.ui-task-row-subject-cloud'),
+      null,
+      'облачков субъектов у строки нет',
+    );
+    assert.equal(
+      row.querySelector('.ui-task-row-subjects'),
+      null,
+      'слота облачков в DOM тоже нет — он не занимает место в строке',
+    );
+    assert.deepEqual(rendered, [], 'экран даже не просили нарисовать облачко');
+    destroy();
+  });
+
+  it('перечитывание показанного списка не показывает статус загрузки (пачка 4, п.2)', () => {
+    const view = panelView([taskRow(), taskRow({ key: 'c1:1', lineNo: 1 })]);
+    const { host, render, destroy } = mount([taskRow(), taskRow({ key: 'c1:1', lineNo: 1 })]);
+    const status = host.querySelector('.ui-task-panel-status') as unknown as ShimElement;
+    assert.equal(status.hidden, true, 'список показан — строки загрузки нет');
+    const rowsBefore = rowsOf(host);
+    // «Обновить»: загрузка идёт, список УЖЕ есть — он не должен съезжать вниз от
+    // появившейся перед ним строки загрузки, а строки не пересобираются.
+    render({ ...view, loading: true });
+    assert.equal(status.hidden, true, 'статус загрузки не появился над показанным списком');
+    const rowsAfter = rowsOf(host);
+    assert.deepEqual(
+      rowsAfter.map((node, index) => node === rowsBefore[index]),
+      [true, true],
+      'узлы строк сохранены keyed-сверкой',
+    );
+    // Первая загрузка (показывать нечего) — статус обязателен.
+    const empty = mount([]);
+    const emptyStatus = empty.host.querySelector('.ui-task-panel-status') as unknown as ShimElement;
+    empty.render({ ...panelView([]), loading: true });
+    assert.equal(emptyStatus.hidden, false, 'пустая панель показывает признак загрузки');
+    empty.destroy();
     destroy();
   });
 

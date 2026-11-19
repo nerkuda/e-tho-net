@@ -689,6 +689,7 @@ export const zh = {
   'tasks.snoozeDateTime': '日期和时间…',
   'tasks.snoozeDateTimeTitle': '推迟提醒',
   'tasks.createTask': '创建今日任务',
+  'tasks.createdForToday': '已创建任务：%1',
   'tasks.rowCommands': '行命令',
   'tasks.groupCommands': '分组命令',
   'tasks.rowChildren': '嵌套行',

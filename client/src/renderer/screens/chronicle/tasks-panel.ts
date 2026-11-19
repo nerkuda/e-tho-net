@@ -39,6 +39,13 @@ export interface TasksPanelDeps {
    * (`openChronicleTaskLine`). Прочие строки экран решает сам (день/карточка).
    */
   openRowSource?(row: TaskPanelRow): void;
+  /**
+   * Перейти к строке только что созданной задачи «на сегодня» (0.16.1, пачка 4,
+   * пункт 3). Экран ведёт штатным входом `openChronicleTaskLine`: запись
+   * становится текущей (или ставится период по её дате), лента — в начало,
+   * тело — в правке, каретка в строку задачи.
+   */
+  openCreatedTask?(ref: { commentId: string; lineNo: number }): void;
   /** Правки в записях изменились — лента «Дневника» перечитывается. */
   onRecordsChanged(): void;
   /** Панель свёрнута/развёрнута: экран прячет слайдер высоты. */
@@ -83,6 +90,13 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       // Экран решает адрес, панель только передаёт строку (пункт 3).
       ...(deps.openRowSource !== undefined
         ? { openRowSource: (row: TaskPanelRow) => deps.openRowSource?.(row) }
+        : {}),
+      // Созданная задача: экран решает адрес перехода (пункт 3 пачки 4).
+      ...(deps.openCreatedTask !== undefined
+        ? {
+            openCreatedTask: (ref: { commentId: string; lineNo: number }) =>
+              deps.openCreatedTask?.(ref),
+          }
         : {}),
       onRecordsChanged: () => deps.onRecordsChanged(),
       onPanelCollapsed: (collapsed) => deps.onPanelCollapsed?.(collapsed),

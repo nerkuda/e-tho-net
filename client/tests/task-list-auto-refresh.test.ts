@@ -33,8 +33,36 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Минимальный DOM и мост `window.etn` с подставным `tasks.list`. */
-function shim(): { listCalls: () => number } {
+/** Строка проекции с полями, которые читает модель панели. */
+function taskRow(lineNo: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    comment_id: 'c1',
+    line_no: lineNo,
+    text: `задача ${lineNo}`,
+    period_from: null,
+    period_to: null,
+    due: '2026-11-20',
+    auto_period: false,
+    done: false,
+    subject_thoughts: [],
+    subject_state: 'active',
+    parent_task: null,
+    subtask: false,
+    revision: 1,
+    parsed_revision: 1,
+    owner_type: 'thought',
+    owner_id: 't1',
+    kind: 'chronological',
+    ...overrides,
+  };
+}
+
+/** Текущая выдача `tasks.list` — тест меняет её между «Обновить». */
+let rowStore: Array<Record<string, unknown>> = [];
+
+/** Подставить DOM и `window.etn` с подставным `tasks.list`. */
+function shim(rows: Array<Record<string, unknown>> = []): { listCalls: () => number } {
+  rowStore = [...rows];
   const body = new ShimElement('body');
   (globalThis as any).HTMLElement = ShimElement;
   (globalThis as any).document = {
@@ -58,7 +86,7 @@ function shim(): { listCalls: () => number } {
     tasks: {
       list: async () => {
         calls += 1;
-        return { items: [], nested: [], max_revision: 0 };
+        return { items: [...rowStore], nested: [], max_revision: 2 };
       },
     },
     thoughts: { get: async () => ({ id: 't1', title: 't1' }) },
@@ -94,7 +122,9 @@ const { resetEventRouter, routeRealtimeEvent } =
   await import('../src/renderer/lib/live/event-router.js');
 
 /** Смонтировать панель редактора мысли (headless) и вернуть хэндл. */
-async function mount(autoRefresh: boolean): Promise<{ handle: any; destroy: () => void }> {
+async function mount(
+  autoRefresh: boolean,
+): Promise<{ handle: any; host: ShimElement; destroy: () => void }> {
   store.update({ networkId: 'n1', network: { first_day_of_week: 1 } } as any);
   const host = new ShimElement('div');
   const handle = mountTaskList(host as unknown as HTMLElement, {
@@ -109,7 +139,24 @@ async function mount(autoRefresh: boolean): Promise<{ handle: any; destroy: () =
     actions: {},
   });
   await flush();
-  return { handle, destroy: () => handle.destroy() };
+  return { handle, host, destroy: () => handle.destroy() };
+}
+
+/** Кнопка «Обновить» шапки headless-панели. */
+function refreshButton(handle: any): ShimElement {
+  return (handle.headActions() as ShimElement[]).find((node) =>
+    node.classList.contains('ui-task-panel-refresh'),
+  )!;
+}
+
+/** Узлы строк панели в порядке показа. */
+function rowsOf(host: ShimElement): ShimElement[] {
+  return host.querySelectorAll('[data-row-key]') as unknown as ShimElement[];
+}
+
+/** Тексты строк панели. */
+function texts(host: ShimElement): string[] {
+  return rowsOf(host).map((node) => node.querySelector('.ui-task-row-text')?.textContent ?? '');
 }
 
 /** Событие чужой правки записи в сети — через реальный маршрутизатор. */
@@ -157,6 +204,69 @@ describe('панель задач: автоперечитывание на со�
     commentUpdated(3);
     await wait(250);
     assert.equal(api.listCalls(), initial + 1, 'дебаунс склеил пачку');
+    destroy();
+  });
+});
+
+describe('панель задач: перечитывание патчит только изменившиеся строки (пачка 4, п.2)', () => {
+  beforeEach(() => {
+    resetEventRouter();
+  });
+
+  it('в зоне редактора событие не серит строки и не зажигает «Обновить»', async () => {
+    const api = shim([taskRow(0), taskRow(1)]);
+    const { handle, host, destroy } = await mount(true);
+    const first = rowsOf(host)[0]!;
+    commentUpdated(1);
+    await flush();
+    assert.equal(
+      first.classList.contains('is-stale'),
+      false,
+      'строка не мигает серым: перечитывание само принесёт свежее состояние',
+    );
+    assert.equal(
+      refreshButton(handle).classList.contains('is-stale'),
+      false,
+      '«Обновить» не зажигается и не гаснет сама — это не действие человека',
+    );
+    await wait(250);
+    assert.equal(api.listCalls(), 2, 'событие дало одно перечитывание');
+    destroy();
+  });
+
+  it('«Обновить» перечитывает список keyed: пересобирается только изменённая строка', async () => {
+    shim([taskRow(0), taskRow(1), taskRow(2)]);
+    const { handle, host, destroy } = await mount(true);
+    const before = rowsOf(host);
+    const beforeTexts = texts(host);
+    // В источнике поправили текст ОДНОЙ строки (второй).
+    rowStore[1] = taskRow(1, { text: 'задача 1 — правка' });
+    refreshButton(handle).click();
+    await flush();
+    const after = rowsOf(host);
+    assert.deepEqual(
+      after.map((node, index) => node === before[index]),
+      [true, true, true],
+      'узлы всех строк сохранены: полной пересборки списка нет',
+    );
+    assert.deepEqual(
+      texts(host),
+      [beforeTexts[0], 'задача 1 — правка', beforeTexts[2]],
+      'обновлён текст только изменённой строки',
+    );
+    destroy();
+  });
+
+  it('без автоперечитывания событие по-прежнему зажигает маркер (Дневник)', async () => {
+    shim([taskRow(0)]);
+    const { handle, destroy } = await mount(false);
+    commentUpdated(1);
+    await flush();
+    assert.equal(
+      refreshButton(handle).classList.contains('is-stale'),
+      true,
+      'панель «Дневника» работает штатным маркером «Обновить»',
+    );
     destroy();
   });
 });

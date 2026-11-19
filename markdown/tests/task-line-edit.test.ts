@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  addTaskLineMarker,
   isTaskLineMarker,
   parseTaskLines,
   removeTaskLineDates,
@@ -39,8 +40,37 @@ describe('markdown: построчные правки пункта задачи'
     assert.equal(removeTaskLineMarker('- [ ] текст'), '- текст');
     assert.equal(removeTaskLineMarker('1. [x] пункт'), '1. пункт');
     assert.equal(removeTaskLineMarker('  [ ] текст'), '  текст');
-    assert.equal(removeTaskLineMarker('- [ ]'), '-');
+    // Пустая после отмены строка — пустой пункт списка (`- `), а не голый дефис:
+    // решение 2026-11-16, как у `removeTaskLineDates` (пачка 4, пункт 4).
+    assert.equal(removeTaskLineMarker('- [ ]'), '- ');
+    assert.equal(removeTaskLineMarker('  [ ]'), '  - ');
     assert.equal(removeTaskLineMarker('- обычный пункт'), null);
+  });
+
+  it('cancel строки, созданной «на сегодня», не оставляет обрезков (пачка 4, пункт 4)', () => {
+    // Именно эта форма пишется «Создать задачу на сегодня»: ID-ссылка субъекта и
+    // date-ссылка дня. Отмена снимает ТОЛЬКО маркер: ссылки остаются целыми, без
+    // обрывков вида `[ ]`, `-`, двойных пробелов.
+    assert.equal(
+      removeTaskLineMarker('- [ ] [[#11111111-1111-4111-8111-111111111111]] [[2026-11-19]]'),
+      '- [[#11111111-1111-4111-8111-111111111111]] [[2026-11-19]]',
+    );
+    assert.equal(
+      removeTaskLineMarker('1. [x] Публикация [[2026-11-19]]'),
+      '1. Публикация [[2026-11-19]]',
+    );
+  });
+
+  it('addTaskLineMarker возвращает маркер отменённой строке (обратная операция)', () => {
+    assert.equal(
+      addTaskLineMarker('- [[#11111111-1111-4111-8111-111111111111]] [[2026-11-19]]'),
+      '- [ ] [[#11111111-1111-4111-8111-111111111111]] [[2026-11-19]]',
+    );
+    assert.equal(addTaskLineMarker('1. пункт'), '1. [ ] пункт');
+    assert.equal(addTaskLineMarker('  - пункт'), '  - [ ] пункт');
+    // Уже задача — возвращается как есть (идемпотентно), не пункт списка — null.
+    assert.equal(addTaskLineMarker('- [x] задача'), '- [x] задача');
+    assert.equal(addTaskLineMarker('просто текст [[2026-11-19]]'), null);
   });
 
   it('адресация по lineNo парсера: маркер на отдельной строке содержимого', () => {

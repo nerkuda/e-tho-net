@@ -32,6 +32,7 @@
  * устарела хоть одна строка либо пришло событие напоминаний `reminders.changed`.
  */
 
+import { parseTaskLines } from '@etn/markdown';
 import type {
   CommentKind,
   Reminder,
@@ -40,6 +41,8 @@ import type {
   TaskMassFilter,
   TaskNestedLine,
 } from '@etn/shared';
+
+import { localDayEnd, localDayStart } from '../dates.js';
 
 /**
  * Что модель знает о строке для адресации и порядка: стабильный ключ, календарный
@@ -541,4 +544,68 @@ export function reminderPanelRows(
     }
   }
   return rows;
+}
+
+/**
+ * ДНЕВНЫЕ хроно-записи указанного дня (0.16.1, пачка 4, пункт 5).
+ *
+ * «Строго дневная» — запись, ЧЬИ СУТКИ и есть этот день: весь интервал
+ * `valid_from`..`valid_to` лежит внутри локальных суток. Запись-период
+ * («Задачник на неделю») сегодня накрывает, но за сутки выходит, поэтому
+ * дневной не считается: «Создать задачу на сегодня» пишет в запись ДНЯ
+ * (требование 7fcdf583), а не в период.
+ *
+ * Записей дня на дату может быть несколько (элемент «Запись дня»), поэтому
+ * возвращается список в порядке начала — вызывающий решает, куда дописать.
+ */
+export function dailyRecordsOf<
+  T extends { kind: CommentKind; valid_from: string; valid_to: string | null },
+>(comments: readonly T[], day: string): T[] {
+  const start = Date.parse(localDayStart(day));
+  const end = Date.parse(localDayEnd(day));
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  return comments
+    .filter((comment) => {
+      if (comment.kind !== 'chronological') return false;
+      const from = Date.parse(comment.valid_from);
+      const to = Date.parse(comment.valid_to ?? comment.valid_from);
+      return (
+        Number.isFinite(from) && Number.isFinite(to) && from <= to && from >= start && to <= end
+      );
+    })
+    .sort((left, right) => Date.parse(left.valid_from) - Date.parse(right.valid_from));
+}
+
+/**
+ * Уже созданная задача субъекта на указанный день — номер строки `body_md`
+ * С НУЛЯ (адрес `PATCH /tasks`), иначе `null`. Идемпотентность «Создать
+ * задачу на сегодня» (0.16.1, пачка 4, пункт 4): повторный клик не плодит
+ * дубли строк.
+ *
+ * Строка узнаётся по проекции, а не по точному тексту: задача (`isTask`), срок
+ * (`due`) — этот день, субъект — ID-ссылка `[[#id]]` строки. У публикации
+ * ID-ссылки нет, поэтому для неё сверяется снапшот текста строки.
+ *
+ * Возвращается и ОТМЕНЁННАЯ строка (`task: false`), но только при точном
+ * совпадении текста с каноническим: пользовательский пункт «обсудить [[#id]]» с
+ * той же датой задачей не считается и маркер ему не возвращают (пункт 4).
+ */
+export function findTaskLineForDay(
+  bodyMd: string,
+  query: { day: string; subjectId?: string | null; text?: string },
+): { lineNo: number; task: boolean } | null {
+  const subject = query.subjectId?.toLowerCase() ?? null;
+  for (const row of parseTaskLines(bodyMd)) {
+    if (row.due !== query.day) continue;
+    if (row.isTask) {
+      if (subject !== null && !row.subjects.includes(subject)) continue;
+      if (subject === null && query.text !== undefined && row.text !== query.text) continue;
+    } else {
+      // Отменённая строка переиспользуется только как есть: у неё тот же текст,
+      // что у создаваемой (ссылка на субъект/название + дата), без добавок.
+      if (query.text === undefined || row.text !== query.text) continue;
+    }
+    return { lineNo: row.lineNo - 1, task: row.isTask };
+  }
+  return null;
 }

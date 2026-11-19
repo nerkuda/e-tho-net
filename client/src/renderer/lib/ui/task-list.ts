@@ -47,7 +47,7 @@
  * панели. Панель карточки мысли состояние не хранит (`persistence` не задан).
  */
 
-import { isTaskLineMarker } from '@etn/markdown';
+import { addTaskLineMarker, isTaskLineMarker } from '@etn/markdown';
 import {
   type Comment,
   type Reminder,
@@ -71,7 +71,7 @@ import {
 import { confirmDialog } from '../dialog.js';
 import { errText } from '../dom.js';
 import { etn } from '../etn.js';
-import { t } from '../i18n.js';
+import { formatDate, t } from '../i18n.js';
 import { onRoutedRealtimeEvent } from '../live/event-router.js';
 import { MENU_SEPARATOR, menuAction, menuSubmenu, type MenuItem } from '../menu.js';
 import { notice } from '../notice.js';
@@ -96,6 +96,8 @@ import {
 import {
   REMINDERS_OVERDUE_DAYS,
   calendarDaysBetween,
+  dailyRecordsOf,
+  findTaskLineForDay,
   flatReminderRows,
   nestedLinesByParent,
   orderTaskRowsUndatedFirst,
@@ -175,6 +177,12 @@ export interface TaskListViewOptions {
    * Маркер «Обновить» при этом остаётся штатным путём панели «Дневника».
    */
   autoRefreshOnCommentChange?: boolean;
+  /**
+   * Облачка субъектов у строк задач (0.16.1, пачка 4, пункт 1). По умолчанию
+   * есть: в «Дневнике» субъекты строк разные. Зона «Задачи» редактора мысли их
+   * выключает — все её строки принадлежат самой редактируемой мысли.
+   */
+  rowSubjectClouds?: boolean;
   /** Отрисовка снапшота текста строки (markdown + кликабельные ссылки). */
   renderText(host: HTMLElement, row: TaskPanelRow): void;
 }
@@ -185,6 +193,14 @@ export interface TaskListActions {
   openDay?(day: string): void;
   /** Открыть запись-источник строки (панель карточки мысли). */
   openRowSource?(row: TaskPanelRow): void;
+  /**
+   * Перейти к строке только что созданной задачи (0.16.1, пачка 4, пункт 3).
+   * Экран ведёт штатным входом «Открыть источник»: запись становится текущей,
+   * отбор/период выставляются по её дате, если её нет в ленте, лента — в
+   * начало, тело — в правке, каретка в строку задачи. `lineNo` — номер строки
+   * `body_md` с нуля (адрес `PATCH /tasks`).
+   */
+  openCreatedTask?(ref: { commentId: string; lineNo: number }): void;
   /** Открыть субъект строки/группы (мысль или публикация). */
   openSubject?(subject: TaskPanelSubject): void;
   /** Правки в записях изменились — лента «Дневника» перечитывается. */
@@ -346,6 +362,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    * а до «Обновить» строка держит отметку (пункт 7).
    */
   const reminderDoneKeys = new Set<string>();
+  /**
+   * Создания задачи на сегодня В ПОЛЁТЕ (ключ субъект+вхождение). Двойное
+   * нажатие «Создать» не должно прочитать запись дважды и дописать две строки:
+   * второй клик, пока первый не завершён, игнорируется (пачка 4, пункт 4).
+   */
+  const creatingForToday = new Set<string>();
   let loadSeq = 0;
   /** Снимок текстов для отмены массовой команды. */
   let undoSnapshot: Array<{ id: string; body_md: string; version: number }> | null = null;
@@ -397,7 +419,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       loadRawBlock: (row) => loadRawBlock(row),
       editBlock: (row, range, text) => editBlock(row, range, text),
     },
-    { headless: view.headless === true, createRowEditor: options.createRowEditor },
+    {
+      headless: view.headless === true,
+      createRowEditor: options.createRowEditor,
+      // Облачка строк выключает зона «Задачи» редактора мысли (пункт 1).
+      rowSubjectClouds: view.rowSubjectClouds !== false,
+    },
   );
 
   // -------------------------------------------------------------------------
@@ -1668,41 +1695,119 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
 
   /**
    * «Создать задачу на сегодня»: строка в СЕГОДНЯШНЕЙ хроно-записи; записи дня
-   * нет — она создаётся. Расписание напоминания продолжается.
+   * нет — она создаётся (требование `7fcdf583`). Расписание напоминания
+   * продолжается.
+   *
+   * **Строго дневная запись (0.16.1, пачка 4, пункт 5).** Цель — запись, ЧЬИ
+   * сутки и есть сегодня: интервал `valid_from`..`valid_to` целиком внутри
+   * локальных суток (`dailyRecordsOf`). Раньше бралась первая запись,
+   * НАКРЫВАЮЩАЯ сегодня, — задача попадала в период («Задачник на неделю»).
+   * Дневной нет — создаётся запись дня по правилам «Записи дня»: владелец HOME,
+   * сутки от начала до конца дня.
+   *
+   * **Идемпотентность (пункт 4).** Повторный клик не плодит дубли: если в
+   * сегодняшней дневной записи уже есть задача этого субъекта на сегодня
+   * (`findTaskLineForDay`), строка не добавляется. Отменённая строка этого же
+   * субъекта за день НЕ дублируется второй строкой — ей возвращается маркер
+   * (`addTaskLineMarker`), иначе связка «Создать → Отменить → Создать» копила
+   * бы пункты-обрезки. Пока создание в полёте, второй клик игнорируется: два
+   * чтения до записи дали бы две строки.
+   *
+   * **Переход и тост (пункт 3).** После создания — переход к строке записи
+   * штатным входом «Открыть источник» (`openCreatedTask`) и тост «Создана
+   * задача на <дата>».
    */
   async function createTaskForToday(row: ReminderPanelRow): Promise<void> {
     const networkId = requireNetworkId();
     const today = todayLocal();
-    const line =
-      row.subjectType === 'thought'
-        ? `- [ ] [[#${row.subjectId}]] [[${today}]]`
-        : `- [ ] ${row.title} [[${today}]]`;
-    const home = await import('../home.js').then((mod) => mod.getHomeId(networkId));
-    const comments = await etn.comments.list(networkId, 'thought', home);
-    const todayStart = Date.parse(localDayStart(today));
-    const todayEnd = Date.parse(localDayEnd(today));
-    const record = comments.find((comment) => {
-      if (comment.kind !== 'chronological') return false;
-      const from = Date.parse(comment.valid_from);
-      const to = Date.parse(comment.valid_to ?? comment.valid_from);
-      return from <= todayEnd && to >= todayStart;
-    });
-    if (record !== undefined) {
-      const body = record.body_md === '' ? line : `${record.body_md}\n${line}`;
-      await etn.comments.update(networkId, record.id, { body_md: body }, record.version);
-    } else {
-      const now = new Date().toISOString();
-      await etn.comments.createMulti(networkId, [{ owner_type: 'thought', owner_id: home }], {
-        kind: 'chronological',
-        title: null,
-        body_md: line,
-        valid_from: now,
-        valid_to: now,
-        use_time: false,
-      });
+    const subjectId = row.subjectType === 'thought' ? row.subjectId : null;
+    const text =
+      subjectId === null ? `${row.title} [[${today}]]` : `[[#${subjectId}]] [[${today}]]`;
+    const line = `- [ ] ${text}`;
+    const inFlightKey = `${row.subjectType}:${row.subjectId}:${row.occurrenceAt}`;
+    if (creatingForToday.has(inFlightKey)) return;
+    creatingForToday.add(inFlightKey);
+    try {
+      const home = await import('../home.js').then((mod) => mod.getHomeId(networkId));
+      const comments = await etn.comments.list(networkId, 'thought', home);
+      const daily = dailyRecordsOf(comments, today);
+      // Строка субъекта за сегодня уже есть: дубль не создаём, пользователь
+      // попадает на существующую (повторный клик или второе окно).
+      for (const record of daily) {
+        const found = findTaskLineForDay(record.body_md, { day: today, subjectId, text });
+        if (found === null) continue;
+        if (!found.task) {
+          // Отменённая строка того же субъекта: возвращаем ей маркер, а не
+          // плодим рядом вторую (пункт 4). Сбой возврата — обычное создание.
+          const lines = record.body_md.split('\n');
+          const restored = addTaskLineMarker(lines[found.lineNo] ?? '');
+          if (restored !== null) {
+            lines[found.lineNo] = restored;
+            await etn.comments.update(
+              networkId,
+              record.id,
+              { body_md: lines.join('\n') },
+              record.version,
+            );
+            actions.onRecordsChanged?.();
+            notifyTaskCreated(today, { commentId: record.id, lineNo: found.lineNo });
+            await loadPanel();
+            return;
+          }
+        }
+        notifyTaskCreated(today, { commentId: record.id, lineNo: found.lineNo });
+        return;
+      }
+      const target = daily[0];
+      let commentId: string;
+      let lineNo: number;
+      if (target !== undefined) {
+        // Строка дописывается в конец: остальное тело записи не трогаем.
+        const base =
+          target.body_md === ''
+            ? ''
+            : target.body_md.endsWith('\n')
+              ? target.body_md
+              : `${target.body_md}\n`;
+        lineNo = base === '' ? 0 : base.split('\n').length - 1;
+        await etn.comments.update(
+          networkId,
+          target.id,
+          { body_md: `${base}${line}` },
+          target.version,
+        );
+        commentId = target.id;
+      } else {
+        const created = await etn.comments.createMulti(
+          networkId,
+          [{ owner_type: 'thought', owner_id: home }],
+          {
+            kind: 'chronological',
+            title: null,
+            body_md: line,
+            valid_from: localDayStart(today),
+            valid_to: localDayEnd(today),
+            use_time: false,
+          },
+        );
+        commentId = created.id;
+        lineNo = 0;
+      }
+      actions.onRecordsChanged?.();
+      notifyTaskCreated(today, { commentId, lineNo });
+      await loadPanel();
+    } finally {
+      creatingForToday.delete(inFlightKey);
     }
-    actions.onRecordsChanged?.();
-    await loadPanel();
+  }
+
+  /**
+   * Тост «Создана задача на <дата>» и переход к строке (пункт 3). Порядок
+   * один для создания и для найденного дубля: пользователь видит, где строка.
+   */
+  function notifyTaskCreated(day: string, ref: { commentId: string; lineNo: number }): void {
+    notice(t('tasks.createdForToday', [formatDate(new Date(`${day}T00:00:00`))]), 'success');
+    actions.openCreatedTask?.(ref);
   }
 
   /** Открыть субъект панели: экран решает, иначе — обычный переход клиента. */
@@ -1890,6 +1995,14 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       // не меняют — ни маркера, ни перерисовки.
       if (!taskChangesRelevant(data.changes)) return;
       if (data.kind === 'permanent' && !permanentTaskRelevant(id, data.changes)) return;
+      // Панель на автоперечитывании (зона «Задачи» редактора мысли) серости и
+      // маркера не показывает: перечитывание придёт по дебаунсу и точечно
+      // патчит изменившиеся строки (пачка 4, пункт 2). Иначе строка мигала
+      // серым, а «Обновить» зажигалась и гасла сама, без действия человека.
+      if (view.autoRefreshOnCommentChange === true) {
+        scheduleAutoRefresh();
+        return;
+      }
       // Чужое изменение записи поднимает маркер панели — в том числе у
       // комментария, которого панель не загружала (новая задача в периоде).
       foreignChange = true;
@@ -1920,6 +2033,11 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         data.comment?.kind === 'permanent' &&
         !bodyHasTaskLine(data.comment.body_md)
       ) {
+        return;
+      }
+      // Автоперечитывание — без серости и маркера (пункт 2, см. выше).
+      if (view.autoRefreshOnCommentChange === true) {
+        scheduleAutoRefresh();
         return;
       }
       foreignChange = true;

@@ -971,6 +971,10 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       const day = row.due ?? row.periodFrom;
       if (day !== null) void openChronicleDay(day);
     },
+    // Созданная «на сегодня» задача — сразу к её строке (0.16.1, пачка 4,
+    // пункт 3): тот же вход, что у «Открыть источник», второй копии перехода
+    // нет.
+    openCreatedTask: (ref) => void openChronicleTaskLine(ref),
     onRecordsChanged: () => void refreshFeedAndCalendar(),
     // Свёрнутая панель не имеет высоты: слайдер прячется (пункт B ТЗ).
     onPanelCollapsed: (collapsed) => {

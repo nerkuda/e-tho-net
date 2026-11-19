@@ -32,8 +32,15 @@ const TASK_MARKER_ONLY_RE = /^\[([ xX])\]/;
  */
 export const TASK_MARKER_PATTERN = String.raw`\[[ xX]\]`;
 
+/**
+ * Текст маркера ОТКРЫТОЙ задачи (`[ ] `) — единственное место его записи в
+ * пакете (сторож `guard-task-line-grammar`): из него собирается и префикс
+ * нового пункта, и возврат маркера отменённой строке (`addTaskLineMarker`).
+ */
+export const TASK_MARKER_UNCHECKED = '[ ] ';
+
 /** Новый пункт задачи — вставка редактора (`- [ ] `). */
-export const TASK_MARKER_PREFIX = '- [ ] ';
+export const TASK_MARKER_PREFIX = `- ${TASK_MARKER_UNCHECKED}`;
 
 /**
  * Индекс `list_item_open`, которому принадлежит inline-токен `idx`, или -1.

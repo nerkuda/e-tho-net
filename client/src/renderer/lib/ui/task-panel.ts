@@ -406,6 +406,13 @@ export interface TaskPanelOptions {
    * CodeMirror. Не задана — двойной клик по строке правку не открывает.
    */
   createRowEditor?: TaskRowEditorFactory;
+  /**
+   * Облачка субъектов у строк задач (0.16.1, пачка 4, пункт 1). По умолчанию
+   * рисуются — в «Дневнике» субъекты строк разные, облачко информативно. Зона
+   * «Задачи» редактора мысли выключает их: все её строки принадлежат самой
+   * редактируемой мысли, облачко у каждой строки избыточно.
+   */
+  rowSubjectClouds?: boolean;
 }
 
 /** Публичный дескриптор панели. */
@@ -476,6 +483,8 @@ export function mountTaskPanel(
 ): TaskPanelHandle {
   host.replaceChildren();
   const headless = options.headless === true;
+  /** Облачка субъектов у строк (пункт 1 пачки 4): редактор мысли их выключает. */
+  const rowSubjectClouds = options.rowSubjectClouds !== false;
   let view: TaskPanelView | null = null;
   /** Ключ строки, открытой в инлайн-правке (`null` — правки нет). */
   let editingKey: string | null = null;
@@ -961,8 +970,11 @@ export function mountTaskPanel(
     // `cfb8cb72`, пункт 6): строка показывает свои субъектные ссылки облачками
     // (эталонный компонент, фабрику даёт экран `renderSubject`), а не только
     // текстом. Нет фабрики — облачков не рисуем.
-    const subjects = div('ui-task-row-subjects');
-    if (actions.renderSubject !== undefined) {
+    // В зоне «Задачи» редактора мысли облачка не рисуются вовсе (пункт 1
+    // пачки 4): субъект у всех строк один — сама мысль. Слота в DOM тоже нет,
+    // иначе пустой блок занимал бы место в строке.
+    const subjects = rowSubjectClouds ? div('ui-task-row-subjects') : null;
+    if (subjects !== null && actions.renderSubject !== undefined) {
       for (const id of row.subjectThoughts) {
         const cloud = span('', 'ui-task-row-subject-cloud');
         actions.renderSubject(cloud, { kind: 'thought', id, title: id });
@@ -1009,7 +1021,13 @@ export function mountTaskPanel(
       });
       leading.push(caret);
     }
-    node.replaceChildren(check, textHost, dates, subjects, rowActions);
+    node.replaceChildren(
+      check,
+      textHost,
+      dates,
+      ...(subjects === null ? [] : [subjects]),
+      rowActions,
+    );
     if (leading.length > 0) node.prepend(...leading);
     // Дети не дублируются под открытой блочной правкой: они уже в поле.
     if (hasChildren && expanded && !(editingKey === row.key && editingRange !== null)) {
@@ -1499,7 +1517,14 @@ export function mountTaskPanel(
     taskGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.tasksGroup));
     reminderGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.remindersGroup));
 
-    if (next.loading) {
+    // Перечитывание УЖЕ показанного списка не двигает его (0.16.1, пачка 4,
+    // пункт 2): строка загрузки стоит в потоке ПЕРЕД списком, и её появление
+    // сдвигало весь список на каждом «Обновить» и автообновлении. Признак
+    // загрузки нужен только там, где показывать ещё нечего (первая загрузка).
+    const hasContent =
+      next.taskSections.some((section) => sectionRowCount(section) > 0) ||
+      next.reminderSections.some((section) => sectionRowCount(section) > 0);
+    if (next.loading && !hasContent) {
       statusHost.hidden = false;
       statusHost.replaceChildren(loadingState());
     } else if (next.error !== null) {

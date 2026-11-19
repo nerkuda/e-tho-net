@@ -63,6 +63,7 @@ export type { TaskLine, TaskLineDate } from './task-lines.js';
 export { findDateLinkSpans } from './date-links.js';
 export type { DateLinkSpan } from './date-links.js';
 export {
+  addTaskLineMarker,
   isTaskLineMarker,
   removeTaskLineDates,
   removeTaskLineMarker,

@@ -1406,6 +1406,7 @@ export const ru = {
   'tasks.snoozeDateTime': 'дата и время…',
   'tasks.snoozeDateTimeTitle': 'Отложить напоминание',
   'tasks.createTask': 'Создать задачу на сегодня',
+  'tasks.createdForToday': 'Создана задача на %1',
   /** Подсказки кнопок-меню. */
   'tasks.rowCommands': 'Команды строки',
   'tasks.groupCommands': 'Команды группы',
