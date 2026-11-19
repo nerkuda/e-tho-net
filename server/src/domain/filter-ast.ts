@@ -117,6 +117,8 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   record_body: ['kind'],
   record_author: ['kind'],
   record_editor: ['kind'],
+  // «Есть задачи» в записи (уточнение 2026-11-19, п.8): предикат наличия.
+  record_tasks: ['kind'],
   // Профиль «события» (задача 2b230e8e): характеристики записи журнала активности.
   occurred_at: ['kind'],
   action: ['kind'],

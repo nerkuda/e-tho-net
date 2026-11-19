@@ -220,4 +220,25 @@ describe('живые чекбоксы просмотра комментария 
     await flush();
     assert.deepEqual(api.updates, [], 'после отписки клики не обрабатываются');
   });
+
+  it('владелец просмотра получает ОБНОВЛЁННЫЙ комментарий (пункт 9 уточнения 2026-11-19)', async () => {
+    fakeApi('- [ ] задача', 4);
+    const host = new ShimElement('div');
+    const box = checkbox(host, false);
+    const saved: Array<{ md: string; html: string; version: number }> = [];
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({
+      commentId: 'c1',
+      onSaved: (md, html, comment) => saved.push({ md, html, version: comment.version }),
+    }));
+    box.checked = true;
+    click(host, box);
+    await flush();
+    // Третий аргумент — ответ сервера: строка ленты обновляется точечно
+    // (html + версия), без перезапроса и без пересборки карточки.
+    assert.deepEqual(
+      saved,
+      [{ md: '- [x] задача', html: '<p>new</p>', version: 5 }],
+      'снапшот строки обновляется из ответа comments.update',
+    );
+  });
 });

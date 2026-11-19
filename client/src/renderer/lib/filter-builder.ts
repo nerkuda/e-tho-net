@@ -709,6 +709,7 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   get record_body() { return t('filter.record_body.textRecords'); },
   get record_author() { return t('filter.record_author.avtorRecords'); },
   get record_editor() { return t('filter.record_editor.editorRecords'); },
+  get record_tasks() { return t('filter.record_tasks.hasTasks'); },
   get occurred_at() { return t('filter.occurred_at.timeEvents'); },
   get action() { return t('filter.action.typeActions'); },
   get entity_type() { return t('filter.entity_type.vidSuschnosti'); },
@@ -1986,6 +1987,9 @@ export const FILTER_COLLECTION_PREDICATE_KINDS: ReadonlySet<string> = new Set([
   // `not_empty`/`is_empty`, плюс полоса состояний ребра под строкой.
   'incoming_links',
   'outgoing_links',
+  // «Есть задачи» в ЗАПИСИ «Дневника» (уточнение 2026-11-19, пункт 8): ячейка
+  // значения — та же триада «(да) (нет)».
+  'record_tasks',
 ]);
 
 /**

@@ -55,6 +55,7 @@ import { modifierChordVariants } from './keymap-chords.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
+import { createDelayedOpen } from './preview-open-delay.js';
 import { t } from './i18n.js';
 
 export { buildMonthWeeks } from './dates.js';
@@ -130,6 +131,19 @@ const MAX_YEAR = 2200;
  */
 const MONTH_REOPEN_GUARD_MS = 400;
 
+/**
+ * Счётчики содержимого дня для попапа наведения (0.16.1, уточнение 2026-11-19,
+ * пункт 7). Задачи и напоминания делят маркер `plans`, но в пояснении дня
+ * считаются раздельно — пользователь видит, чего именно в дате сколько.
+ */
+export interface MonthCalendarDayCounts {
+  records: number;
+  tasks: number;
+  reminders: number;
+  facts: number;
+  overdue: number;
+}
+
 /** Опции сборки календаря месяца. */
 export interface MonthCalendarOptions {
   /** Начало выделенного периода (пусто — нет). */
@@ -145,6 +159,14 @@ export interface MonthCalendarOptions {
    * «Дата/период» рендерится без них.
    */
   markers?: (day: string) => readonly CalendarMarkerKind[];
+  /**
+   * Содержимое дня для ПОПАПА НАВЕДЕНИЯ (0.16.1, уточнение 2026-11-19, пункт 7):
+   * наведение на день с задержкой {@link CTRL_PREVIEW_OPEN_DELAY_MS} (ровно
+   * 0.5 с) показывает пояснение — цветные маркеры с количествами. `null` или
+   * не задано — попапа нет (диалог «Дата/период» остаётся прежним); включает
+   * его только календарь панели отбора «Дневника».
+   */
+  dayInfo?: (day: string) => MonthCalendarDayCounts | null;
   /** Клик по дню. */
   onPickDay?: (day: string) => void;
   /**
@@ -351,6 +373,61 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   let monthPopover: PopoverHandle | null = null;
   /** Момент закрытия списка месяцев (защита от повторного открытия). */
   let monthPopoverClosedAt = 0;
+  /** Открытый попап содержимого дня (наведение, пункт 7 уточнения 2026-11-19). */
+  let dayInfoPopover: PopoverHandle | null = null;
+
+  /** Закрыть попап содержимого дня (перерисовка сетки/новый день/клик). */
+  function closeDayInfo(): void {
+    dayInfoPopover?.close();
+    dayInfoPopover = null;
+  }
+
+  /** Строка пояснения дня: маркер вида, подпись вида, количество. */
+  function dayInfoRow(kind: CalendarMarkerKind, label: string, count: number): HTMLElement {
+    const row = div('cal-day-info-row');
+    const dot = el('span', `cal-marker cal-marker--${kind}`);
+    if (count === 0) dot.classList.add('is-off');
+    row.append(dot, span(label, 'cal-day-info-label'), span(String(count), 'cal-day-info-count'));
+    return row;
+  }
+
+  /** Тело попапа: пять строк-пояснений (легенда + количества дня). */
+  function buildDayInfoBody(counts: MonthCalendarDayCounts): HTMLElement {
+    const body = div('cal-day-info');
+    body.append(
+      dayInfoRow('records', t('calendar.dayInfo.records'), counts.records),
+      dayInfoRow('plans', t('calendar.dayInfo.tasks'), counts.tasks),
+      dayInfoRow('plans', t('calendar.dayInfo.reminders'), counts.reminders),
+      dayInfoRow('facts', t('calendar.dayInfo.facts'), counts.facts),
+      dayInfoRow('overdue', t('calendar.dayInfo.overdue'), counts.overdue),
+    );
+    return body;
+  }
+
+  /**
+   * Отложенный показ попапа дня: задержка ЕДИНАЯ для предпросмотров
+   * ({@link createDelayedOpen}, ровно 500 мс — сторож
+   * `guard-ctrl-preview-open-delay`). Панель открывается общим компонентом
+   * `lib/ui/popover` под клеткой дня; содержимое считает хозяин в момент показа
+   * (`opts.dayInfo`), поэтому данные всегда свежие.
+   */
+  const dayInfoOpen = createDelayedOpen<{ day: string; element: HTMLElement }>((subject) => {
+    if (opts.dayInfo === undefined) return;
+    const counts = opts.dayInfo(subject.day);
+    if (counts === null) return;
+    closeDayInfo();
+    dayInfoPopover = openPopover({
+      anchor: { element: subject.element },
+      content: {
+        title: t('calendar.dayInfo.title', [subject.day]),
+        body: buildDayInfoBody(counts),
+      },
+      extraClass: 'cal-day-info-popover',
+      onClose: () => {
+        dayInfoPopover = null;
+      },
+    });
+  });
 
   function notifyMonth(): void {
     opts.onMonthChange?.(year, month);
@@ -578,6 +655,17 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     if (opts.markers !== undefined) {
       button.append(buildMarkers(new Set(opts.markers(cell.day))));
     }
+    // Попап содержимого дня (пункт 7 уточнения 2026-11-19): наведение с
+    // задержкой 0.5 с; уход курсора отменяет ещё не открывшийся попап, клик по
+    // дню его закрывает (день выбирается, пояснение больше не нужно).
+    if (opts.dayInfo !== undefined) {
+      button.addEventListener('mouseenter', () => {
+        dayInfoOpen.schedule({ day: cell.day, element: button });
+      });
+      button.addEventListener('mouseleave', () => dayInfoOpen.cancel());
+      button.addEventListener('mousedown', () => dayInfoOpen.cancel());
+      button.addEventListener('click', () => closeDayInfo());
+    }
     button.append(span(label, 'cal-day-num'));
     if (dragEnabled) wireDrag(button, cell.day);
     return button;
@@ -651,6 +739,11 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   }
 
   function render(): void {
+    // Сетка пересобирается, и узел-якорь попапа дня исчезает: закрываем панель
+    // и снимаем неоткрывшееся ожидание — попап не должен указывать на
+    // удалённый узел.
+    dayInfoOpen.cancel();
+    closeDayInfo();
     renderHead();
     renderGrid();
   }

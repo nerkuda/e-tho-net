@@ -122,6 +122,13 @@ const TASKS_PAGE_LIMIT = 200;
 /** Задержка записи настроек панели после драга слайдера, мс. */
 const PERSIST_DEBOUNCE_MS = 400;
 
+/**
+ * Задержка автоперечитывания панели на событие комментария, мс (0.16.1,
+ * уточнение 2026-11-19, пункт 4). Сохранение записи даёт пачку событий
+ * (`updated` + перестройка проекции), поэтому перечитывание одно на пачку.
+ */
+const AUTO_REFRESH_DEBOUNCE_MS = 150;
+
 /** Источник выборки панели. */
 export type TaskListSource =
   | {
@@ -160,6 +167,13 @@ export interface TaskListViewOptions {
    * `false` — панель без отмены (например, встроенная в чужой экран).
    */
   undo?: boolean;
+  /**
+   * Перечитывать панель автоматически при `comment.created/updated/deleted`
+   * (0.16.1, уточнение 2026-11-19, пункт 4): зона «Задачи» редактора мысли
+   * появляется сразу после сохранения комментария, а не после смены мысли.
+   * Маркер «Обновить» при этом остаётся штатным путём панели «Дневника».
+   */
+  autoRefreshOnCommentChange?: boolean;
   /** Отрисовка снапшота текста строки (markdown + кликабельные ссылки). */
   renderText(host: HTMLElement, row: TaskPanelRow): void;
 }
@@ -1774,6 +1788,29 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     return new Set(allRows().map((row) => row.comment_id));
   }
 
+  /**
+   * Таймер автоперечитывания панели на событие комментария (0.16.1, уточнение
+   * 2026-11-19, пункт 4). Зона «Задачи» редактора мысли обязана показать новую
+   * задачу сразу после сохранения записи, не дожидаясь смены мысли: сохранение —
+   * это `comment.updated`/`comment.created`, панель перечитывается сама.
+   */
+  let autoRefreshTimer: number | null = null;
+
+  /**
+   * Запланировать автоперечитывание панели. Включается только опцией
+   * {@link TaskListViewOptions.autoRefreshOnCommentChange} (зона редактора):
+   * панель «Дневника» работает штатным маркером «Обновить», где перечитывание
+   * решает пользователь. Дебаунс склеивает пачку событий одной записи.
+   */
+  function scheduleAutoRefresh(): void {
+    if (view.autoRefreshOnCommentChange !== true) return;
+    if (autoRefreshTimer !== null) window.clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = window.setTimeout(() => {
+      autoRefreshTimer = null;
+      if (!disposed) void loadPanel();
+    }, AUTO_REFRESH_DEBOUNCE_MS);
+  }
+
   const unsubscribe = onRoutedRealtimeEvent((event) => {
     if (disposed) return;
     if (event.network_id !== store.state.networkId) return;
@@ -1808,6 +1845,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       foreignChange = true;
       if (id !== undefined && loadedCommentIds().has(id)) staleComments.add(id);
       renderView();
+      scheduleAutoRefresh();
       return;
     }
     if (event.type === 'comment.created' || event.type === 'comment.deleted') {
@@ -1817,6 +1855,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       foreignChange = true;
       if (id !== undefined && loadedCommentIds().has(id)) staleComments.add(id);
       renderView();
+      scheduleAutoRefresh();
     }
   });
 
@@ -1835,6 +1874,10 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       if (persistTimer !== null) {
         window.clearTimeout(persistTimer);
         persistTimer = null;
+      }
+      if (autoRefreshTimer !== null) {
+        window.clearTimeout(autoRefreshTimer);
+        autoRefreshTimer = null;
       }
       retryStop?.();
       retryStop = null;

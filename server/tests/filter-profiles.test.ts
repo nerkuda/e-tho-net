@@ -122,6 +122,8 @@ describe('реестр профилей контекста (задача 7a798b1
       record_body: true,
       record_author: true,
       record_editor: true,
+      // «Есть задачи» в записи (уточнение 2026-11-19, п.8).
+      record_tasks: true,
       occurred_at: true,
       action: true,
       entity_type: true,

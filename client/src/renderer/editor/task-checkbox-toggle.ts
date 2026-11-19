@@ -23,6 +23,7 @@
  */
 
 import { parseTaskLines } from '@etn/markdown';
+import type { Comment } from '@etn/shared';
 
 import { requireNetworkId } from '../lib/network-id.js';
 import { errText } from '../lib/dom.js';
@@ -46,11 +47,13 @@ export interface TaskCheckboxSource {
   /** Комментарий, чей `body_md` правится; `null` — править нечего. */
   commentId: string | null;
   /**
-   * Сохранено: новый `body_md` и HTML, который отдал сервер. Владелец
-   * просмотра обновляет свой снапшот (перерисовывать весь просмотр не нужно —
-   * чекбокс уже показывает новое состояние).
+   * Сохранено: новый `body_md`, HTML, который отдал сервер, и сам обновлённый
+   * комментарий. Владелец просмотра обновляет свой снапшот точечно —
+   * перерисовывать весь просмотр не нужно (чекбокс уже показывает новое
+   * состояние), а лента «Дневника» обязана сохранить прокрутку (0.16.1,
+   * уточнение 2026-11-19, пункт 9).
    */
-  onSaved?(md: string, html: string): void;
+  onSaved?(md: string, html: string, comment: Comment): void;
 }
 
 /** Узел — чекбокс задачи (обход предков вручную: `closest` шима с родителя). */
@@ -153,7 +156,7 @@ export function wireTaskCheckboxes(
         { body_md: bodyMd },
         comment.version,
       );
-      sourceRef.onSaved?.(bodyMd, updated.body_html);
+      sourceRef.onSaved?.(bodyMd, updated.body_html, updated);
     } catch (err) {
       box.checked = !want;
       notice(t('tasks.errorEdit', [errText(err)]), 'error');

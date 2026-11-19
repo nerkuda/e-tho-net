@@ -1143,6 +1143,45 @@ function attachToIdsSql(ids: string[], negate = false): string {
     WHERE ${where}`;
 }
 
+/**
+ * SQL наличия ЗАДАЧ в записи (0.16.1, уточнение 2026-11-19, пункт 8): в
+ * `body_md` записи есть строка-задача (`task_rows.is_task = 1`). Строка живёт
+ * вместе с редакцией своего комментария — видимость та же, что у панели
+ * «Задачи» и календарных маркеров (`task-service.ts`, `buildFilter`): основа
+ * (`layer_id IS NULL`) либо слой записи. Пункт чек-листа (`is_task = 0`)
+ * задачей не является: вложенный пункт под задачей — украшение списка, а не
+ * отдельная задача. Признак «есть задачи» — хотя бы одна строка-задача.
+ */
+const RECORD_TASKS_EXISTS_SQL = `EXISTS (
+  SELECT 1 FROM task_rows tr
+   WHERE tr.comment_id = c.id
+     AND tr.is_task = 1
+     AND (tr.layer_id IS NULL OR tr.layer_id = c.layer_id)
+)`;
+
+/**
+ * Условие «Есть задачи» по записи: предикат наличия — `eq`/`ne` с булевым
+ * значением, `is_empty`/`not_empty` (та же семантика, что у операнда «Задачи»
+ * профиля мыслей: `boolPresenceClause`).
+ */
+function recordTasksLeafClause(leaf: FilterAstLeaf, opts: ChronicleAstOpts): ChronicleClause {
+  let want: boolean;
+  if (leaf.operator === 'not_empty') want = true;
+  else if (leaf.operator === 'is_empty') want = false;
+  else if ((leaf.operator === 'eq' || leaf.operator === 'ne') && typeof leaf.value === 'boolean') {
+    want = leaf.operator === 'eq' ? leaf.value : !leaf.value;
+  } else {
+    return astUnsupported(
+      `Operator "${leaf.operator}" for the record-tasks presence predicate.`,
+      opts.requestId,
+    );
+  }
+  return {
+    sql: want ? RECORD_TASKS_EXISTS_SQL : `NOT (${RECORD_TASKS_EXISTS_SQL})`,
+    args: [],
+  };
+}
+
 /** Условие узла AST хроники по alias `c`. */
 function chronicleAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: ChronicleAstOpts): ChronicleClause {
   if ('op' in node) {
@@ -1173,6 +1212,9 @@ function chronicleAstNodeClause(ndb: NetworkDb, node: FilterAstNode, opts: Chron
       return recordAuthorLeafClause(node, 'c.created_by', opts);
     case 'record_editor':
       return recordAuthorLeafClause(node, 'c.updated_by', opts);
+    case 'record_tasks':
+      // «Есть задачи» (0.16.1, уточнение 2026-11-19, пункт 8).
+      return recordTasksLeafClause(node, opts);
     case 'targets':
       return targetsLeafClause(ndb, node, opts);
     default:

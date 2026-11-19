@@ -290,7 +290,15 @@
  * только токены темы (`--cal-marker-records`/`--warn`/`--ok`/`--danger`), обе
  * темы; прямых цветов в правилах нет (сторож guard-ui-theme-tokens).
  * «Записи» — свой семантический токен, НЕ акцент: в темах с латунным/янтарным
- * акцентом маркер записей обязан остаться синим и не сливаться с `--warn`. */
+ * акцентом маркер записей обязан остаться синим и не сливаться с `--warn`.
+ *
+ * **Различимость — ФОРМОЙ, а не цветом (уточнение 2026-11-19, пункт 6).** В
+ * тёмных темах соседние по спектру токены сближаются (`retronotes`: `--warn`
+ * #e8893a и `--danger` #d97878), и точки-кружки 3px читались как «зелёная и две
+ * красных». Цвета остаются по спеке `ab9d627b`, а маркер каждого вида получает
+ * свою геометрию: записи — круг, задачи/напоминания — квадрат, факты — ромб,
+ * просрочка — кольцо (контур без заливки). Размер — 4px: форма читается, а
+ * столбик не расползается по клетке календаря. */
 .cal-markers {
   display: flex;
   flex-direction: column;
@@ -300,9 +308,9 @@
 }
 
 .cal-marker {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
+  box-sizing: border-box;
+  width: 4px;
+  height: 4px;
 }
 
 /* Отсутствующий маркер места не занимает визуально, но сохраняет позиции
@@ -311,20 +319,59 @@
   visibility: hidden;
 }
 
+/* Записи — КРУГ. */
 .cal-marker--records {
   background: var(--cal-marker-records);
+  border-radius: 50%;
 }
 
+/* Задачи и напоминания — КВАДРАТ. */
 .cal-marker--plans {
   background: var(--warn);
+  border-radius: 0;
 }
 
+/* Факты — РОМБ. */
 .cal-marker--facts {
   background: var(--ok);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
 }
 
+/* Просрочка — КОЛЬЦО: тот же красный токен, но контуром, а не заливкой. */
 .cal-marker--overdue {
-  background: var(--danger);
+  background: transparent;
+  border: 1px solid var(--danger);
+  border-radius: 50%;
+}
+
+/* Попап содержимого дня (0.16.1, уточнение 2026-11-19, пункт 7): легенда и
+ * количества дня. Маркеры в попапе — те же формы/цвета, что в клетке, только
+ * крупнее (4px в клетке не читаются в пояснении). */
+.cal-day-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+}
+
+.cal-day-info-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cal-day-info .cal-marker {
+  width: 8px;
+  height: 8px;
+}
+
+.cal-day-info-label {
+  flex: 1 1 auto;
+}
+
+.cal-day-info-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }
 
 /* ---------------------------------------------------------------------------

@@ -140,8 +140,11 @@ function markersResult(query: { from: string }, day = '01'): CalendarMarkersResu
   return {
     record_spans: [],
     task_days: [`${query.from.slice(0, 8)}${day}`],
+    task_day_counts: { [`${query.from.slice(0, 8)}${day}`]: 1 },
     overdue_days: [],
+    overdue_day_counts: {},
     fact_days: [],
+    fact_day_counts: {},
     reminder_instants: [],
   };
 }

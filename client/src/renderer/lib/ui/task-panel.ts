@@ -44,7 +44,7 @@
 import type { TaskMassFilter } from '@etn/shared';
 
 import { div, el, span } from '../dom.js';
-import { shiftInstant } from '../dates.js';
+import { shiftInstant, todayLocal } from '../dates.js';
 import { t, tp } from '../i18n.js';
 import {
   MENU_SEPARATOR,
@@ -87,6 +87,14 @@ export const REMINDER_PANEL_ROW_CLASS = 'ui-task-row ui-reminder-row';
 
 /** Состояние «строка устарела» (серая, не редактируется). */
 export const TASK_PANEL_ROW_STALE_CLASS = 'is-stale';
+
+/**
+ * Класс свёрнутой ПАНЕЛИ (0.16.1, уточнение 2026-11-19, пункт 1): свёрнутая
+ * панель показывает только шапку, а сохранённая высота (`--task-panel-height`,
+ * выставленная слайдером) обязана перестать держать пустое место. Оформление —
+ * `task-panel.css`; класс ставит сама панель при переключении и при построении.
+ */
+export const TASK_PANEL_COLLAPSED_CLASS = 'is-collapsed';
 
 /** Класс поля БЛОЧНОЙ правки строки (многострочный режим, 0.16.1). */
 export const TASK_ROW_BLOCK_EDIT_CLASS = 'ui-task-row-block-edit';
@@ -418,15 +426,29 @@ export interface TaskPanelHandle {
   setPanelHeight(height: number): void;
 }
 
-/** Сдвиги, предлагаемые командой «Перенести на…». */
+/** Подпись пункта сдвига в меню «Перенести»/«Отложить». */
+type TaskShiftLabelKey =
+  'tasks.shiftToday' | 'tasks.shiftDay' | 'tasks.shiftWeek' | 'tasks.shiftMonth';
+
+/** Относительные сдвиги, предлагаемые меню «Перенести». */
 const TASK_SHIFTS: ReadonlyArray<{
-  labelKey: 'tasks.shiftDay' | 'tasks.shiftWeek' | 'tasks.shiftMonth';
+  labelKey: Exclude<TaskShiftLabelKey, 'tasks.shiftToday'>;
   shift: TaskShift;
 }> = [
   { labelKey: 'tasks.shiftDay', shift: { days: 1 } },
   { labelKey: 'tasks.shiftWeek', shift: { days: 7 } },
   { labelKey: 'tasks.shiftMonth', shift: { months: 1 } },
 ];
+
+/**
+ * Сдвиги меню «Перенести» строки задачи (0.16.1, уточнение 2026-11-19, пункт 2):
+ * абсолютный пункт «на сегодня» плюс относительные. Дата берётся в момент
+ * открытия меню (локальные сутки наблюдателя), поэтому константой не хранится;
+ * относительные сдвиги остаются общими для меню строки и «Отложить» напоминаний.
+ */
+function taskMoveShifts(): ReadonlyArray<{ labelKey: TaskShiftLabelKey; shift: TaskShift }> {
+  return [{ labelKey: 'tasks.shiftToday', shift: { date: todayLocal() } }, ...TASK_SHIFTS];
+}
 
 /** Один лист навигации списка — строка задачи или вхождения. */
 interface PanelEntry {
@@ -506,6 +528,7 @@ export function mountTaskPanel(
         getCollapsed: () => collapseState(TASK_PANEL_COLLAPSE_KEYS.panel),
         onToggle: (collapsed) => {
           actions.setCollapsed?.(TASK_PANEL_COLLAPSE_KEYS.panel, collapsed);
+          syncPanelCollapsed(collapsed);
           nav?.refresh();
         },
         classes: {
@@ -520,6 +543,19 @@ export function mountTaskPanel(
         body,
       });
   const root = panelSection === null ? div(TASK_PANEL_CLASS) : panelSection.root;
+
+  /**
+   * Отразить свёрнутость панели классом на корне (0.16.1, уточнение 2026-11-19,
+   * пункт 1): сохранённая слайдером высота (`--task-panel-height`) не должна
+   * держать пустое место под шапкой свёрнутой панели — CSS снимает высоту по
+   * {@link TASK_PANEL_COLLAPSED_CLASS}. Класс ставит и первичное состояние:
+   * панель, свёрнутая из `ui_state`, открывается сразу без пустоты.
+   */
+  function syncPanelCollapsed(collapsed: boolean): void {
+    root.classList.toggle(TASK_PANEL_COLLAPSED_CLASS, collapsed);
+  }
+
+  if (panelSection !== null) syncPanelCollapsed(panelSection.collapsed());
   if (headless) {
     root.classList.add('is-headless');
     root.append(body);
@@ -741,7 +777,7 @@ export function mountTaskPanel(
       menuSubmenu(
         t('tasks.moveRow'),
         [
-          ...TASK_SHIFTS.map((item) =>
+          ...taskMoveShifts().map((item) =>
             menuAction(t(item.labelKey), () => actions.rowCommand(row, 'move', item.shift)),
           ),
           // Для бессрочной строки дата ЗАДАЁТ срок (ошибка 3f9ea2ee) — пункт
@@ -952,6 +988,10 @@ export function mountTaskPanel(
     const expanded = hasChildren && expandedChildren.has(row.key);
     node.classList.toggle('is-overdue', row.overdue);
     node.classList.toggle('has-children', hasChildren);
+    // Строка в правке (0.16.1, уточнение 2026-11-19, пункт 3): многострочное
+    // поле растягивает строку, и чекбокс обязан оставаться у ПЕРВОЙ строки
+    // текста, а не уезжать в её середину (CSS `is-editing`).
+    node.classList.toggle('is-editing', editingKey === row.key && editingRaw !== null);
     const leading: HTMLElement[] = [];
     if (hasChildren) {
       const caret = el('button', 'ui-task-row-caret');
@@ -1004,6 +1044,15 @@ export function mountTaskPanel(
         });
         check.classList.add('ui-task-child-check');
         line.append(check);
+      } else {
+        // Обычная вложенная строка списка — с маркером (0.16.1, уточнение
+        // 2026-11-19, пункт 5): проекция хранит строку без маркера, поэтому
+        // панель рисует маркер сама, паритетом с просмотром markdown, где
+        // `<ul>` показывает точку. Строка чек-листа маркер не получает — у неё
+        // контрол отметки.
+        const marker = span('•', 'ui-task-child-marker');
+        marker.setAttribute('aria-hidden', 'true');
+        line.append(marker);
       }
       const text = div('ui-task-child-text');
       text.textContent = child.text;
@@ -1408,7 +1457,12 @@ export function mountTaskPanel(
     // экрана читаются асинхронно, после монтирования панели (ошибка d0801eea).
     // Переключение пользователя успевает записать состояние ДО `apply()`, так
     // что повторное применение не спорит с кликом.
-    panelSection?.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.panel));
+    const panelCollapsedNow = collapseState(TASK_PANEL_COLLAPSE_KEYS.panel);
+    panelSection?.setCollapsed(panelCollapsedNow);
+    // Класс свёрнутой панели (пункт 1 уточнения 2026-11-19) держим в согласии с
+    // применённым состоянием — в том числе когда `ui_state` пришёл асинхронно и
+    // свёрнутость сменилась не кликом по шапке.
+    syncPanelCollapsed(panelCollapsedNow);
     applyPanelHeight();
     taskGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.tasksGroup));
     reminderGroup?.section.setCollapsed(collapseState(TASK_PANEL_COLLAPSE_KEYS.remindersGroup));

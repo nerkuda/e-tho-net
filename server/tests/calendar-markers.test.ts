@@ -332,8 +332,11 @@ describe(
         assert.deepEqual(markers(ndb), {
           record_spans: [],
           task_days: [],
+          task_day_counts: {},
           overdue_days: [],
+          overdue_day_counts: {},
           fact_days: [],
+          fact_day_counts: {},
           reminder_instants: [],
         });
         const invalid = (options: Record<string, string>): boolean =>

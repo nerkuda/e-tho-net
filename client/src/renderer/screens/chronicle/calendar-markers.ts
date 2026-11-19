@@ -22,9 +22,22 @@ import {
 } from '@etn/shared';
 
 import { intervalDays, localDay } from './diary.js';
+import type { MonthCalendarDayCounts } from '../../lib/month-calendar.js';
 
 /** Маркеры по локальным дням месяца (день `YYYY-MM-DD`). */
 export type CalendarMarkersByDay = Map<string, readonly CalendarMarkerKind[]>;
+
+/**
+ * Пустые счётчики дня (нет данных/день вне месяца). Форма счётчиков — контракт
+ * компонента календаря ({@link MonthCalendarDayCounts}), здесь только значение.
+ */
+const EMPTY_DAY_COUNTS: MonthCalendarDayCounts = {
+  records: 0,
+  tasks: 0,
+  reminders: 0,
+  facts: 0,
+  overdue: 0,
+};
 
 /** Диапазон отображаемого месяца (локальные дни клиента). */
 export interface CalendarMarkersMonth {
@@ -75,4 +88,34 @@ export function groupCalendarMarkers(
     );
   }
   return out;
+}
+
+/**
+ * Счётчики дня для попапа даты (0.16.1, уточнение 2026-11-19, пункт 7).
+ *
+ * Задачи, факты и просрочка приходят серверным агрегатом по календарным дням
+ * (`*_day_counts`); записи и напоминания считаются здесь — их дни ЛОКАЛЬНЫЕ,
+ * сервер часового пояса не знает (ADR 994d076a). Запись учитывается, если её
+ * интервал покрывает запрошенный локальный день.
+ */
+export function calendarDayCounts(
+  result: CalendarMarkersResult,
+  day: string,
+): MonthCalendarDayCounts {
+  if (day === '') return EMPTY_DAY_COUNTS;
+  let records = 0;
+  for (const span of result.record_spans) {
+    if (intervalDays(span.from, span.to, day, day).length > 0) records += 1;
+  }
+  let reminders = 0;
+  for (const instant of result.reminder_instants) {
+    if (localDay(instant) === day) reminders += 1;
+  }
+  return {
+    records,
+    tasks: result.task_day_counts[day] ?? 0,
+    reminders,
+    facts: result.fact_day_counts[day] ?? 0,
+    overdue: result.overdue_day_counts[day] ?? 0,
+  };
 }

@@ -38,6 +38,7 @@ import {
 import {
   DEFAULT_TASK_HINT_CONTEXT,
   livePreview,
+  mdTaskCheckboxToggle,
   mdWidgetClick,
   taskHintContext,
   type TaskHintContext,
@@ -493,6 +494,7 @@ export function mdEditorExtensions(
     wikiLinkLegacyActions,
     livePreview,
     mdWidgetClick,
+    mdTaskCheckboxToggle,
     mdSearchField,
     mdTheme,
     // Дополнительные расширения вызывающего (точечные перекрытия сочетаний

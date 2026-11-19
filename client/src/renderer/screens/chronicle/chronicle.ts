@@ -36,6 +36,7 @@ import {
   CHRONICLE_PAGE_SIZE,
   UI_STATE_KEY,
   type CalendarMarkerKind,
+  type CalendarMarkersResult,
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
@@ -133,7 +134,11 @@ import {
   weekPeriod,
   type DiaryDay,
 } from './diary.js';
-import { groupCalendarMarkers, type CalendarMarkersByDay } from './calendar-markers.js';
+import {
+  groupCalendarMarkers,
+  calendarDayCounts,
+  type CalendarMarkersByDay,
+} from './calendar-markers.js';
 import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
 import {
   addThoughtToFilter,
@@ -314,6 +319,12 @@ let month: { year: number; month: number } | null = null;
  * замыкание `markers`, перерисовка — `calendar.refresh()`.
  */
 let calendarMarkersByDay: CalendarMarkersByDay = new Map();
+/**
+ * Сырой ответ маркеров текущего месяца — источник СЧЁТЧИКОВ попапа даты
+ * (0.16.1, уточнение 2026-11-19, пункт 7). Раскладка по дням не хранит чисел,
+ * поэтому попап считает `calendarDayCounts` по ответу сервера.
+ */
+let calendarMarkersResult: CalendarMarkersResult | null = null;
 /** Поколение чтения маркеров: ответ устаревшего запроса не перерисовывает. */
 let calendarMarkersSeq = 0;
 /** Запись, к которой выполнен переход: карточка подсвечена до следующего применения. */
@@ -851,6 +862,11 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     // Маркеры дня — ТОЛЬКО у календаря панели отбора «Дневника» (0.16.1,
     // требование ab9d627b): диалог «Дата/период» режим `markers: off`.
     markers: (day) => dayMarkers(day),
+    // Попап даты (0.16.1, уточнение 2026-11-19, пункт 7): наведение ровно 0.5 с
+    // показывает цветные маркеры с количествами дня. Числа — из серверного
+    // агрегата маркеров (`calendarDayCounts`), локальные сутки считает клиент.
+    dayInfo: (day) =>
+      calendarMarkersResult === null ? null : calendarDayCounts(calendarMarkersResult, day),
     firstDayOfWeek: calendarFirstDayOfWeek,
     onPickDay: (day) => void pickPeriod(dayPeriod(day)),
     onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
@@ -1811,12 +1827,24 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     // публикует `comment.updated`, отдельной проводки из ленты нет.
     wireTaskCheckboxes(recordView, () => ({
       commentId: row.id,
-      onSaved: (md, html) => {
+      /**
+       * Точечное обновление снапшота записи (0.16.1, уточнение 2026-11-19,
+       * пункт 9). Прежде здесь гасился ключ ленты: полный перезапрос
+       * пересобирал карточку и уводил прокрутку ленты вверх. Теперь строка
+       * ленты получает ровно те поля, что изменились, — keyed-сверка видит
+       * равенство и НЕ пересобирает карточку. Отложенный realtime-перезапрос
+       * (событие `comment.updated` гасит ключ слоя) сравнивает свежие данные с
+       * уже обновлённой строкой и тоже не трогает DOM: прокрутка, hover и фокус
+       * живут.
+       */
+      onSaved: (md, html, comment) => {
         row.body_html = html;
+        row.version = comment.version;
+        row.updated_at = comment.updated_at;
+        row.updated_by = comment.updated_by;
         row.snippet = recordTitleFromBody(md);
         bodyDraft = md;
         bodyLoaded = true;
-        invalidateQueries(queryKeys.chronicleFeedAll());
       },
     }));
   }
@@ -2644,9 +2672,11 @@ async function refreshCalendarMarkers(snapshot: CalendarMarkersSnapshot | null):
   if (!isCurrentScreenPair(pair)) return;
   const seq = (calendarMarkersSeq += 1);
   let next: CalendarMarkersByDay;
+  let raw: CalendarMarkersResult | null = null;
   try {
     const result = await etn.chronicle.calendarMarkers(pair.networkId, { from, to, today });
     next = groupCalendarMarkers(result, { from, to });
+    raw = result;
   } catch (err) {
     // Сбой чтения маркеров ТЕКУЩЕЙ пары — видимая проблема, а не тишина:
     // прежние counts показывали notice, и пользователь иначе видит пустой
@@ -2658,6 +2688,9 @@ async function refreshCalendarMarkers(snapshot: CalendarMarkersSnapshot | null):
   }
   if (seq !== calendarMarkersSeq || !isCurrentScreenPair(pair) || calendar === null) return;
   calendarMarkersByDay = next;
+  // Сырой ответ — источник счётчиков попапа даты (пункт 7): без данных месяц
+  // показывает только маркеры, а попап не открывается (`dayInfo` → `null`).
+  calendarMarkersResult = raw;
   // Источник маркеров — замыкание `dayMarkers`: новые данные видны только
   // после перерисовки сетки, выделение периода при этом не трогается.
   calendar.refresh();

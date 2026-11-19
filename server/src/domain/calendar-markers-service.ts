@@ -142,8 +142,12 @@ function coverDays(periodFrom: string, periodTo: string, from: string, to: strin
   return days;
 }
 
-/** Дни периодов задач месяца (все даты периода, включая выполненные задачи). */
-function readTaskDays(ndb: NetworkDb, from: string, to: string): string[] {
+/**
+ * Счётчики периодов задач по дням месяца (0.16.1, уточнение 2026-11-19, пункт 7):
+ * сколько задач покрывает каждый день. Дни — все даты периода, включая
+ * выполненные задачи; карта же даёт и состав дней (`task_days`).
+ */
+function readTaskDayCounts(ndb: NetworkDb, from: string, to: string): Record<string, number> {
   const rows = ndb
     .prepare(
       `SELECT tr.period_from AS period_from, tr.period_to AS period_to
@@ -156,18 +160,25 @@ function readTaskDays(ndb: NetworkDb, from: string, to: string): string[] {
           AND ${markedOwnerExclusion('v')}`,
     )
     .all(BASE_LAYER_ID, from, to) as Array<{ period_from: string; period_to: string }>;
-  const days = new Set<string>();
+  const counts: Record<string, number> = {};
   for (const row of rows) {
-    for (const value of coverDays(row.period_from, row.period_to, from, to)) days.add(value);
+    for (const value of coverDays(row.period_from, row.period_to, from, to)) {
+      counts[value] = (counts[value] ?? 0) + 1;
+    }
   }
-  return [...days].sort();
+  return counts;
 }
 
-/** Дни-сроки незакрытых просроченных задач (`due < today`), внутри месяца. */
-function readOverdueDays(ndb: NetworkDb, from: string, to: string, today: string): string[] {
+/** Счётчики дней-сроков незакрытых просроченных задач (`due < today`). */
+function readOverdueDayCounts(
+  ndb: NetworkDb,
+  from: string,
+  to: string,
+  today: string,
+): Record<string, number> {
   const rows = ndb
     .prepare(
-      `SELECT DISTINCT tr.due AS due
+      `SELECT tr.due AS due, COUNT(*) AS rows_count
          ${VISIBLE_ROWS}
         WHERE tr.is_task = 1
           AND tr.done = 0
@@ -175,22 +186,29 @@ function readOverdueDays(ndb: NetworkDb, from: string, to: string, today: string
           AND tr.due < ?
           AND tr.due BETWEEN ? AND ?
           AND ${markedOwnerExclusion('v')}
+        GROUP BY tr.due
         ORDER BY tr.due`,
     )
-    .all(BASE_LAYER_ID, today, from, to) as Array<{ due: string }>;
-  return rows.map((row) => row.due);
+    .all(BASE_LAYER_ID, today, from, to) as Array<{ due: string; rows_count: number }>;
+  const counts: Record<string, number> = {};
+  for (const row of rows) counts[row.due] = row.rows_count;
+  return counts;
 }
 
 /**
- * Дни датовых фактов: значения-даты свойств живых мыслей (справочник
- * `properties_v`) плюс date-ссылки не-задачных строк проекции. Строки-задачи
- * сюда не входят: их даты показывает маркер «задачи и напоминания».
+ * Счётчики датовых фактов по дням: значения-даты свойств живых мыслей
+ * (справочник `properties_v`) плюс date-ссылки не-задачных строк проекции.
+ * Строки-задачи сюда не входят: их даты показывает маркер «задачи и
+ * напоминания».
  */
-function readFactDays(ndb: NetworkDb, from: string, to: string): string[] {
-  const days = new Set<string>();
+function readFactDayCounts(ndb: NetworkDb, from: string, to: string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  const add = (day: string, value: number): void => {
+    counts[day] = (counts[day] ?? 0) + value;
+  };
   const facts = ndb
     .prepare(
-      `SELECT DISTINCT substr(pv.value_date, 1, 10) AS day
+      `SELECT substr(pv.value_date, 1, 10) AS day, COUNT(*) AS rows_count
          FROM property_values_v pv
          JOIN properties_v p ON p.id = pv.property_id
          JOIN thoughts_v t ON t.id = pv.owner_id
@@ -199,14 +217,15 @@ function readFactDays(ndb: NetworkDb, from: string, to: string): string[] {
           AND pv.value_date IS NOT NULL
           AND pv.value_date <> ''
           AND substr(pv.value_date, 1, 10) BETWEEN ? AND ?
-          AND t.marked_for_deletion = 0`,
+          AND t.marked_for_deletion = 0
+        GROUP BY substr(pv.value_date, 1, 10)`,
     )
-    .all(from, to) as Array<{ day: string }>;
-  for (const row of facts) days.add(row.day);
+    .all(from, to) as Array<{ day: string; rows_count: number }>;
+  for (const row of facts) add(row.day, row.rows_count);
 
   const links = ndb
     .prepare(
-      `SELECT DISTINCT d.date AS day
+      `SELECT d.date AS day, COUNT(*) AS rows_count
          FROM task_row_dates d
          JOIN task_rows tr
            ON tr.comment_id = d.comment_id
@@ -217,11 +236,12 @@ function readFactDays(ndb: NetworkDb, from: string, to: string): string[] {
           AND ((tr.layer_id IS NULL AND c.layer_id = ?) OR tr.layer_id = c.layer_id)
         WHERE d.date BETWEEN ? AND ?
           AND tr.is_task = 0
-          AND ${markedOwnerExclusion('c')}`,
+          AND ${markedOwnerExclusion('c')}
+        GROUP BY d.date`,
     )
-    .all(BASE_LAYER_ID, from, to) as Array<{ day: string }>;
-  for (const row of links) days.add(row.day);
-  return [...days].sort();
+    .all(BASE_LAYER_ID, from, to) as Array<{ day: string; rows_count: number }>;
+  for (const row of links) add(row.day, row.rows_count);
+  return counts;
 }
 
 /**
@@ -270,11 +290,21 @@ export function listCalendarMarkers(
   const fromInstant = normaliseInstant(shiftDay(start, -1), 'from', 'start')!;
   const toInstant = normaliseInstant(shiftDay(end, 1), 'to', 'end')!;
 
+  // Счётчики по дням — серверный агрегат для попапа даты (0.16.1, уточнение
+  // 2026-11-19, пункт 7). Состав дней (`*_days`) — ключи этих карт: второй
+  // правды о том, какие дни отмечены, нет.
+  const taskDayCounts = readTaskDayCounts(ndb, start, end);
+  const overdueDayCounts = readOverdueDayCounts(ndb, start, end, today);
+  const factDayCounts = readFactDayCounts(ndb, start, end);
+
   return {
     record_spans: readRecordSpans(ndb, fromInstant, toInstant),
-    task_days: readTaskDays(ndb, start, end),
-    overdue_days: readOverdueDays(ndb, start, end, today),
-    fact_days: readFactDays(ndb, start, end),
+    task_days: Object.keys(taskDayCounts).sort(),
+    task_day_counts: taskDayCounts,
+    overdue_days: Object.keys(overdueDayCounts).sort(),
+    overdue_day_counts: overdueDayCounts,
+    fact_days: Object.keys(factDayCounts).sort(),
+    fact_day_counts: factDayCounts,
     reminder_instants: readReminderInstants(ndb, fromInstant, toInstant, options),
   };
 }

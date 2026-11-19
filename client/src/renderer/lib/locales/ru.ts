@@ -1389,6 +1389,7 @@ export const ru = {
   /** Массовая команда панели редактора мысли. */
   'tasks.undateAllThought': 'Сделать бессрочными все невыполненные по этой мысли',
   /** Варианты сдвига дат. */
+  'tasks.shiftToday': 'на сегодня',
   'tasks.shiftDay': 'следующий день',
   'tasks.shiftWeek': 'через неделю',
   'tasks.shiftMonth': 'через месяц',
@@ -3037,6 +3038,7 @@ export const ru = {
   'filter.record_body.textRecords': 'Текст записи',
   'filter.record_author.avtorRecords': 'Автор записи',
   'filter.record_editor.editorRecords': 'Редактор записи',
+  'filter.record_tasks.hasTasks': 'Есть задачи',
   'filter.occurred_at.timeEvents': 'Время события',
   'filter.action.typeActions': 'Тип действия',
   'filter.entity_type.vidSuschnosti': 'Вид сущности',
@@ -3404,6 +3406,13 @@ export const ru = {
   'calendar.marker.plans': 'Задачи и напоминания',
   'calendar.marker.facts': 'Датовые факты и ссылки на даты',
   'calendar.marker.overdue': 'Просроченные задачи',
+  /** Попап содержимого дня (уточнение 2026-11-19, пункт 7). */
+  'calendar.dayInfo.title': 'Содержимое дня %1',
+  'calendar.dayInfo.records': 'Записи',
+  'calendar.dayInfo.tasks': 'Задачи',
+  'calendar.dayInfo.reminders': 'Напоминания',
+  'calendar.dayInfo.facts': 'Даты и факты',
+  'calendar.dayInfo.overdue': 'Просрочено',
 
   // -- periodEditor ------------------------------------------------------
   'periodEditor.label.today1dZavtra': '$today+1d — завтра',

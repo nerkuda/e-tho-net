@@ -1375,6 +1375,7 @@ export const en = {
   /** Bulk command of the thought editor panel. */
   'tasks.undateAllThought': 'Make all open of this thought undated',
   /** Date shift options. */
+  'tasks.shiftToday': 'today',
   'tasks.shiftDay': 'the next day',
   'tasks.shiftWeek': 'in a week',
   'tasks.shiftMonth': 'in a month',
@@ -2996,6 +2997,7 @@ export const en = {
   'filter.record_body.textRecords': 'Entry text',
   'filter.record_author.avtorRecords': 'Entry author',
   'filter.record_editor.editorRecords': 'Entry editor',
+  'filter.record_tasks.hasTasks': 'Has tasks',
   'filter.occurred_at.timeEvents': 'Event time',
   'filter.action.typeActions': 'Action type',
   'filter.entity_type.vidSuschnosti': 'Entity kind',
@@ -3364,6 +3366,13 @@ export const en = {
   'calendar.marker.plans': 'Tasks and reminders',
   'calendar.marker.facts': 'Date facts and date links',
   'calendar.marker.overdue': 'Overdue tasks',
+  /** Day content popup (refinement 2026-11-19, item 7). */
+  'calendar.dayInfo.title': 'Day content %1',
+  'calendar.dayInfo.records': 'Entries',
+  'calendar.dayInfo.tasks': 'Tasks',
+  'calendar.dayInfo.reminders': 'Reminders',
+  'calendar.dayInfo.facts': 'Dates and facts',
+  'calendar.dayInfo.overdue': 'Overdue',
 
   // -- periodEditor ------------------------------------------------------
   'periodEditor.label.today1dZavtra': '$today+1d — tomorrow',

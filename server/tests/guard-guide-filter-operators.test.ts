@@ -500,6 +500,8 @@ function conditionValue(
     // наличия: конструктор пишет boolean, а не значение-мысль.
     kind === 'tasks' ||
     kind === 'reminders' ||
+    // «Есть задачи» в записи (уточнение 2026-11-19, п.8) — тот же предикат.
+    kind === 'record_tasks' ||
     kind === 'active' ||
     kind === 'trashed' ||
     valueType === 'bool'

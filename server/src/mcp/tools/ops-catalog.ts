@@ -2176,6 +2176,7 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '- `record_body` — `eq/ne/contains/not_contains/matches` (the same operators as for the title);',
       '- `record_author` — `eq/ne/in/not_in`;',
       '- `record_editor` — `eq/ne/in/not_in`;',
+      '- `record_tasks` — `eq/ne/is_empty/not_empty` (the entry HAS task lines: `task_rows.is_task = 1` of its `body_md`; a nested checklist item is `is_task = 0` and does not count — `eq true`/`not_empty` = "has tasks", `eq false`/`is_empty` = "no tasks");',
       '- `targets` — `in/not_in/all_of/in_hierarchy/not_in_hierarchy/is_empty/not_empty` (a LIST of target thoughts or a sub-selection of THOUGHTS (the `thoughts` profile); `in_hierarchy`/`not_in_hierarchy` — the selected targets and their structural descendants; `is_empty`/`not_empty` — an explicit selection of entries without targets / with targets): an entry passes if it is attached to a target thought OR to a link whose end ∈ the set ("at least one target" — `in`; `all_of` — "all targets"; an entry without targets does not pass). The flat `link_scope != "both"` and `link_type_ids` are not expressible in AST — an explicit refusal (`VALIDATION_ERROR`), not a silent substitution with `both`.',
       '',
       '### Sorting',

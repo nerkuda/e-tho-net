@@ -66,6 +66,10 @@ export function createEditorTasksSection(
       headless: true,
       doneSection: 'collapsed',
       inactiveRows: 'filter',
+      // Панель перечитывает себя на событие комментария (0.16.1, уточнение
+      // 2026-11-19, пункт 4): задача, добавленная в запись и сохранённая,
+      // появляется здесь сразу — без смены мысли.
+      autoRefreshOnCommentChange: true,
       renderText: (node, row) => renderEditorTaskRowText(node, row.text, requireNetworkId()),
     },
     actions: {

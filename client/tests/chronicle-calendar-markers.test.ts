@@ -35,7 +35,10 @@ import {
   UI_THEME_NAMES,
 } from '@etn/shared';
 
-import { groupCalendarMarkers } from '../src/renderer/screens/chronicle/calendar-markers.js';
+import {
+  calendarDayCounts,
+  groupCalendarMarkers,
+} from '../src/renderer/screens/chronicle/calendar-markers.js';
 import { ShimElement } from './dom-shim.js';
 import {
   declaredTokens,
@@ -215,7 +218,16 @@ describe('календарь месяца: маркеры дня (0.16.1, ab9d62
     );
     assert.match(rule('.cal-marker--plans'), /background:\s*var\(--warn\)/);
     assert.match(rule('.cal-marker--facts'), /background:\s*var\(--ok\)/);
-    assert.match(rule('.cal-marker--overdue'), /background:\s*var\(--danger\)/);
+    // Просрочка — КОЛЬЦО: красный токен остаётся, но контуром (пункт 6
+    // уточнения 2026-11-19): в тёмных темах оранжевый --warn и красный --danger
+    // сближаются по цвету, и различимость держит ФОРМА маркера.
+    assert.match(rule('.cal-marker--overdue'), /background:\s*transparent/);
+    assert.match(rule('.cal-marker--overdue'), /border:\s*1px solid var\(--danger\)/);
+    // Четыре разные формы одного размера: круг / квадрат / ромб / кольцо.
+    assert.match(rule('.cal-marker--records'), /border-radius:\s*50%/);
+    assert.match(rule('.cal-marker--plans'), /border-radius:\s*0/);
+    assert.match(rule('.cal-marker--facts'), /clip-path:\s*polygon\(50% 0/);
+    assert.match(rule('.cal-marker'), /width:\s*4px/);
     for (const selector of [
       '.cal-marker',
       '.cal-marker--records',
@@ -322,8 +334,11 @@ function emptyResult(): CalendarMarkersResult {
   return {
     record_spans: [],
     task_days: [],
+    task_day_counts: {},
     overdue_days: [],
+    overdue_day_counts: {},
     fact_days: [],
+    fact_day_counts: {},
     reminder_instants: [],
   };
 }
@@ -403,5 +418,51 @@ describe('groupCalendarMarkers: ответ сервера по локальны�
     const result = emptyResult();
     result.reminder_instants = ['', 'не инстанс'];
     assert.equal(groupCalendarMarkers(result, OCTOBER).size, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Счётчики дня для попапа (пункт 7 уточнения 2026-11-19)
+// ---------------------------------------------------------------------------
+
+describe('calendarDayCounts: количества дня для попапа (пункт 7 уточнения 2026-11-19)', () => {
+  it('задачи/факты/просрочка — из серверного агрегата; записи и напоминания считает клиент', () => {
+    const result = emptyResult();
+    result.record_spans = [
+      { from: localInstant(2026, 10, 5), to: localInstant(2026, 10, 6) },
+      { from: localInstant(2026, 10, 5, 9), to: null },
+    ];
+    result.reminder_instants = [localInstant(2026, 10, 5, 8), localInstant(2026, 10, 5, 20)];
+    result.task_day_counts = { '2026-10-05': 3 };
+    result.fact_day_counts = { '2026-10-05': 2 };
+    result.overdue_day_counts = { '2026-10-05': 1 };
+    assert.deepEqual(calendarDayCounts(result, '2026-10-05'), {
+      records: 2,
+      tasks: 3,
+      reminders: 2,
+      facts: 2,
+      overdue: 1,
+    });
+  });
+
+  it('день без данных и пустой ключ — нули по всем видам', () => {
+    const zero = { records: 0, tasks: 0, reminders: 0, facts: 0, overdue: 0 };
+    assert.deepEqual(calendarDayCounts(emptyResult(), '2026-10-07'), zero);
+    assert.deepEqual(calendarDayCounts(emptyResult(), ''), zero);
+  });
+
+  it('запись учитывается, только если её интервал покрывает запрошенный день', () => {
+    const result = emptyResult();
+    result.record_spans = [{ from: localInstant(2026, 10, 4), to: localInstant(2026, 10, 6) }];
+    assert.equal(calendarDayCounts(result, '2026-10-04').records, 1);
+    assert.equal(calendarDayCounts(result, '2026-10-05').records, 1);
+    assert.equal(calendarDayCounts(result, '2026-10-07').records, 0);
+  });
+
+  it('напоминание считается по ЛОКАЛЬНОМУ дню инстанса', () => {
+    const result = emptyResult();
+    result.reminder_instants = [localInstant(2026, 10, 5, 23, 30)];
+    assert.equal(calendarDayCounts(result, '2026-10-05').reminders, 1);
+    assert.equal(calendarDayCounts(result, '2026-10-06').reminders, 0);
   });
 });

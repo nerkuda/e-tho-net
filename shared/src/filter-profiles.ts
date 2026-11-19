@@ -197,6 +197,9 @@ const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   record_body: ['eq', 'ne', 'contains', 'not_contains', 'matches'],
   record_author: ['eq', 'ne', 'in', 'not_in'],
   record_editor: ['eq', 'ne', 'in', 'not_in'],
+  // «Есть задачи» (0.16.1, уточнение 2026-11-19, пункт 8): предикат наличия
+  // строк-задач в записи — булево значение (`eq`/`ne`) и «пусто/не пусто».
+  record_tasks: ['eq', 'ne', 'is_empty', 'not_empty'],
 };
 
 /** Операторы по операнду профиля «события» (требование 1765e659). */
@@ -562,6 +565,8 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
       'record_body',
       'record_author',
       'record_editor',
+      // «Есть задачи» в записи (уточнение 2026-11-19, п.8).
+      'record_tasks',
     ],
     operand_operators: CHRONICLE_OPERATOR_SETS,
     // «Найти слова» у текстовых операндов записи — только для внутреннего

@@ -178,6 +178,8 @@ const OP_TITLE = 'record_title';
 const OP_BODY = 'record_body';
 const OP_AUTHOR = 'record_author';
 const OP_EDITOR = 'record_editor';
+/** «Есть задачи» в записи (уточнение 2026-11-19, пункт 8). */
+const OP_RECORD_TASKS = 'record_tasks';
 
 // ---------------------------------------------------------------------------
 // Дерево: сборка листьев и обход
@@ -1140,7 +1142,7 @@ function renderPanel(): void {
       registry: registryWithSides(),
       linkTypes: store.state.linkTypes,
       thoughtTypes: store.state.thoughtTypes,
-      contextual: [OP_TIME, OP_TARGETS, OP_BODY, OP_TITLE, OP_AUTHOR, OP_EDITOR],
+      contextual: [OP_TIME, OP_TARGETS, OP_BODY, OP_TITLE, OP_AUTHOR, OP_EDITOR, OP_RECORD_TASKS],
     },
     getState: () => filter,
     setSortKeys: () => {

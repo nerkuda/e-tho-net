@@ -37,6 +37,7 @@ import {
   type TaskRowEditorOptions,
 } from '../src/renderer/lib/ui/task-panel.js';
 import { replaceTaskLine } from '../src/renderer/lib/ui/task-panel-model.js';
+import { todayLocal } from '../src/renderer/lib/dates.js';
 import { ShimElement } from './dom-shim.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -559,6 +560,7 @@ describe('панель задач: сворачивание блоков и ко
   it('панель сворачивается в одну шапку, состояние спрашивается у экрана', () => {
     const { host, state, render, destroy } = mountCollapsible();
     const head = host.querySelector('.ui-task-panel-head') as unknown as ShimElement;
+    const panelRoot = host.querySelector('.ui-task-panel') as unknown as ShimElement;
     assert.ok(host.querySelector('.ui-task-panel-body'), 'по умолчанию панель развёрнута');
     head.click();
     assert.deepEqual(state.saved, [['panel', true]], 'свёрнутость записана состоянием экрана');
@@ -567,12 +569,16 @@ describe('панель задач: сворачивание блоков и ко
       null,
       'свёрнутая панель — только шапка',
     );
+    // Класс свёрнутой панели (пункт 1 уточнения 2026-11-19): CSS снимает
+    // сохранённую слайдером высоту, пустого места под шапкой нет.
+    assert.ok(panelRoot.classList.contains('is-collapsed'), 'класс `is-collapsed` поставлен');
     assert.ok(host.querySelector('.ui-task-panel-head'), 'шапка осталась');
     // Сохранённое состояние приходит АСИНХРОННО (`ui_state`): следующая отрисовка
     // обязана применить его к уже построенной панели.
     state.map.set('panel', false);
     render(panelView([taskRow()]));
     assert.ok(host.querySelector('.ui-task-panel-body'), 'развёрнутость из состояния применена');
+    assert.ok(!panelRoot.classList.contains('is-collapsed'), 'класс `is-collapsed` снят');
     destroy();
   });
 
@@ -653,6 +659,34 @@ describe('панель задач: сворачивание блоков и ко
       calls.rowCommands,
       ['c1:2:move', JSON.stringify({ date: '2026-11-20' })],
       'экран получает перенос на выбранную дату',
+    );
+    destroy();
+  });
+
+  it('меню «Перенести» строки предлагает «на сегодня» (пункт 2 уточнения 2026-11-19)', () => {
+    const { host, calls, destroy } = mount();
+    const button = host.querySelector('.ui-task-row-menu') as unknown as ShimElement;
+    button.emit('click', {
+      target: button,
+      currentTarget: button,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const move = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.moveRow')));
+    assert.ok(move, 'пункт «Перенести на…» в меню строки');
+    move!.emit('mouseenter');
+    const today = body
+      .querySelectorAll('.menu-item')
+      .find((node) => node.flatText().includes(t('tasks.shiftToday')));
+    assert.ok(today, 'в подменю переноса есть абсолютный пункт «на сегодня»');
+    today!.click();
+    assert.deepEqual(
+      calls.rowCommands,
+      ['c1:0:move', JSON.stringify({ date: todayLocal() })],
+      'перенос «на сегодня» идёт абсолютной датой локальных суток',
     );
     destroy();
   });
@@ -1104,7 +1138,17 @@ describe('панель задач: вложенные строки строки-
     caret.click();
     const expandedCaret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
     const visible = host.findAll('ui-task-child-row').map((node) => node.flatText().trim());
-    assert.deepEqual(visible, ['пункт чек-листа', 'вложенный текст'], 'раскрытие показывает детей');
+    assert.deepEqual(
+      visible,
+      ['пункт чек-листа', '•вложенный текст'],
+      'раскрытие показывает детей; обычная строка — с маркером списка (пункт 5)',
+    );
+    // Маркер рисует ТОЛЬКО не-чекбоксная строка (0.16.1, уточнение 2026-11-19,
+    // пункт 5): проекция хранит текст без маркера, панель восстанавливает вид
+    // списка. У пункта чек-листа маркера нет — у него контрол отметки.
+    const markers = host.findAll('ui-task-child-marker');
+    assert.equal(markers.length, 1, 'маркер — только у обычной вложенной строки');
+    assert.equal(markers[0]!.flatText(), '•');
     assert.equal(expandedCaret.getAttribute('aria-expanded'), 'true', 'каретка сообщает состояние');
 
     expandedCaret.click();
@@ -1383,6 +1427,9 @@ describe('панель задач: блочная правка строки-за
     (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
     await flush();
     assert.ok(row.querySelector('.ui-task-row-block-edit'), 'открылось поле блочной правки');
+    // Многострочное поле растягивает строку: чекбокс обязан оставаться у ПЕРВОЙ
+    // строки текста — класс `is-editing` (пункт 3 уточнения 2026-11-19).
+    assert.ok(row.classList.contains('is-editing'), 'строка правки помечена `is-editing`');
     assert.equal(calls.rowEditors[0]?.options.md, block, 'в поле — строка задачи И дети');
     assert.ok(
       calls.rowEditors[0]?.options.classes.includes('ui-task-row-block-edit'),
@@ -1419,6 +1466,7 @@ describe('панель задач: блочная правка строки-за
       null,
       'после сохранения поле закрыто',
     );
+    assert.ok(!row.classList.contains('is-editing'), 'после сохранения строка не в правке');
     destroy();
   });
 });

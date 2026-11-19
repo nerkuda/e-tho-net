@@ -291,19 +291,30 @@ class HrWidget extends WidgetType {
 
 /** Чекбокс task-списка (`- [ ]` / `- [x]`): заменяет маркер вне активного пункта. */
 class TaskCheckboxWidget extends WidgetType {
-  constructor(readonly checked: boolean) {
+  constructor(
+    readonly checked: boolean,
+    readonly from: number,
+    readonly to: number,
+  ) {
     super();
   }
 
   override eq(other: TaskCheckboxWidget): boolean {
-    return other.checked === this.checked;
+    return other.checked === this.checked && other.from === this.from && other.to === this.to;
   }
 
   override toDOM(): HTMLElement {
     // Контрол строит фасад дизайн-системы (сторож `guard-ui-fields`):
     // голый `<input>` в обход `choiceControl` запрещён.
-    const input = choiceControl('checkbox', { checked: this.checked, disabled: true });
+    //
+    // Контрол ЖИВОЙ (0.16.1, уточнение 2026-11-19, пункт 10): клик меняет
+    // значение В БУФЕРЕ документа (декорация перерисуется по транзакции), а
+    // запись в источник делает сохранение поля — отказ от правки оставляет и
+    // текст, и задачи прежними.
+    const input = choiceControl('checkbox', { checked: this.checked });
     input.classList.add('cm-md-task-checkbox');
+    input.dataset.mdFrom = String(this.from);
+    input.dataset.mdTo = String(this.to);
     return input;
   }
 
@@ -739,7 +750,7 @@ function buildDecorations(state: EditorState): DecorationSet {
             parts.push({
               from,
               to,
-              value: Decoration.replace({ widget: new TaskCheckboxWidget(checked) }),
+              value: Decoration.replace({ widget: new TaskCheckboxWidget(checked, from, to) }),
             });
           }
           break;
@@ -966,4 +977,47 @@ export function mdWidgetMouseDown(event: MouseEvent, view: EditorView): boolean 
 /** Клик по виджету: каретка в диапазон блока — декорации раскроют исходник. */
 export const mdWidgetClick = EditorView.domEventHandlers({
   mousedown: mdWidgetMouseDown,
+});
+
+/** Имя шага истории для переключения чекбокса из буфера (отмена — штатный undo). */
+const TASK_TOGGLE_USER_EVENT = 'input.taskToggle';
+
+/**
+ * Переключить маркер чекбокса В ДОКУМЕНТЕ редактора (0.16.1, уточнение
+ * 2026-11-19, пункт 10). Диапазон `[from, to)` — `TaskMarker` живой декорации,
+ * то есть ровно `[ ]` / `[x]`; правится ОДИН символ между скобками.
+ *
+ * Запись в источник (комментарий) не делается: изменение попадает в буфер и
+ * уходит на сервер штатным сохранением поля. Отказ от правки (Esc) откатывает
+ * документ к сохранённому тексту, поэтому ни текст, ни задачи не меняются.
+ */
+export function toggleTaskMarkerInDoc(view: EditorView, from: number, to: number): boolean {
+  const source = view.state.sliceDoc(from, to);
+  const match = /^\[([ xX])\]$/.exec(source);
+  if (match === null) return false;
+  const next = match[1] === ' ' ? 'x' : ' ';
+  if (next === match[1]) return false;
+  view.dispatch({
+    changes: { from: from + 1, to: from + 2, insert: next },
+    userEvent: TASK_TOGGLE_USER_EVENT,
+  });
+  return true;
+}
+
+/**
+ * Клик по чекбоксу live-preview меняет значение в буфере (пункт 10). Виджет
+ * живёт ТОЛЬКО в режиме правки (документ CM6), поэтому отдельной ветки
+ * «просмотр» здесь нет: в просмотре `body_html` чекбоксы ведёт
+ * `editor/task-checkbox-toggle.ts` записью в источник.
+ */
+export const mdTaskCheckboxToggle = EditorView.domEventHandlers({
+  change(event, view) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return false;
+    if (!target.classList.contains('cm-md-task-checkbox')) return false;
+    const from = Number(target.dataset['mdFrom']);
+    const to = Number(target.dataset['mdTo']);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return false;
+    return toggleTaskMarkerInDoc(view, from, to);
+  },
 });
