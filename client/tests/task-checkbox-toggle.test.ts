@@ -78,6 +78,22 @@ function click(host: ShimElement, box: ShimElement): void {
   });
 }
 
+/**
+ * Клик с НАСТОЯЩИМ откатом отменённого нажатия: браузер меняет `checked` до
+ * `click`, а отменённое нажатие откатывает его к прежнему значению
+ * (legacy-canceled-activation). Откат применяется ПОСЛЕ обработчиков — внутри
+ * `click` контрол ещё держит новое значение. Так воспроизводится живой дефект
+ * «сервер записал `[x]`, а контрол остался визуально пустым» (вердикт 425ef01d).
+ */
+function clickWithBrowserRevert(host: ShimElement, box: ShimElement, revertTo: boolean): void {
+  host.emit('click', {
+    target: box,
+    preventDefault: (): void => undefined,
+    stopPropagation: (): void => undefined,
+  });
+  box.checked = revertTo;
+}
+
 interface Api {
   updates: Array<{ bodyMd: string; version: number }>;
 }
@@ -261,5 +277,34 @@ describe('живые чекбоксы просмотра комментария 
       [{ md: '- [x] задача', html: '<p>new</p>', version: 5 }],
       'снапшот строки обновляется из ответа comments.update',
     );
+  });
+
+  it('после успешной записи контрол показывает отметку (вердикт 425ef01d)', async () => {
+    const api = fakeApi('- [ ] задача');
+    const host = new ShimElement('div');
+    const box = checkbox(host, false);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c1' }));
+    // Браузер: `checked` уже новое, но отменённый клик откатывает его обратно
+    // (после обработчиков — `want` читается ещё верно).
+    box.checked = true;
+    clickWithBrowserRevert(host, box, false);
+    assert.equal(box.checked, false, 'до ответа сервера браузер вернул прежнее состояние');
+    await flush();
+    assert.deepEqual(api.updates, [{ bodyMd: '- [x] задача', version: 1 }], 'источник записан');
+    assert.equal(box.checked, true, 'успешная отметка видна в просмотре (точечно, без пересборки)');
+  });
+
+  it('отказ записи возвращает контрол в прежнее состояние', async () => {
+    fakeApi('- [ ] задача');
+    (globalThis as any).etn.comments.update = async (): Promise<never> => {
+      throw new Error('boom');
+    };
+    const host = new ShimElement('div');
+    const box = checkbox(host, false);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c1' }));
+    box.checked = true;
+    clickWithBrowserRevert(host, box, false);
+    await flush();
+    assert.equal(box.checked, false, 'отметка не показана без успешной записи');
   });
 });

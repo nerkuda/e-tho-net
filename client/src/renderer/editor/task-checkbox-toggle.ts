@@ -167,6 +167,11 @@ export function wireTaskCheckboxes(
         { body_md: bodyMd },
         comment.version,
       );
+      // Нативный клик отменён (`preventDefault` в `onClick`), поэтому браузер
+      // вернул контрол в прежнее состояние — успешную отметку фиксируем на узле
+      // сами. Это ТОЧЕЧНОЕ обновление: DOM просмотра (и прокрутка длинного
+      // комментария) не пересобирается — пункт 2 пачки 3.
+      box.checked = want;
       sourceRef.onSaved?.(bodyMd, updated.body_html, updated);
     } catch (err) {
       box.checked = !want;
