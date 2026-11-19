@@ -221,6 +221,27 @@ describe('живые чекбоксы просмотра комментария 
     assert.deepEqual(api.updates, [], 'после отписки клики не обрабатываются');
   });
 
+  it('своя запись помечается ДО PATCH и снимается после ответа (гашение эха)', async () => {
+    fakeApi('- [ ] задача', 2);
+    const host = new ShimElement('div');
+    const box = checkbox(host, false);
+    const order: string[] = [];
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({
+      commentId: 'c1',
+      beginSave: () => {
+        order.push('begin');
+        return () => order.push('release');
+      },
+      onSaved: () => order.push('saved'),
+    }));
+    box.checked = true;
+    click(host, box);
+    await flush();
+    // Сервер публикует `comment.updated` ДО ответа PATCH: метка обязана стоять
+    // уже во время запроса, иначе эхо перерисует просмотр и сорвёт прокрутку.
+    assert.deepEqual(order, ['begin', 'saved', 'release'], 'метка живёт ровно на время записи');
+  });
+
   it('владелец просмотра получает ОБНОВЛЁННЫЙ комментарий (пункт 9 уточнения 2026-11-19)', async () => {
     fakeApi('- [ ] задача', 4);
     const host = new ShimElement('div');

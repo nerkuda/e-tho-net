@@ -16,11 +16,12 @@
  */
 
 import { EditorView } from '@codemirror/view';
-import type { Attachment, MentionsScanThought } from '@etn/shared';
+import type { Attachment, Comment, MentionsScanThought } from '@etn/shared';
 import {
   parseTransclusions,
   renderMarkdown,
   sourceOffsetFromCaret,
+  taskLineBodyStart,
   TRANSCLUSION_BLOCK_CLASS,
   TRANSCLUSION_DEPTH_ATTR,
   TRANSCLUSION_MARKER_PREFIX,
@@ -163,6 +164,12 @@ interface MarkdownFieldHandle {
    * считает само поле.
    */
   focusLineStart(lineNo: number): void;
+  /**
+   * Переключает поле в правку и ставит каретку ПОСЛЕ маркера задачи
+   * (`- [ ] `) строки `lineNo` (0.16.1, пачка 3, пункт 1): переход «Открыть
+   * источник» задачи постоянного комментария — сразу к тексту задачи.
+   */
+  focusTaskLine(lineNo: number): void;
   /**
    * «Вставить ссылку на <мысль>» из меню авто-подсветки упоминания: заменяет
    * первое вхождение `matchedText` в исходнике на wiki-ссылку и сохраняет (см.
@@ -789,6 +796,19 @@ export function createMarkdownField(opts: {
      * хук: вставка ссылки/трансклюзии не отменяется.
      */
     attachCreatedThought?: (thoughtId: string) => void | Promise<void>;
+    /**
+     * Сохранён чекбокс задачи В ПРОСМОТРЕ (0.16.1, живая приёмка пачки 3, пункт 2):
+     * ответ `comments.update` отдаётся владельцу поля, чтобы тот обновил свой
+     * снапшот комментария (версия/HTML) и realtime-эхо СВОЕЙ правки не считалось
+     * внешним изменением — поле не перерисовывается, прокрутка просмотра стоит.
+     */
+    onTaskSaved?: (comment: Comment) => void;
+    /**
+     * Своя запись чекбокса просмотра «в полёте» (0.16.1, пачка 3, пункт 2):
+     * метка гасит realtime-эхо, которое сервер публикует до ответа PATCH.
+     * Возвращает освобождение метки.
+     */
+    beginTaskSave?: (commentId: string) => () => void;
   };
   /**
    * Плейсхолдер для пустого комментария (задача 8ab775d9). Показывается
@@ -1226,11 +1246,16 @@ export function createMarkdownField(opts: {
           if (commentId === null) return null;
           return {
             commentId,
-            onSaved: (md, html) => {
+            beginSave: (id) => opts.commentContext?.beginTaskSave?.(id) ?? (() => undefined),
+            onSaved: (md, html, comment) => {
               // Снапшот просмотра — новый: следующая правка начнётся с него,
-              // а разметку чекбоксов уже переключил сам клик.
+              // а разметку чекбоксов уже переключил сам клик. Версию/HTML
+              // получает и владелец поля (пункт 2 пачки 3): иначе realtime-эхо
+              // своей правки выглядело внешним изменением и перерисовывало
+              // просмотр, сбрасывая прокрутку к первой строке.
               currentMd = md;
               currentHtml = html;
+              opts.commentContext?.onTaskSaved?.(comment);
             },
           };
         });
@@ -1875,14 +1900,21 @@ export function createMarkdownField(opts: {
     insertMentionLink,
     value: () => (editing && editor !== null ? editor.getValue() : currentMd),
     set: (md, html) => {
+      // Эхо/повтор с ТЕМ ЖЕ содержимым (в т.ч. событие своей правки после
+      // точечного обновления снапшота) не перерисовывает просмотр: замена DOM
+      // сбрасывала прокрутку длинного комментария к первой строке (0.16.1,
+      // живая приёмка пачки 3, пункт 2).
+      const changed = md !== currentMd || html !== currentHtml;
       currentMd = md;
       currentHtml = html;
-      renderView();
-      if (editor !== null && !area.classList.contains('hidden')) {
-        // Внешнее (серверное) обновление текста — не правка пользователя.
-        editor.setValue(md, true);
+      if (changed) {
+        renderView();
+        if (editor !== null && !area.classList.contains('hidden')) {
+          // Внешнее (серверное) обновление текста — не правка пользователя.
+          editor.setValue(md, true);
+        }
+        search.refresh();
       }
-      search.refresh();
     },
     focusAt: (findText) => {
       showEdit();
@@ -1926,6 +1958,21 @@ export function createMarkdownField(opts: {
       const limit = Math.max(0, Math.min(lineNo, lines.length - 1));
       for (let i = 0; i < limit; i += 1) offset += (lines[i]?.length ?? 0) + 1;
       editor.setCaret(offset);
+      editor.focus();
+    },
+    focusTaskLine: (lineNo: number) => {
+      if (!editing || editor === null) {
+        showEdit();
+        if (editor === null) return;
+      }
+      // Переход «Открыть источник» задачи постоянного комментария (0.16.1,
+      // пачка 3, пункт 1): каретка сразу ПОСЛЕ маркера `- [ ] ` — в начало
+      // текста задачи. Строка без маркера задачи — каретка в начало строки.
+      const lines = (editor.getValue() ?? '').split('\n');
+      let offset = 0;
+      const limit = Math.max(0, Math.min(lineNo, lines.length - 1));
+      for (let i = 0; i < limit; i += 1) offset += (lines[i]?.length ?? 0) + 1;
+      editor.setCaret(offset + (taskLineBodyStart(lines[limit] ?? '') ?? 0));
       editor.focus();
     },
     dispose: () => {
@@ -2011,6 +2058,15 @@ export function focusMarkdownFieldStart(root: HTMLElement): void {
  */
 export function focusMarkdownFieldLineStart(root: HTMLElement, lineNo: number): void {
   handles.get(root)?.focusLineStart(lineNo);
+}
+
+/**
+ * Переводит поле в правку и ставит каретку ПОСЛЕ маркера задачи `- [ ] `
+ * строки `lineNo` (0.16.1, живая приёмка, пачка 3, пункт 1): «Открыть источник»
+ * задачи из постоянного комментария мысли.
+ */
+export function focusMarkdownFieldTaskLine(root: HTMLElement, lineNo: number): void {
+  handles.get(root)?.focusTaskLine(lineNo);
 }
 
 /** Updates an already-built field's content (e.g. after an external change). */

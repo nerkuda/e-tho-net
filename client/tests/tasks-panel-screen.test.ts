@@ -1454,7 +1454,7 @@ describe('панель задач: единая форма списков при
 
 /** Событие слоя для проверки маркера «Обновить» (сеть теста — `n1`). */
 function realtimeEvent(
-  type: 'comment.updated' | 'comment.created' | 'reminders.changed',
+  type: 'comment.updated' | 'comment.created' | 'comment.deleted' | 'reminders.changed',
   data: Record<string, unknown>,
   seq: number,
 ): Parameters<
@@ -1556,6 +1556,132 @@ describe('панель задач: маркер «Обновить» по люб
       assert.equal(row.classList.contains('is-stale'), true, 'строка изменённой записи серая');
       const refreshBtn = h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
       assert.equal(refreshBtn.classList.contains('is-stale'), true, 'маркер «Обновить» горит');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // 0.16.1, пачка 3, пункт 5: нерелевантные события панель НЕ перерисовывают.
+  // -------------------------------------------------------------------------
+
+  it('правка постоянного комментария без задач не дёргает панель «Дневника»', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      const { resetEventRouter, routeRealtimeEvent } =
+        await import('../src/renderer/lib/live/event-router.js');
+      resetEventRouter();
+      const refreshBtn = (): ShimElement =>
+        h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      const text = row.querySelector('.ui-task-row-text') as unknown as ShimElement;
+      assert.equal(
+        refreshBtn().classList.contains('is-stale'),
+        false,
+        'до события маркер не горит',
+      );
+
+      routeRealtimeEvent(
+        realtimeEvent(
+          'comment.updated',
+          {
+            id: 'c-perm',
+            version: 1,
+            kind: 'permanent',
+            changes: { body_md: 'обычный текст комментария мысли' },
+          },
+          1,
+        ),
+      );
+      await h.settle();
+      assert.equal(
+        refreshBtn().classList.contains('is-stale'),
+        false,
+        'постоянный комментарий вне панели маркер не зажигает',
+      );
+      assert.equal(h.host.querySelector('[data-row-key="c1:0"]'), row, 'узел строки не пересоздан');
+      assert.equal(
+        row.querySelector('.ui-task-row-text'),
+        text,
+        'содержимое строки не перерисовывалось',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('постоянный комментарий, где ПОЯВИЛАСЬ строка задачи, релевантен', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      const { resetEventRouter, routeRealtimeEvent } =
+        await import('../src/renderer/lib/live/event-router.js');
+      resetEventRouter();
+      routeRealtimeEvent(
+        realtimeEvent(
+          'comment.updated',
+          {
+            id: 'c-perm-new',
+            version: 1,
+            kind: 'permanent',
+            changes: { body_md: '- [ ] новая задача без дат' },
+          },
+          1,
+        ),
+      );
+      await h.settle();
+      const refreshBtn = h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.equal(
+        refreshBtn.classList.contains('is-stale'),
+        true,
+        'состав секции «Без срока» мог измениться — «Обновить» зажжён',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('правка НЕ-текстовых полей записи панель не трогает', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      const { resetEventRouter, routeRealtimeEvent } =
+        await import('../src/renderer/lib/live/event-router.js');
+      resetEventRouter();
+      routeRealtimeEvent(
+        realtimeEvent(
+          'comment.updated',
+          { id: 'c1', version: 9, kind: 'chronological', changes: { title: 'новый заголовок' } },
+          1,
+        ),
+      );
+      await h.settle();
+      const refreshBtn = h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.equal(refreshBtn.classList.contains('is-stale'), false, 'строки задач не изменились');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('удаление и создание постоянного комментария без задач панель не трогают', async () => {
+    const h = await setup({ tasks: [taskRow()] });
+    try {
+      const { resetEventRouter, routeRealtimeEvent } =
+        await import('../src/renderer/lib/live/event-router.js');
+      resetEventRouter();
+      routeRealtimeEvent(realtimeEvent('comment.deleted', { id: 'c-unknown' }, 1));
+      routeRealtimeEvent(
+        realtimeEvent(
+          'comment.created',
+          { comment: { id: 'p1', kind: 'permanent', body_md: 'просто текст' } },
+          2,
+        ),
+      );
+      await h.settle();
+      const refreshBtn = h.host.querySelector('.ui-task-panel-refresh') as unknown as ShimElement;
+      assert.equal(
+        refreshBtn.classList.contains('is-stale'),
+        false,
+        'состав загруженных строк не изменился',
+      );
     } finally {
       h.destroy();
     }

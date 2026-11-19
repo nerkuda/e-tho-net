@@ -468,8 +468,19 @@ describe('зона «Задачи» редактора: точечная пра�
         check.checked = checked;
         check.emit('change');
       };
+      // Узлы строки и её содержимого ДО клика: точечное обновление чекбокса
+      // (пункт 4 пачки 3) не пересобирает строку, полная перерисовка — заменяет
+      // `.ui-task-row-text` и дёргает панель.
+      const rowNode = rowOf(h.group, 'c1:0');
+      const textNode = rowNode.querySelector('.ui-task-row-text');
       click(true);
       await h.settle();
+      assert.equal(rowOf(h.group, 'c1:0'), rowNode, 'узел строки сохранён');
+      assert.equal(
+        rowNode.querySelector('.ui-task-row-text'),
+        textNode,
+        'содержимое строки не пересобрано: чекбокс патчится точечно',
+      );
       assert.equal(
         rowOf(h.group, 'c1:0').classList.contains('is-stale'),
         false,

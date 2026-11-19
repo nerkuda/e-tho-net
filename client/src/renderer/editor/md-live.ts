@@ -931,6 +931,22 @@ export const livePreview = StateField.define<DecorationSet>({
 export function mdWidgetMouseDown(event: MouseEvent, view: EditorView): boolean {
   if (event.button !== 0) return false;
   const target = event.target as Element | null;
+  // Чекбокс задачи живого предпросмотра (0.16.1, уточнение 2026-11-19, пункт 10):
+  // его корень — сам `choiceControl`, БЕЗ класса `md-widget`, поэтому общая ветка
+  // «увести каретку в диапазон» раньше не срабатывала вовсе, а собственный
+  // `mousedown` CM6 ставил каретку рядом с `[ ]` и перерисовывал декорации.
+  // Виджет исчезал ДО `click`/`change`, и переключение буфера не происходило
+  // (живой дефект пачки 3). Переключаем документ прямо здесь: транзакция меняет
+  // `[ ]`↔`[x]` одной правкой, виджет перерисовывается уже с новым значением.
+  const checkbox = target?.closest?.('.cm-md-task-checkbox');
+  if (checkbox !== null && checkbox !== undefined) {
+    const box = checkbox as HTMLElement;
+    const from = Number(box.dataset['mdFrom']);
+    const to = Number(box.dataset['mdTo']);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return false;
+    event.preventDefault();
+    return toggleTaskMarkerInDoc(view, from, to);
+  }
   const widget = target?.closest?.(`.${MD_WIDGET_CLASS}`);
   if (!(widget instanceof HTMLElement)) return false;
 

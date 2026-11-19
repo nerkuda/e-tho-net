@@ -62,6 +62,7 @@ import { loadingState } from './empty-state.js';
 import { svgIcon } from './icon.js';
 import { reconcileKeyed } from './keyed-list.js';
 import { createListNav, type ListNavHandle } from './list.js';
+import { deepEqual } from './state.js';
 import { TABLE_ROW_KEY_ATTR } from './table.js';
 import type { ReminderPanelRow, TaskPanelChildRow, TaskPanelRow } from './task-panel-model.js';
 
@@ -1275,16 +1276,47 @@ export function mountTaskPanel(
     else renderFlatReminderRows(hostEl, rows as readonly ReminderPanelRow[]);
   }
 
+  /**
+   * Изменилось ТОЛЬКО состояние чекбокса/серости/просрочки (0.16.1, пачка 3,
+   * пункт 4): текст, даты, вложенные строки и облачка те же. Такую строку
+   * патчим по месту — полная пересборка содержимого дёргала панель на каждом
+   * клике чекбокса и на каждом чужом событии.
+   */
+  function onlyCheckStateChanged(prev: TaskPanelRow, next: TaskPanelRow): boolean {
+    if (prev.done === next.done && prev.stale === next.stale && prev.overdue === next.overdue) {
+      return false;
+    }
+    const { done: _d1, stale: _s1, overdue: _o1, ...restPrev } = prev;
+    const { done: _d2, stale: _s2, overdue: _o2, ...restNext } = next;
+    return deepEqual(restPrev, restNext);
+  }
+
+  /** Точечно переставить признаки состояния строки, не трогая её содержимое. */
+  function patchTaskRowState(node: HTMLElement, row: TaskPanelRow): void {
+    node.classList.toggle(TASK_PANEL_ROW_STALE_CLASS, row.stale);
+    node.classList.toggle('is-done', row.done);
+    node.classList.toggle('is-overdue', row.overdue);
+    const check = node.querySelector<HTMLInputElement>('.ui-task-row-check');
+    if (check !== null && check.checked !== row.done) check.checked = row.done;
+  }
+
+  /** Обновить строку задачи: точечный патч состояния или полная пересборка. */
+  function updateTaskRow(rowNode: HTMLElement, row: TaskPanelRow, prev: TaskPanelRow): void {
+    if (editingKey === row.key) return;
+    if (onlyCheckStateChanged(prev, row)) {
+      patchTaskRowState(rowNode, row);
+      return;
+    }
+    fillTaskRow(rowNode, row);
+  }
+
   /** Отрисовать строки плоской секции (keyed-сверка по адресу проекции). */
   function renderFlatRows(hostEl: HTMLElement, rows: readonly TaskPanelRow[]): void {
     reconcileKeyed(hostEl, rows, {
       keyAttr: TABLE_ROW_KEY_ATTR,
       key: (row) => row.key,
       build: (row) => buildTaskRow(row),
-      update: (rowNode, row) => {
-        if (editingKey === row.key) return;
-        fillTaskRow(rowNode, row);
-      },
+      update: (rowNode, row, prev) => updateTaskRow(rowNode, row, prev),
     });
   }
 
@@ -1666,10 +1698,7 @@ export function mountTaskPanel(
         keyAttr: TABLE_ROW_KEY_ATTR,
         key: (row) => row.key,
         build: (row) => buildTaskRow(row),
-        update: (rowNode, row) => {
-          if (editingKey === row.key) return;
-          fillTaskRow(rowNode, row);
-        },
+        update: (rowNode, row, prev) => updateTaskRow(rowNode, row, prev),
       });
     } else {
       const rows = subgroup.rows as ReminderPanelRow[];

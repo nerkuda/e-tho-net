@@ -17,6 +17,7 @@ import {
   removeTaskLineDates,
   removeTaskLineMarker,
   setTaskLineDone,
+  taskLineBodyStart,
 } from '../src/index.js';
 
 describe('markdown: построчные правки пункта задачи', () => {
@@ -54,6 +55,15 @@ describe('markdown: построчные правки пункта задачи'
     const toggled = setTaskLineDone(target, true);
     assert.equal(toggled, '  [x] купить хлеб [[2026-01-05]]');
     assert.equal(isTaskLineMarker(toggled!), true);
+  });
+
+  it('начало текста пункта — сразу после маркера и пробелов', () => {
+    assert.equal(taskLineBodyStart('- [ ] текст'), '- [ ] '.length);
+    assert.equal(taskLineBodyStart('* [x]   текст'), '* [x]   '.length);
+    assert.equal(taskLineBodyStart('  [ ] текст'), '  [ ] '.length);
+    assert.equal(taskLineBodyStart('- [ ]'), '- [ ]'.length, 'пустой пункт — конец строки');
+    assert.equal(taskLineBodyStart('- обычный пункт'), null);
+    assert.equal(taskLineBodyStart('текст [ ] в середине'), null);
   });
 
   it('строки с датами и таблицы не считаются маркером', () => {

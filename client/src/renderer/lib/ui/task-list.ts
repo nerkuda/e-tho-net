@@ -47,6 +47,7 @@
  * панели. Панель карточки мысли состояние не хранит (`persistence` не задан).
  */
 
+import { isTaskLineMarker } from '@etn/markdown';
 import {
   type Comment,
   type Reminder,
@@ -1789,6 +1790,45 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   }
 
   /**
+   * Есть ли в тексте хоть одна строка задачи `- [ ]` (0.16.1, пачка 3,
+   * пункт 5): по ней решается, может ли правка НЕзагруженного постоянного
+   * комментария изменить секцию «Без срока».
+   */
+  function bodyHasTaskLine(md: unknown): boolean {
+    // Грамматика маркера — только в @etn/markdown (сторож единого рендерера).
+    return typeof md === 'string' && md.split('\n').some(isTaskLineMarker);
+  }
+
+  /**
+   * Релевантность `comment.updated` строкам задач (0.16.1, пачка 3, пункт 5):
+   * строки живут в `body_md` источника, поэтому событие с непустым `changes`
+   * без `body_md` (title, targets, период комментария) панель не трогает.
+   * Пустой/отсутствующий `changes` — неизвестно, считаем релевантным.
+   */
+  function taskChangesRelevant(changes: unknown): boolean {
+    if (changes === null || typeof changes !== 'object') return true;
+    const keys = Object.keys(changes as Record<string, unknown>);
+    return keys.length === 0 || keys.includes('body_md');
+  }
+
+  /**
+   * Постоянный комментарий, которого нет среди загруженных строк, меняет
+   * панель «Дневника» только если в новом тексте появились строки задач: у
+   * постоянного комментария задачи живут в сквозной секции «Без срока».
+   * Иначе его правка (например, обычный текст комментария мысли) — не повод
+   * перерисовывать список (живой дефект пачки 3, пункт 5).
+   */
+  function permanentTaskRelevant(id: string | undefined, changes: unknown): boolean {
+    if (source.kind !== 'period') return true;
+    if (id !== undefined && loadedCommentIds().has(id)) return true;
+    const md =
+      changes !== null && typeof changes === 'object'
+        ? (changes as { body_md?: unknown }).body_md
+        : undefined;
+    return bodyHasTaskLine(md);
+  }
+
+  /**
    * Таймер автоперечитывания панели на событие комментария (0.16.1, уточнение
    * 2026-11-19, пункт 4). Зона «Задачи» редактора мысли обязана показать новую
    * задачу сразу после сохранения записи, не дожидаясь смены мысли: сохранение —
@@ -1822,7 +1862,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       return;
     }
     if (event.type === 'comment.updated') {
-      const data = event.data as { id?: string; version?: unknown };
+      const data = event.data as {
+        id?: string;
+        version?: unknown;
+        kind?: unknown;
+        changes?: unknown;
+      };
       const version = typeof data.version === 'number' ? data.version : null;
       const id = data.id;
       if (id !== undefined && version !== null) {
@@ -1840,7 +1885,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         // (позднее эхо своей операции после перечитывания).
         if (version <= (commentVersions.get(id) ?? 0)) return;
       }
-      // ЛЮБОЕ чужое изменение записи поднимает маркер панели — в том числе у
+      // Релевантность (0.16.1, пачка 3, пункт 5): правка постоянного
+      // комментария без строк задач и правка не-текстовых полей строк панели
+      // не меняют — ни маркера, ни перерисовки.
+      if (!taskChangesRelevant(data.changes)) return;
+      if (data.kind === 'permanent' && !permanentTaskRelevant(id, data.changes)) return;
+      // Чужое изменение записи поднимает маркер панели — в том числе у
       // комментария, которого панель не загружала (новая задача в периоде).
       foreignChange = true;
       if (id !== undefined && loadedCommentIds().has(id)) staleComments.add(id);
@@ -1849,9 +1899,29 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       return;
     }
     if (event.type === 'comment.created' || event.type === 'comment.deleted') {
-      const id =
-        (event.data as { comment?: { id?: string }; id?: string }).comment?.id ??
-        (event.data as { id?: string }).id;
+      const data = event.data as {
+        comment?: { id?: string; kind?: string; body_md?: string };
+        id?: string;
+      };
+      const id = data.comment?.id ?? data.id;
+      // Релевантность (0.16.1, пачка 3, пункт 5): удаление записи, которой в
+      // панели «Дневника» нет, состава строк не меняет; создание постоянного
+      // комментария без строк задач — тоже.
+      if (
+        event.type === 'comment.deleted' &&
+        source.kind === 'period' &&
+        (id === undefined || !loadedCommentIds().has(id))
+      ) {
+        return;
+      }
+      if (
+        event.type === 'comment.created' &&
+        source.kind === 'period' &&
+        data.comment?.kind === 'permanent' &&
+        !bodyHasTaskLine(data.comment.body_md)
+      ) {
+        return;
+      }
       foreignChange = true;
       if (id !== undefined && loadedCommentIds().has(id)) staleComments.add(id);
       renderView();

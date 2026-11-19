@@ -51,7 +51,11 @@ import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
-import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
+import {
+  openLinkInEditor,
+  openThoughtCommentTaskLine,
+  setThoughtEditorTarget,
+} from '../../editor/editor.js';
 import {
   cancelMarkdownFieldEdit,
   commitMarkdownField,
@@ -108,6 +112,7 @@ import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
 import { matchesKeyPrefix, queryKeys } from '../../lib/live/query-keys.js';
 import {
+  asRealtimeCause,
   invalidateQueries,
   onQueryInvalidated,
   registerQuery,
@@ -172,6 +177,7 @@ import {
   type ScreenPair,
 } from '../tabs/tab-state.js';
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
+import { feedEventRelevant } from './feed-relevance.js';
 import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
 import {
   buildDayLinksBlock,
@@ -954,6 +960,14 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
         void openChronicleTaskLine(row);
         return;
       }
+      // Задача из ПОСТОЯННОГО комментария (0.16.1, пачка 3, пункт 1): у записи
+      // «Дневника» такого источника нет, поэтому открываем карточку владельца,
+      // вкладку «Основное» и правку комментария на строке задачи. Раньше строка
+      // без дат не находила день, и команда молча ничего не делала.
+      if (row.ownerType === 'thought') {
+        openThoughtCommentTaskLine(row.ownerId, row.lineNo);
+        return;
+      }
       const day = row.due ?? row.periodFrom;
       if (day !== null) void openChronicleDay(day);
     },
@@ -1230,10 +1244,10 @@ function retargetChronicleFeed(): void {
 function bindChronicleFeed(): void {
   retargetChronicleFeed();
   if (chronicleInvalidationUnsub !== null) return;
-  chronicleInvalidationUnsub = onQueryInvalidated((prefix) => {
+  chronicleInvalidationUnsub = onQueryInvalidated((prefix, _keys, cause) => {
     // Содержимое ленты (записи): роутер гасит `chronicle-feed`.
     if (matchesKeyPrefix(prefix, 'chronicle-feed')) {
-      scheduleChronicleFeedRefresh();
+      if (feedEventRelevant(asRealtimeCause(cause), rows)) scheduleChronicleFeedRefresh();
       return;
     }
     // Правка/удаление мысли адресна: перечитываем ленту ТОЛЬКО если мысль видна

@@ -67,6 +67,7 @@ export {
   removeTaskLineDates,
   removeTaskLineMarker,
   setTaskLineDone,
+  taskLineBodyStart,
 } from './task-line-edit.js';
 export { TASK_MARKER_PATTERN, TASK_MARKER_PREFIX } from './task-list.js';
 export { BLANK_LINE_CLASS, blankLinesPlugin } from './blank-lines.js';

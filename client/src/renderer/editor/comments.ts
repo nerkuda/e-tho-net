@@ -65,6 +65,14 @@ let mountedPermanent: {
 let realtimeWired = false;
 
 /**
+ * Чекбоксы просмотра постоянного комментария, чья запись сейчас В ПОЛЁТЕ
+ * (0.16.1, пачка 3, пункт 2). Сервер публикует `comment.updated` ДО ответа
+ * PATCH, поэтому эхо узнаётся по метке операции, а не по версии: иначе поле
+ * успевало перерисоваться и прокрутка длинного комментария прыгала вверх.
+ */
+const pendingTaskSaves = new Set<string>();
+
+/**
  * Updates the mounted permanent-comment field when a foreign `comment.*` event
  * arrives for its owner entity. Skips the update while the user is actively
  * editing (the in-flight text wins until the next save per 04-realtime.md §8,
@@ -107,9 +115,29 @@ function wireCommentRealtime(): void {
       if (!ref.field.isConnected) return;
       const networkId = store.state.networkId;
       if (networkId === null) return;
-      // Resolve the updated comment owner — the event carries no owner field
-      // (04-realtime.md §4.4, L20 multi-target comments); a quick fetch by id
-      // matches the local permanent comment by id.
+      // Фильтр релевантности ДО сетевого запроса (0.16.1, пачка 3, пункт 5):
+      // событие несёт вид/владельца/изменённые поля (04-realtime.md §4.4).
+      // Правка хроно-записи, чужого владельца или не-текстовых полей
+      // постоянного комментария этого поля не касается — ни запроса, ни
+      // перерисовки (раньше на каждый `comment.updated` в сети список
+      // комментариев перечитывался вхолостую).
+      if (evt.data.kind !== undefined && evt.data.kind !== 'permanent') return;
+      if (evt.data.owner_type !== undefined && evt.data.owner_type !== ref.ctx.ownerType) return;
+      if (evt.data.owner_id !== undefined && evt.data.owner_id !== ref.ctx.ownerId) return;
+      // Эхо СВОЕЙ ещё не подтверждённой записи чекбокса: событие публикуется до
+      // ответа PATCH, а снапшот обновит `onTaskSaved`.
+      if (evt.data.id !== undefined && pendingTaskSaves.has(evt.data.id)) return;
+      const changes = evt.data.changes;
+      if (
+        changes !== null &&
+        typeof changes === 'object' &&
+        Object.keys(changes).length > 0 &&
+        !('body_md' in changes)
+      ) {
+        return;
+      }
+      // Resolve the updated comment owner — a quick fetch by id matches the
+      // local permanent comment by id (L20 multi-target comments).
       void (async () => {
         try {
           const comments = await etn.comments.list(networkId, ref.ctx.ownerType, ref.ctx.ownerId);
@@ -274,6 +302,7 @@ function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // signalled by the editor through the lifecycle (verifier blocker).
   lifecycle.onDispose(() => {
     disposed = true;
+    pendingTaskSaves.clear();
     stopRetryWatch();
     // Поле уезжает из документа вместе с панелью: отпускаем его глобальные
     // слушатели, иначе правка, оставшаяся открытой после сбоя записи,
@@ -344,6 +373,22 @@ function buildPermanentBody(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
         ownerType: ctx.ownerType,
         ownerId: ctx.ownerId,
         getCommentId: () => permanent?.id ?? null,
+        // Чекбокс задачи В ПРОСМОТРЕ сохранил источник (0.16.1, пачка 3,
+        // пункт 2): снапшот комментария обновляется сразу из ответа, поэтому
+        // realtime-эхо своей правки не выглядит внешним изменением и не
+        // перерисовывает поле (иначе прокрутка прыгала к первой строке).
+        onTaskSaved: (updated) => {
+          permanent = updated;
+          draftKind = 'comment';
+        },
+        // Метка «своя запись в полёте» для чекбокса просмотра: эхо гасится до
+        // ответа PATCH, просмотр не перерисовывается (пункт 2 пачки 3).
+        beginTaskSave: (commentId) => {
+          pendingTaskSaves.add(commentId);
+          return () => {
+            pendingTaskSaves.delete(commentId);
+          };
+        },
         // Родитель новой мысли (ТЗ5): владелец-мысль; у комментария связи
         // список пуст — порт вставки выведет источник связи.
         getParentThoughtIds: () => (ctx.ownerType === 'thought' ? [ctx.ownerId] : []),

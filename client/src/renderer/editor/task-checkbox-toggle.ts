@@ -54,6 +54,14 @@ export interface TaskCheckboxSource {
    * уточнение 2026-11-19, пункт 9).
    */
   onSaved?(md: string, html: string, comment: Comment): void;
+  /**
+   * Начало СВОЕЙ записи в источник: владелец просмотра помечает правку
+   * «в полёте» и гасит её realtime-эхо. Сервер публикует `comment.updated`
+   * ДО ответа PATCH, поэтому без метки эхо могло прийти раньше ответа и
+   * перерисовать просмотр (сброс прокрутки — пункт 2 пачки 3).
+   * Возвращает освобождение метки; вызывается и при ошибке записи.
+   */
+  beginSave?(commentId: string): () => void;
 }
 
 /** Узел — чекбокс задачи (обход предков вручную: `closest` шима с родителя). */
@@ -123,6 +131,9 @@ export function wireTaskCheckboxes(
     const boxes = checkboxes();
     const box = boxes[index];
     if (box === undefined) return;
+    // Метка СВОЕЙ записи — ДО сетевого вызова: эхо `comment.updated` может
+    // прийти раньше ответа PATCH и не должно считаться внешним изменением.
+    const releaseSave = sourceRef.beginSave?.(commentId);
     try {
       const comment = await etn.comments.get(networkId, commentId);
       const checkLines = parseTaskLines(comment.body_md).filter((line) => line.hasCheckbox);
@@ -160,6 +171,8 @@ export function wireTaskCheckboxes(
     } catch (err) {
       box.checked = !want;
       notice(t('tasks.errorEdit', [errText(err)]), 'error');
+    } finally {
+      releaseSave?.();
     }
   }
 

@@ -32,7 +32,7 @@ import { createTaskRowEditor } from './task-row-editor.js';
 import {
   openLinkInEditor,
   openRecordInEditor,
-  openThoughtInEditor,
+  openThoughtCommentTaskLine,
   registerMainSection,
   showEditorMainTab,
   type EditorContext,
@@ -107,8 +107,11 @@ async function openSource(row: TaskPanelRow): Promise<void> {
     const permanent = row.kind === 'permanent';
     if (row.ownerType === 'thought') {
       if (permanent) {
-        openThoughtInEditor(row.ownerId);
-        showEditorMainTab();
+        // Постоянный комментарий: карточка владельца, вкладка «Основное»,
+        // комментарий в правку, каретка после `- [ ] ` строки задачи
+        // (0.16.1, пачка 3, пункт 1). Раньше команда только открывала
+        // карточку — в правку не входила и строку не находила.
+        openThoughtCommentTaskLine(row.ownerId, row.lineNo);
       } else {
         openRecordInEditor(row.ownerId, row.commentId);
       }

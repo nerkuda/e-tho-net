@@ -18,7 +18,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { toggleTaskMarkerInDoc } from '../src/renderer/editor/md-live.js';
+import { mdWidgetMouseDown, toggleTaskMarkerInDoc } from '../src/renderer/editor/md-live.js';
+
+// Обработчик виджетов проверяет `closest`-результат через `instanceof
+// HTMLElement`; в node-тесте DOM нет — достаточно конструктора-заглушки.
+(globalThis as any).HTMLElement ??= class {};
 
 /** Фейковый `EditorView`: чтение документа и шпион `dispatch`. */
 function fakeView(doc: string): {
@@ -82,5 +86,61 @@ describe('toggleTaskMarkerInDoc: клик по чекбоксу меняет з�
     toggleTaskMarkerInDoc(view as any, FROM, TO);
     assert.equal(view.events.length, 1);
     assert.deepEqual(Object.keys(view.events[0]!.changes).sort(), ['from', 'insert', 'to']);
+  });
+});
+
+describe('mdWidgetMouseDown: клик по чекбоксу в правке переключает буфер (пункт 3)', () => {
+  /** Цель события — сам чекбокс живого предпросмотра (без класса `md-widget`). */
+  function checkboxTarget(): { target: any; box: any } {
+    const box = { dataset: { mdFrom: String(FROM), mdTo: String(TO) } };
+    const target = {
+      closest: (selector: string) => (selector === '.cm-md-task-checkbox' ? box : null),
+    };
+    return { target, box };
+  }
+
+  it('mousedown по чекбоксу меняет `[ ]` → `[x]` и НЕ ставит каретку рядом', () => {
+    // Живой дефект: виджет чекбокса не имел класса `md-widget`, поэтому общая
+    // ветка «увести каретку в диапазон» не срабатывала, а родной mousedown CM6
+    // ставил каретку рядом с `[ ]` и перерисовывал декорации — `change` не
+    // доходил до живого контрола.
+    const view = fakeView('- [ ] задача');
+    const { target } = checkboxTarget();
+    let prevented = 0;
+    const handled = mdWidgetMouseDown(
+      {
+        button: 0,
+        target,
+        preventDefault: () => {
+          prevented += 1;
+        },
+      } as any,
+      view as any,
+    );
+    assert.equal(handled, true, 'mousedown обработан как команда, а не как выделение');
+    assert.equal(prevented, 1, 'нативное выделение CM6 не запускается');
+    assert.equal(view.events.length, 1, 'одна транзакция в буфер');
+    assert.deepEqual(
+      view.events[0]!.changes,
+      { from: FROM + 1, to: FROM + 2, insert: 'x' },
+      'переключён ровно символ отметки',
+    );
+    assert.equal(view.events[0]!.userEvent, 'input.taskToggle', 'шаг истории — общий с отменой');
+    assert.equal(
+      view.events[0]!.selection,
+      undefined,
+      'каретка не двигается: выделение в `[ ]` больше не перехватывает клик',
+    );
+  });
+
+  it('mousedown не по чекбоксу общую ветку виджетов не ломает', () => {
+    const view = fakeView('- [ ] задача');
+    const target = { closest: () => null };
+    const handled = mdWidgetMouseDown(
+      { button: 0, target, preventDefault: () => undefined } as any,
+      view as any,
+    );
+    assert.equal(handled, false, 'не виджет — событие уходит штатной обработке CM6');
+    assert.equal(view.events.length, 0);
   });
 });

@@ -137,7 +137,13 @@ import {
   type StripElements,
 } from '../screens/tabs/tab-overflow.js';
 import { showIconDialog, type IconPickOutcome, type IconPickResult } from './icon-dialog.js';
-import { editMarkdownField, focusMarkdownFieldAt, focusMarkdownFieldSelection, type MdSourceSelection } from './markdown-field.js';
+import {
+  editMarkdownField,
+  focusMarkdownFieldAt,
+  focusMarkdownFieldSelection,
+  focusMarkdownFieldTaskLine,
+  type MdSourceSelection,
+} from './markdown-field.js';
 import { commentFocusStep } from './comment-focus.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
@@ -2238,7 +2244,12 @@ function shownThoughtId(): string {
  * switches it into edit mode — CodeMirror mounts focused with the caret at
  * the end.
  */
-function focusEditorComment(thoughtId: string, findText?: string, selection?: MdSourceSelection): void {
+function focusEditorComment(
+  thoughtId: string,
+  findText?: string,
+  selection?: MdSourceSelection,
+  taskLine?: number,
+): void {
   const deadline = Date.now() + 8000;
   let activated = false;
   const tick = (): void => {
@@ -2294,7 +2305,8 @@ function focusEditorComment(thoughtId: string, findText?: string, selection?: Md
     // выделяет переданный диапазон источника (двойной клик в ленте публикаций,
     // задача 59774016); с текстом — вход по вхождению (задача 189da39e); без
     // офсета — обычный вход в правку (каретка в конец).
-    if (selection !== undefined) focusMarkdownFieldSelection(field!, selection);
+    if (taskLine !== undefined) focusMarkdownFieldTaskLine(field!, taskLine);
+    else if (selection !== undefined) focusMarkdownFieldSelection(field!, selection);
     else if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field!, findText);
     else editMarkdownField(field!);
   };
@@ -2315,6 +2327,18 @@ export function openThoughtCommentEditor(
 ): void {
   openThoughtInEditor(id);
   focusEditorComment(id, findText, selection);
+}
+
+/**
+ * «Открыть источник» задачи из ПОСТОЯННОГО комментария мысли (0.16.1, живая
+ * приёмка, пачка 3, пункт 1): открывает карточку владельца, вкладку «Основное»,
+ * переводит постоянный комментарий в правку и ставит каретку после маркера
+ * `- [ ] ` строки `lineNo` (номер строки `body_md`, с нуля). Маршрут ожидания
+ * поля/активации вкладки — общий с `openThoughtCommentEditor`.
+ */
+export function openThoughtCommentTaskLine(id: string, lineNo: number): void {
+  openThoughtInEditor(id);
+  focusEditorComment(id, undefined, undefined, lineNo);
 }
 
 // ---------------------------------------------------------------------------
