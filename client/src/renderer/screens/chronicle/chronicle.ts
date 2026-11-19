@@ -64,6 +64,8 @@ import {
   focusMarkdownFieldLineStart,
   focusMarkdownFieldStart,
   insertMentionLinkIntoField,
+  markdownFieldValue,
+  setMarkdownField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
 import { wireTaskCheckboxes } from '../../editor/task-checkbox-toggle.js';
@@ -306,6 +308,21 @@ interface CardEditor {
    * мысль обязана появиться сразу (ошибка 78d600c9).
    */
   syncHead(next: ChronicleRow): void;
+  /**
+   * Вход в правку ЗАПРОШЕН и ещё не завершён: тело дочитывается
+   * (`etn.comments.get`) перед созданием поля. Пересборка карточки в это окно
+   * отсоединила бы тело, и `ensureWidget` вернул бы `null` — правка не открылась
+   * бы вовсе (гонка пачки 4, вердикт `6df70910`).
+   */
+  pendingEdit(): boolean;
+  /**
+   * Свежее тело — в ОТКРЫТУЮ правку (пачка 4, замечание вердикта `6df70910`):
+   * чужое изменение источника (например «Отменить задачу» из панели) не должно
+   * оставлять в поле устаревший черновик — иначе сохранение вернёт отменённую
+   * строку. Модель обновляется всегда, документ поля — только если пользователь
+   * ничего не набрал поверх.
+   */
+  syncBody(next: ChronicleRow): void;
 }
 
 const cardEditors = new WeakMap<HTMLElement, CardEditor>();
@@ -1751,8 +1768,11 @@ function buildRecordCard(row: ChronicleRow, day: string): HTMLElement {
  * содержимое, сам узел карточки (и его DOM-позиция) сохраняется, поэтому правка
  * одной записи не пересоздаёт соседние карточки и не сбрасывает прокрутку.
  * Карточка В ЕДИНОЙ ПРАВКЕ не пересобирается: пересборка отсоединила бы живой
- * редактор и потеряла несохранённый текст. При этом шапка (дата/период и
- * облачка привязок) — не поля правки, её обновляет `syncHead` (78d600c9).
+ * редактор и потеряла несохранённый текст. То же — пока вход в правку В ПОЛЁТЕ
+ * (тело дочитывается перед созданием поля): пересборка отсоединила бы тело, и
+ * вход терялся бы (гонка пачки 4, вердикт `6df70910`). При этом шапка
+ * (дата/период и облачка привязок) — не поля правки, её обновляет `syncHead`
+ * (78d600c9).
  */
 function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
   const editor = cardEditors.get(card);
@@ -1761,8 +1781,11 @@ function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): vo
   // облачка привязок — НЕ поля правки, а часть модели записи: шапка
   // синхронизируется сразу. Без этого добавленная к несохранённой записи мысль
   // появлялась в шапке только после сохранения (ошибка 78d600c9).
-  if (editor !== undefined && editor.editing()) {
+  if (editor !== undefined && (editor.editing() || editor.pendingEdit())) {
     editor.syncHead(row);
+    // Открытая правка держит черновик: свежее тело источника подтягивается в
+    // поле, иначе там остаётся устаревший текст (замечание вердикта 6df70910).
+    if (editor.editing()) editor.syncBody(row);
     return;
   }
   fillRecordCard(card, row, day);
@@ -1794,9 +1817,18 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   const bodyHtml = row.body_html ?? '';
 
   let editing = false;
+  /** Вход в правку запрошен, поле ещё дочитывает тело (гонка с пересборкой). */
+  let enterPending = false;
   /** md тела загружен (лента несёт только `body_html`/`snippet`). */
   let bodyLoaded = false;
   let bodyDraft = '';
+  /**
+   * Последний известный СЕРВЕРНЫЙ `body_md` — база сравнения «пользователь
+   * ничего не набрал поверх» при синхронизации открытой правки.
+   */
+  let serverMd = '';
+  /** Версия записи, для которой черновик уже сверен с источником. */
+  let knownVersion = row.version;
   let widget: HTMLElement | null = null;
   let title: RecordTitleHandle | null = null;
 
@@ -1862,6 +1894,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
         row.updated_by = comment.updated_by;
         row.snippet = recordTitleFromBody(md);
         bodyDraft = md;
+        serverMd = md;
         bodyLoaded = true;
       },
     }));
@@ -1895,6 +1928,8 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       try {
         const comment = await etn.comments.get(requireNetworkId(), row.id);
         bodyDraft = comment.body_md;
+        serverMd = comment.body_md;
+        knownVersion = comment.version;
         row.body_html = comment.body_html;
         row.version = comment.version;
         bodyLoaded = true;
@@ -2011,20 +2046,35 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   }, 0);
 
   /**
+   * Провести вход в правку под признаком «вход в полёте»: пока дочитывается
+   * тело, карточка не пересобирается (`updateRecordCard`) — иначе отсоединённое
+   * тело не дало бы создать поле (гонка пачки 4, вердикт `6df70910`).
+   */
+  const whileEntering = async (enter: () => Promise<void>): Promise<void> => {
+    enterPending = true;
+    try {
+      await enter();
+    } finally {
+      enterPending = false;
+    }
+  };
+
+  /**
    * Войти в единую правку с фокусом в заданном поле: тело создаётся при первом
    * входе, заголовок открывается тем же действием (через `onEditChange`).
    */
-  const enterBodyEdit = async (focus: 'title' | 'body'): Promise<void> => {
-    const w = await ensureWidget();
-    if (w === null) return;
-    if (editing) {
+  const enterBodyEdit = async (focus: 'title' | 'body'): Promise<void> =>
+    whileEntering(async () => {
+      const w = await ensureWidget();
+      if (w === null) return;
+      if (editing) {
+        if (focus === 'title') title?.beginEdit(true);
+        else focusMarkdownFieldStart(w);
+        return;
+      }
+      editMarkdownField(w);
       if (focus === 'title') title?.beginEdit(true);
-      else focusMarkdownFieldStart(w);
-      return;
-    }
-    editMarkdownField(w);
-    if (focus === 'title') title?.beginEdit(true);
-  };
+    });
 
   /**
    * Войти в единую правку тела и поставить каретку в НАЧАЛО строки `lineNo`
@@ -2032,11 +2082,12 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
    * `ensureWidget`, вход в правку и позиция каретки — жестом поля
    * (`focusMarkdownFieldLineStart`), второй копии разбора смещений нет.
    */
-  const enterBodyEditAtLine = async (lineNo: number): Promise<void> => {
-    const w = await ensureWidget();
-    if (w === null) return;
-    focusMarkdownFieldLineStart(w, lineNo);
-  };
+  const enterBodyEditAtLine = async (lineNo: number): Promise<void> =>
+    whileEntering(async () => {
+      const w = await ensureWidget();
+      if (w === null) return;
+      focusMarkdownFieldLineStart(w, lineNo);
+    });
 
   /** ЕДИНАЯ запись обоих полей одним PATCH (требование 26f0aa52). */
   const saveBoth = async (md: string): Promise<string> => {
@@ -2061,8 +2112,10 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     row.title = updated.title;
     row.body_html = updated.body_html;
     row.version = updated.version;
+    knownVersion = updated.version;
     row.snippet = recordTitleFromBody(updated.body_md);
     bodyDraft = updated.body_md;
+    serverMd = updated.body_md;
     bodyLoaded = true;
     if (title !== null) {
       title.setContent(updated.title ?? '', derivedTitleLabel(updated.title, updated.body_md));
@@ -2145,6 +2198,41 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       row.use_time = next.use_time;
       chips.sync(row);
       head.setDayLabel(recordDateLabel(row));
+    },
+    pendingEdit: () => enterPending,
+    syncBody: (next: ChronicleRow): void => {
+      if (next.version === knownVersion) return;
+      // Версию запоминаем сразу: повторные отрисовки той же ленты не должны
+      // плодить точечные чтения одной и той же редакции.
+      knownVersion = next.version;
+      void (async () => {
+        let comment: Comment;
+        try {
+          comment = await etn.comments.get(requireNetworkId(), row.id);
+        } catch {
+          // Сбой дочитывания правку не отменяет: черновик остаётся прежним,
+          // а лента попробует снова на следующем обновлении.
+          return;
+        }
+        knownVersion = comment.version;
+        row.body_html = comment.body_html;
+        row.version = comment.version;
+        row.snippet = recordTitleFromBody(comment.body_md);
+        const field = widget;
+        if (!editing || field === null) {
+          bodyDraft = comment.body_md;
+          serverMd = comment.body_md;
+          bodyLoaded = true;
+          return;
+        }
+        // Пользователь набрал поверх — его текст не трогаем; документ поля
+        // заменяется только когда он совпадает с последним серверным.
+        if (markdownFieldValue(field) !== serverMd) return;
+        bodyDraft = comment.body_md;
+        serverMd = comment.body_md;
+        bodyLoaded = true;
+        setMarkdownField(field, comment.body_md, comment.body_html);
+      })();
     },
   };
 
