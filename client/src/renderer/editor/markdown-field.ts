@@ -119,6 +119,12 @@ export interface AttachmentsOwner {
 interface MarkdownFieldHandle {
   showEdit(md?: string): void;
   set(md: string, html: string): void;
+  /**
+   * Заменить ЧЕРНОВИК правки, не выдавая его за сохранённый снапшот: поле
+   * остаётся «грязным», `Ctrl+Enter` сохранит содержимое. Нужно построчному
+   * слиянию черновика записи с внешней правкой (0.16.1, задача `b36a3d49`).
+   */
+  replaceDraft(md: string): void;
   /** Текущий markdown поля: текст правки, если поле в правке, иначе снапшот. */
   value(): string;
   /**
@@ -1916,6 +1922,14 @@ export function createMarkdownField(opts: {
         search.refresh();
       }
     },
+    replaceDraft: (md) => {
+      // Текст пришёл построчным слиянием с серверной правкой: снапшот
+      // (`currentMd`) остаётся последним сохранённым, поэтому поле «грязное» и
+      // `Ctrl+Enter` сохранит содержимое (0.16.1, задача `b36a3d49`).
+      if (editor === null || !editing) return;
+      editor.setValue(md, true);
+      search.refresh();
+    },
     focusAt: (findText) => {
       showEdit();
       if (editor === null) return;
@@ -2072,6 +2086,15 @@ export function focusMarkdownFieldTaskLine(root: HTMLElement, lineNo: number): v
 /** Updates an already-built field's content (e.g. after an external change). */
 export function setMarkdownField(root: HTMLElement, md: string, html: string): void {
   handles.get(root)?.set(md, html);
+}
+
+/**
+ * Заменить ЧЕРНОВИК правки, не выдавая его за сохранённый снапшот: поле
+ * остаётся «грязным», `Ctrl+Enter` сохранит содержимое. Нужно построчному
+ * слиянию черновика записи с внешней правкой (0.16.1, задача `b36a3d49`).
+ */
+export function replaceMarkdownFieldDraft(root: HTMLElement, md: string): void {
+  handles.get(root)?.replaceDraft(md);
 }
 
 /**

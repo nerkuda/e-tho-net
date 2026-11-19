@@ -75,7 +75,8 @@ let net: Net;
 
 const { localDayEnd, localDayStart, todayLocal } = await import('../src/renderer/lib/dates.js');
 const { t } = await import('../src/renderer/lib/i18n.js');
-const { markdownFieldValue } = await import('../src/renderer/editor/markdown-field.js');
+const { commitMarkdownField, markdownFieldValue } =
+  await import('../src/renderer/editor/markdown-field.js');
 
 /** Простейший markdown → HTML: тесту важен не рендер, а смена содержимого. */
 function mdToHtml(md: string): string {
@@ -477,6 +478,23 @@ function caretLine(): number | null {
   return view.state.doc.lineAt(view.state.selection.main.head).number - 1;
 }
 
+/** Набрать текст в строку правки — транзакцией документа, как ввод в CM6. */
+function replaceLine(lineNo: number, text: string): void {
+  const content = fieldRoot()?.querySelector('.cm-content') as unknown as ShimElement | null;
+  assert.ok(content, 'документ правки в поле');
+  const view = EditorView.findFromDOM(content as unknown as HTMLElement);
+  assert.ok(view !== null, 'редактор поля правки');
+  const line = view.state.doc.line(lineNo + 1);
+  view.dispatch({ changes: { from: line.from, to: line.to, insert: text } });
+}
+
+/** Ctrl+Enter: сохранение правки тем же путём, каким его зовёт клавиша. */
+function commitEdit(): void {
+  const root = fieldRoot();
+  assert.ok(root, 'поле правки');
+  commitMarkdownField(root as unknown as HTMLElement);
+}
+
 /** «Создать задачу на сегодня» у строки напоминания панели. */
 function clickCreateTask(): void {
   const button = host.querySelector('.ui-reminder-create-task') as unknown as ShimElement | null;
@@ -636,5 +654,58 @@ describe('открытая правка догоняет тело источни
       'в источнике строка без маркера задачи',
     );
     assert.equal(editing(), true, 'правка осталась открытой');
+  });
+});
+
+describe('набранный текст и внешняя правка записи (блокер 90c35105)', () => {
+  it('«Отменить задачу» при набранном тексте: маркер не возвращается, ввод сохранён', async () => {
+    const today = todayLocal();
+    net.record = makeRecord(`Заметка дня\n- [ ] Задача записи [[#${SUBJECT}]] [[${today}]]`);
+    net.tasks = [taskRow(1)];
+    await mountDiary();
+    await waitFor(() => host.querySelector('.ui-task-row') !== null, 'строка задачи в панели');
+
+    await chronicleMod.openChronicleTaskLine({ commentId: REC, lineNo: 1 });
+    await waitFor(() => editing(), 'правка тела открыта');
+    // Пользователь печатает в СВОЕЙ строке — не в той, которую правит панель.
+    replaceLine(0, 'Заметка дня, дописал');
+    assert.equal(
+      markdownFieldValue(fieldRoot() as unknown as HTMLElement),
+      `Заметка дня, дописал\n- [ ] Задача записи [[#${SUBJECT}]] [[${today}]]`,
+      'набранный текст в поле правки',
+    );
+
+    await clickCancelTask();
+    await waitFor(
+      () => net.record.body_md === `Заметка дня\n- Задача записи [[#${SUBJECT}]] [[${today}]]`,
+      'источник обновился после отмены задачи',
+    );
+    eventRouterMod.routeRealtimeEvent({
+      type: 'comment.updated',
+      network_id: NET,
+      seq: 1,
+      data: {
+        id: REC,
+        kind: 'chronological',
+        version: net.record.version,
+        changes: { body_md: net.record.body_md, body_html: net.record.body_html },
+      },
+    } as any);
+    // Набранная строка пользователя цела, строку задачи заменила серверная.
+    await waitFor(
+      () =>
+        markdownFieldValue(fieldRoot() as unknown as HTMLElement) ===
+        `Заметка дня, дописал\n- Задача записи [[#${SUBJECT}]] [[${today}]]`,
+      'черновик слит с внешней правкой построчно',
+    );
+
+    commitEdit();
+    await waitFor(
+      () =>
+        net.record.body_md === `Заметка дня, дописал\n- Задача записи [[#${SUBJECT}]] [[${today}]]`,
+      'сохранение записало слитый черновик',
+    );
+    assert.ok(!net.record.body_md.includes('- [ ]'), 'отменённая задача не вернулась в источник');
+    assert.ok(net.record.body_md.startsWith('Заметка дня, дописал'), 'набранный текст сохранён');
   });
 });

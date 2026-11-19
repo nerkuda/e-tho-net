@@ -65,6 +65,7 @@ import {
   focusMarkdownFieldStart,
   insertMentionLinkIntoField,
   markdownFieldValue,
+  replaceMarkdownFieldDraft,
   setMarkdownField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
@@ -210,6 +211,7 @@ import {
 } from './tasks-panel.js';
 import { filterPanelReserve, tasksPanelMaxHeight } from './tasks-panel-geometry.js';
 import { renderRecordView } from './record-body.js';
+import { mergeRecordBody } from './record-body-merge.js';
 import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
 
 /**
@@ -2225,13 +2227,25 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
           bodyLoaded = true;
           return;
         }
-        // Пользователь набрал поверх — его текст не трогаем; документ поля
-        // заменяется только когда он совпадает с последним серверным.
-        if (markdownFieldValue(field) !== serverMd) return;
-        bodyDraft = comment.body_md;
+        // Правки источника применяются ПОСТРОЧНО: строки, которых пользователь
+        // не касался, берутся из свежего тела, набранные — остаются. Иначе
+        // сохранение возвращало отменённую строку (блокер репроверки 90c35105).
+        const userMd = markdownFieldValue(field);
+        const merged = mergeRecordBody(serverMd, userMd, comment.body_md);
+        bodyDraft = merged ?? userMd;
         serverMd = comment.body_md;
         bodyLoaded = true;
-        setMarkdownField(field, comment.body_md, comment.body_html);
+        // `null` — структура разошлась (строки добавили/удалили): документ не
+        // трогаем, как и прежде.
+        if (merged === null || merged === userMd) return;
+        if (merged === comment.body_md) {
+          // В слитом тексте только серверные редакции — поле получает снапшот.
+          setMarkdownField(field, comment.body_md, comment.body_html);
+          return;
+        }
+        // В слитом тексте остались набранные строки — это ЧЕРНОВИК: `Ctrl+Enter`
+        // обязан его сохранить, поэтому снапшот поля не подменяем.
+        replaceMarkdownFieldDraft(field, merged);
       })();
     },
   };
