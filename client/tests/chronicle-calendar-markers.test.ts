@@ -227,7 +227,11 @@ describe('календарь месяца: маркеры дня (0.16.1, ab9d62
     assert.match(rule('.cal-marker--records'), /border-radius:\s*50%/);
     assert.match(rule('.cal-marker--plans'), /border-radius:\s*0/);
     assert.match(rule('.cal-marker--facts'), /clip-path:\s*polygon\(50% 0/);
-    assert.match(rule('.cal-marker'), /width:\s*4px/);
+    // Размер клетки — 6px (поднят с 4px по замечанию живой приёмки 0.16.1):
+    // на 4px ромб и круг сливались. Попап дня крупнее — 8px.
+    assert.match(rule('.cal-marker'), /width:\s*6px/);
+    assert.match(rule('.cal-marker'), /height:\s*6px/);
+    assert.match(rule('.cal-day-info .cal-marker'), /width:\s*8px/);
     for (const selector of [
       '.cal-marker',
       '.cal-marker--records',
