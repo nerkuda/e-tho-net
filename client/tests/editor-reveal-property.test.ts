@@ -420,6 +420,65 @@ describe('переход к свойству из «Связей дня» (3054f
     );
   });
 
+  it('раскрывает внетиповую группу, когда свёрнуты обе группы', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { store } = await import('../src/renderer/state.js');
+    // Свойства `p-out` в типе нет, а пользователь свернул ОБЕ группы — ни одно
+    // тело не построено. Переход обязан раскрыть именно внетиповую группу:
+    // иначе строку не показать (замечание проверки 8894a5f8 — без этого кейса
+    // ветка раскрытия вне-типа оставалась без сторожа).
+    const etnApi = (globalThis as any).window.etn as Record<string, any>;
+    etnApi.types = { listTypeProperties: async () => [TEXT_PROPERTY] };
+    etnApi.properties = {
+      get: async () => [
+        {
+          property_id: 'p-out',
+          property_name: 'дата приобретения',
+          value_type: 'date',
+          value: '2026-11-02',
+          outside_type: true,
+        },
+      ],
+    };
+    store.update({
+      collapsedGroups: { 'properties.type': true, 'properties.outside': true },
+    } as any);
+    const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p-out',
+    });
+    await flush();
+
+    assert.equal(
+      scrollBox.querySelector('.properties-type-body'),
+      null,
+      'типовая группа осталась свёрнутой (тело не построено)',
+    );
+    assert.notEqual(
+      scrollBox.querySelector('.properties-outside-body'),
+      null,
+      'внетиповая группа раскрыта — тело построено',
+    );
+    assert.equal(
+      currentPropertyRow(scrollBox)?.getAttribute('data-key'),
+      'p-out',
+      'внетиповая строка выделена в раскрытой группе',
+    );
+    // Раскрытие ради перехода не переписывает предпочтения пользователя.
+    assert.equal(
+      store.state.collapsedGroups['properties.type'],
+      true,
+      'типовая: свёрнуто сохранено',
+    );
+    assert.equal(
+      store.state.collapsedGroups['properties.outside'],
+      true,
+      'внетиповая: свёрнуто сохранено',
+    );
+  });
+
   it('обычное открытие мысли вкладку не переключает', async () => {
     const { scrollBox } = await mountOpenEditor();
     const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
