@@ -554,6 +554,7 @@ export const zh = {
     '删除类型「%1」？此类型的想法将保留并变为无类型；此类型的属性值将被删除。',
   'thoughtTypes.deleteConfirmWithChildren':
     '删除类型「%1」及其子类型（%2）？这些类型的想法将保留并变为无类型；这些类型的属性值将被删除。',
+  'thoughtTypes.deleteRoleBlocked': '该类型在网络中用作「%1」角色；请先在网络设置中取消该角色。',
   'typeEditor.tab.basic': '基本',
   'typeEditor.tab.properties': '属性',
   'typeEditor.tab.views': '视图',

@@ -106,6 +106,14 @@ function buildUsageDetails(
   for (const [k, v] of Object.entries(counts)) {
     if (v !== undefined) details[k] = v;
   }
+  // Ошибка d4802371: отказ по типу мысли несёт ТОТ ЖЕ ключ `children`, что и
+  // доменный/REST-отказ (`thought-type-service.deleteThoughtType`) — клиенты и
+  // тесты читают `details.children`. `children_count` остаётся счётчиком
+  // ответа использования (`affected_counts`), в отказе он не нужен.
+  if (kind === 'thought_type' && counts.children_count !== undefined) {
+    delete details.children_count;
+    details.children = counts.children_count;
+  }
   return details;
 }
 

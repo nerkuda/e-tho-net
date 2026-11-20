@@ -152,5 +152,43 @@ describe(
         await closeMcpContext(ctx);
       }
     });
+
+    it('без force при использовании И детях отказ несёт details.children, а не children_count', async () => {
+      const ctx = await buildMcpContext();
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const a = createThoughtType(ndb, { name: 'A' }, ctx.adminId);
+        const b = createThoughtType(ndb, { name: 'B', parent_id: a.id }, ctx.adminId);
+        createThoughtType(ndb, { name: 'C', parent_id: b.id }, ctx.adminId);
+        createThought(ndb, { title: 'Мысль типа A', type_id: a.id }, ctx.adminId);
+
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          // Есть и использование (мысль), и потомки: отказ строится по
+          // счётчикам использования, но ключ размера поддерева обязан
+          // совпадать с доменным и REST-отказом — `details.children`.
+          const del = await callOp(
+            handle.client,
+            'ontology.delete',
+            {
+              network_id: ctx.networkId,
+              kind: 'thought_type',
+              id: a.id,
+            },
+            true,
+          );
+          assert.equal(del.isError, true, 'без force удаление отвергается');
+          const details = errorDetails(toolText(del));
+          assert.equal(details?.children, 2, 'details.children — число потомков поддерева');
+          assert.equal(details?.children_count, undefined, 'второго ключа размера в отказе нет');
+          assert.equal(details?.thoughts_count, 1, 'счётчик использования сохранён');
+          assert.notEqual(getThoughtType(ndb, a.id), null, 'ничего не удалено');
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
   },
 );

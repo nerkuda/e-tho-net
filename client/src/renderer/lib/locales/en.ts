@@ -1127,6 +1127,10 @@ export const en = {
    *  `%1` — имя типа, `%2` — число дочерних типов (всё поддерево). */
   'thoughtTypes.deleteConfirmWithChildren':
     'Delete type “%1” together with its child types (%2)? Thoughts of these types will remain and become untyped; property values will be deleted.',
+  /** Отказ удаления, когда тип (или потомок поддерева) занят ролью сети
+   *  (ошибка d4802371): `%1` — человекочитаемое имя роли. */
+  'thoughtTypes.deleteRoleBlocked':
+    'The type is used by the network in the “%1” role; remove the role in the network settings first.',
 
   // -- Редактор типа мысли (screens/type-manager.ts) -----------------------
   /** Первая вкладка редактора типа: имя/родитель вынесены в шапку, здесь —
