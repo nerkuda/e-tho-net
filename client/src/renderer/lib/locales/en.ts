@@ -1397,6 +1397,7 @@ export const en = {
   'tasks.openSubject': 'Open subject',
   'tasks.dismissReminder': 'Dismiss',
   'tasks.snoozeReminder': 'Snooze…',
+  'tasks.snoozeToday': 'today',
   'tasks.snoozeDateTime': 'date and time…',
   'tasks.snoozeDateTimeTitle': 'Snooze reminder',
   'tasks.createTask': 'Create a task for today',

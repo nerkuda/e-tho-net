@@ -49,6 +49,28 @@ export function localDayOfInstant(iso: string | null | undefined): string | null
 }
 
 /**
+ * Локальные сутки `now` со ВРЕМЕНЕМ СУТОК инстанса `iso` — «сегодня в тот же
+ * час» (0.16.1, план тестирования 7e12f589: сдвиг «сегодня» у напоминания).
+ * Часы берутся в поясе наблюдателя: вхождение, показанное в 9:00, после сдвига
+ * остаётся в 9:00 местного времени. Неразборчивый `iso` возвращается как есть —
+ * решение о пригодности значения принимает вызывающий.
+ */
+export function todayAtTimeOf(iso: string, now: Date = new Date()): string {
+  const source = new Date(iso);
+  if (Number.isNaN(source.getTime()) || Number.isNaN(now.getTime())) return iso;
+  const target = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    source.getHours(),
+    source.getMinutes(),
+    source.getSeconds(),
+    source.getMilliseconds(),
+  );
+  return target.toISOString();
+}
+
+/**
  * Локальная дата `YYYY-MM-DD` корректна (такая дата существует в календаре).
  * Общий валидатор «голых дат»: им пользуются диалог «Дата/период» и
  * компонентное поле даты (`lib/date-field.ts`) — одна точка правды

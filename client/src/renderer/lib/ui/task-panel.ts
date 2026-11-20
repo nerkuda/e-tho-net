@@ -44,7 +44,7 @@
 import type { TaskMassFilter } from '@etn/shared';
 
 import { div, el, span } from '../dom.js';
-import { shiftInstant, todayLocal } from '../dates.js';
+import { shiftInstant, todayAtTimeOf, todayLocal } from '../dates.js';
 import { t, tp } from '../i18n.js';
 import {
   MENU_SEPARATOR,
@@ -458,6 +458,30 @@ function taskMoveShifts(): ReadonlyArray<{ labelKey: TaskShiftLabelKey; shift: T
   return [{ labelKey: 'tasks.shiftToday', shift: { date: todayLocal() } }, ...TASK_SHIFTS];
 }
 
+/**
+ * «Сегодня» в подменю «Отложить…» вхождения напоминания (0.16.1, план
+ * тестирования `7e12f589`, пп. 1.4/5.6): вхождение показывается в ТЕКУЩИХ
+ * локальных сутках в тот же час, что и `row.moment` (момент показа строки —
+ * `until` у уже отложенного, иначе момент по расписанию).
+ *
+ * Сервер принимает `until` только строго в будущем и строго позже
+ * откладываемого вхождения (`snoozeReminder`, требование 4401beb8), поэтому
+ * команду, которую он заведомо отклонит, меню НЕ предлагает: пункт недоступен
+ * (`null`), когда сегодняшний час уже прошёл, вхождение и так сегодня, или
+ * вхождение запланировано на будущие сутки — «отложить» переносит только
+ * ВПЕРЁД. Произвольный будущий момент остаётся у пункта «дата и время…».
+ */
+function todaySnoozeUntil(row: ReminderPanelRow, nowMs: number = Date.now()): string | null {
+  const until = todayAtTimeOf(row.moment);
+  const untilMs = Date.parse(until);
+  if (!Number.isFinite(untilMs) || untilMs <= nowMs) return null;
+  const occurrenceMs = Date.parse(row.occurrenceAt);
+  // Вхождение по расписанию — адрес исключения: сервер требует `until` позже
+  // него. Неразборчивый адрес не блокирует команду — его отклонит сам сервер.
+  if (Number.isFinite(occurrenceMs) && untilMs <= occurrenceMs) return null;
+  return until;
+}
+
 /** Один лист навигации списка — строка задачи или вхождения. */
 interface PanelEntry {
   key: string;
@@ -817,11 +841,21 @@ export function mountTaskPanel(
 
   /** Строка меню команд вхождения напоминания. */
   function reminderRowMenu(row: ReminderPanelRow): MenuItem[] {
+    const todayUntil = todaySnoozeUntil(row);
     return [
       menuAction(t('tasks.openSubject'), () => actions.reminderAction(row, 'open-subject')),
       menuAction(t('reminder.editSchedule'), () => actions.reminderAction(row, 'edit-schedule')),
       menuAction(t('tasks.dismissReminder'), () => actions.reminderAction(row, 'dismiss')),
       menuSubmenu(t('tasks.snoozeReminder'), [
+        // «Сегодня» идёт первым — по плану 7e12f589. Пункт недоступен, если
+        // сегодняшний час вхождения уже прошёл: сервер такую команду отклонит.
+        menuAction(
+          t('tasks.snoozeToday'),
+          () => {
+            if (todayUntil !== null) actions.reminderAction(row, 'snooze', todayUntil);
+          },
+          { disabled: todayUntil === null },
+        ),
         ...TASK_SHIFTS.map((item) =>
           menuAction(t(item.labelKey), () =>
             actions.reminderAction(row, 'snooze', shiftIso(row.moment, item.shift)),

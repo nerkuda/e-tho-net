@@ -689,6 +689,7 @@ export const zh = {
   'tasks.openSubject': '打开对象',
   'tasks.dismissReminder': '移除',
   'tasks.snoozeReminder': '稍后提醒…',
+  'tasks.snoozeToday': '今天',
   'tasks.snoozeDateTime': '日期和时间…',
   'tasks.snoozeDateTimeTitle': '推迟提醒',
   'tasks.createTask': '创建今日任务',

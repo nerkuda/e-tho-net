@@ -292,6 +292,47 @@ function menuRowByLabel(root: ShimElement, label: string): ShimElement {
   return row as unknown as ShimElement;
 }
 
+/** Снимок панели с одной группой напоминаний (строки — в подгруппе даты). */
+function remindersView(rows: ReminderPanelRow[]): TaskPanelView {
+  return panelView([], {
+    reminderCount: rows.length,
+    reminderSections: [
+      {
+        key: 'today',
+        title: 'Сегодня',
+        subgroups: [
+          { key: 'date:2026-11-14', title: '14.11.2026', kind: 'dates', filter: {}, rows },
+        ],
+      },
+    ],
+  });
+}
+
+/** Открыть меню команд строки напоминания; корень меню живёт в `document.body`. */
+function openReminderMenu(host: ShimElement): ShimElement {
+  const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+  const button = host.querySelector('.ui-reminder-row-menu') as unknown as ShimElement;
+  assert.ok(button, 'у строки напоминания есть меню команд');
+  button.emit('click', {
+    target: button,
+    currentTarget: button,
+    preventDefault: (): void => undefined,
+    stopPropagation: (): void => undefined,
+  });
+  const root = body.querySelector('.menu') as unknown as ShimElement | null;
+  assert.ok(root, 'меню строки открыто');
+  return root;
+}
+
+/** Открыть подменю «Отложить…» и вернуть сам список подменю. */
+function openSnoozeSubmenu(host: ShimElement): ShimElement {
+  const root = openReminderMenu(host);
+  menuRowByLabel(root, t('tasks.snoozeReminder')).emit('mouseenter');
+  const sub = root.querySelector('.menu-sub') as unknown as ShimElement | null;
+  assert.ok(sub, 'подменю «Отложить…» строится по наведению (ленивая сборка меню)');
+  return sub;
+}
+
 const CLIENT_ROOT = path.resolve(import.meta.dirname, '..');
 const TASK_PANEL_CSS = path.join(CLIENT_ROOT, 'src', 'renderer', 'lib', 'ui', 'task-panel.css');
 
@@ -541,7 +582,37 @@ describe('панель задач: секции, строки и счётчик�
     destroy();
   });
 
-  it('меню строки напоминания: пять команд и подменю «Отложить…» от момента вхождения', async () => {
+  /** Вхождение напоминания для проверок «сегодня» (момент показа = вхождения). */
+  function reminderRow(moment: string): ReminderPanelRow {
+    return {
+      key: `r1:${moment}`,
+      reminderId: 'r1',
+      subjectType: 'thought',
+      subjectId: 't1',
+      title: 'Мысль',
+      moment,
+      occurrenceAt: moment,
+      status: 'active',
+      repeat: 'однократно',
+      day: '2026-11-14',
+    };
+  }
+
+  /** Момент сегодняшних суток со временем суток `iso` (ожидаемый «сегодня»). */
+  function todayAt(iso: string, base: Date): number {
+    const source = new Date(iso);
+    return new Date(
+      base.getFullYear(),
+      base.getMonth(),
+      base.getDate(),
+      source.getHours(),
+      source.getMinutes(),
+      source.getSeconds(),
+      source.getMilliseconds(),
+    ).getTime();
+  }
+
+  it('меню строки напоминания: пять команд и подменю «Отложить…» от момента вхождения', async (test) => {
     const rows: ReminderPanelRow[] = [
       {
         key: 'r1:2026-11-14T09:00:00.000Z',
@@ -557,50 +628,21 @@ describe('панель задач: секции, строки и счётчик�
       },
     ];
     const key = rows[0]!.key;
+    // Пункт «сегодня» зависит от ТЕКУЩИХ локальных суток, поэтому «сейчас»
+    // фиксируется: сегодняшний час вхождения должен быть ещё впереди, иначе
+    // пункт штатно недоступен (см. следующий кейс).
+    const now = new Date('2026-11-20T06:00:00.000Z');
+    /** Сегодняшние сутки со временем суток вхождения — ожидаемый `until`. */
+    const expectedToday = new Date(todayAt(rows[0]!.moment, now)).toISOString();
+    test.mock.timers.enable({ apis: ['Date'] });
+    test.mock.timers.setTime(now.getTime());
     const { host, calls, render, destroy } = mount([]);
-    render(
-      panelView([], {
-        reminderCount: rows.length,
-        reminderSections: [
-          {
-            key: 'today',
-            title: 'Сегодня',
-            subgroups: [
-              { key: 'date:2026-11-14', title: '14.11.2026', kind: 'dates', filter: {}, rows },
-            ],
-          },
-        ],
-      }),
-    );
-    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
-
-    /** Открыть меню строки и вернуть его корень (меню живёт в `document.body`). */
-    const openMenu = (): ShimElement => {
-      const button = host.querySelector('.ui-reminder-row-menu') as unknown as ShimElement;
-      assert.ok(button, 'у строки напоминания есть меню команд');
-      button.emit('click', {
-        target: button,
-        currentTarget: button,
-        preventDefault: (): void => undefined,
-        stopPropagation: (): void => undefined,
-      });
-      const root = body.querySelector('.menu') as unknown as ShimElement | null;
-      assert.ok(root, 'меню строки открыто');
-      return root;
-    };
-    /** Открыть подменю «Отложить…» и вернуть сам список подменю. */
-    const openSnoozeSubmenu = (): ShimElement => {
-      const root = openMenu();
-      menuRowByLabel(root, t('tasks.snoozeReminder')).emit('mouseenter');
-      const sub = root.querySelector('.menu-sub') as unknown as ShimElement | null;
-      assert.ok(sub, 'подменю «Отложить…» строится по наведению (ленивая сборка меню)');
-      return sub;
-    };
+    render(remindersView(rows));
 
     // Пять команд плана (план тестирования 7e12f589, «напоминания можно
     // переносить / создать задачу / отменить»). Разделитель `.menu-sep` строкой
     // меню не считается.
-    const topLevel = openMenu()
+    const topLevel = openReminderMenu(host)
       .querySelectorAll('.menu-item')
       .map((node) => menuLabel(node));
     assert.deepEqual(
@@ -622,7 +664,7 @@ describe('панель задач: секции, строки и счётчик�
       [t('tasks.dismissReminder'), 'dismiss'],
       [t('tasks.createTask'), 'create-task'],
     ] as const) {
-      menuRowByLabel(openMenu(), label).click();
+      menuRowByLabel(openReminderMenu(host), label).click();
       assert.equal(
         calls.reminderActions[calls.reminderActions.length - 1],
         `${key}:${action}`,
@@ -630,44 +672,99 @@ describe('панель задач: секции, строки и счётчик�
       );
     }
 
-    // Подменю «Отложить…»: относительные сдвиги считаются ОТ МОМЕНТА вхождения
-    // (`shiftIso(row.moment, …)`); абсолютный пункт — диалог даты и времени.
-    const sub = openSnoozeSubmenu();
+    // Подменю «Отложить…»: «сегодня» (план 7e12f589) + относительные сдвиги,
+    // считаемые ОТ МОМЕНТА вхождения (`shiftIso(row.moment, …)`); абсолютный
+    // пункт — диалог даты и времени.
+    const sub = openSnoozeSubmenu(host);
     assert.deepEqual(
       sub.querySelectorAll('.menu-item').map((node) => menuLabel(node)),
-      [t('tasks.shiftDay'), t('tasks.shiftWeek'), t('tasks.shiftMonth'), t('tasks.snoozeDateTime')],
-      'три относительных сдвига и «на дату…»',
-    );
-    assert.equal(
-      sub
-        .querySelectorAll('.menu-item')
-        .map((node) => menuLabel(node))
-        .includes(t('tasks.shiftToday')),
-      false,
-      'пункта «сегодня» в «Отложить…» нет: момент вхождения, а не текущие сутки',
+      [
+        t('tasks.snoozeToday'),
+        t('tasks.shiftDay'),
+        t('tasks.shiftWeek'),
+        t('tasks.shiftMonth'),
+        t('tasks.snoozeDateTime'),
+      ],
+      '«сегодня», три относительных сдвига и «на дату…»',
     );
 
-    menuRowByLabel(openSnoozeSubmenu(), t('tasks.shiftDay')).click();
+    // «Сегодня» — ТЕКУЩИЕ сутки с часом вхождения: дата сегодняшняя, время из
+    // `row.moment` (сервер принимает `until` строго в будущем и позже вхождения).
+    menuRowByLabel(openSnoozeSubmenu(host), t('tasks.snoozeToday')).click();
+    assert.equal(
+      calls.reminderActions[calls.reminderActions.length - 1],
+      `${key}:snooze:${expectedToday}`,
+      '«сегодня» — сегодняшняя дата со временем вхождения',
+    );
+    assert.ok(
+      Date.parse(expectedToday) > Date.parse(rows[0]!.moment),
+      'ожидаемый момент позже вхождения — сервер команду примет',
+    );
+
+    menuRowByLabel(openSnoozeSubmenu(host), t('tasks.shiftDay')).click();
     assert.equal(
       calls.reminderActions[calls.reminderActions.length - 1],
       `${key}:snooze:2026-11-15T09:00:00.000Z`,
       '«следующий день» — момент + 1 день',
     );
 
-    menuRowByLabel(openSnoozeSubmenu(), t('tasks.shiftMonth')).click();
+    menuRowByLabel(openSnoozeSubmenu(host), t('tasks.shiftMonth')).click();
     assert.equal(
       calls.reminderActions[calls.reminderActions.length - 1],
       `${key}:snooze:2026-12-14T09:00:00.000Z`,
       '«на месяц» — календарный месяц от момента',
     );
 
-    menuRowByLabel(openSnoozeSubmenu(), t('tasks.snoozeDateTime')).click();
+    menuRowByLabel(openSnoozeSubmenu(host), t('tasks.snoozeDateTime')).click();
     await flush();
     assert.equal(
       calls.reminderActions[calls.reminderActions.length - 1],
       `${key}:snooze:2026-11-20T12:00:00.000Z`,
       '«на дату…» — выбранные дата и время, тоже вхождение',
     );
+    destroy();
+  });
+
+  it('«сегодня» недоступен, когда сегодняшний час вхождения уже прошёл', async (test) => {
+    const moment = '2026-11-14T09:00:00.000Z';
+    // «Сейчас» — минутой позже сегодняшнего часа вхождения (в любом поясе):
+    // сервер отклонит `until` не в будущем (`snoozeReminder`), и меню такую
+    // команду не предлагает.
+    test.mock.timers.enable({ apis: ['Date'] });
+    test.mock.timers.setTime(todayAt(moment, new Date('2026-11-20T06:00:00.000Z')) + 60_000);
+
+    const { host, calls, render, destroy } = mount([]);
+    render(remindersView([reminderRow(moment)]));
+    const today = menuRowByLabel(openSnoozeSubmenu(host), t('tasks.snoozeToday'));
+
+    assert.equal(
+      today.classList.contains('menu-item-disabled'),
+      true,
+      'пункт «сегодня» недоступен: момент уже прошёл',
+    );
+    today.click();
+    assert.deepEqual(calls.reminderActions, [], 'команда не отправлена — сервер её отклонил бы');
+    destroy();
+  });
+
+  it('«сегодня» недоступен для вхождения будущих суток: отложить можно только вперёд', async (test) => {
+    const moment = '2026-12-01T09:00:00.000Z';
+    // «Сейчас» — за час ДО сегодняшнего часа вхождения: значение в будущем, но
+    // раньше самого вхождения, а `until` обязан быть строго позже него.
+    test.mock.timers.enable({ apis: ['Date'] });
+    test.mock.timers.setTime(todayAt(moment, new Date('2026-11-20T06:00:00.000Z')) - 3_600_000);
+
+    const { host, calls, render, destroy } = mount([]);
+    render(remindersView([reminderRow(moment)]));
+    const today = menuRowByLabel(openSnoozeSubmenu(host), t('tasks.snoozeToday'));
+
+    assert.equal(
+      today.classList.contains('menu-item-disabled'),
+      true,
+      'перенос «назад» сервер не примет — пункт недоступен',
+    );
+    today.click();
+    assert.deepEqual(calls.reminderActions, [], 'команда не отправлена');
     destroy();
   });
 
@@ -1846,10 +1943,14 @@ describe('панель задач: группа «Задачи» и секции
       }),
     );
     const sections = host.querySelectorAll(`.${TASK_PANEL_SECTION_CLASS}`);
+    // Секции сюда подаёт САМ тест: проверяется, что панель рисует их в порядке
+    // снимка со счётчиками. Порядок «Без срока» → «Срочные» собирает
+    // `periodTaskSections`, и его стережёт тест экрана
+    // (`tasks-panel-screen.test.ts`).
     assert.deepEqual(
       sections.map((section) => section.getAttribute('data-section')),
       ['undated', 'urgent'],
-      'сначала «Без срока», затем «Срочные» (порядок собирает `periodTaskSections`)',
+      'порядок секций снимка сохранён',
     );
     assert.deepEqual(
       sections.map((section) => section.querySelector('.ui-task-section-title')!.flatText().trim()),

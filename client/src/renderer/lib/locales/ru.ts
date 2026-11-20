@@ -1411,6 +1411,7 @@ export const ru = {
   'tasks.openSubject': 'Открыть субъект',
   'tasks.dismissReminder': 'Убрать',
   'tasks.snoozeReminder': 'Отложить…',
+  'tasks.snoozeToday': 'сегодня',
   'tasks.snoozeDateTime': 'дата и время…',
   'tasks.snoozeDateTimeTitle': 'Отложить напоминание',
   'tasks.createTask': 'Создать задачу на сегодня',
