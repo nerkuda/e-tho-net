@@ -1993,14 +1993,16 @@ describe('панель задач: чекбоксы подчинённого б�
   });
 
   it('адрес считается от строки-родителя: не нулевая строка источника (@152@ паритет)', async () => {
-    // Родитель — 5-я строка записи (line_no 4): второй чекбокс блока обязан
+    // Родитель — 5-я строка записи (lineNo 4): второй чекбокс блока обязан
     // адресовать АБСОЛЮТНУЮ строку 6, а не «2» блока. Именно этого не видит
     // тест с родителем в строке 0 — там формулы совпадают.
     const toggles: number[] = [];
-    const mounted = mount([taskRow({ line_no: 4, children: [], hasChildren: true })], {
+    const rowsSeen: number[] = [];
+    const mounted = mount([taskRow({ lineNo: 4, children: [], hasChildren: true })], {
       loadRawBlock: async () => ({ start: 4, end: 6, text: block }),
       renderBlock: fakeBlockRenderer([]),
-      toggleChild: (_row, lineNo) => {
+      toggleChild: (row, lineNo) => {
+        rowsSeen.push(row.lineNo);
         toggles.push(lineNo);
         return true;
       },
@@ -2015,6 +2017,7 @@ describe('панель задач: чекбоксы подчинённого б�
     boxes[1]!.checked = true;
     blockHost.emit('change', { target: boxes[1] });
     await flush();
+    assert.deepEqual(rowsSeen, [4], 'строка-родитель — пятая строка источника (lineNo 4)');
     assert.deepEqual(toggles, [6], 'второй чекбокс блока — абсолютная строка 6 записи');
     mounted.destroy();
   });

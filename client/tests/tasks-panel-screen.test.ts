@@ -832,6 +832,36 @@ describe('панель задач: точечная правка строки (�
       h.destroy();
     }
   });
+  it('инлайн-правка пишет СЫРУЮ строку источника, а не снапшот проекции', async () => {
+    keymap.keymapInternals.reset();
+    // Сырая строка отличается от снапшота: маркер списка, markdown-разметка,
+    // date-ссылка и вложенная строка под задачей. Мутация «писать row.text»
+    // сохранила бы снапшот и уничтожила задачу.
+    const raw = '- [ ] Задача **жирным** и `кодом` [[2026-11-20]]';
+    const h = await setup({
+      tasks: [taskRow({ text: 'Задача **жирным** и `кодом` [[2026-11-20]]' })],
+      commentBodies: { c1: `${raw}\n  - [ ] пункт` },
+      commentRows: { c1: [taskRow({ text: 'Задача **жирным** — уточнение', revision: 2 })] },
+    });
+    try {
+      const row = rowOf(h, 'c1:0');
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-edit') as unknown as HTMLElement;
+      assert.ok(field, 'поле правки открылось');
+      assert.equal(fieldText(field), raw, 'в поле — СЫРАЯ строка тела, а не снапшот проекции');
+      typeIntoField(field, '- [ ] Задача **жирным** — уточнение');
+      pressCommit(field);
+      await h.settle();
+      assert.deepEqual(
+        h.calls.commentUpdates,
+        ['- [ ] Задача **жирным** — уточнение\n  - [ ] пункт'],
+        'в тело ушла отредактированная СЫРАЯ строка (маркер сохранён), вложенная строка цела',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
   it('поле правки получает фокус ПОСЛЕ вставки в строку (блокер 84c71c37)', async () => {
     keymap.keymapInternals.reset();
     const h = await setup({ tasks: [taskRow()] });
@@ -1958,6 +1988,89 @@ describe('панель задач: блочная правка компонен�
         row.querySelector('.ui-task-row-block-edit'),
         null,
         'поле закрылось после сохранения',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('блочная правка сохраняет произвольный текст БЕЗ маркера — задача снимается (DoD 5)', async () => {
+    const body = '- [ ] задача\n  - [ ] пункт\n  текст\n- [ ] соседняя';
+    const h = await setup({
+      tasks: [taskRow()],
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт',
+          depth: 1,
+          checkbox: true,
+          done: false,
+        },
+        {
+          comment_id: 'c1',
+          line_no: 2,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'текст',
+          depth: 1,
+          checkbox: false,
+          done: false,
+        },
+      ],
+      commentBodies: { c1: body },
+      commentRows: { c1: [] },
+    });
+    try {
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-block-edit') as unknown as HTMLElement;
+      assert.ok(field, 'блочное поле открылось');
+      typeIntoField(field, 'Просто заметка без списка');
+      pressCommit(field);
+      await h.settle();
+      assert.deepEqual(
+        h.calls.commentUpdates,
+        ['Просто заметка без списка\n- [ ] соседняя'],
+        'текст без маркера записан вместо блока дословно; соседняя задача цела',
+      );
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('блочная правка: смешанный блок (задача → обычный текст) пишется дословно', async () => {
+    const body = '- [ ] задача\n  - [ ] пункт\n- [ ] соседняя';
+    const h = await setup({
+      tasks: [taskRow()],
+      nested: [
+        {
+          comment_id: 'c1',
+          line_no: 1,
+          parent: { comment_id: 'c1', line_no: 0 },
+          text: 'пункт',
+          depth: 1,
+          checkbox: true,
+          done: false,
+        },
+      ],
+      commentBodies: { c1: body },
+      commentRows: { c1: [taskRow({ revision: 2 })] },
+    });
+    try {
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      (row.querySelector('.ui-task-row-text') as unknown as ShimElement).emit('dblclick', {});
+      await h.settle();
+      const field = row.querySelector('.ui-task-row-block-edit') as unknown as HTMLElement;
+      assert.ok(field, 'блочное поле открылось');
+      typeIntoField(field, '- [ ] задача\nобычный текст вместо пункта');
+      pressCommit(field);
+      await h.settle();
+      assert.deepEqual(
+        h.calls.commentUpdates,
+        ['- [ ] задача\nобычный текст вместо пункта\n- [ ] соседняя'],
+        'смешанный блок записан дословно, ничего не отвергнуто',
       );
     } finally {
       h.destroy();
