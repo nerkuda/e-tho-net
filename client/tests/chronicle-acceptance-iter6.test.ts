@@ -242,7 +242,7 @@ describe('приёмка №6, п.3: клик по дню обновляет н�
     // Сетка не пересобирается при старте перетаскивания — иначе узел-цель
     // теряется и одиночный `click` по дню не доходит.
     const other = dayByDate(root, '2026-09-20')!;
-    dayByDate(root, '2026-09-10')!.emit('mousedown');
+    dayByDate(root, '2026-09-10')!.emit('mousedown', { button: 0 });
     assert.equal(
       dayByDate(root, '2026-09-20'),
       other,
@@ -256,7 +256,7 @@ describe('приёмка №6, п.3: клик по дню обновляет н�
     assert.equal(dateInputValue(root, 0), '2026-09-15', 'поле даты обновлено кликом по дню');
 
     // Drag по-прежнему ставит «С»/«По» и авто-переключает режим.
-    dayByDate(root, '2026-09-10')!.emit('mousedown');
+    dayByDate(root, '2026-09-10')!.emit('mousedown', { button: 0 });
     dayByDate(root, '2026-09-20')!.emit('mousemove');
     dayByDate(root, '2026-09-20')!.emit('mouseup');
     assert.equal(handle.getValue().mode, 'period', 'drag включил режим «Период»');

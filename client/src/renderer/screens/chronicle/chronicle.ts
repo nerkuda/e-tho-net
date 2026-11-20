@@ -893,6 +893,11 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     dayInfo: (day) =>
       calendarMarkersResult === null ? null : calendarDayCounts(calendarMarkersResult, day),
     firstDayOfWeek: calendarFirstDayOfWeek,
+    // Перетаскивание по дням (задача 3054fe86): отпускание применяет период
+    // через ту же `pickPeriod`, что клик по дню/неделе; выделение в процессе
+    // рисует сам календарь. Клик без движения остаётся выбором одного дня.
+    enableRangeDrag: true,
+    onRangeChange: (from, to) => void pickPeriod({ from, to }),
     onPickDay: (day) => void pickPeriod(dayPeriod(day)),
     onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
     onToday: () => goToday(),
@@ -1392,6 +1397,9 @@ function dayMarkers(day: string): readonly CalendarMarkerKind[] {
 function dayLinksActions(): DayLinksActions {
   return {
     openThought: (id) => void openChronicleThought(id),
+    // Подпись свойства датового факта (задача 3054fe86): та же мысль, но
+    // редактор открывает вкладку «Свойства» и показывает строку свойства.
+    openThoughtProperty: (id, propertyId) => void openChronicleThoughtProperty(id, propertyId),
     openSource: (source) => {
       if (source.owner_type === 'thought') {
         void openChronicleThought(source.owner_id);
@@ -3109,6 +3117,17 @@ export async function openChronicleThought(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const thought = await etn.thoughts.get(networkId, id);
   await setThoughtEditorTarget(thought);
+}
+
+/**
+ * Открыть мысль датового факта на вкладке «Свойства» с показом строки свойства
+ * (задача 3054fe86). Клик по облачку идёт прежним путём (`openChronicleThought`)
+ * — вкладка не меняется.
+ */
+export async function openChronicleThoughtProperty(id: string, propertyId: string): Promise<void> {
+  const networkId = requireNetworkId();
+  const thought = await etn.thoughts.get(networkId, id);
+  await setThoughtEditorTarget(thought, { tab: 'properties', revealPropertyId: propertyId });
 }
 
 export async function openChronicleLink(link: Link): Promise<void> {

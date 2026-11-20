@@ -53,6 +53,10 @@ function installShim(): void {
   win.innerHeight = 800;
   win.addEventListener = (): void => undefined;
   win.removeEventListener = (): void => undefined;
+  // Облачко откладывает одиночный клик (`deferSingleClick`, 220 мс) — в тесте
+  // откладываем на ближайший тик и ждём его: проверяется выбор действия, не таймер.
+  win.setTimeout = (fn: () => void): unknown => setTimeout(fn, 0);
+  win.clearTimeout = (handle: unknown): void => clearTimeout(handle as NodeJS.Timeout);
 }
 
 /** Владелец-мысль источника. */
@@ -74,6 +78,8 @@ function owner(id: string, title: string): DayLinkSource {
 /** Наблюдения действий блока. */
 interface Calls {
   thoughts: string[];
+  /** Открытия на вкладке «Свойства»: `[мысль, свойство]`. */
+  properties: Array<[string, string]>;
   sources: string[];
   days: string[];
 }
@@ -84,7 +90,7 @@ function mountBlock(): { block: ShimElement; calls: Calls } {
   const host = new ShimElement('div');
   const block = buildDayLinksBlock() as unknown as ShimElement;
   host.append(block);
-  const calls: Calls = { thoughts: [], sources: [], days: [] };
+  const calls: Calls = { thoughts: [], properties: [], sources: [], days: [] };
   return { block, calls };
 }
 
@@ -138,6 +144,7 @@ describe('связи дня: разбор ответа и блок дня (1fb10
     const { block } = mountBlock();
     renderDayLinks(block as unknown as HTMLElement, undefined, {
       openThought: () => undefined,
+      openThoughtProperty: () => undefined,
       openSource: () => undefined,
       openSourceDay: () => undefined,
     });
@@ -149,6 +156,7 @@ describe('связи дня: разбор ответа и блок дня (1fb10
     const { block } = mountBlock();
     const actions = {
       openThought: () => undefined,
+      openThoughtProperty: () => undefined,
       openSource: () => undefined,
       openSourceDay: () => undefined,
     };
@@ -170,6 +178,7 @@ describe('связи дня: разбор ответа и блок дня (1fb10
     const { block } = mountBlock();
     renderDayLinks(block as unknown as HTMLElement, groupDayLinks(sample()).get('2026-11-02'), {
       openThought: () => undefined,
+      openThoughtProperty: () => undefined,
       openSource: () => undefined,
       openSourceDay: () => undefined,
     });
@@ -195,10 +204,51 @@ describe('связи дня: разбор ответа и блок дня (1fb10
     );
   });
 
+  it('подпись свойства открывает мысль на вкладке «Свойства», облачко — как раньше (3054fe86)', async () => {
+    const { block, calls } = mountBlock();
+    const actions = {
+      openThought: (id: string) => calls.thoughts.push(id),
+      openThoughtProperty: (id: string, propertyId: string) =>
+        calls.properties.push([id, propertyId]),
+      openSource: () => undefined,
+      openSourceDay: () => undefined,
+    };
+    renderDayLinks(
+      block as unknown as HTMLElement,
+      groupDayLinks(sample()).get('2026-11-02'),
+      actions,
+    );
+    const caption = block.querySelector('.diary-day-link-caption') as unknown as ShimElement;
+    // Подпись — НАСТОЯЩАЯ кнопка: Enter/Space работают нативно, а не за счёт
+    // самодельного разбора клавиш. Некликабельный `span` тест красит.
+    assert.equal(
+      (caption.tagName ?? '').toLowerCase(),
+      'button',
+      'подпись свойства — кнопка словаря',
+    );
+    caption.click();
+    assert.deepEqual(
+      calls.properties,
+      [['t-stol', 'p-bought']],
+      'подпись ведёт к строке ЭТОГО свойства',
+    );
+    assert.deepEqual(calls.thoughts, [], 'облачко не нажимали — карточка не открывалась');
+    // Облачко факта — прежний путь: карточка мысли без смены вкладки.
+    const chip = block.querySelector('.prop-ref-cloud') as unknown as ShimElement;
+    assert.ok(chip !== null, 'облачко мысли на месте');
+    chip.click();
+    // Одиночный клик облачка отложен — дожидаемся тика.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(calls.thoughts, ['t-stol']);
+    assert.equal(calls.properties.length, 1, 'облачко не просит показа свойства');
+  });
+
   it('сниппет записи ведёт к дню источника, постоянного комментария — к владельцу', () => {
     const { block, calls } = mountBlock();
     const actions = {
       openThought: (id: string) => calls.thoughts.push(id),
+      openThoughtProperty: (id: string, propertyId: string) =>
+        calls.properties.push([id, propertyId]),
       openSource: (source: DayLinkSource) => calls.sources.push(source.comment_id),
       openSourceDay: (day: string) => calls.days.push(day),
     };

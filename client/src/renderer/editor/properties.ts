@@ -65,12 +65,14 @@ import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions
 import { onReconnected, store } from '../state.js';
 import {
   invalidateGraphTab,
+  clearPendingPropertyReveal,
+  pendingPropertyRevealFor,
   registerTabContent,
   registerTabRetarget,
   type EditorContext,
   type TabPaneLifecycle,
 } from './editor.js';
-import { groupSection } from './group.js';
+import { groupSection, setGroupExpanded } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import {
   propertyRowMenuItems,
@@ -1157,6 +1159,10 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   });
   outsideRefreshCount = () =>
     outsideGroup.dispatchEvent(new CustomEvent('etn:refresh-count'));
+  // Строка свойства в СВЁРНУТОЙ группе «Свойства вне типа» (задача 3054fe86):
+  // типовая таблица не нашла свойство и просит раскрыть группу — её
+  // перечитывание покажет строку и снимет запрос.
+  box.addEventListener('etn:reveal-outside', () => setGroupExpanded(outsideGroup, true));
   // Retarget of the SHOWN pane to another owner of the same type: the pane is
   // reused (editor's `registerTabRetarget`), its bodies reload under the new
   // owner and the outside-type badge is re-resolved (its owner lives on the
@@ -1598,7 +1604,24 @@ function buildOutsidePropertiesBody(
     collectRowNodes();
     nav?.refresh();
     reorder?.refresh();
+    revealRequestedOutsideRow();
   };
+
+  /**
+   * Строка перехода могла оказаться именно здесь, вне типа (задача 3054fe86):
+   * запрос живёт в редакторе до показа, поэтому забираем его после каждой
+   * сверки строк группы.
+   */
+  function revealRequestedOutsideRow(): void {
+    const propertyId = pendingPropertyRevealFor(target.ownerType, target.ownerId);
+    if (propertyId === null) return;
+    const row = shownRows.find((candidate) =>
+      matchesRevealProperty(rowKeyOf(candidate), propertyId),
+    );
+    if (row === undefined) return;
+    clearPendingPropertyReveal();
+    nav?.setCurrent(row, { activate: true, reveal: true, focus: true });
+  }
 
   /**
    * Разложить переупорядочиваемые строки по их слотам, сохранив позиции
@@ -2017,6 +2040,15 @@ function definitionValueKey(definition: EffectiveTypeProperty): string {
   return definition.value_type === 'link'
     ? `${definition.property_id}:${linkSideOf(definition)}`
     : definition.property_id;
+}
+
+/**
+ * Относится ли ключ строки к запрошенному свойству: скаляр совпадает по
+ * `property_id`, свойство-связь несёт сторону (`property_id:side`) — датовый
+ * факт знает только свойство, поэтому подходит любая сторона (задача 3054fe86).
+ */
+function matchesRevealProperty(rowKey: string, propertyId: string): boolean {
+  return rowKey === propertyId || rowKey.startsWith(`${propertyId}:`);
 }
 
 /** CSS-класс выделенной (текущей) строки таблицы свойств (навигация ↑/↓). */
@@ -2778,6 +2810,35 @@ function buildTypePropertiesBody(
     nav = null;
   });
 
+  /** Свойство, запрос показа которого уже уходил в группу «Свойства вне типа». */
+  let revealOutsideRequestedFor: string | null = null;
+
+  /**
+   * Показать строку свойства, к которой вёл переход из «Связей дня» (задача
+   * 3054fe86). Ключ панели — property_id (у свойства-связи — property_id:side;
+   * датовый факт несёт только свойство, поэтому подходит и любой его стороне).
+   * Не нашли в типовой таблице — просим вкладку раскрыть группу «Свойства вне
+   * типа»: свойство могло быть не подключено к типу.
+   */
+  const revealRequestedRow = (): void => {
+    const propertyId = pendingPropertyRevealFor(target.ownerType, target.ownerId);
+    if (propertyId === null) return;
+    const row = shownRows.find((candidate) =>
+      matchesRevealProperty(rowKeyOf(candidate), propertyId),
+    );
+    if (row === undefined) {
+      if (revealOutsideRequestedFor !== propertyId) {
+        revealOutsideRequestedFor = propertyId;
+        box.dispatchEvent(
+          new CustomEvent('etn:reveal-outside', { detail: propertyId, bubbles: true }),
+        );
+      }
+      return;
+    }
+    clearPendingPropertyReveal();
+    nav?.setCurrent(row, { activate: true, reveal: true, focus: true });
+  };
+
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
   let disposed = false;
@@ -2869,6 +2930,7 @@ function buildTypePropertiesBody(
         reconcileKeyed(tbody, previousRows, rowSpec);
         collectRowNodes();
         nav?.refresh();
+        revealRequestedRow();
         return;
       }
       // Прежних строк нет (первый показ владельца): строить таблицу не из
@@ -2898,6 +2960,7 @@ function buildTypePropertiesBody(
       shownRows = [];
       rowNodes.clear();
       nav?.refresh();
+      revealRequestedRow();
       tableWrap.replaceChildren(el('p', 'muted', t('properties.uTypeNoProperties')));
       tableAttached = false;
       return;
@@ -3004,6 +3067,7 @@ function buildTypePropertiesBody(
     reconcileKeyed(tbody, rows, rowSpec);
     collectRowNodes();
     nav?.refresh();
+    revealRequestedRow();
     logUiEvent('ui.editor.props.loaded', {
       id: requestOwnerId,
       ms: Date.now() - startedAt,

@@ -10,9 +10,11 @@
  * **Порядок.** Факты (по алфавиту — серверный порядок), затем ссылки (по
  * времени цели); группировки внутри блока нет.
  *
- * **Клики.** Облачко факта — карточка мысли; облачко/сниппет постоянного
- * комментария — карточка владельца; сниппет записи и дата записи-источника —
- * переход к её дню. Пустой блок не показывается.
+ * **Клики.** Облачко факта — карточка мысли; подпись свойства факта — та же
+ * мысль на вкладке «Свойства» с выделением строки этого свойства (задача
+ * 3054fe86); облачко/сниппет постоянного комментария — карточка владельца;
+ * сниппет записи и дата записи-источника — переход к её дню. Пустой блок не
+ * показывается.
  *
  * Модуль не ходит в сеть: данные приходят из `etn.chronicle.dayLinks`, действия
  * — от экрана (`DayLinksActions`), поэтому правила блока проверяются DOM-тестом.
@@ -20,7 +22,7 @@
 
 import type { DayFact, DayLink, DayLinkSource, DayLinksResult, SortOrder } from '@etn/shared';
 
-import { div, el, span } from '../../lib/dom.js';
+import { div, el, span, button } from '../../lib/dom.js';
 import { t } from '../../lib/i18n.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
 import { createThoughtCloud } from '../../lib/thought-cloud.js';
@@ -41,6 +43,11 @@ export interface DayLinksData {
 export interface DayLinksActions {
   /** Открыть карточку мысли (факт или владелец ссылки). */
   openThought(id: string): void;
+  /**
+   * Открыть мысль датового факта сразу на вкладке «Свойства» и показать строку
+   * свойства (задача 3054fe86): клик по подписи свойства ведёт к значению.
+   */
+  openThoughtProperty(id: string, propertyId: string): void;
   /** Открыть владельца источника (мысль/связь/публикация). */
   openSource(source: DayLinkSource): void;
   /** Перейти к дню записи-источника. */
@@ -160,6 +167,10 @@ function linkKey(link: DayLink): string {
  * Наполнить строку датового факта: облачко мысли + подпись свойства. Строка
  * пересобирается целиком — её состав фиксирован, коллекция строк живёт в
  * контейнере и обновляется сверкой.
+ *
+ * Подпись свойства — кнопка словаря (`link-btn`): мышь и Enter/Space ведут в ту
+ * же мысль, но на вкладку «Свойства» к строке этого свойства (задача 3054fe86).
+ * Облачко по-прежнему открывает карточку без смены вкладки.
  */
 function fillFactRow(row: HTMLElement, fact: DayFact, actions: DayLinksActions): HTMLElement {
   const chip = createThoughtCloud(
@@ -170,7 +181,12 @@ function fillFactRow(row: HTMLElement, fact: DayFact, actions: DayLinksActions):
       actions: { onClick: (id) => actions.openThought(id) },
     },
   );
-  row.replaceChildren(chip, span(fact.property_name, 'diary-day-link-caption'));
+  const caption = button(
+    fact.property_name,
+    () => actions.openThoughtProperty(fact.thought_id, fact.property_id),
+    'link-btn diary-day-link-caption',
+  );
+  row.replaceChildren(chip, caption);
   return row;
 }
 

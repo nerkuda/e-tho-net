@@ -24,6 +24,9 @@
  * упорядоченный диапазон (`onRangeChange`). Сетка при старте перетаскивания НЕ
  * перестраивается (меняется только выделение классов) — иначе узел-цель
  * теряется и одиночный `click` по дню не доходит (приёмка №6, п.3).
+ * Перетаскивание начинается только на ячейке дня: номер недели его не
+ * запускает и диапазон не расширяет. Отпускание вне сетки и `Esc` отменяют
+ * жест и возвращают прежнее выделение (задача 3054fe86).
  *
  * **Что компонент НЕ делает.** Он не применяет период и не трогает данные: клик
  * по дню/неделе лишь сообщает хозяину выбранное (`onPickDay`/`onPickWeek`),
@@ -364,6 +367,16 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   let dragStart = '';
   /** Drag ушёл на другой день (тогда click подавляется). */
   let dragMoved = false;
+  /**
+   * Гасит ОДИН следующий click: после отмены drag (Esc, отпускание вне сетки)
+   * браузер всё равно присылает click по дню — он не должен выбрать день.
+   * Сбрасывается на новом mousedown и при первом click.
+   */
+  let swallowNextClick = false;
+  /** Выделение до начала drag — к нему возвращает отмена/отпускание вне сетки. */
+  let selectionBeforeDrag = { from, to };
+  /** Слушатели окна на время drag (снимаются при завершении — без утечек). */
+  let unbindWindowDrag: (() => void) | null = null;
   /** Кнопки дней текущей сетки (для обновления выделения без перестройки). */
   let dayCells: Array<{ day: string; el: HTMLElement }> = [];
 
@@ -589,13 +602,23 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   // (`showDialog` слушает Escape на `window` в capture-фазе). Capture-слушатель
   // регистрируется при сборке календаря — то есть раньше, чем диалог повесит
   // свой, — и при открытом поле года гасит нажатие до диалога (приёмка №6, п.5).
+  // Тот же слушатель отменяет активное перетаскивание диапазона (задача
+  // 3054fe86): второго локального перехвата клавиш не заводим (сторож
+  // `guard-keymap-single-point`), а Escape обязан не закрывать диалог.
   window.addEventListener(
     'keydown',
     (event) => {
-      if (!yearEditing || event.key !== 'Escape') return;
+      if (event.key !== 'Escape') return;
+      if (yearEditing) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancelYear();
+        return;
+      }
+      if (!dragging) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      cancelYear();
+      finishDrag(null);
     },
     true,
   );
@@ -637,9 +660,11 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       title: cell.day,
       class: classes.join(' '),
       onClick: (event) => {
-        if (dragMoved) {
-          // Завершение перетаскивания: click уже обработан в mouseup.
+        if (dragMoved || swallowNextClick) {
+          // Завершение перетаскивания или отменённый drag: click уже обработан
+          // в mouseup / не должен выбирать день после отмены.
           dragMoved = false;
+          swallowNextClick = false;
           return;
         }
         opts.onPickDay?.(cell.day);
@@ -675,14 +700,28 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
    * Перетаскивание диапазона: mousedown → движение → mouseup. Во время drag
    * сетка НЕ пересобирается — обновляются только классы выделения, поэтому
    * узел-цель остаётся на месте и одиночный `click` по дню срабатывает.
+   *
+   * Drag начинается ТОЛЬКО на ячейке дня: номер недели и заголовок календаря
+   * его не запускают, а движение над номером недели не расширяет диапазон
+   * (у номера недели нет обработчиков drag). Отпускание вне ячеек и `Esc`
+   * отменяют drag и возвращают прежнее выделение — «залипшего» диапазона и
+   * случайного применения периода не остаётся.
    */
   function wireDrag(button: HTMLElement, day: string): void {
-    button.addEventListener('mousedown', () => {
+    button.addEventListener('mousedown', (event) => {
+      // Только основная кнопка мыши: правый клик/средняя не начинают drag.
+      if ((event as MouseEvent).button !== 0) return;
+      // Сетка могла перерисоваться между нажатием и завершением предыдущего
+      // жеста — начинаем чистый drag.
+      unbindWindowDrag?.();
       dragging = true;
       dragMoved = false;
+      swallowNextClick = false;
       dragStart = day;
+      selectionBeforeDrag = { from, to };
       from = day;
       to = day;
+      bindWindowDrag();
       paintSelection();
     });
     button.addEventListener('mousemove', () => {
@@ -693,17 +732,53 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       paintSelection();
     });
     button.addEventListener('mouseup', () => {
-      if (!dragging) return;
-      dragging = false;
-      const start = dragStart;
-      const end = day;
-      dragStart = '';
-      if (start === end) return; // обычный клик — дальше сработает onClick
-      from = minDay(start, end);
-      to = maxDay(start, end);
-      paintSelection();
-      opts.onRangeChange?.(from, to);
+      finishDrag(day);
     });
+  }
+
+  /** Завершить drag: `endDay = null` — отмена (Esc/отпускание вне сетки). */
+  function finishDrag(endDay: string | null): void {
+    if (!dragging) return;
+    dragging = false;
+    unbindWindowDrag?.();
+    unbindWindowDrag = null;
+    const start = dragStart;
+    dragStart = '';
+    if (endDay === null) {
+      // Отмена: возвращаем выделение, бывшее до нажатия, и гасим click,
+      // который браузер пришлёт после отпускания кнопки.
+      from = selectionBeforeDrag.from;
+      to = selectionBeforeDrag.to;
+      dragMoved = false;
+      swallowNextClick = true;
+      paintSelection();
+      return;
+    }
+    if (start === endDay) {
+      // Обычный клик — день выберет onClick; подавлять его не нужно.
+      dragMoved = false;
+      return;
+    }
+    from = minDay(start, endDay);
+    to = maxDay(start, endDay);
+    dragMoved = true;
+    swallowNextClick = false;
+    paintSelection();
+    opts.onRangeChange?.(from, to);
+  }
+
+  /**
+   * Слушатель окна живёт только пока идёт drag: отпускание кнопки вне
+   * календаря завершает жест отменой (иначе выделение осталось бы
+   * «залипшим»). `Esc` отменяет drag постоянным capture-слушателем календаря
+   * выше — второго перехвата клавиш не заводим.
+   */
+  function bindWindowDrag(): void {
+    const onMouseUp = (): void => finishDrag(null);
+    window.addEventListener('mouseup', onMouseUp);
+    unbindWindowDrag = () => {
+      window.removeEventListener('mouseup', onMouseUp);
+    };
   }
 
   function renderGrid(): void {
@@ -717,16 +792,21 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     for (const week of buildMonthWeeks(year, month, firstDayOfWeek)) {
       const row = div('cal-row');
       if (weekNumbers) {
-        row.append(
-          uiButton({
-            label: String(week.week),
-            role: 'ghost',
-            size: 's',
-            title: t('calendar.week', [week.week, week.days[0]!.day, week.days[6]!.day]),
-            class: 'cal-week',
-            onClick: () => opts.onPickWeek?.(week.days[0]!.day),
-          }),
-        );
+        const weekTitle = t('calendar.week', [week.week, week.days[0]!.day, week.days[6]!.day]);
+        const weekButton = uiButton({
+          label: String(week.week),
+          role: 'ghost',
+          size: 's',
+          title: weekTitle,
+          class: 'cal-week',
+          onClick: () => opts.onPickWeek?.(week.days[0]!.day),
+        });
+        // Номер недели — кнопка: Enter/Space работают нативно, а подпись для
+        // экранного диктора объясняет, что именно выделится (задача 3054fe86).
+        weekButton.setAttribute('aria-label', weekTitle);
+        // Перетаскивание диапазона начинается только на днях: у номера недели
+        // обработчиков drag нет, поэтому жест над ним неделю не выделяет.
+        row.append(weekButton);
       }
       for (const cell of week.days) {
         const button = buildDay(cell);

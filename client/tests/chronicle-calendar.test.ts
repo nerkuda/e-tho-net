@@ -73,6 +73,28 @@ describe('календарь месяца', () => {
   });
 });
 
+describe('перетаскивание диапазона в календаре «Дневника» (3054fe86)', () => {
+  it('календарь экрана включает drag и ставит отбор периода через pickPeriod', () => {
+    const src = read('screens/chronicle/chronicle.ts');
+    const start = src.indexOf('buildMonthCalendar({');
+    assert.ok(start >= 0, 'календарь месяца встроен в экран');
+    const block = src.slice(start, src.indexOf('});', start));
+    // Перетаскивание включает САМ ЭКРАН (общий компонент умеет, но не
+    // включает по умолчанию — диалог «Дата/период» управляет опцией сам).
+    assert.match(block, /enableRangeDrag: true/, 'drag диапазона включён в «Дневнике»');
+    assert.match(
+      block,
+      /onRangeChange: \(from, to\) => void pickPeriod\(\{ from, to \}\)/,
+      'отпускание кнопки ставит период той же семантикой, что клик по дню/неделе',
+    );
+    assert.match(
+      block,
+      /onPickDay: \(day\) => void pickPeriod\(dayPeriod\(day\)\)/,
+      'клик по дню не сломан',
+    );
+  });
+});
+
 describe('переименование «Хроника» → «Дневник» (80b31f7a)', () => {
   it('закладка экрана подписана «Дневник», а не «Хроника»', () => {
     const workspace = read('screens/workspace.ts');

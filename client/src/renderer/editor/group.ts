@@ -19,6 +19,12 @@
 import { collapsibleSection } from '../lib/ui/collapsible.js';
 import { store } from '../state.js';
 
+/**
+ * Построенные группы по их корню: программное раскрытие из перехода к строке
+ * (задача 3054fe86) не требует повторного поиска по DOM и состояния в разметке.
+ */
+const groupHandles = new WeakMap<HTMLElement, ReturnType<typeof collapsibleSection>>();
+
 /** Callback fired when a group is collapsed/expanded (persistence hook). */
 export type CollapseChange = (groupId: string, collapsed: boolean) => void;
 
@@ -69,7 +75,7 @@ export interface GroupSpec {
  * collapsed state is read from and written back to the editor store.
  */
 export function groupSection(spec: GroupSpec): HTMLElement {
-  return collapsibleSection({
+  const handle = collapsibleSection({
     id: spec.id,
     title: spec.title,
     count: spec.count,
@@ -93,5 +99,23 @@ export function groupSection(spec: GroupSpec): HTMLElement {
       actions: 'group-actions',
     },
     buildBody: () => spec.buildBody(),
-  }).root;
+  });
+  groupHandles.set(handle.root, handle);
+  return handle.root;
+}
+
+/**
+ * Раскрыть/свернуть группу ПОМИМО клика по заголовку (задача 3054fe86: переход
+ * к строке свойства может вести в свёрнутую группу «Свойства вне типа»).
+ * Сохранённое предпочтение пользователя не переписывается — раскрытие нужно
+ * текущему переходу. Событие `etn:toggled` шлётся как при клике: на нём держится
+ * раскладка панели (сплиттеры/высоты групп).
+ */
+export function setGroupExpanded(root: HTMLElement, expanded: boolean): boolean {
+  const handle = groupHandles.get(root);
+  if (handle === undefined) return false;
+  if (handle.collapsed() === !expanded) return true;
+  handle.setCollapsed(!expanded);
+  root.dispatchEvent(new CustomEvent('etn:toggled', { detail: !expanded }));
+  return true;
 }

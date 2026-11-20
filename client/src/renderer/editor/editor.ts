@@ -654,7 +654,69 @@ function openThoughtTarget(id: string, options: { force: boolean }): void {
  * unified visit history. Mirrors what {@link openThoughtInEditor} does for
  * the canvas, so every screen feeds the same "current thought" state.
  */
-export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
+/** Дополнительные действия при открытии мысли (задача 3054fe86). */
+export interface ThoughtEditorOpenOptions {
+  /**
+   * Вкладка, которую показать вместе с мыслью: клик по подписи свойства в
+   * «Связях дня» открывает «Свойства», а не вкладку прошлого просмотра.
+   */
+  tab?: EditorTabId;
+  /**
+   * Строка свойства, к которой прокрутить и которую выделить (вкладка
+   * «Свойства»). Показ завершает собственное перечитывание строк панели.
+   */
+  revealPropertyId?: string;
+}
+
+/** Отложенный программный переход на вкладку (задача 3054fe86). */
+let pendingEditorReveal: { ownerId: string; tab: EditorTabId } | null = null;
+
+/**
+ * Отложенный показ строки свойства (задача 3054fe86): его забирает таблица
+ * «Свойства» после отрисовки строк своего владельца. Запрос снимается ТОЛЬКО
+ * при показе строки: пока строки читаются, он должен пережить перечитывание.
+ */
+let pendingPropertyReveal: {
+  ownerType: 'thought' | 'link';
+  ownerId: string;
+  propertyId: string;
+} | null = null;
+
+/**
+ * Свойство, к строке которого нужно перейти у этого владельца (или null).
+ * Читает панель «Свойства» (client/src/renderer/editor/properties.ts).
+ */
+export function pendingPropertyRevealFor(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+): string | null {
+  const pending = pendingPropertyReveal;
+  if (pending === null || pending.ownerType !== ownerType || pending.ownerId !== ownerId) {
+    return null;
+  }
+  return pending.propertyId;
+}
+
+/** Снять запрос показа строки свойства — строка найдена и показана. */
+export function clearPendingPropertyReveal(): void {
+  pendingPropertyReveal = null;
+}
+
+export async function setThoughtEditorTarget(
+  thought: Thought,
+  options: ThoughtEditorOpenOptions = {},
+): Promise<void> {
+  if (options.tab !== undefined || options.revealPropertyId !== undefined) {
+    pendingEditorReveal = { ownerId: thought.id, tab: options.tab ?? 'properties' };
+    pendingPropertyReveal =
+      options.revealPropertyId !== undefined
+        ? { ownerType: 'thought', ownerId: thought.id, propertyId: options.revealPropertyId }
+        : null;
+  } else {
+    // Обычный заход в мысль снимает отложенный переход другого действия.
+    pendingEditorReveal = null;
+    pendingPropertyReveal = null;
+  }
   await noteThoughtWillOpen(thought.id);
   logUiEvent('ui.editor.opened', { id: thought.id, kind: 'thought' });
   store.update({
@@ -663,6 +725,15 @@ export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
     structuresActiveThoughtId: thought.id,
     selectedLinkId: null,
   });
+  // Мысль уже показана: дешёвый гейт store-подписки в mountEditor пропустит
+  // render(), поэтому отложенный переход применяем здесь.
+  if (
+    liveRenderedKey !== null &&
+    liveRenderedKey.ownerId === thought.id &&
+    String(liveRenderedKey.version ?? '') === String(thought.version)
+  ) {
+    applyPendingEditorReveal(currentEditorContext());
+  }
 }
 
 /** Current editor context: a picked thought/link, else the focused thought. */
@@ -1318,6 +1389,23 @@ function activateEditorTab(id: EditorTabId): void {
 }
 
 /**
+ * Применить отложенный программный переход (задача 3054fe86) ПОСЛЕ отрисовки
+ * вкладок нужного владельца: «Свойства» нельзя собирать под прежнюю сущность.
+ * Кэш вкладки сбрасывается, чтобы её перечитывание увидело запрос строки
+ * (pendingPropertyRevealFor) и прокрутило к ней. Сохранённое предпочтение
+ * вкладки не переписывается — это разовый переход.
+ */
+function applyPendingEditorReveal(ctx: EditorContext | null): void {
+  const pending = pendingEditorReveal;
+  if (pending === null) return;
+  if (ctx === null || ctx.ownerType !== 'thought' || ctx.ownerId !== pending.ownerId) return;
+  pendingEditorReveal = null;
+  if (pendingPropertyReveal !== null) invalidatePanes(['properties']);
+  activeTab = pending.tab;
+  displayTab(pending.tab);
+}
+
+/**
  * Drops the given cached panes so they rebuild from the current `ctx` on next
  * activation. If the shown tab was dropped it is re-displayed right away, so
  * the user sees the new content without switching tabs. Panes outside the list
@@ -1816,7 +1904,12 @@ async function render(): Promise<void> {
     ctx === null
       ? 'null'
       : `${identitySignature}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}|${ctxTypeId(ctx) ?? ''}`;
-  if (fullSignature === lastSignature) return;
+  if (fullSignature === lastSignature) {
+    // Цель та же: дешёвый путь. Отложенный переход (задача 3054fe86) обязан
+    // примениться и здесь — например, повторный клик по тому же свойству.
+    applyPendingEditorReveal(ctx);
+    return;
+  }
 
   const prevCtx = renderCtx;
   const identitySame = identitySignature === lastIdentitySignature;
@@ -1883,6 +1976,7 @@ async function render(): Promise<void> {
   // can only belong to the CURRENT `scrollBox` — no DOM containment check.
   if (sameOwner && ctxLoaded(prevCtx) && ctxLoaded(ctx)) {
     patchHeader(ctx);
+    applyPendingEditorReveal(ctx);
     return;
   }
   // Another entity of the same kind, or the loading→loaded transition of the
@@ -1939,6 +2033,7 @@ function renderRetarget(ctx: EditorContext): void {
 
   refreshTabCounts(ctx);
   displayTab(shownTab);
+  applyPendingEditorReveal(ctx);
 
   // Different entity → different content: no scroll to preserve.
   scrollBox.scrollTop = 0;
@@ -2198,6 +2293,7 @@ function renderFull(ctx: EditorContext | null): void {
   // сущности (например «Хроника» у связи), уступает «Основному» — само
   // предпочтение в L4 не перезаписывается.
   displayInitialTab(tabs);
+  applyPendingEditorReveal(ctx);
 
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 }

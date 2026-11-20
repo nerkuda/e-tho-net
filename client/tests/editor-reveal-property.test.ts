@@ -1,0 +1,285 @@
+/**
+ * Переход к свойству из «Связей дня» (0.16.1, задача 3054fe86): клик по подписи
+ * свойства датового факта открывает мысль на вкладке «Свойства» и показывает
+ * строку ЭТОГО свойства (прокрутка + выделение `prop-row-current`).
+ *
+ * Проверяется на РЕАЛЬНОМ `mountEditor`: вкладка активируется программно
+ * (`setThoughtEditorTarget` с опцией), панель пересобирается и забирает запрос
+ * строки (`pendingPropertyRevealFor` → `nav.setCurrent`). Повторный клик по
+ * тому же свойству тоже обязан сработать — запрос не «съедается» первым
+ * переходом без показа строки.
+ *
+ * Дом — DOM-шим `renderer-editor-entity-switch.test.ts`.
+ */
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import type { FocusResponse, Thought, ThoughtType } from '@etn/shared';
+import { ShimElement } from './dom-shim.js';
+
+function shimDom(): void {
+  (globalThis as any).HTMLElement = ShimElement;
+  (globalThis as any).CustomEvent = class {
+    type: string;
+    detail: unknown;
+    bubbles: boolean;
+    constructor(type: string, init?: { detail?: unknown; bubbles?: boolean }) {
+      this.type = type;
+      this.detail = init?.detail;
+      // Шиму нужен флаг всплытия: на `bubbles` держится `etn:reveal-outside`.
+      this.bubbles = init?.bubbles === true;
+    }
+  };
+  (globalThis as any).ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+  (globalThis as any).requestAnimationFrame = (cb: () => void): number => {
+    cb();
+    return 0;
+  };
+  (globalThis as any).getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
+  (globalThis as any).document = {
+    createElement: (tag: string) => new ShimElement(tag),
+    createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+    documentElement: { style: { setProperty: () => undefined, removeProperty: () => undefined } },
+    body: new ShimElement('body'),
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => undefined,
+    querySelector: () => null,
+    activeElement: null,
+  };
+  const win = ((globalThis as any).window ??= {}) as Record<string, unknown>;
+  win.setTimeout = setTimeout;
+  win.clearTimeout = clearTimeout;
+  win.dispatchEvent = () => undefined;
+  win.addEventListener = () => undefined;
+  win.removeEventListener = () => undefined;
+}
+
+/** Тип мысли с одним текстовым свойством «Заметка» (`p1`). */
+const TEXT_PROPERTY = {
+  id: 'p1',
+  property_id: 'p1',
+  owner_type: 'thought_type',
+  owner_id: 'ta',
+  key: 'Заметка',
+  value_type: 'text',
+  config: null,
+  required: false,
+  position: 0,
+};
+
+function installEtn(): void {
+  const win = (globalThis as any).window as Record<string, unknown>;
+  win.etn = {
+    ui: { getState: async () => 'main', setState: async () => undefined },
+    comments: { list: async () => [], create: async () => undefined },
+    attachments: { list: async () => [] },
+    thoughts: { get: async () => ({}) },
+    properties: {
+      get: async () => [
+        {
+          property_id: 'p1',
+          property_name: 'Заметка',
+          value_type: 'text',
+          value: 'значение',
+          outside_type: false,
+        },
+      ],
+    },
+    types: { listTypeProperties: async () => [TEXT_PROPERTY] },
+  };
+}
+
+function makeThought(overrides: Partial<Thought> = {}): Thought {
+  return {
+    id: 't1',
+    title: 'T1',
+    type_id: 'ta',
+    icon: null,
+    icon_kind: 'emoji',
+    icon_attachment_id: null,
+    active: true,
+    is_protected: false,
+    is_root: false,
+    marked_for_deletion: false,
+    marked_for_deletion_at: null,
+    marked_for_deletion_by: null,
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    synonyms: [],
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeType(id: string, overrides: Partial<ThoughtType> = {}): ThoughtType {
+  return {
+    id,
+    name: id,
+    parent_id: null,
+    is_root: false,
+    comment_template_md: null,
+    icon: null,
+    icon_kind: 'emoji',
+    fg_color: null,
+    bg_color: null,
+    font_bold: null,
+    font_italic: null,
+    font_underline: null,
+    font_strike: null,
+    description: null,
+    version: 1,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    created_by: 'u1',
+    ...overrides,
+  };
+}
+
+function makeFocus(focused: Thought): FocusResponse {
+  return {
+    focused,
+    parents: [],
+    siblings: [],
+    children: [],
+    edges: [],
+    sorts: {
+      parents: { sort: 'created', order: 'asc' },
+      children: { sort: 'created', order: 'asc' },
+      siblings: { sort: 'created', order: 'asc' },
+    },
+  };
+}
+
+/** Дождаться собственных асинхронных цепочек редактора (render, панели). */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+/** Смонтировать редактор на мысли t1 и вернуть хост. */
+async function mountOpenEditor(): Promise<{ host: ShimElement; scrollBox: ShimElement }> {
+  shimDom();
+  installEtn();
+  const { mountEditor } = await import('../src/renderer/editor/editor.js');
+  const { store } = await import('../src/renderer/state.js');
+  const thought = makeThought();
+  store.update({
+    networkId: 'n1',
+    focus: makeFocus(thought),
+    thoughtTypes: [makeType('root', { is_root: true }), makeType('ta')],
+    editorTarget: null,
+    selectedLinkId: null,
+    collapsedGroups: {},
+  } as any);
+  const host = new ShimElement('div');
+  mountEditor(host as any);
+  await flush();
+  return { host, scrollBox: host.children[1]! };
+}
+
+/** Активная вкладка редактора (её подпись). */
+function activeTabTitle(scrollBox: ShimElement): string {
+  const active = scrollBox
+    .querySelectorAll('.editor-tab')
+    .find((tab) => tab.classList.contains('active'));
+  assert.notEqual(active, undefined, 'в редакторе есть активная вкладка');
+  return String(active!.textContent ?? '');
+}
+
+/** Строка выделенного свойства (класс `prop-row-current`) или null. */
+function currentPropertyRow(scrollBox: ShimElement): ShimElement | null {
+  return scrollBox.querySelector('.prop-row-current');
+}
+
+describe('переход к свойству из «Связей дня» (3054fe86)', () => {
+  it('открывает вкладку «Свойства» и выделяет строку запрошенного свойства', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { setThoughtEditorTarget, pendingPropertyRevealFor } =
+      await import('../src/renderer/editor/editor.js');
+    // Исходно редактор на «Комментарии» — переход обязан сменить вкладку.
+    assert.ok(
+      activeTabTitle(scrollBox).includes('Основное'),
+      'до перехода активна вкладка «Основное»',
+    );
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p1',
+    });
+    await flush();
+
+    assert.ok(
+      activeTabTitle(scrollBox).includes('Свойства'),
+      'переход активирует вкладку «Свойства»',
+    );
+    const row = currentPropertyRow(scrollBox);
+    assert.notEqual(row, null, 'строка свойства выделена');
+    assert.equal(row!.getAttribute('data-key'), 'p1', 'выделена строка ЗАПРОШЕННОГО свойства');
+    assert.equal(pendingPropertyRevealFor('thought', 't1'), null, 'запрос снят показом строки');
+  });
+
+  it('повторный переход по тому же свойству снова показывает строку', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p1',
+    });
+    await flush();
+    assert.notEqual(currentPropertyRow(scrollBox), null, 'первый переход показал строку');
+
+    // Пользователь ушёл на другую вкладку и вернулся к «Свойствам» — строка
+    // больше не текущая; повторный клик по подписи обязан выделить её снова.
+    const mainTab = scrollBox
+      .querySelectorAll('.editor-tab')
+      .find((tab) => String(tab.textContent ?? '').includes('Основное'));
+    mainTab!.emit('click', {});
+    await flush();
+    assert.equal(currentPropertyRow(scrollBox), null, 'после ухода строки нет в выделении');
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p1',
+    });
+    await flush();
+    assert.ok(activeTabTitle(scrollBox).includes('Свойства'));
+    assert.equal(
+      currentPropertyRow(scrollBox)?.getAttribute('data-key'),
+      'p1',
+      'повторный клик снова выделяет ту же строку',
+    );
+  });
+
+  it('обычное открытие мысли вкладку не переключает', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
+    // Активная вкладка — состояние модуля редактора (общее для монтирований):
+    // сначала явно встаём на «Основное», как это делает пользователь.
+    const mainTab = scrollBox
+      .querySelectorAll('.editor-tab')
+      .find((tab) => String(tab.textContent ?? '').includes('Основное'));
+    assert.notEqual(mainTab, undefined, 'вкладка «Основное» есть в полосе');
+    mainTab!.emit('click', {});
+    await flush();
+    await setThoughtEditorTarget(makeThought());
+    await flush();
+    assert.ok(
+      activeTabTitle(scrollBox).includes('Основное'),
+      'клик по облачку (без опций) оставляет вкладку прежней',
+    );
+  });
+});
