@@ -4,8 +4,10 @@
  *
  * **Состав.** Датовые факты (мысль + подпись свойства-даты) и date-ссылки из
  * ДРУГИХ записей и постоянных комментариев (облачко владельца + сниппет
- * источника + время/дата записи-источника). Строки-задачи сюда не попадают —
- * их даты показывает панель «Задачи» (исключение дублей делает сервер).
+ * источника + время/дата записи-источника). Строки задач сюда не попадают —
+ * их даты показывает панель «Задачи»: открытые отсекает сервер по признаку
+ * `is_task`, а остаток отменённой задачи (маркер снят, осталась каноническая
+ * строка `[[#id]] [[дата]]`) — этот модуль по форме строки (ошибка 009bda81).
  *
  * **Порядок.** Факты (по алфавиту — серверный порядок), затем ссылки (по
  * времени цели); группировки внутри блока нет.
@@ -21,6 +23,7 @@
  */
 
 import type { DayFact, DayLink, DayLinkSource, DayLinksResult, SortOrder } from '@etn/shared';
+import { isCanonicalTaskText, isTaskLineMarker } from '@etn/markdown';
 
 import { div, el, span, button } from '../../lib/dom.js';
 import { t } from '../../lib/i18n.js';
@@ -61,7 +64,14 @@ export function buildDayLinksBlock(): HTMLElement {
   return block;
 }
 
-/** Сгруппировать ответ сервера по календарным дням. */
+/**
+ * Сгруппировать ответ сервера по календарным дням.
+ *
+ * Строки задач отбрасываются ДО группировки (ошибка 009bda81, решение
+ * пользователя «исключить строки задач»): иначе день, где есть только такие
+ * строки, попал бы в ленту пустым (`withLinkDays`), а сам блок показал бы
+ * сырой markdown отменённой задачи с ID вместо ссылки.
+ */
 export function groupDayLinks(result: DayLinksResult): Map<string, DayLinksData> {
   const days = new Map<string, { facts: DayFact[]; links: DayLink[] }>();
   const take = (day: string): { facts: DayFact[]; links: DayLink[] } => {
@@ -72,8 +82,30 @@ export function groupDayLinks(result: DayLinksResult): Map<string, DayLinksData>
     return created;
   };
   for (const fact of result.facts) take(fact.day).facts.push(fact);
-  for (const link of result.links) take(link.day).links.push(link);
+  for (const link of result.links) {
+    if (isTaskDayLink(link)) continue;
+    take(link.day).links.push(link);
+  }
   return days;
+}
+
+/**
+ * Строка «ссылок дня» — строка задачи и показываться не должна.
+ *
+ * Сервер отсекает задачи с чек-боксом (`task_rows.is_task`), но снапшот строки
+ * приходит БЕЗ маркера, поэтому:
+ *   * отменённая задача (`- [ ] …` → `- [[#id]] [[дата]]`) теряет признак
+ *     задачи в проекции и узнаётся только по канону «субъект + даты» —
+ *     {@link isCanonicalTaskText} (тот же канон у открытой задачи в снапшоте);
+ *   * строка, где маркер всё же остался (унаследованные/нестандартные данные),
+ *     отсекается по нему — {@link isTaskLineMarker}.
+ *
+ * Открытые задачи показывает панель «Задачи», их даты в блоке дублировали бы
+ * её. Факты свойств правило не затрагивает.
+ */
+function isTaskDayLink(link: DayLink): boolean {
+  const text = link.source.text;
+  return isTaskLineMarker(text) || isCanonicalTaskText(text);
 }
 
 /**

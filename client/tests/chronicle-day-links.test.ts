@@ -332,3 +332,120 @@ describe('дни ленты: день только со «связями дня�
     );
   });
 });
+
+/**
+ * Строки задач в «ссылках дня» не показываются (ошибка 009bda81, решение
+ * пользователя 2026-11-20): открытые задачи показывает панель «Задачи», а
+ * отменённая задача (после «Отменить задачу» маркер снят) попадала в блок
+ * сырым markdown с ID. Факты свойств правило не затрагивает.
+ */
+describe('строки задач не попадают в «ссылки дня» (009bda81)', () => {
+  beforeEach(() => installShim());
+
+  /** Упоминание даты с заданным текстом строки источника. */
+  function mention(text: string, lineNo: number): DayLink {
+    const source: DayLinkSource = {
+      ...owner('t-src', 'Источник'),
+      comment_id: `c-src-${lineNo}`,
+      line_no: lineNo,
+      text,
+    };
+    return { day: '2026-11-02', time: null, source };
+  }
+
+  /** Отрисовать блок дня из одних ссылок и вернуть его с контейнером LINKS. */
+  function renderLinks(links: DayLink[]): { block: ShimElement; list: ShimElement } {
+    const { block } = mountBlock();
+    const actions = {
+      openThought: () => undefined,
+      openThoughtProperty: () => undefined,
+      openSource: () => undefined,
+      openSourceDay: () => undefined,
+    };
+    renderDayLinks(
+      block as unknown as HTMLElement,
+      groupDayLinks({ facts: [], links }).get('2026-11-02'),
+      actions,
+    );
+    return { block, list: block.querySelector('.diary-day-links-list')! };
+  }
+
+  it('отменённая каноническая строка `[[#id]] [[дата]]` не показывается', () => {
+    const cancelled = '[[#2df16a9c-6a1e-4a52-9d0a-1b2c3d4e5f60]] [[2026-11-02]]';
+    const { block, list } = renderLinks([
+      mention(cancelled, 0),
+      mention('Позвонить маме [[2026-11-02]]', 1),
+    ]);
+
+    assert.equal(
+      list.querySelectorAll('.diary-day-link-ref').length,
+      1,
+      'осталось обычное упоминание, строка-остаток задачи скрыта',
+    );
+    assert.equal(
+      list.querySelector('.diary-day-link-snippet')?.textContent,
+      'Позвонить маме [[2026-11-02]]',
+      'показана именно не-задачная строка',
+    );
+    assert.equal(block.hidden, false, 'блок виден — остальное упоминание на месте');
+  });
+
+  it('обычное упоминание даты и датовый факт остаются', () => {
+    const result: DayLinksResult = {
+      facts: [
+        {
+          day: '2026-11-02',
+          thought_id: 't-stol',
+          title: 'Стол кухонный',
+          property_id: 'p-bought',
+          property_name: 'дата приобретения',
+          value: '2026-11-02',
+        },
+      ],
+      links: [
+        mention('[[#2df16a9c-6a1e-4a52-9d0a-1b2c3d4e5f60]] [[2026-11-02]]', 0),
+        mention('Созвон с мамой [[2026-11-02]]', 1),
+      ],
+    };
+    const grouped = groupDayLinks(result).get('2026-11-02');
+    assert.ok(grouped !== undefined);
+    assert.equal(grouped.facts.length, 1, 'факты свойств не отфильтрованы');
+    assert.equal(grouped.links.length, 1, 'в ссылках только не-задачная строка');
+  });
+
+  it('чекбокс-строка задачи исключена: `[ ]`, `- [x]`, отступ и `- [X]`', () => {
+    const { list } = renderLinks([
+      mention('[ ] Позвонить маме [[2026-11-02]]', 0),
+      mention('- [x] Купить хлеб [[2026-11-02]]', 1),
+      mention('  - [X] Вложенная задача [[2026-11-02]]', 2),
+    ]);
+    assert.equal(
+      list.querySelectorAll('.diary-day-link-ref').length,
+      0,
+      'ни одна чекбокс-строка не показана',
+    );
+  });
+
+  it('строка с текстом и датой — обычное упоминание, а не канон задачи', () => {
+    // Снапшот открытой задачи приходит БЕЗ маркера (его снимает рендерер), и
+    // такие строки сервер отсекает по `is_task` ещё в выборке. Фильтр блока не
+    // должен прятать обычный текст: «Купить хлеб [[дата]]» — законное
+    // упоминание даты, а не канонический остаток задачи.
+    const { list } = renderLinks([mention('Купить хлеб [[2026-11-02]]', 0)]);
+    assert.equal(
+      list.querySelector('.diary-day-link-snippet')?.textContent,
+      'Купить хлеб [[2026-11-02]]',
+      'обычное упоминание показано',
+    );
+  });
+
+  it('день только со строками задач не становится днём ленты', () => {
+    const grouped = groupDayLinks({
+      facts: [],
+      links: [mention('[[#966f3c79-6a1e-4a52-9d0a-1b2c3d4e5f60]] [[2026-11-02]]', 0)],
+    });
+    assert.equal(grouped.size, 0, 'день без видимых связей не появился');
+    const days = withLinkDays([], grouped, { from: '2026-11-01', to: '2026-11-30', order: 'asc' });
+    assert.deepEqual(days, [], 'пустой день не добавлен в ленту');
+  });
+});

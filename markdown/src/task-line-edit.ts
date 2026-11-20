@@ -17,7 +17,9 @@
  */
 
 import { findDateLinkSpans } from './date-links.js';
+import { getRenderer } from './renderer.js';
 import { TASK_MARKER_PATTERN, TASK_MARKER_UNCHECKED } from './task-list.js';
+import type { WikiLinkMeta } from './wiki-link.js';
 
 /**
  * Маркер пункта списка с чекбоксом: необязательный маркер списка (`-`, `*`,
@@ -34,6 +36,48 @@ const TASK_LIST_PREFIX_RE = /^([ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/;
 /** Есть ли в строке маркер пункта задачи. */
 export function isTaskLineMarker(line: string): boolean {
   return TASK_LINE_MARKER_RE.test(line);
+}
+
+/**
+ * Канонический текст строки задачи: содержимое пункта — ровно одна ID-ссылка
+ * `[[#id]]` и одна/несколько date-ссылок, больше ничего.
+ *
+ * Так выглядит сниппет ОТКРЫТОЙ задачи в проекции (`task_rows.text`: маркер
+ * чек-бокса рендерер из содержимого убирает) и точно так же — ОТМЕНЁННАЯ
+ * задача: `removeTaskLineMarker` оставляет `- [[#id]] [[дата]]`. Отмена снимает
+ * в проекции признак задачи, поэтому остаток отличим от обычной строки только
+ * по форме — по ней «Связи дня» его и исключают (ошибка 009bda81, решение
+ * пользователя «исключить строки задач»).
+ *
+ * Посторонний текст, ссылка по имени `[[Имя]]`, алиас и любой другой markdown
+ * каноном не считаются: такая строка — обычное упоминание и показывается.
+ * Грамматику ссылок разбирает единый рендерер — своего регэкспа здесь нет.
+ */
+export function isCanonicalTaskText(text: string): boolean {
+  if (typeof text !== 'string') return false;
+  const inline = getRenderer()
+    .parseInline(text.trim(), {})
+    .find((token) => token.type === 'inline');
+  if (inline === undefined) return false;
+  let subject = false;
+  let dates = 0;
+  for (const child of inline.children ?? []) {
+    if (child.type === 'text') {
+      if (child.content.trim() !== '') return false;
+      continue;
+    }
+    if (child.type !== 'wiki_link') return false;
+    const meta = child.meta as WikiLinkMeta | null;
+    if (meta === null) return false;
+    if (!subject) {
+      if (meta.kind !== 'id' || meta.targetId === null) return false;
+      subject = true;
+      continue;
+    }
+    if (meta.kind !== 'date' || meta.date === null) return false;
+    dates += 1;
+  }
+  return subject && dates > 0;
 }
 
 /**
