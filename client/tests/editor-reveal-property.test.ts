@@ -370,6 +370,56 @@ describe('переход к свойству из «Связей дня» (3054f
     );
   });
 
+  it('не раскрывает типовую группу при переходе к внетиповому свойству', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { store } = await import('../src/renderer/state.js');
+    // Свойства `p-out` в типе нет — строка живёт в группе «Свойства вне типа».
+    const etnApi = (globalThis as any).window.etn as Record<string, any>;
+    etnApi.types = { listTypeProperties: async () => [TEXT_PROPERTY] };
+    etnApi.properties = {
+      get: async () => [
+        {
+          property_id: 'p-out',
+          property_name: 'дата приобретения',
+          value_type: 'date',
+          value: '2026-11-02',
+          outside_type: true,
+        },
+      ],
+    };
+    store.update({ collapsedGroups: { 'properties.type': true } } as any);
+    const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p-out',
+    });
+    await flush();
+
+    // Типовая группа осталась свёрнутой — её тело даже не построено, поэтому
+    // внетиповая группа не сжата (замечание к fa415304).
+    assert.equal(
+      scrollBox.querySelector('.properties-type-body'),
+      null,
+      'типовая группа не раскрыта ради внетипового свойства',
+    );
+    assert.notEqual(
+      scrollBox.querySelector('.properties-outside-body'),
+      null,
+      'тело группы «Свойства вне типа» построено и не сжато',
+    );
+    assert.equal(
+      currentPropertyRow(scrollBox)?.getAttribute('data-key'),
+      'p-out',
+      'внетиповая строка выделена',
+    );
+    assert.equal(
+      store.state.collapsedGroups['properties.type'],
+      true,
+      'сохранённое предпочтение пользователя не переписано',
+    );
+  });
+
   it('обычное открытие мысли вкладку не переключает', async () => {
     const { scrollBox } = await mountOpenEditor();
     const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');

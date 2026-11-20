@@ -1163,13 +1163,53 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // типовая таблица не нашла свойство и просит раскрыть группу — её
   // перечитывание покажет строку и снимет запрос.
   box.addEventListener('etn:reveal-outside', () => setGroupExpanded(outsideGroup, true));
-  // Переход к свойству может вести в СВЁРНУТУЮ группу «Свойства типа»
-  // (задача 3054fe86, вердикт 4294f1f3): без тела таблица не построится, и
-  // строка не найдётся. Раскрываем только на время текущего перехода —
-  // сохранённое предпочтение пользователя не переписывается; если свойства в
-  // типе нет, типовая таблица сама попросит раскрыть внетиповую группу.
-  if (pendingPropertyRevealFor(target.ownerType, target.ownerId) !== null) {
-    setGroupExpanded(typeGroup, true);
+  // Переход к свойству в СВЁРНУТОЙ группе «Свойства типа» (задача 3054fe86,
+  // вердикт 4294f1f3): без тела таблица не построится. Раскрываем группу ТОЛЬКО
+  // если свойство входит в эффективный набор типа — внетиповое свойство не
+  // должно сжимать свою группу из-за лишнего раскрытия типовой (замечание к
+  // fa415304). Раскрытая группа остаётся раскрытой до ручного сворачивания;
+  // сохранённое предпочтение `collapsedGroups` не переписывается.
+  const revealPropertyId = pendingPropertyRevealFor(target.ownerType, target.ownerId);
+  if (
+    revealPropertyId !== null &&
+    store.state.collapsedGroups['properties.type'] === true
+  ) {
+    void openTypeGroupIfPropertyInType(revealPropertyId);
+  }
+
+  /**
+   * Типовая группа свёрнута: читаем эффективный набор типа и раскрываем группу,
+   * только если запрошенное свойство в нём есть. Свойства нет — строка вне
+   * типа; на всякий случай раскрываем внетиповую группу (если она тоже была
+   * свёрнута), а типовую не трогаем. Отказ чтения набора — не раскрываем
+   * ничего: строка вне типа показывается своей группой, а запрос останется
+   * жить до следующего успешного показа.
+   */
+  async function openTypeGroupIfPropertyInType(propertyId: string): Promise<void> {
+    const requestOwnerId = target.ownerId;
+    const requestTypeId = target.typeId;
+    if (requestTypeId === null) return;
+    const typeOwner = target.ownerType === 'thought' ? 'thought_type' : 'link_type';
+    let definitions: EffectiveTypeProperty[];
+    try {
+      definitions = await etn.types.listTypeProperties(
+        requireNetworkId(),
+        typeOwner,
+        requestTypeId,
+      );
+    } catch {
+      return;
+    }
+    // Пока читали, панель могли перепривязать/перестроить/снять с экрана —
+    // чужой ответ не должен менять раскрытие текущей группы.
+    if (!box.isConnected) return;
+    if (target.ownerId !== requestOwnerId || target.typeId !== requestTypeId) return;
+    if (pendingPropertyRevealFor(target.ownerType, target.ownerId) !== propertyId) return;
+    if (definitions.some((definition) => definition.property_id === propertyId)) {
+      setGroupExpanded(typeGroup, true);
+      return;
+    }
+    setGroupExpanded(outsideGroup, true);
   }
   // Retarget of the SHOWN pane to another owner of the same type: the pane is
   // reused (editor's `registerTabRetarget`), its bodies reload under the new
