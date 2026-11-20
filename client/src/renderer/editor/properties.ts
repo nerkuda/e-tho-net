@@ -1163,6 +1163,14 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   // типовая таблица не нашла свойство и просит раскрыть группу — её
   // перечитывание покажет строку и снимет запрос.
   box.addEventListener('etn:reveal-outside', () => setGroupExpanded(outsideGroup, true));
+  // Переход к свойству может вести в СВЁРНУТУЮ группу «Свойства типа»
+  // (задача 3054fe86, вердикт 4294f1f3): без тела таблица не построится, и
+  // строка не найдётся. Раскрываем только на время текущего перехода —
+  // сохранённое предпочтение пользователя не переписывается; если свойства в
+  // типе нет, типовая таблица сама попросит раскрыть внетиповую группу.
+  if (pendingPropertyRevealFor(target.ownerType, target.ownerId) !== null) {
+    setGroupExpanded(typeGroup, true);
+  }
   // Retarget of the SHOWN pane to another owner of the same type: the pane is
   // reused (editor's `registerTabRetarget`), its bodies reload under the new
   // owner and the outside-type badge is re-resolved (its owner lives on the
@@ -2043,9 +2051,23 @@ function definitionValueKey(definition: EffectiveTypeProperty): string {
 }
 
 /**
- * Относится ли ключ строки к запрошенному свойству: скаляр совпадает по
- * `property_id`, свойство-связь несёт сторону (`property_id:side`) — датовый
- * факт знает только свойство, поэтому подходит любая сторона (задача 3054fe86).
+ * Относится ли ТИПОВАЯ строка к запрошенному свойству (задача 3054fe86).
+ * Ключ сверки типовой таблицы — id ПРИВЯЗКИ (`definition.id`, уникален в
+ * эффективном наборе), а датовый факт несёт РЕЕСТРОВЫЙ `property_id`; сравнивать
+ * их нельзя (вердикт 4294f1f3). Свойство-связь находит любая его сторона:
+ * запрос знает только свойство.
+ */
+function matchesRevealDefinition(
+  definition: EffectiveTypeProperty,
+  propertyId: string,
+): boolean {
+  return definition.property_id === propertyId;
+}
+
+/**
+ * Относится ли ключ ВНЕТИПОВОЙ строки к запрошенному свойству: ключ такой
+ * строки — это значение `property_id` (+ сторона связи `:side`), поэтому
+ * совпадение по реестровому id здесь корректно (задача 3054fe86).
  */
 function matchesRevealProperty(rowKey: string, propertyId: string): boolean {
   return rowKey === propertyId || rowKey.startsWith(`${propertyId}:`);
@@ -2815,16 +2837,17 @@ function buildTypePropertiesBody(
 
   /**
    * Показать строку свойства, к которой вёл переход из «Связей дня» (задача
-   * 3054fe86). Ключ панели — property_id (у свойства-связи — property_id:side;
-   * датовый факт несёт только свойство, поэтому подходит и любой его стороне).
-   * Не нашли в типовой таблице — просим вкладку раскрыть группу «Свойства вне
-   * типа»: свойство могло быть не подключено к типу.
+   * 3054fe86). Поиск идёт по РЕЕСТРОВОМУ property_id определения, а не по ключу
+   * сверки (id привязки, вердикт 4294f1f3); свойство-связь находит любая
+   * сторона — датовый факт знает только свойство. Не нашли в типовой таблице —
+   * просим вкладку раскрыть группу «Свойства вне типа»: свойство могло быть не
+   * подключено к типу.
    */
   const revealRequestedRow = (): void => {
     const propertyId = pendingPropertyRevealFor(target.ownerType, target.ownerId);
     if (propertyId === null) return;
     const row = shownRows.find((candidate) =>
-      matchesRevealProperty(rowKeyOf(candidate), propertyId),
+      matchesRevealDefinition(candidate.definition, propertyId),
     );
     if (row === undefined) {
       if (revealOutsideRequestedFor !== propertyId) {

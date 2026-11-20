@@ -62,9 +62,14 @@ function shimDom(): void {
   win.removeEventListener = () => undefined;
 }
 
-/** Тип мысли с одним текстовым свойством «Заметка» (`p1`). */
+/**
+ * Тип мысли с двумя свойствами. `id` — id ПРИВЯЗКИ (`type_properties.id`), он
+ * уникален в эффективном наборе и служит ключом сверки строк; `property_id` —
+ * реестровый id, который несёт датовый факт. В реальных данных они РАЗНЫЕ —
+ * фикстура с одинаковыми id маскировала дефект (вердикт 4294f1f3).
+ */
 const TEXT_PROPERTY = {
-  id: 'p1',
+  id: 'binding-1',
   property_id: 'p1',
   owner_type: 'thought_type',
   owner_id: 'ta',
@@ -73,6 +78,19 @@ const TEXT_PROPERTY = {
   config: null,
   required: false,
   position: 0,
+};
+
+/** Свойство-связь: ключ строки = id привязки, запрос — реестровый `p2`. */
+const LINK_PROPERTY = {
+  id: 'binding-2',
+  property_id: 'p2',
+  owner_type: 'thought_type',
+  owner_id: 'ta',
+  key: 'Связь',
+  value_type: 'link',
+  config: {},
+  required: false,
+  position: 1,
 };
 
 function installEtn(): void {
@@ -93,7 +111,7 @@ function installEtn(): void {
         },
       ],
     },
-    types: { listTypeProperties: async () => [TEXT_PROPERTY] },
+    types: { listTypeProperties: async () => [TEXT_PROPERTY, LINK_PROPERTY] },
   };
 }
 
@@ -227,8 +245,59 @@ describe('переход к свойству из «Связей дня» (3054f
     );
     const row = currentPropertyRow(scrollBox);
     assert.notEqual(row, null, 'строка свойства выделена');
-    assert.equal(row!.getAttribute('data-key'), 'p1', 'выделена строка ЗАПРОШЕННОГО свойства');
+    // Ключ строки — id ПРИВЯЗКИ, а не property_id: переход нашёл строку по
+    // реестровому id из факта (вердикт 4294f1f3).
+    assert.equal(
+      row!.getAttribute('data-key'),
+      'binding-1',
+      'выделена строка ЗАПРОШЕННОГО свойства (ключ — id привязки)',
+    );
     assert.equal(pendingPropertyRevealFor('thought', 't1'), null, 'запрос снят показом строки');
+  });
+
+  it('находит строку свойства-связи по реестровому property_id', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p2',
+    });
+    await flush();
+
+    const row = currentPropertyRow(scrollBox);
+    assert.notEqual(row, null, 'строка свойства-связи выделена');
+    assert.equal(
+      row!.getAttribute('data-key'),
+      'binding-2',
+      'свойство-связь найдено по property_id при другом id привязки',
+    );
+  });
+
+  it('раскрывает свёрнутую группу «Свойства типа» ради строки перехода', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { store } = await import('../src/renderer/state.js');
+    // Пользователь свернул группу «Свойства типа» — её тело не строится,
+    // поэтому переход обязан раскрыть группу, иначе строку не найти.
+    store.update({ collapsedGroups: { 'properties.type': true } } as any);
+    const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p1',
+    });
+    await flush();
+
+    assert.equal(
+      currentPropertyRow(scrollBox)?.getAttribute('data-key'),
+      'binding-1',
+      'строка найдена в раскрытой на время перехода группе',
+    );
+    assert.equal(
+      store.state.collapsedGroups['properties.type'],
+      true,
+      'сохранённое предпочтение пользователя не переписано',
+    );
   });
 
   it('повторный переход по тому же свойству снова показывает строку', async () => {
@@ -259,8 +328,45 @@ describe('переход к свойству из «Связей дня» (3054f
     assert.ok(activeTabTitle(scrollBox).includes('Свойства'));
     assert.equal(
       currentPropertyRow(scrollBox)?.getAttribute('data-key'),
-      'p1',
+      'binding-1',
       'повторный клик снова выделяет ту же строку',
+    );
+  });
+
+  it('ручной выбор другой строки переносит выделение (не залипает)', async () => {
+    const { scrollBox } = await mountOpenEditor();
+    const { setThoughtEditorTarget } = await import('../src/renderer/editor/editor.js');
+
+    await setThoughtEditorTarget(makeThought(), {
+      tab: 'properties',
+      revealPropertyId: 'p1',
+    });
+    await flush();
+    assert.equal(
+      currentPropertyRow(scrollBox)?.getAttribute('data-key'),
+      'binding-1',
+      'переход выделил первую строку',
+    );
+
+    // Пользователь кликнул по другой строке таблицы: выделение переезжает на
+    // неё единственным классом (механика списка), а не остаётся на прежней.
+    const box = scrollBox.querySelector('.properties-type-body')!;
+    const other = scrollBox
+      .querySelectorAll('tr')
+      .find((row) => row.getAttribute('data-key') === 'binding-2');
+    assert.notEqual(other, undefined, 'вторая строка таблицы есть');
+    box.emit('click', { target: other });
+    await flush();
+
+    assert.equal(
+      currentPropertyRow(scrollBox)?.getAttribute('data-key'),
+      'binding-2',
+      'выделение перешло на выбранную строку',
+    );
+    assert.equal(
+      scrollBox.querySelectorAll('.prop-row-current').length,
+      1,
+      'выделена ровно одна строка',
     );
   });
 
