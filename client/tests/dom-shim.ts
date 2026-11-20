@@ -473,6 +473,20 @@ export class ShimElement {
   /** Данные текстового узла (`#text`); у элемента всегда пусто. */
   private textData = '';
 
+  /**
+   * Родитель-ЭЛЕМЕНТ (как в DOM): тот же узел, что `parent` (в шиме родитель
+   * всегда элемент). Нужен коду, который поднимается по предкам, — например
+   * адресации чекбокса блока трансклюзии.
+   */
+  get parentElement(): ShimElement | null {
+    return this.parent;
+  }
+
+  /** Присваивание (как у DOM-подделок в тестах) меняет того же `parent`. */
+  set parentElement(value: ShimElement | null) {
+    this.parent = value;
+  }
+
   /** Текстовый узел (в браузере `nodeType === Node.TEXT_NODE`). */
   get isTextNode(): boolean {
     // Сравнение без регистра: `uppercaseTagNames` (thought-cloud) поднимает тег

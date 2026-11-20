@@ -1409,6 +1409,7 @@ export const ru = {
   'tasks.cancelRow': 'Отменить задачу',
   /** Команды вхождения напоминания. */
   'tasks.openSubject': 'Открыть субъект',
+  'tasks.moreSubjects': 'Ещё связанные мысли: %1',
   'tasks.dismissReminder': 'Убрать',
   'tasks.snoozeReminder': 'Отложить…',
   'tasks.snoozeToday': 'сегодня',

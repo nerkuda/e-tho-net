@@ -687,6 +687,7 @@ export const zh = {
   'tasks.undateRow': '设为无期限',
   'tasks.cancelRow': '取消任务',
   'tasks.openSubject': '打开对象',
+  'tasks.moreSubjects': '更多关联思想：%1',
   'tasks.dismissReminder': '移除',
   'tasks.snoozeReminder': '稍后提醒…',
   'tasks.snoozeToday': '今天',

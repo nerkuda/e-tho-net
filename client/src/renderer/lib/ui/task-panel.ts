@@ -126,6 +126,18 @@ export interface TaskPanelSubject {
   title: string;
 }
 
+/**
+ * Настройка отрисовки субъекта облачком.
+ *
+ * `interactive: false` — визуальное облачко БЕЗ жестов: так субъекты показываются
+ * строками выпадающего списка «…» (0.16.1, пачка 6, пункт 2). Само действие —
+ * клик по пункту меню; облачко внутри него не должно ни перехватывать клик, ни
+ * открывать контекстное меню, ни ждать двойного клика.
+ */
+export interface TaskPanelSubjectRenderOptions {
+  interactive?: boolean;
+}
+
 /** Подгруппа списка: заголовок + фильтр массовой команды + строки. */
 export interface TaskPanelSubgroupView<T> {
   key: string;
@@ -163,7 +175,8 @@ export interface TaskPanelSectionView {
   collapsible?: boolean;
   /** Секция свёрнута при первом показе (только при `collapsible`). */
   collapsed?: boolean;
-  /** Строки плоской секции (заполняется при `flat`). */
+  /** Строки секции со сплошным списком (без подгрупп) — при `flat` и в
+   *  штатных секциях «Без срока»/«Срочные». */
   rows?: TaskPanelRow[];
 }
 
@@ -178,7 +191,7 @@ export interface ReminderPanelSectionView {
    * хронологический список без подгрупп при любом периоде.
    */
   flat?: boolean;
-  /** Строки плоской секции (заполняется при `flat`). */
+  /** Строки секции со сплошным списком (без подгрупп). */
   rows?: ReminderPanelRow[];
 }
 
@@ -364,7 +377,18 @@ export interface TaskPanelActions {
    * элемент собирает экран (эталонный компонент из коллекции), поэтому здесь
    * только данные. Не задано — рисуется название строкой.
    */
-  renderSubject?(host: HTMLElement, subject: TaskPanelSubject): void;
+  renderSubject?(
+    host: HTMLElement,
+    subject: TaskPanelSubject,
+    options?: TaskPanelSubjectRenderOptions,
+  ): void;
+  /**
+   * Открыть субъект (0.16.1, пачка 6, пункт 2): клик по пункту выпадающего
+   * списка «…» строки. Сам список собирает панель, а переход делает экран —
+   * тот же путь, что у клика по облачку. Не задано — кнопки «…» нет (пункт
+   * списка некуда вести).
+   */
+  openSubject?(subject: TaskPanelSubject): void;
   /**
    * Высота панели «Дневника» из `ui_state` (пункт B ТЗ 2026-11-17), `null` — не
    * задана: панель живёт на собственной высоте по умолчанию (`lib/ui/task-panel.css`).
@@ -658,22 +682,22 @@ export function mountTaskPanel(
   }
 
   /**
-   * Строки плоской секции (`null` — секция с подгруппами). Плоскость есть у
-   * обеих форм: у секции задач панели редактора и у секции напоминаний при одной
-   * выбранной дате (пункт D ТЗ 2026-11-17) — счётчик и навигация считают их
-   * одинаково.
+   * Строки, лежащие в секции НАПРЯМУЮ, без подгрупп (`null` — секция с
+   * подгруппами). Так устроены плоские секции панели редактора мысли и
+   * «Напоминания», а с пачки 6 (пункт 1) — штатные секции «Без срока»/«Срочные»
+   * панели «Дневника»: они уже не `flat`, но списка подгрупп у них нет.
+   * Счётчик и навигация считают такую форму одинаково.
    */
-  function flatRowsOf(
+  function directRowsOf(
     section: TaskPanelSectionView | ReminderPanelSectionView,
   ): readonly { key: string }[] | null {
-    if (section.flat !== true) return null;
-    return section.rows ?? [];
+    return section.rows ?? null;
   }
 
   /** Сколько строк в секции (счётчик в шапке — и у свёрнутой секции). */
   function sectionRowCount(section: TaskPanelSectionView | ReminderPanelSectionView): number {
-    const flat = flatRowsOf(section);
-    if (flat !== null) return flat.length;
+    const direct = directRowsOf(section);
+    if (direct !== null) return direct.length;
     return section.subgroups.reduce((sum, subgroup) => sum + subgroup.rows.length, 0);
   }
 
@@ -790,6 +814,23 @@ export function mountTaskPanel(
     return [
       menuAction(t('reminder.groupDismiss'), () => actions.reminderGroupDismiss(title, rows)),
     ];
+  }
+
+  /**
+   * Список связанных мыслей строки для кнопки «…» (0.16.1, пачка 6, пункт 2):
+   * по пункту на мысль, содержимое пункта — ВИЗУАЛЬНОЕ облачко (та же эталонная
+   * фабрика экрана, что и у облачка строки, но без жестов). Двойного клика в
+   * списке нет и быть не может: меню закрывается на ПЕРВОМ клике (`lib/menu.ts`),
+   * поэтому «открыть мысль» делает сам пункт, а двойной клик остаётся свойством
+   * облачка ПЕРВОЙ мысли в строке.
+   */
+  function subjectListMenu(ids: readonly string[]): MenuItem[] {
+    return ids.map((id) => {
+      const subject: TaskPanelSubject = { kind: 'thought', id, title: id };
+      const content = span('', 'ui-task-row-subject-cloud');
+      actions.renderSubject?.(content, subject, { interactive: false });
+      return menuAction(subject.title, () => actions.openSubject?.(subject), { content });
+    });
   }
 
   /** Строка меню команд строки задачи. */
@@ -1009,10 +1050,31 @@ export function mountTaskPanel(
     // иначе пустой блок занимал бы место в строке.
     const subjects = rowSubjectClouds ? div('ui-task-row-subjects') : null;
     if (subjects !== null && actions.renderSubject !== undefined) {
-      for (const id of row.subjectThoughts) {
+      // Несколько связанных мыслей (0.16.1, пачка 6, пункт 2): в строке ОДНО
+      // облачко — первой мысли; остальные живут в выпадающем списке кнопки «…».
+      // Так строка не растягивается на все связи, а каждая остаётся в один клик.
+      const linked = row.subjectThoughts;
+      for (const id of linked.slice(0, 1)) {
         const cloud = span('', 'ui-task-row-subject-cloud');
         actions.renderSubject(cloud, { kind: 'thought', id, title: id });
         if (cloud.childNodes.length > 0) subjects.append(cloud);
+      }
+      const rest = linked.slice(1);
+      // Кнопка «…» — только когда есть куда вести пункты списка: без
+      // `openSubject` экрана список был бы тупиком, поэтому её нет вовсе.
+      if (rest.length > 0 && actions.openSubject !== undefined) {
+        subjects.append(
+          uiButton({
+            label: '…',
+            role: 'ghost',
+            size: 's',
+            title: t('tasks.moreSubjects', [String(rest.length)]),
+            onClick: (event) => {
+              const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+              showMenuAt(rect.left, rect.bottom, subjectListMenu(rest), { keyboard: true });
+            },
+          }),
+        );
       }
     }
     const rowActions = div('ui-task-row-actions');
@@ -1238,6 +1300,8 @@ export function mountTaskPanel(
     kind: 'task' | 'reminder',
   ): HTMLElement {
     if (section.flat === true) return buildFlatSection(section, kind);
+    // Секция со сплошным списком строк без подгрупп (0.16.1, пачка 6, пункт 1).
+    if (section.rows !== undefined) return buildRowsSection(section, kind);
     const list = div('ui-task-subgroup-list');
     const key = TASK_PANEL_COLLAPSE_KEYS.section(kind, section.key);
     const collapsible = collapsibleSection({
@@ -1313,6 +1377,49 @@ export function mountTaskPanel(
       node.append(rowsHost);
     }
     node.dataset['section'] = section.key;
+    flatRowsHosts.set(node, rowsHost);
+    paintFlatRows(rowsHost, rows, kind);
+    return node;
+  }
+
+  /**
+   * Штатная секция со СПЛОШНЫМ списком строк (0.16.1, пачка 6, пункт 1):
+   * «Без срока» и «Срочные» панели «Дневника». Это сворачиваемая секция
+   * дизайн-системы — те же классы шапки/названия/счётчика/каретки и тот же
+   * ключ персиста (`section:<вид>:<ключ>`), что у секций с подгруппами;
+   * отличие — тело сразу со строками, без уровня подгрупп. Тело держит реестр
+   * `flatRowsHosts`: у свёрнутой секции оно снято с экрана, и поиск по DOM
+   * ничего бы не нашёл.
+   */
+  function buildRowsSection(
+    section: TaskPanelSectionView | ReminderPanelSectionView,
+    kind: 'task' | 'reminder',
+  ): HTMLElement {
+    const rows = section.rows ?? [];
+    const rowsHost = div('ui-task-flat-rows');
+    const key = TASK_PANEL_COLLAPSE_KEYS.section(kind, section.key);
+    const collapsible = collapsibleSection({
+      title: section.title,
+      count: `(${rows.length})`,
+      getCollapsed: () => collapseState(key),
+      onToggle: (collapsed) => {
+        actions.setCollapsed?.(key, collapsed);
+        nav?.refresh();
+      },
+      classes: {
+        root: TASK_PANEL_SECTION_CLASS,
+        header: 'ui-task-section-head',
+        title: 'ui-task-section-title',
+        count: 'ui-task-section-count',
+        caret: 'ui-task-caret',
+        body: 'ui-task-flat-rows',
+      },
+      body: rowsHost,
+    });
+    const node = collapsible.root;
+    node.dataset['section'] = section.key;
+    sectionHandles.set(node, collapsible);
+    sectionDefaults.set(node, false);
     flatRowsHosts.set(node, rowsHost);
     paintFlatRows(rowsHost, rows, kind);
     return node;
@@ -1423,9 +1530,9 @@ export function mountTaskPanel(
   /** Отрисовка навигации по видимым строкам (серая строка тоже достижима). */
   let nav: ListNavHandle<PanelEntry> | null = null;
 
-  /** Строки секции задач независимо от её формы (плоская/с подгруппами). */
+  /** Строки секции задач независимо от её формы (сплошная/с подгруппами). */
   function sectionRows(section: TaskPanelSectionView): TaskPanelRow[] {
-    if (section.flat === true) return section.rows ?? [];
+    if (section.rows !== undefined) return section.rows;
     return section.subgroups.flatMap((subgroup) => subgroup.rows);
   }
 
@@ -1446,8 +1553,8 @@ export function mountTaskPanel(
 
   /** Секция попадает в отрисовку, только когда в ней есть строки. */
   function sectionVisible(section: TaskPanelSectionView | ReminderPanelSectionView): boolean {
-    const flat = flatRowsOf(section);
-    if (flat !== null) return flat.length > 0;
+    const direct = directRowsOf(section);
+    if (direct !== null) return direct.length > 0;
     return section.subgroups.length > 0;
   }
 
@@ -1475,9 +1582,9 @@ export function mountTaskPanel(
     }
     for (const section of view.reminderSections) {
       if (sectionCollapsed('reminder', section.key)) continue;
-      const flat = flatRowsOf(section);
-      if (flat !== null) {
-        for (const row of flat) list.push({ key: row.key, kind: 'reminder' });
+      const direct = directRowsOf(section);
+      if (direct !== null) {
+        for (const row of direct) list.push({ key: row.key, kind: 'reminder' });
         continue;
       }
       for (const subgroup of section.subgroups) {
@@ -1644,6 +1751,14 @@ export function mountTaskPanel(
               ),
             );
           if (section.flat === true) {
+            updateFlatSection(node, section, kind);
+            return;
+          }
+          if (section.rows !== undefined) {
+            // Штатная секция со сплошным списком: название могло смениться
+            // (смена языка), строки и счётчик обновляются точечно.
+            const rowsTitle = node.querySelector('.ui-task-section-title');
+            if (rowsTitle !== null) rowsTitle.textContent = section.title;
             updateFlatSection(node, section, kind);
             return;
           }

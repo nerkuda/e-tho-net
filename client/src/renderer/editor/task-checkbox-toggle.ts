@@ -20,9 +20,29 @@
  * середине строки чекбоксом не считаются и адресация не съезжает. Число
  * чекбоксов в DOM и в разборе обязано совпасть: не совпало — клик ничего не
  * делает (лучше no-op, чем правка чужой строки).
+ *
+ * **Трансклюзии** (0.16.1, пачка 6, пункт 3). Чекбокс внутри развёрнутой
+ * трансклюзии принадлежит не владельцу просмотра, а ИСТОЧНИКУ трансклюзии:
+ * клик правит строку его постоянного комментария. Адрес берётся у блока
+ * (`data-transclusion-source` — id мысли-источника, `data-transclusion-section`
+ * — имя раздела, если ссылка адресовала раздел), а индекс считается по
+ * чекбоксам ЭТОГО блока (контролы вложенных трансклюзий не в счёт). Тело
+ * правится в пределах показанного фрагмента — всего `body_md` или извлечённого
+ * раздела (`extractSection`), — поэтому строки за пределами раздела целы. Если
+ * адрес построить нельзя (нет источника/раздела, числа разошлись), клик —
+ * безопасный no-op с откатом контрола.
+ *
+ * В режиме ПРАВКИ статический блок трансклюзии чекбоксов этим модулем не
+ * обслуживается: клик по нему — вход в правку блока (вложенный редактор правит
+ * свой буфер), см. `mdWidgetMouseDown`.
  */
 
-import { parseTaskLines } from '@etn/markdown';
+import {
+  extractSection,
+  parseTaskLines,
+  TRANSCLUSION_SECTION_ATTR,
+  TRANSCLUSION_SOURCE_ATTR,
+} from '@etn/markdown';
 import type { Comment } from '@etn/shared';
 
 import { requireNetworkId } from '../lib/network-id.js';
@@ -78,6 +98,46 @@ function taskCheckboxOf(node: EventTarget | null): HTMLInputElement | null {
 }
 
 /**
+ * Блок трансклюзии, внутри которого лежит узел (`null` — вне трансклюзий).
+ * Возвращается БЛИЖАЙШАЯ обёртка: у вложенной трансклюзии контрол принадлежит
+ * её источнику, а не внешнему.
+ */
+function transclusionBlockOf(node: EventTarget | null): HTMLElement | null {
+  let current = node as HTMLElement | null;
+  while (current !== null) {
+    if (current.hasAttribute?.(TRANSCLUSION_SOURCE_ATTR) === true) return current;
+    current = current.parentElement ?? null;
+  }
+  return null;
+}
+
+/**
+ * Чекбоксы САМОГО блока трансклюзии — без контролов вложенных блоков: у них
+ * свои источники, и в адресации внешнего они не участвуют.
+ */
+function blockCheckboxes(block: HTMLElement): HTMLInputElement[] {
+  return Array.from(block.querySelectorAll<HTMLInputElement>(CHECKBOX_SELECTOR)).filter(
+    (box) => box.type === 'checkbox' && transclusionBlockOf(box) === block,
+  );
+}
+
+/**
+ * Фрагмент источника, который показывает блок трансклюзии, и его смещение в
+ * теле: весь `body_md` либо извлечённый раздел ВМЕСТЕ с заголовком — ровно так
+ * его разворачивает `expandTransclusions`. `null` — раздела в теле нет.
+ */
+function transclusionFragment(
+  body: string,
+  section: string | null,
+): { text: string; start: number } | null {
+  if (section === null) return { text: body, start: 0 };
+  const text = extractSection(body, section);
+  if (text === null) return null;
+  const start = body.indexOf(text);
+  return start < 0 ? null : { text, start };
+}
+
+/**
  * Подключить живые чекбоксы внутри просмотра `host`. `source` — геттер
  * источника: он вызывается в момент КЛИКА (id комментария появляется позже
  * сборки просмотра, например у записи до дочитывания). Возвращает функцию
@@ -87,11 +147,19 @@ export function wireTaskCheckboxes(
   host: HTMLElement,
   source: () => TaskCheckboxSource | null,
 ): () => void {
-  /** Чекбоксы просмотра в порядке документа. */
-  const checkboxes = (): HTMLInputElement[] =>
+  /** Чекбоксы просмотра в порядке документа (включая контролы трансклюзий). */
+  const allCheckboxes = (): HTMLInputElement[] =>
     Array.from(host.querySelectorAll<HTMLInputElement>(CHECKBOX_SELECTOR)).filter(
       (box) => box.type === 'checkbox',
     );
+
+  /**
+   * Чекбоксы САМОГО комментария владельца: контролы блоков трансклюзий из
+   * адресации исключены (они правят свои источники — пачка 6, пункт 3), иначе
+   * N-й контрол DOM не совпал бы с N-й строкой `body_md` владельца.
+   */
+  const ownerCheckboxes = (): HTMLInputElement[] =>
+    allCheckboxes().filter((box) => transclusionBlockOf(box) === null);
 
   // Отключённый вендорский контрол не шлёт `click`, поэтому просмотр делает
   // чекбоксы живыми: снимаем `disabled` и помечаем классом (CSS — курсор).
@@ -100,22 +168,94 @@ export function wireTaskCheckboxes(
     box.removeAttribute('disabled');
     box.classList.add(LIVE_TASK_CHECKBOX_CLASS);
   };
-  for (const box of checkboxes()) activate(box);
+  for (const box of allCheckboxes()) activate(box);
 
   const onClick = (event: Event): void => {
     const box = taskCheckboxOf(event.target);
     if (box === null || !host.contains(box)) return;
     event.preventDefault();
     event.stopPropagation();
+    const want = box.checked;
+    // Чекбокс внутри трансклюзии правит ИСТОЧНИК, а не комментарий владельца
+    // просмотра (0.16.1, пачка 6, пункт 3).
+    const block = transclusionBlockOf(box);
+    if (block !== null) {
+      void applyTransclusionToggle(block, box, want);
+      return;
+    }
     const sourceRef = source();
     const commentId = sourceRef?.commentId ?? null;
     if (sourceRef === null || commentId === null) return;
-    const boxes = checkboxes();
+    const boxes = ownerCheckboxes();
     const index = boxes.indexOf(box);
     if (index < 0) return;
-    const want = box.checked;
     void applyToggle(commentId, index, want, sourceRef);
   };
+
+  /**
+   * Переключить строку внутри блока трансклюзии: адресация — по атрибутам блока
+   * (комментарий-источник + раздел) и по номеру чекбокса внутри него. Вид
+   * контрола ставится сразу, при отказе построения адреса или записи —
+   * откатывается (лучше no-op, чем правка чужой строки).
+   */
+  async function applyTransclusionToggle(
+    block: HTMLElement,
+    box: HTMLInputElement,
+    want: boolean,
+  ): Promise<void> {
+    const sourceId = block.getAttribute(TRANSCLUSION_SOURCE_ATTR);
+    const section = block.getAttribute(TRANSCLUSION_SECTION_ATTR);
+    const boxes = blockCheckboxes(block);
+    const index = boxes.indexOf(box);
+    if (sourceId === null || index < 0) {
+      box.checked = !want;
+      return;
+    }
+    const networkId = requireNetworkId();
+    try {
+      // Источник трансклюзии — ПОСТОЯННЫЙ комментарий мысли-источника.
+      const comments = await etn.comments.list(networkId, 'thought', sourceId);
+      const permanent = comments.find((comment) => comment.kind === 'permanent');
+      if (permanent === undefined) {
+        box.checked = !want;
+        return;
+      }
+      const fragment = transclusionFragment(permanent.body_md, section);
+      const checkLines =
+        fragment === null ? [] : parseTaskLines(fragment.text).filter((line) => line.hasCheckbox);
+      const target = checkLines[index];
+      // Число чекбоксов раздела и блока обязано совпасть: разошлось — адрес
+      // неоднозначен, клик молчит.
+      if (fragment === null || target === undefined || checkLines.length !== boxes.length) {
+        box.checked = !want;
+        return;
+      }
+      const lines = fragment.text.split('\n');
+      const rawLine = lines[target.lineNo - 1];
+      if (rawLine === undefined) {
+        box.checked = !want;
+        return;
+      }
+      const next = setChecklistLineDone(rawLine, want);
+      if (next === null) {
+        box.checked = !want;
+        return;
+      }
+      if (next === rawLine) return;
+      lines[target.lineNo - 1] = next;
+      // Заменяется ровно показанный фрагмент: строки источника за пределами
+      // раздела (когда ссылка адресовала раздел) остаются нетронутыми.
+      const bodyMd =
+        permanent.body_md.slice(0, fragment.start) +
+        lines.join('\n') +
+        permanent.body_md.slice(fragment.start + fragment.text.length);
+      await etn.comments.update(networkId, permanent.id, { body_md: bodyMd }, permanent.version);
+      box.checked = want;
+    } catch (err) {
+      box.checked = !want;
+      notice(t('tasks.errorEdit', [errText(err)]), 'error');
+    }
+  }
 
   /**
    * Переключить N-ю строку с чек-боксом источника. Вид чекбокса ставится сразу
@@ -128,7 +268,7 @@ export function wireTaskCheckboxes(
     sourceRef: TaskCheckboxSource,
   ): Promise<void> {
     const networkId = requireNetworkId();
-    const boxes = checkboxes();
+    const boxes = ownerCheckboxes();
     const box = boxes[index];
     if (box === undefined) return;
     // Метка СВОЕЙ записи — ДО сетевого вызова: эхо `comment.updated` может

@@ -88,6 +88,7 @@ import {
   type TaskPanelRow,
   type TaskPanelSectionView,
   type TaskPanelSubject,
+  type TaskPanelSubjectRenderOptions,
   type TaskPanelView,
   type TaskRowCommand,
   type TaskRowEditorFactory,
@@ -409,7 +410,8 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       openRowSource: actions.openRowSource,
       headMenu: source.kind === 'thought' ? () => thoughtHeadMenu() : undefined,
       renderText: (node, row) => view.renderText(node, row),
-      renderSubject: (node, subject) => renderSubject(node, subject),
+      renderSubject: (node, subject, renderOptions) => renderSubject(node, subject, renderOptions),
+      openSubject: (subject) => openSubjectInternal(subject),
       panelHeight: () => panelHeightValue,
       setPanelHeight: (height) => {
         panelHeightValue = height;
@@ -766,16 +768,20 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   }
 
   /**
-   * ПЛОСКАЯ секция задач (0.16.1, задача `cfb8cb72`, пункт 6): подгрупп нет,
-   * список сплошной — одинаковый при любом периоде. Порядок строк задаёт
-   * вызывающий (готовые представления приходят уже упорядоченными).
+   * Секция задач со сплошным списком строк (0.16.1, задача `cfb8cb72`, пункт 6;
+   * пачка 6, пункт 1): «Без срока» и «Срочные» панели «Дневника». Это ШТАТНАЯ
+   * сворачиваемая секция дизайн-системы — как секции с подгруппами (шапка с
+   * кареткой, счётчик, персист свёрнутости по ключу секции), только тело —
+   * строки напрямую, без подгрупп: список сплошной и одинаков при любом
+   * периоде. Порядок строк задаёт вызывающий (готовые представления приходят
+   * уже упорядоченными).
    */
-  function flatTaskSection(
+  function rowsTaskSection(
     key: string,
     title: string,
     rows: readonly TaskPanelRow[],
   ): TaskPanelSectionView {
-    return { key, title, flat: true, subgroups: [], rows: [...rows] };
+    return { key, title, subgroups: [], rows: [...rows] };
   }
 
   /**
@@ -958,10 +964,10 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     const datedViews = orderByDue(unique(dated).map((row) => viewRowOf(row, nestedChildren)));
     const sections: TaskPanelSectionView[] = [];
     if (undatedViews.length > 0) {
-      sections.push(flatTaskSection('undated', t('tasks.sectionUndated'), undatedViews));
+      sections.push(rowsTaskSection('undated', t('tasks.sectionUndated'), undatedViews));
     }
     if (datedViews.length > 0) {
-      sections.push(flatTaskSection('urgent', t('tasks.sectionUrgent'), datedViews));
+      sections.push(rowsTaskSection('urgent', t('tasks.sectionUrgent'), datedViews));
     }
     return sections;
   }
@@ -1838,14 +1844,25 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    * Облачко субъекта (пункты C/E ТЗ 2026-11-17, замечание 5 ТЗ 2026-11-18):
    * эталонное облачко мысли/публикации с ДЕЙСТВИЯМИ — клик открывает субъект,
    * правый клик открывает общее меню мысли вне холста.
+   *
+   * `interactive: false` — визуальное облачко без жестов (0.16.1, пачка 6,
+   * пункт 2): так субъекты показываются в выпадающем списке «…» строки. Пункт
+   * списка сам закрывает меню и открывает мысль, поэтому облачко внутри не
+   * должно ни откладывать клик, ни ждать двойного, ни перехватывать правый
+   * клик.
    */
-  function renderSubject(hostEl: HTMLElement, subject: TaskPanelSubject): void {
+  function renderSubject(
+    hostEl: HTMLElement,
+    subject: TaskPanelSubject,
+    options?: TaskPanelSubjectRenderOptions,
+  ): void {
+    const interactive = options?.interactive !== false;
     if (subject.kind === 'publication') {
       const cloud = createPublicationCloud(
         { id: subject.id, title: subject.title },
         { width: 'container' },
       );
-      cloud.addEventListener('click', () => openSubjectInternal(subject));
+      if (interactive) cloud.addEventListener('click', () => openSubjectInternal(subject));
       hostEl.append(cloud);
       return;
     }
@@ -1854,14 +1871,18 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     const cloud = createThoughtCloud(input, {
       profile: 'chip',
       width: 'container',
-      actions: {
-        onClick: (id) =>
-          openSubjectInternal({ kind: 'thought', id, title: subjectTitle('thought', id) }),
-        onContextMenu: (event, id) => {
-          event.stopPropagation();
-          void openThoughtMenu(event, id);
-        },
-      },
+      ...(interactive
+        ? {
+            actions: {
+              onClick: (id: string) =>
+                openSubjectInternal({ kind: 'thought', id, title: subjectTitle('thought', id) }),
+              onContextMenu: (event: MouseEvent, id: string) => {
+                event.stopPropagation();
+                void openThoughtMenu(event, id);
+              },
+            },
+          }
+        : {}),
     });
     hostEl.append(cloud);
   }

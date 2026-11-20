@@ -1040,18 +1040,73 @@ describe('панель задач: сворачивание блоков и ко
     destroy();
   });
 
-  it('рядом с датой строки — облачка связанных мыслей (пункт 6)', () => {
+  it('рядом с датой строки — ОДНО облачко и кнопка «…» со списком остальных (пачка 6, п.2)', () => {
     const rendered: string[] = [];
-    const { host, destroy } = mount([taskRow({ subjectThoughts: ['t1', 't2'] })], {
-      renderSubject: (node, subject) => {
-        rendered.push(subject.id);
+    const opened: string[] = [];
+    const { host, destroy } = mount([taskRow({ subjectThoughts: ['t1', 't2', 't3'] })], {
+      renderSubject: (node, subject, options) => {
+        rendered.push(`${subject.id}:${options?.interactive === false ? 'visual' : 'live'}`);
         node.textContent = subject.id;
       },
+      openSubject: (subject) => opened.push(subject.id),
     });
     const row = rowsOf(host)[0]!;
     const clouds = row.querySelectorAll('.ui-task-row-subject-cloud');
-    assert.equal(clouds.length, 2, 'по облачку на каждую связанную мысль');
-    assert.deepEqual(rendered, ['t1', 't2'], 'облачко рисует экран (renderSubject)');
+    assert.equal(clouds.length, 1, 'в строке ОДНО облачко — первой связанной мысли');
+    assert.equal(clouds[0]!.flatText(), 't1', 'облачко первой мысли');
+    assert.deepEqual(rendered, ['t1:live'], 'облачко строки — с жестами (клик/двойной клик)');
+
+    const subjectsSlot = row.querySelector('.ui-task-row-subjects')!;
+    const more = subjectsSlot.querySelector('button') as unknown as ShimElement;
+    assert.ok(more, 'кнопка «…» рядом с облачком');
+    assert.equal(more.flatText().trim(), '…', 'кнопка — троеточие (словарь lib/ui)');
+    assert.equal(
+      more.title,
+      t('tasks.moreSubjects', ['2']),
+      'подсказка называет число мыслей, ушедших в список',
+    );
+
+    more.emit('click', {
+      target: more,
+      currentTarget: more,
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const menu = body.querySelector('.menu') as unknown as ShimElement | null;
+    assert.ok(menu, 'список остальных мыслей открыт');
+    assert.deepEqual(
+      menu.querySelectorAll('.menu-item').map((node) => menuLabel(node)),
+      ['t2', 't3'],
+      'в списке — только остальные мысли, в порядке строки',
+    );
+    assert.deepEqual(
+      rendered,
+      ['t1:live', 't2:visual', 't3:visual'],
+      'пункты списка — визуальные облачка без жестов: действие делает сам пункт',
+    );
+
+    menuRowByLabel(menu, 't2').click();
+    assert.deepEqual(opened, ['t2'], 'клик по пункту открывает свою мысль в редакторе');
+    destroy();
+  });
+
+  it('одна связанная мысль — кнопки «…» нет (списку не из чего состоять)', () => {
+    const opened: string[] = [];
+    const { host, destroy } = mount([taskRow({ subjectThoughts: ['t1'] })], {
+      renderSubject: (node, subject) => {
+        node.textContent = subject.id;
+      },
+      openSubject: (subject) => opened.push(subject.id),
+    });
+    const row = rowsOf(host)[0]!;
+    assert.equal(row.querySelectorAll('.ui-task-row-subject-cloud').length, 1, 'облачко одно');
+    assert.equal(
+      row.querySelector('.ui-task-row-subjects')!.querySelector('button'),
+      null,
+      'кнопка «…» не нужна: список был бы пуст',
+    );
+    assert.deepEqual(opened, [], 'переходов нет');
     destroy();
   });
 
@@ -1920,22 +1975,23 @@ describe('панель задач: группа «Задачи» и секции
     destroy();
   });
 
-  it('секции «Без срока» → «Срочные» идут в этом порядке со счётчиками строк', () => {
-    const { host, render, destroy } = mount([taskRow()]);
+  it('секции «Без срока» → «Срочные»: штатные сворачиваемые секции со счётчиками', () => {
+    const collapses: string[] = [];
+    const { host, render, destroy } = mount([taskRow()], {
+      setCollapsed: (key, collapsed) => collapses.push(`${key}:${collapsed}`),
+    });
     render(
       panelView([], {
         taskSections: [
           {
             key: 'undated',
             title: t('tasks.sectionUndated'),
-            flat: true,
             subgroups: [],
             rows: [taskRow({ due: null, periodFrom: null })],
           },
           {
             key: 'urgent',
             title: t('tasks.sectionUrgent'),
-            flat: true,
             subgroups: [],
             rows: [taskRow(), taskRow({ key: 'c1:1', lineNo: 1, text: 'вторая' })],
           },
@@ -1961,6 +2017,42 @@ describe('панель задач: группа «Задачи» и секции
       sections.map((section) => section.querySelector('.ui-task-section-count')!.textContent),
       ['(1)', '(2)'],
       'счётчик секции — число её строк, виден и в свёрнутом виде',
+    );
+    // Форма — ШТАТНАЯ секция дизайн-системы (пункт 1 пачки 6): шапка и каретка
+    // секций с подгруппами, а не flat-вариант «Выполненных задач».
+    assert.deepEqual(
+      sections.map((section) => section.querySelectorAll('.ui-task-section-head').length),
+      [1, 1],
+      'у секции шапка дизайн-системы `.ui-task-section-head`',
+    );
+    assert.deepEqual(
+      sections.map((section) => section.classList.contains('ui-task-flat')),
+      [false, false],
+      'flat-формы у секций «Без срока»/«Срочные» нет',
+    );
+    // По умолчанию развёрнуты; свёрнутость пишется штатным `collapsedGroups`.
+    assert.deepEqual(
+      sections.map((section) =>
+        section.querySelector('.ui-task-caret')!.classList.contains('collapsed'),
+      ),
+      [false, false],
+      'без записи ui_state секции развёрнуты',
+    );
+    sections[0]!.querySelector('.ui-task-section-head')!.emit('click', {
+      target: sections[0]!.querySelector('.ui-task-section-head'),
+      currentTarget: sections[0]!.querySelector('.ui-task-section-head'),
+      preventDefault: (): void => undefined,
+      stopPropagation: (): void => undefined,
+    });
+    assert.deepEqual(
+      collapses,
+      ['section:task:undated:true'],
+      'свёрнутость уходит в штатный персист панели',
+    );
+    assert.equal(
+      sections[0]!.querySelector('.ui-task-caret')!.classList.contains('collapsed'),
+      true,
+      'каретка секции показывает свёрнутость',
     );
     destroy();
   });

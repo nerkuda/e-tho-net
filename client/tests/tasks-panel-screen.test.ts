@@ -1429,6 +1429,20 @@ describe('панель задач: единая форма списков при
         [t('tasks.sectionUndated'), t('tasks.sectionUrgent')],
         'ровно две сплошные секции: «Без срока», затем «Срочные»',
       );
+      // Форма секций — штатная сворачиваемая секция дизайн-системы (0.16.1,
+      // пачка 6, пункт 1), а не flat-вариант «Выполненных задач»: шапка с
+      // кареткой и счётчиком, свёрнутость — общий персист панели.
+      assert.equal(
+        tasksGroup.findAll('ui-task-section-head').length,
+        2,
+        'у каждой секции шапка дизайн-системы',
+      );
+      const sectionRoots = tasksGroup.querySelectorAll('[data-section]');
+      assert.deepEqual(
+        sectionRoots.map((section) => section.classList.contains('ui-task-flat')),
+        [false, false],
+        'flat-формы списка у этих секций нет',
+      );
 
       await h.setPeriod({ from: today, to: tomorrowLocalOfScreen() });
 

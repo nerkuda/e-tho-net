@@ -13,7 +13,9 @@
  *  • code fence и `- [ ]` в середине строки не адресуются (грамматика та же,
  *    что у просмотра);
  *  • число чекбоксов DOM и источника не совпало — no-op с откатом контрола
- *    (лучше ничего не делать, чем править чужую строку).
+ *    (лучше ничего не делать, чем править чужую строку);
+ *  • чекбокс блока трансклюзии правит ИСТОЧНИК по атрибутам блока (раздел —
+ *    только в его пределах), а вложенный блок адресуется ближайшей обёртке.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -69,6 +71,18 @@ function checkbox(host: ShimElement, checked: boolean): ShimElement {
   return box;
 }
 
+/**
+ * Обёртка блока трансклюзии в `body_html` — такую разметку ставит единый
+ * рендерер (`data-transclusion-source`/`data-transclusion-section`).
+ */
+function transclusionBlock(host: ShimElement, sourceId: string, section?: string): ShimElement {
+  const block = new ShimElement('div', 'md-transclusion');
+  block.setAttribute('data-transclusion-source', sourceId);
+  if (section !== undefined) block.setAttribute('data-transclusion-section', section);
+  host.append(block);
+  return block;
+}
+
 /** Клик по контролу: в браузере `checked` меняется ДО `click`. */
 function click(host: ShimElement, box: ShimElement): void {
   host.emit('click', {
@@ -96,19 +110,38 @@ function clickWithBrowserRevert(host: ShimElement, box: ShimElement, revertTo: b
 
 interface Api {
   updates: Array<{ bodyMd: string; version: number }>;
+  /** Комментарии, в которые писала правка (трансклюзия адресует ИСТОЧНИК). */
+  ids: string[];
+  /** Постоянные комментарии мыслей-источников: id мысли → комментарий. */
+  sources: Map<string, { id: string; body_md: string; version: number }>;
 }
 
 /** Подставной `window.etn` с управляемым источником комментария. */
 function fakeApi(bodyMd: string, version = 1): Api {
-  const api: Api = { updates: [] };
+  const api: Api = { updates: [], ids: [], sources: new Map() };
   const stub = {
     comments: {
-      get: async (_networkId: string, id: string) => ({
-        id,
-        body_md: bodyMd,
-        version,
-        body_html: '<p>html</p>',
-      }),
+      get: async (_networkId: string, id: string) => {
+        for (const source of api.sources.values()) {
+          if (source.id === id) return { ...source, body_html: '<p>source</p>' };
+        }
+        return { id, body_md: bodyMd, version, body_html: '<p>html</p>' };
+      },
+      list: async (_networkId: string, _ownerType: string, ownerId: string) => {
+        const source = api.sources.get(ownerId);
+        if (source === undefined) return [];
+        return [
+          {
+            id: source.id,
+            owner_type: 'thought',
+            owner_id: ownerId,
+            kind: 'permanent',
+            body_md: source.body_md,
+            version: source.version,
+            body_html: '<p>source</p>',
+          },
+        ];
+      },
       update: async (
         _networkId: string,
         id: string,
@@ -116,6 +149,7 @@ function fakeApi(bodyMd: string, version = 1): Api {
         expected?: number,
       ) => {
         api.updates.push({ bodyMd: input.body_md ?? '', version: expected ?? 0 });
+        api.ids.push(id);
         return {
           id,
           body_md: input.body_md,
@@ -214,18 +248,23 @@ describe('живые чекбоксы просмотра комментария 
     assert.equal(first.checked, false, 'контрол возвращён к снапшоту');
   });
 
-  it('трансклюзия в просмотре: чекбоксы вложенной записи не адресуются (no-op с откатом)', async () => {
-    // Фикстура живой приёмки: комментарий-владелец — ОДНА строка-трансклюзия
-    // `![[#id]]`, а его `body_html` — отрисованный блок вложенной записи с тремя
-    // чекбоксами. Адресация модуля «N-й чекбокс DOM ↔ N-я строка с чек-боксом
-    // `body_md`» видит 3 против 0 — и обязана молчать: правка наугад задела бы
-    // чужой комментарий (расхождение 4.3 плана — в отчёте задачи 0161068d).
-    const api = fakeApi('![[#11111111-1111-4111-8111-111111111111]]', 7);
+  it('трансклюзия: чекбокс правит строку тела ИСТОЧНИКА, а не владельца (п.3 пачки 6)', async () => {
+    // Владелец просмотра — ОДНА строка-трансклюзия `![[#id]]`; его `body_html`
+    // несёт развёрнутый блок источника с тремя чекбоксами. Клик обязан править
+    // постоянный комментарий ИСТОЧНИКА (адрес блока), а не тело владельца.
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const api = fakeApi(`![[#${sourceId}]]`, 7);
+    api.sources.set(sourceId, {
+      id: 'c-source',
+      body_md: '- [ ] первая\n- [ ] вторая\n- [x] третья',
+      version: 5,
+    });
     const host = new ShimElement('div');
-    const first = checkbox(host, false);
-    checkbox(host, false);
-    checkbox(host, true);
-    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c1' }));
+    const block = transclusionBlock(host, sourceId);
+    const first = checkbox(block, false);
+    checkbox(block, false);
+    checkbox(block, true);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c-owner' }));
     assert.ok(
       first.classList.contains(LIVE_TASK_CHECKBOX_CLASS),
       'контрол блока трансклюзии тоже становится живым (снимается вендорский disabled)',
@@ -233,8 +272,84 @@ describe('живые чекбоксы просмотра комментария 
     first.checked = true;
     click(host, first);
     await flush();
-    assert.deepEqual(api.updates, [], 'источник не тронут: трансклюзия — не строки задачи');
+    assert.deepEqual(
+      api.ids,
+      ['c-source'],
+      'адрес — постоянный комментарий источника, а не комментарий просмотра',
+    );
+    assert.deepEqual(
+      api.updates,
+      [{ bodyMd: '- [x] первая\n- [ ] вторая\n- [x] третья', version: 5 }],
+      'правлена ровно строка своего чекбокса внутри источника; соседние целы',
+    );
+    assert.equal(first.checked, true, 'успешная отметка видна без пересборки просмотра');
+  });
+
+  it('трансклюзия раздела: правка не выходит за фрагмент `![[#id#Раздел]]`', async () => {
+    // Ссылка адресовала раздел: в блоке только его чекбоксы. Индекс считается
+    // по разделу, а строки источника за его пределами остаются нетронутыми.
+    const api = fakeApi('owner', 1);
+    api.sources.set('src', {
+      id: 'c-source',
+      body_md: '# Дела\n- [ ] внутри\n\n# Прочее\n- [ ] снаружи',
+      version: 2,
+    });
+    const host = new ShimElement('div');
+    const block = transclusionBlock(host, 'src', 'Дела');
+    const inside = checkbox(block, false);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c-owner' }));
+    inside.checked = true;
+    click(host, inside);
+    await flush();
+    assert.deepEqual(
+      api.updates,
+      [{ bodyMd: '# Дела\n- [x] внутри\n\n# Прочее\n- [ ] снаружи', version: 2 }],
+      'правлен раздел; строка за его пределами цела',
+    );
+  });
+
+  it('трансклюзия: адрес не строится (числа разошлись) — no-op с откатом контрола', async () => {
+    // В блоке два контрола, а в источнике одна строка с чек-боксом: адрес
+    // неоднозначен — правка наугад задела бы чужую строку.
+    const api = fakeApi('owner', 1);
+    api.sources.set('src', { id: 'c-source', body_md: '- [ ] только одна', version: 1 });
+    const host = new ShimElement('div');
+    const block = transclusionBlock(host, 'src');
+    const first = checkbox(block, false);
+    checkbox(block, false);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c-owner' }));
+    first.checked = true;
+    click(host, first);
+    await flush();
+    assert.deepEqual(api.ids, [], 'запросов нет: адрес не построен');
+    assert.deepEqual(api.updates, [], 'источник не тронут');
     assert.equal(first.checked, false, 'контрол возвращён к снапшоту (no-op, а не догадка)');
+  });
+
+  it('вложенная трансклюзия: чекбокс адресуется БЛИЖАЙШЕМУ блоку', async () => {
+    const api = fakeApi('owner', 1);
+    api.sources.set('outer', { id: 'c-outer', body_md: '- [ ] внешняя', version: 1 });
+    api.sources.set('inner', { id: 'c-inner', body_md: '- [ ] вложенная', version: 1 });
+    const host = new ShimElement('div');
+    const outer = transclusionBlock(host, 'outer');
+    const outerBox = checkbox(outer, false);
+    const inner = transclusionBlock(outer, 'inner');
+    const innerBox = checkbox(inner, false);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c-owner' }));
+
+    innerBox.checked = true;
+    click(host, innerBox);
+    await flush();
+    assert.deepEqual(api.ids, ['c-inner'], 'контрол вложенного блока правит свой источник');
+    assert.deepEqual(api.updates, [{ bodyMd: '- [x] вложенная', version: 1 }]);
+
+    api.ids.length = 0;
+    api.updates.length = 0;
+    outerBox.checked = true;
+    click(host, outerBox);
+    await flush();
+    assert.deepEqual(api.ids, ['c-outer'], 'контролы вложенного блока не сдвигают индекс внешнего');
+    assert.deepEqual(api.updates, [{ bodyMd: '- [x] внешняя', version: 1 }]);
   });
 
   it('без адреса комментария клик ничего не пишет', async () => {
