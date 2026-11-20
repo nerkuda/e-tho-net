@@ -45,6 +45,14 @@ import {
   saveWindowBounds,
   type WindowBounds,
 } from './window-bounds.js';
+import {
+  DISABLED_DICTIONARY_DOWNLOAD_URL,
+  SPELLCHECK_DICTIONARIES,
+  dictionariesSourceDir,
+  ensureSpellcheckDictionaries,
+  profileDictionariesDir,
+  resolveSpellcheckLanguages,
+} from './spellcheck-dictionaries.js';
 
 /**
  * Directory of the compiled main bundle (`out/main`): `import.meta.dirname`
@@ -448,7 +456,7 @@ function registerEtnimgProtocol(deps: EtnimgServeDeps): void {
 }
 
 /**
- * Нативные языки проверки орфографии (задача 1e373ac7).
+ * Нативные языки проверки орфографии (задачи 1e373ac7, 68402877).
  *
  * Electron на Windows/Linux использует Hunspell: набор доступных словарей
  * зависит от сборки, а язык по умолчанию — локаль ОС, в которой русского
@@ -459,13 +467,43 @@ function registerEtnimgProtocol(deps: EtnimgServeDeps): void {
  * этого старт приложения нельзя. Сама проверка включается атрибутом
  * `spellcheck="true"` на contentDOM редактора комментария
  * (client/src/renderer/editor/md-editor.ts).
+ *
+ * Словари едут в поставке (задача 68402877): перед включением языков они
+ * идемпотентно копируются из ресурсов в `<userData>/Dictionaries`, откуда их
+ * читает Chromium. Если файла с ожидаемым именем там нет, Chromium идёт за ним
+ * на redirector.gvt1.com — в рабочей сети TLS до этого хоста рвётся, и в
+ * консоли повторяются handshake-ошибки. Поэтому при недоступных ресурсах
+ * загрузчик отправляется в loopback-отказ, а языки не включаются вовсе.
  */
 function configureSpellCheckerLanguages(): void {
   try {
-    const available = session.defaultSession.availableSpellCheckerLanguages;
-    const wanted = ['ru', 'en-US'].filter((lang) => available.includes(lang));
+    const result = ensureSpellcheckDictionaries(
+      dictionariesSourceDir(app.getAppPath(), app.isPackaged, process.resourcesPath),
+      profileDictionariesDir(app.getPath('userData')),
+    );
+    for (const file of result.files) {
+      if (file.status === 'failed') {
+        console.warn(
+          `[ETN] spellcheck: dictionary ${file.fileName} not installed — ${file.error}`,
+        );
+      }
+    }
+    const allReady = SPELLCHECK_DICTIONARIES.every((dict) =>
+      result.readyLanguages.includes(dict.language),
+    );
+    if (!allReady) {
+      // Битая установка (нет ресурсов/нет места на диске): никаких сетевых
+      // загрузок — она и была причиной handshake-ошибок в консоли.
+      session.defaultSession.setSpellCheckerDictionaryDownloadURL(
+        DISABLED_DICTIONARY_DOWNLOAD_URL,
+      );
+    }
+    const wanted = resolveSpellcheckLanguages(
+      session.defaultSession.availableSpellCheckerLanguages,
+      result.readyLanguages,
+    );
     if (wanted.length === 0) {
-      console.warn('[ETN] spellcheck: no dictionary for ru/en-US, using system default');
+      console.warn('[ETN] spellcheck: bundled dictionaries unavailable, spellcheck disabled');
       return;
     }
     session.defaultSession.setSpellCheckerLanguages(wanted);

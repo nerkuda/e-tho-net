@@ -49,6 +49,12 @@ extraResources:
   # с программой — лицензию видно без распаковки.
   - from: out/renderer/licenses
     to: licenses
+  # Локальные словари проверки орфографии (задача 68402877): Chromium читает
+  # `.bdic` из `<userData>/Dictionaries`, main копирует их туда при старте.
+  # Без файлов в поставке Chromium пошёл бы за ними на redirector.gvt1.com,
+  # где в рабочей сети рвётся TLS и в консоли сыплются handshake-ошибки.
+  - from: resources/dictionaries
+    to: dictionaries
 
 # Native module — rebuilt for Electron ABI by electron-builder automatically.
 asarUnpack:

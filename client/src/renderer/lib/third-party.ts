@@ -166,6 +166,26 @@ export const THIRD_PARTY_COMPONENTS: readonly ThirdPartyComponent[] = [
     asset: true,
     licenseFile: 'licenses/jetbrains-mono-OFL-1.1.txt',
   },
+  // Словари проверки орфографии в поставке (задача 68402877): бинарные `.bdic`
+  // лежат в `client/resources/dictionaries` и копируются main в профиль, а
+  // тексты лицензий — там же и в `public/licenses` (для notices и диалога
+  // «О программе»). Обе записи — ассеты: npm-пакетов за словарями нет.
+  {
+    title: 'Hunspell ru-RU',
+    license: 'BSD-style',
+    copyright: '© 1997-2008 Alexander I. Lebedev',
+    url: 'https://github.com/LibreOffice/dictionaries/tree/master/ru_RU',
+    asset: true,
+    licenseFile: 'licenses/dictionaries/ru-RU.txt',
+  },
+  {
+    title: 'SCOWL en-US (Hunspell)',
+    license: 'SCOWL',
+    copyright: '© 2000-2018 Kevin Atkinson, Geoff Kuenning',
+    url: 'https://github.com/en-wl/wordlist',
+    asset: true,
+    licenseFile: 'licenses/dictionaries/en-US.txt',
+  },
   // Темы оформления (задача 3cac16cc): значения токенов ETN выведены из палитр
   // этих тем, поэтому лицензия и правообладатель едут в поставку вместе с
   // текстом MIT. У каждой темы из `UI_THEME_NAMES` (кроме собственной
