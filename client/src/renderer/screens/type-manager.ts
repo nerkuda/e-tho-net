@@ -394,6 +394,60 @@ export function typeRowRevealIds(
     .map((t) => t.id);
 }
 
+/**
+ * План удаления типа мысли вместе с поддеревом (ошибка d4802371): какие типы
+ * уйдут и что спросить у пользователя.
+ *
+ * Поддерево считается по ВСЕМУ каталогу типов, а не по прямым детям: сервер с
+ * `force` уносит и внуков. Для типа-листа остаётся прежний текст подтверждения.
+ */
+export interface TypeDeletePlan {
+  /** id поддерева, начиная с запрошенного типа. */
+  ids: string[];
+  /** Текст подтверждения (ключ `thoughtTypes.deleteConfirm*`). */
+  message: string;
+}
+
+/** Построить {@link TypeDeletePlan} по каталогу типов. */
+export function planTypeDelete(types: readonly ThoughtType[], type: ThoughtType): TypeDeletePlan {
+  const ids = [...subtreeTypeIds(types, type.id)];
+  const descendants = ids.length - 1;
+  return {
+    ids,
+    message:
+      descendants === 0
+        ? t('thoughtTypes.deleteConfirm', type.name)
+        : t('thoughtTypes.deleteConfirmWithChildren', [type.name, descendants]),
+  };
+}
+
+/**
+ * Удалить тип мысли с поддеревом (ошибка d4802371): подтверждение с числом
+ * потомков → `DELETE …?force=1` → перечитать каталог → локально уведомить об
+ * исчезновении КАЖДОГО типа поддерева (открытая сущность может иметь тип-
+ * потомок; раньше уведомлялся только корень).
+ *
+ * Возвращает план удаления или `null`, если пользователь отказался. Ошибки
+ * запроса пробрасываются — их показывает вызывающий.
+ */
+export async function deleteThoughtTypeSubtree(
+  networkId: string,
+  type: ThoughtType,
+  types: readonly ThoughtType[],
+): Promise<TypeDeletePlan | null> {
+  const plan = planTypeDelete(types, type);
+  const ok = await confirmDialog(t('thoughtTypes.delete'), plan.message, true);
+  if (!ok) return null;
+  await etn.types.removeThoughtType(networkId, type.id, type.version, true);
+  // Каталог перечитываем ДО уведомлений: подписчики читают уже свежий store
+  // без удалённых типов (`typeDeletedFacts`).
+  await refreshThoughtTypes();
+  for (const id of plan.ids) {
+    notifyTypeChanged(typeDeletedFacts({ ownerType: 'thought_type', ownerId: id }));
+  }
+  return plan;
+}
+
 // ---------------------------------------------------------------------------
 // Type tree rows for the catalogue dialog (L21) — единый компонент
 // `lib/ui/tree.ts` над данными `lib/type-tree.ts` (задача d1c15a2d,
@@ -713,23 +767,17 @@ export function buildThoughtTypesPanel(): CataloguePanel {
   // остаётся в поле (ошибка 58981cf5, стандарт b6b2821d).
   bindSearchNav(searchInput, { handleKey: (key, modifiers) => tree.handleKey(key, modifiers) });
 
-  /** Deletes a thought type (forced: thoughts detached, values dropped). */
+  /**
+   * Deletes a thought type with its whole subtree (forced: thoughts detached,
+   * values dropped — ошибка d4802371).
+   */
   async function removeRow(type: ThoughtType): Promise<void> {
-    const ok = await confirmDialog(t('thoughtTypes.delete'), t('thoughtTypes.deleteConfirm', type.name), true);
-    if (!ok) return;
     try {
-      await etn.types.removeThoughtType(networkId, type.id, type.version, true);
-      await refreshThoughtTypes();
+      const plan = await deleteThoughtTypeSubtree(networkId, type, currentTypes);
+      if (plan === null) return;
       scheduleRefresh();
-      // Удалённый тип уходит из цепочки типов показанной сущности (ошибка
-      // 7dfad7d4): открытый редактор обязан пометить тип исчезнувшим,
-      // перечитать «Свойства» и отвязать показанную сущность. Своё
-      // realtime-эхо приходит асинхронно (B1) (G8 applier), поэтому уведомляем
-      // локально — каталог перечитан строкой выше, значит шапку можно
-      // перерисовать сразу и по свежим данным.
-      notifyTypeChanged(typeDeletedFacts({ ownerType: 'thought_type', ownerId: type.id }));
-      // Удалённый тип не может остаться текущей строкой.
-      if (currentRowId === type.id) currentRowId = null;
+      // Ни один удалённый тип не может остаться текущей строкой.
+      if (currentRowId !== null && plan.ids.includes(currentRowId)) currentRowId = null;
       updateButtons();
       onChanged();
     } catch (err) {

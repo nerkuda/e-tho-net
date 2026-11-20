@@ -77,6 +77,8 @@ import {
 import { getLinkType } from '../domain/link-type-service.js';
 import { getThoughtType } from '../domain/thought-type-service.js';
 import { assertLibraryIcon } from '../domain/icon-view.js';
+import { assertTypesFreeOfRoles } from '../domain/type-roles.js';
+import { subtreeIds } from '../domain/type-hierarchy.js';
 
 /** Route params for a network + type id. */
 interface TypeIdParams {
@@ -446,30 +448,20 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
         const { networkId, id } = req.params as TypeIdParams;
         const expectedVersion = parseRest(RestIfMatch, req).expected_version;
         const force = parseRest(RestForceQuery, req).force === true;
+        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
         // Task ba024a45 / 0.7.2 (ADR 46d17a91): the type is used by THIS
         // network in any of its `type_roles` roles? Refuse even with `force` —
         // the network would lose the structural or instructions marker.
         // The owner must clear the role in `PATCH /networks/{id}` first.
-        const networkRow = app.systemDb.getNetworkById(networkId);
-        if (networkRow !== null) {
-          const referencedRole = (
-            Object.entries(networkRow.type_roles) as Array<[string, string | null]>
-          ).find(([, value]) => value === id)?.[0];
-          if (referencedRole !== undefined) {
-            throw new EtnError(
-              'VALIDATION_ERROR',
-              `The type is used by the network in the "${referencedRole}" role; remove the role via PATCH /networks/{id} first.`,
-              {
-                entity: 'thought_type',
-                id,
-                network_id: networkId,
-                role: referencedRole,
-              },
-              req.id,
-            );
-          }
-        }
-        const ndb = openRouteNetworkDb(deps, req, networkId, app.appLogger);
+        // Ошибка d4802371: с `force` уносится всё поддерево, поэтому роль
+        // проверяется у КАЖДОГО его типа — общий хелпер с MCP.
+        assertTypesFreeOfRoles(
+          app.systemDb.getNetworkById(networkId)?.type_roles,
+          'thought_type',
+          subtreeIds(ndb, 'thought_types', id),
+          { network_id: networkId },
+          req.id,
+        );
         runWrite(ndb, restWriteFx(deps, req, networkId), () => {
           // Единая точка удаления типа (0.14.1, ошибка 1242f78d): каскад
           // отборов + снапшоты ДО удаления — общая с MCP `ontology.delete`.
@@ -480,7 +472,12 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
           return {
             result: undefined,
             events: [
-              { type: 'thought-type.deleted', data: { id } },
+              // С 0.16.1 (ошибка d4802371) `force` уносит всё поддерево —
+              // событие на КАЖДЫЙ удалённый тип (запрошенный и потомки).
+              ...deleted.types.map((card) => ({
+                type: 'thought-type.deleted' as const,
+                data: { id: card.id },
+              })),
               // По событию на каждый каскадно удалённый отбор — с полной
               // карточкой (ошибка 69aa355c) и корректным типом-владельцем.
               ...deleted.views.map((view) => ({
@@ -492,16 +489,14 @@ export function createTypesRoutes(deps: RouteDeps): FastifyPluginAsync {
                 },
               })),
             ],
-            ...(deleted.type === null
+            ...(deleted.types.length === 0
               ? {}
               : {
-                  activity: [
-                    {
-                      kind: 'thought-type' as const,
-                      action: 'deleted' as const,
-                      type: deleted.type,
-                    },
-                  ],
+                  activity: deleted.types.map((card) => ({
+                    kind: 'thought-type' as const,
+                    action: 'deleted' as const,
+                    type: card,
+                  })),
                 }),
           };
         });

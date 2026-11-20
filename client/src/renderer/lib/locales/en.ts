@@ -1123,6 +1123,10 @@ export const en = {
   /** Вопрос подтверждения удаления типа (подстановка — имя типа). */
   'thoughtTypes.deleteConfirm':
     'Delete type “%1”? Thoughts of this type will remain and become untyped; property values of this type will be deleted.',
+  /** Подтверждение удаления типа ВМЕСТЕ с поддеревом (ошибка d4802371):
+   *  `%1` — имя типа, `%2` — число дочерних типов (всё поддерево). */
+  'thoughtTypes.deleteConfirmWithChildren':
+    'Delete type “%1” together with its child types (%2)? Thoughts of these types will remain and become untyped; property values will be deleted.',
 
   // -- Редактор типа мысли (screens/type-manager.ts) -----------------------
   /** Первая вкладка редактора типа: имя/родитель вынесены в шапку, здесь —

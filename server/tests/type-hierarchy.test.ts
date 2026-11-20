@@ -162,19 +162,30 @@ describe(
       }
     });
 
-    it('refuses to delete a type with subordinate types and the root', () => {
+    it('deletes a type with subordinate types only with force and never the root', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const root = listThoughtTypes(ndb).find((t) => t.is_root)!;
         const parent = createThoughtType(ndb, { name: 'Родитель' }, USER);
         createThoughtType(ndb, { name: 'Ребёнок', parent_id: parent.id }, USER);
+        // Без force тип с детьми отвергается и сообщает их число (d4802371).
         assert.throws(
           () => deleteThoughtType(ndb, parent.id, parent.version),
-          (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+          (e: unknown) =>
+            e instanceof EtnError &&
+            e.code === 'VALIDATION_ERROR' &&
+            (e.details as { children?: number }).children === 1,
         );
         assert.throws(
           () => deleteThoughtType(ndb, root.id, root.version, { force: true }),
           (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+        );
+        // С force уносится всё поддерево (ошибка d4802371).
+        deleteThoughtType(ndb, parent.id, parent.version, { force: true });
+        assert.equal(
+          listThoughtTypes(ndb).filter((t) => !t.is_root).length,
+          0,
+          'поддерево удалено целиком',
         );
       } finally {
         ndb.close();

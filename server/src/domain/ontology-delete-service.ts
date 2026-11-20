@@ -41,7 +41,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { deleteRowLayered, isBaseContext } from '../db/layer-write.js';
-import { getRootTypeId } from './type-hierarchy.js';
+import { getRootTypeId, subtreeIds } from './type-hierarchy.js';
 import {
   countLinksBecomingStructural,
   deleteNetworkProperty,
@@ -52,6 +52,7 @@ import {
 import { deleteThoughtTypeWithViews } from './thought-type-delete-service.js';
 import { deleteLinkType } from './link-type-service.js';
 import { deleteThoughtTypeView } from './thought-type-views-service.js';
+import { assertTypesFreeOfRoles } from './type-roles.js';
 
 export {
   EtnError,
@@ -83,6 +84,12 @@ interface OntologyDeleteUsage {
   property_values_count?: number;
   /** Для `thought_type` — число отборов типа (задача c1fa71d4, 0.7.3). */
   type_views_count?: number;
+  /** Для `thought_type` — число ПОТОМКОВ (всё поддерево без самого типа,
+   *  ошибка d4802371): столько типов удалит `force` вместе с запрошенным. */
+  children_count?: number;
+  /** Для `thought_type` — полное число типов, которые уносит каскад `force`,
+   *  включая запрошенный (ошибка d4802371). */
+  cascade_types_count?: number;
   /** Для `link_type` — число живых рёбер, теряющих `type_id` (ошибка
    *  3537f1c2): считается до удаления с фильтрами REST и отдаётся всегда,
    *  включая 0. Для `property` — то же число, если это свойство-связь:
@@ -125,24 +132,20 @@ export function deleteOntologyEntity(
     });
   }
   const force = params.force === true;
+  // Поддерево типа мысли (ошибка d4802371): с `force` тип уносится вместе со
+  // всеми потомками, поэтому и счётчики использования, и защита ролей считаются
+  // по ВСЕМУ поддереву, а не только по запрошенному типу.
+  const typeIds =
+    params.kind === 'thought_type' ? subtreeIds(ndb, 'thought_types', params.id) : [params.id];
   const usage = collectUsage(ndb, params.kind, params.id);
 
-  // Защита ролевых типов — даже с force.
+  // Защита ролевых типов — даже с force. Проверяются все типы поддерева: роль
+  // на дочернем типе так же не должна потеряться (ошибка d4802371).
   if (params.kind === 'thought_type' || params.kind === 'link_type') {
-    const role = (Object.entries(networkRoles) as Array<[string, string | null]>).find(
-      ([, value]) => value === params.id,
-    )?.[0];
-    if (role !== undefined) {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `The type is used by the network in the "${role}" role; remove the role via PATCH /networks/{id} first.`,
-        { entity: params.kind, id: params.id, role },
-      );
-    }
+    assertTypesFreeOfRoles(networkRoles, params.kind, typeIds);
   }
   // Защита `type_view` (задача c1fa71d4): отбор не может быть занят в роли
   // сети (роли — это типы), отдельная проверка не нужна.
-  void networkRoles;
 
   // Без force — отвергаем на любом использовании. `type_view` не имеет
   // использований (нет мыслей/связей/привязок, ссылающихся на отбор), так
@@ -337,20 +340,32 @@ function collectUsage(
 ): OntologyDeleteUsage {
   switch (kind) {
     case 'thought_type': {
-      const thoughts = (
-        ndb.prepare('SELECT COUNT(*) AS c FROM thoughts_v WHERE type_id = ?').get(id) as {
-          c: number;
-        }
-      ).c;
-      const typeViews = (
-        ndb.prepare('SELECT COUNT(*) AS c FROM thought_type_views_v WHERE thought_type_id = ?').get(id) as {
-          c: number;
-        }
-      ).c;
+      // Ошибка d4802371: счётчики — по всему поддереву, ведь `force` уносит его
+      // целиком. `children_count`/`cascade_types_count` описывают размер
+      // каскада; для типа-листа они равны 0 и 1, прежние счётчики не меняются.
+      const ids = subtreeIds(ndb, 'thought_types', id);
+      let thoughts = 0;
+      let bindings = 0;
+      let typeViews = 0;
+      for (const typeId of ids) {
+        thoughts += (
+          ndb.prepare('SELECT COUNT(*) AS c FROM thoughts_v WHERE type_id = ?').get(typeId) as {
+            c: number;
+          }
+        ).c;
+        bindings += countTypeProperties(ndb, 'thought_type', typeId);
+        typeViews += (
+          ndb
+            .prepare('SELECT COUNT(*) AS c FROM thought_type_views_v WHERE thought_type_id = ?')
+            .get(typeId) as { c: number }
+        ).c;
+      }
       return {
         thoughts_count: thoughts,
-        type_properties_count: countTypeProperties(ndb, 'thought_type', id),
+        type_properties_count: bindings,
         type_views_count: typeViews,
+        children_count: ids.length - 1,
+        cascade_types_count: ids.length,
       };
     }
     case 'link_type': {

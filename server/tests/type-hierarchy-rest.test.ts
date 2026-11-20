@@ -177,13 +177,17 @@ describe(
         });
         assert.equal(cycleRes.statusCode, 422);
 
-        // Deleting a type with children (Персона) or the root is rejected.
+        // Deleting a type with children WITHOUT force is rejected with the
+        // number of descendants; the cascade itself lives in the dedicated
+        // test-file (ошибка d4802371) — here Персона/Коллега are still needed.
         const delParentRes = await ctx.app.inject({
           method: 'DELETE',
-          url: `/api/v1/networks/${nid}/thought-types/${person.id}?force=1`,
+          url: `/api/v1/networks/${nid}/thought-types/${person.id}`,
           headers: { ...h, 'If-Match': String(person.version) },
         });
         assert.equal(delParentRes.statusCode, 422);
+        // `children` — число ПОТОМКОВ всего поддерева (Коллега + L4), ошибка d4802371.
+        assert.equal(delParentRes.json().error.details.children, 2);
         const delRootRes = await ctx.app.inject({
           method: 'DELETE',
           url: `/api/v1/networks/${nid}/thought-types/${root.id}?force=1`,

@@ -132,6 +132,7 @@ import {
 } from '../../domain/property-service.js';
 import { deleteOntologyEntity } from '../../domain/ontology-delete-service.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
+import { subtreeIds } from '../../domain/type-hierarchy.js';
 import { getLinkType } from '../../domain/link-type-service.js';
 import {
   getThoughtTypeView,
@@ -1896,7 +1897,10 @@ const HANDLERS: Record<string, OpHandler> = {
         // ошибка 1242f78d). Отдельный `type_view` тоже читаем до удаления —
         // иначе событие несло `thought_type_id: ''` (ошибка 1242f78d, п. в).
         let snapshot: unknown = null;
-        let cascadedViews: ReturnType<typeof listOwnEffectiveTypeViews> = [];
+        /** id ВСЕХ типов, которые уносит удаление: с `force` — всё поддерево
+         *  (ошибка d4802371), поэтому события уходят на каждый тип, как в REST. */
+        let cascadedTypeIds: string[] = [];
+        const cascadedViews: ReturnType<typeof listOwnEffectiveTypeViews> = [];
         let removedView: ReturnType<typeof toEffectiveTypeView> | null = null;
         /** Парное свойство-связь удаляемого типа (ошибка 117a999a): снимок до
          *  удаления, чтобы отправить `property-registry.deleted`. */
@@ -1904,7 +1908,12 @@ const HANDLERS: Record<string, OpHandler> = {
         try {
           if (a.kind === 'thought_type') {
             snapshot = getThoughtType(ndb, a.id);
-            cascadedViews = listOwnEffectiveTypeViews(ndb, a.id);
+            // Поддерево (ошибка d4802371): с `force` тип уносится вместе со
+            // всеми потомками — снимки отборов снимаем с каждого типа.
+            cascadedTypeIds = subtreeIds(ndb, 'thought_types', a.id);
+            for (const typeId of cascadedTypeIds) {
+              cascadedViews.push(...listOwnEffectiveTypeViews(ndb, typeId));
+            }
           } else if (a.kind === 'link_type') {
             snapshot = getLinkType(ndb, a.id);
             removedLinkPropertyId = getLinkPropertyByLinkTypeId(ndb, a.id)?.id ?? null;
@@ -1924,7 +1933,11 @@ const HANDLERS: Record<string, OpHandler> = {
         const events: AnyWriteEvent[] = [];
         if (snapshot !== null && snapshot !== undefined) {
           if (a.kind === 'thought_type') {
-            events.push({ type: 'thought-type.deleted', data: { id: a.id } });
+            // Каскад поддерева (ошибка d4802371): событие на КАЖДЫЙ удалённый
+            // тип — запрошенный и всех потомков.
+            for (const typeId of cascadedTypeIds) {
+              events.push({ type: 'thought-type.deleted', data: { id: typeId } });
+            }
             // Каскад отборов (задача c1fa71d4): отдельное событие
             // `thought-type-view.deleted` на каждый удалённый отбор — с полной
             // карточкой-снапшотом (0.14.1, ошибки 69aa355c/1242f78d).

@@ -11,8 +11,9 @@
  *
  * Hierarchy rules (L21): types form a tree under the undeletable root
  * «основной тип»; nesting is capped at {@link MAX_TYPE_DEPTH} levels; a type
- * used by thoughts cannot be reparented; a type with child types cannot be
- * deleted; the root type is never deletable and never assignable to thoughts.
+ * used by thoughts cannot be reparented; a type with child types is deleted
+ * only with `force` — together with the whole subtree (ошибка d4802371); the
+ * root type is never deletable and never assignable to thoughts.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -32,6 +33,7 @@ import {
   assertParentValid,
   computeReparentImpact,
   getRootTypeId,
+  subtreeIds,
   typeAncestors,
 } from './type-hierarchy.js';
 import { assertIconColor } from './icon-view.js';
@@ -461,7 +463,11 @@ export interface UpdateThoughtTypeOptions {
 
 /** Options for {@link deleteThoughtType}. */
 export interface DeleteThoughtTypeOptions {
-  /** When true, null `type_id` on thoughts of this type before deleting it. */
+  /**
+   * When true, null `type_id` on thoughts of the type before deleting it.
+   * Since 0.16.1 (ошибка d4802371) `force` is also what allows deleting a type
+   * that has child types: the whole subtree goes with it (children first).
+   */
   force?: boolean;
   /** User performing the delete (recorded on the nulling update). */
   actorUserId?: string;
@@ -472,23 +478,32 @@ export interface DeleteThoughtTypeOptions {
  *
  * Throws:
  *   * `NOT_FOUND` (404) if the type does not exist;
- *   * `VERSION_CONFLICT` (409) if `expectedVersion` is set and does not match;
+ *   * `VERSION_CONFLICT` (409) if `expectedVersion` is set and does not match
+ *     the requested type (descendants are removed without a version check — a
+ *     cascade is an explicit `force` decision, ошибка d4802371);
  *   * `VALIDATION_ERROR` (422) for the root type (undeletable), for a type
- *     with child types (reparent or delete them first), or when thoughts still
- *     reference the type and `force` is not set. With `force`, those thoughts'
- *     `type_id` is set to NULL (and their `updated_at`/`updated_by` refreshed)
- *     before the type row is removed.
+ *     with child types when `force` is not set (`details.children` — the number
+ *     of descendants), or when thoughts still reference the requested type and
+ *     `force` is not set. With `force`, those thoughts' `type_id` is set to
+ *     NULL (and their `updated_at`/`updated_by` refreshed) before the type row
+ *     is removed.
+ *
+ * Since 0.16.1 (ошибка d4802371) `force` deletes the WHOLE subtree: the
+ * requested type plus every descendant, children before their parent (a
+ * preorder walk reversed). Without `force` a type with child types is still
+ * rejected — the caller must ask the user explicitly.
  *
  * The type's property definitions are deleted along with it — and, since S2
  * dropped the `property_id` FKs (docs/13-layers.md §3), their stored values and
- * default overrides are removed explicitly in the same transaction. Child
- * types are impossible here (rejected up front), so no orphaned parents remain.
+ * default overrides are removed explicitly in the same transaction. Each type
+ * of the subtree gets exactly the single-type treatment, so no orphaned
+ * parents or bindings remain.
  *
  * S4 (13-layers.md §5.2, §13): in a working layer the deletion materialises
- * tombstones over the type's visible subtree — the type row, its property
+ * tombstones over each type's visible subtree — the type row, its property
  * definitions, their values/overrides — and (with `force`) shadows of the
  * visible thoughts referencing the type with `type_id = NULL`; the base rows
- * stay intact.
+ * stay intact. Tombstones are laid bottom-up, like the physical deletion.
  */
 export function deleteThoughtType(
   ndb: NetworkDb,
@@ -512,14 +527,16 @@ export function deleteThoughtType(
         id,
       });
     }
-    const childCount = ndb
-      .prepare('SELECT COUNT(*) AS c FROM thought_types_v WHERE parent_id = ?')
-      .get(id) as { c: number };
-    if (childCount.c > 0) {
+    // Preorder: the requested type first, then every descendant (the L21
+    // helper reads the layer-resolved tree). Deletion goes bottom-up — a child
+    // before its parent (ошибка d4802371).
+    const subtree = subtreeIds(ndb, 'thought_types', id);
+    const children = subtree.length - 1;
+    if (children > 0 && !opts.force) {
       throw new EtnError(
         'VALIDATION_ERROR',
-        `the type has child types (${childCount.c}); delete or move them first`,
-        { entity: 'thought_type', id, children: childCount.c },
+        `the type has child types (${children}); pass force=1 to delete them together or move them first`,
+        { entity: 'thought_type', id, children },
       );
     }
     const usage = ndb.prepare('SELECT COUNT(*) AS c FROM thoughts_v WHERE type_id = ?').get(id) as {
@@ -532,36 +549,39 @@ export function deleteThoughtType(
         { entity: 'thought_type', id, in_use: usage.c },
       );
     }
+    const actorUserId = opts.actorUserId ?? 'system';
+    const bottomUp = [...subtree].reverse();
     if (!isBaseContext(ndb)) {
-      tombstoneThoughtTypeSubtree(ndb, id, opts.actorUserId ?? 'system');
+      for (const typeId of bottomUp) tombstoneThoughtTypeSubtree(ndb, typeId, actorUserId);
       return;
     }
-    if (usage.c > 0) {
-      const nowMs = Date.now();
-      const now = new Date(nowMs).toISOString();
-      // Scoped to the base layer row: a live shadow of a thought in another
-      // layer keeps its `type_id` (the layer has not agreed to the detach).
-      ndb
-        .prepare(
-          'UPDATE thoughts SET type_id = NULL, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE type_id = ? AND layer_id = ?',
-        )
-        .run(now, opts.actorUserId ?? 'system', nowMs, id, ndb.layerId);
-    }
-    // The type's property BINDINGS go with it (0.6.5: a binding is the
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    // Scoped to the base layer row: a live shadow of a thought in another
+    // layer keeps its `type_id` (the layer has not agreed to the detach).
+    const detachThoughts = ndb.prepare(
+      'UPDATE thoughts SET type_id = NULL, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE type_id = ? AND layer_id = ?',
+    );
+    // A type's property BINDINGS go with it (0.6.5: a binding is the
     // property's role in this type). Stored values are deliberately NOT
     // touched — they address registry properties, not bindings, and become
     // values outside type (02-data-model.md §3.5a); the same goes for other
     // types' overrides of these properties (they reference the registry too).
-    // Only THIS type's own override rows die with it.
-    ndb
-      .prepare("DELETE FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?") // layers:physical-write — базовая ветка слоёного удаления типа мысли
-      .run(id);
-    ndb
-      .prepare(
-        "DELETE FROM type_property_overrides WHERE owner_type = 'thought_type' AND type_id = ?", // layers:physical-write — базовая ветка слоёного удаления типа мысли
-      )
-      .run(id);
-    ndb.prepare('DELETE FROM thought_types WHERE id = ?').run(id); // layers:physical-write — базовая ветка слоёного удаления типа мысли
+    // Only the type's own override rows die with it.
+    const deleteBindings = ndb.prepare(
+      "DELETE FROM type_properties WHERE owner_type = 'thought_type' AND owner_id = ?", // layers:physical-write — базовая ветка слоёного удаления типа мысли
+    );
+    const deleteOverrides = ndb.prepare(
+      "DELETE FROM type_property_overrides WHERE owner_type = 'thought_type' AND type_id = ?", // layers:physical-write — базовая ветка слоёного удаления типа мысли
+    );
+    // layers:physical-write — базовая ветка слоёного удаления типа мысли
+    const deleteType = ndb.prepare('DELETE FROM thought_types WHERE id = ?');
+    for (const typeId of bottomUp) {
+      detachThoughts.run(now, actorUserId, nowMs, typeId, ndb.layerId);
+      deleteBindings.run(typeId);
+      deleteOverrides.run(typeId);
+      deleteType.run(typeId);
+    }
   });
 }
 
