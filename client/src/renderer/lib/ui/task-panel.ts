@@ -41,6 +41,7 @@
  * из панели или внешнее изменение) не редактируется до «Обновить».
  */
 
+import { parseTaskLines } from '@etn/markdown';
 import type { TaskMassFilter } from '@etn/shared';
 
 import { div, el, span } from '../dom.js';
@@ -64,9 +65,15 @@ import { reconcileKeyed } from './keyed-list.js';
 import { createListNav, type ListNavHandle } from './list.js';
 import { deepEqual } from './state.js';
 import { TABLE_ROW_KEY_ATTR } from './table.js';
-import type { ReminderPanelRow, TaskPanelChildRow, TaskPanelRow } from './task-panel-model.js';
+import {
+  LIVE_TASK_CHECKBOX_CLASS,
+  childBlockText,
+  type ReminderPanelRow,
+  type TaskPanelRow,
+} from './task-panel-model.js';
 
 export type { ReminderPanelRow, TaskPanelChildRow, TaskPanelRow } from './task-panel-model.js';
+export { LIVE_TASK_CHECKBOX_CLASS } from './task-panel-model.js';
 
 /** Корневой класс панели (адрес CSS и тестов). */
 export const TASK_PANEL_CLASS = 'ui-task-panel';
@@ -397,11 +404,21 @@ export interface TaskPanelActions {
   /** Запомнить высоту панели (пишет экран, по образцу `editor_list_heights`). */
   setPanelHeight?(height: number): void;
   /**
-   * Чекбокс пункта чек-листа под задачей (0.16.1, задача 7446eb25). Пункт
-   * чек-листа — не задача проекции: команды `PATCH /tasks` на него нет, отметка
-   * ставится правкой текста источника (экран решает, как именно).
+   * Чекбокс строки ПОДЧИНЁННОГО БЛОКА (0.16.1, пачка 7). Адрес — line-based:
+   * `lineNo` — номер строки `body_md` с нуля (абсолютный), а не «N-й чекбокс на
+   * экране». Пункт чек-листа/подзадача не являются задачей проекции: отметка
+   * ставится правкой текста источника (экран решает, как именно). `false` —
+   * запись не удалась, контрол обязан вернуться к снапшоту.
    */
-  toggleChild?(row: TaskPanelRow, child: TaskPanelChildRow, done: boolean): void;
+  toggleChild?(row: TaskPanelRow, lineNo: number, done: boolean): Promise<boolean> | boolean;
+  /**
+   * Отрисовка ПОДЧИНЁННОГО БЛОКА строки задачи (0.16.1, пачка 7): текст блока —
+   * уже без базового отступа предков (`childBlockText`), рендерится ТЕМ ЖЕ
+   * путём/рендерером, что просмотр комментария (markdown, вложенные списки,
+   * чекбоксы, код/цитаты, wiki-ссылки, сворачивание). Экран даёт реализацию —
+   * `lib/ui` не тянет `editor/`. Не задано — строки с детьми не сворачиваются.
+   */
+  renderBlock?(host: HTMLElement, text: string): void;
   /**
    * Сырой блок источника для БЛОЧНОЙ правки «как трансклюзия» (0.16.1, задача
    * 7446eb25): строка задачи и все её вложенные строки одним куском.
@@ -927,6 +944,7 @@ export function mountTaskPanel(
       onChange: (checked) => actions.toggle(row, checked),
     });
     check.classList.add('ui-task-row-check');
+    const blockCapable = row.hasChildren ?? row.children.length > 0;
     const textHost = div('ui-task-row-text');
     textHost.tabIndex = 0;
     /** Поле открытой правки строки (создаёт экран фабрикой компоненты). */
@@ -1006,9 +1024,9 @@ export function mountTaskPanel(
     } else {
       actions.renderText(textHost, row);
       textHost.addEventListener('dblclick', () => {
-        // Строка с вложенными строками правится БЛОКОМ: правка одной строки
+        // Строка с подчинённым блоком правится БЛОКОМ: правка одной строки
         // оставила бы детей висеть на прежнем тексте (замечание 3 ТЗ 2026-11-18).
-        if (row.children.length > 0) {
+        if (blockCapable) {
           beginBlockEdit();
           return;
         }
@@ -1091,9 +1109,12 @@ export function mountTaskPanel(
         },
       }),
     );
-    // Строка с вложенными строками сворачиваемая и по умолчанию СВЁРНУТА:
-    // каретка слева от чекбокса, дети — отдельным блоком ниже (пункт F ТЗ).
-    const hasChildren = row.children.length > 0;
+    // Строка с подчинённым блоком сворачиваемая и по умолчанию СВЁРНУТА:
+    // каретка слева от чекбокса, блок — ниже (пункт F ТЗ). С 0.16.1 (пачка 7)
+    // блок рисуется тем же путём, что просмотр комментария, поэтому признак
+    // берётся из `blockCapable` (не-задачные строки + подзадачи страницы) и
+    // требует реализации рендера от экрана.
+    const hasChildren = blockCapable && actions.renderBlock !== undefined;
     const expanded = hasChildren && expandedChildren.has(row.key);
     node.classList.toggle('is-overdue', row.overdue);
     node.classList.toggle('has-children', hasChildren);
@@ -1107,7 +1128,7 @@ export function mountTaskPanel(
       caret.setAttribute('type', 'button');
       caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');
       caret.setAttribute('aria-label', t('tasks.rowChildren'));
-      caret.append(svgIcon('chevron-down', 11));
+      caret.append(svgIcon('chevron-down', 12));
       caret.classList.toggle('collapsed', !expanded);
       caret.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -1127,7 +1148,7 @@ export function mountTaskPanel(
     if (leading.length > 0) node.prepend(...leading);
     // Дети не дублируются под открытой блочной правкой: они уже в поле.
     if (hasChildren && expanded && !(editingKey === row.key && editingRange !== null)) {
-      node.append(buildChildRows(row, beginBlockEdit));
+      node.append(buildTaskChildBlock(row));
     }
     // Фокус правки — ПОСЛЕ сборки строки (блокер 84c71c37): пока поле не в
     // документе, `.focus()` — no-op, и правка открывалась без каретки (Enter и
@@ -1136,46 +1157,73 @@ export function mountTaskPanel(
   }
 
   /**
-   * Вложенные не-задачные строки под задачей (пункт F ТЗ 2026-11-17): пункт
-   * чек-листа — настоящий чекбокс с отметкой источника (замечание 4 ТЗ
-   * 2026-11-18), обычная строка — текст с отступом по уровню списка.
+   * Подчинённый блок строки задачи (0.16.1, пачка 7). Срез читается из тела
+   * комментария (`loadRawBlock` — те же границы, что у блочной правки), при
+   * показе снимается только базовый отступ предков, а рисует блок экран ТЕМ ЖЕ
+   * путём, что просмотр комментария (`renderBlock`: единый рендерер, вложенные
+   * списки/чекбоксы/код, wiki-ссылки, сворачивание).
    *
-   * Двойной клик по любому пункту открывает БЛОЧНУЮ правку родителя «как
-   * трансклюзия» (замечание 3): блок правится одним куском.
+   * Плоских строк «•» больше нет: панель не размечает markdown сама. Пока срез
+   * читается, блок пуст — асинхронный ответ дорисовывается в тот же узел, если
+   * панель ещё показывает эту строку.
    */
-  function buildChildRows(row: TaskPanelRow, onEditBlock: () => void): HTMLElement {
+  function buildTaskChildBlock(row: TaskPanelRow): HTMLElement {
     const box = div('ui-task-row-children');
-    for (const child of row.children) {
-      const line = div('ui-task-child-row');
-      line.dataset['depth'] = String(child.depth);
-      line.classList.toggle('is-checkbox', child.checkbox);
-      line.classList.toggle('is-done', child.done === true);
-      if (child.checkbox) {
-        // Пункт чек-листа — ЧЕКБОКС, а не маркированная строка: отметка
-        // приходит из проекции, клик — команда экрана (0.16.1, 7446eb25).
-        const check = choiceControl('checkbox', {
-          checked: child.done === true,
-          onChange: (checked) => actions.toggleChild?.(row, child, checked),
-        });
-        check.classList.add('ui-task-child-check');
-        line.append(check);
-      } else {
-        // Обычная вложенная строка списка — с маркером (0.16.1, уточнение
-        // 2026-11-19, пункт 5): проекция хранит строку без маркера, поэтому
-        // панель рисует маркер сама, паритетом с просмотром markdown, где
-        // `<ul>` показывает точку. Строка чек-листа маркер не получает — у неё
-        // контрол отметки.
-        const marker = span('•', 'ui-task-child-marker');
-        marker.setAttribute('aria-hidden', 'true');
-        line.append(marker);
-      }
-      const text = div('ui-task-child-text');
-      text.textContent = child.text;
-      text.addEventListener('dblclick', () => onEditBlock());
-      line.append(text);
-      box.append(line);
-    }
+    const load = actions.loadRawBlock;
+    const render = actions.renderBlock;
+    if (load === undefined || render === undefined) return box;
+    void load(row).then((block) => {
+      if (block === null || !box.isConnected) return;
+      const text = childBlockText(block.text);
+      if (text.trim() === '') return;
+      render(box, text);
+      wireBlockCheckboxes(box, row, block.start + 1, text);
+    });
     return box;
+  }
+
+  /**
+   * Живые чекбоксы подчинённого блока — адресация LINE-BASED (0.16.1, пачка 7):
+   * N-й чекбокс DOM соответствует N-й строке с чек-боксом в разборе блока
+   * (`parseTaskLines`), её абсолютный адрес — `baseLine + lineNo - 1`. Число
+   * чекбоксов DOM и разбора обязано совпасть: не совпало — контролы остаются
+   * индикаторами (лучше no-op, чем правка чужой строки, грамматика та же, что
+   * у единого рендерера). При отказе записи контрол возвращается к снапшоту.
+   */
+  function wireBlockCheckboxes(
+    host: HTMLElement,
+    row: TaskPanelRow,
+    baseLine: number,
+    text: string,
+  ): void {
+    if (actions.toggleChild === undefined) return;
+    const boxes = (): HTMLInputElement[] =>
+      Array.from(host.querySelectorAll<HTMLInputElement>('input')).filter(
+        (node) => node.type === 'checkbox',
+      );
+    for (const box of boxes()) {
+      box.disabled = false;
+      box.removeAttribute('disabled');
+      box.classList.add(LIVE_TASK_CHECKBOX_CLASS);
+    }
+    // Делегирование на блок (а не слушатель на каждом контроле): `change`
+    // всплывает и от чекбокса, вставленного позже (шапки/виджеты рендерера не
+    // пересобирают блок), а адрес берётся из того же разбора, по которому блок
+    // нарисован.
+    host.addEventListener('change', (event) => {
+      const box = event.target as HTMLInputElement | null;
+      if (box === null || box.type !== 'checkbox') return;
+      const all = boxes();
+      const index = all.indexOf(box);
+      if (index < 0) return;
+      const lines = parseTaskLines(text).filter((line) => line.hasCheckbox);
+      if (lines.length !== all.length) return;
+      const lineNo = baseLine + (lines[index]!.lineNo - 1);
+      const want = box.checked;
+      void Promise.resolve(actions.toggleChild?.(row, lineNo, want)).then((saved) => {
+        if (saved === false) box.checked = !want;
+      });
+    });
   }
 
   /** Строка вхождения напоминания: субъект, момент, повтор, метка, команды. */

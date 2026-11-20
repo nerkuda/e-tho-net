@@ -121,6 +121,15 @@ export interface TaskPanelRow extends PanelGroupable {
    * строка не сворачивается.
    */
   children: TaskPanelChildRow[];
+  /**
+   * Под строкой есть подчинённый БЛОК (0.16.1, пачка 7): не-задачные строки
+   * проекции ЛИБО подзадачи страницы (`parent_task` указывает на эту строку).
+   * Блок не хранится в проекции — панель читает его срез из тела комментария
+   * (`loadRawBlock`), поэтому подзадача с собственной датой (она в `children`
+   * не попадает) тоже делает строку сворачиваемой. Не задано — признак берётся
+   * из `children` (совместимость с прежними снимками).
+   */
+  hasChildren?: boolean;
 }
 
 /**
@@ -175,6 +184,14 @@ export function taskRowKey(ref: { comment_id: string; line_no: number }): string
 }
 
 /**
+ * Класс ЖИВОГО чекбокса задачи в просмотре (0.16.1, пачка 7). Один словарь для
+ * панели (подчинённый блок) и просмотра комментария (`editor/task-checkbox-toggle`)
+ * — вид/курсор контрола не зависит от поверхности, а `editor/` не нужен
+ * `lib/ui` для этого имени.
+ */
+export const LIVE_TASK_CHECKBOX_CLASS = 'ui-task-checkbox-live';
+
+/**
  * Признаки устаревания строк панели (требование 0e85b66e, ошибка d318a647).
  *
  * Серость строки — про её СНАПШОТ, а не про всю запись: правка одной строки
@@ -215,15 +232,22 @@ export function taskRowIsStale(row: TaskDTO, stale: TaskPanelStaleness = {}): bo
  * `today` — граница просрочки (локальный день клиента): срок раньше неё и
  * незакрытая строка показываются красным (пункт D ТЗ 2026-11-17).
  * `children` — вложенные не-задачные строки под задачей (пункт F).
+ * `hasChildren` — есть подчинённый блок (не-задачные строки ИЛИ подзадачи
+ * страницы, 0.16.1 пачка 7); не задано — считается по `children`.
  */
 export function taskRowView(
   row: TaskDTO,
   stale: TaskPanelStaleness = {},
   done?: boolean,
-  options: { today?: string | null; children?: readonly TaskPanelChildRow[] } = {},
+  options: {
+    today?: string | null;
+    children?: readonly TaskPanelChildRow[];
+    hasChildren?: boolean;
+  } = {},
 ): TaskPanelRow {
   const isDone = done ?? row.done;
   const today = options.today ?? null;
+  const children = [...(options.children ?? [])];
   return {
     key: taskRowKey(row),
     commentId: row.comment_id,
@@ -241,8 +265,62 @@ export function taskRowView(
     subjectThoughts: row.subject_thoughts,
     subjectId: row.subject_thoughts[0] ?? null,
     overdue: !isDone && row.due !== null && today !== null && row.due < today,
-    children: [...(options.children ?? [])],
+    children,
+    hasChildren: options.hasChildren ?? children.length > 0,
   };
+}
+
+/** Число ведущих пробелов/табов строки (отступ markdown-списка). */
+function leadingIndent(line: string): number {
+  return line.length - line.trimStart().length;
+}
+
+/**
+ * Конец поддерева строки `start` в `body_md` (0.16.1, пачка 7): строка задачи и
+ * все её подчинённые строки — до первой непустой строки с отступом НЕ больше
+ * отступа родителя. Пустые строки внутри поддерева не обрывают его (они часть
+ * пункта/разделитель абзацев), хвостовые пустые в диапазон не входят.
+ *
+ * Границы ЕДИНЫ для блочной правки и для показа подчинённого блока: панель
+ * читает один и тот же срез (`loadRawBlock`) — записанное вернётся в источник
+ * один в один.
+ */
+export function blockRangeEnd(lines: readonly string[], start: number): number {
+  const parent = lines[start];
+  if (parent === undefined) return start;
+  const base = leadingIndent(parent);
+  let end = start;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (line.trim() === '') continue;
+    if (leadingIndent(line) <= base) break;
+    end = index;
+  }
+  return end;
+}
+
+/**
+ * Текст ПОДЧИНЁННОГО БЛОКА из сырого среза `loadRawBlock` (0.16.1, пачка 7).
+ *
+ * Первая строка среза — сама строка задачи, в блок она не входит. При показе
+ * снимается ТОЛЬКО базовый отступ предков (отступ первой непустой строки
+ * блока): иначе у задачи глубины ≥1 блок начинался бы с кода (4+ пробела).
+ * Относительные отступы внутри блока не меняются — вложенные списки, код и
+ * цитаты остаются собой, а рендерятся тем же единым рендерером, что просмотр
+ * комментария. Запись при этом идёт СЫРЫМИ строками среза (не этого текста).
+ */
+export function childBlockText(blockText: string): string {
+  const body = blockText.split('\n').slice(1);
+  const first = body.find((line) => line.trim() !== '');
+  if (first === undefined) return '';
+  const base = leadingIndent(first);
+  if (base === 0) return body.join('\n');
+  return body
+    .map((line) => {
+      const cut = Math.min(base, leadingIndent(line));
+      return line.slice(cut);
+    })
+    .join('\n');
 }
 
 /** Счётчики заголовка группы: открытых и выполненных. */

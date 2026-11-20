@@ -50,10 +50,14 @@ import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { notice } from '../lib/notice.js';
-import { replaceTaskLine, setChecklistLineDone } from '../lib/ui/task-panel-model.js';
+import {
+  LIVE_TASK_CHECKBOX_CLASS,
+  replaceTaskLine,
+  setChecklistLineDone,
+} from '../lib/ui/task-panel-model.js';
 
 /** Класс живого чекбокса просмотра (адрес CSS: курсор-указатель). */
-export const LIVE_TASK_CHECKBOX_CLASS = 'ui-task-checkbox-live';
+export { LIVE_TASK_CHECKBOX_CLASS };
 
 /**
  * Селектор контрола чекбокса. В `body_html` комментария единственные `input` —

@@ -96,6 +96,7 @@ import {
 } from './task-panel.js';
 import {
   REMINDERS_OVERDUE_DAYS,
+  blockRangeEnd,
   calendarDaysBetween,
   dailyRecordsOf,
   findTaskLineForDay,
@@ -186,6 +187,13 @@ export interface TaskListViewOptions {
   rowSubjectClouds?: boolean;
   /** Отрисовка снапшота текста строки (markdown + кликабельные ссылки). */
   renderText(host: HTMLElement, row: TaskPanelRow): void;
+  /**
+   * Отрисовка ПОДЧИНЁННОГО БЛОКА строки (0.16.1, пачка 7): текст уже без
+   * базового отступа предков, рисуется тем же путём, что просмотр комментария.
+   * Реализацию даёт экран — `lib/ui` не тянет `editor/`. Не задано — строки с
+   * детьми не сворачиваются (плоских «•»-строк нет).
+   */
+  renderBlock?(host: HTMLElement, text: string): void;
 }
 
 /** Реакции экрана: всё, что требует знания, куда вести пользователя. */
@@ -410,6 +418,9 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       openRowSource: actions.openRowSource,
       headMenu: source.kind === 'thought' ? () => thoughtHeadMenu() : undefined,
       renderText: (node, row) => view.renderText(node, row),
+      ...(view.renderBlock !== undefined
+        ? { renderBlock: (node: HTMLElement, text: string) => view.renderBlock?.(node, text) }
+        : {}),
       renderSubject: (node, subject, renderOptions) => renderSubject(node, subject, renderOptions),
       openSubject: (subject) => openSubjectInternal(subject),
       panelHeight: () => panelHeightValue,
@@ -417,7 +428,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         panelHeightValue = height;
         schedulePersist();
       },
-      toggleChild: (row, child, done) => void toggleChild(row, child, done),
+      toggleChild: (row, lineNo, done) => toggleChild(row, lineNo, done),
       loadRawBlock: (row) => loadRawBlock(row),
       editBlock: (row, range, text) => editBlock(row, range, text),
     },
@@ -755,16 +766,31 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   /**
    * Строка проекции → строка панели. Общий путь секций периода и мысли:
    * снапшот текста, вложенные строки и показанная отметка чекбокса.
+   * `taskParents` — ключи строк-задач, у которых есть подзадача страницы
+   * (`parent_task`): подзадача с датой делает родителя сворачиваемым, хотя в
+   * `children` (не-задачные строки проекции) её нет.
    */
   function viewRowOf(
     row: TaskDTO,
     children: ReadonlyMap<string, readonly TaskPanelChildRow[]>,
+    taskParents: ReadonlySet<string>,
   ): TaskPanelRow {
     const address = taskRowKey(row);
+    const ownChildren = children.get(address) ?? [];
     return taskRowView(row, staleness(), toggledDone.get(address), {
       today: todayLocal(),
-      children: children.get(address) ?? [],
+      children: ownChildren,
+      hasChildren: ownChildren.length > 0 || taskParents.has(address),
     });
+  }
+
+  /** Ключи строк-задач, на которые ссылается `parent_task` подзадачи страницы. */
+  function taskParentKeys(): Set<string> {
+    const keys = new Set<string>();
+    for (const row of allRows()) {
+      if (row.parent_task !== null) keys.add(taskRowKey(row.parent_task));
+    }
+    return keys;
   }
 
   /**
@@ -833,8 +859,9 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   function thoughtSections(): TaskPanelSectionView[] {
     const rows = visibleRows(state.rows);
     const children = nestedLinesByParent(state.nested);
+    const parents = taskParentKeys();
     const viewRow = (row: TaskDTO): TaskPanelRow => {
-      const mapped = viewRowOf(row, children);
+      const mapped = viewRowOf(row, children, parents);
       // Неактуальный субъект карточки мысли — серая строка (настройка сети).
       if (row.subject_state === 'inactive') mapped.stale = true;
       return mapped;
@@ -941,6 +968,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    */
   function periodTaskSections(): TaskPanelSectionView[] {
     const nestedChildren = nestedLinesByParent(state.nested);
+    const parents = taskParentKeys();
     const showDoneRows = showDone && doneSection === 'toggle';
     const undated: TaskDTO[] = [...state.undated];
     const dated: TaskDTO[] = [...state.period, ...state.overdue];
@@ -959,9 +987,11 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         return true;
       });
     const undatedViews = orderTaskRowsUndatedFirst(
-      unique(undated).map((row) => viewRowOf(row, nestedChildren)),
+      unique(undated).map((row) => viewRowOf(row, nestedChildren, parents)),
     );
-    const datedViews = orderByDue(unique(dated).map((row) => viewRowOf(row, nestedChildren)));
+    const datedViews = orderByDue(
+      unique(dated).map((row) => viewRowOf(row, nestedChildren, parents)),
+    );
     const sections: TaskPanelSectionView[] = [];
     if (undatedViews.length > 0) {
       sections.push(rowsTaskSection('undated', t('tasks.sectionUndated'), undatedViews));
@@ -1127,35 +1157,36 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   }
 
   /**
-   * Чекбокс ПУНКТА ЧЕК-ЛИСТА под задачей (замечание 4 ТЗ 2026-11-18). Пункт не
-   * является задачей проекции, поэтому `PATCH /tasks` для него возвращает
-   * `not_a_task` — отметка ставится правкой текста источника и точечным
-   * перечитыванием записи.
+   * Чекбокс строки ПОДЧИНЁННОГО БЛОКА (0.16.1, пачка 7). Пункт чек-листа и
+   * подзадача не являются задачей проекции, поэтому `PATCH /tasks` для них
+   * вернул бы `not_a_task` — отметка ставится правкой текста источника.
+   * Адрес LINE-BASED: `lineNo` — абсолютный номер строки `body_md` с нуля,
+   * который панель знает при рендере блока (N-й чекбокс блока → строка
+   * `baseLine + N`), а не «N-й чекбокс на экране».
+   *
+   * `false` — запись не удалась (строка исчезла, конфликт версий, сеть):
+   * контрол вернётся к снапшоту (решение принимает панель).
    */
-  async function toggleChild(
-    row: TaskPanelRow,
-    child: TaskPanelChildRow,
-    done: boolean,
-  ): Promise<void> {
+  async function toggleChild(row: TaskPanelRow, lineNo: number, done: boolean): Promise<boolean> {
     const networkId = requireNetworkId();
     try {
       const comment = await etn.comments.get(networkId, row.commentId);
-      const line = comment.body_md.split('\n')[child.lineNo];
+      const line = comment.body_md.split('\n')[lineNo];
       if (line === undefined) {
         notice(taskErrorText('line_not_found'), 'error');
-        return;
+        return false;
       }
       const next = setChecklistLineDone(line, done);
       if (next === null) {
         notice(taskErrorText('not_a_task'), 'error');
-        return;
+        return false;
       }
-      if (next === line) return;
+      if (next === line) return true;
       const updated = await withOwnWrite(row.commentId, () =>
         etn.comments.update(
           networkId,
           row.commentId,
-          { body_md: replaceTaskLine(comment.body_md, child.lineNo, next) ?? comment.body_md },
+          { body_md: replaceTaskLine(comment.body_md, lineNo, next) ?? comment.body_md },
           comment.version,
         ),
       );
@@ -1163,8 +1194,10 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       rememberOwnOp(row.commentId, updated.version);
       await refreshAfterOwnOp(row.commentId, updated.version);
       renderView();
+      return true;
     } catch (err) {
       notice(t('tasks.errorEdit', [errText(err)]), 'error');
+      return false;
     }
   }
 
@@ -1189,21 +1222,24 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   }
 
   /**
-   * Сырой блок источника для БЛОЧНОЙ правки: строка задачи и все её вложенные
-   * строки (замечание 3 ТЗ 2026-11-18, образец — блочная правка трансклюзии).
+   * Сырой блок источника для БЛОЧНОЙ правки и для показа подчинённого блока
+   * (0.16.1, пачка 7): строка задачи и все её подчинённые строки одним куском.
+   * Границы поддерева считаются по отступам САМОГО тела (`blockRangeEnd`), а не
+   * по проекции: срез един для записи и показа, подзадача с собственной датой
+   * (`children` её не содержит) входит в блок.
    */
   async function loadRawBlock(
     row: TaskPanelRow,
   ): Promise<{ start: number; end: number; text: string } | null> {
     const networkId = requireNetworkId();
-    const end = row.children.reduce((max, child) => Math.max(max, child.lineNo), row.lineNo);
     try {
       const comment = await etn.comments.get(networkId, row.commentId);
       const lines = comment.body_md.split('\n');
-      if (row.lineNo < 0 || end >= lines.length) {
+      if (row.lineNo < 0 || row.lineNo >= lines.length) {
         notice(taskErrorText('line_not_found'), 'error');
         return null;
       }
+      const end = blockRangeEnd(lines, row.lineNo);
       return { start: row.lineNo, end, text: lines.slice(row.lineNo, end + 1).join('\n') };
     } catch (err) {
       notice(t('tasks.errorEdit', [errText(err)]), 'error');

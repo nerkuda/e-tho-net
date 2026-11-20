@@ -317,6 +317,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* Каретка выравнивается по ВЕРХНЕМУ краю строки (0.16.1, пачка 7): при
+   * переносе длинной строки на несколько строк центр по вертикали уводил бы
+   * треугольник к середине блока, как во всех редакторах он стоит у первой
+   * строки. Тот же принцип у маркера просмотра комментария (полоса-гаттер
+   * `md-collapse-rail` ставит `top` по верхнему краю якоря). */
+  align-self: flex-start;
   width: var(--hit-area);
   height: var(--hit-area);
   color: var(--text-dim);
@@ -333,64 +339,15 @@
   transform: rotate(-90deg);
 }
 
+/* Подчинённый блок строки задачи (0.16.1, пачка 7): это ПРОСМОТР КОММЕНТАРИЯ
+ * (`.comment-view`), а не плоские строки панели. Раскладку, вложенные списки,
+ * чекбоксы, код и сворачивание задаёт единый рендерер и `decorateCommentView`;
+ * здесь — только место блока в строке панели и отступ от строки-родителя.
+ * Полоса-гаттер маркеров сворачивания (`.md-collapse-host`) резервирует слева
+ * собственный `--hit-area`, поэтому отступ родителя и полоса не спорят. */
 .ui-task-row-children {
   flex: 1 0 100%;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
   padding-left: var(--tree-indent);
-}
-
-.ui-task-child-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-dim);
-  font-size: var(--font-size-2xs);
-  line-height: var(--line-height-snug);
-}
-
-/* Отступ по уровню вложенности списка: глубина приходит из проекции. */
-.ui-task-child-row[data-depth='1'] {
-  margin-left: var(--tree-indent);
-}
-
-.ui-task-child-row[data-depth='2'] {
-  margin-left: calc(var(--tree-indent) * 2);
-}
-
-.ui-task-child-row[data-depth='3'] {
-  margin-left: calc(var(--tree-indent) * 3);
-}
-
-.ui-task-child-row.is-checkbox .ui-task-child-text {
-  /* Пункт чек-листа — настоящий чекбокс (0.16.1, задача 7446eb25): маркер
-   * списка больше не рисуется, отметку показывает контрол слева. */
-  flex: 1 1 auto;
-}
-
-.ui-task-child-check {
-  flex: 0 0 auto;
-  margin: 0;
-}
-
-.ui-task-child-row.is-done .ui-task-child-text {
-  color: var(--text-faint);
-  text-decoration: line-through;
-}
-
-.ui-task-child-text {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* Маркер обычной вложенной строки списка (0.16.1, уточнение 2026-11-19,
- * пункт 5): проекция хранит строку без маркера, панель рисует точку сама —
- * паритет с просмотром markdown, где `<ul>` показывает маркер списка. Строка
- * чек-листа маркера не получает: у неё контрол отметки. */
-.ui-task-child-marker {
-  flex: 0 0 auto;
-  color: var(--text-dim);
 }
 
 /* Субъект строки напоминания — облачко мысли (пункт C ТЗ 2026-11-17): строка

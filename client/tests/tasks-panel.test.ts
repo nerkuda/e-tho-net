@@ -24,6 +24,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, it } from 'node:test';
 
+import { parseTaskLines, renderMarkdown } from '@etn/markdown';
+
 import * as keymap from '../src/renderer/lib/keymap.js';
 import { t } from '../src/renderer/lib/i18n.js';
 import {
@@ -354,6 +356,34 @@ function ruleBodies(css: string, selector: string): string[] {
 /** Дождаться промисов загрузки сырой строки и ответа `editLine`. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) await Promise.resolve();
+}
+
+/**
+ * Подделка рендера ПОДЧИНЁННОГО БЛОКА (0.16.1, пачка 7). Контракт экрана:
+ * текст уже без базового отступа, хост получает класс просмотра комментария и
+ * разметку ЕДИНОГО рендерера. Шим не разбирает `innerHTML`, поэтому контролы
+ * блока создаются по разбору ТОГО ЖЕ текста — как их создал бы рендерер:
+ * порядок и отметки совпадают с `parseTaskLines`.
+ */
+function fakeBlockRenderer(seen: string[]): (host: HTMLElement, text: string) => void {
+  return (host, text) => {
+    seen.push(text);
+    const node = host as unknown as ShimElement;
+    node.classList.add('comment-view');
+    node.innerHTML = renderMarkdown(text);
+    for (const line of parseTaskLines(text).filter((item) => item.hasCheckbox)) {
+      const box = new ShimElement('input');
+      box.type = 'checkbox';
+      box.checked = line.done;
+      box.disabled = true;
+      node.append(box);
+    }
+  };
+}
+
+/** Сырой блок строки-родителя (срез `loadRawBlock`: первая строка — задача). */
+function rawBlock(parent: string, children: readonly string[]): string {
+  return [parent, ...children].join('\n');
 }
 
 describe('панель задач: секции, строки и счётчики (6762adb0)', () => {
@@ -1487,48 +1517,118 @@ describe('панель редактора мысли: headless, плоские �
 // 0.16.1, замечания пользователя 2026-11-17 (задача 01998381): пункты B, C, D, E, F.
 // ---------------------------------------------------------------------------
 
-describe('панель задач: вложенные строки строки-задачи (пункт F)', () => {
-  it('строка с детьми по умолчанию СВЁРНУТА, каретка раскрывает и сворачивает', () => {
-    const children = [
-      { key: 'c1:1', lineNo: 1, text: 'пункт чек-листа', depth: 1, checkbox: true },
-      { key: 'c1:2', lineNo: 2, text: 'вложенный текст', depth: 1, checkbox: false },
-    ];
-    const { host, destroy } = mount([taskRow({ children })]);
-    const row = host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+describe('панель задач: подчинённый блок строки-задачи (пункт F, пачка 7)', () => {
+  it('строка с блоком по умолчанию СВЁРНУТА, каретка раскрывает; блок — как в комментарии', async () => {
+    const seen: string[] = [];
+    const block = rawBlock('- [ ] задача', [
+      '  - [ ] пункт чек-листа',
+      '  - обычная вложенная строка',
+      '    - глубже: вложенный текст',
+      '  ```',
+      '  - [ ] это код, а не задача',
+      '  ```',
+      '  [[#11111111-1111-4111-8111-111111111111]]',
+    ]);
+    const { host, destroy } = mount([taskRow({ hasChildren: true })], {
+      loadRawBlock: async () => ({ start: 0, end: 7, text: block }),
+      renderBlock: fakeBlockRenderer(seen),
+      toggleChild: () => true,
+    });
+    const row = rowsOf(host)[0]!;
     assert.equal(
       host.findAll('ui-task-row-children').length,
       0,
-      'по умолчанию вложенные строки свёрнуты',
+      'по умолчанию подчинённый блок свёрнут',
     );
     const caret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
-    assert.ok(caret, 'у строки с детьми есть каретка раскрытия');
+    assert.ok(caret, 'у строки с блоком есть каретка раскрытия');
     assert.equal(caret.getAttribute('aria-expanded'), 'false');
 
     caret.click();
-    const expandedCaret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
-    const visible = host.findAll('ui-task-child-row').map((node) => node.flatText().trim());
+    await flush();
     assert.deepEqual(
-      visible,
-      ['пункт чек-листа', '•вложенный текст'],
-      'раскрытие показывает детей; обычная строка — с маркером списка (пункт 5)',
+      seen,
+      [
+        [
+          '- [ ] пункт чек-листа',
+          '- обычная вложенная строка',
+          '  - глубже: вложенный текст',
+          '```',
+          '- [ ] это код, а не задача',
+          '```',
+          '[[#11111111-1111-4111-8111-111111111111]]',
+        ].join('\n'),
+      ],
+      'блок отрисовывается срезом БЕЗ базового отступа предков; относительные отступы сохранены',
     );
-    // Маркер рисует ТОЛЬКО не-чекбоксная строка (0.16.1, уточнение 2026-11-19,
-    // пункт 5): проекция хранит текст без маркера, панель восстанавливает вид
-    // списка. У пункта чек-листа маркера нет — у него контрол отметки.
-    const markers = host.findAll('ui-task-child-marker');
-    assert.equal(markers.length, 1, 'маркер — только у обычной вложенной строки');
-    assert.equal(markers[0]!.flatText(), '•');
+    const blockHost = row.querySelector('.ui-task-row-children') as unknown as ShimElement;
+    assert.ok(blockHost, 'блок вставлен под строкой');
+    assert.ok(
+      blockHost.classList.contains('comment-view'),
+      'блок несёт класс просмотра комментария (те же стили)',
+    );
+    const html = String(blockHost.innerHTML);
+    assert.match(
+      html,
+      /<ul class="contains-task-list">/,
+      'вложенный список задач — разметка рендерера',
+    );
+    assert.match(html, /class="task-list-item-checkbox"/, 'чекбоксы — эталонные, не «•»-строки');
+    assert.match(html, /<pre><code[ >]/, 'код внутри подчинённых строк остаётся кодом');
+    assert.match(
+      html,
+      /data-wiki-id="11111111-1111-4111-8111-111111111111"/,
+      'wiki-ссылка — разметка рендерера',
+    );
+    // Требование @152@: `- [ ]` внутри блока кода — код. В блоке ДВА маркера, а
+    // живой чекбокс только у настоящего пункта: код рендерится `<pre><code>`,
+    // адрес записи по нему не строится (те же данные, что у проекции).
+    assert.equal(
+      host.findAll('ui-task-checkbox-live').length,
+      1,
+      'строка `- [ ]` в блоке кода не стала задачей-чекбоксом',
+    );
+    assert.match(
+      html,
+      /<pre><code[^>]*>- \[ \] это код, а не задача/,
+      'код-строка осталась текстом внутри блока кода',
+    );
+    assert.equal(
+      host.findAll('ui-task-child-row').length,
+      0,
+      'плоских `.ui-task-child-row` больше нет',
+    );
+    const expandedCaret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
     assert.equal(expandedCaret.getAttribute('aria-expanded'), 'true', 'каретка сообщает состояние');
 
     expandedCaret.click();
+    await flush();
     assert.equal(host.findAll('ui-task-row-children').length, 0, 'повторный клик сворачивает');
     destroy();
   });
 
-  it('строка без детей не сворачивается: каретки и блока детей нет', () => {
-    const { host, destroy } = mount([taskRow()]);
+  it('строка без подчинённого блока не сворачивается: каретки и блока нет', () => {
+    const { host, destroy } = mount([taskRow()], { renderBlock: fakeBlockRenderer([]) });
     assert.equal(host.findAll('ui-task-row-caret').length, 0);
     assert.equal(host.findAll('ui-task-row-children').length, 0);
+    destroy();
+  });
+
+  it('подзадача с датой делает родителя сворачиваемым, даже если `children` пуст', async () => {
+    const seen: string[] = [];
+    const { host, destroy } = mount([taskRow({ children: [], hasChildren: true })], {
+      loadRawBlock: async () => ({
+        start: 0,
+        end: 1,
+        text: rawBlock('- [ ] задача', ['  - [ ] подзадача [[2026-11-20]]']),
+      }),
+      renderBlock: fakeBlockRenderer(seen),
+    });
+    const caret = rowsOf(host)[0]!.querySelector('.ui-task-row-caret') as unknown as ShimElement;
+    assert.ok(caret, 'каретка есть: блок знает о подзадаче');
+    caret.click();
+    await flush();
+    assert.equal(seen.length, 1, 'блок нарисован');
     destroy();
   });
 });
@@ -1840,92 +1940,95 @@ describe('панель задач: блочная правка строки-за
   });
 });
 
-describe('панель задач: пункт чек-листа под задачей (замечание 4 ТЗ 2026-11-18)', () => {
-  const children = [
-    { key: 'c1:1', lineNo: 1, text: 'пункт', depth: 1, checkbox: true, done: true },
-    { key: 'c1:2', lineNo: 2, text: 'текст', depth: 1, checkbox: false, done: false },
-  ];
+describe('панель задач: чекбоксы подчинённого блока — адресация line-based (пачка 7)', () => {
+  /** Блок: первая строка (родитель) — 0, пункты — 1 и 2, второй — с датой. */
+  const block = rawBlock('- [ ] задача', ['  - [ ] пункт', '  - [ ] второй пункт']);
 
-  it('пункт чек-листа — чекбокс с отметкой источника, обычная строка — без контрола', () => {
-    const { host, destroy } = mount([taskRow({ children })]);
-    const row = rowsOf(host)[0]!;
-    (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
-    const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
-    assert.ok(check, 'у пункта чек-листа есть настоящий чекбокс');
-    assert.equal(check.checked, true, 'отметка взята из снапшота, а не выдумана панелью');
-    assert.equal(
-      row.querySelectorAll('.ui-task-child-check').length,
-      1,
-      'у обычной вложенной строки контрола нет',
-    );
+  async function mountBlock(overrides: Partial<TaskPanelActions> = {}): Promise<{
+    host: ShimElement;
+    destroy: () => void;
+  }> {
+    const mounted = mount([taskRow({ children: [], hasChildren: true })], {
+      loadRawBlock: async () => ({ start: 0, end: 2, text: block }),
+      renderBlock: fakeBlockRenderer([]),
+      toggleChild: () => true,
+      ...overrides,
+    });
+    const caret = rowsOf(mounted.host)[0]!.querySelector(
+      '.ui-task-row-caret',
+    ) as unknown as ShimElement;
+    caret.click();
+    await flush();
+    return { host: mounted.host, destroy: mounted.destroy };
+  }
+
+  it('контролы блока — живые чекбоксы с тем же классом, что у просмотра', async () => {
+    const { host, destroy } = await mountBlock();
+    const boxes = host.findAll('ui-task-checkbox-live');
+    assert.equal(boxes.length, 2, 'оба пункта блока — живые чекбоксы');
+    assert.equal(boxes[0]!.disabled, false, 'вендорский disabled снят');
     destroy();
   });
 
-  it('клик по чекбоксу пункта отдаёт команду экрану (`toggleChild`)', () => {
-    const toggles: Array<{ key: string; child: number; done: boolean }> = [];
-    const { host, destroy } = mount([taskRow({ children })], {
-      toggleChild: (row, child, done) => {
-        toggles.push({ key: row.key, child: child.lineNo, done });
+  it('клик по ВТОРОМУ чекбоксу блока правит ровно строку n1+1 источника', async () => {
+    const toggles: Array<{ key: string; lineNo: number; done: boolean }> = [];
+    const { host, destroy } = await mountBlock({
+      toggleChild: (row, lineNo, done) => {
+        toggles.push({ key: row.key, lineNo, done });
+        return true;
       },
     });
-    const row = rowsOf(host)[0]!;
-    (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
-    const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
-    check.checked = false;
-    check.emit('change', { target: check });
-    assert.deepEqual(toggles, [{ key: 'c1:0', child: 1, done: false }]);
+    const boxes = host.findAll('ui-task-checkbox-live');
+    const block = host.findAll('ui-task-row-children')[0]!;
+    boxes[1]!.checked = true;
+    // `change` доходит до хоста блока всплытием, как в браузере (делегирование).
+    block.emit('change', { target: boxes[1] });
+    await flush();
+    assert.deepEqual(
+      toggles,
+      [{ key: 'c1:0', lineNo: 2, done: true }],
+      'второй чекбокс блока адресует строку 2 (родитель 0 + первая строка блока 1 + индекс 1)',
+    );
     destroy();
   });
 
-  it('вложенные строки 2–3 уровня: маркер панели у текста, чекбоксы у пунктов', () => {
-    const { host, destroy } = mount([
-      taskRow({
-        children: [
-          {
-            key: 'c1:1',
-            lineNo: 1,
-            text: 'пункт на первом уровне',
-            depth: 1,
-            checkbox: true,
-            done: true,
-          },
-          { key: 'c1:2', lineNo: 2, text: 'текст второго уровня', depth: 2, checkbox: false },
-          { key: 'c1:3', lineNo: 3, text: 'пункт третьего уровня', depth: 3, checkbox: true },
-        ],
-      }),
-    ]);
-    const row = rowsOf(host)[0]!;
-    (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+  it('адрес считается от строки-родителя: не нулевая строка источника (@152@ паритет)', async () => {
+    // Родитель — 5-я строка записи (line_no 4): второй чекбокс блока обязан
+    // адресовать АБСОЛЮТНУЮ строку 6, а не «2» блока. Именно этого не видит
+    // тест с родителем в строке 0 — там формулы совпадают.
+    const toggles: number[] = [];
+    const mounted = mount([taskRow({ line_no: 4, children: [], hasChildren: true })], {
+      loadRawBlock: async () => ({ start: 4, end: 6, text: block }),
+      renderBlock: fakeBlockRenderer([]),
+      toggleChild: (_row, lineNo) => {
+        toggles.push(lineNo);
+        return true;
+      },
+    });
+    const caret = rowsOf(mounted.host)[0]!.querySelector(
+      '.ui-task-row-caret',
+    ) as unknown as ShimElement;
+    caret.click();
+    await flush();
+    const boxes = mounted.host.findAll('ui-task-checkbox-live');
+    const blockHost = mounted.host.findAll('ui-task-row-children')[0]!;
+    boxes[1]!.checked = true;
+    blockHost.emit('change', { target: boxes[1] });
+    await flush();
+    assert.deepEqual(toggles, [6], 'второй чекбокс блока — абсолютная строка 6 записи');
+    mounted.destroy();
+  });
 
-    const children = row.querySelectorAll('.ui-task-child-row');
-    assert.deepEqual(
-      children.map((node) => node.dataset['depth']),
-      ['1', '2', '3'],
-      'уровень вложенности строки приходит из проекции',
-    );
-    assert.deepEqual(
-      children.map((node) => node.querySelector('.ui-task-child-text')!.flatText().trim()),
-      ['пункт на первом уровне', 'текст второго уровня', 'пункт третьего уровня'],
-      'тексты вложенных строк на месте',
-    );
-    assert.equal(
-      row.querySelectorAll('.ui-task-child-check').length,
-      2,
-      'чекбокс есть ровно у пунктов чек-листа (уровни 1 и 3)',
-    );
-    assert.equal(
-      row.querySelectorAll('.ui-task-child-marker').length,
-      1,
-      'маркер панели получает только обычная строка списка',
-    );
-
-    // Фактическое поведение (0.16.1): вложенные строки панели — плоские
-    // `.ui-task-child-row` с маркером «•» и штатным чекбоксом. Проекция хранит
-    // строку без вида списка и без номера, поэтому `ul`/`ol` единого рендерера
-    // (`renderMarkdownWithWikiLinks`) здесь недостижимы: нумерованные пункты
-    // показываются тем же «•». Расхождение с пунктом (г) плана — в отчёте.
-    assert.equal(row.querySelectorAll('ul').length, 0, 'списка `ul` панель не строит');
-    assert.equal(row.querySelectorAll('ol').length, 0, 'нумерованного `ol` панель не строит');
+  it('отказ записи возвращает контрол к снапшоту', async () => {
+    const { host, destroy } = await mountBlock({
+      toggleChild: async () => false,
+    });
+    const box = host.findAll('ui-task-checkbox-live')[0]!;
+    const block = host.findAll('ui-task-row-children')[0]!;
+    box.checked = true;
+    block.emit('change', { target: box });
+    await flush();
+    assert.equal(box.checked, false, 'при отказе записи отметка снята (безопасный откат)');
     destroy();
   });
 });

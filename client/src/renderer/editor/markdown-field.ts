@@ -79,6 +79,7 @@ import { createCommentSearch } from './comment-search.js';
 import { registerCommentField } from './comment-source.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
 import { wireTaskCheckboxes } from './task-checkbox-toggle.js';
+import { markOverdueTaskItems } from './task-lines-view.js';
 import type { TaskHintContext } from './md-live.js';
 import { annotateMentions, resolveMentionsExcludeThoughtId } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
@@ -1209,6 +1210,10 @@ export function createMarkdownField(opts: {
     view.replaceChildren();
     if (html.trim() !== '') {
       renderHtml(view, html);
+      // Просроченные задачи в комментарии красным — там, где они фактически
+      // записаны (0.16.1, пачка 7): тот же вид, что у строки панели, по
+      // готовому DOM (date-чипы пункта, последняя дата = срок).
+      markOverdueTaskItems(view);
       renderMermaidBlocks(view);
       annotateMentions(view, {
         excludeThoughtId: excludeThoughtId(),

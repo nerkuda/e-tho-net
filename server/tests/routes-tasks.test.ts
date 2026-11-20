@@ -405,5 +405,69 @@ describe(
         await closeRestContext(ctx);
       }
     });
+    /**
+     * Требование @152@ (пачка 7): строка `- [ ]` ВНУТРИ блока кода — код, а не
+     * задача. Состояние блока определяет единый разбор рендерера, поэтому
+     * проекция, счётчики, `include_nested` и авто-поля её не видят.
+     */
+    it('`- [ ]` внутри блока кода не создаёт задач: список, COUNT, nested, автополя', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const thought = await apiCreateThought(ctx, { title: 'Код не задача' });
+        const thoughtId = thought.data['id'] as string;
+        const comment = await createComment(
+          ctx,
+          thoughtId,
+          [
+            '```',
+            '- [ ] в бэктиках [[2026-11-01]]',
+            '```',
+            '~~~',
+            '- [ ] в тильдах',
+            '~~~',
+            '',
+            '    - [ ] отступ в четыре пробела',
+            '',
+            '- [ ] настоящая',
+            '  ```',
+            '  - [ ] код подзадачи',
+            '  ```',
+            '  - [ ] пункт чек-листа',
+          ].join('\n'),
+        );
+
+        const page = await getTasks(ctx, { scope: 'open', count: 'true', include_nested: 'true' });
+        assert.equal(page.statusCode, 200);
+        assert.deepEqual(
+          page.data.items.map((task) => [task.text, task.line_no]),
+          [['настоящая', 9]],
+          'единственная задача — строка 9; строки кода задачами не стали',
+        );
+        assert.equal(page.data.total, 1, 'COUNT считает только настоящие задачи');
+        assert.deepEqual(
+          (page.data.nested ?? []).map((line) => line.text),
+          ['пункт чек-листа'],
+          'вложенные строки блока кода не отдаются, настоящий пункт — отдаётся',
+        );
+        assert.deepEqual(
+          (page.data.nested ?? []).map((line) => line.checkbox),
+          [true],
+          'пункт из кода не притворяется чек-листом',
+        );
+
+        // Автопериод/автосубъекты применяются к строкам-задачам, а не к коду:
+        // у настоящей строки своего срока нет — период берётся у записи, у кода
+        // строк не существует вовсе.
+        const dated = await getTasks(ctx, { comment_id: comment.id });
+        assert.deepEqual(
+          dated.data.items.map((task) => [task.line_no, task.auto_period]),
+          [[9, true]],
+          'автопериод получила только настоящая строка',
+        );
+        assert.deepEqual(dated.data.items[0]!.subject_thoughts, [], 'автосубъектов нет');
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
   },
 );

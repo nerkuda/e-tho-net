@@ -744,10 +744,18 @@ describe('зона «Задачи» редактора: СВОЯ правка н
     try {
       const row = rowOf(h.group, 'c1:0');
       (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
-      const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
-      assert.ok(check, 'чекбокс пункта чек-листа раскрыт');
+      await h.settle();
+      const block = rowOf(h.group, 'c1:0').querySelector(
+        '.ui-task-row-children',
+      ) as unknown as ShimElement;
+      assert.ok(block, 'подчинённый блок раскрыт');
+      // Шим не разбирает `innerHTML`: контрол вставляем в блок вручную, путь
+      // записи тот же (делегированный `change` блока, line-based адрес).
+      const check = new ShimElement('input');
+      check.type = 'checkbox';
       check.checked = true;
-      check.emit('change', { target: check });
+      block.append(check);
+      block.emit('change', { target: check });
       await h.settle();
 
       assert.equal(
@@ -767,13 +775,13 @@ describe('зона «Задачи» редактора: СВОЯ правка н
         '0',
         'панель не помечена устаревшей',
       );
-      const childRow = rowOf(h.group, 'c1:0').querySelector(
-        '.ui-task-child-row',
+      const blockAfter = rowOf(h.group, 'c1:0').querySelector(
+        '.ui-task-row-children',
       ) as unknown as ShimElement;
-      assert.equal(
-        childRow.classList.contains('is-done'),
-        true,
-        'перечитывание подхватило отметку проекции',
+      assert.match(
+        String(blockAfter.innerHTML),
+        /task-list-item-checkbox[^>]*checked/,
+        'перечитывание подхватило отметку источника (блок перерисован из тела)',
       );
     } finally {
       h.destroy();

@@ -18,6 +18,7 @@ import { UI_STATE_KEY } from '@etn/shared';
 
 import { requireNetworkId } from '../../app.js';
 import { createTaskRowEditor } from '../../editor/task-row-editor.js';
+import { renderTaskBlock } from '../../editor/task-lines-view.js';
 import { renderMarkdownWithWikiLinks } from '../../editor/wiki-link-resolver.js';
 import {
   REMINDER_PANEL_ROW_CLASS,
@@ -83,6 +84,9 @@ export function mountTasksPanel(host: HTMLElement, deps: TasksPanelDeps): TasksP
       reminders: true,
       doneSection: 'toggle',
       renderText: (node, row) => renderTaskRowText(node, row.text, requireNetworkId()),
+      // Подчинённый блок строки — тем же путём, что просмотр комментария
+      // (0.16.1, пачка 7): единый рендерер, вложенные списки/чекбоксы, сворачивание.
+      renderBlock: (node, text) => renderTaskBlock(node, text, requireNetworkId()),
     },
     actions: {
       openDay: (day) => deps.openDay(day),

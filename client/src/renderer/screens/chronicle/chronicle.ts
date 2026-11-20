@@ -70,6 +70,7 @@ import {
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
 import { wireTaskCheckboxes } from '../../editor/task-checkbox-toggle.js';
+import { markOverdueTaskItems } from '../../editor/task-lines-view.js';
 import {
   paintWikiIdsInSnippet,
   resolveWikiIdsInSnippet,
@@ -1863,6 +1864,10 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   // Тело просмотра — статичный `body_html`; декорируем его теми же шагами, что и
   // поле markdown (авто-подсветка упоминаний). Держим элемент для декорации.
   const recordView = renderRecordView(shell, { body_html: bodyHtml });
+  // Просроченные задачи в тексте записи красным — там, где они фактически
+  // записаны (0.16.1, пачка 7): тот же вид, что у строки панели, по готовому
+  // DOM (`data-wiki-date` чекбокс-пункта).
+  markOverdueTaskItems(recordView);
   body.append(shell.root);
   // Сворачивание заголовков в просмотре записи — тем же механизмом, что у
   // комментария мысли (ошибка c91a0067): статичный `body_html` без декоратора

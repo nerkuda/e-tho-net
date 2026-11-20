@@ -39,6 +39,7 @@ import {
   type TabPaneLifecycle,
 } from './editor.js';
 import type { GroupSpec } from './group.js';
+import { renderTaskBlock } from './task-lines-view.js';
 import { renderMarkdownWithWikiLinks } from './wiki-link-resolver.js';
 
 /**
@@ -74,6 +75,9 @@ export function createEditorTasksSection(
       // появляется здесь сразу — без смены мысли.
       autoRefreshOnCommentChange: true,
       renderText: (node, row) => renderEditorTaskRowText(node, row.text, requireNetworkId()),
+      // Подчинённый блок строки — тем же путём, что просмотр комментария
+      // (0.16.1, пачка 7): единый рендерер, вложенные списки/чекбоксы, сворачивание.
+      renderBlock: (node, text) => renderTaskBlock(node, text, requireNetworkId()),
     },
     actions: {
       openRowSource: (row) => void openSource(row),

@@ -28,7 +28,17 @@ const CSS = fs
   .readFileSync(path.join(RENDERER_ROOT, 'lib', 'ui', 'task-panel.css'), 'utf8')
   .replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** Тело правила по точному селектору (последнее вхождение). */
+/** Тела всех правил с точным селектором (селекторы через запятую учитываются). */
+function ruleBodies(selector: string): string[] {
+  const code = CSS;
+  const bodies: string[] = [];
+  for (const match of code.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = match[1]!.split(',').map((part) => part.trim().replace(/\s+/g, ' '));
+    if (selectors.includes(selector)) bodies.push(match[2]!);
+  }
+  return bodies;
+}
+
 function ruleBody(selector: string): string {
   const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(?:^|[},])\\s*${esc}\\s*\\{([^}]*)\\}`, 'g');
@@ -119,17 +129,23 @@ describe('панель задач: шапка, свёрнутость и сер�
     );
   });
 
-  it('вложенные строки: каретка и блок детей со своим отступом (пункт F)', () => {
+  it('подчинённый блок: каретка у верхнего края, блок — просмотр комментария (пачка 7)', () => {
     assert.match(
       ruleBody('.ui-task-row.has-children'),
       /flex-wrap:\s*wrap/,
-      'дети уходят блоком под строку, адрес `data-row-key` остаётся у строки',
+      'блок уходит под строку, адрес `data-row-key` остаётся у строки',
     );
     assert.match(ruleBody('.ui-task-row-children'), /padding-left:\s*var\(--tree-indent\)/);
-    assert.match(ruleBody(".ui-task-child-row[data-depth='1']"), /margin-left/);
     assert.match(
-      ruleBody(".ui-task-child-row[data-depth='2']"),
-      /calc\(var\(--tree-indent\) \* 2\)/,
+      ruleBody('.ui-task-row-caret'),
+      /align-self:\s*flex-start/,
+      'каретка выравнивается по ВЕРХНЕМУ краю многострочной строки (пункт 4 ТЗ)',
+    );
+    // Плоских строк панели больше нет: блок рисует просмотр комментария.
+    assert.equal(
+      ruleBodies('.ui-task-child-row').length,
+      0,
+      'правила плоских `.ui-task-child-row` удалены — блок рендерит единый рендерер',
     );
   });
 });

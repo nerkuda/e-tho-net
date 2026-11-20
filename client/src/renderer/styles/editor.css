@@ -1389,6 +1389,17 @@ input.task-list-item-checkbox.ui-task-checkbox-live:hover {
   border-color: var(--accent);
 }
 
+/* Просроченная задача в ПРОСМОТРЕ комментария/записи — красным (0.16.1,
+   пачка 7): там, где задача фактически записана. Класс `is-overdue` ставит
+   `editor/task-lines-view.ts` по готовому DOM (последний date-чип строки =
+   срок); у строки панели то же имя и токен темы (`task-panel.css`). Селектор
+   без класса-хоста: правило живёт там же, где вид чекбокса, и покрывает все
+   места просмотра markdown (`.comment-view`, `.diary-body`, блок панели). */
+li.task-list-item.is-overdue,
+li.task-list-item.is-overdue .wiki-link-date {
+  color: var(--danger);
+}
+
 /* ТП1: выделение `==…==` (`<mark>`) — тем же фоном, что подсветка поиска,
    а не жёлтым по умолчанию Web Awesome (`@layer wa-native`). Класс
    `cm-md-mark` в правке ставит `editor/md-live.ts`. */

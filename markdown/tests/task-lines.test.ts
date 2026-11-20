@@ -33,6 +33,98 @@ function checkboxRows(rows: TaskLine[]): TaskLine[] {
   return rows.filter((r) => r.hasCheckbox);
 }
 
+/**
+ * Строки `- [ ]` внутри БЛОКА КОДА — код, а не задачи (требование @152@,
+ * пачка 7). Корпус границ ограждений: парсер обязан читать ровно то, что
+ * показал бы единый рендерер (своего разбора ограждений у него нет и быть не
+ * должно — сторож `guard-task-line-grammar`).
+ */
+const CODE_BLOCK_CORPUS: Array<{ name: string; source: string; checkboxes: number[] }> = [
+  {
+    name: 'бэктики ```',
+    source: ['```', '- [ ] в коде [[2026-11-01]]', '```', '', '- [ ] вне кода'].join('\n'),
+    checkboxes: [5],
+  },
+  {
+    name: 'тильды ~~~',
+    source: ['~~~', '- [ ] в тильде', '~~~', '', '- [ ] вне кода'].join('\n'),
+    checkboxes: [5],
+  },
+  {
+    name: 'ограждение с отступом 1–3 пробела',
+    source: ['   ```', '   - [ ] в сдвинутом блоке', '   ```', '', '- [ ] вне кода'].join('\n'),
+    checkboxes: [5],
+  },
+  {
+    name: 'закрывающее ограждение с отступом',
+    source: ['```', '- [ ] в коде', '   ```', '', '- [ ] вне кода'].join('\n'),
+    checkboxes: [5],
+  },
+  {
+    name: '~~~ внутри ```-блока и наоборот',
+    source: ['~~~', '```', '- [ ] внутри тильды', '```', '~~~', '', '- [ ] вне кода'].join('\n'),
+    checkboxes: [7],
+  },
+  {
+    name: '```` с внутренними ```',
+    source: ['````', '```', '- [ ] в коде', '```', '````', '', '- [ ] вне кода'].join('\n'),
+    checkboxes: [7],
+  },
+  {
+    name: 'блок кода отступом в четыре пробела',
+    source: ['Абзац', '', '    - [ ] в коде отступом', '', '- [ ] вне кода'].join('\n'),
+    checkboxes: [5],
+  },
+  {
+    // Пункт вложен в задачу: рендерер рисует ему чек-бокс, а проекция считает
+    // его подзадачей (`isTask === false`) — это не строка кода и не задача.
+    name: 'блок кода внутри пункта списка',
+    source: ['- [ ] задача', '  ```', '  - [ ] код в пункте', '  ```', '  - [ ] пункт'].join('\n'),
+    checkboxes: [1, 5],
+  },
+];
+
+describe('parseTaskLines: строка `- [ ]` в блоке кода — не задача (@152@)', () => {
+  for (const sample of CODE_BLOCK_CORPUS) {
+    it(`${sample.name}: задача только вне блока, как в HTML рендерера`, () => {
+      const rows = parseTaskLines(sample.source);
+      const html = renderMarkdown(sample.source);
+      const rendered = (html.match(/class="task-list-item-checkbox"/g) ?? []).length;
+      assert.equal(
+        checkboxRows(rows).length,
+        rendered,
+        'число чек-боксов парсера совпадает с разметкой единого рендерера',
+      );
+      assert.deepEqual(
+        checkboxRows(rows).map((line) => line.lineNo),
+        sample.checkboxes,
+        'строки кода в чек-боксы не попали (номера строк — только настоящие)',
+      );
+    });
+  }
+
+  it('незакрытое ограждение тянется до конца комментария: задач после него нет', () => {
+    const source = ['```', '- [ ] раз', '- [ ] два [[2026-11-02]]', '', '- [ ] три'].join('\n');
+    assert.deepEqual(parseTaskLines(source), []);
+    assert.equal(
+      (renderMarkdown(source).match(/class="task-list-item-checkbox"/g) ?? []).length,
+      0,
+      'рендерер тоже не рисует чек-боксов',
+    );
+  });
+
+  it('адресация toggle тоже не видит строку кода: номер строки не выдаётся', () => {
+    // Панель и просмотр адресуют чекбоксы по `lineNo` из этого же разбора:
+    // код-строки в выходе нет — значит, и адрес для записи не строится.
+    const source = ['```', '- [ ] код', '```', '- [ ] настоящая'].join('\n');
+    const rows = checkboxRows(parseTaskLines(source));
+    assert.deepEqual(
+      rows.map((r) => [r.lineNo, r.text]),
+      [[4, 'настоящая']],
+    );
+  });
+});
+
 describe('parseTaskLines: грамматика чек-боксов', () => {
   it('открытый/закрытый чек-бокс, маркеры списков и нумерация', () => {
     const rows = parseTaskLines(

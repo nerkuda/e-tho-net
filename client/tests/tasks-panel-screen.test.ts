@@ -1188,8 +1188,8 @@ function tomorrowLocalOfScreen(): string {
 // 0.16.1, замечания пользователя 2026-11-17 (задача 01998381): пункты B, C, D, F.
 // ---------------------------------------------------------------------------
 
-describe('панель задач: вложенные строки задачи (пункт F ТЗ 2026-11-17)', () => {
-  it('сервер отдаёт вложенные строки, панель сворачивает их по умолчанию', async () => {
+describe('панель задач: подчинённый блок рендерится как комментарий (пачка 7)', () => {
+  it('сервер отдаёт строки записи, панель читает срез тела и рисует его единым рендерером', async () => {
     const h = await setup({
       tasks: [taskRow()],
       nested: [
@@ -1202,22 +1202,81 @@ describe('панель задач: вложенные строки задачи 
           checkbox: true,
         },
       ],
+      commentBodies: {
+        c1: [
+          '- [ ] задача',
+          '  - [ ] пункт чек-листа',
+          '  - обычная строка',
+          '    - глубже',
+          '  ```',
+          '  - [ ] это код',
+          '  ```',
+        ].join('\n'),
+      },
     });
     try {
       const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
       assert.ok(row, 'строка задачи в панели');
       assert.equal(
-        h.host.findAll('ui-task-child-row').length,
+        h.host.findAll('ui-task-row-children').length,
         0,
-        'по умолчанию вложенные строки свёрнуты',
+        'по умолчанию подчинённый блок свёрнут',
       );
       const caret = row.querySelector('.ui-task-row-caret') as unknown as ShimElement;
-      assert.ok(caret, 'у строки с вложенными строками есть каретка');
+      assert.ok(caret, 'у строки с блоком есть каретка');
       caret.click();
-      assert.deepEqual(
-        h.host.findAll('ui-task-child-row').map((node) => node.flatText().trim()),
-        ['пункт чек-листа'],
-        'раскрытие показывает вложенную строку из выдачи сервера',
+      await h.settle();
+
+      const block = row.querySelector('.ui-task-row-children') as unknown as ShimElement;
+      assert.ok(block, 'блок раскрыт');
+      assert.ok(
+        block.classList.contains('comment-view'),
+        'блок — просмотр комментария (те же стили)',
+      );
+      assert.ok(
+        block.classList.contains('md-collapse-host'),
+        'сворачивание пунктов — штатным механизмом просмотра (`decorateCommentView`)',
+      );
+      const html = String(block.innerHTML);
+      assert.match(html, /<ul class="contains-task-list">/, 'вложенный список построен рендерером');
+      assert.match(html, /class="task-list-item-checkbox"/, 'чекбоксы эталонные');
+      assert.match(html, /<pre><code[ >]/, 'код внутри подчинённых строк остался кодом');
+      assert.doesNotMatch(html, /ui-task-child-row/, 'плоских «•»-строк больше нет');
+    } finally {
+      h.destroy();
+    }
+  });
+
+  it('подзадача с датой видна и строкой-топ, и внутри блока родителя', async () => {
+    const h = await setup({
+      tasks: [
+        taskRow(),
+        taskRow({
+          key: 'c1:1',
+          line_no: 1,
+          text: 'подзадача',
+          due: '2026-11-20',
+          subtask: true,
+          parent_task: { comment_id: 'c1', line_no: 0 },
+        }),
+      ],
+      commentBodies: {
+        c1: '- [ ] задача\n  - [ ] подзадача [[2026-11-20]]',
+      },
+    });
+    try {
+      const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
+      (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+      await h.settle();
+      const block = row.querySelector('.ui-task-row-children') as unknown as ShimElement;
+      assert.match(
+        String(block.innerHTML),
+        /подзадача \[\[2026-11-20\]\]|wiki-link-date/,
+        'датированная подзадача показана внутри блока родителя',
+      );
+      assert.ok(
+        h.host.querySelector('[data-row-key="c1:1"]'),
+        'и остаётся самостоятельной строкой-топ панели',
       );
     } finally {
       h.destroy();
@@ -1704,6 +1763,7 @@ describe('панель задач: маркер «Обновить» по люб
 
 describe('панель задач: пункт чек-листа правит источник (замечание 4 ТЗ 2026-11-18)', () => {
   it('клик по чекбоксу пункта ставит `[x]` правкой `body_md` (серверного toggle у пункта нет)', async () => {
+    const body = '- [ ] задача\n  - [ ] пункт';
     const h = await setup({
       tasks: [taskRow()],
       nested: [
@@ -1717,16 +1777,23 @@ describe('панель задач: пункт чек-листа правит и�
           done: false,
         },
       ],
-      commentBodies: { c1: '- [ ] задача\n  - [ ] пункт' },
+      commentBodies: { c1: body },
       commentRows: { c1: [taskRow({ revision: 2 })] },
     });
     try {
       const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
       (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
-      const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
-      assert.ok(check, 'пункт чек-листа показан чекбоксом');
+      await h.settle();
+      const block = row.querySelector('.ui-task-row-children') as unknown as ShimElement;
+      assert.ok(block, 'блок раскрыт');
+      // Шим не разбирает `innerHTML`, поэтому контрол вставляем в блок вручную:
+      // делегированный `change` на блоке адресует строку по разбору блока —
+      // этот же путь работает и с контролами настоящего рендерера.
+      const check = new ShimElement('input');
+      check.type = 'checkbox';
       check.checked = true;
-      check.emit('change', { target: check });
+      block.append(check);
+      block.emit('change', { target: check });
       await h.settle();
 
       assert.deepEqual(
@@ -1795,10 +1862,14 @@ describe('панель задач: своя правка бессрочной с
 
       const row = h.host.querySelector('[data-row-key="c1:0"]') as unknown as ShimElement;
       (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
-      const check = row.querySelector('.ui-task-child-check') as unknown as ShimElement;
-      assert.ok(check, 'пункт чек-листа показан чекбоксом');
+      await h.settle();
+      const block = row.querySelector('.ui-task-row-children') as unknown as ShimElement;
+      assert.ok(block, 'блок раскрыт');
+      const check = new ShimElement('input');
+      check.type = 'checkbox';
       check.checked = true;
-      check.emit('change', { target: check });
+      block.append(check);
+      block.emit('change', { target: check });
       await h.settle();
 
       assert.ok(

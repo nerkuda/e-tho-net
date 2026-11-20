@@ -235,6 +235,62 @@ describe('живые чекбоксы просмотра комментария 
     );
   });
 
+  it('`- [ ]` внутри `~~~` и незакрытого fence не адресуется (@152@)', async () => {
+    // Ограждения разные, состояние блока определяет единый рендерер: первая
+    // строка после закрытого `~~~` — настоящая задача, а всё после незакрытого
+    // fence — код до конца комментария.
+    const api = fakeApi(['~~~', '- [ ] тильда', '~~~', '- [ ] настоящая'].join('\n'), 1);
+    const host = new ShimElement('div');
+    const box = checkbox(host, false);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c1' }));
+    box.checked = true;
+    click(host, box);
+    await flush();
+    assert.deepEqual(
+      api.updates,
+      [{ bodyMd: ['~~~', '- [ ] тильда', '~~~', '- [x] настоящая'].join('\n'), version: 1 }],
+      'правлена настоящая строка, а не `- [ ]` в тильдах',
+    );
+
+    const unclosed = fakeApi('```\n- [ ] раз\n- [ ] два', 2);
+    const unclosedHost = new ShimElement('div');
+    const stray = checkbox(unclosedHost, false);
+    wireTaskCheckboxes(unclosedHost as unknown as HTMLElement, () => ({ commentId: 'c2' }));
+    stray.checked = true;
+    click(unclosedHost, stray);
+    await flush();
+    assert.deepEqual(
+      unclosed.updates,
+      [],
+      'строк задач в источнике нет: запись не производится (безопасный no-op)',
+    );
+    assert.equal(stray.checked, false, 'контрол возвращён к снапшоту');
+  });
+
+  it('просмотр кода не даёт ни живого чекбокса, ни пункта задачи (@152@)', async () => {
+    // Единый рендерер — источник состояния код-блока: в HTML нет ни одного
+    // `task-list-item`, поэтому `wireTaskCheckboxes` нечего оживлять.
+    const { renderMarkdown } = await import('@etn/markdown');
+    const html = renderMarkdown(
+      ['```', '- [ ] в бэктиках', '```', '~~~', '- [ ] в тильдах', '~~~'].join('\n'),
+    );
+    assert.doesNotMatch(html, /task-list-item-checkbox/, 'интерактивного чекбокса кода нет');
+    assert.doesNotMatch(html, /task-list-item/, 'пункта задачи код не создаёт');
+    assert.equal(
+      (html.match(/<pre><code/g) ?? []).length,
+      2,
+      'оба блока остались кодом (оба вида ограждений)',
+    );
+
+    const api = fakeApi(['```', '- [ ] код', '```'].join('\n'), 1);
+    const host = new ShimElement('div');
+    const off = wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c3' }));
+    host.emit('click', { target: host, preventDefault: (): void => undefined });
+    await flush();
+    assert.deepEqual(api.updates, [], 'в просмотре кода писать нечего');
+    off();
+  });
+
   it('число чекбоксов DOM и источника не совпало — no-op с откатом контрола', async () => {
     const api = fakeApi('- [ ] только одна строка', 1);
     const host = new ShimElement('div');
