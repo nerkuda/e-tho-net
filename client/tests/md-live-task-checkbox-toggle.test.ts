@@ -144,3 +144,68 @@ describe('mdWidgetMouseDown: клик по чекбоксу в правке пе
     assert.equal(view.events.length, 0);
   });
 });
+
+describe('чекбокс внутри блока трансклюзии в правке (пункт 3 плана 7e12f589)', () => {
+  /**
+   * Цель события — чекбокс ОТРИСОВАННОГО блока трансклюзии. Такой блок рисуется
+   * единым рендерером (`body.innerHTML` в `transclusion.ts`), поэтому его
+   * контрол — вендорский `input` без класса живого виджета `.cm-md-task-checkbox`
+   * и без `data-md-from/to`.
+   */
+  function renderedBlockCheckbox(): any {
+    return {
+      closest: () => null,
+    };
+  }
+
+  it('клик по чекбоксу статического блока не правит внешний документ и не гасит событие', () => {
+    const view = fakeView('![[#11111111-1111-4111-8111-111111111111]]');
+    let prevented = 0;
+    const handled = mdWidgetMouseDown(
+      {
+        button: 0,
+        target: renderedBlockCheckbox(),
+        preventDefault: () => {
+          prevented += 1;
+        },
+      } as any,
+      view as any,
+    );
+    assert.equal(handled, false, 'статический блок — не виджет live-preview');
+    assert.equal(prevented, 0, 'событие не гасится');
+    assert.equal(view.events.length, 0, 'внешний документ не меняется');
+  });
+
+  it('в активном вложенном редакторе виджет правит СВОЙ буфер, внешний не трогается', () => {
+    // Вложенный инстанс монтируется со своим стеком (`mdEditorExtensions`), и
+    // обработчик получает ЕГО `view`: транзакция уходит в буфер вложенного
+    // документа. Внешний документ остаётся прежним — его правка идёт только
+    // через сохранение блока (`transclusion-drafts`).
+    const outer = fakeView('![[#11111111-1111-4111-8111-111111111111]]');
+    const nestedDoc = '- [ ] пункт вложенной записи';
+    const nested = fakeView(nestedDoc);
+    const target = {
+      closest: (selector: string) =>
+        selector === '.cm-md-task-checkbox'
+          ? { dataset: { mdFrom: String(FROM), mdTo: String(TO) } }
+          : null,
+    };
+    const handled = mdWidgetMouseDown(
+      { button: 0, target, preventDefault: () => undefined } as any,
+      nested as any,
+    );
+    assert.equal(handled, true, 'виджет вложенного инстанса — команда');
+    assert.equal(nested.events.length, 1, 'транзакция ушла во вложенный буфер');
+    assert.deepEqual(
+      nested.events[0]!.changes,
+      { from: FROM + 1, to: FROM + 2, insert: 'x' },
+      'во вложенном документе переключён символ отметки',
+    );
+    assert.equal(outer.events.length, 0, 'внешний документ не тронут');
+    assert.equal(
+      outer.state.sliceDoc(0, '![[#11111111-1111-4111-8111-111111111111]]'.length),
+      '![[#11111111-1111-4111-8111-111111111111]]',
+      'внешний документ читается по своему тексту (трансклюзия цела)',
+    );
+  });
+});

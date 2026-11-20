@@ -214,6 +214,29 @@ describe('живые чекбоксы просмотра комментария 
     assert.equal(first.checked, false, 'контрол возвращён к снапшоту');
   });
 
+  it('трансклюзия в просмотре: чекбоксы вложенной записи не адресуются (no-op с откатом)', async () => {
+    // Фикстура живой приёмки: комментарий-владелец — ОДНА строка-трансклюзия
+    // `![[#id]]`, а его `body_html` — отрисованный блок вложенной записи с тремя
+    // чекбоксами. Адресация модуля «N-й чекбокс DOM ↔ N-я строка с чек-боксом
+    // `body_md`» видит 3 против 0 — и обязана молчать: правка наугад задела бы
+    // чужой комментарий (расхождение 4.3 плана — в отчёте задачи 0161068d).
+    const api = fakeApi('![[#11111111-1111-4111-8111-111111111111]]', 7);
+    const host = new ShimElement('div');
+    const first = checkbox(host, false);
+    checkbox(host, false);
+    checkbox(host, true);
+    wireTaskCheckboxes(host as unknown as HTMLElement, () => ({ commentId: 'c1' }));
+    assert.ok(
+      first.classList.contains(LIVE_TASK_CHECKBOX_CLASS),
+      'контрол блока трансклюзии тоже становится живым (снимается вендорский disabled)',
+    );
+    first.checked = true;
+    click(host, first);
+    await flush();
+    assert.deepEqual(api.updates, [], 'источник не тронут: трансклюзия — не строки задачи');
+    assert.equal(first.checked, false, 'контрол возвращён к снапшоту (no-op, а не догадка)');
+  });
+
   it('без адреса комментария клик ничего не пишет', async () => {
     const api = fakeApi('- [ ] задача', 1);
     const host = new ShimElement('div');

@@ -20,6 +20,8 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { beforeEach, describe, it } from 'node:test';
 
 import * as keymap from '../src/renderer/lib/keymap.js';
@@ -278,6 +280,36 @@ function mount(
 const rowsOf = (host: ShimElement): ShimElement[] =>
   host.querySelectorAll('[data-row-key]') as unknown as ShimElement[];
 
+/** Подпись пункта меню без служебной стрелки подменю (`▸`). */
+function menuLabel(node: ShimElement): string {
+  return node.flatText().trim().replace(/\s*▸$/, '');
+}
+
+/** Строка открытого меню по её подписи (меню и подменю рисуются одним списком). */
+function menuRowByLabel(root: ShimElement, label: string): ShimElement {
+  const row = root.querySelectorAll('.menu-item').find((node) => menuLabel(node) === label.trim());
+  assert.ok(row, `пункт «${label}» есть в меню`);
+  return row as unknown as ShimElement;
+}
+
+const CLIENT_ROOT = path.resolve(import.meta.dirname, '..');
+const TASK_PANEL_CSS = path.join(CLIENT_ROOT, 'src', 'renderer', 'lib', 'ui', 'task-panel.css');
+
+/**
+ * Тела правил, в списке селекторов которых есть РОВНО `selector`. Один и тот же
+ * класс в файле объявлен несколькими блоками (базовая раскладка + состояния),
+ * поэтому карта «селектор → тело» потеряла бы часть правил.
+ */
+function ruleBodies(css: string, selector: string): string[] {
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const bodies: string[] = [];
+  for (const match of code.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = match[1]!.split(',').map((part) => part.trim().replace(/\s+/g, ' '));
+    if (selectors.includes(selector)) bodies.push(match[2]!);
+  }
+  return bodies;
+}
+
 /** Дождаться промисов загрузки сырой строки и ответа `editLine`. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) await Promise.resolve();
@@ -506,6 +538,136 @@ describe('панель задач: секции, строки и счётчик�
     assert.ok(edit, 'пункт «Изменить расписание» в меню строки');
     edit!.click();
     assert.deepEqual(calls.reminderActions, [`${rows[0]!.key}:edit-schedule`]);
+    destroy();
+  });
+
+  it('меню строки напоминания: пять команд и подменю «Отложить…» от момента вхождения', async () => {
+    const rows: ReminderPanelRow[] = [
+      {
+        key: 'r1:2026-11-14T09:00:00.000Z',
+        reminderId: 'r1',
+        subjectType: 'thought',
+        subjectId: 't1',
+        title: 'Мысль',
+        moment: '2026-11-14T09:00:00.000Z',
+        occurrenceAt: '2026-11-14T09:00:00.000Z',
+        status: 'active',
+        repeat: 'однократно',
+        day: '2026-11-14',
+      },
+    ];
+    const key = rows[0]!.key;
+    const { host, calls, render, destroy } = mount([]);
+    render(
+      panelView([], {
+        reminderCount: rows.length,
+        reminderSections: [
+          {
+            key: 'today',
+            title: 'Сегодня',
+            subgroups: [
+              { key: 'date:2026-11-14', title: '14.11.2026', kind: 'dates', filter: {}, rows },
+            ],
+          },
+        ],
+      }),
+    );
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+
+    /** Открыть меню строки и вернуть его корень (меню живёт в `document.body`). */
+    const openMenu = (): ShimElement => {
+      const button = host.querySelector('.ui-reminder-row-menu') as unknown as ShimElement;
+      assert.ok(button, 'у строки напоминания есть меню команд');
+      button.emit('click', {
+        target: button,
+        currentTarget: button,
+        preventDefault: (): void => undefined,
+        stopPropagation: (): void => undefined,
+      });
+      const root = body.querySelector('.menu') as unknown as ShimElement | null;
+      assert.ok(root, 'меню строки открыто');
+      return root;
+    };
+    /** Открыть подменю «Отложить…» и вернуть сам список подменю. */
+    const openSnoozeSubmenu = (): ShimElement => {
+      const root = openMenu();
+      menuRowByLabel(root, t('tasks.snoozeReminder')).emit('mouseenter');
+      const sub = root.querySelector('.menu-sub') as unknown as ShimElement | null;
+      assert.ok(sub, 'подменю «Отложить…» строится по наведению (ленивая сборка меню)');
+      return sub;
+    };
+
+    // Пять команд плана (план тестирования 7e12f589, «напоминания можно
+    // переносить / создать задачу / отменить»). Разделитель `.menu-sep` строкой
+    // меню не считается.
+    const topLevel = openMenu()
+      .querySelectorAll('.menu-item')
+      .map((node) => menuLabel(node));
+    assert.deepEqual(
+      topLevel,
+      [
+        t('tasks.openSubject'),
+        t('reminder.editSchedule'),
+        t('tasks.dismissReminder'),
+        t('tasks.snoozeReminder'),
+        t('tasks.createTask'),
+      ],
+      'меню строки: источник, расписание, отмена, отложить, создать задачу',
+    );
+
+    // Каждая команда адресует ВХОЖДЕНИЕ: ключ строки содержит `occurrence_at`.
+    for (const [label, action] of [
+      [t('tasks.openSubject'), 'open-subject'],
+      [t('reminder.editSchedule'), 'edit-schedule'],
+      [t('tasks.dismissReminder'), 'dismiss'],
+      [t('tasks.createTask'), 'create-task'],
+    ] as const) {
+      menuRowByLabel(openMenu(), label).click();
+      assert.equal(
+        calls.reminderActions[calls.reminderActions.length - 1],
+        `${key}:${action}`,
+        `команда «${label}» адресует вхождение напоминания`,
+      );
+    }
+
+    // Подменю «Отложить…»: относительные сдвиги считаются ОТ МОМЕНТА вхождения
+    // (`shiftIso(row.moment, …)`); абсолютный пункт — диалог даты и времени.
+    const sub = openSnoozeSubmenu();
+    assert.deepEqual(
+      sub.querySelectorAll('.menu-item').map((node) => menuLabel(node)),
+      [t('tasks.shiftDay'), t('tasks.shiftWeek'), t('tasks.shiftMonth'), t('tasks.snoozeDateTime')],
+      'три относительных сдвига и «на дату…»',
+    );
+    assert.equal(
+      sub
+        .querySelectorAll('.menu-item')
+        .map((node) => menuLabel(node))
+        .includes(t('tasks.shiftToday')),
+      false,
+      'пункта «сегодня» в «Отложить…» нет: момент вхождения, а не текущие сутки',
+    );
+
+    menuRowByLabel(openSnoozeSubmenu(), t('tasks.shiftDay')).click();
+    assert.equal(
+      calls.reminderActions[calls.reminderActions.length - 1],
+      `${key}:snooze:2026-11-15T09:00:00.000Z`,
+      '«следующий день» — момент + 1 день',
+    );
+
+    menuRowByLabel(openSnoozeSubmenu(), t('tasks.shiftMonth')).click();
+    assert.equal(
+      calls.reminderActions[calls.reminderActions.length - 1],
+      `${key}:snooze:2026-12-14T09:00:00.000Z`,
+      '«на месяц» — календарный месяц от момента',
+    );
+
+    menuRowByLabel(openSnoozeSubmenu(), t('tasks.snoozeDateTime')).click();
+    await flush();
+    assert.equal(
+      calls.reminderActions[calls.reminderActions.length - 1],
+      `${key}:snooze:2026-11-20T12:00:00.000Z`,
+      '«на дату…» — выбранные дата и время, тоже вхождение',
+    );
     destroy();
   });
 
@@ -1560,6 +1722,145 @@ describe('панель задач: пункт чек-листа под зада�
     check.checked = false;
     check.emit('change', { target: check });
     assert.deepEqual(toggles, [{ key: 'c1:0', child: 1, done: false }]);
+    destroy();
+  });
+
+  it('вложенные строки 2–3 уровня: маркер панели у текста, чекбоксы у пунктов', () => {
+    const { host, destroy } = mount([
+      taskRow({
+        children: [
+          {
+            key: 'c1:1',
+            lineNo: 1,
+            text: 'пункт на первом уровне',
+            depth: 1,
+            checkbox: true,
+            done: true,
+          },
+          { key: 'c1:2', lineNo: 2, text: 'текст второго уровня', depth: 2, checkbox: false },
+          { key: 'c1:3', lineNo: 3, text: 'пункт третьего уровня', depth: 3, checkbox: true },
+        ],
+      }),
+    ]);
+    const row = rowsOf(host)[0]!;
+    (row.querySelector('.ui-task-row-caret') as unknown as ShimElement).click();
+
+    const children = row.querySelectorAll('.ui-task-child-row');
+    assert.deepEqual(
+      children.map((node) => node.dataset['depth']),
+      ['1', '2', '3'],
+      'уровень вложенности строки приходит из проекции',
+    );
+    assert.deepEqual(
+      children.map((node) => node.querySelector('.ui-task-child-text')!.flatText().trim()),
+      ['пункт на первом уровне', 'текст второго уровня', 'пункт третьего уровня'],
+      'тексты вложенных строк на месте',
+    );
+    assert.equal(
+      row.querySelectorAll('.ui-task-child-check').length,
+      2,
+      'чекбокс есть ровно у пунктов чек-листа (уровни 1 и 3)',
+    );
+    assert.equal(
+      row.querySelectorAll('.ui-task-child-marker').length,
+      1,
+      'маркер панели получает только обычная строка списка',
+    );
+
+    // Фактическое поведение (0.16.1): вложенные строки панели — плоские
+    // `.ui-task-child-row` с маркером «•» и штатным чекбоксом. Проекция хранит
+    // строку без вида списка и без номера, поэтому `ul`/`ol` единого рендерера
+    // (`renderMarkdownWithWikiLinks`) здесь недостижимы: нумерованные пункты
+    // показываются тем же «•». Расхождение с пунктом (г) плана — в отчёте.
+    assert.equal(row.querySelectorAll('ul').length, 0, 'списка `ul` панель не строит');
+    assert.equal(row.querySelectorAll('ol').length, 0, 'нумерованного `ol` панель не строит');
+    destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// План тестирования 7e12f589 (0.16.1, задача 0161068d): добор покрытия панели.
+// ---------------------------------------------------------------------------
+
+describe('панель задач: кнопки строки видны при наведении и фокусе (план 7e12f589)', () => {
+  it('`.ui-task-row-actions` скрыт базово и показывается на `:hover`/`:focus-within`', () => {
+    const css = fs.readFileSync(TASK_PANEL_CSS, 'utf8');
+
+    const base = ruleBodies(css, '.ui-task-row-actions');
+    assert.ok(
+      base.some((body) => /opacity:\s*0\b/.test(body)),
+      'базовое правило скрывает кнопки строки (`opacity: 0`)',
+    );
+    assert.ok(
+      base.some((body) => /display:\s*flex\b/.test(body)),
+      'кнопки строки — flex-ряд (раскладка не ломается при показе)',
+    );
+
+    const hover = ruleBodies(css, '.ui-task-row:hover .ui-task-row-actions');
+    assert.ok(
+      hover.some((body) => /opacity:\s*1\b/.test(body)),
+      'наведение на строку показывает её кнопки',
+    );
+    const focus = ruleBodies(css, '.ui-task-row:focus-within .ui-task-row-actions');
+    assert.ok(
+      focus.some((body) => /opacity:\s*1\b/.test(body)),
+      'фокус внутри строки (клавиатура) показывает кнопки тоже',
+    );
+  });
+});
+
+describe('панель задач: группа «Задачи» и секции без записи ui_state (план 7e12f589)', () => {
+  it('группа развёрнута по умолчанию: свёрнутость — только пользовательский персист', () => {
+    const { host, destroy } = mount([taskRow()]);
+    const group = host.querySelector('.ui-task-group-tasks') as unknown as ShimElement;
+    assert.ok(group, 'группа «Задачи» в панели есть');
+    assert.equal(
+      group.querySelector('.ui-task-caret')!.classList.contains('collapsed'),
+      false,
+      'без записи ui_state каретка не свёрнута',
+    );
+    assert.ok(group.querySelector('.ui-task-group-sections') !== null, 'тело группы построено');
+    destroy();
+  });
+
+  it('секции «Без срока» → «Срочные» идут в этом порядке со счётчиками строк', () => {
+    const { host, render, destroy } = mount([taskRow()]);
+    render(
+      panelView([], {
+        taskSections: [
+          {
+            key: 'undated',
+            title: t('tasks.sectionUndated'),
+            flat: true,
+            subgroups: [],
+            rows: [taskRow({ due: null, periodFrom: null })],
+          },
+          {
+            key: 'urgent',
+            title: t('tasks.sectionUrgent'),
+            flat: true,
+            subgroups: [],
+            rows: [taskRow(), taskRow({ key: 'c1:1', lineNo: 1, text: 'вторая' })],
+          },
+        ],
+      }),
+    );
+    const sections = host.querySelectorAll(`.${TASK_PANEL_SECTION_CLASS}`);
+    assert.deepEqual(
+      sections.map((section) => section.getAttribute('data-section')),
+      ['undated', 'urgent'],
+      'сначала «Без срока», затем «Срочные» (порядок собирает `periodTaskSections`)',
+    );
+    assert.deepEqual(
+      sections.map((section) => section.querySelector('.ui-task-section-title')!.flatText().trim()),
+      [t('tasks.sectionUndated'), t('tasks.sectionUrgent')],
+      'подписи секций из словаря',
+    );
+    assert.deepEqual(
+      sections.map((section) => section.querySelector('.ui-task-section-count')!.textContent),
+      ['(1)', '(2)'],
+      'счётчик секции — число её строк, виден и в свёрнутом виде',
+    );
     destroy();
   });
 });
