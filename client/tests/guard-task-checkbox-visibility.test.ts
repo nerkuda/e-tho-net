@@ -65,6 +65,13 @@ function preludeOf(rule: CssRule): string {
   return rule.prelude.replace(/\s+/g, ' ').trim();
 }
 
+/** Правило целится в элемент списка (ul/ol/li), а не в слово с «li» внутри. */
+function isListRule(rule: CssRule): boolean {
+  return rule.prelude
+    .split(',')
+    .some((sel) => /(?:^|[\s>+~])(?:ul|ol|li)(?=$|[\s.:#[>+~])/.test(sel.trim()));
+}
+
 describe('guard: видимость чек-боксов task-списков (5c6cc7d3)', () => {
   const cssClass = 'task-list-item-checkbox';
 
@@ -83,7 +90,9 @@ describe('guard: видимость чек-боксов task-списков (5c6
     const rules = rulesWith(cssClass);
     assert.ok(rules.length > 0, `в CSS нет правил для .${cssClass}`);
 
-    const base = rules.find((r) => preludeOf(r).includes(`input.${cssClass}`) && !preludeOf(r).includes(':checked'));
+    const base = rules.find(
+      (r) => preludeOf(r).includes(`input.${cssClass}`) && !preludeOf(r).includes(':checked'),
+    );
     assert.ok(base !== undefined, 'нет базового правила input.task-list-item-checkbox');
     const basePrelude = preludeOf(base);
     assert.ok(
@@ -94,7 +103,11 @@ describe('guard: видимость чек-боксов task-списков (5c6
       !basePrelude.includes('.comment-view') && !basePrelude.includes('.diary-body'),
       'селектор привязан к хосту: остальные места просмотра markdown останутся без вида',
     );
-    assert.match(base.body, /(?:^|[\s;])opacity:\s*1\s*;/, 'приглушение disabled (opacity: 0.5) обязано быть снято');
+    assert.match(
+      base.body,
+      /(?:^|[\s;])opacity:\s*1\s*;/,
+      'приглушение disabled (opacity: 0.5) обязано быть снято',
+    );
     assert.match(
       base.body,
       /border-color:\s*var\(--text-dim\)/,
@@ -107,7 +120,9 @@ describe('guard: видимость чек-боксов task-списков (5c6
     );
 
     const checked = rules.find(
-      (r) => preludeOf(r).includes(`input.${cssClass}:checked`) && preludeOf(r).includes('.cm-md-task-checkbox:checked'),
+      (r) =>
+        preludeOf(r).includes(`input.${cssClass}:checked`) &&
+        preludeOf(r).includes('.cm-md-task-checkbox:checked'),
     );
     assert.ok(checked !== undefined, 'нет правила отмеченного состояния (просмотр + правка)');
     assert.match(
@@ -137,14 +152,77 @@ describe('guard: видимость чек-боксов task-списков (5c6
     }
   });
 
-  it('маркер списка задач снят во всех местах просмотра (без класса-хоста)', () => {
-    const marker = rulesWith('contains-task-list').find((r) => /list-style:\s*none/.test(r.body));
-    assert.ok(marker !== undefined, 'нет правила list-style: none для contains-task-list');
+  it('маркер списка снят ТОЛЬКО у пункта-задачи (обычный пункт смешанного списка его сохраняет)', () => {
+    // Пачка 8 (задача 92c4ecf5): правило на ul/ol.contains-task-list гасило
+    // маркеры у ВСЕХ пунктов списка, и обычный пункт смешанного списка
+    // («- [ ] задача» + «- просто пункт») оставался без буллета.
+    const lists = rulesWith('contains-task-list');
     assert.ok(
-      !preludeOf(marker).includes('.comment-view') && !preludeOf(marker).includes('.diary-body'),
-      'снятие маркера привязано к хосту: в остальных местах просмотра останется точка/номер',
+      lists.every((r) => !/list-style:\s*none/.test(r.body)),
+      'снятие маркера не ставится на САМ список: иначе обычные пункты теряют буллет/номер',
     );
     const item = rulesWith('li.task-list-item').find((r) => /list-style:\s*none/.test(r.body));
     assert.ok(item !== undefined, 'нет правила list-style: none для li.task-list-item');
+    assert.ok(
+      !preludeOf(item).includes('.comment-view') && !preludeOf(item).includes('.diary-body'),
+      'снятие маркера привязано к хосту: в остальных местах просмотра останется точка/номер',
+    );
+    // Отступы не едут (DoD 1): снятие маркера — признак пункта, а не раскладка.
+    // Пункт-задача не получает собственных полей, полоса списка остаётся
+    // вендорской (`@layer wa-native`) и одинаковой у смешанного списка, поэтому
+    // текст пунктов встаёт на то же место. Свойства структурные — в светлой и
+    // тёмной теме раскладка одна и та же (цвета тут не участвуют).
+    assert.doesNotMatch(
+      item.body,
+      /(?:^|[\s;])(?:padding|margin)[-a-z]*\s*:/,
+      'правило снятия маркера не задаёт полей пункту (отступы не должны ехать)',
+    );
+    const listRules = [...rulesWith('ul'), ...rulesWith('ol'), ...rulesWith('li')].filter(
+      isListRule,
+    );
+    assert.ok(listRules.length > 0, 'не найдено ни одного правила элементов списка');
+    for (const rule of listRules) {
+      assert.doesNotMatch(
+        rule.body,
+        /(?:^|[\s;])padding[-a-z]*\s*:/,
+        `правило «${preludeOf(rule)}» задаёт padding списку/пункту: отступ под маркер изменится`,
+      );
+    }
+    // Разметка смешанного списка: обычный пункт — без `task-list-item`, значит
+    // правило снятия маркера его не покрывает и он показывает маркер списка.
+    const mixed = renderMarkdown('- [ ] задача\n- просто пункт');
+    assert.match(mixed, /<ul class="contains-task-list">/, 'смешанный список помечен');
+    assert.match(mixed, /<li class="task-list-item">/, 'пункт-задача помечен task-list-item');
+    assert.match(
+      mixed,
+      /<li>просто пункт<\/li>/,
+      'обычный пункт — без класса задачи, маркер списка не снят',
+    );
+    const ordered = renderMarkdown('1. [ ] задача\n2. просто пункт');
+    assert.match(
+      ordered,
+      /<ol class="contains-task-list">/,
+      'нумерованный смешанный список помечен',
+    );
+    assert.match(
+      ordered,
+      /<li>просто пункт<\/li>/,
+      'обычный пункт нумерованного списка — с номером',
+    );
+  });
+
+  it('каретка гаттера правки выровнена по ВЕРХНЕМУ краю строки (пачка 8)', () => {
+    const rule = rulesWith('.cm-md-collapse-gutter .cm-gutterElement')[0];
+    assert.ok(rule !== undefined, 'нет правила .cm-md-collapse-gutter .cm-gutterElement');
+    assert.match(
+      rule.body,
+      /align-items:\s*flex-start/,
+      'маркер — у верхнего края перенесённой строки, как в просмотре',
+    );
+    assert.doesNotMatch(
+      rule.body,
+      /align-items:\s*center/,
+      'центр по вертикали уводил треугольник к середине длинной строки',
+    );
   });
 });
