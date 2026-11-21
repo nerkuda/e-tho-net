@@ -87,6 +87,7 @@ import { svgIcon } from '../../lib/ui/icon.js';
 import { cachedHomeId, getHomeId, resetHomeCache } from '../../lib/home.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
+import { holdStatusMessage, type StatusMessageHold } from '../../lib/status-message.js';
 import { resolvePeriodInstants } from '../../lib/period-editor.js';
 import {
   datePeriodValueFromInstants,
@@ -1109,6 +1110,37 @@ async function applyFilter(): Promise<void> {
 }
 
 /**
+ * Задержка показа индикатора долгой перезагрузки ленты в статус-строке, мс
+ * (пачка 10, задача a33b5fc7): быстрый ответ не мелькает «Загрузкой…».
+ */
+export const FEED_LOADING_NOTICE_DELAY_MS = 300;
+
+/**
+ * Индикатор перечитывания ленты, когда содержимое уже показано: через
+ * {@link FEED_LOADING_NOTICE_DELAY_MS} в статус-строке появляется «Загрузка…»,
+ * по завершении операции сообщение гасится. Первая загрузка (лента пуста) идёт
+ * прежним путём — `renderStatus('loading')` в области ленты, статус-бар её не
+ * дублирует. `clear` идемпотентен и безопасен, если показ не состоялся.
+ */
+function startFeedLoadingNotice(): StatusMessageHold {
+  let hold: StatusMessageHold | null = null;
+  let timer: number | null = window.setTimeout(() => {
+    timer = null;
+    hold = holdStatusMessage(t('common.loading'));
+  }, FEED_LOADING_NOTICE_DELAY_MS);
+  return {
+    clear: () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      hold?.clear();
+      hold = null;
+    },
+  };
+}
+
+/**
  * Re-fetches the feed (used after edits and real-time events).
  *
  * `preserveDepth` — перезапрос до УЖЕ загруженной глубины (`rows.length`):
@@ -1138,10 +1170,13 @@ async function reload(preserveDepth = false): Promise<void> {
   // известен до обоих запросов, поэтому чтение идёт параллельно страницам
   // записей — ожидание не удлиняет смену периода.
   const dayLinksPending = fetchDayLinks();
-  // Статус «Загрузка…» — только когда показывать нечего: при смене периода с
-  // уже отрисованными строками лента остаётся видимой до прихода нового
-  // содержимого (образец — панель задач редактора, пачка 4).
-  if (!feedHasContent()) renderStatus('loading');
+  // Уже показанное содержимое при перечитывании не прячем, а долгую загрузку
+  // показываем в статус-строке (пачка 10, задача a33b5fc7) — без мелькания на
+  // быстрых ответах. Статус в области ленты остаётся для первой загрузки,
+  // когда показывать нечего (образец — панель задач редактора, пачка 4).
+  const hasContent = feedHasContent();
+  const loadingNotice = hasContent ? startFeedLoadingNotice() : null;
+  if (!hasContent) renderStatus('loading');
   try {
     const def = chronicleQueryDefinition();
     // Диагностика ядра едет в каждой странице конверта `meta`; редактору нужна
@@ -1180,6 +1215,10 @@ async function reload(preserveDepth = false): Promise<void> {
     // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
     setFilterServerIssues(filterIssuesFromQueryError(err));
     renderStatus('error', err);
+  } finally {
+    // Индикатор статус-строки снимается на любом исходе (успех, ошибка,
+    // вытеснение более поздним запросом) и гасит ТОЛЬКО своё сообщение.
+    loadingNotice?.clear();
   }
 }
 

@@ -55,6 +55,7 @@ win['removeEventListener'] = () => undefined;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 import {
+  holdStatusMessage,
   mountStatusMessage,
   STATUS_MESSAGE_TTL_MS,
   statusMessage,
@@ -137,4 +138,56 @@ test('сообщение при снятом статус-баре не теря
 
   mountStatusMessage(host);
   assert.equal(host.textContent, 'Применено к 3 мыслям.');
+});
+
+// ---------------------------------------------------------------------------
+// 3. Удерживаемое сообщение (индикатор хода операции, пачка 10 a33b5fc7)
+// ---------------------------------------------------------------------------
+
+test('удержание показывает текст без TTL и само его гасит', () => {
+  const hold = holdStatusMessage('Загрузка…');
+
+  assert.equal(host.textContent, 'Загрузка…');
+  assert.equal(host.title, 'Загрузка…', 'полный текст — в подсказке');
+  assert.equal(timers.length, 0, 'удерживаемое сообщение не гаснет по TTL');
+
+  hold.clear();
+  assert.equal(host.textContent, '', 'гасится по завершении операции');
+  assert.equal(host.title, '');
+});
+
+test('удержание не перебивает чужое сообщение и не гасит его', () => {
+  statusMessage('Сохранено.');
+  const hold = holdStatusMessage('Загрузка…');
+
+  assert.equal(host.textContent, 'Сохранено.', 'занятую зону не перебиваем');
+  hold.clear();
+  assert.equal(host.textContent, 'Сохранено.', 'чужое сообщение не погашено');
+});
+
+test('чужое сообщение поверх удержания не затирается завершением удержания', () => {
+  const hold = holdStatusMessage('Загрузка…');
+  statusMessage('Комментарий записан.');
+
+  hold.clear();
+  assert.equal(host.textContent, 'Комментарий записан.', 'гасим только своё сообщение');
+});
+
+test('второе удержание не перебивает первое; гасит только владелец', () => {
+  const first = holdStatusMessage('Загрузка A…');
+  const second = holdStatusMessage('Загрузка B…');
+
+  assert.equal(host.textContent, 'Загрузка A…', 'текущее удержание не вытесняется');
+  second.clear();
+  assert.equal(host.textContent, 'Загрузка A…', 'чужой clear не гасит удержание владельца');
+  first.clear();
+  assert.equal(host.textContent, '');
+});
+
+test('обычное сообщение снимает владение удержанием', () => {
+  const hold = holdStatusMessage('Загрузка…');
+  statusMessage('Скопировано.');
+  hold.clear();
+
+  assert.equal(host.textContent, 'Скопировано.', 'прежний держатель не гасит новый текст');
 });
