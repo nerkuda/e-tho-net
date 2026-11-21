@@ -2453,11 +2453,17 @@ export const RestChronicleDayLinks = defineContract(
     // fcdcd75f), сервер только читает проекцию по INDEX(date).
     from: z.string().min(1),
     to: z.string().min(1).optional(),
+    /**
+     * Показывать содержимое корзины (0.16.1, пачка 11): не задано — per-user
+     * настройка `show_trash` (по умолчанию да).
+     */
+    show_trash: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     from: { from: { kind: 'query' }, parse: singleQueryValue },
     to: { from: { kind: 'query' }, parse: singleQueryValue },
+    show_trash: { from: { kind: 'query', coerce: 'bool' } },
   },
 );
 
@@ -2476,12 +2482,15 @@ export const RestChronicleCalendarMarkers = defineContract(
     to: z.string().min(1),
     // «Сегодня» клиента — граница просрочки (due < today).
     today: z.string().min(1),
+    /** Показывать содержимое корзины (пачка 11; не задано — per-user `show_trash`). */
+    show_trash: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     from: { from: { kind: 'query' }, parse: singleQueryValue },
     to: { from: { kind: 'query' }, parse: singleQueryValue },
     today: { from: { kind: 'query' }, parse: singleQueryValue },
+    show_trash: { from: { kind: 'query', coerce: 'bool' } },
   },
 );
 
@@ -6411,6 +6420,12 @@ export const RestTaskList = defineContract(
     count: z.boolean().optional(),
     /** Дополнить страницу вложенными не-задачными строками её задач (ТЗ F). */
     include_nested: z.boolean().optional(),
+    /**
+     * Показывать содержимое корзины (0.16.1, пачка 11): `false` — строки
+     * записей помеченных сущностей и строки, адресованные помеченной мысли, не
+     * отдаются. Не задано — per-user настройка `show_trash` (по умолчанию да).
+     */
+    show_trash: z.boolean().optional(),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -6424,6 +6439,7 @@ export const RestTaskList = defineContract(
     limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
     count: { from: { kind: 'query', coerce: 'bool' } },
     include_nested: { from: { kind: 'query', coerce: 'bool' } },
+    show_trash: { from: { kind: 'query', coerce: 'bool' } },
   },
 );
 

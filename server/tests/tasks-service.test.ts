@@ -348,6 +348,42 @@ describe(
       }
     });
 
+    it('show_trash = false скрывает корзину: записи помеченного владельца и строки на помеченную мысль', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-live', 'Живая мысль');
+        const trashedSubject = '55555555-5555-4555-8555-555555555555';
+        seedThought(ndb, trashedSubject, 'Субъект в корзине', { marked: true });
+        seedThought(ndb, 't-trashed-owner', 'Владелец в корзине', { marked: true });
+        // Живая запись: задача адресована живой мысли и помеченной мысли.
+        createTaskComment(ndb, 't-live', '- [ ] Живая [[2026-11-20]]');
+        createTaskComment(ndb, 't-live', `- [ ] На корзину [[#${trashedSubject}]] [[2026-11-21]]`);
+        // Запись владельца в корзине (хроно-запись — не постоянный комментарий).
+        createTaskComment(ndb, 't-trashed-owner', '- [ ] Из корзины [[2026-11-22]]');
+
+        const withTrash = listTasks(ndb, { scope: 'open' }).items.map((task) => task.text);
+        assert.equal(withTrash.length, 3, 'по умолчанию корзина показывается');
+
+        const hidden = listTasks(ndb, { scope: 'open', showTrash: false }).items.map(
+          (task) => task.text,
+        );
+        assert.deepEqual(
+          hidden,
+          ['Живая [[2026-11-20]]'],
+          'show_trash = false скрывает записи помеченного владельца и строки на помеченную мысль',
+        );
+
+        // Возврат из корзины возвращает строки: фильтр читается на лету, проекция
+        // не переписывается.
+        ndb
+          .prepare('UPDATE thoughts SET marked_for_deletion = 0 WHERE id IN (?, ?)')
+          .run(trashedSubject, 't-trashed-owner');
+        assert.equal(listTasks(ndb, { scope: 'open', showTrash: false }).items.length, 3);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('toggle в постоянном комментарии пишет новую ревизию и пере-парсит строку', () => {
       const ndb = createInMemoryNetworkDb();
       try {

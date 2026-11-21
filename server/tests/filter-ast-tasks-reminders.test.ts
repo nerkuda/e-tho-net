@@ -122,7 +122,11 @@ function leaf(kind: string, operator: string, value?: unknown): FilterAst {
 function ids(
   ndb: NetworkDb,
   ast: FilterAst,
-  opts: { userId?: string; tokenContext?: ThoughtQueryOptions['tokenContext'] } = {},
+  opts: {
+    userId?: string;
+    tokenContext?: ThoughtQueryOptions['tokenContext'];
+    showTrash?: boolean;
+  } = {},
 ): string[] {
   // Часы сценария по умолчанию: next_at напоминаний считается ЛЕНИВО (доработка
   // по приёмке), поэтому без явных часов тест зависел бы от реальной даты.
@@ -131,7 +135,12 @@ function ids(
     ndb,
     opts.userId ?? USER,
     { sort: 'alpha', order: 'asc', limit: 100, offset: 0, ast },
-    { emptyFilterMode: 'all', maxLimit: 200, tokenContext },
+    {
+      emptyFilterMode: 'all',
+      maxLimit: 200,
+      tokenContext,
+      ...(opts.showTrash !== undefined ? { showTrash: opts.showTrash } : {}),
+    },
   );
   return result.items.map((item) => item.id).sort();
 }
@@ -317,22 +326,65 @@ describe(
       try {
         const subject = seedThought(ndb, 'Субъект');
         const trashedOwner = seedThought(ndb, 'Владелец в корзине');
-        runWriteCore(
-          ndb,
-          { networkId: ndb.networkId, userId: USER, layerId: ndb.layerId },
-          () => ({
-            result: createCommentWithTargets(
-              ndb,
-              [{ owner_type: 'thought', owner_id: trashedOwner }],
-              { kind: 'permanent', body_md: `- [ ] Задача [[#${subject}]]` },
-              USER,
-            ).id,
-          }),
-        );
+        runWriteCore(ndb, { networkId: ndb.networkId, userId: USER, layerId: ndb.layerId }, () => ({
+          result: createCommentWithTargets(
+            ndb,
+            [{ owner_type: 'thought', owner_id: trashedOwner }],
+            { kind: 'permanent', body_md: `- [ ] Задача [[#${subject}]]` },
+            USER,
+          ).id,
+        }));
         ndb.prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id = ?').run(trashedOwner);
 
         assert.deepEqual(ids(ndb, leaf('tasks', 'not_empty')), []);
         assert.deepEqual(ids(ndb, leaf('tasks', 'is_empty')), [subject, trashedOwner].sort());
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('«Есть задачи»: show_trash = false не считает задачи корзины', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const liveSubject = seedThought(ndb, 'Субъект');
+        const trashedSubject = seedThought(ndb, 'Субъект в корзине');
+        const trashedOwner = seedThought(ndb, 'Владелец в корзине');
+        const liveOwner = seedThought(ndb, 'Владелец живой');
+        // Живая запись: задача адресована живой и помеченной мысли (две строки).
+        writeComment(ndb, liveOwner, `- [ ] Живая [[#${liveSubject}]]`);
+        writeComment(ndb, liveOwner, `- [ ] На корзину [[#${trashedSubject}]]`);
+        // Запись владельца в корзине — хроно-запись, не постоянный комментарий:
+        // строка адресована самому владельцу и живой мысли.
+        writeComment(
+          ndb,
+          trashedOwner,
+          `- [ ] Из корзины [[#${trashedOwner}]] [[#${liveSubject}]]`,
+        );
+        ndb
+          .prepare('UPDATE thoughts SET marked_for_deletion = 1 WHERE id IN (?, ?)')
+          .run(trashedSubject, trashedOwner);
+
+        // Корзина показывается (по умолчанию): задачи есть у живого субъекта, у
+        // субъекта из корзины и у владельца записи из корзины.
+        assert.deepEqual(
+          ids(ndb, leaf('tasks', 'not_empty')),
+          [liveSubject, trashedSubject, trashedOwner].sort(),
+        );
+
+        assert.deepEqual(
+          ids(ndb, leaf('tasks', 'not_empty'), { showTrash: false }),
+          [liveSubject].sort(),
+          'запись помеченного владельца и строка на помеченную мысль не считаются',
+        );
+
+        // Возврат из корзины: строки возвращаются без пере-парса проекции.
+        ndb
+          .prepare('UPDATE thoughts SET marked_for_deletion = 0 WHERE id IN (?, ?)')
+          .run(trashedSubject, trashedOwner);
+        assert.deepEqual(
+          ids(ndb, leaf('tasks', 'not_empty'), { showTrash: false }),
+          [liveSubject, trashedSubject, trashedOwner].sort(),
+        );
       } finally {
         ndb.close();
       }

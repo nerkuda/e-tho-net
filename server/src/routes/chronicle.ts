@@ -23,7 +23,13 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 
 import { sendList, sendSuccess } from '../http/responses.js';
 import { filterProfileHasTime, type CalendarMarkersResult, type DayLinksResult } from '@etn/shared';
-import { openRouteNetworkDb, requestBody, resolveShowInactive, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  requestBody,
+  resolveShowInactive,
+  resolveShowTrash,
+  type RouteDeps,
+} from './helpers.js';
 import { parseRest, RestChronicleCalendarMarkers, RestChronicleDayLinks } from '../contracts.js';
 import { parseChronicleQueryBody, queryChronicle } from '../domain/chronicle-service.js';
 import { listCalendarMarkers } from '../domain/calendar-markers-service.js';
@@ -85,6 +91,7 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
         const result: DayLinksResult = listDayLinks(ndb, {
           from: input.from,
           ...(input.to !== undefined ? { to: input.to } : {}),
+          showTrash: resolveShowTrash(app, req.auth!.user.id, input.network_id, input.show_trash),
         });
         sendSuccess(reply, result, { request_id: req.id });
       },
@@ -106,6 +113,7 @@ export function createChronicleRoutes(deps: RouteDeps): FastifyPluginAsync {
           today: input.today,
           userId: req.auth!.user.id,
           show_inactive: resolveShowInactive(app, req.auth!.user.id, input.network_id),
+          show_trash: resolveShowTrash(app, req.auth!.user.id, input.network_id, input.show_trash),
         });
         sendSuccess(reply, result, { request_id: req.id });
       },

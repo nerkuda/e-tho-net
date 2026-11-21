@@ -31,6 +31,7 @@ import {
   runTool,
   runWrite,
   runWriteTool,
+  showTrashFor,
 } from '../context.js';
 import { listTasksAsync } from '../../domain/heavy-read.js';
 import {
@@ -204,6 +205,8 @@ export const TASK_OPS_HANDLERS: Record<string, OpHandler> = {
         ...(a.limit !== undefined ? { limit: a.limit } : {}),
         ...(a.count !== undefined ? { count: a.count } : {}),
         ...(a.include_nested !== undefined ? { includeNested: a.include_nested } : {}),
+        // Содержимое корзины: явный параметр, иначе per-user настройка (пачка 11).
+        showTrash: a.show_trash ?? showTrashFor(rt, a.network_id),
       });
     });
   },

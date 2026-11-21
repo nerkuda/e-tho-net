@@ -247,6 +247,41 @@ describe(
       }
     });
 
+    it('show_trash = false скрывает date-ссылки записи помеченной мысли; возврат — показывает', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-live', 'Живая мысль');
+        seedThought(ndb, 't-trash', 'Мысль в корзине', { marked: true });
+        createComment(
+          ndb,
+          { owner_type: 'thought', owner_id: 't-live' },
+          'Живая встреча [[2026-11-02]]',
+        );
+        createComment(
+          ndb,
+          { owner_type: 'thought', owner_id: 't-trash' },
+          'Встреча из корзины [[2026-11-02]]',
+        );
+
+        const withTrash = listDayLinks(ndb, { from: '2026-11-02' });
+        assert.equal(withTrash.links.length, 2, 'по умолчанию корзина показывается');
+
+        const hidden = listDayLinks(ndb, { from: '2026-11-02', showTrash: false });
+        assert.deepEqual(
+          hidden.links.map((link) => link.source.text),
+          ['Живая встреча [[2026-11-02]]'],
+          'запись помеченной мысли — содержимое корзины',
+        );
+
+        // Возврат из корзины возвращает строку: фильтр читается на лету.
+        ndb.prepare('UPDATE thoughts SET marked_for_deletion = 0 WHERE id = ?').run('t-trash');
+        const restored = listDayLinks(ndb, { from: '2026-11-02', showTrash: false });
+        assert.equal(restored.links.length, 2);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('пустой день — пустые списки; невалидный день — VALIDATION_ERROR', () => {
       const ndb = createInMemoryNetworkDb();
       try {

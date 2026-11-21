@@ -73,8 +73,10 @@ import { errText } from '../dom.js';
 import { etn } from '../etn.js';
 import { formatDate, t } from '../i18n.js';
 import { onRoutedRealtimeEvent } from '../live/event-router.js';
+import { isTrashVisibilityEvent } from '../live/trash-events.js';
 import { MENU_SEPARATOR, menuAction, menuSubmenu, type MenuItem } from '../menu.js';
 import { notice } from '../notice.js';
+import { isNotFoundError } from '../pure.js';
 import { openReminderEditor } from '../reminder-editor.js';
 import { createPublicationCloud, type PublicationCloudInput } from './publication-cloud.js';
 import { createThoughtCloud, type ThoughtCloudInput } from '../thought-cloud.js';
@@ -382,6 +384,14 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   let undoSnapshot: Array<{ id: string; body_md: string; version: number }> | null = null;
   /** Кэш субъектов строк: снапшот мысли/публикации для облачка и названий. */
   const subjectData = new Map<string, ThoughtCloudInput | PublicationCloudInput>();
+  /**
+   * Субъекты-мысли, которых больше нет в сети (`NOT_FOUND` при резолве
+   * снапшота — мысль удалена совсем, пачка 11). Облачко такого субъекта
+   * остаётся визуальным снапшотом строки, но НЕ получает действий: клик не
+   * открывает мёртвую мысль, контекстное меню недоступно (`dead`-меню запрещено
+   * ТЗ 2026-11-21). Строка исчезнет при ближайшем перечитывании панели.
+   */
+  const missingSubjects = new Set<string>();
   let settingsLoaded = false;
   let panelHeightValue: number | null = null;
   let persistTimer: number | null = null;
@@ -696,7 +706,15 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     );
     await Promise.allSettled([
       ...missingThoughts.map(async (id) => {
-        subjectData.set(`thought:${id}`, await etn.thoughts.get(networkId, id));
+        try {
+          subjectData.set(`thought:${id}`, await etn.thoughts.get(networkId, id));
+          missingSubjects.delete(id);
+        } catch (err) {
+          // Мысль удалена совсем (`NOT_FOUND`): снапшот строки живёт до
+          // перечитывания, но действий у облачка не будет (пачка 11).
+          if (isNotFoundError(err)) missingSubjects.add(id);
+          else throw err;
+        }
       }),
       ...missingPublications.map(async (id) => {
         const publication = await etn.publications.get(networkId, id);
@@ -1854,6 +1872,8 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
 
   /** Открыть субъект панели: экран решает, иначе — обычный переход клиента. */
   function openSubjectInternal(subject: TaskPanelSubject): void {
+    // Субъект удалён совсем: переход — no-op без ошибки (пачка 11, пункт 4).
+    if (subject.kind === 'thought' && missingSubjects.has(subject.id)) return;
     if (actions.openSubject !== undefined) {
       actions.openSubject(subject);
       return;
@@ -1904,6 +1924,13 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     }
     const data = subjectData.get(`thought:${subject.id}`);
     const input: ThoughtCloudInput = data ?? { id: subject.id, title: subject.title };
+    // Мысль удалена совсем: облачко — визуальный снапшот строки до её
+    // перечитывания, без действий. Клик — no-op, «мёртвое» контекстное меню не
+    // открывается (пачка 11, пункт 4 ТЗ 2026-11-21).
+    if (missingSubjects.has(subject.id)) {
+      hostEl.append(createThoughtCloud(input, { profile: 'chip', width: 'container' }));
+      return;
+    }
     const cloud = createThoughtCloud(input, {
       profile: 'chip',
       width: 'container',
@@ -2013,9 +2040,40 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     }, AUTO_REFRESH_DEBOUNCE_MS);
   }
 
+  /** Таймер тихого перечитывания по событию корзины (пачка 11). */
+  let trashReloadTimer: number | null = null;
+
+  /**
+   * Перечитать панель по событию корзины — НЕЗАВИСИМО от
+   * {@link TaskListViewOptions.autoRefreshOnCommentChange}: удаление и корзина
+   * меняют состав списка мгновенно для обеих панелей. Маркер «Обновить» и
+   * серость не поднимаются: пользователь не нажимал «Обновить», а строки просто
+   * исчезают/возвращаются. Дебаунс склеивает пачку событий каскада (удаление
+   * мысли уносит связи и комментарии).
+   */
+  function scheduleSilentReload(): void {
+    if (trashReloadTimer !== null) window.clearTimeout(trashReloadTimer);
+    trashReloadTimer = window.setTimeout(() => {
+      trashReloadTimer = null;
+      if (!disposed) void loadPanel();
+    }, AUTO_REFRESH_DEBOUNCE_MS);
+  }
+
   const unsubscribe = onRoutedRealtimeEvent((event) => {
     if (disposed) return;
     if (event.network_id !== store.state.networkId) return;
+    // Корзина: удаление/помещение/возврат владельца задачи или смена настройки
+    // «показывать содержимое корзины» меняют состав списка БЕЗ ревизии
+    // комментариев — панель перечитывает себя сама, без маркера «Обновить» и
+    // без серых строк (пачка 11, задача 173e8368).
+    if (isTrashVisibilityEvent(event)) {
+      // Совсем удалённая мысль: кэш субъекта устарел. Следующее перечитывание
+      // снова спросит `thoughts.get` и по `NOT_FOUND` выключит действия
+      // облачка — переход в мёртвую мысль не случится (пункт 4).
+      if (event.type === 'thought.deleted') subjectData.delete(`thought:${event.data.id}`);
+      scheduleSilentReload();
+      return;
+    }
     if (event.type === 'reminders.changed') {
       if (withReminders) {
         remindersChanged = true;
@@ -2123,6 +2181,10 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       if (autoRefreshTimer !== null) {
         window.clearTimeout(autoRefreshTimer);
         autoRefreshTimer = null;
+      }
+      if (trashReloadTimer !== null) {
+        window.clearTimeout(trashReloadTimer);
+        trashReloadTimer = null;
       }
       retryStop?.();
       retryStop = null;

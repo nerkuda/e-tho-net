@@ -115,6 +115,8 @@ import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
+import { onRoutedRealtimeEvent } from '../../lib/live/event-router.js';
+import { isTrashVisibilityEvent } from '../../lib/live/trash-events.js';
 import { matchesKeyPrefix, queryKeys } from '../../lib/live/query-keys.js';
 import {
   asRealtimeCause,
@@ -1025,6 +1027,16 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     chronicleFilterAdd: (thoughtId) => addThoughtToFilter(thoughtId),
   });
 
+  // Удаление мысли/связи, корзина и смена настройки «показывать содержимое
+  // корзины» меняют состав ленты, «связей дня» и маркеров календаря, не двигая
+  // ревизию комментариев (пачка 11, задача 173e8368). Перечитываем тем же
+  // путём, что инвалидация слоя: сохранение глубины, затем календарь и счётчики.
+  const trashUnsub = onRoutedRealtimeEvent((event) => {
+    if (host === null) return;
+    if (event.network_id !== store.state.networkId) return;
+    if (isTrashVisibilityEvent(event)) scheduleChronicleFeedRefresh();
+  });
+
   const unsubscribe = store.subscribe(() => {
     if (host === null || !host.isConnected) return;
     const networkId = store.state.networkId;
@@ -1073,6 +1085,7 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   return () => {
     unmountChronicleFilterPanel();
     unsubscribe();
+    trashUnsub();
     feedNav?.destroy();
     feedNav = null;
     tasksPanel?.destroy();

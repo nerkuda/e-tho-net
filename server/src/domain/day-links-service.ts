@@ -16,8 +16,11 @@
  *
  * Видимость строки — по видимости её комментария: `comments_v` отдаёт
  * победителя цепочки слоя, строка видима, когда её `layer_id` совпадает со слоем
- * победителя (`NULL` — основа). Постоянные комментарии помеченных на удаление
- * мысли/связи/публикации исключаются (то же правило, что у GET /tasks).
+ * победителя (`NULL` — основа). Правило видимости — общее с GET /tasks и
+ * маркерами календаря (`task-visibility.ts`): постоянные комментарии помеченных
+ * мысли/связи/публикации исключаются всегда, а при выключенной настройке
+ * «показывать содержимое корзины» — и остальные записи помеченных владельцев
+ * (пачка 11, задача 173e8368).
  *
  * Сутки наблюдателя сервер не считает (требование `fcdcd75f`): `from`/`to` —
  * календарные дни клиента `YYYY-MM-DD`, интервалы записей-источников отдаются
@@ -33,6 +36,7 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { taskRowVisibilitySql } from './task-visibility.js';
 
 /** Параметры выборки «связей дня». */
 export interface DayLinksOptions {
@@ -40,6 +44,12 @@ export interface DayLinksOptions {
   from: string;
   /** Последний день диапазона (`YYYY-MM-DD`); не задан — равен `from`. */
   to?: string;
+  /**
+   * Показывать содержимое корзины (per-user `show_trash`, по умолчанию `true`):
+   * при `false` date-ссылки помеченных на удаление владельцев не отдаются
+   * (пачка 11, задача 173e8368).
+   */
+  showTrash?: boolean;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -138,7 +148,7 @@ interface LinkRow {
  * «источник — назначение» (у ребра нет собственного названия). Неразрешимый
  * владелец деградирует до его id — блок не теряет строку.
  */
-function readLinks(ndb: NetworkDb, from: string, to: string): DayLink[] {
+function readLinks(ndb: NetworkDb, from: string, to: string, showTrash: boolean): DayLink[] {
   const rows = ndb
     .prepare(
       `SELECT d.date AS day,
@@ -175,15 +185,7 @@ function readLinks(ndb: NetworkDb, from: string, to: string): DayLink[] {
     LEFT JOIN thoughts_v dst_t ON dst_t.id = lv.target_id
         WHERE d.date BETWEEN ? AND ?
           AND tr.is_task = 0
-          AND NOT (c.kind = 'permanent' AND (
-              (c.owner_type = 'thought' AND EXISTS (
-                 SELECT 1 FROM thoughts_v t WHERE t.id = c.owner_id AND t.marked_for_deletion = 1))
-           OR (c.owner_type = 'link' AND EXISTS (
-                 SELECT 1 FROM links_v l WHERE l.id = c.owner_id AND l.marked_for_deletion = 1))
-           OR (c.owner_type = 'publication' AND EXISTS (
-                 SELECT 1 FROM publications_v p
-                  WHERE p.id = c.owner_id AND p.marked_for_deletion = 1))
-          ))
+          AND ${taskRowVisibilitySql('tr', 'c', showTrash)}
         ORDER BY d.date, COALESCE(d.time, '99:99'), c.valid_from, tr.comment_id, tr.line_no`,
     )
     .all(BASE_LAYER_ID, from, to) as LinkRow[];
@@ -235,6 +237,6 @@ export function listDayLinks(ndb: NetworkDb, options: DayLinksOptions): DayLinks
   const [start, end] = from <= to ? [from, to] : [to, from];
   return {
     facts: readFacts(ndb, start, end),
-    links: readLinks(ndb, start, end),
+    links: readLinks(ndb, start, end, options.showTrash !== false),
   };
 }

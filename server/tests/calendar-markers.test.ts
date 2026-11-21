@@ -134,13 +134,14 @@ function createComment(
 /** Маркеры месяца с часовым поясом теста по умолчанию. */
 function markers(
   ndb: NetworkDb,
-  extra: { today?: string; userId?: string } = {},
+  extra: { today?: string; userId?: string; showTrash?: boolean } = {},
 ): CalendarMarkersResult {
   return listCalendarMarkers(ndb, {
     ...MONTH,
     today: extra.today ?? '2026-11-05',
     userId: extra.userId ?? USER,
     nowMs: NOW_MS,
+    ...(extra.showTrash !== undefined ? { show_trash: extra.showTrash } : {}),
   });
 }
 
@@ -321,6 +322,32 @@ describe(
         createComment(ndb, 't-dead', '- [ ] Скрытая [[2026-11-03]]', { kind: 'permanent' });
 
         assert.deepEqual(markers(ndb).task_days, []);
+      } finally {
+        ndb.close();
+      }
+    });
+
+    it('show_trash = false скрывает задачи и date-ссылки записи помеченной мысли', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-dead', 'Удалённая мысль', { marked: true });
+        seedThought(ndb, 't-live', 'Живая мысль');
+        createComment(ndb, 't-dead', '- [ ] Скрытая [[2026-11-03]]');
+        createComment(ndb, 't-dead', 'Встреча из корзины [[2026-11-04]]');
+        createComment(ndb, 't-live', 'Живая встреча [[2026-11-04]]');
+        createComment(ndb, 't-live', '- [ ] Живая [[2026-11-03]]');
+
+        const withTrash = markers(ndb);
+        assert.deepEqual(withTrash.task_days, ['2026-11-03']);
+        assert.deepEqual(withTrash.task_day_counts, { '2026-11-03': 2 });
+        assert.deepEqual(withTrash.fact_days, ['2026-11-04']);
+        assert.deepEqual(withTrash.fact_day_counts, { '2026-11-04': 2 });
+
+        const hidden = markers(ndb, { showTrash: false });
+        assert.deepEqual(hidden.task_days, ['2026-11-03']);
+        assert.deepEqual(hidden.task_day_counts, { '2026-11-03': 1 }, 'осталась живая задача');
+        assert.deepEqual(hidden.fact_days, ['2026-11-04']);
+        assert.deepEqual(hidden.fact_day_counts, { '2026-11-04': 1 }, 'осталась живая ссылка');
       } finally {
         ndb.close();
       }

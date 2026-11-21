@@ -98,6 +98,7 @@ import {
 } from './property-service.js';
 import { reminderNextAtBySubject } from './reminder-service.js';
 import { nameTrigramMatch } from './search-service.js';
+import { taskRowVisibilitySql } from './task-visibility.js';
 import { REF_COLUMNS, rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause, listTypeNodes } from './type-hierarchy.js';
 import { resolveGlobalDateTokens, scanStringForTokens, type TokenIssue } from './thought-type-view-tokens.js';
@@ -2238,6 +2239,14 @@ export interface AstExecContextOptions {
    * (`POST /thoughts/query`, требование b363cad1) опцию не ставит.
    */
   keywordCommentIncludesLinkComments?: boolean;
+  /**
+   * Показывать содержимое корзины (0.16.1, пачка 11, задача 173e8368). Лист
+   * «Есть задачи» считает живые задачи так же, как панель «Задачи»: при `false`
+   * задачи, адресованные помеченной мысли, и записи помеченных владельцев не
+   * дают мысли признака «есть задачи». По умолчанию `true` (настройка
+   * запросившего резолвится фасадом — REST/MCP).
+   */
+  showTrash?: boolean;
 }
 
 /** Опции исполнения AST-листьев: контекст токенов и коллектор неразрешимых. */
@@ -2542,7 +2551,9 @@ function filterAstLeafClause(
 
     // Задачи и напоминания мысли (0.16.1, задача 4cfc6257, требование daf152d8).
     case 'tasks':
-      return boolPresenceClause(TASKS_LEAF_EXISTS_SQL, leaf, path, requestId, [BASE_LAYER_ID]);
+      return boolPresenceClause(tasksLeafExistsSql(astOpts?.showTrash !== false), leaf, path, requestId, [
+        BASE_LAYER_ID,
+      ]);
     case 'reminders':
       return boolPresenceClause(REMINDERS_LEAF_EXISTS_SQL, leaf, path, requestId, [
         astRequesterId(astOpts),
@@ -2937,14 +2948,16 @@ function astRequesterId(astOpts: AstExecOptions | undefined): string {
  * Подзапрос существования НЕЗАКРЫТОЙ субъектной задачи мысли (0.16.1, задача
  * 4cfc6257): строка проекции `task_rows` (`is_task = 1`, `done = 0`), у которой
  * мысль — субъект (`task_row_subjects`), а комментарий-источник ВИДИМ в текущем
- * контексте слоя. Видимость строки проекции — та же, что в панели «Задачи»
- * (`task-service.ts`, `buildFilter`): строка живёт вместе с редакцией своего
- * комментария, `layer_id = NULL` — основа, иначе слой победившей редакции.
- * Постоянные комментарии помеченных на удаление владельцев (мысль/связь/
- * публикация) не дают задач нигде — тот же запрет, что в панели (ТП f326e6c0,
- * уточнение 4; `task-service.ts`, `buildFilter`).
+ * контексте слоя. Видимость строки проекции — тот же единый предикат, что у
+ * панели «Задачи», «Связей дня» и маркеров календаря (`task-visibility.ts`):
+ * строка живёт вместе с редакцией своего комментария, `layer_id = NULL` — основа,
+ * иначе слой победившей редакции; постоянные комментарии помеченных владельцев
+ * не дают задач нигде, а при выключенной настройке корзины скрываются и прочие
+ * записи помеченных владельцев и строки, адресованные помеченной мысли (пачка 11,
+ * задача 173e8368).
  */
-const TASKS_LEAF_EXISTS_SQL = `EXISTS (
+function tasksLeafExistsSql(showTrash: boolean): string {
+  return `EXISTS (
   SELECT 1 FROM task_row_subjects s
     JOIN task_rows tr
       ON tr.comment_id = s.comment_id
@@ -2954,14 +2967,8 @@ const TASKS_LEAF_EXISTS_SQL = `EXISTS (
       ON v.id = tr.comment_id
      AND ((tr.layer_id IS NULL AND v.layer_id = ?) OR tr.layer_id = v.layer_id)
    WHERE s.thought_id = t.id AND tr.is_task = 1 AND tr.done = 0
-     AND NOT (v.kind = 'permanent' AND (
-       (v.owner_type = 'thought' AND EXISTS (
-          SELECT 1 FROM thoughts_v o WHERE o.id = v.owner_id AND o.marked_for_deletion = 1))
-       OR (v.owner_type = 'link' AND EXISTS (
-          SELECT 1 FROM links_v o WHERE o.id = v.owner_id AND o.marked_for_deletion = 1))
-       OR (v.owner_type = 'publication' AND EXISTS (
-          SELECT 1 FROM publications_v o WHERE o.id = v.owner_id AND o.marked_for_deletion = 1))
-       )))`;
+     AND ${taskRowVisibilitySql('tr', 'v', showTrash)})`;
+}
 
 /**
  * Подзапрос существования АКТИВНОГО напоминания ЗАПРОСИВШЕГО на мысль
@@ -4149,6 +4156,7 @@ function buildQuery(
   if (astContext?.keywordCommentIncludesLinkComments === true) {
     astOpts.keywordCommentIncludesLinkComments = true;
   }
+  if (astContext?.showTrash === false) astOpts.showTrash = false;
   if (collectStats === true) {
     astOpts.stats = { conditions: 0, nodes_walked: 0, hierarchy_calls: 0, limits_hit: new Set() };
   }
@@ -4202,7 +4210,19 @@ export function queryThoughts(
 ): ThoughtQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
   const startedAt = opts.collectStats === true ? performance.now() : 0;
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
+  const built = buildQuery(
+    ndb,
+    userId,
+    req,
+    emptyFilterMode,
+    undefined,
+    opts.tokenContext,
+    opts.collectStats === true,
+    opts.profile,
+    // Видимость корзины в листе «Есть задачи» — та же настройка, что у панели
+    // «Задачи» (пачка 11, задача 173e8368).
+    opts.showTrash === false ? { showTrash: false } : undefined,
+  );
   // Неразрешимый токен AST — пустой результат с пояснением, а не молчаливая
   // потеря условия (требование b7fdab20).
   if (built.unresolved.length > 0) {
@@ -4324,7 +4344,19 @@ export function queryThoughtIds(
 ): ThoughtIdsQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
   const startedAt = opts.collectStats === true ? performance.now() : 0;
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
+  const built = buildQuery(
+    ndb,
+    userId,
+    req,
+    emptyFilterMode,
+    undefined,
+    opts.tokenContext,
+    opts.collectStats === true,
+    opts.profile,
+    // Видимость корзины в листе «Есть задачи» — та же настройка, что у панели
+    // «Задачи» (пачка 11, задача 173e8368).
+    opts.showTrash === false ? { showTrash: false } : undefined,
+  );
   if (built.unresolved.length > 0) {
     return {
       ids: [],

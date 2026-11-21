@@ -69,6 +69,7 @@ import {
   taskRowContext,
   type ProjectionRow,
 } from './task-projection.js';
+import { taskRowVisibilitySql } from './task-visibility.js';
 
 /** Предел страницы GET /tasks (как у остальных постраничных выборок). */
 export const TASKS_MAX_LIMIT = 200;
@@ -94,6 +95,12 @@ export interface TaskListOptions {
    * порядку строк комментария.
    */
   includeNested?: boolean;
+  /**
+   * Показывать ли содержимое корзины (per-user `show_trash`, по умолчанию
+   * `true`). `false` — строки записей помеченных сущностей и строки-задачи,
+   * адресованные помеченной мысли, не отдаются (пачка 11, задача 173e8368).
+   */
+  showTrash?: boolean;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -194,6 +201,8 @@ interface RowFilter {
   thoughtId?: string;
   commentId?: string;
   today?: string;
+  /** Показывать содержимое корзины (по умолчанию `true`). */
+  showTrash?: boolean;
 }
 
 interface FilterSql {
@@ -264,17 +273,7 @@ function buildFilter(filter: RowFilter): FilterSql {
     params.push(filter.thoughtId);
   }
 
-  where.push(
-    `NOT (v.kind = 'permanent' AND (
-        (v.owner_type = 'thought' AND EXISTS (
-           SELECT 1 FROM thoughts_v t WHERE t.id = v.owner_id AND t.marked_for_deletion = 1))
-     OR (v.owner_type = 'link' AND EXISTS (
-           SELECT 1 FROM links_v l WHERE l.id = v.owner_id AND l.marked_for_deletion = 1))
-     OR (v.owner_type = 'publication' AND EXISTS (
-           SELECT 1 FROM publications_v p WHERE p.id = v.owner_id AND p.marked_for_deletion = 1))
-     ))`,
-  );
-
+  where.push(taskRowVisibilitySql('tr', 'v', filter.showTrash !== false));
   return {
     from: `FROM task_rows tr
            JOIN (SELECT c.id, c.layer_id, c.version, c.kind, c.owner_type, c.owner_id
@@ -517,6 +516,7 @@ export function listTasks(ndb: NetworkDb, options: TaskListOptions = {}): TaskLi
     ...(options.thoughtId !== undefined ? { thoughtId: options.thoughtId } : {}),
     ...(options.commentId !== undefined ? { commentId: options.commentId } : {}),
     ...(options.today !== undefined ? { today: options.today } : {}),
+    ...(options.showTrash !== undefined ? { showTrash: options.showTrash } : {}),
   });
   const limit = Math.min(Math.max(options.limit ?? TASKS_DEFAULT_LIMIT, 1), TASKS_MAX_LIMIT);
 

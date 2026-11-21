@@ -44,7 +44,14 @@ import {
 } from '../../domain/response-projection.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
-import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool, showInactiveFor } from '../context.js';
+import {
+  hasNetworkAccess,
+  mcpLayerClientId,
+  openMemberNetwork,
+  runTool,
+  showInactiveFor,
+  showTrashFor,
+} from '../context.js';
 import { mcpTokenContext } from './token-context.js';
 import {
   fanOutFindDuplicates,
@@ -400,6 +407,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             // Токены AST разрешаются в контексте КАЖДОЙ сети (первый день
             // недели у сети свой) — паритет с REST (`tokenContextFor`).
             tokenContextFor: (nid) => mcpTokenContext(rt, nid),
+            // Настройка корзины — per-user и per-network: фабрика по сети.
+            showTrashFor: (nid) => showTrashFor(rt, nid),
           });
           // O10: count reads per network.
           for (const net of access.networks) {
@@ -510,6 +519,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             tokenContext: mcpTokenContext(rt, args.network_id as string),
             // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
             profile: 'thoughts',
+            // Лист «Есть задачи» считает задачи по настройке корзины
+            // запросившего (0.16.1, пачка 11, задача 173e8368).
+            showTrash: showTrashFor(rt, args.network_id as string),
           },
         );
         // O10: count every hit in the structured query.
@@ -597,6 +609,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             ? getThoughtDealsMeta(ndb, args.thought_id, {
                 userId: rt.deps.auth.userId,
                 showInactive: showInactiveFor(rt, args.network_id),
+                showTrash: showTrashFor(rt, args.network_id),
               })
             : null;
         const view: McpViewMode = args.view ?? 'compact';
@@ -705,6 +718,7 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
                   ...getThoughtDealsMeta(ndb, card.id, {
                     userId: rt.deps.auth.userId,
                     showInactive: showInactiveFor(rt, args.network_id),
+                    showTrash: showTrashFor(rt, args.network_id),
                   }),
                 },
               }))

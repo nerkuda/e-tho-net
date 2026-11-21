@@ -20,7 +20,13 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import type { TaskMassAction, TaskOpResult, TaskPatchResult } from '@etn/shared';
 
 import { sendSuccess } from '../http/responses.js';
-import { openRouteNetworkDb, restWriteFx, runWrite, type RouteDeps } from './helpers.js';
+import {
+  openRouteNetworkDb,
+  resolveShowTrash,
+  restWriteFx,
+  runWrite,
+  type RouteDeps,
+} from './helpers.js';
 import { listTasksAsync } from '../domain/heavy-read.js';
 import { applyTaskMassCommand, applyTaskOps, type TaskOpInput } from '../domain/task-service.js';
 import { parseRest, RestTaskList, RestTaskPatch } from '../contracts.js';
@@ -47,6 +53,9 @@ export function createTasksRoutes(deps: RouteDeps): FastifyPluginAsync {
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
           ...(input.count !== undefined ? { count: input.count } : {}),
           ...(input.include_nested !== undefined ? { includeNested: input.include_nested } : {}),
+          // Содержимое корзины — per-user настройка (`show_trash`), явный
+          // query-параметр имеет приоритет (пачка 11, задача 173e8368).
+          showTrash: resolveShowTrash(app, req.auth!.user.id, input.network_id, input.show_trash),
         });
         sendSuccess(reply, page, { request_id: req.id });
       },

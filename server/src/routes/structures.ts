@@ -233,6 +233,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             // Токены AST в веерном режиме разрешаются по реестру КАЖДОЙ сети
             // (свой первый день недели) — фабрика берёт networkId.
             tokenContextFor: (nid) => restTokenContext(app, req.auth!.user.id, nid),
+            // Настройка корзины — per-user и per-network: фабрика по сети.
+            showTrashFor: (nid) =>
+              resolveShowTrash(app, req.auth!.user.id, nid, query.show_trash),
           });
           // Fan-out возвращает упрощённые хиты (id/title/type_id/active/depth).
           // Этого хватает для веерного режима — карточка читается через
@@ -288,6 +291,9 @@ export function createStructuresRoutes(deps: RouteDeps): FastifyPluginAsync {
             tokenContext,
             collectStats: app.fileLog.enabled,
             profile: 'thoughts',
+            // Видимость корзины в листе «Есть задачи» — та же настройка, что у
+            // основного пути (пачка 11, задача 173e8368).
+            showTrash: resolveShowTrash(app, req.auth!.user.id, networkId, query.show_trash),
           });
           logFilterStats(app.fileLog, networkId, 'rest.ids_only', result.stats);
           sendSuccess(reply, {

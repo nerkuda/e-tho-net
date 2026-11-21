@@ -124,6 +124,7 @@ const { resetEventRouter, routeRealtimeEvent } =
 /** Смонтировать панель редактора мысли (headless) и вернуть хэндл. */
 async function mount(
   autoRefresh: boolean,
+  actions: Record<string, unknown> = {},
 ): Promise<{ handle: any; host: ShimElement; destroy: () => void }> {
   store.update({ networkId: 'n1', network: { first_day_of_week: 1 } } as any);
   const host = new ShimElement('div');
@@ -136,7 +137,7 @@ async function mount(
         node.textContent = row.text;
       },
     },
-    actions: {},
+    actions,
   });
   await flush();
   return { handle, host, destroy: () => handle.destroy() };
@@ -267,6 +268,128 @@ describe('панель задач: перечитывание патчит то�
       true,
       'панель «Дневника» работает штатным маркером «Обновить»',
     );
+    destroy();
+  });
+});
+
+/** Событие «корзина/удаление» через реальный маршрутизатор. */
+function trashEvent(seq: number, type: string, data: Record<string, unknown>): void {
+  routeRealtimeEvent({ type, network_id: 'n1', seq, data } as any);
+}
+
+describe('панель задач: корзина и удаление мысли (пачка 11, задача 173e8368)', () => {
+  it('удаление мысли перечитывает панель БЕЗ маркера «Обновить» (обе панели)', async () => {
+    const api = shim([taskRow(0)]);
+    const { handle, host, destroy } = await mount(false);
+    const initial = api.listCalls();
+    const row = rowsOf(host)[0]!;
+
+    trashEvent(1, 'thought.deleted', { id: 't1' });
+    await flush();
+    assert.equal(
+      row.classList.contains('is-stale'),
+      false,
+      'строка не сереет: строки просто исчезают по перечитыванию',
+    );
+    assert.equal(
+      refreshButton(handle).classList.contains('is-stale'),
+      false,
+      '«Обновить» не зажигается — пользователь ничего не нажимал',
+    );
+
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 1, 'событие дало ровно одно перечитывание');
+    destroy();
+  });
+
+  it('помещение в корзину и возврат перечитывают панель так же тихо', async () => {
+    const api = shim([taskRow(0)]);
+    const { handle, destroy } = await mount(false);
+    const initial = api.listCalls();
+
+    trashEvent(1, 'thought.updated', {
+      id: 't1',
+      version: 2,
+      changes: { marked_for_deletion: true },
+    });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 1, 'корзина — перечитывание');
+    assert.equal(refreshButton(handle).classList.contains('is-stale'), false);
+
+    trashEvent(2, 'thought.updated', {
+      id: 't1',
+      version: 3,
+      changes: { marked_for_deletion: false },
+    });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 2, 'возврат из корзины — перечитывание');
+
+    // Смена самой настройки «показывать содержимое корзины» — тоже перечитывание.
+    trashEvent(3, 'user-preference.updated', { key: 'show_trash', value: false });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 3);
+    destroy();
+  });
+
+  it('каскад событий удаления склеивается в один перезапрос', async () => {
+    const api = shim([taskRow(0)]);
+    const { destroy } = await mount(true);
+    const initial = api.listCalls();
+    trashEvent(1, 'thought.deleted', { id: 't1' });
+    trashEvent(2, 'link.deleted', { id: 'l1' });
+    trashEvent(3, 'publication.trashed', { id: 'p1' });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 1, 'дебаунс склеил каскад');
+    destroy();
+  });
+
+  it('правка без marked_for_deletion панель по корзине не перечитывает', async () => {
+    const api = shim([taskRow(0)]);
+    const { destroy } = await mount(false);
+    const initial = api.listCalls();
+    trashEvent(1, 'thought.updated', { id: 't1', version: 2, changes: { title: 'Новое' } });
+    await wait(250);
+    assert.equal(api.listCalls(), initial, 'смена названия — не событие корзины');
+    destroy();
+  });
+});
+
+describe('панель задач: облачко удалённой мысли (пачка 11, пункт 4)', () => {
+  /** Переопределить `thoughts.get`: удалённая мысль отвечает `NOT_FOUND`. */
+  function thoughtsGet(deadId: string): void {
+    const stub = (globalThis as any).window.etn;
+    stub.thoughts.get = async (_networkId: string, id: string) => {
+      if (id === deadId) throw { code: 'NOT_FOUND' };
+      return { id, title: id };
+    };
+  }
+
+  it('клик по облачку удалённой мысли — no-op, действий у облачка нет', async () => {
+    const opened: unknown[] = [];
+    shim([taskRow(0, { subject_thoughts: ['dead'] })]);
+    thoughtsGet('dead');
+    const { host, destroy } = await mount(false, { openSubject: (s: unknown) => opened.push(s) });
+
+    const chips = host.querySelectorAll('[data-id="dead"]') as unknown as ShimElement[];
+    assert.equal(chips.length, 1, 'облачко субъекта отрисовано');
+    const chip = chips[0]!;
+    assert.equal(chip.hasListeners(), false, 'жестов у мёртвого облачка нет');
+
+    chip.click();
+    await wait(300);
+    assert.deepEqual(opened, [], 'переход в удалённую мысль не выполняется');
+    destroy();
+  });
+
+  it('облачко живой мысли действия сохраняет', async () => {
+    const opened: unknown[] = [];
+    shim([taskRow(0, { subject_thoughts: ['live'] })]);
+    thoughtsGet('dead');
+    const { host, destroy } = await mount(false, { openSubject: (s: unknown) => opened.push(s) });
+
+    const chips = host.querySelectorAll('[data-id="live"]') as unknown as ShimElement[];
+    assert.equal(chips.length, 1, 'облачко живого субъекта отрисовано');
+    assert.equal(chips[0]!.hasListeners(), true, 'у живой мысли жесты есть');
     destroy();
   });
 });

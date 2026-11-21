@@ -28,8 +28,10 @@
  *
  * Видимость задач и date-ссылок — как у GET /tasks и «Связей дня»: строка
  * видима, когда её `layer_id` совпадает со слоем победителя `comments_v`
- * (`NULL` — основа); строки постоянных комментариев сущностей, помеченных на
- * удаление, исключены.
+ * (`NULL` — основа). Правило одно на все чтения (`task-visibility.ts`):
+ * постоянные комментарии помеченных на удаление сущностей исключены всегда, а
+ * при выключенной настройке «показывать содержимое корзины» — и остальные
+ * записи помеченных владельцев (пачка 11, задача 173e8368).
  */
 
 import {
@@ -42,6 +44,7 @@ import {
 import type { NetworkDb } from '../db/network-db.js';
 import { normaliseInstant } from './dates.js';
 import { listReminders } from './reminder-service.js';
+import { taskRowVisibilitySql, trashContentSql } from './task-visibility.js';
 
 /** Параметры выборки маркеров месяца. */
 export interface CalendarMarkersOptions {
@@ -55,6 +58,12 @@ export interface CalendarMarkersOptions {
   userId?: string;
   /** Настройка сети «Показывать неактуальные мысли и связи». */
   show_inactive?: boolean;
+  /**
+   * Показывать содержимое корзины (per-user `show_trash`, по умолчанию `true`):
+   * при `false` записи/задачи помеченных на удаление владельцев в маркерах не
+   * учитываются (пачка 11, задача 173e8368).
+   */
+  show_trash?: boolean;
   /** Часы исполнения раскрытия серий (тесты и детерминизм). */
   nowMs?: number;
 }
@@ -81,10 +90,10 @@ function shiftDay(value: string, days: number): string {
 }
 
 /**
- * Предикат видимости строки проекции и исключение постоянных комментариев
- * помеченных на удаление сущностей — ТЕ ЖЕ правила, что у GET /tasks
- * (`buildFilter` в `task-service.ts`) и «Связей дня»: один смысл видимости на
- * все чтения проекции.
+ * Предикат видимости строки проекции — ТЕ ЖЕ правила, что у GET /tasks и
+ * «Связей дня»: один смысл видимости на все чтения проекции (`task-visibility.ts`,
+ * `taskRowVisibilitySql`). Настройка корзины (`show_trash`) учитывается тем же
+ * предикатом — отдельной копии SQL здесь нет.
  */
 const VISIBLE_ROWS = `FROM task_rows tr
        JOIN (SELECT c.id, c.layer_id, c.kind, c.owner_type, c.owner_id
@@ -92,28 +101,12 @@ const VISIBLE_ROWS = `FROM task_rows tr
          ON v.id = tr.comment_id
         AND ((tr.layer_id IS NULL AND v.layer_id = ?) OR tr.layer_id = v.layer_id)`;
 
-/**
- * Исключение строк постоянных комментариев сущностей, помеченных на удаление —
- * ТО ЖЕ правило, что у GET /tasks (`buildFilter` в `task-service.ts`) и
- * «Связей дня». `alias` — псевдоним выборки `comments_v` в запросе.
- */
-function markedOwnerExclusion(alias: string): string {
-  return `NOT (${alias}.kind = 'permanent' AND (
-        (${alias}.owner_type = 'thought' AND EXISTS (
-           SELECT 1 FROM thoughts_v t WHERE t.id = ${alias}.owner_id AND t.marked_for_deletion = 1))
-     OR (${alias}.owner_type = 'link' AND EXISTS (
-           SELECT 1 FROM links_v l WHERE l.id = ${alias}.owner_id AND l.marked_for_deletion = 1))
-     OR (${alias}.owner_type = 'publication' AND EXISTS (
-           SELECT 1 FROM publications_v p
-            WHERE p.id = ${alias}.owner_id AND p.marked_for_deletion = 1))
-     ))`;
-}
-
 /** Интервалы хроно-записей, пересёкших поисковое окно. */
 function readRecordSpans(
   ndb: NetworkDb,
   fromInstant: string,
   toInstant: string,
+  showTrash: boolean,
 ): CalendarRecordSpan[] {
   const rows = ndb
     .prepare(
@@ -122,6 +115,7 @@ function readRecordSpans(
         WHERE c.kind = 'chronological'
           AND c.valid_from <= ?
           AND (c.valid_to IS NULL OR c.valid_to >= ?)
+          AND ${trashContentSql('c', showTrash)}
         ORDER BY c.valid_from, c.valid_to`,
     )
     .all(toInstant, fromInstant) as Array<{ from_instant: string; to_instant: string | null }>;
@@ -147,7 +141,12 @@ function coverDays(periodFrom: string, periodTo: string, from: string, to: strin
  * сколько задач покрывает каждый день. Дни — все даты периода, включая
  * выполненные задачи; карта же даёт и состав дней (`task_days`).
  */
-function readTaskDayCounts(ndb: NetworkDb, from: string, to: string): Record<string, number> {
+function readTaskDayCounts(
+  ndb: NetworkDb,
+  from: string,
+  to: string,
+  showTrash: boolean,
+): Record<string, number> {
   const rows = ndb
     .prepare(
       `SELECT tr.period_from AS period_from, tr.period_to AS period_to
@@ -157,7 +156,7 @@ function readTaskDayCounts(ndb: NetworkDb, from: string, to: string): Record<str
           AND tr.period_to IS NOT NULL
           AND tr.period_to >= ?
           AND tr.period_from <= ?
-          AND ${markedOwnerExclusion('v')}`,
+          AND ${taskRowVisibilitySql('tr', 'v', showTrash)}`,
     )
     .all(BASE_LAYER_ID, from, to) as Array<{ period_from: string; period_to: string }>;
   const counts: Record<string, number> = {};
@@ -175,6 +174,7 @@ function readOverdueDayCounts(
   from: string,
   to: string,
   today: string,
+  showTrash: boolean,
 ): Record<string, number> {
   const rows = ndb
     .prepare(
@@ -185,7 +185,7 @@ function readOverdueDayCounts(
           AND tr.due IS NOT NULL
           AND tr.due < ?
           AND tr.due BETWEEN ? AND ?
-          AND ${markedOwnerExclusion('v')}
+          AND ${taskRowVisibilitySql('tr', 'v', showTrash)}
         GROUP BY tr.due
         ORDER BY tr.due`,
     )
@@ -201,7 +201,12 @@ function readOverdueDayCounts(
  * Строки-задачи сюда не входят: их даты показывает маркер «задачи и
  * напоминания».
  */
-function readFactDayCounts(ndb: NetworkDb, from: string, to: string): Record<string, number> {
+function readFactDayCounts(
+  ndb: NetworkDb,
+  from: string,
+  to: string,
+  showTrash: boolean,
+): Record<string, number> {
   const counts: Record<string, number> = {};
   const add = (day: string, value: number): void => {
     counts[day] = (counts[day] ?? 0) + value;
@@ -236,7 +241,7 @@ function readFactDayCounts(ndb: NetworkDb, from: string, to: string): Record<str
           AND ((tr.layer_id IS NULL AND c.layer_id = ?) OR tr.layer_id = c.layer_id)
         WHERE d.date BETWEEN ? AND ?
           AND tr.is_task = 0
-          AND ${markedOwnerExclusion('c')}
+          AND ${taskRowVisibilitySql('tr', 'c', showTrash)}
         GROUP BY d.date`,
     )
     .all(BASE_LAYER_ID, from, to) as Array<{ day: string; rows_count: number }>;
@@ -293,12 +298,13 @@ export function listCalendarMarkers(
   // Счётчики по дням — серверный агрегат для попапа даты (0.16.1, уточнение
   // 2026-11-19, пункт 7). Состав дней (`*_days`) — ключи этих карт: второй
   // правды о том, какие дни отмечены, нет.
-  const taskDayCounts = readTaskDayCounts(ndb, start, end);
-  const overdueDayCounts = readOverdueDayCounts(ndb, start, end, today);
-  const factDayCounts = readFactDayCounts(ndb, start, end);
+  const showTrash = options.show_trash !== false;
+  const taskDayCounts = readTaskDayCounts(ndb, start, end, showTrash);
+  const overdueDayCounts = readOverdueDayCounts(ndb, start, end, today, showTrash);
+  const factDayCounts = readFactDayCounts(ndb, start, end, showTrash);
 
   return {
-    record_spans: readRecordSpans(ndb, fromInstant, toInstant),
+    record_spans: readRecordSpans(ndb, fromInstant, toInstant, showTrash),
     task_days: Object.keys(taskDayCounts).sort(),
     task_day_counts: taskDayCounts,
     overdue_days: Object.keys(overdueDayCounts).sort(),

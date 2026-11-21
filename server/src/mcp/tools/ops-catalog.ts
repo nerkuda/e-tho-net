@@ -1273,6 +1273,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
         name: 'include_nested',
         desc: '`true` - also read the lines of nested checklists of a row (`parent_task`/`subtask`); default `false`',
       },
+      {
+        name: 'show_trash',
+        desc: "`false` - hide the recycle bin content: rows of records owned by trashed entities and rows addressed to a trashed thought; omitted - the caller's `show_trash` preference (default `true`)",
+      },
     ],
     destructive: false,
     readOnly: true,
@@ -1282,7 +1286,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
       '`due`/`period_from`/`period_to` (`YYYY-MM-DD`), `auto_period` (the period comes from the record, not from ' +
       'the line), `done`, `subject_thoughts`, `subject_state`, ' +
       '`parent_task`/`subtask`, `revision`/`parsed_revision` and the source owner (`owner_type`/`owner_id`/`kind`). ' +
-      'Rows of permanent comments of entities marked for deletion are hidden; `max_revision` is the network ' +
+      'Rows of permanent comments of entities marked for deletion are hidden; `show_trash: false` also hides ' +
+      'rows of records owned by trashed entities and rows addressed to a trashed thought. `max_revision` is the network ' +
       'projection marker (the client compares it and shows "Refresh").',
     errors:
       '`VALIDATION_ERROR` - a bad date, an invalid keyset cursor; `BAD_REQUEST` - `scope: overdue` without `today` ' +

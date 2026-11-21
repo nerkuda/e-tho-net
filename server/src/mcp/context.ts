@@ -134,7 +134,10 @@ export function resolveRuntimeLayer(rt: McpRuntime, networkId: string): LayerEch
  * и `currentNetworkId` для запрета адреса собственной сети. `clientId` — синтетический
  * MCP-идентификатор сессии, target-сеть открывается в слое вызывающего.
  */
-export function mcpCrossNetworkAccess(rt: McpRuntime, networkId: string): CrossNetworkAccessContext {
+export function mcpCrossNetworkAccess(
+  rt: McpRuntime,
+  networkId: string,
+): CrossNetworkAccessContext {
   return {
     dataDir: rt.deps.dataDir,
     userId: rt.deps.auth.userId,
@@ -197,6 +200,21 @@ export function showInactiveFor(rt: McpRuntime, networkId: string): boolean {
     PREF_KEY.SHOW_INACTIVE,
   );
   return pref?.value === true;
+}
+
+/**
+ * Настройка «Показывать содержимое корзины» у владельца ключа (0.16.1, пачка 11,
+ * задача 173e8368): `false` — записи помеченных сущностей и задачи, адресованные
+ * помеченной мысли, не отдаются. Единая точка для MCP-фасадов, спрашивающих ту
+ * же видимость, что REST (`resolveShowTrash`). По умолчанию — да.
+ */
+export function showTrashFor(rt: McpRuntime, networkId: string): boolean {
+  const pref = rt.deps.systemDb.getNetworkPreference(
+    rt.deps.auth.userId,
+    networkId,
+    PREF_KEY.SHOW_TRASH,
+  );
+  return pref?.value !== false;
 }
 
 /** Consume one write-budget slot, raising `RATE_LIMITED` when exhausted (F6). */

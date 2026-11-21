@@ -46,6 +46,7 @@ import {
   openRouteNetworkDb,
   requestBody,
   restTokenContext,
+  resolveShowTrash,
   restWriteFx,
   runWrite,
   type RouteDeps,
@@ -556,6 +557,8 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
           // Контекст разрешения токенов AST (обязательный пункт задачи c13762b1):
           // часы/пользователь/первый день недели сети/профиль времени.
           tokenContext: restTokenContext(app, req.auth!.user.id, networkId),
+          // Видимость корзины в листе «Есть задачи» (0.16.1, пачка 11).
+          showTrash: resolveShowTrash(app, req.auth!.user.id, networkId),
           // Статистика — только при включённом журналировании (0f34a5ff).
           collectStats: app.fileLog.enabled,
         });
@@ -676,6 +679,8 @@ export function createThoughtTypeViewsRoutes(deps: RouteDeps): FastifyPluginAsyn
             offset,
             // Контекст разрешения токенов AST (как у `:view/run`).
             tokenContext: restTokenContext(app, req.auth!.user.id, networkId),
+            // Видимость корзины в листе «Есть задачи» (0.16.1, пачка 11).
+            showTrash: resolveShowTrash(app, req.auth!.user.id, networkId),
             // Статистика — только при включённом журналировании (0f34a5ff);
             // строка источника — своя (`rest.view_run_ast`).
             collectStats: app.fileLog.enabled,

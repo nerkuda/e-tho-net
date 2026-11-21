@@ -36,6 +36,12 @@ export interface ThoughtDealsMetaOptions {
   userId: string;
   /** Настройка сети «Показывать неактуальные мысли и связи» владельца. */
   showInactive: boolean;
+  /**
+   * Настройка владельца «Показывать содержимое корзины» (0.16.1, пачка 11,
+   * задача 173e8368): `false` — задачи мысли-субъекта из корзины в карточку не
+   * попадают, как и в списке `tasks.list`.
+   */
+  showTrash: boolean;
 }
 
 /** Блоки «Открытые дела» + напоминания карточки мысли. */
@@ -50,12 +56,13 @@ export interface ThoughtDealsMeta {
  * слоя, задачи постоянных комментариев помеченных на удаление сущностей не
  * возвращаются (`buildFilter`).
  */
-function openTasksOf(ndb: NetworkDb, thoughtId: string): ThoughtOpenTasksMeta {
+function openTasksOf(ndb: NetworkDb, thoughtId: string, showTrash: boolean): ThoughtOpenTasksMeta {
   const page = listTasks(ndb, {
     scope: 'open',
     thoughtId,
     limit: THOUGHT_META_TASKS_LIMIT,
     count: true,
+    showTrash,
   });
   const items: ThoughtOpenTaskItem[] = page.items.map((task) => ({
     comment_id: task.comment_id,
@@ -115,7 +122,7 @@ export function getThoughtDealsMeta(
   options: ThoughtDealsMetaOptions,
 ): ThoughtDealsMeta {
   return {
-    open_tasks: openTasksOf(ndb, thoughtId),
+    open_tasks: openTasksOf(ndb, thoughtId, options.showTrash),
     reminders: remindersOf(ndb, thoughtId, options),
   };
 }
