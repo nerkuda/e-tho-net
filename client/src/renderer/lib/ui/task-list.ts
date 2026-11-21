@@ -614,6 +614,10 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       if (!disposed && seq === loadSeq) {
         loading = false;
         renderView();
+        // Открытый список «Ещё связанные мысли» — статичный снимок облачков:
+        // после перечитывания перерисовываем его пункты из свежего кэша
+        // (доработка по вердикту 35656dfb). Меню закрыто — no-op.
+        panel.refreshSubjectMenus();
       }
     }
   }
@@ -2175,7 +2179,11 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     if (isThoughtVisualEvent(event)) {
       const data = event.data as { id: string };
       if (!subjectData.has(`thought:${data.id}`)) return;
-      subjectData.delete(`thought:${data.id}`);
+      // Кэш субъекта НЕ сбрасываем (доработка по вердикту 35656dfb): пока идёт
+      // тихое перечитывание, строка обязана показывать ПРЕЖНИЙ вид облачка.
+      // Удаление записи роняло облачко в фолбэк «(недоступна)» на время
+      // `loading`-отрисовки — выглядело как потерянная мысль. Новый канон
+      // перезапишет запись в `resolveSubjects` без промежуточного состояния.
       scheduleSilentReload();
       return;
     }

@@ -467,6 +467,12 @@ export interface TaskPanelHandle {
   headActions(): HTMLElement[];
   /** Снять слушателей и навигацию. */
   destroy(): void;
+  /**
+   * Перерисовать облачка открытого списка «Ещё связанные мысли» из текущего
+   * кэша субъектов (смена визуала мысли при открытом меню). Меню закрыто —
+   * no-op.
+   */
+  refreshSubjectMenus(): void;
   /** Свёрнута ли вся панель (пункт B: слайдер высоты доступен только развёрнутой). */
   panelCollapsed(): boolean;
   /** Высота панели по умолчанию (запись `ui_state`), `null` — не задана. */
@@ -567,6 +573,12 @@ export function mountTaskPanel(
    * живёт в компоненте и переживает перерисовку панели (в `ui_state` не пишется).
    */
   const expandedChildren = new Set<string>();
+
+  /**
+   * Открытый список «Ещё связанные мысли»: id пунктов и хосты их облачков
+   * (доработка по вердикту 35656dfb — пункты перерисовываются по смене визуала).
+   */
+  let openSubjectMenu: { ids: readonly string[]; hosts: HTMLElement[] } | null = null;
 
   const undoBtn = uiButton({
     label: t('tasks.undo'),
@@ -842,11 +854,41 @@ export function mountTaskPanel(
    * облачка ПЕРВОЙ мысли в строке.
    */
   function subjectListMenu(ids: readonly string[]): MenuItem[] {
-    return ids.map((id) => {
+    const hosts: HTMLElement[] = [];
+    const items = ids.map((id) => {
       const subject: TaskPanelSubject = { kind: 'thought', id, title: id };
       const content = span('', 'ui-task-row-subject-cloud');
+      hosts.push(content);
       actions.renderSubject?.(content, subject, { interactive: false });
       return menuAction(subject.title, () => actions.openSubject?.(subject), { content });
+    });
+    // Пункты списка — визуальные облачка на момент открытия; смена визуала
+    // мысли обязана их обновить, а не оставить статичным снимком (доработка по
+    // вердикту 35656dfb). Храним хосты: закрытое меню отключает их от
+    // документа, запись снимается при ближайшем обновлении.
+    openSubjectMenu = { ids: [...ids], hosts };
+    return items;
+  }
+
+  /**
+   * Перерисовать облачка ОТКРЫТОГО списка «Ещё связанные мысли» из текущего
+   * кэша субъектов (0.16.1, доработка по вердикту 35656dfb): пункты меню
+   * собираются при открытии, поэтому без этого они показывали прежний вид мысли
+   * после смены иконки/цвета/стиля.
+   */
+  function refreshSubjectMenus(): void {
+    const menu = openSubjectMenu;
+    if (menu === null) return;
+    if (!menu.hosts.some((itemHost) => itemHost.isConnected)) {
+      openSubjectMenu = null;
+      return;
+    }
+    menu.hosts.forEach((itemHost, index) => {
+      if (!itemHost.isConnected) return;
+      const id = menu.ids[index];
+      if (id === undefined) return;
+      itemHost.replaceChildren();
+      actions.renderSubject?.(itemHost, { kind: 'thought', id, title: id }, { interactive: false });
     });
   }
 
@@ -1943,7 +1985,11 @@ export function mountTaskPanel(
     destroy(): void {
       nav?.destroy();
       nav = null;
+      openSubjectMenu = null;
       host.replaceChildren();
+    },
+    refreshSubjectMenus(): void {
+      refreshSubjectMenus();
     },
     panelCollapsed(): boolean {
       return collapseState(TASK_PANEL_COLLAPSE_KEYS.panel);

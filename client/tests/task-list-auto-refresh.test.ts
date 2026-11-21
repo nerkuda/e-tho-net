@@ -67,6 +67,25 @@ let subjectStore: Array<Record<string, unknown>> = [];
 /** Отдаёт ли подставной сервер поле `subjects` (иначе — ответ старого сервера). */
 let subjectsReported = false;
 
+/** Удержание ответа ближайшего `tasks.list` — тест «полёта» тихого перечитывания. */
+let listGate: Promise<void> | null = null;
+
+/**
+ * Задержать ответ ближайшего `tasks.list`: вернуть функцию освобождения.
+ * Нужно, чтобы увидеть кадр «запрос ещё в полёте» (доработка по вердикту
+ * 35656dfb: облачко не должно проваливаться в «(недоступна)»).
+ */
+function holdList(): () => void {
+  let release!: () => void;
+  listGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => {
+    listGate = null;
+    release();
+  };
+}
+
 /** Подставить DOM и `window.etn` с подставным `tasks.list`. */
 function shim(
   rows: Array<Record<string, unknown>> = [],
@@ -99,6 +118,8 @@ function shim(
     tasks: {
       list: async () => {
         calls += 1;
+        const gate = listGate;
+        if (gate !== null) await gate;
         return {
           items: [...rowStore],
           nested: [],
@@ -698,6 +719,86 @@ describe('панель задач: облачка связанных мысле�
     thoughtVisualUpdated(1, 'stranger', { icon: '🌙' });
     await wait(250);
     assert.equal(api.listCalls(), initial, 'панель не знает эту мысль — перечитывать нечего');
+    destroy();
+  });
+
+  it('на время тихого перечитывания облачко показывает ПРЕЖНИЙ вид, а не «(недоступна)»', async () => {
+    const api = shim(
+      [taskRow(0, { subject_thoughts: ['s1'] })],
+      [thoughtRef('s1', 'Первая', { icon: '⭐' })],
+    );
+    const { handle, host, destroy } = await mount(false);
+    const initial = api.listCalls();
+    assert.equal(
+      cloudOf(rowsOf(host)[0]!, 's1')?.querySelector('.prc-title')?.textContent,
+      'Первая',
+      'исходное облачко',
+    );
+
+    // Мысль сменила название и иконку; ответ `tasks.list` удержан — смотрим
+    // кадр «запрос в полёте» (вердикт 35656dfb, блокер).
+    subjectStore[0] = thoughtRef('s1', 'Первая (новая)', { icon: '🌙' });
+    const release = holdList();
+    thoughtVisualUpdated(1, 's1', { title: 'Первая (новая)', icon: '🌙' });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 1, 'тихое перечитывание стартовало');
+
+    const inFlight = cloudOf(rowsOf(host)[0]!, 's1')!;
+    assert.equal(
+      inFlight.querySelector('.prc-title')?.textContent,
+      'Первая',
+      'пока ответа нет — прежний вид облачка',
+    );
+    assert.equal(inFlight.querySelector('.mini-icon')?.textContent, '⭐', 'прежняя иконка');
+    assert.notEqual(
+      inFlight.querySelector('.prc-title')?.textContent,
+      t('tasks.subjectUnavailable'),
+      '«(недоступна)» на время перечитывания не показывается',
+    );
+    assert.equal(
+      refreshButton(handle).classList.contains('is-stale'),
+      false,
+      'маркер «Обновить» не зажигается',
+    );
+
+    release();
+    await flush();
+    const after = cloudOf(rowsOf(host)[0]!, 's1')!;
+    assert.equal(
+      after.querySelector('.prc-title')?.textContent,
+      'Первая (новая)',
+      'после ответа — новый вид',
+    );
+    assert.equal(after.querySelector('.mini-icon')?.textContent, '🌙', 'новая иконка');
+    destroy();
+  });
+
+  it('открытый список «…» обновляет пункты при смене визуала (не статичный снимок)', async () => {
+    shim(
+      [taskRow(0, { subject_thoughts: ['s1', 's2'] })],
+      [thoughtRef('s1', 'Первая'), thoughtRef('s2', 'Вторая', { icon: '🔥' })],
+    );
+    const { host, destroy } = await mount(false);
+    const row = rowsOf(host)[0]!;
+    press(row.querySelector('.ui-task-row-subjects')!.querySelector('button')!);
+    const body = (globalThis as unknown as { document: { body: ShimElement } }).document.body;
+    const opened = body.querySelectorAll('.menu-item')[0]!;
+    assert.equal(cloudOf(opened, 's2')?.querySelector('.prc-title')?.textContent, 'Вторая');
+
+    subjectStore[1] = thoughtRef('s2', 'Вторая (новая)', { icon: '🌙' });
+    thoughtVisualUpdated(2, 's2', { title: 'Вторая (новая)', icon: '🌙' });
+    await wait(250);
+    await flush();
+
+    const items = body.querySelectorAll('.menu-item');
+    assert.equal(items.length, 1, 'меню осталось открытым');
+    const updated = cloudOf(items[0]!, 's2')!;
+    assert.equal(
+      updated.querySelector('.prc-title')?.textContent,
+      'Вторая (новая)',
+      'пункт «…» показывает новый вид без переоткрытия меню',
+    );
+    assert.equal(updated.querySelector('.mini-icon')?.textContent, '🌙', 'иконка обновлена');
     destroy();
   });
 });
