@@ -176,7 +176,7 @@ curl -fsSL https://github.com/nerkuda/e-tho-net/releases/latest/download/install
 ## Документация пользователя
 
 Начиная с версии 0.12 приложение генерирует файлы пользовательской документации в 
-каталоге [`docs/userdocs`](docs/userdocs/). Начните знакомство с [`overview.md`](docs/userdocs/overview.md)
+каталоге [`docs/userdocs`](docs/userdocs/). Начните знакомство с [`overview.md`](docs/userdocs/overview.md).
 
 
 ## Стек
@@ -256,6 +256,6 @@ npm test                 # все тесты
 - [X] Совместная работа: авторство, захват и события
 - [X] Ревизия MCP-инструментов
 - [X] Управление разработкой с помощью мыслесети
-- [X] Markdown редактор с динамическим предпросмотром
+- [X] Markdown-редактор с динамическим предпросмотром
 - [X] Управление вложениями, иконки
 - [X] MVP (фазы A-Q)

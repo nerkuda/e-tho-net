@@ -66,8 +66,9 @@ It does not fit if you:
   attachments, properties and a chronicle — in one place.
 - 🔍 **Search and views.** Across names, texts, links and the chronicle;
   complex conditions are saved as named views.
-- 📅 **A diary that thoughts grow from.** Daily notes with entries linked to
-  thoughts and thoughts created from entries.
+- 📅 **A diary, reminders and tasks.** Daily notes with entries linked to
+  thoughts and thoughts created from entries. Task and reminder lists tied
+  to dates.
 - 📖 **Publications.** A coherent document with a table of contents assembled
   from scattered thoughts; export to Markdown/HTML/PDF.
 - 🗂️ **Layers — branches for knowledge.** Rebuild the base in a separate
@@ -179,7 +180,7 @@ are organized on the basis of the thought network is described in
 ## User documentation
 
 Since version 0.12 the application generates user documentation files in the
-[`docs/userdocs`](docs/userdocs/) directory. Start with [`overview.md`](docs/userdocs/overview.md)
+[`docs/userdocs`](docs/userdocs/) directory. Start with [`overview.md`](docs/userdocs/overview.md).
 
 
 ## Stack
@@ -234,9 +235,10 @@ in [`docs/development-in-etn.en.md`](docs/development-in-etn.en.md).
 - [ ] Discussions and chats for users and agents
 - [ ] User-defined appearance styles
 - [ ] List/table/kanban view switcher
-- [ ] To-do lists and thought reminders
 - [ ] Localization into other languages
-- [X] Localization into English
+- [X] To-do lists and thought reminders
+- [X] Preinstalled appearance themes and background image choice
+- [X] Localization into English and Chinese
 - [X] Server and client installer; updating the server service from the client
 - [X] Out-of-type thought views
 - [X] Out-of-type thought properties
