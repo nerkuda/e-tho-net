@@ -381,6 +381,45 @@ describe('панель задач: облачко удалённой мысли 
     destroy();
   });
 
+  it('до ответа перечитывания меню и клик облачка удалённой мысли уже недоступны', async () => {
+    const opened: unknown[] = [];
+    shim([taskRow(0, { subject_thoughts: ['live'] })]);
+    const stub = (globalThis as any).window.etn;
+    stub.thoughts.get = async (_networkId: string, id: string) => ({ id, title: id });
+    const { host, destroy } = await mount(false, { openSubject: (s: unknown) => opened.push(s) });
+    const alive = host.querySelectorAll('[data-id="live"]')[0]!;
+    assert.equal(alive.hasListeners(), true, 'до удаления у облачка есть действия и меню');
+
+    // Перечитывание зависает на ответе `/tasks`: окно «до ответа» держится явно.
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    stub.tasks.list = () => pending;
+
+    trashEvent(1, 'thought.deleted', { id: 'live' });
+    await flush();
+
+    // Сразу после события, ещё без ответа списка: строка на месте (до тихой
+    // перезагрузки), но облачко уже без действий и контекстного меню.
+    const dead = host.querySelectorAll('[data-id="live"]')[0]!;
+    assert.equal(dead.hasListeners(), false, 'жестов и меню у облачка нет сразу');
+    dead.click();
+    assert.deepEqual(opened, [], 'клик по облачку удалённой мысли — no-op');
+    assert.equal(rowsOf(host).length, 1, 'строка живёт до перечитывания');
+
+    // Запрос `tasks.list` ушёл, ответа всё ещё нет — состояние то же.
+    await wait(200);
+    const stillDead = host.querySelectorAll('[data-id="live"]')[0]!;
+    assert.equal(stillDead.hasListeners(), false, 'до ответа /tasks меню недоступно');
+
+    release({ items: [], nested: [], max_revision: 3 });
+    await flush();
+    await wait(50);
+    assert.equal(rowsOf(host).length, 0, 'после ответа строка исчезла');
+    destroy();
+  });
+
   it('облачко живой мысли действия сохраняет', async () => {
     const opened: unknown[] = [];
     shim([taskRow(0, { subject_thoughts: ['live'] })]);

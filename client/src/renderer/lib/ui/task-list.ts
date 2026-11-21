@@ -795,10 +795,14 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   ): TaskPanelRow {
     const address = taskRowKey(row);
     const ownChildren = children.get(address) ?? [];
+    // Удалённые совсем субъекты строки — в view-модель: keyed-сверка увидит
+    // изменение и перерисует облачко без действий сразу (вердикт b13a39d8).
+    const gone = row.subject_thoughts.filter((id) => missingSubjects.has(id));
     return taskRowView(row, staleness(), toggledDone.get(address), {
       today: todayLocal(),
       children: ownChildren,
       hasChildren: ownChildren.length > 0 || taskParents.has(address),
+      ...(gone.length > 0 ? { missingSubjects: gone } : {}),
     });
   }
 
@@ -2067,10 +2071,16 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     // комментариев — панель перечитывает себя сама, без маркера «Обновить» и
     // без серых строк (пачка 11, задача 173e8368).
     if (isTrashVisibilityEvent(event)) {
-      // Совсем удалённая мысль: кэш субъекта устарел. Следующее перечитывание
-      // снова спросит `thoughts.get` и по `NOT_FOUND` выключит действия
-      // облачка — переход в мёртвую мысль не случится (пункт 4).
-      if (event.type === 'thought.deleted') subjectData.delete(`thought:${event.data.id}`);
+      // Совсем удалённая мысль: кэш субъекта устарел. Действия облачка должны
+      // пропасть СРАЗУ, до ответа перечитывания (вердикт b13a39d8): помечаем id
+      // в `missingSubjects` (тот же механизм, что и по `NOT_FOUND`) и
+      // перерисовываем строки keyed-патчем. Сама строка живёт до тихой
+      // перезагрузки — клик по облачку уже no-op, меню не открывается (пункт 4).
+      if (event.type === 'thought.deleted') {
+        missingSubjects.add(event.data.id);
+        subjectData.delete(`thought:${event.data.id}`);
+        renderView();
+      }
       scheduleSilentReload();
       return;
     }

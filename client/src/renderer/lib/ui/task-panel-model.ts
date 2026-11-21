@@ -130,6 +130,13 @@ export interface TaskPanelRow extends PanelGroupable {
    * из `children` (совместимость с прежними снимками).
    */
   hasChildren?: boolean;
+  /**
+   * Субъекты строки, удалённые совсем (0.16.1, пачка 11, вердикт b13a39d8):
+   * у их облачков нет действий и контекстного меню. Поле участвует в
+   * keyed-сравнении строки — по нему облачко перерисовывается сразу после
+   * `thought.deleted`, не дожидаясь ответа перечитывания.
+   */
+  missingSubjects?: readonly string[];
 }
 
 /**
@@ -234,6 +241,8 @@ export function taskRowIsStale(row: TaskDTO, stale: TaskPanelStaleness = {}): bo
  * `children` — вложенные не-задачные строки под задачей (пункт F).
  * `hasChildren` — есть подчинённый блок (не-задачные строки ИЛИ подзадачи
  * страницы, 0.16.1 пачка 7); не задано — считается по `children`.
+ * `missingSubjects` — субъекты строки, удалённые совсем: попадает в view-модель,
+ * чтобы keyed-сверка перерисовала облачко без действий (вердикт b13a39d8).
  */
 export function taskRowView(
   row: TaskDTO,
@@ -243,6 +252,7 @@ export function taskRowView(
     today?: string | null;
     children?: readonly TaskPanelChildRow[];
     hasChildren?: boolean;
+    missingSubjects?: readonly string[];
   } = {},
 ): TaskPanelRow {
   const isDone = done ?? row.done;
@@ -267,6 +277,9 @@ export function taskRowView(
     overdue: !isDone && row.due !== null && today !== null && row.due < today,
     children,
     hasChildren: options.hasChildren ?? children.length > 0,
+    ...(options.missingSubjects !== undefined && options.missingSubjects.length > 0
+      ? { missingSubjects: [...options.missingSubjects] }
+      : {}),
   };
 }
 
