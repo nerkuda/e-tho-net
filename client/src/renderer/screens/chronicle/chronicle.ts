@@ -116,6 +116,7 @@ import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.j
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../../lib/live/event-router.js';
+import { isThoughtVisualEvent } from '../../lib/live/thought-visual-events.js';
 import { isTrashVisibilityEvent } from '../../lib/live/trash-events.js';
 import { matchesKeyPrefix, queryKeys } from '../../lib/live/query-keys.js';
 import {
@@ -283,6 +284,24 @@ let tasksPanel: TasksPanelHandle | null = null;
 let dayLinksData = new Map<string, DayLinksData>();
 /** Поколение чтения «связей дня»: ответ устаревшего запроса не перерисовывает. */
 let dayLinksSeq = 0;
+
+/**
+ * Мысль видна в загруженных «связях дня» — фактом или владельцем-мыслью
+ * date-ссылки (0.16.1, задача 739eb698). Смена визуала такой мысли требует
+ * перечитать блоки; чужое событие запроса не стоит.
+ */
+function dayLinksContain(id: string): boolean {
+  for (const day of dayLinksData.values()) {
+    if (day.facts.some((fact) => fact.thought_id === id)) return true;
+    if (
+      day.links.some((link) => link.source.owner_type === 'thought' && link.source.owner_id === id)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Единый контроллер правки карточки записи (ТП «Дневник без псевдослота»):
  * режим правки принадлежит КАРТОЧКЕ — вход в правку любого поля (заголовок или
@@ -1031,10 +1050,19 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   // корзины» меняют состав ленты, «связей дня» и маркеров календаря, не двигая
   // ревизию комментариев (пачка 11, задача 173e8368). Перечитываем тем же
   // путём, что инвалидация слоя: сохранение глубины, затем календарь и счётчики.
+  // Смена визуала мысли (название/иконка/цвета/стиль) меняет только облачка
+  // «связей дня» — их блоки перерисовываются без перечитывания всей ленты
+  // (0.16.1, задача 739eb698).
   const trashUnsub = onRoutedRealtimeEvent((event) => {
     if (host === null) return;
     if (event.network_id !== store.state.networkId) return;
-    if (isTrashVisibilityEvent(event)) scheduleChronicleFeedRefresh();
+    if (isTrashVisibilityEvent(event)) {
+      scheduleChronicleFeedRefresh();
+      return;
+    }
+    if (isThoughtVisualEvent(event) && dayLinksContain((event.data as { id: string }).id)) {
+      scheduleDayLinksRefresh();
+    }
   });
 
   const unsubscribe = store.subscribe(() => {
@@ -1319,6 +1347,8 @@ let chronicleSnapshotSeq = 0;
 /** Окно дебаунса перезапроса ленты: одна пачка событий → один перезапрос. */
 const CHRONICLE_REFRESH_WINDOW_MS = 250;
 let feedRefreshTimer: number | null = null;
+/** Отложенное перечитывание «связей дня» при смене визуала мысли (739eb698). */
+let dayLinksRefreshTimer: number | null = null;
 /**
  * Скрытый экран получил событие (ошибка 8e702d8c): снимок грязный, перезапрос
  * отложен до показа вида «Дневник».
@@ -1510,6 +1540,27 @@ async function fetchDayLinks(): Promise<Map<string, DayLinksData> | null> {
     next = new Map();
   }
   return seq === dayLinksSeq ? next : null;
+}
+
+/**
+ * Отложить перечитывание «связей дня» по событию смены визуала мысли (0.16.1,
+ * задача 739eb698). Лента записей от такой правки не меняется — перезапрашивать
+ * её незачем; облачка блока дня читают канон отображения из ответа
+ * `chronicle.dayLinks`. Дебаунс склеивает пачку событий в один запрос.
+ */
+function scheduleDayLinksRefresh(): void {
+  if (host === null) return;
+  if (store.state.activeView !== 'chronicle') {
+    // Скрытый вид перечитает связи при показе (`fullRefreshPending` → reload).
+    fullRefreshPending = true;
+    return;
+  }
+  if (dayLinksRefreshTimer !== null) window.clearTimeout(dayLinksRefreshTimer);
+  dayLinksRefreshTimer = window.setTimeout(() => {
+    dayLinksRefreshTimer = null;
+    if (host === null) return;
+    void refreshDayLinks();
+  }, CHRONICLE_REFRESH_WINDOW_MS);
 }
 
 /**

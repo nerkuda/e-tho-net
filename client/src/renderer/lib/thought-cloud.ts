@@ -416,6 +416,34 @@ export interface ThoughtCloudInput {
   marked_for_deletion?: boolean;
 }
 
+/**
+ * Отпечаток визуала мысли для keyed-сверки строк (0.16.1, задача 739eb698):
+ * меняется ровно тогда, когда меняется то, что рисует фабрика, — название,
+ * иконка (вид/цвет/вложение), цвета, стиль шрифта и признаки
+ * `active`/`marked_for_deletion`. Потребитель кладёт отпечаток в модель строки:
+ * совпал — узел не пересобирается, изменился — перерисовывается только эта
+ * строка. Список полей живёт рядом с фабрикой, а не в потребителях (стандарт S1:
+ * представление мысли собирает только она).
+ */
+export function thoughtVisualSignature(input: ThoughtCloudInput): string {
+  return [
+    input.title,
+    input.icon ?? '',
+    input.icon_kind ?? '',
+    input.icon_attachment_id ?? '',
+    input.icon_color ?? '',
+    input.type_id ?? '',
+    input.fg_color ?? '',
+    input.bg_color ?? '',
+    input.font_bold === true ? '1' : '0',
+    input.font_italic === true ? '1' : '0',
+    input.font_underline === true ? '1' : '0',
+    input.font_strike === true ? '1' : '0',
+    input.active === false ? '0' : '1',
+    input.marked_for_deletion === true ? '1' : '0',
+  ].join('\u0001');
+}
+
 /** Признак захвата (блокировки) мысли для индикации на облачке. */
 export interface ThoughtCloudLock {
   /** Имя держателя блокировки; `null` — захват собственным клиентом. */

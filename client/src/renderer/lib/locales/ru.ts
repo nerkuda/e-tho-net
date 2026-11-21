@@ -1410,6 +1410,7 @@ export const ru = {
   /** Команды вхождения напоминания. */
   'tasks.openSubject': 'Открыть субъект',
   'tasks.moreSubjects': 'Ещё связанные мысли: %1',
+  'tasks.subjectUnavailable': '(недоступна)',
   'tasks.dismissReminder': 'Убрать',
   'tasks.snoozeReminder': 'Отложить…',
   'tasks.snoozeToday': 'сегодня',

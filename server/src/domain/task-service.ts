@@ -51,6 +51,7 @@ import {
   type TaskPatchResult,
   type TaskScope,
   type TaskSubjectState,
+  type ThoughtRef,
 } from '@etn/shared';
 import {
   findDateLinkSpans,
@@ -63,6 +64,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { getVisibleComment, updateComment } from './comment-service.js';
+import { REF_COLUMNS, rowToThoughtRef } from './thought-ref.js';
 import {
   buildTaskRows,
   readTaskProjectionMarker,
@@ -334,10 +336,31 @@ function loadStates(ndb: NetworkDb, ids: readonly string[]): Map<string, boolean
 }
 
 /**
+ * Мысли-субъекты строк страницы в каноне отображения (0.16.1, задача 739eb698):
+ * название, иконка, цвета, стиль, `active`/`marked_for_deletion` — одним
+ * чтением `thoughts_v` по `task_row_subjects`. Клиент рисует из этого набора
+ * облачка строк и пункты списка «Ещё связанные мысли», не запрашивая мысль по
+ * id (панель не держит собственного кэша визуала).
+ */
+function loadTaskSubjects(ndb: NetworkDb, ids: readonly string[]): ThoughtRef[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(
+      `SELECT ${REF_COLUMNS} FROM thoughts_v t WHERE t.id IN (${placeholders}) ORDER BY t.id`,
+    )
+    .all(...ids) as Array<Parameters<typeof rowToThoughtRef>[0]>;
+  return rows.map(rowToThoughtRef);
+}
+
+/**
  * Собрать DTO страницы: субъекты строки (ID-ссылки) и худшее состояние
  * владельца комментария и субъектов (`subject_state`).
  */
-function toTaskDtos(ndb: NetworkDb, rows: readonly TaskRow[]): TaskDTO[] {
+function toTaskDtos(
+  ndb: NetworkDb,
+  rows: readonly TaskRow[],
+): { items: TaskDTO[]; subjects: ThoughtRef[] } {
   const commentIds = [...new Set(rows.map((row) => row.comment_id))];
   const subjects = new Map<string, string[]>();
   if (commentIds.length > 0) {
@@ -395,7 +418,7 @@ function toTaskDtos(ndb: NetworkDb, rows: readonly TaskRow[]): TaskDTO[] {
       kind: row.kind as TaskDTO['kind'],
     } satisfies TaskDTO;
   });
-  return items;
+  return { items, subjects: loadTaskSubjects(ndb, subjectIds) };
 }
 
 /**
@@ -550,9 +573,13 @@ export function listTasks(ndb: NetworkDb, options: TaskListOptions = {}): TaskLi
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const cursor = hasMore && page.length > 0 ? encodeCursor(page[page.length - 1]!) : null;
+  const dtos = toTaskDtos(ndb, page);
 
   return {
-    items: toTaskDtos(ndb, page),
+    items: dtos.items,
+    // Субъекты страницы — всегда (пустой массив = субъектов нет): наличие поля
+    // отличает новый сервер от старого (клиент доразрешает по id) — 739eb698.
+    subjects: dtos.subjects,
     cursor,
     ...(total !== undefined ? { total } : {}),
     ...(options.includeNested === true ? { nested: loadNestedLines(ndb, page) } : {}),

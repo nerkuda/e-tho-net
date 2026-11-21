@@ -1281,11 +1281,14 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: true,
     effects:
-      'read-only, no writes. Response `{ items[], cursor, total?, max_revision }` (parity with REST `GET /tasks`). ' +
+      'read-only, no writes. Response `{ items[], subjects[], cursor, total?, max_revision }` (parity with REST `GET /tasks`). ' +
       'A row is addressed by `{ comment_id, line_no }` (line number of `body_md`, 0-based) and carries `text`, ' +
       '`due`/`period_from`/`period_to` (`YYYY-MM-DD`), `auto_period` (the period comes from the record, not from ' +
       'the line), `done`, `subject_thoughts`, `subject_state`, ' +
       '`parent_task`/`subtask`, `revision`/`parsed_revision` and the source owner (`owner_type`/`owner_id`/`kind`). ' +
+      "`subjects[]` is the display canon (`ThoughtRef`: title, icon, colors, font style, `active`, " +
+      "`marked_for_deletion`) of the rows' subject thoughts, read from `thoughts_v` in one pass; a subject absent " +
+      'from it is unavailable. ' +
       'Rows of permanent comments of entities marked for deletion are hidden; `show_trash: false` also hides ' +
       'rows of records owned by trashed entities and rows addressed to a trashed thought. `max_revision` is the network ' +
       'projection marker (the client compares it and shows "Refresh").',

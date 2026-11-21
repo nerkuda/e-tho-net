@@ -324,6 +324,60 @@ describe(
       }
     });
 
+    it('subjects страницы — канон отображения субъектов и его актуальность (739eb698)', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedThought(ndb, 't-1', 'Мысль');
+        const subjectId = '66666666-6666-4666-8666-666666666666';
+        seedThought(ndb, subjectId, 'Субъект');
+        const setVisuals = (
+          icon: string | null,
+          fg: string | null,
+          bg: string | null,
+          bold: number,
+          manual: number,
+        ): void => {
+          ndb
+            .prepare(
+              `UPDATE thoughts SET icon = ?, icon_kind = 'emoji', fg_color = ?, bg_color = ?,
+                 font_bold = ?, font_manual = ? WHERE id = ?`,
+            )
+            .run(icon, fg, bg, bold, manual, subjectId);
+        };
+        setVisuals('⭐', '#ff0000', '#00ff00', 1, 1);
+        const comment = createTaskComment(
+          ndb,
+          't-1',
+          `- [ ] Задача [[#${subjectId}]] [[2026-11-20]]`,
+        );
+
+        const page = listTasks(ndb, { commentId: comment });
+        const subjects = page.subjects ?? [];
+        assert.equal(subjects.length, 1, 'субъект страницы в каноне отображения');
+        assert.equal(subjects[0]!.id, subjectId);
+        assert.equal(subjects[0]!.title, 'Субъект');
+        assert.equal(subjects[0]!.icon, '⭐');
+        assert.equal(subjects[0]!.fg_color, '#ff0000');
+        assert.equal(subjects[0]!.bg_color, '#00ff00');
+        assert.equal(subjects[0]!.font_bold, true);
+
+        // Смена визуала — следующая страница отдаёт новое состояние (без кэша).
+        setVisuals('🔥', '#0000ff', null, 0, 1);
+        const updated = listTasks(ndb, { commentId: comment }).subjects ?? [];
+        assert.equal(updated[0]!.icon, '🔥');
+        assert.equal(updated[0]!.fg_color, '#0000ff');
+        assert.equal(updated[0]!.bg_color, null);
+        assert.equal(updated[0]!.font_bold, false);
+
+        // Физически удалённая мысль в каноне отсутствует — клиент покажет
+        // понятную деградацию, а не сырой id (739eb698).
+        ndb.prepare('DELETE FROM thoughts WHERE id = ?').run(subjectId);
+        assert.deepEqual(listTasks(ndb, { commentId: comment }).subjects, []);
+      } finally {
+        ndb.close();
+      }
+    });
+
     it('subject_state = inactive, если субъект неактуален; корзинный владелец исключает постоянный комментарий', () => {
       const ndb = createInMemoryNetworkDb();
       try {

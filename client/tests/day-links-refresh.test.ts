@@ -41,6 +41,8 @@ let today = '';
  * блок перечитан, а не переиспользован из первого снапшота.
  */
 let propertyName = 'дата приобретения';
+/** Иконка мысли-факта в каноне отображения (0.16.1, задача 739eb698). */
+let factIcon = '⭐';
 
 function installShims(bridge: Dict): void {
   (globalThis as Dict).HTMLElement = ShimElement;
@@ -105,6 +107,23 @@ function dayLinks(): DayLinksResult {
         property_id: 'p-bought',
         property_name: propertyName,
         value: today,
+        thought: {
+          id: THOUGHT_ID,
+          title: 'Стол кухонный',
+          type_id: null,
+          icon: factIcon,
+          icon_kind: 'emoji',
+          icon_attachment_id: null,
+          icon_color: null,
+          active: true,
+          marked_for_deletion: false,
+          fg_color: null,
+          bg_color: null,
+          font_bold: null,
+          font_italic: null,
+          font_underline: null,
+          font_strike: null,
+        },
       },
     ],
     links: [],
@@ -223,6 +242,7 @@ beforeEach(() => {
   queries.length = 0;
   dayLinkRanges.length = 0;
   propertyName = 'дата приобретения';
+  factIcon = '⭐';
   today = diaryMod.todayLocal();
   routerMod.resetEventRouter();
 });
@@ -304,4 +324,59 @@ describe('«Дневник»: связи дня перечитываются п�
   function routeRealtimeEventSafe(seq: number): void {
     routerMod.routeRealtimeEvent(propertySetEvent(seq));
   }
+});
+
+describe('«Дневник»: смена визуала мысли обновляет облачка «связей дня» (739eb698)', () => {
+  /** Иконки облачков в блоке «связи дня» сегодняшней секции. */
+  function factIcons(): string[] {
+    const section = host.querySelector(`.diary-day[data-day="${today}"]`);
+    if (section === null) return [];
+    return section.querySelectorAll('.mini-icon').map((node) => node.flatText().trim());
+  }
+
+  /** Штатное realtime-событие смены визуала мысли-факта. */
+  function visualEvent(seq: number, icon: string): any {
+    return {
+      type: 'thought.updated',
+      seq,
+      ts: '2026-11-20T09:00:00.000Z',
+      actor: { user_id: 'u1', client_id: 'c1' },
+      network_id: NET,
+      audience: 'network',
+      data: { id: THOUGHT_ID, version: 2, changes: { icon } },
+      layer_id: '00000000-0000-0000-0000-000000000000',
+    };
+  }
+
+  it('иконка из канона дня рисуется в облачке факта', async () => {
+    await mountDiary('tab-dl-visual-1');
+    await settleDebounce();
+    await settleDebounce();
+    assert.deepEqual(factIcons(), ['⭐'], 'облачко факта — из канона отображения');
+  });
+
+  it('thought.updated с визуальными полями перечитывает связи дня, не трогая ленту', async () => {
+    await mountDiary('tab-dl-visual-2');
+    await settleDebounce();
+    await settleDebounce();
+    const dayLinksBefore = dayLinkRanges.length;
+    const feedQueries = queries.length;
+    assert.deepEqual(factIcons(), ['⭐']);
+
+    factIcon = '🌙';
+    assert.equal(routerMod.routeRealtimeEvent(visualEvent(1, '🌙')).routed, true);
+    await settleDebounce();
+
+    assert.deepEqual(factIcons(), ['🌙'], 'облачко факта обновилось без ручного «Обновить»');
+    assert.equal(dayLinkRanges.length, dayLinksBefore + 1, 'связи дня перечитаны один раз');
+    assert.equal(queries.length, feedQueries, 'лента записей не перезапрашивалась');
+
+    // Пачка событий склеивается окном дебаунса в одно чтение.
+    factIcon = '🔥';
+    routerMod.routeRealtimeEvent(visualEvent(2, '🔥'));
+    routerMod.routeRealtimeEvent(visualEvent(3, '🔥'));
+    await settleDebounce();
+    assert.deepEqual(factIcons(), ['🔥']);
+    assert.equal(dayLinkRanges.length, dayLinksBefore + 2, 'пачка дала одно чтение');
+  });
 });

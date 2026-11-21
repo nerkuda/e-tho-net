@@ -205,14 +205,13 @@ function linkKey(link: DayLink): string {
  * Облачко по-прежнему открывает карточку без смены вкладки.
  */
 function fillFactRow(row: HTMLElement, fact: DayFact, actions: DayLinksActions): HTMLElement {
-  const chip = createThoughtCloud(
-    { id: fact.thought_id, title: fact.title },
-    {
-      profile: 'chip',
-      width: 'container',
-      actions: { onClick: (id) => actions.openThought(id) },
-    },
-  );
+  // Канон отображения мысли-владельца (0.16.1, 739eb698): облачко с иконкой,
+  // цветами и стилем. Старый сервер поля не отдаёт — деградация до названия.
+  const chip = createThoughtCloud(fact.thought ?? { id: fact.thought_id, title: fact.title }, {
+    profile: 'chip',
+    width: 'container',
+    actions: { onClick: (id) => actions.openThought(id) },
+  });
   const caption = button(
     fact.property_name,
     () => actions.openThoughtProperty(fact.thought_id, fact.property_id),
@@ -253,7 +252,8 @@ function fillLinkRow(row: HTMLElement, link: DayLink, actions: DayLinksActions):
 function ownerChip(source: DayLinkSource, actions: DayLinksActions): HTMLElement {
   if (source.owner_type === 'thought') {
     return createThoughtCloud(
-      { id: source.owner_id, title: source.owner_title },
+      // Канон отображения владельца (0.16.1, 739eb698): иконка, цвета, стиль.
+      source.owner_thought ?? { id: source.owner_id, title: source.owner_title },
       {
         profile: 'chip',
         width: 'container',

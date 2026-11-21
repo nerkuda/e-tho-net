@@ -204,6 +204,67 @@ describe('связи дня: разбор ответа и блок дня (1fb10
     );
   });
 
+  it('облачка факта и владельца-мысли несут канон отображения (739eb698)', () => {
+    const { block } = mountBlock();
+    const data = sample();
+    data.facts[0]!.thought = {
+      id: 't-stol',
+      title: 'Стол кухонный',
+      type_id: null,
+      icon: '⭐',
+      icon_kind: 'emoji',
+      icon_attachment_id: null,
+      icon_color: null,
+      active: true,
+      marked_for_deletion: false,
+      fg_color: '#ff0000',
+      bg_color: '#00ffee',
+      font_bold: true,
+      font_italic: null,
+      font_underline: null,
+      font_strike: null,
+    };
+    data.links[0]!.source.owner_thought = {
+      id: 't-brat',
+      title: 'Брат',
+      type_id: null,
+      icon: '🔥',
+      icon_kind: 'emoji',
+      icon_attachment_id: null,
+      icon_color: null,
+      active: true,
+      marked_for_deletion: false,
+      fg_color: '#0000ff',
+      bg_color: null,
+      font_bold: null,
+      font_italic: true,
+      font_underline: null,
+      font_strike: null,
+    };
+    renderDayLinks(block as unknown as HTMLElement, groupDayLinks(data).get('2026-11-02'), {
+      openThought: () => undefined,
+      openThoughtProperty: () => undefined,
+      openSource: () => undefined,
+      openSourceDay: () => undefined,
+    });
+
+    const chips = block.querySelectorAll('.prop-ref-cloud');
+    const factChip = chips[0]!;
+    assert.equal(factChip.querySelector('.mini-icon')?.textContent, '⭐', 'иконка мысли факта');
+    assert.equal(factChip.style.color, '#ff0000', 'цвет шрифта факта');
+    assert.equal(factChip.style.background, '#00ffee', 'цвет фона факта');
+    assert.equal(factChip.classList.contains('font-bold'), true, 'стиль факта');
+
+    const ownerChipEl = chips[1]!;
+    assert.equal(
+      ownerChipEl.querySelector('.mini-icon')?.textContent,
+      '🔥',
+      'иконка владельца-мысли источника',
+    );
+    assert.equal(ownerChipEl.style.color, '#0000ff');
+    assert.equal(ownerChipEl.classList.contains('font-italic'), true);
+  });
+
   it('подпись свойства открывает мысль на вкладке «Свойства», облачко — как раньше (3054fe86)', async () => {
     const { block, calls } = mountBlock();
     const actions = {

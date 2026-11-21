@@ -17,6 +17,7 @@
 
 import type { CommentKind } from '../enums.js';
 import type { Comment, CommentOwnerKind } from './comment.js';
+import type { ThoughtRef } from './thought.js';
 
 /** Основа выборки GET /tasks (операция e6d65f51). */
 export const TASK_SCOPES = ['open', 'done', 'overdue', 'undated'] as const;
@@ -151,6 +152,16 @@ export interface TaskListPage {
   total?: number;
   max_revision: number;
   nested?: TaskNestedLine[];
+  /**
+   * Мысли-субъекты строк страницы в каноне отображения (`ThoughtRef`):
+   * название, иконка, цвета, стиль, признаки `active`/`marked_for_deletion`
+   * (0.16.1, задача 739eb698). Собирается сервером по `task_row_subjects`
+   * одним чтением `thoughts_v`; клиент рисует облачка строк и пункты списка
+   * «Ещё связанные мысли» из этого набора, не запрашивая мысль по id. Поле
+   * присутствует всегда (пустой массив — у страницы нет субъектов); его
+   * отсутствие означает старый сервер — тогда клиент доразрешает по id.
+   */
+  subjects?: ThoughtRef[];
 }
 
 /** Итог одной операции PATCH /tasks. */

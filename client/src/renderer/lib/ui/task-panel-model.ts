@@ -137,6 +137,12 @@ export interface TaskPanelRow extends PanelGroupable {
    * `thought.deleted`, не дожидаясь ответа перечитывания.
    */
   missingSubjects?: readonly string[];
+  /**
+   * Отпечаток визуала субъектов строки (название, иконка, цвета, стиль) —
+   * 0.16.1, задача 739eb698. Участвует только в keyed-сравнении: смена визуала
+   * мысли перерисовывает строки, которых она касается, остальные не трогает.
+   */
+  subjectVisuals?: string;
 }
 
 /**
@@ -253,6 +259,8 @@ export function taskRowView(
     children?: readonly TaskPanelChildRow[];
     hasChildren?: boolean;
     missingSubjects?: readonly string[];
+    /** Отпечаток визуала субъектов строки (keyed-сравнение, 739eb698). */
+    subjectVisuals?: string;
   } = {},
 ): TaskPanelRow {
   const isDone = done ?? row.done;
@@ -280,6 +288,7 @@ export function taskRowView(
     ...(options.missingSubjects !== undefined && options.missingSubjects.length > 0
       ? { missingSubjects: [...options.missingSubjects] }
       : {}),
+    ...(options.subjectVisuals !== undefined ? { subjectVisuals: options.subjectVisuals } : {}),
   };
 }
 

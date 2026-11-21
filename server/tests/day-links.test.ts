@@ -139,6 +139,11 @@ describe(
       try {
         seedThought(ndb, 't-stol', 'Стол кухонный');
         seedThought(ndb, 't-brat', 'Брат');
+        ndb
+          .prepare(
+            `UPDATE thoughts SET icon = '🔥', icon_kind = 'emoji', fg_color = '#0000ff' WHERE id = ?`,
+          )
+          .run('t-brat');
         // Запись 26 октября ссылается на 2 ноября — классический источник S1.
         createComment(
           ndb,
@@ -188,6 +193,12 @@ describe(
         assert.equal(permanent.source.owner_id, 't-brat');
         assert.equal(permanent.source.owner_title, 'Брат');
         assert.equal(permanent.source.source_from, null);
+        // Канон отображения владельца-мысли: облачко источника с визуалом
+        // (0.16.1, задача 739eb698).
+        assert.equal(permanent.source.owner_thought?.id, 't-brat');
+        assert.equal(permanent.source.owner_thought?.title, 'Брат');
+        assert.equal(permanent.source.owner_thought?.icon, '🔥');
+        assert.equal(permanent.source.owner_thought?.fg_color, '#0000ff');
 
         const record = result.links.find((link) => link.source.kind === 'chronological');
         assert.ok(record !== undefined);
@@ -205,6 +216,12 @@ describe(
         seedThought(ndb, 't-a', 'Стол кухонный');
         seedThought(ndb, 't-b', 'Брат');
         seedThought(ndb, 't-dead', 'Удалённая мысль', { marked: true });
+        ndb
+          .prepare(
+            `UPDATE thoughts SET icon = '⭐', icon_kind = 'emoji', fg_color = '#ff0000',
+               bg_color = '#00ffee', font_bold = 1, font_manual = 1 WHERE id = ?`,
+          )
+          .run('t-a');
         seedDateProperty(ndb, 'p-bought', 'дата приобретения');
         seedDateProperty(ndb, 'p-born', 'день рождения');
         seedValue(ndb, 't-a', 'p-bought', '2026-11-02');
@@ -221,6 +238,18 @@ describe(
           'факты отсортированы по названию мысли, помеченная на удаление исключена',
         );
         assert.ok(result.facts.every((fact) => fact.day === '2026-11-02'));
+        // Канон отображения мысли-владельца (0.16.1, задача 739eb698): облачко
+        // факта несёт иконку, цвета и стиль, а не только название.
+        const factA = result.facts.find((fact) => fact.thought_id === 't-a');
+        assert.ok(factA !== undefined);
+        assert.equal(factA.thought?.id, 't-a');
+        assert.equal(factA.thought?.title, 'Стол кухонный');
+        assert.equal(factA.thought?.icon, '⭐');
+        assert.equal(factA.thought?.fg_color, '#ff0000');
+        assert.equal(factA.thought?.bg_color, '#00ffee');
+        assert.equal(factA.thought?.font_bold, true);
+        const factB = result.facts.find((fact) => fact.thought_id === 't-b');
+        assert.equal(factB?.thought?.title, 'Брат');
       } finally {
         ndb.close();
       }

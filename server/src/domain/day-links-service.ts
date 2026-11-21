@@ -33,9 +33,11 @@ import {
   type DayFact,
   type DayLink,
   type DayLinksResult,
+  type ThoughtRef,
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
+import { REF_COLUMNS, rowToThoughtRef } from './thought-ref.js';
 import { taskRowVisibilitySql } from './task-visibility.js';
 
 /** Параметры выборки «связей дня». */
@@ -68,14 +70,12 @@ function day(value: string | undefined, field: string): string {
 }
 
 /** Строка выборки фактов до сборки DTO. */
-interface FactRow {
+type FactRow = Parameters<typeof rowToThoughtRef>[0] & {
   day: string;
-  thought_id: string;
-  title: string;
   property_id: string;
   property_name: string;
   value: string;
-}
+};
 
 /**
  * Датовые факты диапазона: значения-даты свойств живых мыслей.
@@ -88,8 +88,7 @@ function readFacts(ndb: NetworkDb, from: string, to: string): DayFact[] {
   const rows = ndb
     .prepare(
       `SELECT substr(pv.value_date, 1, 10) AS day,
-              pv.owner_id AS thought_id,
-              t.title AS title,
+              ${REF_COLUMNS},
               pv.property_id AS property_id,
               p.name AS property_name,
               pv.value_date AS value
@@ -108,19 +107,39 @@ function readFacts(ndb: NetworkDb, from: string, to: string): DayFact[] {
   const seen = new Set<string>();
   const facts: DayFact[] = [];
   for (const row of rows) {
-    const key = `${row.thought_id}\u0000${row.property_id}\u0000${row.day}`;
+    const key = `${row.id}\u0000${row.property_id}\u0000${row.day}`;
     if (seen.has(key)) continue;
     seen.add(key);
     facts.push({
       day: row.day,
-      thought_id: row.thought_id,
+      thought_id: row.id,
       title: row.title,
       property_id: row.property_id,
       property_name: row.property_name,
       value: row.value,
+      // Канон отображения мысли-владельца (0.16.1, задача 739eb698): облачко
+      // факта рисуется с иконкой, цветами и стилем, а не только названием.
+      thought: rowToThoughtRef(row),
     });
   }
   return facts;
+}
+
+/**
+ * Канон отображения владельцев-мыслей одним чтением `thoughts_v` (0.16.1,
+ * задача 739eb698): облачко источника в строке ссылки рисуется с иконкой,
+ * цветами и стилем. Неразрешимый id в ответ не попадает — клиент деградирует до
+ * подписи `owner_title`.
+ */
+function loadOwnerThoughts(ndb: NetworkDb, ids: readonly string[]): Map<string, ThoughtRef> {
+  const refs = new Map<string, ThoughtRef>();
+  if (ids.length === 0) return refs;
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = ndb
+    .prepare(`SELECT ${REF_COLUMNS} FROM thoughts_v t WHERE t.id IN (${placeholders})`)
+    .all(...ids) as Array<Parameters<typeof rowToThoughtRef>[0]>;
+  for (const row of rows) refs.set(row.id, rowToThoughtRef(row));
+  return refs;
 }
 
 /** Строка выборки date-ссылок до сборки DTO. */
@@ -190,6 +209,11 @@ function readLinks(ndb: NetworkDb, from: string, to: string, showTrash: boolean)
     )
     .all(BASE_LAYER_ID, from, to) as LinkRow[];
 
+  const ownerThoughts = loadOwnerThoughts(
+    ndb,
+    rows.filter((row) => row.owner_type === 'thought').map((row) => row.owner_id),
+  );
+
   const seen = new Map<string, number>();
   const links: DayLink[] = [];
   for (const row of rows) {
@@ -220,6 +244,9 @@ function readLinks(ndb: NetworkDb, from: string, to: string, showTrash: boolean)
         source_from: row.kind === 'chronological' ? row.valid_from : null,
         source_to: row.kind === 'chronological' ? row.valid_to : null,
         source_title: row.kind === 'chronological' ? row.title : null,
+        ...(row.owner_type === 'thought' && ownerThoughts.has(row.owner_id)
+          ? { owner_thought: ownerThoughts.get(row.owner_id)! }
+          : {}),
       },
     });
   }

@@ -21,6 +21,7 @@
 
 import type { CommentKind } from '../enums.js';
 import type { CommentOwnerKind } from './comment.js';
+import type { ThoughtRef } from './thought.js';
 
 /** Датовый факт: значение-дата свойства мысли (`YYYY-MM-DD`). */
 export interface DayFact {
@@ -36,6 +37,12 @@ export interface DayFact {
   property_name: string;
   /** Значение-дата как хранится (`YYYY-MM-DD` или ISO-инстанс). */
   value: string;
+  /**
+   * Мысль-владелец в каноне отображения: название, иконка, цвета, стиль
+   * (0.16.1, задача 739eb698). Облачко факта рисуется из него; у старого
+   * сервера поля нет — клиент достраивает облачко по `title`.
+   */
+  thought?: ThoughtRef;
 }
 
 /**
@@ -63,6 +70,12 @@ export interface DayLinkSource {
   source_to: string | null;
   /** Заголовок записи-источника (у постоянного комментария — `null`). */
   source_title: string | null;
+  /**
+   * Владелец-мысль в каноне отображения (0.16.1, задача 739eb698): облачко
+   * источника рисуется с иконкой/цветами/стилем. `undefined` — владелец не
+   * мысль или ответ старого сервера.
+   */
+  owner_thought?: ThoughtRef;
 }
 
 /** Date-ссылка строки комментария, указывающая на день. */

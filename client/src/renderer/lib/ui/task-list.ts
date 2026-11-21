@@ -58,6 +58,7 @@ import {
   type TaskNestedLine,
   type TaskOpAction,
   type TaskScope,
+  type ThoughtRef,
 } from '@etn/shared';
 
 import { requireNetworkId } from '../network-id.js';
@@ -73,13 +74,18 @@ import { errText } from '../dom.js';
 import { etn } from '../etn.js';
 import { formatDate, t } from '../i18n.js';
 import { onRoutedRealtimeEvent } from '../live/event-router.js';
+import { isThoughtVisualEvent } from '../live/thought-visual-events.js';
 import { isTrashVisibilityEvent } from '../live/trash-events.js';
 import { MENU_SEPARATOR, menuAction, menuSubmenu, type MenuItem } from '../menu.js';
 import { notice } from '../notice.js';
 import { isNotFoundError } from '../pure.js';
 import { openReminderEditor } from '../reminder-editor.js';
-import { createPublicationCloud, type PublicationCloudInput } from './publication-cloud.js';
-import { createThoughtCloud, type ThoughtCloudInput } from '../thought-cloud.js';
+import { createPublicationCloud } from './publication-cloud.js';
+import {
+  createThoughtCloud,
+  thoughtVisualSignature,
+  type ThoughtCloudInput,
+} from '../thought-cloud.js';
 import {
   TASK_PANEL_COLLAPSE_KEYS,
   mountTaskPanel,
@@ -293,6 +299,27 @@ interface TaskListState {
   maxRevision: number;
   /** Вложенные не-задачные строки страниц (`include_nested`). */
   nested: TaskNestedLine[];
+  /**
+   * Канон отображения субъектов страницы (`TaskListPage.subjects`, 739eb698):
+   * название, иконка, цвета, стиль. Пустой массив — субъектов нет.
+   */
+  subjects: ThoughtRef[];
+  /**
+   * Сервер отдал поле `subjects` (новый сервер): отсутствие строкового субъекта
+   * в каноне означает «мысли нет» — доразрешать её запросом не нужно.
+   */
+  hasSubjectCanon: boolean;
+}
+
+/** Слить канон субъектов страниц без дублей (id → первое вхождение). */
+function mergeSubjects(pages: ReadonlyArray<{ subjects?: ThoughtRef[] }>): ThoughtRef[] {
+  const byId = new Map<string, ThoughtRef>();
+  for (const page of pages) {
+    for (const subject of page.subjects ?? []) {
+      if (!byId.has(subject.id)) byId.set(subject.id, subject);
+    }
+  }
+  return [...byId.values()];
 }
 
 /** Пустое состояние до первой загрузки. */
@@ -307,6 +334,8 @@ function emptyState(): TaskListState {
     reminders: { reminders: [], from: null, to: null },
     maxRevision: 0,
     nested: [],
+    subjects: [],
+    hasSubjectCanon: false,
   };
 }
 
@@ -382,8 +411,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   let loadSeq = 0;
   /** Снимок текстов для отмены массовой команды. */
   let undoSnapshot: Array<{ id: string; body_md: string; version: number }> | null = null;
-  /** Кэш субъектов строк: снапшот мысли/публикации для облачка и названий. */
-  const subjectData = new Map<string, ThoughtCloudInput | PublicationCloudInput>();
+  /**
+   * Кэш снапшотов субъектов, ключи `thought:<id>` / `publication:<id>`: у мысли
+   * — канон отображения для облачка, у публикации — только имя (обе формы
+   * структурно покрывает `ThoughtCloudInput`).
+   */
+  const subjectData = new Map<string, ThoughtCloudInput>();
   /**
    * Субъекты-мысли, которых больше нет в сети (`NOT_FOUND` при резолве
    * снапшота — мысль удалена совсем, пачка 11). Облачко такого субъекта
@@ -648,6 +681,10 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         ...(undatedPage.nested ?? []),
         ...(donePage.nested ?? []),
       ],
+      subjects: mergeSubjects([periodPage, overduePage, undatedPage, donePage]),
+      hasSubjectCanon: [periodPage, overduePage, undatedPage, donePage].some(
+        (page) => page.subjects !== undefined,
+      ),
     };
   }
 
@@ -656,6 +693,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     if (source.kind !== 'thought') return;
     const items: TaskDTO[] = [];
     const nested: TaskNestedLine[] = [];
+    const subjectPages: Array<{ subjects?: ThoughtRef[] }> = [];
     let maxRevision = 0;
     let cursor: string | undefined;
     do {
@@ -668,6 +706,7 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       });
       items.push(...page.items);
       nested.push(...(page.nested ?? []));
+      subjectPages.push(page);
       maxRevision = Math.max(maxRevision, page.max_revision);
       cursor = page.cursor ?? undefined;
       if (disposed || seq !== loadSeq) return;
@@ -682,6 +721,8 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       reminders: { reminders: [], from: null, to: null },
       maxRevision,
       nested,
+      subjects: mergeSubjects(subjectPages),
+      hasSubjectCanon: subjectPages.some((page) => page.subjects !== undefined),
     };
   }
 
@@ -691,16 +732,35 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
    */
   async function resolveSubjects(seq: number): Promise<void> {
     const networkId = requireNetworkId();
-    const ids = new Set<string>();
+    /** Субъекты строк: их канон приходит в ответе страницы (`subjects`). */
+    const rowIds = new Set<string>();
     for (const row of allRows()) {
-      for (const id of row.subject_thoughts) ids.add(id);
+      for (const id of row.subject_thoughts) rowIds.add(id);
     }
+    const ids = new Set<string>(rowIds);
     const publicationIds = new Set<string>();
     for (const reminder of state.reminders.reminders) {
       if (reminder.subject_type === 'thought') ids.add(reminder.subject_id);
       else publicationIds.add(reminder.subject_id);
     }
-    const missingThoughts = [...ids].filter((id) => !subjectData.has(`thought:${id}`));
+    // Канон отображения субъектов пришёл в ответе страницы (739eb698): облачко
+    // строки и пункт «…» рисуются из него — без запроса мысли по id.
+    const canonIds = new Set<string>();
+    for (const subject of state.subjects) {
+      canonIds.add(subject.id);
+      subjectData.set(`thought:${subject.id}`, subject);
+      missingSubjects.delete(subject.id);
+    }
+    const missingThoughts = [...ids].filter((id) => {
+      if (state.hasSubjectCanon && rowIds.has(id)) {
+        // Новый сервер перечислил всех субъектов строк: если id в каноне нет —
+        // мысль удалена. Запрашивать её не нужно; снапшот строки живёт до
+        // перечитывания, действий у облачка нет (пачка 11).
+        if (!canonIds.has(id)) missingSubjects.add(id);
+        return false;
+      }
+      return !subjectData.has(`thought:${id}`);
+    });
     const missingPublications = [...publicationIds].filter(
       (id) => !subjectData.has(`publication:${id}`),
     );
@@ -745,6 +805,20 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
   /** Название субъекта строки (мысль/публикация) с фолбэком на id. */
   function subjectTitle(kind: 'thought' | 'publication', id: string): string {
     return subjectData.get(`${kind}:${id}`)?.title ?? id;
+  }
+
+  /**
+   * Отпечаток визуала субъектов строки (0.16.1, задача 739eb698): канон
+   * отображения каждой мысли-субъекта. Строка view-модели меняется — keyed-
+   * сверка перерисовывает ТОЛЬКО строки этой мысли.
+   */
+  function subjectVisualsKey(ids: readonly string[]): string {
+    return ids
+      .map((id) => {
+        const data = subjectData.get(`thought:${id}`);
+        return `${id}\u0002${data === undefined ? '' : thoughtVisualSignature(data)}`;
+      })
+      .join('\u0002');
   }
 
   /** Признаки устаревания для модели. */
@@ -798,11 +872,15 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
     // Удалённые совсем субъекты строки — в view-модель: keyed-сверка увидит
     // изменение и перерисует облачко без действий сразу (вердикт b13a39d8).
     const gone = row.subject_thoughts.filter((id) => missingSubjects.has(id));
+    // Визуал субъектов — тоже часть view-модели: смена иконки/цвета/стиля
+    // перерисовывает только эти строки (739eb698).
+    const visuals = subjectVisualsKey(row.subject_thoughts);
     return taskRowView(row, staleness(), toggledDone.get(address), {
       today: todayLocal(),
       children: ownChildren,
       hasChildren: ownChildren.length > 0 || taskParents.has(address),
       ...(gone.length > 0 ? { missingSubjects: gone } : {}),
+      ...(visuals !== '' ? { subjectVisuals: visuals } : {}),
     });
   }
 
@@ -1927,7 +2005,12 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       return;
     }
     const data = subjectData.get(`thought:${subject.id}`);
-    const input: ThoughtCloudInput = data ?? { id: subject.id, title: subject.title };
+    // Понятная деградация вместо сырого id (0.16.1, задача 739eb698): если
+    // названия нет ни в каноне, ни в вызывающем — «(недоступна)». Сохранённый
+    // снапшот (пачка 11) остаётся: имя и визуал видны, действий у облачка нет.
+    const fallbackTitle =
+      subject.title !== subject.id ? subject.title : t('tasks.subjectUnavailable');
+    const input: ThoughtCloudInput = data ?? { id: subject.id, title: fallbackTitle };
     // Мысль удалена совсем: облачко — визуальный снапшот строки до её
     // перечитывания, без действий. Клик — no-op, «мёртвое» контекстное меню не
     // открывается (пачка 11, пункт 4 ТЗ 2026-11-21).
@@ -2077,10 +2160,22 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
       // перерисовываем строки keyed-патчем. Сама строка живёт до тихой
       // перезагрузки — клик по облачку уже no-op, меню не открывается (пункт 4).
       if (event.type === 'thought.deleted') {
+        // Снапшот имени и визуала сохраняем: облачко остаётся читаемым, но без
+        // действий; сырой id не показывается (пачка 11 + задача 739eb698).
         missingSubjects.add(event.data.id);
-        subjectData.delete(`thought:${event.data.id}`);
         renderView();
       }
+      scheduleSilentReload();
+      return;
+    }
+    // Визуал мысли (название/иконка/цвета/стиль) приезжает в ответе выборки
+    // (`subjects`): тихо перечитываем — облачка обновятся и в других открытых
+    // экранах. Событие чужой мысли, которой нет среди субъектов панели, ничего
+    // не меняет — лишнего перечитывания не будет (739eb698).
+    if (isThoughtVisualEvent(event)) {
+      const data = event.data as { id: string };
+      if (!subjectData.has(`thought:${data.id}`)) return;
+      subjectData.delete(`thought:${data.id}`);
       scheduleSilentReload();
       return;
     }
