@@ -1133,7 +1133,15 @@ async function reload(preserveDepth = false): Promise<void> {
   // на новый ключ (инвалидации роутера адресуют актуальный ключ).
   retargetChronicleFeed();
   const seq = ++querySeq;
-  renderStatus('loading');
+  // «Связи дня» читаются ДО отрисовки ленты (пачка 9, задача ef6d1aab): блоки
+  // дня появляются вместе с секциями, одним изменением содержимого. Период
+  // известен до обоих запросов, поэтому чтение идёт параллельно страницам
+  // записей — ожидание не удлиняет смену периода.
+  const dayLinksPending = fetchDayLinks();
+  // Статус «Загрузка…» — только когда показывать нечего: при смене периода с
+  // уже отрисованными строками лента остаётся видимой до прихода нового
+  // содержимого (образец — панель задач редактора, пачка 4).
+  if (!feedHasContent()) renderStatus('loading');
   try {
     const def = chronicleQueryDefinition();
     // Диагностика ядра едет в каждой странице конверта `meta`; редактору нужна
@@ -1148,17 +1156,21 @@ async function reload(preserveDepth = false): Promise<void> {
           return page;
         }),
     );
+    // Связи дня ждём до отрисовки: `renderFeed` строит секции дней уже с ними.
+    const dayLinksNext = await dayLinksPending;
     if (seq !== querySeq) return;
     if (!isCurrentScreenPair(pair)) return;
     rows = result.rows;
     total = result.total;
+    // Устаревшее чтение связей (период перечитан позже) не подменяет данные:
+    // `null` — отрисовка пройдёт со снимком прежнего прохода, а его перечитает
+    // более поздний запрос.
+    if (dayLinksNext !== null) dayLinksData = dayLinksNext;
     pendingReconcile = false;
     // Успешный запрос: строки редактора получают актуальную диагностику ядра
     // (жёлтое — не блокирует; красное пришло бы ошибкой выше).
     setFilterServerIssues(filterIssuesFromQueryResult({ warnings: pageWarnings }));
     renderFeed();
-    // «Связи дня» периода — отдельным индексным чтением (0.16.1).
-    void refreshDayLinks();
     publishChronicleSnapshot();
   } catch (err) {
     if (seq !== querySeq) return;
@@ -1353,6 +1365,12 @@ export function publishChronicleSnapshot(): void {
   setQueryData(chronicleQueryKey, { seq: ++chronicleSnapshotSeq, rows, total });
 }
 
+/** В ленте есть что показывать: строки уже отрисованы либо есть секции дней. */
+function feedHasContent(): boolean {
+  if (rows.length > 0) return true;
+  return feedList !== null && feedList.querySelector('.diary-day') !== null;
+}
+
 function renderStatus(kind: 'loading' | 'error', err?: unknown): void {
   if (statusEl === null) return;
   statusEl.hidden = false;
@@ -1420,13 +1438,15 @@ function dayLinksActions(): DayLinksActions {
 }
 
 /**
- * Перечитать «связи дня» за применённый период и обновить блоки уже
- * отрисованных дней. Таблица проекции индексная, поэтому чтение одно на ленту:
- * разбор по дням делает клиент (`groupDayLinks`).
+ * Прочитать «связи дня» применённого периода. Отрисовку НЕ делает — данные
+ * нужны вызывающему ДО `renderFeed` (пачка 9). `null` — чтение устарело: пока
+ * шёл запрос, период перечитан более поздним проходом (`dayLinksSeq`).
+ * Таблица проекции индексная, поэтому чтение одно на ленту: разбор по дням
+ * делает клиент (`groupDayLinks`).
  */
-async function refreshDayLinks(): Promise<void> {
+async function fetchDayLinks(): Promise<Map<string, DayLinksData> | null> {
   const networkId = store.state.networkId;
-  if (networkId === null || feedList === null) return;
+  if (networkId === null) return null;
   const { from, to } = currentFromTo();
   const seq = (dayLinksSeq += 1);
   let next: Map<string, DayLinksData>;
@@ -1437,7 +1457,19 @@ async function refreshDayLinks(): Promise<void> {
     // Сбой чтения блока не ломает ленту: блоки остаются пустыми до повтора.
     next = new Map();
   }
-  if (seq !== dayLinksSeq) return;
+  return seq === dayLinksSeq ? next : null;
+}
+
+/**
+ * Перечитать «связи дня» за применённый период и обновить блоки уже
+ * отрисованных дней (точечные пути: локальная вставка записи, ручной refresh).
+ * Смена периода сюда не ходит — `reload` читает связи до единственной
+ * отрисовки ленты.
+ */
+async function refreshDayLinks(): Promise<void> {
+  if (feedList === null) return;
+  const next = await fetchDayLinks();
+  if (next === null) return;
   dayLinksData = next;
   // Состав дней мог измениться: день без своих записей, но со «связями дня»,
   // обязан появиться секцией (замечание финальной приёмки 399c25d5). Секции

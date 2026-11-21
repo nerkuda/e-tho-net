@@ -680,14 +680,19 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     if (opts.markers !== undefined) {
       button.append(buildMarkers(new Set(opts.markers(cell.day))));
     }
-    // Попап содержимого дня (пункт 7 уточнения 2026-11-19): наведение с
-    // задержкой 0.5 с; уход курсора отменяет ещё не открывшийся попап, клик по
-    // дню его закрывает (день выбирается, пояснение больше не нужно).
+    // Попап содержимого дня (пункт 7 уточнения 2026-11-19; пачка 9, задача
+    // ef6d1aab): наведение с задержкой 0.5 с; уход курсора отменяет ещё не
+    // открывшийся попап и ЗАКРЫВАЕТ уже открытый — курсор покинул
+    // дату-источник, всплывашка гаснет. Клик по дню закрывает (день
+    // выбирается, пояснение больше не нужно).
     if (opts.dayInfo !== undefined) {
       button.addEventListener('mouseenter', () => {
         dayInfoOpen.schedule({ day: cell.day, element: button });
       });
-      button.addEventListener('mouseleave', () => dayInfoOpen.cancel());
+      button.addEventListener('mouseleave', () => {
+        dayInfoOpen.cancel();
+        closeDayInfo();
+      });
       button.addEventListener('mousedown', () => dayInfoOpen.cancel());
       button.addEventListener('click', () => closeDayInfo());
     }
