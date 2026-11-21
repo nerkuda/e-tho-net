@@ -307,19 +307,36 @@ export class ShimClassList {
     if (this.owner !== null) this.owner.className = [...tokens].join(' ');
   }
 
-  add(...names: string[]): void {
-    const tokens = this.tokens();
-    for (const name of names) {
-      for (const token of name.split(/\s+/).filter((t) => t !== '')) tokens.add(token);
+  /**
+   * Проверка токена по спецификации `DOMTokenList`: пустой — `SyntaxError`,
+   * с ASCII-пробелом — `InvalidCharacterError`. Мягкое разбиение по пробелам
+   * прятало реальный дефект открытия блочной правки строки задачи:
+   * `classList.add('ui-task-row-edit ui-task-row-block-edit')` падал только в
+   * Chromium, а тесты оставались зелёными (блокер 84c71c37).
+   */
+  private static check(token: string): void {
+    if (token === '') {
+      throw new DOMException('The token provided must not be empty.', 'SyntaxError');
     }
+    if (/[\t\n\f\r ]/.test(token)) {
+      throw new DOMException(
+        `The token provided ('${token}') contains HTML space characters, which are not valid in tokens.`,
+        'InvalidCharacterError',
+      );
+    }
+  }
+
+  add(...names: string[]): void {
+    for (const name of names) ShimClassList.check(name);
+    const tokens = this.tokens();
+    for (const name of names) tokens.add(name);
     this.write(tokens);
   }
 
   remove(...names: string[]): void {
+    for (const name of names) ShimClassList.check(name);
     const tokens = this.tokens();
-    for (const name of names) {
-      for (const token of name.split(/\s+/).filter((t) => t !== '')) tokens.delete(token);
-    }
+    for (const name of names) tokens.delete(name);
     this.write(tokens);
   }
 
@@ -338,6 +355,7 @@ export class ShimClassList {
   }
 
   toggle(name: string, force?: boolean): void {
+    ShimClassList.check(name);
     const tokens = this.tokens();
     const next = force ?? !tokens.has(name);
     if (next) tokens.add(name);
@@ -455,6 +473,20 @@ export class ShimElement {
   /** Данные текстового узла (`#text`); у элемента всегда пусто. */
   private textData = '';
 
+  /**
+   * Родитель-ЭЛЕМЕНТ (как в DOM): тот же узел, что `parent` (в шиме родитель
+   * всегда элемент). Нужен коду, который поднимается по предкам, — например
+   * адресации чекбокса блока трансклюзии.
+   */
+  get parentElement(): ShimElement | null {
+    return this.parent;
+  }
+
+  /** Присваивание (как у DOM-подделок в тестах) меняет того же `parent`. */
+  set parentElement(value: ShimElement | null) {
+    this.parent = value;
+  }
+
   /** Текстовый узел (в браузере `nodeType === Node.TEXT_NODE`). */
   get isTextNode(): boolean {
     // Сравнение без регистра: `uppercaseTagNames` (thought-cloud) поднимает тег
@@ -512,6 +544,35 @@ export class ShimElement {
 
   get firstChild(): ShimElement | null {
     return this.nodes[0] ?? null;
+  }
+
+  /**
+   * Следующий узел того же родителя (`Node.nextSibling`); конец списка и
+   * оторванный узел — `null`. Нужен CodeMirror: сверка строк вида
+   * `insertBefore(child.dom, next)` читает `prev.nextSibling` и без геттера
+   * получает `undefined`, на котором `insertBefore` падает.
+   */
+  get nextSibling(): ShimElement | null {
+    const parent = this.parent;
+    if (parent === null) return null;
+    const index = parent.nodes.indexOf(this);
+    return index < 0 ? null : (parent.nodes[index + 1] ?? null);
+  }
+
+  /** Предыдущий узел того же родителя (`Node.previousSibling`); начало — `null`. */
+  get previousSibling(): ShimElement | null {
+    const parent = this.parent;
+    if (parent === null) return null;
+    const index = parent.nodes.indexOf(this);
+    return index <= 0 ? null : (parent.nodes[index - 1] ?? null);
+  }
+
+  /**
+   * Родительский узел (`Node.parentNode`) — то же, что {@link parent}. Нужен
+   * DOM-операциям CodeMirror, которые читают `parentNode` (а не `parent`).
+   */
+  get parentNode(): ShimElement | null {
+    return this.parent;
   }
 
   /** Первый дочерний УЗЕЛ-элемент (текстовые узлы пропускаются, как в DOM). */
@@ -799,10 +860,16 @@ export class ShimElement {
    * Продукт шлёт на элементах `CustomEvent` (`editor/properties.ts` →
    * `etn:refresh-count` для бейджа группы); шим-`CustomEvent` тестов обязан
    * нести `type`. Без типа — no-op (совместимость с урезанными заглушками).
+   * `bubbles: true` поднимает событие по цепочке родителей, как в браузере:
+   * на этом держится публикация счётчиков из тела группы (`etn:set-count`
+   * панели задач → бейдж шапки зоны редактора).
    */
   dispatchEvent(event: any): boolean {
     const type = event?.type;
-    if (typeof type === 'string' && type !== '') this.emit(type, event);
+    if (typeof type !== 'string' || type === '') return true;
+    this.emit(type, event);
+    if (event?.bubbles !== true) return true;
+    for (let node = this.parent; node !== null; node = node.parent) node.emit(type, event);
     return true;
   }
 
@@ -875,8 +942,9 @@ export class ShimElement {
   closest(selector: string): ShimElement | null {
     let current: ShimElement | null = this.parent;
     while (current !== null) {
-      if (selector.startsWith('.') && current.classList.contains(selector.slice(1))) return current;
-      if (!selector.startsWith('.') && current.tagName === selector) return current;
+      // Тот же предикат, что у `querySelectorAll`: классы, `#id`, тег и
+      // атрибутные формы (`.cloud[data-id="…"]`, `[data-row-key]`).
+      if (current.matchesSelector(selector)) return current;
       current = current.parent;
     }
     return null;

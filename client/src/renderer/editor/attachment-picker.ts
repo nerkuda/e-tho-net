@@ -27,6 +27,7 @@
 import type { Attachment } from '@etn/shared';
 import { div, errText, span } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
+import { chooseImageFile } from '../lib/image-source.js';
 import { t } from '../lib/i18n.js';
 import { defineKeyContext, pushKeyContext } from '../lib/keymap.js';
 import { modifierChordVariants } from '../lib/keymap-chords.js';
@@ -520,7 +521,7 @@ export function attachmentPickerSourceTab(opts: AttachmentPickerOptions): Resour
 
       /** «Загрузить из файла»: системный выбор картинки → локальное превью. */
       async function uploadFromFile(): Promise<void> {
-        const picked = await etn.system.pickImage();
+        const picked = await chooseImageFile();
         if (picked.status === 'cancel') return;
         if (picked.status === 'error') return;
         setSelection({

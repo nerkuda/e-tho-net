@@ -39,6 +39,7 @@ import { purgeOwnerDependants, tombstoneOwnerDependants } from './owner-cleanup.
 import { assertLinkTypeAssignable } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
 import { setPropertyValues } from './property-service.js';
+import { queueTaskReparse } from './task-projection.js';
 import { linkTypeFilterClause } from './type-hierarchy.js';
 
 import {
@@ -665,8 +666,32 @@ export function updateLink(
       .prepare(`UPDATE links SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)
       .run(...args);
 
+    // Автосубъекты задачи постоянного комментария связи — ОБА её конца
+    // (уточнение 2026-11-16): после смены концов пара изменилась, поэтому
+    // строки проекции обязаны пере-парситься — иначе панель «Задачи» держит
+    // старые концы до правки комментария (ошибка da805de1).
+    if (endpointsRepointed) queueLinkPermanentCommentReparse(ndb, id);
+
     return getLinkOrThrow(ndb, id);
   });
+}
+
+/**
+ * Поставить постоянные комментарии связи в очередь пере-парса проекции задач
+ * (ошибка da805de1): их строки адресуются обоим концам связи
+ * (`task_row_subjects`), а смена концов меняет этот состав. Хроно-записи не
+ * трогаем — их субъекты берутся только из ID-ссылок строки. В слое вызов не
+ * нужен: перепривязка там — надгробие + вставка, комментарии старой связи
+ * надгробит `tombstoneOwnerDependants` вместе со строками проекции.
+ */
+function queueLinkPermanentCommentReparse(ndb: NetworkDb, linkId: string): void {
+  const rows = ndb
+    .prepare(
+      `SELECT id FROM comments_v
+        WHERE owner_type = 'link' AND owner_id = ? AND kind = 'permanent'`,
+    )
+    .all(linkId) as Array<{ id: string }>;
+  for (const row of rows) queueTaskReparse(ndb, row.id);
 }
 
 /**

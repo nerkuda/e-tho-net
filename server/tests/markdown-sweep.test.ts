@@ -98,6 +98,27 @@ describe(
       return row.body_html;
     }
 
+    /** Дополнительная строка комментария с заданным (устаревшим) `body_html`. */
+    function insertStaleCommentRow(id: string, bodyMd: string, bodyHtml: string): void {
+      const now = new Date().toISOString();
+      ndb
+        .prepare(
+          `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html,
+                                 valid_from, valid_to, version, created_at, updated_at, created_by, updated_by)
+           VALUES (?, ?, 'thought', ?, 'chronological', NULL, ?, ?, ?, NULL, 1, ?, ?, 'tester', 'tester')`,
+        )
+        .run(id, BASE_LAYER_ID, ownerThoughtId, bodyMd, bodyHtml, now, now, now);
+    }
+
+    /** `body_html` дополнительной строки основы. */
+    function staleRowHtml(id: string): string {
+      const row = ndb
+        .prepare('SELECT body_html FROM comments WHERE id = ? AND layer_id = ?')
+        .get(id, BASE_LAYER_ID) as { body_html: string } | undefined;
+      assert.ok(row !== undefined, 'дополнительная строка комментария не найдена');
+      return row.body_html;
+    }
+
     before(() => {
       const log = createLogger('silent');
       dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'etn-md-sweep-'));
@@ -127,6 +148,34 @@ describe(
       closeAll();
       systemDb.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
+    });
+
+    it('перерисовывает устаревший body_html с [[2026-11-02]] в date-чип', () => {
+      // Регресс 0.16.1 (задача c5eb7d8d): до date-ссылок `[[2026-11-02]]` был
+      // legacy-ссылкой на мысль с именем-датой. Кеш такого HTML обязан
+      // перерисоваться в чип с `data-wiki-date` при подъёме MD_RENDER_VERSION.
+      const id = randomUUID();
+      const bodyMd = 'Встреча [[2026-11-02 14:30]] и ещё [[2026-11-02]].';
+      insertStaleCommentRow(
+        id,
+        bodyMd,
+        '<p>Встреча <span class="wiki-link" data-wiki-target="2026-11-02 14:30" ' +
+          'data-legacy-link="true">2026-11-02 14:30</span> и ещё ' +
+          '<span class="wiki-link" data-wiki-target="2026-11-02" ' +
+          'data-legacy-link="true">2026-11-02</span></p>\n',
+      );
+
+      // Версия предыдущего конвейера — как на старте после подъёма версии.
+      systemDb.setSetting(MARKDOWN_RENDER_SETTING, 'markdown-it/12');
+      sweepCommentHtml(dataDir, systemDb, createLogger('silent'));
+
+      const html = staleRowHtml(id);
+      assert.ok(html.includes('data-wiki-date="2026-11-02"'), html);
+      assert.ok(html.includes('data-wiki-time="14:30"'), html);
+      assert.ok(html.includes('>02.11.2026 14:30</span>'), html);
+      assert.ok(!html.includes('data-legacy-link'), html);
+      assert.equal(html, renderMarkdown(bodyMd));
+      assert.equal(systemDb.getSetting(MARKDOWN_RENDER_SETTING), MD_RENDER_VERSION);
     });
 
     it('перерисовывает каждую строку слоя из её собственного body_md', () => {

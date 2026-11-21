@@ -23,8 +23,13 @@
  *   `examples`), the per-network `type_roles.table_of_contents` dropdown and the
  *   per-user `show_inactive` / `show_trash` L3 preferences (group «Видимость»). Markdown
  *   tabs are owner-only.
- * - **Клиент** — UI theme (L5 `client_meta.theme`) and `cloud_width` /
- *   `cloud_gap` (L4 `ui_state`), all clipped to the system constants.
+ * - **Клиент** — язык приложения и `cloud_width` / `cloud_gap` (L4 `ui_state`),
+ *   ограниченные системными константами.
+ * - **Оформление** — тема интерфейса, режим (значения из профиля с
+ *   офлайн-кэшем) и фоновая картинка карты. Контролы применяются сразу
+ *   (ИСКЛЮЧЕНИЕ из draft-модели), но входят в «есть непринятые изменения»:
+ *   «Применить» фиксирует их в снимке, «Отмена» откатывает к снимку (задача
+ *   a6ad0143).
  * - **Логирование** — client/server diagnostic journals (task 92b89e6f,
  *   08-ui-spec.md §9.7): immediate-effect toggles and file actions, built in
  *   `settings-logs.ts`; deliberately outside the draft/«Применить» model.
@@ -50,6 +55,12 @@ import { div, el, errText } from '../lib/dom.js';
 import { footerErrorLine } from '../lib/ui/messages.js';
 import { availableLocales, getLang, t } from '../lib/i18n.js';
 import { applyLang, unavailableLang } from '../lib/lang.js';
+import { themeOptions } from '../lib/theme.js';
+import {
+  changeUiMode,
+  changeUiTheme,
+  getUiThemeState,
+} from '../lib/ui-theme.js';
 import {
   changeAppLanguage,
   getAppLanguageState,
@@ -60,15 +71,32 @@ import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { notice } from '../lib/notice.js';
 import { clip } from '../lib/pure.js';
-import { store, type Theme } from '../state.js';
+import { store } from '../state.js';
+import type { LogsSectionState } from './settings-logs.js';
 import { buildLogsSection } from './settings-logs.js';
 import { scheduleStructuresRefresh } from './structures/structures.js';
 import { uiButton } from '../lib/ui/button.js';
 import { fieldInput, fieldRow, fieldSelect } from '../lib/ui/field.js';
 import { checkboxRow, radioRow, choiceGroup } from '../lib/ui/choice-row.js';
+import { chooseImageFile } from '../lib/image-source.js';
+import {
+  imagePickErrorText,
+  wallpaperPrepareError,
+  wallpaperUploadError,
+} from '../lib/wallpaper-errors.js';
+import { WALLPAPER_SOURCE_MAX_BYTES } from '../lib/wallpaper-image.js';
+import { prepareWallpaper } from '../lib/wallpaper-prepare.js';
+import {
+  getWallpaperState,
+  refreshWallpaper,
+  removeWallpaper,
+  subscribeWallpaper,
+  uploadWallpaper,
+} from '../lib/wallpaper-state.js';
+import type { WallpaperState } from '../../main/ipc/contract.js';
 
 /** Sections of the settings dialog (order in the sidebar). */
-type Section = 'user' | 'network' | 'client' | 'logs';
+type Section = 'user' | 'network' | 'client' | 'appearance' | 'logs';
 
 /** Title rendered above a section. Геттеры: текст берётся в момент рендера
  *  (ошибка ebed42d3). */
@@ -76,6 +104,7 @@ const SECTION_TITLES: Record<Section, string> = {
   get user() { return t('settings.user.user'); },
   get network() { return t('settings.network.mysleset'); },
   get client() { return t('settingsLogs.client'); },
+  get appearance() { return t('settings.appearance'); },
   get logs() { return t('settings.logs.logging'); },
 };
 
@@ -142,7 +171,6 @@ interface Draft {
   networkFirstDayOfWeek: number;
   showInactive: boolean;
   showTrash: boolean;
-  theme: Theme;
   /**
    * «Язык приложения» из профиля пользователя (ADR daab6ac4 §2–3, задачи
    * faba9ff4/222666db): `null` — «использовать язык сетей», иначе тег.
@@ -186,7 +214,6 @@ function readInitialDraft(): Draft {
         : 1,
     showInactive: store.state.showInactive,
     showTrash: store.state.showTrash,
-    theme: store.state.theme,
     appLanguage: getAppLanguageState().language,
     networkLanguage: net?.language ?? null,
     lang: getLang(),
@@ -209,7 +236,6 @@ function isDirtyDraft(a: Draft, b: Draft): boolean {
     a.networkFirstDayOfWeek !== b.networkFirstDayOfWeek ||
     a.showInactive !== b.showInactive ||
     a.showTrash !== b.showTrash ||
-    a.theme !== b.theme ||
     a.appLanguage !== b.appLanguage ||
     a.networkLanguage !== b.networkLanguage ||
     a.lang !== b.lang ||
@@ -244,6 +270,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     user: el('button', 'settings-nav-item'),
     network: el('button', 'settings-nav-item'),
     client: el('button', 'settings-nav-item'),
+    appearance: el('button', 'settings-nav-item'),
     logs: el('button', 'settings-nav-item'),
   };
   for (const key of Object.keys(navButtons) as Section[]) {
@@ -263,6 +290,14 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   // видна на любой вкладке/разделе диалога, в т.ч. при прокрученном
   // содержимом (ошибка add8d09d).
   const errorLine = footerErrorLine('settings-error');
+  // Превью картинки обновляется подпиской уровня ДИАЛОГА: раздел «Оформление»
+  // пересобирается при каждом переходе, и слушатель, заведённый в разделе,
+  // копился бы на каждый переход. Снимается в `onClose`.
+  let refreshWallpaperSection: (() => void) | null = null;
+  const unsubscribeWallpaper = subscribeWallpaper(() => {
+    refreshWallpaperSection?.();
+    refreshApplyButtons();
+  });
 
   body.append(nav, content);
 
@@ -291,7 +326,7 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     label: t('actions.cancel'),
     role: 'secondary',
     size: 'm',
-    onClick: () => closeDialog(),
+    onClick: () => void rollbackAndClose(() => closeDialog()),
   });
   btnCancel.title = t('actions.cancelShortcut', 'Esc');
   // Primary-действие — крайним справа (требование edc5faea): панель
@@ -302,14 +337,17 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   // -- helpers -----------------------------------------------------------
   function setBusy(value: boolean): void {
     busy = value;
-    btnApply.disabled = value;
-    btnApplyClose.disabled = value;
     btnCancel.disabled = value;
     for (const btn of Object.values(navButtons)) btn.disabled = value;
+    // «Применить»/«Применить и закрыть» живут по признаку «есть непринятые
+    // изменения», а не по признаку «идёт запись»: после снятия блокировки они
+    // обязаны снова стать недоступными, если применять больше нечего (до
+    // задачи a6ad0143 кнопки оставались активными после «Применить»).
+    refreshApplyButtons();
   }
 
   function refreshApplyButtons(): void {
-    const dirty = isDirtyDraft(draft, original);
+    const dirty = hasUnappliedChanges();
     btnApply.disabled = busy || !dirty;
     btnApplyClose.disabled = busy || !dirty;
   }
@@ -317,6 +355,243 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
   function markDirty(): void {
     refreshApplyButtons();
   }
+
+  // -- снимок мгновенных настроек (задача a6ad0143) ----------------------
+
+  /** Текущее состояние тумблеров журналирования (обновляет раздел «Логирование»). */
+  const logState: { client: boolean | null; server: boolean | null } = {
+    client: null,
+    server: null,
+  };
+
+  /**
+   * Записи тумблеров журналирования в полёте (задача a6ad0143, гонка
+   * «Отмены»): раздел сообщает последнее ЗАПРОШЕННОЕ значение сразу, а
+   * фактическое на сервере определяется только по завершении записи. Откат
+   * к снимку поэтому сначала ждёт этот хвост. Живёт на уровне диалога —
+   * пересборка раздела при переходе по навигации не теряет начатые записи.
+   */
+  let logsWrites: Promise<void> = Promise.resolve();
+
+  /** Учесть начатую запись тумблера: хвост ждёт и успех, и ошибку. */
+  function trackLogsWrite(write: Promise<unknown>): void {
+    const settled = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    logsWrites = Promise.all([logsWrites, settled]).then(() => undefined);
+  }
+
+  /** Дождаться записей тумблеров, включая начатые во время ожидания. */
+  async function waitLogsWrites(): Promise<void> {
+    for (;;) {
+      const tail = logsWrites;
+      await tail;
+      if (tail === logsWrites) return;
+    }
+  }
+
+  /** Снимок картинки: «нет картинки» либо байты и метаданные прежней. */
+  type WallpaperSnapshot =
+    | { kind: 'none' }
+    | {
+        kind: 'ok';
+        contentHash: string;
+        dataUrl: string;
+        mimeType: string;
+        meta: import('@etn/shared').WallpaperMeta;
+      };
+
+  /**
+   * Снимок «принятых» мгновенных настроек: тема, режим, картинка активной сети
+   * и тумблеры журналирования. Берётся при открытии диалога и обновляется
+   * каждым «Применить»; «Отмена» и «Не сохранять» возвращают состояние к нему.
+   */
+  interface SettingsSnapshot {
+    theme: typeof store.state.uiTheme;
+    mode: typeof store.state.theme;
+    wallpaper: WallpaperSnapshot;
+    clientLogging: boolean | null;
+    serverLogging: boolean | null;
+  }
+
+  /** Снимок картинки из состояния главного процесса. */
+  function wallpaperSnapshotOf(state: WallpaperState): WallpaperSnapshot {
+    return state.status === 'ok'
+      ? {
+          kind: 'ok',
+          contentHash: state.content_hash,
+          dataUrl: state.data_url,
+          mimeType: state.mime_type,
+          meta: state.meta,
+        }
+      : { kind: 'none' };
+  }
+
+  /** Подпись картинки: хэш содержимого либо «нет картинки». */
+  function wallpaperSignature(wallpaper: WallpaperSnapshot): string {
+    return wallpaper.kind === 'ok' ? `ok:${wallpaper.contentHash}` : 'none';
+  }
+
+  /** Подпись текущей картинки (что реально показывает карта). */
+  function currentWallpaperSignature(): string {
+    return wallpaperSignature(wallpaperSnapshotOf(getWallpaperState()));
+  }
+
+  /** Снять текущее состояние мгновенных настроек. */
+  function takeSnapshot(): SettingsSnapshot {
+    return {
+      theme: store.state.uiTheme,
+      mode: store.state.theme,
+      wallpaper: wallpaperSnapshotOf(getWallpaperState()),
+      clientLogging: logState.client,
+      serverLogging: logState.server,
+    };
+  }
+
+  let snapshot: SettingsSnapshot = takeSnapshot();
+  /**
+   * Пользователь уже менял картинку: позднее чтение при открытии не должно
+   * записать его свежую картинку в «принятый» снимок.
+   */
+  let wallpaperTouched = false;
+
+  /**
+   * Есть ли непринятые изменения в мгновенных разделах («Оформление»,
+   * «Логирование»): выбранная тема/режим/картинка/тумблеры отличаются от
+   * снимка.
+   */
+  function immediateDirty(): boolean {
+    if (store.state.uiTheme !== snapshot.theme) return true;
+    if (store.state.theme !== snapshot.mode) return true;
+    if (currentWallpaperSignature() !== wallpaperSignature(snapshot.wallpaper)) return true;
+    if (
+      snapshot.clientLogging !== null &&
+      logState.client !== null &&
+      logState.client !== snapshot.clientLogging
+    ) {
+      return true;
+    }
+    if (
+      snapshot.serverLogging !== null &&
+      logState.server !== null &&
+      logState.server !== snapshot.serverLogging
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  /** Общий признак «есть непринятые изменения»: черновик + мгновенные разделы. */
+  function hasUnappliedChanges(): boolean {
+    return isDirtyDraft(draft, original) || immediateDirty();
+  }
+
+  /**
+   * Состояние тумблеров из раздела «Логирование». Первое известное значение
+   * становится базой снимка (до загрузки раздела о журналах ничего не известно,
+   * поэтому «изменено» не считается), следующие — сравниваются с ней.
+   */
+  function onLogsState(state: LogsSectionState): void {
+    logState.client = state.client;
+    logState.server = state.server;
+    if (snapshot.clientLogging === null && state.client !== null) {
+      snapshot.clientLogging = state.client;
+    }
+    if (snapshot.serverLogging === null && state.server !== null) {
+      snapshot.serverLogging = state.server;
+    }
+    refreshApplyButtons();
+  }
+
+  /**
+   * Дочитать снимок при открытии: свежая картинка активной сети из главного
+   * процесса (сервер или локальный кэш). Если пользователь уже менял картинку,
+   * его выбор не перетирается.
+   */
+  async function initSnapshot(): Promise<void> {
+    const wallpaper = await refreshWallpaper().catch(() => getWallpaperState());
+    if (!wallpaperTouched) snapshot.wallpaper = wallpaperSnapshotOf(wallpaper);
+    refreshApplyButtons();
+  }
+
+  /** Байты из `data:`-URL картинки (главный процесс отдаёт base64). */
+  function dataUrlBase64(dataUrl: string): string {
+    const marker = ';base64,';
+    const index = dataUrl.indexOf(marker);
+    if (index < 0) throw new Error(t('settings.wallpaperRestoreFailed'));
+    return dataUrl.slice(index + marker.length);
+  }
+
+  /**
+   * Вернуть мгновенные настройки к снимку: тема, режим, картинка активной сети
+   * (прежние байты загружаются обратно, загруженная при отсутствии прежней —
+   * удаляется) и тумблеры журналирования.
+   *
+   * Откат тумблеров считается по ПОСЛЕДНЕМУ ЗАПРОШЕННОМУ значению и потому
+   * сначала ждёт начатые записи (задача a6ad0143, гонка «Отмены»): без этого
+   * «Отмена», нажатая во время записи, уходила параллельно ей и сервер
+   * оставался с новым значением. Записи нет в полёте и фактическое значение
+   * уже совпадает со снимком — лишнего запроса не отправляется.
+   */
+  async function rollbackImmediate(): Promise<void> {
+    await waitLogsWrites();
+    const tasks: Array<Promise<unknown>> = [];
+    if (snapshot.theme !== store.state.uiTheme) tasks.push(changeUiTheme(snapshot.theme));
+    if (snapshot.mode !== store.state.theme) tasks.push(changeUiMode(snapshot.mode));
+    if (currentWallpaperSignature() !== wallpaperSignature(snapshot.wallpaper)) {
+      if (snapshot.wallpaper.kind === 'none') {
+        tasks.push(removeWallpaper());
+      } else {
+        tasks.push(
+          uploadWallpaper({
+            data_base64: dataUrlBase64(snapshot.wallpaper.dataUrl),
+            mime_type: snapshot.wallpaper.mimeType,
+            meta: snapshot.wallpaper.meta,
+          }),
+        );
+      }
+    }
+    if (
+      snapshot.clientLogging !== null &&
+      logState.client !== null &&
+      logState.client !== snapshot.clientLogging
+    ) {
+      tasks.push(etn.system.setClientLogging(snapshot.clientLogging));
+    }
+    if (
+      snapshot.serverLogging !== null &&
+      logState.server !== null &&
+      logState.server !== snapshot.serverLogging
+    ) {
+      tasks.push(etn.system.setServerLogging(snapshot.serverLogging));
+    }
+    await Promise.all(tasks);
+    // Откаченное состояние становится принятым: если откат прервался ошибкой,
+    // повторное «Не сохранять» не переигрывает уже выполненные шаги.
+    logState.client = snapshot.clientLogging ?? logState.client;
+    logState.server = snapshot.serverLogging ?? logState.server;
+    snapshot = takeSnapshot();
+    wallpaperTouched = false;
+  }
+
+  /** «Отмена» и «Не сохранять»: откат к снимку, затем закрытие. */
+  async function rollbackAndClose(close: () => void): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    errorLine.clear();
+    try {
+      await rollbackImmediate();
+      close();
+    } catch (err) {
+      // Откат не выполнен — закрывать нельзя: пользователь остался бы с
+      // непринятым состоянием. Показываем причину и оставляем диалог открытым.
+      errorLine.show(errText(err));
+      renderContent();
+      setBusy(false);
+    }
+  }
+
 
   function renderUserSection(): HTMLElement {
     const root = div('settings-section');
@@ -724,28 +999,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       ? null
       : el('p', 'muted', t('settings.languageLocalOnly'));
 
-    const themeGroup = choiceGroup();
-    const lightOpt = radioRow({
-      label: t('settings.label.light'),
-      name: 'settings-theme',
-      value: 'light',
-      checked: draft.theme === 'light',
-    });
-    const darkOpt = radioRow({
-      label: t('settings.label.dark'),
-      name: 'settings-theme',
-      value: 'dark',
-      checked: draft.theme === 'dark',
-    });
-    for (const radio of [lightOpt.input, darkOpt.input]) {
-      radio.addEventListener('change', () => {
-        if (!radio.checked) return;
-        draft.theme = radio.value as Theme;
-        markDirty();
-      });
-    }
-    themeGroup.append(lightOpt.row, darkOpt.row);
-
     const widthInput = fieldInput();
     widthInput.type = 'number';
     widthInput.min = String(CLOUD_WIDTH_MIN);
@@ -786,9 +1039,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       ...(effectiveNote === null ? [] : [effectiveNote]),
       ...(localOnlyNote === null ? [] : [localOnlyNote]),
       ...(unavailableNote === null ? [] : [unavailableNote]),
-      el('h3', 'settings-section-title settings-section-title-spaced', t('settings.tema')),
-      themeGroup,
-      el('p', 'muted', t('settings.applyAllEkranahAppliesOnlyClient')),
       el('h3', 'settings-section-title settings-section-title-spaced', t('settings.razmerOblachka')),
       fieldRow({ label: t('settings.shirinaOblachkaPx', [CLOUD_WIDTH_MIN, CLOUD_WIDTH_MAX]), control: widthInput }),
       fieldRow({ label: t('settings.otstupBetweenOblachkamiPx', [CLOUD_GAP_MIN, CLOUD_GAP_MAX]), control: gapInput }),
@@ -797,6 +1047,194 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     return root;
   }
 
+  /**
+   * Раздел «Оформление» (задача a6ad0143; элемент edc921ab, требование
+   * 219d030c, задача 0e4a52cd): тема интерфейса, режим и фоновая картинка
+   * карты. Вынесен из «Клиента» в самостоятельный раздел верхнего уровня,
+   * поэтому собственного заголовка внутри не повторяет.
+   *
+   * Контролы применяются и сохраняются СРАЗУ (исключение из draft-модели), но
+   * входят в признак «есть непринятые изменения»: «Применить» фиксирует их в
+   * снимке, «Отмена» возвращает к снимку (задача a6ad0143).
+   */
+  function renderAppearanceSection(): HTMLElement {
+    const root = div('settings-section');
+
+    // Тема — fieldSelect из реестра `lib/theme.ts`, режим — переключатель из
+    // двух опций. Строки — только из словаря, термины: «тема» — набор
+    // значений, «режим» — тёмный/светлый.
+    const themeSelect = fieldSelect({
+      options: themeOptions(),
+      value: store.state.uiTheme,
+      onChange: (value) => {
+        if (value === store.state.uiTheme) return;
+        errorLine.clear();
+        void changeUiTheme(value as Parameters<typeof changeUiTheme>[0]).then((synced) => {
+          refreshUiThemeHints();
+          refreshApplyButtons();
+          if (!synced) errorLine.show(t('settings.uiThemeSyncDeferred'));
+        });
+        // Применение к store — синхронное: признак «изменено» обновляется сразу,
+        // не дожидаясь ответа сервера.
+        refreshApplyButtons();
+      },
+    });
+    const modeGroup = choiceGroup();
+    const modeRow = (mode: 'light' | 'dark'): HTMLElement => {
+      const row = radioRow({
+        label: mode === 'light' ? t('settings.uiMode.light') : t('settings.uiMode.dark'),
+        name: 'settings-ui-mode',
+        value: mode,
+        checked: store.state.theme === mode,
+        onChange: (checked) => {
+          if (!checked) return;
+          errorLine.clear();
+          void changeUiMode(mode).then((synced) => {
+            refreshUiThemeHints();
+            refreshApplyButtons();
+            if (!synced) errorLine.show(t('settings.uiThemeSyncDeferred'));
+          });
+          refreshApplyButtons();
+        },
+      });
+      return row.row;
+    };
+    modeGroup.append(modeRow('dark'), modeRow('light'));
+    // Подсказки — живой снимок серверного слоя: пересчитываются при открытии
+    // раздела и после каждого выбора/ответа синхронизации (замечание проверки
+    // 0e4a52cd). Пока сервер не ответил (`support: 'unknown'`), обещать
+    // «хранится в профиле» или «сервер не поддерживает» нельзя — это догадка.
+    const themeSupportHint = el('p', 'muted');
+    const unknownThemeNote = el('p', 'muted');
+    const deferredNote = el('p', 'muted');
+    function refreshUiThemeHints(): void {
+      const current = getUiThemeState();
+      themeSupportHint.hidden = current.support === 'unknown';
+      themeSupportHint.textContent = themeSupportHint.hidden
+        ? ''
+        : current.support === 'supported'
+          ? t('settings.uiThemeHintAllDevices')
+          : t('settings.uiThemeLocalOnly');
+      unknownThemeNote.hidden = current.unknownTheme === null;
+      unknownThemeNote.textContent =
+        current.unknownTheme === null
+          ? ''
+          : t('settings.uiThemeUnknown', current.unknownTheme);
+      deferredNote.hidden = !current.syncDeferred;
+      deferredNote.textContent = current.syncDeferred ? t('settings.uiThemeSyncDeferred') : '';
+    }
+    refreshUiThemeHints();
+
+    // «Фоновая картинка карты» (0.16.1, задача 80324150, элемент edc921ab):
+    // «Загрузить…» → мини-превью 16:9 → «Убрать картинку». Как тема и
+    // «Логирование» — ИСКЛЮЧЕНИЕ из draft-модели: картинка живёт на сервере и
+    // применяется сразу. Ошибки — в закреплённом футере диалога (виден на
+    // любом разделе).
+    let wallpaperBusy = false;
+    const wallpaperPreview = el('img', 'settings-wallpaper-preview');
+    wallpaperPreview.alt = t('settings.wallpaperPreviewAlt');
+    const wallpaperHintNote = el('p', 'muted');
+    const wallpaperUploadBtn = uiButton({
+      label: t('settings.wallpaperUpload'),
+      role: 'secondary',
+      size: 's',
+      onClick: () => void pickWallpaper(),
+    });
+    const wallpaperRemoveBtn = uiButton({
+      label: t('settings.wallpaperRemove'),
+      role: 'secondary',
+      size: 's',
+      onClick: () => void dropWallpaper(),
+    });
+    const wallpaperBlock = div('settings-wallpaper');
+    wallpaperBlock.append(wallpaperUploadBtn, wallpaperPreview, wallpaperRemoveBtn);
+
+    function refreshWallpaperBlock(): void {
+      const state = getWallpaperState();
+      const has = state.status === 'ok';
+      // Без открытой сети картинку не для чего выбирать: контролы недоступны.
+      const hasNetwork = store.state.networkId !== null;
+      wallpaperPreview.hidden = !has;
+      wallpaperRemoveBtn.disabled = wallpaperBusy || !has || !hasNetwork;
+      wallpaperUploadBtn.disabled = wallpaperBusy || !hasNetwork;
+      if (has) wallpaperPreview.src = state.data_url;
+      else wallpaperPreview.removeAttribute('src');
+      // Подсказка называет только правило (задача a6ad0143): у каждой пары
+      // «пользователь × сеть» своя картинка, имя сети в тексте не дублируется.
+      wallpaperHintNote.textContent = hasNetwork
+        ? t('settings.wallpaperHint')
+        : t('settings.wallpaperHintNoNetwork');
+      refreshApplyButtons();
+    }
+    refreshWallpaperSection = refreshWallpaperBlock;
+    refreshWallpaperBlock();
+
+    /** Выбор файла → подготовка (даунскейл/meta) → PUT → немедленное превью. */
+    async function pickWallpaper(): Promise<void> {
+      if (wallpaperBusy) return;
+      errorLine.clear();
+      const picked = await chooseImageFile({ maxBytes: WALLPAPER_SOURCE_MAX_BYTES });
+      if (picked.status === 'cancel') return;
+      if (picked.status === 'error') {
+        errorLine.show(imagePickErrorText(picked));
+        return;
+      }
+      wallpaperBusy = true;
+      refreshWallpaperBlock();
+      try {
+        const prepared = await prepareWallpaper({
+          data_url: picked.dataUrl,
+          mime: picked.mime,
+          size: picked.size,
+        });
+        if (prepared.status === 'error') {
+          errorLine.show(wallpaperPrepareError(prepared.message));
+          return;
+        }
+        await uploadWallpaper({
+          data_base64: prepared.prepared.data_base64,
+          mime_type: prepared.prepared.mime_type,
+          meta: prepared.prepared.meta,
+        });
+        // Снимок «принятого» состояния не должен подхватить эту картинку:
+        // иначе «Отмена» не вернёт прежнюю.
+        wallpaperTouched = true;
+      } catch (err) {
+        errorLine.show(wallpaperUploadError(err));
+      } finally {
+        wallpaperBusy = false;
+        refreshWallpaperBlock();
+      }
+    }
+
+    /** «Убрать картинку»: без подтверждения — обратимо новой загрузкой. */
+    async function dropWallpaper(): Promise<void> {
+      if (wallpaperBusy) return;
+      errorLine.clear();
+      wallpaperBusy = true;
+      refreshWallpaperBlock();
+      try {
+        await removeWallpaper();
+        wallpaperTouched = true;
+      } catch (err) {
+        errorLine.show(errText(err));
+      } finally {
+        wallpaperBusy = false;
+        refreshWallpaperBlock();
+      }
+    }
+
+    root.append(
+      fieldRow({ label: t('settings.uiTheme'), control: themeSelect }),
+      themeSupportHint,
+      unknownThemeNote,
+      deferredNote,
+      fieldRow({ label: t('settings.uiMode'), control: modeGroup }),
+      fieldRow({ label: t('settings.wallpaper'), control: wallpaperBlock }),
+      wallpaperHintNote,
+    );
+    return root;
+  }
   function renderContent(): void {
     for (const key of Object.keys(navButtons) as Section[]) {
       navButtons[key].classList.toggle('active', key === active);
@@ -804,6 +1242,9 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     }
     content.replaceChildren();
     errorLine.clear();
+    // Превью картинки обслуживает только живой раздел «Оформление»: ссылка на
+    // разобранный раздел снимается при каждой пересборке.
+    refreshWallpaperSection = null;
     let section: HTMLElement;
     switch (active) {
       case 'user':
@@ -815,8 +1256,11 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       case 'client':
         section = renderClientSection();
         break;
+      case 'appearance':
+        section = renderAppearanceSection();
+        break;
       case 'logs':
-        section = buildLogsSection();
+        section = buildLogsSection({ onChange: onLogsState, onWrite: trackLogsWrite });
         break;
     }
     content.append(section);
@@ -923,18 +1367,6 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       );
     }
 
-    // Client: theme (L5). Mirrors `lib/theme.ts` — apply to the DOM right
-    // away so the user sees the change live, then persist.
-    if (draft.theme !== original.theme) {
-      tasks.push(
-        (async () => {
-          await etn.meta.set(CLIENT_META_KEY.THEME, draft.theme);
-          document.documentElement.dataset['theme'] = draft.theme;
-          store.update({ theme: draft.theme });
-        })(),
-      );
-    }
-
     // Client: «язык приложения». При доступном сервере значение живёт в
     // профиле пользователя (ADR daab6ac4 §2–3, задача 222666db п. 1):
     // сохранение `PUT /users/me/settings/app_language` и живое применение
@@ -978,14 +1410,25 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
 
   async function applyDraft(thenClose: boolean): Promise<void> {
     if (busy) return;
-    if (!isDirtyDraft(draft, original)) {
+    if (!hasUnappliedChanges()) {
       if (thenClose) closeDialog();
       return;
     }
     setBusy(true);
     errorLine.clear();
     try {
-      await applyDiff();
+      // Записи тумблеров в полёте: снимок фиксирует их фактический итог, а не
+      // «последнее запрошенное» значение (задача a6ad0143).
+      await waitLogsWrites();
+      if (!hasUnappliedChanges()) {
+        // Пока ждали запись, она могла не пройти — применять больше нечего.
+        if (thenClose) closeDialog();
+        return;
+      }
+      // Черновик разделов уходит на сервер только при реальных правках:
+      // мгновенные настройки («Оформление», «Логирование») уже применены, и
+      // «Применить» для них — фиксация снимка.
+      if (isDirtyDraft(draft, original)) await applyDiff();
       // Resync from the store: empty display_name normalises to null, etc.
       draft = readInitialDraft();
       original.displayName = draft.displayName;
@@ -999,13 +1442,15 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       original.networkFirstDayOfWeek = draft.networkFirstDayOfWeek;
       original.showInactive = draft.showInactive;
       original.showTrash = draft.showTrash;
-      original.theme = draft.theme;
       original.appLanguage = draft.appLanguage;
       original.networkLanguage = draft.networkLanguage;
       original.lang = draft.lang;
       original.cloudWidth = draft.cloudWidth;
       original.cloudGap = draft.cloudGap;
-      refreshApplyButtons();
+      // Мгновенные настройки приняты: снимок переезжает на текущее состояние,
+      // кнопки снова недоступны, «Отмена» откатывает уже к нему.
+      snapshot = takeSnapshot();
+      wallpaperTouched = false;
       renderContent();
       notice(t('settings.settingsSaved'), 'success');
       if (thenClose) closeDialog();
@@ -1039,20 +1484,32 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
     title: () => t('settings.title'),
     size: 'l',
     // Высота фиксируется ролью: разделы разной высоты (Пользователь / Мыслесеть
-    // / Клиент / Логирование) при переключении больше не меняют высоту окна —
+    // / Клиент / Оформление / Логирование) при переключении больше не меняют
+    // высоту окна —
     // содержимое прокручивается в теле, футер остаётся на месте (требование
     // 13464c39, ошибка 0ab63eac). Левая навигация по разделам — по спеке
     // элемента «Единый диалог настроек», поэтому не заменяется вкладками.
     fixedHeight: true,
     body,
     customFooter: footer,
-    // Грязная форма (требование b58f6aad): Esc/крестик при изменениях требуют
-    // подтверждения; «Сохранить» подтверждения идёт тем же путём, что кнопка
-    // «Применить и закрыть» (запись + закрытие). Явная «Отмена» в футере по-
-    // прежнему закрывает молча.
+    // Ctrl/Cmd+Enter нажимает главную кнопку кастомного футера (задача
+    // a6ad0143: каркас ждал primary только из `buttons`, поэтому подсказка
+    // «Ctrl+Enter — применить и закрыть» была ложной).
+    primaryButton: btnApplyClose,
+    // Непринятые изменения (требование b58f6aad + задача a6ad0143): Esc/крестик
+    // спрашивают подтверждение с семантикой «применить»; «Не сохранять»
+    // возвращает мгновенные настройки к снимку и только потом закрывает диалог.
     dirty: {
-      isDirty: () => isDirtyDraft(draft, original),
+      isDirty: hasUnappliedChanges,
       save: () => void applyDraft(true),
+      discard: (close) => void rollbackAndClose(close),
+      labels: {
+        title: t('settings.unsaved.title'),
+        message: t('settings.unsaved.message'),
+        save: t('actions.apply'),
+        discard: t('dialog.unsaved.discard'),
+        stay: t('dialog.unsaved.stay'),
+      },
     },
     extraShortcuts: {
       shiftEnter: () => void applyDraft(false),
@@ -1063,9 +1520,17 @@ export function showSettingsDialog(initialSection: Section = 'user'): void {
       updateTexts();
       renderContent();
     },
+    // Подписка на картинку живёт вместе с диалогом.
+    onClose: () => {
+      unsubscribeWallpaper();
+      refreshWallpaperSection = null;
+    },
   });
 
   renderContent();
   refreshApplyButtons();
+  // Снимок дочитывается асинхронно: свежая картинка активной сети из главного
+  // процесса (сервер или локальный кэш) — задача a6ad0143.
+  void initSnapshot();
 }
 

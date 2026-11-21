@@ -13,7 +13,7 @@ import { recordReads } from '../../domain/read-metrics-service.js';
 import { thoughtTypeCatalog } from '../catalogs.js';
 import { projectThoughtRows } from '../../domain/response-projection.js';
 import { getEffectiveViewsForThought, executeViewDefinitionForThought, runViewForThought } from '../../domain/thought-type-views-service.js';
-import { openMemberNetwork, runTool } from '../context.js';
+import { openMemberNetwork, runTool, showTrashFor } from '../context.js';
 import { mcpTokenContext } from './token-context.js';
 
 export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
@@ -82,6 +82,8 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
               tokenContext: mcpTokenContext(rt, args.network_id),
               // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
               profile: 'thoughts',
+              // Лист «Есть задачи» — по настройке корзины (0.16.1, пачка 11).
+              showTrash: showTrashFor(rt, args.network_id),
               // Потолок страницы — общий с сохранённым путём `etn.views.run`.
               maxLimit: 200,
               // Ad-hoc: `ast.sort` XOR `sort`/`order` (конвенция cb78315b).
@@ -183,6 +185,8 @@ export function registerViewsRunTool(mcp: McpServer, rt: McpRuntime): void {
             // Обязательный пункт задачи cb78315b: контекст разрешения токенов
             // (нужен для отборов, хранящих определение в форме AST).
             tokenContext: mcpTokenContext(rt, args.network_id),
+            // Лист «Есть задачи» — по настройке корзины (0.16.1, пачка 11).
+            showTrash: showTrashFor(rt, args.network_id),
           },
         );
         // Страница уже отсортирована и спагинирована SQL-движком — никакой

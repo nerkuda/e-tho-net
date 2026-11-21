@@ -13,6 +13,9 @@ import {
   WIKI_LINK_TARGET_ATTR,
   WIKI_LINK_ID_ATTR,
   WIKI_LINK_NETWORK_ATTR,
+  WIKI_LINK_DATE_CLASS,
+  WIKI_LINK_DATE_ATTR,
+  WIKI_LINK_TIME_ATTR,
 } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -194,6 +197,89 @@ test('ID-форма: [[#id]] внутри code span и fenced-блока не и
 
 test('обычные [текст](url) ссылки не задеваются', () => {
   assert.match(renderMarkdown('[пример](https://example.com)'), /<a href="https:\/\/example\.com">/);
+});
+
+// ---------------------------------------------------------------------------
+// Date-ссылки (0.16.1; требование 62efc4f2, ADR fa50de55)
+// ---------------------------------------------------------------------------
+
+test('[[YYYY-MM-DD]] — date-чип: класс wiki-link-date, ISO в data-wiki-date, подпись dd.MM.yyyy', () => {
+  const html = renderMarkdown('см. [[2026-11-02]]');
+  assert.ok(html.includes(`class="${WIKI_LINK_CLASS} ${WIKI_LINK_DATE_CLASS}"`), html);
+  assert.ok(html.includes(`${WIKI_LINK_DATE_ATTR}="2026-11-02"`), html);
+  assert.ok(html.includes('>02.11.2026</span>'), html);
+  // Приоритет над мыслью (ADR fa50de55): это НЕ legacy-имя.
+  assert.ok(!html.includes(WIKI_LINK_TARGET_ATTR + '='), html);
+  assert.ok(!html.includes('data-legacy-link'), html);
+});
+
+test('[[YYYY-MM-DD HH:MM]] — datetime-чип: время в data-wiki-time и в подписи', () => {
+  const html = renderMarkdown('встреча [[2026-11-02 14:30]]');
+  assert.ok(html.includes(`${WIKI_LINK_DATE_ATTR}="2026-11-02"`), html);
+  assert.ok(html.includes(`${WIKI_LINK_TIME_ATTR}="14:30"`), html);
+  assert.ok(html.includes('>02.11.2026 14:30</span>'), html);
+  assert.ok(!html.includes(WIKI_LINK_TARGET_ATTR + '='), html);
+});
+
+test('алиас date-ссылки заменяет подпись, ISO остаётся в data-атрибутах', () => {
+  const html = renderMarkdown('[[2026-11-02 14:30|совещание]]');
+  assert.ok(html.includes('>совещание</span>'), html);
+  assert.ok(html.includes(`${WIKI_LINK_DATE_ATTR}="2026-11-02"`), html);
+  assert.ok(html.includes(`${WIKI_LINK_TIME_ATTR}="14:30"`), html);
+  assert.ok(!html.includes('02.11.2026'), 'алиас полностью заменяет подпись');
+});
+
+test('валидные ISO-даты: високосный год, границы месяца и суток', () => {
+  const cases: Array<[string, string]> = [
+    ['2024-02-29', '29.02.2024'],
+    ['0001-01-01', '01.01.0001'],
+    ['2026-12-31', '31.12.2026'],
+    ['2026-11-02 00:00', '02.11.2026 00:00'],
+    ['2026-11-02 23:59', '02.11.2026 23:59'],
+  ];
+  for (const [target, label] of cases) {
+    const html = renderMarkdown(`[[${target}]]`);
+    assert.ok(html.includes(WIKI_LINK_DATE_CLASS), target);
+    assert.ok(html.includes(`>${label}</span>`), `${target}: ${html}`);
+  }
+});
+
+test('невалидная дата — legacy-ссылка на имя (не date-чип)', () => {
+  const invalid = [
+    '2026-13-45', // нет такого месяца/дня
+    '2026-02-29', // 2026 не високосный
+    '2026-1-2', // не ISO (месяц/день без ведущего нуля)
+    '2026-11-02 24:00', // нет такого часа
+    '2026-11-02 14:60', // нет такой минуты
+    '2026-11-02 14:30:00', // секунд в синтаксисе нет
+    '2026-11-02T14:30', // разделитель — только пробел
+    '02.11.2026', // не ISO
+  ];
+  for (const target of invalid) {
+    const html = renderMarkdown(`[[${target}]]`);
+    assert.ok(!html.includes(WIKI_LINK_DATE_CLASS), target);
+    assert.ok(html.includes(`${WIKI_LINK_TARGET_ATTR}="${target}"`), target);
+    assert.ok(html.includes('data-legacy-link="true"'), target);
+  }
+});
+
+test('перенос строки внутри date-ссылки — обычный текст', () => {
+  const html = renderMarkdown('[[2026-11-02\n14:30]]');
+  assert.ok(!html.includes(WIKI_LINK_DATE_CLASS), html);
+  assert.ok(!html.includes(WIKI_LINK_CLASS), html);
+});
+
+test('date-ссылка внутри code span и fence не интерпретируется', () => {
+  assert.ok(renderMarkdown('`[[2026-11-02]]`').includes('<code>[[2026-11-02]]</code>'));
+  const fenced = renderMarkdown('```\n[[2026-11-02]]\n```');
+  assert.ok(fenced.includes('[[2026-11-02]]'));
+  assert.ok(!fenced.includes(WIKI_LINK_DATE_CLASS));
+});
+
+test('алиас date-ссылки экранируется', () => {
+  const html = renderMarkdown('[[2026-11-02|<b>x</b>]]');
+  assert.ok(!html.includes('<b>'));
+  assert.ok(html.includes('>&lt;b&gt;x&lt;/b&gt;</span>'), html);
 });
 
 // ---------------------------------------------------------------------------

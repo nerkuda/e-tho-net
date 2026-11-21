@@ -19,6 +19,7 @@ import { describe, it } from 'node:test';
 
 import {
   compatibilityRangeFor,
+  parseSemver,
   satisfiesRange,
   type HealthResponse,
   type VersionResponse,
@@ -53,6 +54,17 @@ const VERSION_FIELDS = [
   'recommended_client_version',
   'version',
 ] as const;
+
+/**
+ * Рекомендованная версия ЗА пределами окна совместимости текущего сервера —
+ * следующий minor. Считается от `SERVER_VERSION`: литерал «вне окна» устаревает
+ * при каждом релизе (например, `0.16.0` попала в окно 0.16.x).
+ */
+const RECOMMENDED_OUTSIDE_WINDOW = (() => {
+  const parsed = parseSemver(SERVER_VERSION);
+  assert.ok(parsed !== null, `SERVER_VERSION ${SERVER_VERSION} is not semver`);
+  return `${parsed.major}.${parsed.minor + 1}.0`;
+})();
 
 describe('resolveClientChannel — значения по умолчанию (0.15.1)', () => {
   it('диапазон, min_client, рекомендация и страница релиза выводятся из версии сервера', () => {
@@ -273,7 +285,7 @@ describe('loadConfig — отказ старта на некорректных E
     { env: { ETN_CLIENT_COMPATIBILITY: '>=0.1.0' }, variable: 'ETN_CLIENT_COMPATIBILITY' },
     { env: { ETN_CLIENT_COMPATIBILITY: '>=0.15.0 <0.15.4' }, variable: 'ETN_CLIENT_COMPATIBILITY' },
     {
-      env: { ETN_RECOMMENDED_CLIENT_VERSION: '0.16.0' },
+      env: { ETN_RECOMMENDED_CLIENT_VERSION: RECOMMENDED_OUTSIDE_WINDOW },
       variable: 'ETN_RECOMMENDED_CLIENT_VERSION',
     },
     { env: { ETN_CLIENT_DOWNLOAD_URL: 'http://example.com' }, variable: 'ETN_CLIENT_DOWNLOAD_URL' },

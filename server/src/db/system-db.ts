@@ -53,6 +53,24 @@ import {
  */
 const COUNT_FIRST_USER_SQL = 'SELECT COUNT(*) AS c FROM users WHERE is_first_user = 1';
 
+/** Raw `user_files` row — a user's file in a network (entity 62fd29b5, ADR a5888535). */
+export interface UserFileRow {
+  user_id: string;
+  /** Network the file belongs to (revision 2026-11-13, task 5db41abf). */
+  network_id: string;
+  kind: string;
+  /** Absolute path under `ETN_DATA_DIR/users/<user_id>/files/`. */
+  file_path: string;
+  /** SHA-256 of the stored bytes. */
+  content_hash: string;
+  file_size: number;
+  mime_type: string;
+  /** JSON metadata computed by the client, stored as is. */
+  meta: string;
+  /** Epoch ms of the last overwrite. */
+  updated_at: number;
+}
+
 /** Raw `users` row shape (INTEGER booleans). */
 interface UserRow {
   id: string;
@@ -374,6 +392,11 @@ export class SystemDb {
   private readonly stGetUserSetting: Database.Statement;
   private readonly stUpsertUserSetting: Database.Statement;
   private readonly stListUserSettings: Database.Statement;
+  private readonly stGetUserFile: Database.Statement;
+  private readonly stUpsertUserFile: Database.Statement;
+  private readonly stDeleteUserFile: Database.Statement;
+  private readonly stListUserFilesByNetwork: Database.Statement;
+  private readonly stDeleteUserFilesByNetwork: Database.Statement;
   private readonly stGetSetting: Database.Statement;
   private readonly stSetSetting: Database.Statement;
   private readonly stListNetworkIds: Database.Statement;
@@ -513,6 +536,21 @@ export class SystemDb {
     );
     this.stListUserSettings = db.prepare(
       'SELECT key, value, updated_at FROM user_settings WHERE user_id = ? ORDER BY key',
+    );
+    this.stGetUserFile = db.prepare(
+      'SELECT user_id, network_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at FROM user_files WHERE user_id = ? AND network_id = ? AND kind = ? LIMIT 1',
+    );
+    this.stUpsertUserFile = db.prepare(
+      'INSERT INTO user_files (user_id, network_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, network_id, kind) DO UPDATE SET file_path = excluded.file_path, content_hash = excluded.content_hash, file_size = excluded.file_size, mime_type = excluded.mime_type, meta = excluded.meta, updated_at = excluded.updated_at',
+    );
+    this.stDeleteUserFile = db.prepare(
+      'DELETE FROM user_files WHERE user_id = ? AND network_id = ? AND kind = ?',
+    );
+    this.stListUserFilesByNetwork = db.prepare(
+      'SELECT user_id, network_id, kind, file_path, content_hash, file_size, mime_type, meta, updated_at FROM user_files WHERE network_id = ?',
+    );
+    this.stDeleteUserFilesByNetwork = db.prepare(
+      'DELETE FROM user_files WHERE network_id = ?',
     );
     this.stGetSetting = db.prepare('SELECT value FROM settings WHERE key = ? LIMIT 1');
     this.stSetSetting = db.prepare(
@@ -1242,6 +1280,54 @@ export class SystemDb {
       updated_at: string;
     }>;
     return rows.map((r) => ({ key: r.key, value: JSON.parse(r.value), updated_at: r.updated_at }));
+  }
+
+  // -------------------------------------------------------------------------
+  // user_files — a user's file in a network: the key is (user, network, kind)
+  // (entity 62fd29b5, ADR a5888535; API operation 31ef478a, revision 2026-11-13)
+  // -------------------------------------------------------------------------
+
+  /** The single file row of a (user, network, kind) triple, or `null`. */
+  getUserFile(userId: string, networkId: string, kind: string): UserFileRow | null {
+    const row = this.stGetUserFile.get(userId, networkId, kind) as UserFileRow | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Insert or overwrite the single row of a (user, network, kind) triple. The
+   * primary key is the UNIQUE invariant: a re-upload keeps one row per kind
+   * inside one network.
+   */
+  upsertUserFile(row: UserFileRow): void {
+    this.stUpsertUserFile.run(
+      row.user_id,
+      row.network_id,
+      row.kind,
+      row.file_path,
+      row.content_hash,
+      row.file_size,
+      row.mime_type,
+      row.meta,
+      row.updated_at,
+    );
+  }
+
+  /** Delete the row of a (user, network, kind) triple; `true` when it existed. */
+  deleteUserFile(userId: string, networkId: string, kind: string): boolean {
+    return this.stDeleteUserFile.run(userId, networkId, kind).changes > 0;
+  }
+
+  /**
+   * Remove every `user_files` row of a network and RETURN the removed rows:
+   * the caller deletes the bytes on disk (networks live in separate databases,
+   * so there is no FK cascade — entity 62fd29b5, task 5db41abf).
+   */
+  takeUserFilesByNetwork(networkId: string): UserFileRow[] {
+    return this.transaction(() => {
+      const rows = this.stListUserFilesByNetwork.all(networkId) as UserFileRow[];
+      this.stDeleteUserFilesByNetwork.run(networkId);
+      return rows;
+    });
   }
 
   // -------------------------------------------------------------------------

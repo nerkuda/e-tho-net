@@ -26,6 +26,7 @@ import { createInMemoryNetworkDb } from '../src/db/network-db.js';
 import type { NetworkDb } from '../src/db/network-db.js';
 import { createComment, createCommentWithTargets } from '../src/domain/comment-service.js';
 import { parseChronicleQueryBody, queryChronicle } from '../src/domain/chronicle-service.js';
+import { flushTaskProjection } from '../src/domain/task-projection.js';
 
 function nativeAvailable(): boolean {
   try {
@@ -641,3 +642,87 @@ describe('хроника: авторство записи раскрывает �
     }
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// «Есть задачи» записи (0.16.1, уточнение 2026-11-19, пункт 8)
+// ---------------------------------------------------------------------------
+
+describe(
+  'хроника: условие «Есть задачи» записи (пункт 8 уточнения 2026-11-19)',
+  { skip: !nativeAvailable() },
+  () => {
+    it('record_tasks: записи с задачами и без; eq/ne и пусто/не пусто согласованы', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        const owner = seedThought(ndb, 'Мысль');
+        const withTask = createComment(
+          ndb,
+          'thought',
+          owner,
+          {
+            kind: 'chronological',
+            title: 'С задачей',
+            body_md: '- [ ] задача',
+            valid_from: '2024-03-05T10:00:00.000Z',
+          },
+          USER,
+        ).id;
+        const withNested = createComment(
+          ndb,
+          'thought',
+          owner,
+          {
+            kind: 'chronological',
+            title: 'Задача с пунктом',
+            body_md: '- [ ] задача\n  - [ ] пункт чек-листа',
+            valid_from: '2024-03-06T10:00:00.000Z',
+          },
+          USER,
+        ).id;
+        const plain = createComment(
+          ndb,
+          'thought',
+          owner,
+          {
+            kind: 'chronological',
+            title: 'Без задач',
+            body_md: 'просто текст записи',
+            valid_from: '2024-03-07T10:00:00.000Z',
+          },
+          USER,
+        ).id;
+        // Проекция задач строится в обёртке записи; прямой вызов домена её лишь
+        // помечает — сбрасываем очередь явно.
+        flushTaskProjection(ndb);
+
+        const ids = (filter: FilterAst['filter']): string[] => runAst(ndb, filter).ids.sort();
+
+        // «Есть задачи» = есть хотя бы одна строка-задача (вложенный пункт под
+        // задачей — не отдельная задача, но родитель уже даёт признак).
+        assert.deepEqual(
+          ids({ entity: { kind: 'record_tasks' }, operator: 'not_empty' }),
+          [withNested, withTask].sort(),
+          'not_empty — записи с задачами',
+        );
+        assert.deepEqual(
+          ids({ entity: { kind: 'record_tasks' }, operator: 'eq', value: true }),
+          [withNested, withTask].sort(),
+          'eq true эквивалентен not_empty',
+        );
+        assert.deepEqual(
+          ids({ entity: { kind: 'record_tasks' }, operator: 'is_empty' }),
+          [plain],
+          'is_empty — только запись без задач',
+        );
+        assert.deepEqual(
+          ids({ entity: { kind: 'record_tasks' }, operator: 'ne', value: true }),
+          [plain],
+          'ne true эквивалентен is_empty',
+        );
+      } finally {
+        ndb.close();
+      }
+    });
+  },
+);

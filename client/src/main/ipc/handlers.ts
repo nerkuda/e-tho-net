@@ -16,12 +16,32 @@ import os from 'node:os';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
-import { CLIENT_META_KEY, EtnError, NOT_CONNECTED_ERROR_TEXT, NOT_CONNECTED_NETWORK_ERROR_TEXT, type CurrentUser, type FocusDir, type LinkTypeFilterInput, type Network, type SystemLoggingStatus, type TypeOwnerType } from '@etn/shared';
+import {
+  CLIENT_META_KEY,
+  EtnError,
+  NOT_CONNECTED_ERROR_TEXT,
+  NOT_CONNECTED_NETWORK_ERROR_TEXT,
+  type CurrentUser,
+  type FocusDir,
+  type LinkTypeFilterInput,
+  type Network,
+  type SystemLoggingStatus,
+  type TypeOwnerType,
+} from '@etn/shared';
 
 import type { RestClient } from '../net/rest-client.js';
 import type { DraftRow, LocalDb, ServerProfileRow } from '../db/local-db.js';
 import { getClientLog } from '../log/client-log.js';
-import type { AppInfo, ClientLanguage, ClipboardReadResult, ClientLogState, IpcCallContext, PickFileResult, PickImageResult, ServerMaintenanceDto } from './contract.js';
+import type {
+  AppInfo,
+  ClientLanguage,
+  ClipboardReadResult,
+  ClientLogState,
+  IpcCallContext,
+  PickFileResult,
+  PickImageResult,
+  ServerMaintenanceDto,
+} from './contract.js';
 import { mapSystemLanguage } from '../system-locale.js';
 import type { CompatibilityResult } from '../compatibility.js';
 import type { ConnectPrefill } from '../connect-prefill.js';
@@ -30,10 +50,23 @@ import { readClipboard } from './clipboard.js';
 import { classifyOpenTarget } from './open-target.js';
 import { printHtmlToPdf, type PdfPrintWindow } from '../print-pdf.js';
 import { errText } from '../../renderer/lib/dom.js';
+import { wallpaperCacheDir } from '../wallpaper/wallpaper-cache.js';
+import {
+  loadWallpaper,
+  removeWallpaper,
+  uploadWallpaper,
+  type WallpaperServiceDeps,
+  type WallpaperUploadInput,
+} from '../wallpaper/wallpaper-service.js';
 
 /** Shared state owned by the main process, injected into handlers. */
 export interface HandlerDeps {
   localDb: LocalDb;
+  /**
+   * Корень данных клиента (`app.getPath('userData')`): каталог локального кэша
+   * фоновой картинки карты (задача 80324150, сценарий 0ec86f0b).
+   */
+  userDataDir: string;
   /** Active REST client, or `null` when disconnected. */
   getRest: () => RestClient | null;
   /** Realtime pool (one socket per open network, Q2). `null` when disconnected. */
@@ -75,6 +108,12 @@ export interface HandlerDeps {
   getServerMaintenance: () => ServerMaintenanceDto;
   /** Returns the currently open network id (realtime `getNetworkId` source). */
   getCurrentNetworkId: () => string | null;
+  /**
+   * Текущее главное окно (`null` — ещё не создано/уже уничтожено). Нужно
+   * обработчику `system.setWindowBackground`: фон окна следует за применённой
+   * темой (ревизия задачи 0e4a52cd).
+   */
+  getWindow: () => import('electron').BrowserWindow | null;
   /** Opens a network: persists L4 state, connects realtime, returns meta. */
   openNetwork: (networkId: string) => Promise<Network>;
   /** Bridge: forwards a realtime event to the renderer window. */
@@ -333,9 +372,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         .some((t) => t.network_id === row.network_id);
       if (!stillOpen) deps.getRealtimePool()?.release(row.network_id);
       // Re-pack slot indices so subsequent `reorderTabs` works on a dense list.
-      const remaining = deps.localDb
-        .listTabs(profile.id)
-        .map((t, idx) => ({ id: t.tab_id, idx }));
+      const remaining = deps.localDb.listTabs(profile.id).map((t, idx) => ({ id: t.tab_id, idx }));
       deps.localDb.reorderTabs(
         profile.id,
         remaining.map((r) => r.id),
@@ -509,14 +546,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         synonyms?: string[],
         typeIds?: string[],
         mode?: 'dedupe' | 'search',
-      ) =>
-        requireRest(deps).findDuplicates(
-          networkId,
-          title,
-          synonyms ?? [],
-          typeIds ?? [],
-          mode,
-        ),
+      ) => requireRest(deps).findDuplicates(networkId, title, synonyms ?? [], typeIds ?? [], mode),
     ),
   );
   // Задача eb1a3f43: кросс-сетевая проверка дублей — для диалога выбора мысли
@@ -544,8 +574,12 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughts.searchAcrossNetworks',
-    bind((networkId: string, networkIds: string[], request: Parameters<RestClient['searchThoughtsAcrossNetworks']>[2]) =>
-      requireRest(deps).searchThoughtsAcrossNetworks(networkId, networkIds, request),
+    bind(
+      (
+        networkId: string,
+        networkIds: string[],
+        request: Parameters<RestClient['searchThoughtsAcrossNetworks']>[2],
+      ) => requireRest(deps).searchThoughtsAcrossNetworks(networkId, networkIds, request),
     ),
   );
   handlers.set(
@@ -555,8 +589,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         networkId: string,
         networkIds: string[],
         request: Parameters<RestClient['queryStructureThoughtsAcrossNetworks']>[2],
-      ) =>
-        requireRest(deps).queryStructureThoughtsAcrossNetworks(networkId, networkIds, request),
+      ) => requireRest(deps).queryStructureThoughtsAcrossNetworks(networkId, networkIds, request),
     ),
   );
   handlers.set(
@@ -599,12 +632,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'structures.hierarchy',
-    bind(
-      (
-        networkId: string,
-        thoughtId: string,
-        query: Parameters<RestClient['getHierarchy']>[2],
-      ) => requireRest(deps).getHierarchy(networkId, thoughtId, query),
+    bind((networkId: string, thoughtId: string, query: Parameters<RestClient['getHierarchy']>[2]) =>
+      requireRest(deps).getHierarchy(networkId, thoughtId, query),
     ),
   );
   handlers.set(
@@ -659,6 +688,18 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'chronicle.query',
     bind((networkId: string, request: Parameters<RestClient['queryChronicle']>[1]) =>
       requireRest(deps).queryChronicle(networkId, request),
+    ),
+  );
+  handlers.set(
+    'chronicle.dayLinks',
+    bind((networkId: string, query: Parameters<RestClient['listDayLinks']>[1]) =>
+      requireRest(deps).listDayLinks(networkId, query),
+    ),
+  );
+  handlers.set(
+    'chronicle.calendarMarkers',
+    bind((networkId: string, query: Parameters<RestClient['listCalendarMarkers']>[1]) =>
+      requireRest(deps).listCalendarMarkers(networkId, query),
     ),
   );
   handlers.set(
@@ -773,9 +814,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'links.deletionCheck',
-    bind((networkId: string, ids: string[]) =>
-      requireRest(deps).checkLinkDeletion(networkId, ids),
-    ),
+    bind((networkId: string, ids: string[]) => requireRest(deps).checkLinkDeletion(networkId, ids)),
   );
 
   // --- trash (S13, 03-server-api.md §14b) -----------------------------------
@@ -791,11 +830,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   // --- activity log (задачи f2eca5a4, 6bcccd2b; docs/03-server-api.md §13d) -
   handlers.set(
     'activity.list',
-    bind(
-      (
-        networkId: string,
-        filters?: Parameters<RestClient['listActivity']>[1],
-      ) => requireRest(deps).listActivity(networkId, filters),
+    bind((networkId: string, filters?: Parameters<RestClient['listActivity']>[1]) =>
+      requireRest(deps).listActivity(networkId, filters),
     ),
   );
   handlers.set(
@@ -820,11 +856,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'publications.create',
-    bind(
-      (
-        networkId: string,
-        input: Parameters<RestClient['createPublication']>[1],
-      ) => requireRest(deps).createPublication(networkId, input),
+    bind((networkId: string, input: Parameters<RestClient['createPublication']>[1]) =>
+      requireRest(deps).createPublication(networkId, input),
     ),
   );
   handlers.set(
@@ -891,8 +924,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'publications.assembly',
     bind(
-      (networkId: string, id: string, query?: Parameters<RestClient['getPublicationAssembly']>[2]) =>
-        requireRest(deps).getPublicationAssembly(networkId, id, query),
+      (
+        networkId: string,
+        id: string,
+        query?: Parameters<RestClient['getPublicationAssembly']>[2],
+      ) => requireRest(deps).getPublicationAssembly(networkId, id, query),
     ),
   );
   handlers.set(
@@ -914,18 +950,17 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'publications.usage',
     bind(
-      (networkId: string, thoughtId: string, query?: Parameters<RestClient['listPublicationUsage']>[2]) =>
-        requireRest(deps).listPublicationUsage(networkId, thoughtId, query),
+      (
+        networkId: string,
+        thoughtId: string,
+        query?: Parameters<RestClient['listPublicationUsage']>[2],
+      ) => requireRest(deps).listPublicationUsage(networkId, thoughtId, query),
     ),
   );
   handlers.set(
     'publications.export',
-    bind(
-      (
-        networkId: string,
-        id: string,
-        request: Parameters<RestClient['exportPublication']>[2],
-      ) => requireRest(deps).exportPublication(networkId, id, request),
+    bind((networkId: string, id: string, request: Parameters<RestClient['exportPublication']>[2]) =>
+      requireRest(deps).exportPublication(networkId, id, request),
     ),
   );
   /**
@@ -1018,9 +1053,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'publications.updateShelf',
-    bind(
-      (networkId: string, id: string, input: Parameters<RestClient['updateShelf']>[2]) =>
-        requireRest(deps).updateShelf(networkId, id, input),
+    bind((networkId: string, id: string, input: Parameters<RestClient['updateShelf']>[2]) =>
+      requireRest(deps).updateShelf(networkId, id, input),
     ),
   );
   handlers.set(
@@ -1037,9 +1071,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'publications.shelfDeletionCheck',
-    bind((networkId: string, id: string) =>
-      requireRest(deps).checkShelfDeletion(networkId, id),
-    ),
+    bind((networkId: string, id: string) => requireRest(deps).checkShelfDeletion(networkId, id)),
   );
   handlers.set(
     'publications.addShelfItem',
@@ -1110,13 +1142,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'layers.mergeThought',
-    bind(
-      (
-        networkId: string,
-        layerId: string,
-        thoughtId: string,
-        mode: 'overwrite' | 'combine',
-      ) => requireRest(deps).mergeLayerThought(networkId, layerId, thoughtId, mode),
+    bind((networkId: string, layerId: string, thoughtId: string, mode: 'overwrite' | 'combine') =>
+      requireRest(deps).mergeLayerThought(networkId, layerId, thoughtId, mode),
     ),
   );
   handlers.set(
@@ -1127,16 +1154,15 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'layers.diff',
-    bind((networkId: string, layerId: string) => requireRest(deps).getLayerDiff(networkId, layerId)),
+    bind((networkId: string, layerId: string) =>
+      requireRest(deps).getLayerDiff(networkId, layerId),
+    ),
   );
   handlers.set(
     'layers.diffPage',
     bind(
-      (
-        networkId: string,
-        layerId: string,
-        options?: { limit?: number; cursor?: string | null },
-      ) => requireRest(deps).getLayerDiffPage(networkId, layerId, options ?? {}),
+      (networkId: string, layerId: string, options?: { limit?: number; cursor?: string | null }) =>
+        requireRest(deps).getLayerDiffPage(networkId, layerId, options ?? {}),
     ),
   );
   handlers.set(
@@ -1157,9 +1183,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'types.getThoughtType',
-    bind((networkId: string, id: string) =>
-      requireRest(deps).getThoughtType(networkId, id),
-    ),
+    bind((networkId: string, id: string) => requireRest(deps).getThoughtType(networkId, id)),
   );
   handlers.set(
     'types.createThoughtType',
@@ -1199,9 +1223,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'types.getLinkType',
-    bind((networkId: string, id: string) =>
-      requireRest(deps).getLinkType(networkId, id),
-    ),
+    bind((networkId: string, id: string) => requireRest(deps).getLinkType(networkId, id)),
   );
   handlers.set(
     'types.createLinkType',
@@ -1233,9 +1255,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'types.listTypeProperties',
-    bind(
-      (networkId: string, ownerType: TypeOwnerType, typeId: string) =>
-        requireRest(deps).listTypeProperties(networkId, ownerType, typeId),
+    bind((networkId: string, ownerType: TypeOwnerType, typeId: string) =>
+      requireRest(deps).listTypeProperties(networkId, ownerType, typeId),
     ),
   );
   handlers.set(
@@ -1258,8 +1279,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         typeId: string,
         propertyId: string,
         input: Parameters<RestClient['updateTypeProperty']>[4],
-      ) =>
-        requireRest(deps).updateTypeProperty(networkId, ownerType, typeId, propertyId, input),
+      ) => requireRest(deps).updateTypeProperty(networkId, ownerType, typeId, propertyId, input),
     ),
   );
   handlers.set(
@@ -1316,23 +1336,18 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   // --- thought-type views (отборы типов мыслей, 0.7.3, task c1fa71d4) ----
   handlers.set(
     'thoughtTypeViews.list',
-    bind(
-      (
-        networkId: string,
-        thoughtTypeId: string,
-        opts?: { includeEffective?: boolean },
-      ) => requireRest(deps).listThoughtTypeViews(networkId, thoughtTypeId, opts),
+    bind((networkId: string, thoughtTypeId: string, opts?: { includeEffective?: boolean }) =>
+      requireRest(deps).listThoughtTypeViews(networkId, thoughtTypeId, opts),
     ),
   );
   handlers.set(
     'thoughtTypeViews.create',
-    bind(
-      (networkId: string, thoughtTypeId: string, input: unknown) =>
-        requireRest(deps).createThoughtTypeView(
-          networkId,
-          thoughtTypeId,
-          input as Parameters<RestClient['createThoughtTypeView']>[2],
-        ),
+    bind((networkId: string, thoughtTypeId: string, input: unknown) =>
+      requireRest(deps).createThoughtTypeView(
+        networkId,
+        thoughtTypeId,
+        input as Parameters<RestClient['createThoughtTypeView']>[2],
+      ),
     ),
   );
   handlers.set(
@@ -1356,9 +1371,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughtTypeViews.remove',
-    bind(
-      (networkId: string, thoughtTypeId: string, viewId: string, expectedVersion: number) =>
-        requireRest(deps).deleteThoughtTypeView(networkId, thoughtTypeId, viewId, expectedVersion),
+    bind((networkId: string, thoughtTypeId: string, viewId: string, expectedVersion: number) =>
+      requireRest(deps).deleteThoughtTypeView(networkId, thoughtTypeId, viewId, expectedVersion),
     ),
   );
   handlers.set(
@@ -1371,12 +1385,14 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         networkId: string,
         thoughtId: string,
         viewName: string,
-        opts: {
-          sort?: import('@etn/shared').StructureSort;
-          order?: import('@etn/shared').SortOrder;
-          limit?: number;
-          offset?: number;
-        } | undefined,
+        opts:
+          | {
+              sort?: import('@etn/shared').StructureSort;
+              order?: import('@etn/shared').SortOrder;
+              limit?: number;
+              offset?: number;
+            }
+          | undefined,
         ctx: IpcCallContext,
       ) =>
         requireRest(deps).runThoughtTypeView(networkId, thoughtId, viewName, {
@@ -1387,23 +1403,21 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'thoughtTypeViews.moveToThought',
-    bind(
-      (networkId: string, thoughtTypeId: string, viewId: string, targetThoughtId: string) =>
-        requireRest(deps).moveThoughtTypeViewToThought(
-          networkId,
-          thoughtTypeId,
-          viewId,
-          targetThoughtId,
-        ),
+    bind((networkId: string, thoughtTypeId: string, viewId: string, targetThoughtId: string) =>
+      requireRest(deps).moveThoughtTypeViewToThought(
+        networkId,
+        thoughtTypeId,
+        viewId,
+        targetThoughtId,
+      ),
     ),
   );
 
   // --- thought-custom views (внетиповые отборы мысли, 0.14.1, 5e55b7bb) ---
   handlers.set(
     'thoughtCustomViews.list',
-    bind(
-      (networkId: string, thoughtId: string, opts?: { includeEffective?: boolean }) =>
-        requireRest(deps).listThoughtCustomViews(networkId, thoughtId, opts),
+    bind((networkId: string, thoughtId: string, opts?: { includeEffective?: boolean }) =>
+      requireRest(deps).listThoughtCustomViews(networkId, thoughtId, opts),
     ),
   );
   handlers.set(
@@ -1419,7 +1433,13 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'thoughtCustomViews.update',
     bind(
-      (networkId: string, thoughtId: string, viewId: string, input: unknown, expectedVersion: number) =>
+      (
+        networkId: string,
+        thoughtId: string,
+        viewId: string,
+        input: unknown,
+        expectedVersion: number,
+      ) =>
         requireRest(deps).updateThoughtCustomView(
           networkId,
           thoughtId,
@@ -1529,22 +1549,19 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   handlers.set(
     'propertyRegistry.update',
     bind(
-      (
-        networkId: string,
-        id: string,
-        input: Parameters<RestClient['updateNetworkProperty']>[2],
-      ) => requireRest(deps).updateNetworkProperty(networkId, id, input),
+      (networkId: string, id: string, input: Parameters<RestClient['updateNetworkProperty']>[2]) =>
+        requireRest(deps).updateNetworkProperty(networkId, id, input),
     ),
   );
   handlers.set(
     'propertyRegistry.remove',
-    bind((networkId: string, id: string) =>
-      requireRest(deps).deleteNetworkProperty(networkId, id),
-    ),
+    bind((networkId: string, id: string) => requireRest(deps).deleteNetworkProperty(networkId, id)),
   );
   handlers.set(
     'propertyRegistry.usage',
-    bind((networkId: string, id: string) => requireRest(deps).getNetworkPropertyUsage(networkId, id)),
+    bind((networkId: string, id: string) =>
+      requireRest(deps).getNetworkPropertyUsage(networkId, id),
+    ),
   );
 
   // --- comments -------------------------------------------------------------
@@ -1619,14 +1636,9 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         ownerId: string,
         expectedVersion?: number,
       ) =>
-        requireRest(deps).addCommentTarget(
-          networkId,
-          id,
-          ownerType,
-          ownerId,
-          expectedVersion,
-          { clientRequestId: randomUUID() },
-        ),
+        requireRest(deps).addCommentTarget(networkId, id, ownerType, ownerId, expectedVersion, {
+          clientRequestId: randomUUID(),
+        }),
     ),
   );
   handlers.set(
@@ -1639,14 +1651,72 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         ownerId: string,
         expectedVersion?: number,
       ) =>
-        requireRest(deps).removeCommentTarget(
-          networkId,
-          id,
-          ownerType,
-          ownerId,
-          expectedVersion,
-          { clientRequestId: randomUUID() },
-        ),
+        requireRest(deps).removeCommentTarget(networkId, id, ownerType, ownerId, expectedVersion, {
+          clientRequestId: randomUUID(),
+        }),
+    ),
+  );
+
+  // --- tasks (0.16.1, операции e6d65f51/de4cee18) --------------------------
+  handlers.set(
+    'tasks.list',
+    bind((networkId: string, query: Parameters<RestClient['listTasks']>[1]) =>
+      requireRest(deps).listTasks(networkId, query),
+    ),
+  );
+  handlers.set(
+    'tasks.patch',
+    bind((networkId: string, input: Parameters<RestClient['patchTasks']>[1]) =>
+      requireRest(deps).patchTasks(networkId, input, { clientRequestId: randomUUID() }),
+    ),
+  );
+
+  // --- reminders (0.16.1, операции ae19b1bf/500d1b3d) -----------------------
+  handlers.set(
+    'reminders.list',
+    bind((networkId: string, query: Parameters<RestClient['listReminders']>[1]) =>
+      requireRest(deps).listReminders(networkId, query),
+    ),
+  );
+  handlers.set(
+    'reminders.create',
+    bind((networkId: string, input: Parameters<RestClient['createReminder']>[1]) =>
+      requireRest(deps).createReminder(networkId, input, { clientRequestId: randomUUID() }),
+    ),
+  );
+  handlers.set(
+    'reminders.update',
+    bind((networkId: string, id: string, input: Parameters<RestClient['updateReminder']>[2]) =>
+      requireRest(deps).updateReminder(networkId, id, input, { clientRequestId: randomUUID() }),
+    ),
+  );
+  handlers.set(
+    'reminders.snooze',
+    bind((networkId: string, id: string, until: string, occurrenceAt?: string) =>
+      requireRest(deps).snoozeReminder(
+        networkId,
+        id,
+        until,
+        { clientRequestId: randomUUID() },
+        occurrenceAt,
+      ),
+    ),
+  );
+  handlers.set(
+    'reminders.dismiss',
+    bind((networkId: string, id: string, occurrenceAt?: string) =>
+      requireRest(deps).dismissReminder(
+        networkId,
+        id,
+        { clientRequestId: randomUUID() },
+        occurrenceAt,
+      ),
+    ),
+  );
+  handlers.set(
+    'reminders.remove',
+    bind((networkId: string, id: string) =>
+      requireRest(deps).removeReminder(networkId, id, { clientRequestId: randomUUID() }),
     ),
   );
 
@@ -1662,9 +1732,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'attachments.get',
-    bind((networkId: string, id: string) =>
-      requireRest(deps).getAttachment(networkId, id),
-    ),
+    bind((networkId: string, id: string) => requireRest(deps).getAttachment(networkId, id)),
   );
   handlers.set(
     'attachments.add',
@@ -1692,7 +1760,8 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
         input: Parameters<RestClient['uploadThoughtAttachmentFile']>[2],
       ) => {
         const rest = requireRest(deps);
-        if (ownerType === 'thought') return rest.uploadThoughtAttachmentFile(networkId, ownerId, input);
+        if (ownerType === 'thought')
+          return rest.uploadThoughtAttachmentFile(networkId, ownerId, input);
         if (ownerType === 'link') return rest.uploadLinkAttachmentFile(networkId, ownerId, input);
         return rest.uploadPublicationAttachmentFile(networkId, ownerId, input);
       },
@@ -1714,9 +1783,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'attachments.getContent',
-    bind((networkId: string, id: string) =>
-      requireRest(deps).getAttachmentContent(networkId, id),
-    ),
+    bind((networkId: string, id: string) => requireRest(deps).getAttachmentContent(networkId, id)),
   );
   handlers.set(
     'attachments.updateContent',
@@ -1740,22 +1807,15 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'attachments.addOwners',
-    bind(
-      (
-        networkId: string,
-        id: string,
-        input: Parameters<RestClient['addAttachmentOwners']>[2],
-      ) => requireRest(deps).addAttachmentOwners(networkId, id, input),
+    bind((networkId: string, id: string, input: Parameters<RestClient['addAttachmentOwners']>[2]) =>
+      requireRest(deps).addAttachmentOwners(networkId, id, input),
     ),
   );
   handlers.set(
     'attachments.removeOwner',
     bind(
-      (
-        networkId: string,
-        id: string,
-        input: Parameters<RestClient['removeAttachmentOwner']>[2],
-      ) => requireRest(deps).removeAttachmentOwner(networkId, id, input),
+      (networkId: string, id: string, input: Parameters<RestClient['removeAttachmentOwner']>[2]) =>
+        requireRest(deps).removeAttachmentOwner(networkId, id, input),
     ),
   );
   handlers.set(
@@ -1869,6 +1929,79 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'me.getSettings',
     bind(() => requireRest(deps).getMySettings()),
   );
+  /**
+   * `GET /users/me/wallpaper` (+ байты): фоновая картинка карты (0.16.1,
+   * задача 80324150; операция 31ef478a). Главный процесс — единственный
+   * владелец сети и файлов: рендерер получает готовый `data:`-URL.
+   *
+   * Офлайн-старт: активного подключения нет, но профиль остался в локальной БД
+   * (`getActiveProfile`), поэтому кэш находится по нему и карта показывает
+   * последнюю известную картинку (сценарий 0ec86f0b). Без профиля и без
+   * подключения картинки нет.
+   */
+  /**
+   * Ключ `client_meta` последней сети, для которой читали/писали картинку:
+   * офлайн-старт ещё не знает активной сети (сессия не восстановлена), но
+   * картинка кэша её сети должна быть видна (сценарий 0ec86f0b, задача
+   * 5db41abf).
+   */
+  const wallpaperNetworkKey = (profileId: string): string => `wallpaper_network:${profileId}`;
+
+  /**
+   * Сеть картинки: активная сеть рендерера, а если её ещё нет — последняя сеть
+   * этого профиля из `client_meta`. `null` — профиля/сети нет вовсе.
+   */
+  const wallpaperNetworkId = (requested: unknown): string | null => {
+    if (typeof requested === 'string' && requested !== '') return requested;
+    const profile = deps.getProfile() ?? deps.localDb.getActiveProfile();
+    if (profile === null) return null;
+    const remembered = deps.localDb.getMeta(wallpaperNetworkKey(profile.id));
+    return remembered !== null && remembered !== '' ? remembered : null;
+  };
+
+  const wallpaperServiceDeps = (networkId: string): WallpaperServiceDeps | null => {
+    const profile = deps.getProfile() ?? deps.localDb.getActiveProfile();
+    if (profile === null) return null;
+    // Активная сеть профиля запоминается: офлайн-старт возьмёт её кэш.
+    deps.localDb.setMeta(wallpaperNetworkKey(profile.id), networkId);
+    return {
+      remote: deps.getRest(),
+      networkId,
+      cacheDir: wallpaperCacheDir(deps.userDataDir, profile.id, profile.user_id, networkId),
+    };
+  };
+  handlers.set(
+    'me.getWallpaper',
+    bind(async (requestedNetworkId?: unknown) => {
+      const networkId = wallpaperNetworkId(requestedNetworkId);
+      const wpDeps = networkId === null ? null : wallpaperServiceDeps(networkId);
+      if (wpDeps === null) return { status: 'none' as const };
+      return loadWallpaper(wpDeps);
+    }),
+  );
+  handlers.set(
+    'me.uploadWallpaper',
+    bind(async (input: WallpaperUploadInput & { networkId?: unknown }) => {
+      const networkId =
+        typeof input.networkId === 'string' && input.networkId !== '' ? input.networkId : null;
+      const wpDeps = networkId === null ? null : wallpaperServiceDeps(networkId);
+      if (wpDeps === null) throw new Error(NOT_CONNECTED_NETWORK_ERROR_TEXT);
+      return uploadWallpaper(wpDeps, input);
+    }),
+  );
+  handlers.set(
+    'me.removeWallpaper',
+    bind(async (requestedNetworkId?: unknown) => {
+      const networkId =
+        typeof requestedNetworkId === 'string' && requestedNetworkId !== ''
+          ? requestedNetworkId
+          : null;
+      const wpDeps = networkId === null ? null : wallpaperServiceDeps(networkId);
+      if (wpDeps === null) return { status: 'none' as const };
+      await removeWallpaper(wpDeps);
+      return { status: 'none' as const };
+    }),
+  );
   handlers.set(
     'me.setSetting',
     bind((key: string, value: unknown) => requireRest(deps).setMySetting(key, value)),
@@ -1889,9 +2022,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'locks.release',
-    bind((networkId: string, lockId: string) =>
-      requireRest(deps).releaseLock(networkId, lockId),
-    ),
+    bind((networkId: string, lockId: string) => requireRest(deps).releaseLock(networkId, lockId)),
   );
   handlers.set(
     'locks.list',
@@ -1901,9 +2032,7 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'locks.clear',
-    bind((networkId: string, userId: string) =>
-      requireRest(deps).clearLocks(networkId, userId),
-    ),
+    bind((networkId: string, userId: string) => requireRest(deps).clearLocks(networkId, userId)),
   );
 
   // --- meta (L5 client_meta: installation-scoped state, e.g. the UI theme) ---
@@ -2070,8 +2199,28 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       deps.localDb.clearVisitHistory(profile.id, networkId, tabId ?? null);
     }),
   );
-  handlers.set('system.appInfo', bind(() => appInfo()));
-  handlers.set('system.preferredLanguage', bind(() => preferredLanguage()));
+  handlers.set(
+    'system.appInfo',
+    bind(() => appInfo()),
+  );
+  // Фон окна под применённую тему (ревизия задачи 0e4a52cd): renderer присылает
+  // `#rrggbb`, вычисленный из `--bg`; цвет проверяем здесь, окно — текущее.
+  handlers.set(
+    'system.setWindowBackground',
+    bind((color: string) => {
+      if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) {
+        throw new EtnError('VALIDATION_ERROR', 'color must be a CSS hex colour "#rrggbb".', {
+          field: 'color',
+        });
+      }
+      const win = deps.getWindow();
+      if (win !== null && !win.isDestroyed()) win.setBackgroundColor(color);
+    }),
+  );
+  handlers.set(
+    'system.preferredLanguage',
+    bind(() => preferredLanguage()),
+  );
   handlers.set(
     'system.health',
     bind(() => requireRest(deps).getHealth()),
@@ -2109,15 +2258,30 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
     'system.getJob',
     bind((jobId: string) => requireRest(deps).getJob(jobId)),
   );
-  handlers.set('system.pickImage', bind(() => pickImageFile()));
-  handlers.set('system.pickFile', bind(() => pickAnyFile()));
-  handlers.set('system.readClipboard', bind(() => readSystemClipboard()));
-  handlers.set('system.openPath', bind((filePath: string) => openPathShell(filePath)));
+  handlers.set(
+    'system.pickImage',
+    bind((maxBytes?: number) => pickImageFile({ maxBytes })),
+  );
+  handlers.set(
+    'system.pickFile',
+    bind(() => pickAnyFile()),
+  );
+  handlers.set(
+    'system.readClipboard',
+    bind(() => readSystemClipboard()),
+  );
+  handlers.set(
+    'system.openPath',
+    bind((filePath: string) => openPathShell(filePath)),
+  );
   handlers.set(
     'system.openAttachment',
     bind((filePath: string) => openAttachmentFile(deps, filePath)),
   );
-  handlers.set('system.openExternal', bind((url: string) => openExternalShell(url)));
+  handlers.set(
+    'system.openExternal',
+    bind((url: string) => openExternalShell(url)),
+  );
   handlers.set(
     'system.openClientUpdatePage',
     bind((url: string) => openClientUpdatePageShell(url)),
@@ -2173,7 +2337,11 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
           const status = await rest.getServerLogging();
           name = newestServerLogName(status);
           if (name === null) {
-            return { saved_path: null, cancelled: false, error: 'Файлы журнала сервера не найдены.' };
+            return {
+              saved_path: null,
+              cancelled: false,
+              error: 'Файлы журнала сервера не найдены.',
+            };
           }
         }
         const { body } = await rest.downloadServerLogFile(name);
@@ -2217,47 +2385,41 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
   );
   handlers.set(
     'system.downloadExport',
-    bind(
-      async (
-        jobId: string,
-        suggestedFilename: string,
-        targetPath?: string,
-      ) => {
-        const rest = requireRest(deps);
-        const { contentType, body } = await rest.downloadJob(jobId);
-        const ext = extensionForContentType(contentType);
-        // When the caller already has a path (the export dialog picked one),
-        // skip the picker entirely and write directly.
-        if (targetPath !== undefined && targetPath !== '') {
-          try {
-            writeFileSync(targetPath, body);
-          } catch (err) {
-            return { saved_path: null, cancelled: false, error: errText(err) };
-          }
-          return { saved_path: targetPath, cancelled: false };
-        }
-        const filename = suggestedFilename.endsWith(`.${ext}`)
-          ? suggestedFilename
-          : `${suggestedFilename}.${ext}`;
-        const { dialog, BrowserWindow } = await import('electron');
-        const win = BrowserWindow.getFocusedWindow();
-        const save = win
-          ? await dialog.showSaveDialog(win, {
-              title: 'Сохранить экспорт',
-              defaultPath: filename,
-            })
-          : await dialog.showSaveDialog({ title: 'Сохранить экспорт', defaultPath: filename });
-        if (save.canceled || save.filePath === undefined || save.filePath === '') {
-          return { saved_path: null, cancelled: true };
-        }
+    bind(async (jobId: string, suggestedFilename: string, targetPath?: string) => {
+      const rest = requireRest(deps);
+      const { contentType, body } = await rest.downloadJob(jobId);
+      const ext = extensionForContentType(contentType);
+      // When the caller already has a path (the export dialog picked one),
+      // skip the picker entirely and write directly.
+      if (targetPath !== undefined && targetPath !== '') {
         try {
-          writeFileSync(save.filePath, body);
+          writeFileSync(targetPath, body);
         } catch (err) {
           return { saved_path: null, cancelled: false, error: errText(err) };
         }
-        return { saved_path: save.filePath, cancelled: false };
-      },
-    ),
+        return { saved_path: targetPath, cancelled: false };
+      }
+      const filename = suggestedFilename.endsWith(`.${ext}`)
+        ? suggestedFilename
+        : `${suggestedFilename}.${ext}`;
+      const { dialog, BrowserWindow } = await import('electron');
+      const win = BrowserWindow.getFocusedWindow();
+      const save = win
+        ? await dialog.showSaveDialog(win, {
+            title: 'Сохранить экспорт',
+            defaultPath: filename,
+          })
+        : await dialog.showSaveDialog({ title: 'Сохранить экспорт', defaultPath: filename });
+      if (save.canceled || save.filePath === undefined || save.filePath === '') {
+        return { saved_path: null, cancelled: true };
+      }
+      try {
+        writeFileSync(save.filePath, body);
+      } catch (err) {
+        return { saved_path: null, cancelled: false, error: errText(err) };
+      }
+      return { saved_path: save.filePath, cancelled: false };
+    }),
   );
   handlers.set(
     'system.pickSavePath',
@@ -2268,18 +2430,15 @@ export function createHandlers(deps: HandlerDeps): Map<string, IpcHandler> {
       ): Promise<{ filePath: string | null; cancelled: boolean }> => {
         const { BrowserWindow, dialog } = await import('electron');
         const win = BrowserWindow.getFocusedWindow();
-        const filename =
-          suggestedFilename.endsWith(`.${defaultExt}`)
-            ? suggestedFilename
-            : `${suggestedFilename}.${defaultExt}`;
+        const filename = suggestedFilename.endsWith(`.${defaultExt}`)
+          ? suggestedFilename
+          : `${suggestedFilename}.${defaultExt}`;
         const opts = {
           title: 'Сохранить экспорт',
           defaultPath: filename,
         };
         const result =
-          win !== null
-            ? await dialog.showSaveDialog(win, opts)
-            : await dialog.showSaveDialog(opts);
+          win !== null ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
         if (result.canceled || result.filePath === undefined || result.filePath === '') {
           return { filePath: null, cancelled: true };
         }
@@ -2364,9 +2523,7 @@ async function pickEtnxArchive(): Promise<PickedArchive> {
     filters: [{ name: 'Экспорт ETN (.etnx, .zip)', extensions: ['etnx', 'zip'] }],
   };
   const result =
-    win !== null
-      ? await dialog.showOpenDialog(win, opts)
-      : await dialog.showOpenDialog(opts);
+    win !== null ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
   if (result.canceled || result.filePaths.length === 0) {
     return { kind: 'cancelled' };
   }
@@ -2428,10 +2585,16 @@ async function readSystemClipboard(): Promise<ClipboardReadResult> {
 /**
  * Opens the OS file picker for an image and returns the ORIGINAL file as a
  * `data:` URL with its name/mime/size (08-ui-spec.md §6.8, workplan L16). The
- * icon-sized preview is the renderer's job — files up to the attachment limit
- * are accepted; bigger/unreadable ones resolve an error message.
+ * icon-sized preview is the renderer's job.
+ *
+ * `maxBytes` — потолок размера ИСХОДНОГО файла; по умолчанию — лимит вложения
+ * (10 МиБ). Фоновая картинка карты передаёт свой, больший потолок: фото-исходник
+ * даунскейлится клиентом перед отправкой (задача 80324150), поэтому файл-
+ * источник может быть крупным. Отказ — КОД причины (`image_too_large` +
+ * потолок, `image_unreadable`): текст подбирает рендерер по языку интерфейса,
+ * главный процесс пользовательских строк не порождает (вердикт 80324150).
  */
-async function pickImageFile(): Promise<PickImageResult> {
+async function pickImageFile(options?: { maxBytes?: number }): Promise<PickImageResult> {
   // electron is imported lazily so this module stays loadable in the Node test
   // runner (which resolves `electron` to a stub without the named exports).
   const { BrowserWindow, dialog } = await import('electron');
@@ -2454,11 +2617,10 @@ async function pickImageFile(): Promise<PickImageResult> {
   if (filePath === undefined) return { status: 'cancel' };
   try {
     const size = statSync(filePath).size;
-    if (size > PICK_IMAGE_MAX_BYTES) {
-      return {
-        status: 'error',
-        message: `Файл больше ${PICK_IMAGE_MAX_BYTES / (1024 * 1024)} МБ — лимит вложения.`,
-      };
+    const maxBytes = options?.maxBytes ?? PICK_IMAGE_MAX_BYTES;
+    if (size > maxBytes) {
+      // Код + потолок: текст выбирает рендерер по языку интерфейса (80324150).
+      return { status: 'error', code: 'image_too_large', max_bytes: maxBytes };
     }
     const buf = readFileSync(filePath);
     const ext = filePath.toLowerCase().split('.').pop() ?? '';
@@ -2472,7 +2634,7 @@ async function pickImageFile(): Promise<PickImageResult> {
       size,
     };
   } catch {
-    return { status: 'error', message: 'Не удалось прочитать файл.' };
+    return { status: 'error', code: 'image_unreadable' };
   }
 }
 
@@ -2690,6 +2852,10 @@ const SELF_MUTATING_IPC_METHODS: ReadonlySet<string> = new Set([
   'comments.createMulti',
   'comments.addTarget',
   'comments.removeTarget',
+  'tasks.patch',
+  'reminders.snooze',
+  'reminders.dismiss',
+  'reminders.remove',
   'attachments.add',
   'attachments.update',
   'attachments.remove',

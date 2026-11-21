@@ -52,6 +52,8 @@ import { BASE_LAYER_ID, FILTER_AST_VERSION } from '@etn/shared';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { queryThoughts, type ThoughtQueryRequest } from '../src/domain/query-service.js';
+import { rebuildTaskProjection } from '../src/domain/task-projection.js';
+import { listTasks } from '../src/domain/task-service.js';
 
 /** True when the `better-sqlite3` native binding loads. */
 function nativeAvailable(): boolean {
@@ -73,6 +75,8 @@ const PERF_TARGET_MS = {
   parent: 50,
   /** AST-листья «Родитель = X»/«Потомок = X» на стенде 1500 (DoD 6d78ccab). */
   astLeaf: 50,
+  /** GET /tasks: keyset-страница + COUNT по проекции (0.16.1, задача 632eca85). */
+  tasks: 50,
 } as const;
 /**
  * Крупный стенд ошибки 6d78ccab: 10 тыс. мыслей и ~20 тыс. связей. Отбор по
@@ -291,6 +295,38 @@ function seedStand(
   });
 
   return { homeId: ids[0]!, parentId: ids[1]! };
+}
+
+/**
+ * Наполнить стенд задачами (0.16.1): комментарии с пунктами чек-листа и их
+ * материализованная проекция. `taskCount` комментариев по два пункта.
+ */
+function seedTasks(ndb: NetworkDb, thoughtIds: readonly string[], taskCount: number): void {
+  const now = new Date().toISOString();
+  const insert = ndb.prepare(
+    `INSERT INTO comments (id, layer_id, owner_type, owner_id, kind, title, body_md, body_html,
+                           valid_from, valid_to, use_time, version, created_at, updated_at,
+                           created_by, updated_by, created_at_ms, updated_at_ms)
+     VALUES (?, ?, 'thought', ?, 'chronological', NULL, ?, '', ?, ?, 0, 1, ?, ?, ?, ?, 0, 0)`,
+  );
+  ndb.transaction(() => {
+    for (let i = 0; i < taskCount; i += 1) {
+      const day = String((i % 28) + 1).padStart(2, '0');
+      insert.run(
+        `stand-task-${i}`,
+        BASE_LAYER_ID,
+        thoughtIds[i % thoughtIds.length]!,
+        `- [ ] Задача ${i} [[2026-11-${day}]]\n- [x] Готово ${i} [[2026-12-${day}]]`,
+        now,
+        now,
+        now,
+        now,
+        STAND_USER,
+        STAND_USER,
+      );
+    }
+  });
+  rebuildTaskProjection(ndb);
 }
 
 describe(
@@ -532,6 +568,46 @@ describe(
           childrenMs <= PERF_TARGET_MS.astLeaf * PERF_CI_TOLERANCE,
           `слой-снапшот: AST «Потомок = X» ${childrenMs.toFixed(2)} мс > потолка`,
         );
+      } finally {
+        ndb.close();
+      }
+    });
+
+    // --- GET /tasks: keyset-страница и COUNT по проекции (0.16.1) ----------
+    it('GET /tasks: keyset-страница и COUNT по материализованной проекции в потолке', () => {
+      const ndb = createInMemoryNetworkDb();
+      try {
+        seedStand(ndb);
+        const ids = (
+          ndb.prepare('SELECT id FROM thoughts ORDER BY id').all() as { id: string }[]
+        ).map((row) => row.id);
+        seedTasks(ndb, ids, 2000);
+        const today = '2026-11-14';
+        const first = listTasks(ndb, { scope: 'open', limit: 50, today });
+        assert.equal(first.items.length, 50, 'первая страница обязана быть полной');
+        assert.ok(first.cursor !== null, 'хвоста больше одной страницы — курсор задан');
+
+        const second = listTasks(ndb, {
+          scope: 'open',
+          limit: 50,
+          today,
+          cursor: first.cursor!,
+        });
+        const seen = new Set(first.items.map((t) => `${t.comment_id}:${t.line_no}`));
+        assert.ok(
+          second.items.every((t) => !seen.has(`${t.comment_id}:${t.line_no}`)),
+          'keyset не повторяет строки первой страницы',
+        );
+
+        const ms = measure(() => {
+          listTasks(ndb, { scope: 'open', limit: 50, today, count: true });
+        });
+        const ceiling = PERF_TARGET_MS.tasks * PERF_CI_TOLERANCE;
+        console.log(
+          `[perf-stand] GET /tasks (2000 задач): keyset+COUNT=${ms.toFixed(2)} мс ` +
+            `(цель ${PERF_TARGET_MS.tasks}, потолок ${ceiling})`,
+        );
+        assert.ok(ms <= ceiling, `GET /tasks ${ms.toFixed(2)} мс > потолка ${ceiling} мс`);
       } finally {
         ndb.close();
       }

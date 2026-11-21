@@ -103,7 +103,7 @@ describe('432ab7ba п.2 / bd6609b5: ядро 2D-навигации и двухр
     assert.match(CSS, /\.pub-current\s*\{[^}]*outline:\s*2px dashed/s, 'текущая сущность — пунктир');
     assert.match(
       CSS,
-      /\.pub-open\s*\{[^}]*outline:\s*2px solid var\(--layer-focus-stripe,\s*var\(--accent\)\)/s,
+      /\.pub-open\s*\{[^}]*outline:\s*2px solid var\(--layer-focus-ring-screen,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/s,
       'открытая в редакторе — сплошная рамка фокуса',
     );
     assert.ok(LIBNAV.includes('LIB_OPEN_CLASS'), 'контроллер рисует сплошную рамку');

@@ -20,6 +20,14 @@ export interface CommentTarget {
   owner_id: string;
 }
 
+/**
+ * Владелец комментария в данных: у публикаций (0.11.1) тоже есть комментарий,
+ * хотя публичная пара типов `CommentOwnerType` покрывает только мысль и связь.
+ * Читающие проекции (задачи, «связи дня») отдают владельца как есть, чтобы
+ * клиент мог открыть карточку источника.
+ */
+export type CommentOwnerKind = CommentOwnerType | 'publication';
+
 /** A permanent or chronological comment on a thought/link (02-data-model.md §3.8). */
 export interface Comment {
   id: string;

@@ -47,9 +47,9 @@ function isComment(line: string): boolean {
   return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
 }
 
-/** Только CSS-файлы словаря `lib/ui`. */
+/** Только CSS-файлы словаря `lib/ui`, кроме файлов тем: темы — значения токенов. */
 function inLibUi(rel: string): boolean {
-  return rel.startsWith('lib/ui/');
+  return rel.startsWith('lib/ui/') && !rel.startsWith('lib/ui/themes/');
 }
 
 /** Строка — условие `@container`/`@media`? (порог раскладки, не размер шкалы). */
@@ -87,12 +87,10 @@ describe('guard: токены дизайн-системы lib/ui', () => {
     assertGuardClean(RENDERER_ROOT, rules(), { extensions: ['.css'] });
   });
 
-  it('шкалы типографики, отступов и радиусов объявлены в :root styles.css', () => {
+  it('шкалы типографики и отступов объявлены в :root styles.css', () => {
+    // Радиусы переехали в файлы тем (ADR de24adef): их полноту и наличие
+    // проверяет `guard-ui-theme-tokens`. Здесь — общие для всех тем шкалы.
     const css = fs.readFileSync(STYLES_CSS, 'utf8');
-    // Блок :root до селектора тёмной темы (в шапке-комментарии `:root` тоже
-    // упоминается `[data-theme='dark']`, поэтому ищем сам селектор).
-    const rootEnd = css.indexOf("[data-theme='dark'] {");
-    const root = css.slice(0, rootEnd === -1 ? css.length : rootEnd);
     const required = [
       '--font-size-xs',
       '--font-size-s',
@@ -102,11 +100,8 @@ describe('guard: токены дизайн-системы lib/ui', () => {
       '--line-height-none',
       '--space-1',
       '--space-8',
-      '--radius-s',
-      '--radius-m',
-      '--radius-l',
     ];
-    const missing = required.filter((t) => !new RegExp(`${t}\\s*:`).test(root));
+    const missing = required.filter((t) => !new RegExp(`${t}\\s*:`).test(css));
     if (missing.length > 0) {
       throw new Error(
         `Шкалы токенов не объявлены в :root styles.css: ${missing.join(', ')}. ` +

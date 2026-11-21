@@ -10,18 +10,30 @@
   flex-direction: column;
   overflow: hidden;
   /* --layer-bg (0.6.4, 13-layers.md §2.2a): полотно «Дневника» следует фону
-   * активного слоя, как карта. */
-  background: var(--layer-bg, var(--bg));
+   * активного слоя, как карта. Сверху — лёгкий тинт активной картинки (этап 2,
+   * задача 80324150): переменная пуста без картинки, слой прозрачный. */
+  background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
+    var(--layer-bg, var(--bg));
 }
 
 /* Область панели отбора: размер и скрытость ведёт общий каркас
  * (`.fp-host`, задача 2ebe4206); здесь только вид области. */
-.chron-filter-area {  display: flex;
+.chron-filter-area {
+  display: flex;
   flex-direction: column;
   min-height: 0;
   padding: 10px 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  /* Панель отбора — сама прокручиваемый контейнер: при малой высоте полотна
+   * её содержимое (календарь, поиск, дерево, футер) не ужимается в ноль, а
+   * прокручивается целиком (репроверка 7775bca4 по задаче cfb8cb72).
+   * В обычной высоте прокрутки нет — дерево и календарь прокручиваются сами. */
+  overflow-y: auto;
 }
 
 .chron-filter {
@@ -30,6 +42,15 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Дерево условий на «Дневнике» не сжимается в ноль (репроверка 7775bca4 по
+ * задаче cfb8cb72): при панели 256px футер редактора съедал всю высоту, `.ft`
+ * получал clientH 0 при scrollH 226 — условия были недоступны. Минимум — три-
+ * четыре строки; остальное — прокруткой самого дерева или панели отбора.
+ * Правило экранное: другие панели фильтра (`filter-editor.css`) не меняются. */
+.chron-filter .fe > .ft {
+  min-height: 96px;
 }
 
 .chron-splitter {
@@ -43,6 +64,70 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Контейнер панели «Задачи и напоминания» (0.16.1, задача 64f7976a).
+ * Панель стоит НАД лентой, вне блоков дней, и одна при любом периоде:
+ * собственную высоту и прокрутку держит компонента (`lib/ui/task-panel.css`),
+ * контейнер только резервирует место в колонке центра.
+ *
+ * `flex: 0 1 auto` — хост тянется по панели, но УЖИМАЕТСЯ, если остатка колонки
+ * не хватает ленте (замечание Н1 вердикта 84c71c37). Собственного `max-height`
+ * у хоста нет: потолок задаёт раскладка колонки (панель добавления + шов +
+ * минимум ленты), а процентный `calc(100% - 160px)` считался от уже сжатой
+ * колонки и в узком окне давал 0 (регрессия Б1-Н репроверки 4b755c93).
+ * `overflow: hidden` + колонка flex держат панель ВНУТРИ хоста: панель
+ * ужимается до его высоты (`flex: 1 1 auto` в task-panel.css) и прокручивается
+ * сама, а не переливается поверх ленты. */
+.chron-tasks-panel-host {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Слайдер высоты панели «Задачи и напоминания» (пункт B ТЗ 2026-11-17):
+ * вертикальный сплиттер между панелью и лентой. Скрыт, пока панель свёрнута
+ * (атрибут `hidden` ставит экран по `onPanelCollapsed`). */
+.chron-tasks-splitter {
+  /* Тонкий шов-слайдер высоты панели «Задачи и напоминания» (0.16.1, замечание
+   * 1 ТЗ 2026-11-18): видимая полоска 6px, зона захвата — `--hit-area` (18px)
+   * невидимым псевдоэлементом. Прежнее правило `flex: 0 0 auto` без размера
+   * давало элемент высотой 0 — за него нельзя было взяться мышью. */
+  position: relative;
+  /* Подъём над соседями: иначе позиционированная лента перекрывает внешнюю
+   * половину зоны захвата (ошибка ec02c553). */
+  z-index: 1;
+  flex: 0 0 6px;
+  block-size: 6px;
+  background: var(--border);
+  border-radius: 2px;
+  cursor: row-resize;
+  transition: background var(--transition-hover) ease;
+}
+
+.chron-tasks-splitter:hover,
+.chron-tasks-splitter:active,
+.chron-tasks-splitter.dragging,
+.chron-tasks-splitter:focus-visible {
+  background: var(--accent);
+}
+
+/* Хит-зона шва: зона нажатия не меньше токена тач-таргета (требование 5677bc3d),
+ * полоса прокрутки ленты вертикальная — горизонтальному шву пересекать её нечем. */
+.chron-tasks-splitter::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  block-size: max(100%, var(--hit-area));
+  transform: translateY(-50%);
+}
+
+.chron-tasks-splitter[hidden] {
+  display: none;
 }
 
 /* ---------------------------------------------------------------------------
@@ -64,13 +149,13 @@
 }
 
 /* Календарь месяца — первый элемент панели отбора (элемент 9b424548).
- * При нехватке высоты панели календарь уступает место ПОЛНОСТЬЮ (высокий
- * shrink-приоритет): он сжимается и прокручивается сам, а редактор с футером
- * («Отборы…», «Применить») остаётся в панели, не выезжая поверх ленты
- * (ошибка b562f4db, проверено при 1280×700/800/900). */
+ * При нехватке высоты панели календарь уступает первым (высокий shrink-приоритет)
+ * и прокручивается сам, но не ниже рабочего минимума: при `min-height: 0` панель
+ * отбора в 256px давила его до 8px (репроверка 7775bca4 по задаче cfb8cb72).
+ * 140px — заголовок месяца и несколько недель; остальное — прокруткой. */
 .chron-cal {
   flex: 0 1000 auto;
-  min-height: 0;
+  min-height: 140px;
   overflow-y: auto;
   padding: 0 0 8px;
 }
@@ -167,8 +252,8 @@
 .cal-day {
   min-width: 0;
   padding: 2px 0;
-  /* Индикатор записей — столбик точек слева от номера, по центру ячейки
-   * (0.10.2, задача 41ed99ab). */
+  /* Маркеры дня — столбик слева от номера, по центру ячейки (0.16.1,
+   * требование ab9d627b; до 0.16.1 здесь были точки-счётчики записей). */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -181,23 +266,42 @@
 }
 
 .cal-day.is-selected {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -1px;
 }
 
 /* Края диапазона выделены плотнее (диалог даты/периода). */
 .cal-day.is-selected-from,
 .cal-day.is-selected-to {
-  background: var(--accent-soft);
-  font-weight: 700;
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
+  font-weight: 600;
 }
 
 .cal-day.is-today {
-  font-weight: 700;
+  font-weight: 600;
 }
 
-/* Точки-индикаторы записей дня: вертикальный столбик из 1–3 точек. */
-.cal-dots {
+/* Маркеры дня (0.16.1, требование ab9d627b): столбик ЧЕТЫРЁХ фиксированных
+ * мест слева от номера — записи, задачи/напоминания, факты, просрочка. Цвета —
+ * только токены темы (`--cal-marker-records`/`--warn`/`--ok`/`--danger`), обе
+ * темы; прямых цветов в правилах нет (сторож guard-ui-theme-tokens).
+ * «Записи» — свой семантический токен, НЕ акцент: в темах с латунным/янтарным
+ * акцентом маркер записей обязан остаться синим и не сливаться с `--warn`.
+ *
+ * **Различимость — ФОРМОЙ, а не цветом (уточнение 2026-11-19, пункт 6).** В
+ * тёмных темах соседние по спектру токены сближаются (`retronotes`: `--warn`
+ * #e8893a и `--danger` #d97878), и точки-кружки 3px читались как «зелёная и две
+ * красных». Цвета остаются по спеке `ab9d627b`, а маркер каждого вида получает
+ * свою геометрию: записи — круг, задачи/напоминания — квадрат, факты — ромб,
+ * просрочка — кольцо (контур без заливки). Размер — 6px (поднят с 4px по
+ * замечанию живой приёмки 0.16.1: на 4px ромб и круг сливались): форма читается,
+ * а столбик из четырёх мест (6+1+6+1+6+1+6 = 27px) остаётся компактным и не
+ * расползается по клетке календаря. */
+.cal-markers {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -205,11 +309,72 @@
   flex: 0 0 auto;
 }
 
-.cal-dot {
-  width: 3px;
-  height: 3px;
+.cal-marker {
+  box-sizing: border-box;
+  width: 6px;
+  height: 6px;
+}
+
+/* Отсутствующий маркер места не занимает визуально, но сохраняет позиции
+ * остальных: появление маркера не сдвигает столбик. */
+.cal-marker.is-off {
+  visibility: hidden;
+}
+
+/* Записи — КРУГ. */
+.cal-marker--records {
+  background: var(--cal-marker-records);
   border-radius: 50%;
-  background: var(--accent);
+}
+
+/* Задачи и напоминания — КВАДРАТ. */
+.cal-marker--plans {
+  background: var(--warn);
+  border-radius: 0;
+}
+
+/* Факты — РОМБ. */
+.cal-marker--facts {
+  background: var(--ok);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+/* Просрочка — КОЛЬЦО: тот же красный токен, но контуром, а не заливкой. */
+.cal-marker--overdue {
+  background: transparent;
+  border: 1px solid var(--danger);
+  border-radius: 50%;
+}
+
+/* Попап содержимого дня (0.16.1, уточнение 2026-11-19, пункт 7): легенда и
+ * количества дня. Маркеры в попапе — те же формы/цвета, что в клетке, только
+ * крупнее (8px против 6px в клетке): в узкой клетке крупный маркер не помещается,
+ * а в пояснении читается уверенно. */
+.cal-day-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+}
+
+.cal-day-info-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cal-day-info .cal-marker {
+  width: 8px;
+  height: 8px;
+}
+
+.cal-day-info-label {
+  flex: 1 1 auto;
+}
+
+.cal-day-info-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
 }
 
 /* ---------------------------------------------------------------------------
@@ -284,9 +449,19 @@
  * ------------------------------------------------------------------------- */
 
 .chron-feed-wrap {
-  flex: 1 1 auto;
+  /* `1 1 var(--tasks-panel-feed-min)` — basis РАВЕН минимуму ленты, а не
+   * содержимому (репроверка 7775bca4 по задаче cfb8cb72). С `1 1 auto` базис
+   * был высотой содержимого ленты (~2442px), и flex-shrink делил недостаток
+   * пропорционально ему: хост панели задач получал 31px вместо 120. С базисом
+   * `feedMin` недостаток делится с панелью почти поровну и упирается в её
+   * минимум; панель при auto получает остаток колонки. */
+  flex: 1 1 var(--tasks-panel-feed-min, 160px);
   min-width: 0;
-  min-height: 0;
+  /* Лента не отдаёт панели задач последние пиксели (замечание Н1 вердикта
+   * 84c71c37, репроверка 4b755c93): минимум равен `TASKS_PANEL_FEED_MIN`,
+   * который уже входит в резерв панели отбора (`tasks-panel-geometry.ts`),
+   * поэтому колонка всегда оставляет ленте эту высоту. */
+  min-height: var(--tasks-panel-feed-min, 160px);
   /* Лента занимает всю высоту центра: прежний потолок таблицы (240px) снят. */
   max-height: none;
   overflow: auto;
@@ -379,6 +554,73 @@
   display: none;
 }
 
+/* Блок «Связи дня» (0.16.1, задача 710b68aa; элемент 8ecc30cd): датовые факты
+ * (мысль + подпись свойства), затем date-ссылки (владелец + сниппет + дата
+ * источника). Скрыт, когда данных нет, и вместе со свёрнутым днём. */
+.diary-day-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+}
+
+.diary-day-links[hidden],
+.diary-day.is-collapsed .diary-day-links {
+  display: none;
+}
+
+.diary-day-links-facts,
+.diary-day-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.diary-day-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.diary-day-link-caption {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+}
+
+.diary-day-link-time,
+.diary-day-link-source-date {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}
+
+.diary-day-link-source-date {
+  cursor: pointer;
+}
+
+.diary-day-link-source-date:hover {
+  color: var(--accent);
+}
+
+.diary-day-link-snippet {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.diary-day-link-snippet:hover {
+  color: var(--accent);
+}
+
+.diary-day-link-owner {
+  cursor: pointer;
+}
+
 /* ---------------------------------------------------------------------------
  * Запись дневника
  * ------------------------------------------------------------------------- */
@@ -395,26 +637,39 @@
 
 /* Запись, к которой выполнен переход поиска (T7): подсветка рамкой и фоном. */
 .diary-record-target {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+      transparent
+    );
 }
 
 /* Клавиатурная навигация ленты (0.10.1, итерация приёмки №9, требование
  * 165323a7): «текущая группа дат», «текущая запись» и текущий элемент записи
  * получают видимое выделение клиента. Клик мышью делает сущность текущей. */
 .diary-day-head.diary-nav-current {
-  color: var(--accent-strong);
-  box-shadow: inset 3px 0 0 var(--accent);
+  /* Цвет текста — контрастный кант темы, а не фокус-цвет: сам фокус-цвет как
+     текст даёт 1.9–4.3:1 на подложках части тем (замечание 1 вердикта
+     136575c9), кант — минимум 5.5:1. Индикацию фокуса держит полоса слева. */
+  color: var(--focus-ring-contrast);
+  box-shadow: inset 3px 0 0 var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   padding-left: 6px;
 }
 
 .diary-record.diary-nav-current {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+      transparent
+    );
 }
 
 .diary-record .diary-nav-el {
-  outline: 1px dashed var(--accent);
+  outline: 1px dashed var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: 2px;
   border-radius: 4px;
 }

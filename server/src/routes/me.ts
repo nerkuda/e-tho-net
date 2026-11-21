@@ -32,10 +32,19 @@ import type {
   UserSettingsMap,
 } from '@etn/shared';
 
-import { EtnError, normalizeLanguageTag, USER_SETTING_KEY } from '@etn/shared';
+import {
+  EtnError,
+  normalizeLanguageTag,
+  UI_MODES,
+  UI_THEME_NAMES,
+  USER_SETTING_KEY,
+} from '@etn/shared';
 
 /** Max length of `users.display_name`; mirrors the schema CHECK. */
 const DISPLAY_NAME_MAX_LENGTH = 200;
+
+/** Keys this server understands; anything else is a client/server mismatch. */
+const KNOWN_USER_SETTING_KEYS = new Set<string>(Object.values(USER_SETTING_KEY));
 
 /** Body of `PATCH /me`. */
 interface PatchMeBody {
@@ -72,17 +81,14 @@ interface KeyIdParams {
  * (clear/inherit the server default) or a positive integer; anything else
  * raises `VALIDATION_ERROR`.
  */
-export function parseMaxWritesPerMinute(
-  value: unknown,
-  requestId?: string,
-): number | null {
+export function parseMaxWritesPerMinute(value: unknown, requestId?: string): number | null {
   if (value === null) {
     return null;
   }
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      "max_writes_per_minute must be a positive integer or null.",
+      'max_writes_per_minute must be a positive integer or null.',
       { field: 'max_writes_per_minute' },
       requestId,
     );
@@ -93,16 +99,53 @@ export function parseMaxWritesPerMinute(
 /**
  * Validate the `value` of a server-level user setting (`PUT /users/me/settings/:key`).
  *
- * The `value` field is mandatory. Known keys get a shape check; unknown keys are
- * stored as-is so the table can carry future server-level user settings
- * (ADR 3a829d25) without an allowlist edit per key.
+ * The `value` field is mandatory. The key must be one this server version
+ * knows (`USER_SETTING_KEY`): an unknown key is a client/server version
+ * mismatch and is rejected instead of being stored opaquely (task 3b1716e3).
+ * Known keys get a value check: `ui_theme` — a name from `UI_THEME_NAMES`,
+ * `ui_mode` — `light | dark`; `null` on either clears the value (the client
+ * reads it as unset), `app_language` — BCP-47/null (ADR daab6ac4),
+ * `comment_hotkeys` — a JSON map «command → combination». A violation is a
+ * `VALIDATION_ERROR` (HTTP 422), same as `app_language`.
  *
  * Returns the value to store: known keys may canonicalise it (the language tag
  * of `app_language` is normalised to BCP-47 canonical form — ADR daab6ac4).
  */
 export function validateUserSettingValue(key: string, value: unknown, requestId: string): unknown {
+  if (!KNOWN_USER_SETTING_KEYS.has(key)) {
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `Unknown user setting key "${key}".`,
+      { field: 'key', key },
+      requestId,
+    );
+  }
   if (value === undefined) {
     throw new EtnError('VALIDATION_ERROR', 'value is required.', { field: 'value' }, requestId);
+  }
+  if (key === USER_SETTING_KEY.UI_THEME) {
+    if (value === null) return null;
+    if (typeof value === 'string' && (UI_THEME_NAMES as readonly string[]).includes(value)) {
+      return value;
+    }
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `ui_theme must be one of: ${UI_THEME_NAMES.join(', ')}.`,
+      { field: 'value', value, allowed: [...UI_THEME_NAMES] },
+      requestId,
+    );
+  }
+  if (key === USER_SETTING_KEY.UI_MODE) {
+    if (value === null) return null;
+    if (typeof value === 'string' && (UI_MODES as readonly string[]).includes(value)) {
+      return value;
+    }
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      `ui_mode must be one of: ${UI_MODES.join(', ')}.`,
+      { field: 'value', value, allowed: [...UI_MODES] },
+      requestId,
+    );
   }
   if (key === USER_SETTING_KEY.APP_LANGUAGE) {
     if (value === null) return null;
@@ -200,7 +243,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       } else {
         throw new EtnError(
           'VALIDATION_ERROR',
-          "The display_name field must be a string or null.",
+          'The display_name field must be a string or null.',
           { field: 'display_name' },
           req.id,
         );
@@ -232,7 +275,7 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const updated = app.systemDb.getUserById(me.id);
       if (updated === null) {
         // Should not happen — we just updated an existing user.
-        throw new EtnError('INTERNAL', "Failed to read the updated user.", undefined, req.id);
+        throw new EtnError('INTERNAL', 'Failed to read the updated user.', undefined, req.id);
       }
       sendSuccess(reply, currentUserDto(updated));
     },
@@ -272,7 +315,12 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         action: 'api_key.create',
         targetType: 'api_key',
         targetId: apiKey.id,
-        details: { label, read_only: readOnly, max_writes_per_minute: maxWritesPerMinute, self: true },
+        details: {
+          label,
+          read_only: readOnly,
+          max_writes_per_minute: maxWritesPerMinute,
+          self: true,
+        },
       });
       const dto: ApiKeyWithSecret = { ...keyPublicDto(apiKey), key: gen.key };
       sendCreated(reply, dto);
@@ -287,13 +335,13 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null || key.user_id !== req.auth!.user.id) {
         // Do not leak ownership: treat a foreign key as not-found.
-        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
+        throw new EtnError('NOT_FOUND', 'Key not found.', undefined, req.id);
       }
       const body = (req.body ?? {}) as UpdateKeyBody;
       if (!('max_writes_per_minute' in body)) {
         throw new EtnError(
           'VALIDATION_ERROR',
-          "The max_writes_per_minute field is required (a number or null).",
+          'The max_writes_per_minute field is required (a number or null).',
           { field: 'max_writes_per_minute' },
           req.id,
         );
@@ -320,11 +368,11 @@ export const meRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const { id: keyId } = req.params as KeyIdParams;
       const key = app.systemDb.getApiKeyById(keyId);
       if (key === null) {
-        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
+        throw new EtnError('NOT_FOUND', 'Key not found.', undefined, req.id);
       }
       if (key.user_id !== req.auth!.user.id) {
         // Do not leak ownership: treat a foreign key as not-found.
-        throw new EtnError('NOT_FOUND', "Key not found.", undefined, req.id);
+        throw new EtnError('NOT_FOUND', 'Key not found.', undefined, req.id);
       }
       app.systemDb.disableApiKey(keyId);
       app.systemDb.insertAuditLog({

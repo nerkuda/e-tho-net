@@ -49,6 +49,7 @@ import {
 } from './lib/live/query-registry.js';
 import { notice } from './lib/notice.js';
 import { logUiEvent } from './lib/ui-log.js';
+import { measureSegment, segmentStart } from './lib/slow-segment.js';
 import { UI_STATE_KEY, PREF_KEY, parseStoredCanvasLinkFilter } from '@etn/shared';
 import { applyCanvasZoom } from './canvas/canvas-zoom.js';
 import { getCanvasCursor, resetCanvasCursor } from './canvas/kbd-nav.js';
@@ -81,12 +82,16 @@ import {
   resetAppLanguageState,
   syncLanguageForNetwork,
 } from './lib/app-language.js';
+import { initUiTheme, resetUiThemeState } from './lib/ui-theme.js';
+import { initWallpaperBackdrop } from './canvas/wallpaper.js';
+import { refreshWallpaper, resetWallpaperState } from './lib/wallpaper-state.js';
 import { loadUserSettings, resetUserSettings } from './lib/user-settings.js';
 import { initLayerTheme } from './lib/layer-colors.js';
 import { initLockCache, refresh as refreshLockCache } from './lib/lock-cache.js';
 import { initCompatibilityDialog } from './lib/compatibility-dialog.js';
 import { openServerUpdateDialog } from './lib/server-update-dialog.js';
 import { initLockReconnect } from './lib/lock-guard.js';
+import { requireNetworkId } from './lib/network-id.js';
 import { ensureLoaded as ensureUserNamesLoaded } from './lib/users.js';
 import { initTransclusionSourceCache } from './editor/transclusion.js';
 import { invalidateAllRefs, invalidateRef } from './canvas/canvas.js';
@@ -228,22 +233,35 @@ async function openNetworkBody(
   const canvasLinkFilterPref = prefs.find((p) => p.key === PREF_KEY.CANVAS_LINK_FILTER);
   const canvasLinkFilter = parseStoredCanvasLinkFilter(canvasLinkFilterPref?.value);
 
-  const [cloudWidthRaw, cloudGapRaw, posRaw, collapsedRaw, focusRaw, linkTypeRaw, layoutRaw, canvasLayoutRaw, canvasZoomRaw, activeViewRaw, pinsRaw, heightsRaw, chronicleHeightsRaw] =
-    await Promise.all([
-      etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
-      etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
-      etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_POSITION),
-      etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_COLLAPSED_GROUPS),
-      etn.ui.getState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID),
-      etn.ui.getState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID),
-      etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
-      etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
-      etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
-      etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
-      etn.pins.list(networkId),
-      etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
-      etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_LIST_HEIGHTS),
-    ]);
+  const [
+    cloudWidthRaw,
+    cloudGapRaw,
+    posRaw,
+    collapsedRaw,
+    focusRaw,
+    linkTypeRaw,
+    layoutRaw,
+    canvasLayoutRaw,
+    canvasZoomRaw,
+    activeViewRaw,
+    pinsRaw,
+    heightsRaw,
+    chronicleHeightsRaw,
+  ] = await Promise.all([
+    etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_WIDTH),
+    etn.ui.getState(networkId, UI_STATE_KEY.CLOUD_GAP),
+    etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_POSITION),
+    etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_COLLAPSED_GROUPS),
+    etn.ui.getState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID),
+    etn.ui.getState(networkId, UI_STATE_KEY.LAST_USED_LINK_TYPE_ID),
+    etn.ui.getState(networkId, UI_STATE_KEY.WINDOW_LAYOUT),
+    etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_LAYOUT),
+    etn.ui.getState(networkId, UI_STATE_KEY.CANVAS_ZOOM),
+    etn.ui.getState(networkId, UI_STATE_KEY.ACTIVE_VIEW),
+    etn.pins.list(networkId),
+    etn.ui.getState(networkId, UI_STATE_KEY.EDITOR_LIST_HEIGHTS),
+    etn.ui.getState(networkId, UI_STATE_KEY.CHRONICLE_LIST_HEIGHTS),
+  ]);
   if (!isCurrentOpenNetwork(seq)) return;
 
   const editorPosition = (
@@ -316,12 +334,11 @@ async function openNetworkBody(
   const viewFromTab = activeTabView;
   const knownView = (value: string | null): value is WorkspaceView =>
     value === 'structures' || value === 'chronicle' || value === 'publications';
-  const resolvedView: WorkspaceView =
-    knownView(viewFromTab)
-      ? viewFromTab
-      : knownView(activeViewRaw)
-        ? activeViewRaw
-        : 'map';
+  const resolvedView: WorkspaceView = knownView(viewFromTab)
+    ? viewFromTab
+    : knownView(activeViewRaw)
+      ? activeViewRaw
+      : 'map';
 
   // Публикация сети/вкладки/экрана — только если этот запуск ещё актуален:
   // запоздавший ответ прежней сети не откатывает уже открытую (ошибка
@@ -366,7 +383,10 @@ async function openNetworkBody(
   // применяется, только если сеть всё ещё активна (проверка внутри модуля).
   void syncLanguageForNetwork(networkId);
   // Срез слоя `pins` (G5): порядок закреплённых для панели — из ответа сети.
-  setQueryData(queryKeys.pins(), (pinsRaw ?? []).map((p) => p.thought_id));
+  setQueryData(
+    queryKeys.pins(),
+    (pinsRaw ?? []).map((p) => p.thought_id),
+  );
 
   // Холодная синхронизация захватов (0.12.2, задача 8e4e3dc5): клик по
   // легаси-ссылке проверяет, не захвачена ли цель другим пользователем, а
@@ -420,7 +440,13 @@ async function openNetworkBody(
   } else {
     const root = await findRootThought(networkId);
     if (!isCurrentOpenNetwork(seq)) return;
-    await loadFocusForTab(root.id, networkId, activeTabId, () => isCurrentOpenNetwork(seq), focusSeq);
+    await loadFocusForTab(
+      root.id,
+      networkId,
+      activeTabId,
+      () => isCurrentOpenNetwork(seq),
+      focusSeq,
+    );
   }
   if (!isCurrentOpenNetwork(seq)) return;
 
@@ -496,10 +522,57 @@ export async function loadFocusForTab(
  */
 
 /**
+ * Установка фокуса, которая УЖЕ идёт (ошибка dc723634).
+ *
+ * Двойной клик по облачку может позвать `focusFromUi` дважды подряд: в журнале
+ * клиента перед фризом — два `ui.cloud.click` через 1–2 мс и ДВА запроса
+ * `thoughts/focus` одной и той же мысли. Две параллельные цепочки одновременно
+ * тянут сеть, историю и перерисовку карты — конвейер сталкивается сам с собой, и
+ * на большой сети это выливалось в фриз рендерера ~15 с (`ui.focus.applied
+ * ms:15808` при ответе сервера 4 мс). Второй клик по ТОЙ ЖЕ мысли не заводит
+ * свою цепочку, а ждёт уже идущую: результат у него ровно тот же.
+ */
+let inFlightFocus: { id: string; promise: Promise<void> } | null = null;
+
+/**
  * Focuses a thought (H5): fetches the focus response, rotates local history
  * (H7) and persists the L4 current-focus key.
+ *
+ * Повторный вызов для мысли, установка которой ещё в полёте, игнорируется (см.
+ * {@link inFlightFocus}). Номер операции `beginFocusOp` берёт только ПЕРВЫЙ
+ * запуск: иначе дедуплицированный клик отменил бы собственную же цепочку как
+ * «устаревшую» и фокус не применился бы вовсе.
  */
 export async function setFocus(id: string): Promise<void> {
+  if (inFlightFocus !== null && inFlightFocus.id === id) {
+    // Метка нужна журналу: без неё второй клик выглядел как «клик без
+    // реакции» — неотличимо от зависания (та же логика, что у `ui.focus.noop`).
+    logUiEvent('ui.focus.noop', { id, reason: 'focus_in_flight' });
+    // Отказ уже идущей цепочки обработает её собственный вызывающий
+    // (`focusFromUi` показывает тост один раз) — второй тост не нужен.
+    await inFlightFocus.promise.catch(() => undefined);
+    return;
+  }
+  const promise = runFocusPipeline(id);
+  inFlightFocus = { id, promise };
+  try {
+    await promise;
+  } finally {
+    if (inFlightFocus?.promise === promise) inFlightFocus = null;
+  }
+}
+
+/**
+ * Цепочка установки фокуса: `thoughts.focus` → история → публикация ответа →
+ * подписчики стора.
+ *
+ * Сегментные замеры (ошибка dc723634): итоговая метка `ui.focus.applied` несёт
+ * длительность каждой ноги, а нога дольше порога пишется отдельной меткой
+ * `ui.slow_segment`. Так следующий фриз называет виновника — ожидание IPC,
+ * запись истории, публикацию ответа или синхронную работу подписчиков стора, —
+ * вместо «где-то между ответом сервера и применением фокуса».
+ */
+async function runFocusPipeline(id: string): Promise<void> {
   const startedAt = Date.now();
   const networkId = requireNetworkId();
   const tabId = store.state.activeTabId;
@@ -510,7 +583,9 @@ export async function setFocus(id: string): Promise<void> {
   // и дерево фокуса показывало прежнюю мысль с её детьми).
   const focusSeq = beginFocusOp();
   const pair = currentScreenPair();
+  const requestAt = segmentStart();
   const response = await etn.thoughts.focus(networkId, id);
+  const requestMs = measureSegment('focus.request', requestAt, { id });
   // Проверка ДО истории: иначе запоздавший клик писал бы поворот истории в
   // чужую (более новую) вкладку/сеть.
   if (!isFocusOpCurrent(focusSeq)) return;
@@ -520,7 +595,9 @@ export async function setFocus(id: string): Promise<void> {
   // without moving the focus) — not necessarily the old focus. Must run
   // before the store update below (same reasoning as before: the history bar
   // re-renders from store changes, so this needs to land first).
+  const historyAt = segmentStart();
   await noteThoughtWillOpen(id);
+  const historyMs = measureSegment('focus.history', historyAt, { id });
   // `noteThoughtWillOpen` тоже ждёт сеть/запись — за это время операция могла
   // устареть. Повторная сверка перед публикацией.
   if (!isFocusOpCurrent(focusSeq)) return;
@@ -528,25 +605,37 @@ export async function setFocus(id: string): Promise<void> {
   // Слой данных (G2): ответ фокуса кладётся в кэш `focus:@id` (мутатор-путь),
   // активная окрестность подписывается на ключ. Ручного перечитывания
   // окрестности нет — холст перерисовывается из кэша.
+  const publishAt = segmentStart();
   publishFocusResponse(response, focusSeq);
   activateFocusQuery(networkId, id);
+  const publishMs = measureSegment('focus.publish', publishAt, { id });
+  const storeAt = segmentStart();
   store.update({
     editorTarget: null,
     selectedLinkId: null,
     structuresActiveThoughtId: null,
     structuresActiveThought: null,
   });
+  const storeMs = measureSegment('focus.store', storeAt, { id });
   // Milestone journal mark (task 92b89e6f): the focus response has landed and
   // the canvas/store now render it — the closing bracket of the
-  // `ui.cloud.click` → `ui.focus.applied` pipeline.
-  logUiEvent('ui.focus.applied', { id, ms: Date.now() - startedAt });
+  // `ui.cloud.click` → `ui.focus.applied` pipeline. Сегменты (ошибка
+  // dc723634) — чтобы итоговая строка сама называла съеденное время: фриз
+  // часто укладывается целиком в одну ногу.
+  logUiEvent('ui.focus.applied', {
+    id,
+    ms: Date.now() - startedAt,
+    seg: { request: requestMs, history: historyMs, publish: publishMs, store: storeMs },
+  });
   // Q4: persist focus_id on the tab row so it survives restarts and tab
   // switches. Falls back to the legacy ui_state key when no tab is active
   // (shouldn't happen post-Q3, but defensible).
   if (tabId !== null) {
     void etn.tabs.updateState(tabId, { focus_id: id }).catch(() => undefined);
   } else {
-    void etn.ui.setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id).catch(() => undefined);
+    void etn.ui
+      .setState(networkId, UI_STATE_KEY.CURRENT_FOCUS_THOUGHT_ID, id)
+      .catch(() => undefined);
   }
 }
 
@@ -611,10 +700,7 @@ export function scheduleRefresh(cause?: InvalidationCause): void {
       // Жёсткий срок волны — от первого события, поток его не продлевает
       // (иначе fallback так же голодал бы, как реестр до блокера 96d7f05d).
       if (refreshMaxWaitTimer === null) {
-        refreshMaxWaitTimer = window.setTimeout(
-          runFallbackRefresh,
-          REALTIME_REFETCH_MAX_WAIT_MS,
-        );
+        refreshMaxWaitTimer = window.setTimeout(runFallbackRefresh, REALTIME_REFETCH_MAX_WAIT_MS);
       }
     }
     return;
@@ -729,6 +815,13 @@ export async function restoreSession(): Promise<void> {
   // `client_meta.lang` → профиль. Недоступный/старый сервер не блокирует вход —
   // интерфейс остаётся на кэше/ОС.
   await initAppLanguage().catch(() => undefined);
+  // Тема и режим интерфейса (требование 219d030c, задача 0e4a52cd): кэш уже
+  // применён в boot() до первого экрана; здесь серверные значения побеждают,
+  // кэш чужого пользователя не применяется, отложенная запись повторяется.
+  await initUiTheme(store.state.me?.id ?? null).catch(() => undefined);
+  // Фоновая картинка карты (задача 80324150): серверная копия побеждает
+  // локальный кэш; сбой чтения не блокирует вход (остаётся кэш или фон темы).
+  await refreshWallpaper().catch(() => undefined);
   // Q5: warm the `networkList` cache early so the first tab-strip render has
   // display_names. The accessibility marking itself re-runs at the end of
   // `openNetwork`, once `store.tabs` is populated — marking here raced an
@@ -767,17 +860,24 @@ export async function disconnect(): Promise<void> {
   // Серверный слой языка — тоже принадлежность пользователя: снимок профиля
   // сбрасывается (кэш `client_meta.lang` остаётся установочным).
   resetAppLanguageState();
+  // Серверный слой темы/режима — тоже принадлежность пользователя: снимок
+  // сбрасывается, установочный кэш `client_meta` остаётся (тема не мигает).
+  resetUiThemeState();
+  // Картинка — принадлежность пользователя сервера: чужую на холсте не
+  // показываем (установочный кэш остаётся в главном процессе).
+  resetWallpaperState();
   store.resetNetwork();
   store.update({ me: null, profileId: null });
   showScreen('onboarding');
 }
 
-/** The current network id, or throws (callers require an open network). */
-export function requireNetworkId(): string {
-  const id = store.state.networkId;
-  if (id === null) throw new Error(t('app.networkNotOpen'));
-  return id;
-}
+/**
+ * Идентификатор текущей сети — реэкспорт низкоуровневого источника
+ * (`lib/network-id.ts`): тело переехало туда в 0.16.1 (задача `7446eb25`),
+ * чтобы единая компонента списка задач не замыкала цикл на `app.ts`. Публичная
+ * точка импорта остаётся здесь — потребители не меняются.
+ */
+export { requireNetworkId };
 
 /**
  * Actor-side cleanup after deleting a thought (workplan L4). B1 техпроекта
@@ -930,6 +1030,10 @@ export async function boot(): Promise<void> {
   // the --layer-* overrides (or clearing them) whenever the current layer,
   // its colours or the theme change.
   initLayerTheme();
+  // Подложка холста карты из пользовательской картинки (0.16.1, задача
+  // 80324150): подписки на тему/слой/картинку + первое чтение. Офлайн-старт
+  // берёт последнюю известную картинку из локального кэша главного процесса.
+  initWallpaperBackdrop();
   initLockCache();
   // Захваты живут только вместе с realtime-сессией: после переподключения
   // кэш перечитывается с сервера, а захваты открытых редакторов берутся

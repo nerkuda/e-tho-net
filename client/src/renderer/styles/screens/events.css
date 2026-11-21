@@ -15,7 +15,14 @@
   display: flex;
   flex-direction: row;
   overflow: hidden;
-  background: var(--layer-bg, var(--bg));
+  /* Сверху — лёгкий тинт активной картинки карты (этап 2, задача 80324150):
+   * без картинки переменная пуста, остаётся фон темы/слоя. */
+  background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
+    var(--layer-bg, var(--bg));
 }
 
 /* Filter row: one line of compact controls with a label per group. */
@@ -256,7 +263,7 @@
 /* «КРИТЕРИИ ОТБОРА» — заголовок секции в диалоге отбора (e8365d29). */
 .view-editor-section-title {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -266,7 +273,7 @@
 /* Маркер «группа заполнена» — звёздочка в заголовке группы. */
 .st-f-star {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* Отступ между группами конструктора условий (половина кегля заголовка —

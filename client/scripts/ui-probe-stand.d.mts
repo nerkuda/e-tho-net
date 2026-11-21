@@ -133,7 +133,15 @@ export declare function buildProbeArgs(
   ports: StandPorts,
   seed: StandSeed | null,
   key: string,
+  /** Переменные из stdout фикстуры (`--scenario-seed`): `{{имя}}` сценария. */
+  fixtureVars?: Record<string, string>,
 ): string[];
+
+/**
+ * Переменные сценария из stdout фикстуры: последняя строка, валидная как
+ * JSON-объект; подставляются только скаляры (id сущностей).
+ */
+export declare function parseFixtureVars(stdout: string): Record<string, string>;
 
 /** Верхняя граница числа совпадений шаблона в серверном логе. */
 export interface ServerLogAtMostRule {

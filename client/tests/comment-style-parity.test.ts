@@ -498,9 +498,12 @@ describe('ссылки: автолинк голых URL выглядит как 
     // Автолинк linkify приходит тем же `<a href>`, что и обычные ссылки, —
     // отдельного класса у него нет и быть не должно: вид задаёт одно правило.
     const bodies = bodiesFor(css, '.comment-view a');
+    // Цвет ссылки — акцент темы: он же значение по умолчанию пользовательского
+    // токена --user-comment-link (с фолбэком на акцент), поэтому паритет с
+    // тегом CodeMirror (--accent) сохраняется.
     assert.ok(
-      bodies.some((b) => /color:\s*var\(--accent\)/.test(b)),
-      'ссылка в просмотре — цветом var(--accent)',
+      bodies.some((b) => /color:\s*(?:var\(--user-comment-link,\s*)?var\(--accent\)/.test(b)),
+      'ссылка в просмотре — цветом акцента темы (var(--accent))',
     );
     assert.ok(
       bodies.some((b) => /text-decoration:\s*none/.test(b)),

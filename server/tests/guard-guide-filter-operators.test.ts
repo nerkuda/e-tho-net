@@ -408,7 +408,9 @@ function isDateOperand(kind: FilterAstEntityKind, valueType?: PropertyValueType)
     kind === 'created_at' ||
     kind === 'updated_at' ||
     kind === 'record_time' ||
-    kind === 'occurred_at'
+    kind === 'occurred_at' ||
+    // «Дата напоминания» — ближайшее next_at напоминаний (0.16.1, 4cfc6257).
+    kind === 'reminder_at'
   );
 }
 
@@ -492,7 +494,18 @@ function conditionValue(
   }
 
   // eq/ne
-  if (kind === 'comment' || kind === 'active' || kind === 'trashed' || valueType === 'bool') {
+  if (
+    kind === 'comment' ||
+    // «Есть задачи»/«Есть напоминание» (0.16.1, задача 4cfc6257) — предикаты
+    // наличия: конструктор пишет boolean, а не значение-мысль.
+    kind === 'tasks' ||
+    kind === 'reminders' ||
+    // «Есть задачи» в записи (уточнение 2026-11-19, п.8) — тот же предикат.
+    kind === 'record_tasks' ||
+    kind === 'active' ||
+    kind === 'trashed' ||
+    valueType === 'bool'
+  ) {
     return true;
   }
   if (kind === 'attachments' || kind === 'chronology' || isCountOperand(kind, valueType)) return 1;

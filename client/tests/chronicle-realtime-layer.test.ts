@@ -207,8 +207,11 @@ describe('chronicle G3: проводка экрана и шины', () => {
 
   it('лента зарегистрирована под ключом chronicle-feed и подписана на его инвалидации', () => {
     assert.match(chronicle, /function bindChronicleFeed\(\): void \{/);
-    assert.match(chronicle, /onQueryInvalidated\(\(prefix\) => \{/);
+    assert.match(chronicle, /onQueryInvalidated\(\(prefix, _keys, cause\) => \{/);
     assert.match(chronicle, /matchesKeyPrefix\(prefix, 'chronicle-feed'\)/);
+    // Фильтр релевантности (0.16.1, пачка 3, пункт 6): правка постоянного
+    // комментария/удаление незагруженной записи ленту не перечитывают.
+    assert.match(chronicle, /feedEventRelevant\(asRealtimeCause\(cause\), rows\)/);
     assert.match(chronicle, /registerQuery\(key, null\)/);
     assert.match(chronicle, /function scheduleChronicleFeedRefresh\(\): void \{/);
     assert.match(chronicle, /function publishChronicleSnapshot\(\): void \{/);

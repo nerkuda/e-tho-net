@@ -1,4 +1,3 @@
-
 /**
  * Зона сообщений статусной строки — рутинные подтверждения клиента.
  *
@@ -16,6 +15,9 @@
  * - **Не теряет сообщения.** Пока статус-бар не смонтирован (старт клиента,
  *   экран без рабочего стола), последнее сообщение запоминается и
  *   показывается при монтировании ({@link mountStatusMessage}).
+ * - **Удержание.** Сообщение о ходе операции показывает {@link holdStatusMessage}
+ *   (без TTL) и снимает его сам; чужое сообщение удержание не перебивает и
+ *   чужим не гасится.
  *
  * Текст даёт вызывающий (из словаря `t()`); модуль лишь владеет местом, TTL и
  * заменой. Важные сообщения сюда НЕ попадают — их канал `notice`
@@ -37,6 +39,9 @@ export interface StatusMessageHost {
 
 /** Узел зоны в статусной строке; `null` — статус-бар не смонтирован. */
 let host: StatusMessageHost | null = null;
+
+/** Владелец показанного текста: `null` — обычное (чужое для удержания) сообщение. */
+let owner: symbol | null = null;
 
 /** Таймер гашения текущего сообщения. */
 let timer: number | null = null;
@@ -66,6 +71,9 @@ function clearText(): void {
  * показано при {@link mountStatusMessage} — молча сообщения не теряются.
  */
 export function statusMessage(text: string): void {
+  // Обычное сообщение снимает владение удерживаемым: прежний держатель больше
+  // не гасит этот текст (см. `holdStatusMessage`).
+  owner = null;
   if (text.trim() === '') {
     pending = null;
     clearText();
@@ -87,11 +95,52 @@ export function statusMessage(text: string): void {
 }
 
 /**
+ * Удерживаемое сообщение: живёт до {@link StatusMessageHold.clear}, без TTL.
+ * `clear` гасит текст, только если он всё ещё принадлежит этому держателю, —
+ * чужое сообщение, показанное поверх, не затирается.
+ */
+export interface StatusMessageHold {
+  clear(): void;
+}
+
+/**
+ * Показывает сообщение, которое вызывающий снимет сам (например, индикатор
+ * долгой загрузки ленты «Дневника»). Отличия от {@link statusMessage}:
+ * - нет TTL — сообщение висит, пока идёт операция;
+ * - чужое сообщение НЕ перебивается: если зона уже занята обычным или другим
+ *   удерживаемым сообщением, вызов ничего не показывает (и `clear` не гасит
+ *   чужое);
+ * - `clear` гасит текст, только если он всё ещё принадлежит этому вызову.
+ *
+ * До монтирования статус-бара индикатор не показывается (удерживать нечего):
+ * вызывающий получает пустой дескриптор, `clear` безопасен.
+ */
+export function holdStatusMessage(text: string): StatusMessageHold {
+  const token = Symbol('status-message-hold');
+  const hold: StatusMessageHold = {
+    clear: () => {
+      if (owner !== token) return;
+      owner = null;
+      clearText();
+    },
+  };
+  if (text.trim() === '' || host === null) return hold;
+  // Зона занята (обычное сообщение или другое удержание) — не перебиваем.
+  if (owner !== null || host.textContent !== '') return hold;
+  owner = token;
+  host.textContent = text;
+  host.title = text;
+  clearTimer();
+  return hold;
+}
+
+/**
  * Подключает узел зоны сообщений (статусная строка рабочего стола). Если до
  * монтирования пришло сообщение — оно показывается сразу.
  */
 export function mountStatusMessage(target: StatusMessageHost): void {
   host = target;
+  owner = null;
   host.textContent = '';
   host.title = '';
   clearTimer();
@@ -109,5 +158,6 @@ export function unmountStatusMessage(): void {
   clearText();
   clearTimer();
   host = null;
+  owner = null;
   pending = null;
 }

@@ -1,0 +1,68 @@
+{
+  "name": "e622824e-font-bundle",
+  "description": "Задача e622824e «Шрифтовый бандл woff2 в клиенте». Стенд собранного клиента (prod, file://). Проверено: (1) в документе объявлены ровно 8 начертаний бандла — Inter 400/500/600 и JetBrains Mono 400, по два подмножества; (2) каждый src — локальный относительный woff2 из сборки (CSSOM), внешних адресов нет; (3) начертания фактически загружены (status loaded), то есть вид не зависит от установленных в ОС шрифтов; (4) body считает гарнитуру из бандла (связка Web Awesome токенами ETN); (5) ширина строки в стеке --user-font-ui совпадает с шириной в 'Inter' и отличается от системного фолбэка system-ui — на латинице и кириллице; (6) ширина в --md-mono совпадает с 'JetBrains Mono' и отличается от прежнего системного Consolas; (7) CSP font-src допускает только 'self' (file: не нужен — проверено замером: шрифты грузятся 8/8). Запуск: npm -w @etn/client run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.e622824e-font-bundle.scenario.json --server-language ru --out .tmp/e622824e/out",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "app-ready",
+      "waitFor": {
+        "expression": "document.querySelector('#app')?.children.length > 0 && document.fonts.size > 0"
+      }
+    },
+    {
+      "name": "load-faces",
+      "probe": {
+        "name": "faces",
+        "expression": "(async () => { await Promise.all([ document.fonts.load(\"400 16px 'Inter'\", 'AaШш'), document.fonts.load(\"500 16px 'Inter'\", 'AaШш'), document.fonts.load(\"600 16px 'Inter'\", 'AaШш'), document.fonts.load(\"400 16px 'JetBrains Mono'\", 'AaШш') ]); await document.fonts.ready; const faces = [...document.fonts].filter((f) => /Inter|JetBrains Mono/.test(f.family)).map((f) => ({ family: f.family, weight: f.weight, style: f.style, status: f.status })); const ui = getComputedStyle(document.documentElement).getPropertyValue('--user-font-ui').trim(); const mono = getComputedStyle(document.documentElement).getPropertyValue('--md-mono').trim(); return { faces, ui, mono, body: getComputedStyle(document.body).fontFamily, checkInter: document.fonts.check(\"16px 'Inter'\"), checkMono: document.fonts.check(\"16px 'JetBrains Mono'\"), hidden: document.hidden }; })()"
+      }
+    },
+    {
+      "name": "font-sources",
+      "probe": {
+        "name": "fontSources",
+        "expression": "(() => { const sources = []; let cssomReadable = true; for (const sheet of document.styleSheets) { let rules = []; try { rules = [...sheet.cssRules]; } catch (e) { cssomReadable = false; continue; } for (const rule of rules) { if (rule.type === 5) sources.push(rule.style.getPropertyValue('src')); } } const csp = document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]')?.getAttribute('content') ?? ''; const m = /font-src\\s+([^;]+)/.exec(csp); return { sources, cssomReadable, fontSrc: m ? m[1].trim().split(/\\s+/) : [], body: getComputedStyle(document.body).fontFamily }; })()"
+      }
+    },
+    {
+      "name": "faces-ok",
+      "probe": {
+        "name": "facesOk",
+        "expression": "(() => { const faces = [...document.fonts].filter((f) => /Inter|JetBrains Mono/.test(f.family)); const unique = [...new Set(faces.map((f) => f.family + '/' + f.weight + '/' + f.style))].sort(); const expected = ['Inter/400/normal', 'Inter/500/normal', 'Inter/600/normal', 'JetBrains Mono/400/normal']; const allLoaded = faces.every((f) => f.status === 'loaded'); const sources = []; for (const sheet of document.styleSheets) { let rules = []; try { rules = [...sheet.cssRules]; } catch (e) { continue; } for (const rule of rules) if (rule.type === 5) sources.push(rule.style.getPropertyValue('src')); } const local = sources.filter((s) => /^url\\((['\"])?\\.\\/[A-Za-z0-9._-]+\\.woff2\\1\\)/i.test(s)); const noRemote = sources.length === 8 && local.length === 8 && sources.every((s) => !/:\\/\\//.test(s)); const bodyFont = getComputedStyle(document.body).fontFamily; const bodyInter = /^['\"]?Inter['\"]?(,|$)/.test(bodyFont); const csp = document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]')?.getAttribute('content') ?? ''; const m = /font-src\\s+([^;]+)/.exec(csp); const fontSrc = m ? m[1].trim().split(/\\s+/) : []; return { ok: unique.length === expected.length && expected.every((k) => unique.includes(k)) && allLoaded && noRemote && bodyInter && fontSrc.length > 0 && fontSrc.every((v) => v === \"'self'\"), unique, allLoaded, noRemote, bodyInter, fontSrc }; })()"
+      },
+      "expect": {
+        "ok": true,
+        "unique": [
+          "Inter/400/normal",
+          "Inter/500/normal",
+          "Inter/600/normal",
+          "JetBrains Mono/400/normal"
+        ],
+        "allLoaded": true,
+        "noRemote": true,
+        "bodyInter": true,
+        "fontSrc": ["'self'"]
+      }
+    },
+    {
+      "name": "widths",
+      "probe": {
+        "name": "widths",
+        "expression": "(() => { const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d'); const ui = getComputedStyle(document.documentElement).getPropertyValue('--user-font-ui').trim(); const mono = getComputedStyle(document.documentElement).getPropertyValue('--md-mono').trim(); const measure = (family, text) => { ctx.font = '16px ' + family; return Number(ctx.measureText(text).width.toFixed(3)); }; const latin = 'Font bundle Inter 0110'; const cyrillic = 'Шрифтовый бандл 0110'; const code = 'const value = 42;'; return { latin: { inter: measure(\"'Inter'\", latin), stack: measure(ui, latin), fallback: measure('system-ui', latin) }, cyrillic: { inter: measure(\"'Inter'\", cyrillic), stack: measure(ui, cyrillic), fallback: measure('system-ui', cyrillic) }, mono: { jetbrains: measure(\"'JetBrains Mono'\", code), stack: measure(mono, code), fallback: measure(\"'Consolas'\", code) } }; })()"
+      }
+    },
+    {
+      "name": "widths-ok",
+      "probe": {
+        "name": "widthsOk",
+        "expression": "(() => { const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d'); const ui = getComputedStyle(document.documentElement).getPropertyValue('--user-font-ui').trim(); const mono = getComputedStyle(document.documentElement).getPropertyValue('--md-mono').trim(); const measure = (family, text) => { ctx.font = '16px ' + family; return ctx.measureText(text).width; }; const near = (a, b) => Math.abs(a - b) < 0.01; const latin = 'Font bundle Inter 0110'; const cyrillic = 'Шрифтовый бандл 0110'; const code = 'const value = 42;'; const uiEqualsInter = near(measure(ui, latin), measure(\"'Inter'\", latin)) && near(measure(ui, cyrillic), measure(\"'Inter'\", cyrillic)); const uiDiffersFallback = !near(measure(ui, latin), measure('system-ui', latin)) && !near(measure(ui, cyrillic), measure('system-ui', cyrillic)); const monoEqualsJetBrains = near(measure(mono, code), measure(\"'JetBrains Mono'\", code)); const monoDiffersFallback = !near(measure(mono, code), measure(\"'Consolas'\", code)); return { ok: uiEqualsInter && uiDiffersFallback && monoEqualsJetBrains && monoDiffersFallback, uiEqualsInter, uiDiffersFallback, monoEqualsJetBrains, monoDiffersFallback }; })()"
+      },
+      "expect": {
+        "ok": true,
+        "uiEqualsInter": true,
+        "uiDiffersFallback": true,
+        "monoEqualsJetBrains": true,
+        "monoDiffersFallback": true
+      }
+    }
+  ]
+}

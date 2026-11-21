@@ -1478,6 +1478,10 @@ export function search(
       : toSearchClause(
           filterAstClause(ndb, effectiveAst, undefined, {
             ...(tokenContext !== undefined ? { ctx: tokenContext } : {}),
+            // Per-user условия («Есть напоминание»/«Дата напоминания», 0.16.1)
+            // читают напоминания ЗАПРОСИВШЕГО: владелец ключа — из контекста
+            // токенов точки поиска (REST/MCP собирают его в одном месте).
+            ...(tokenContext?.userId !== undefined ? { requesterId: tokenContext.userId } : {}),
             unresolved,
           }),
         );

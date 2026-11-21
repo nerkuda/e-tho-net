@@ -65,12 +65,14 @@ import { isTypeDeleted, rememberShownDefinitions } from '../lib/type-definitions
 import { onReconnected, store } from '../state.js';
 import {
   invalidateGraphTab,
+  clearPendingPropertyReveal,
+  pendingPropertyRevealFor,
   registerTabContent,
   registerTabRetarget,
   type EditorContext,
   type TabPaneLifecycle,
 } from './editor.js';
-import { groupSection } from './group.js';
+import { groupSection, setGroupExpanded } from './group.js';
 import { removeLinkValueEdges, type LinkValueRemovalMode } from './link-value-removal.js';
 import {
   propertyRowMenuItems,
@@ -1157,6 +1159,58 @@ function buildPropertiesTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HT
   });
   outsideRefreshCount = () =>
     outsideGroup.dispatchEvent(new CustomEvent('etn:refresh-count'));
+  // Строка свойства в СВЁРНУТОЙ группе «Свойства вне типа» (задача 3054fe86):
+  // типовая таблица не нашла свойство и просит раскрыть группу — её
+  // перечитывание покажет строку и снимет запрос.
+  box.addEventListener('etn:reveal-outside', () => setGroupExpanded(outsideGroup, true));
+  // Переход к свойству в СВЁРНУТОЙ группе «Свойства типа» (задача 3054fe86,
+  // вердикт 4294f1f3): без тела таблица не построится. Раскрываем группу ТОЛЬКО
+  // если свойство входит в эффективный набор типа — внетиповое свойство не
+  // должно сжимать свою группу из-за лишнего раскрытия типовой (замечание к
+  // fa415304). Раскрытая группа остаётся раскрытой до ручного сворачивания;
+  // сохранённое предпочтение `collapsedGroups` не переписывается.
+  const revealPropertyId = pendingPropertyRevealFor(target.ownerType, target.ownerId);
+  if (
+    revealPropertyId !== null &&
+    store.state.collapsedGroups['properties.type'] === true
+  ) {
+    void openTypeGroupIfPropertyInType(revealPropertyId);
+  }
+
+  /**
+   * Типовая группа свёрнута: читаем эффективный набор типа и раскрываем группу,
+   * только если запрошенное свойство в нём есть. Свойства нет — строка вне
+   * типа; на всякий случай раскрываем внетиповую группу (если она тоже была
+   * свёрнута), а типовую не трогаем. Отказ чтения набора — не раскрываем
+   * ничего: строка вне типа показывается своей группой, а запрос останется
+   * жить до следующего успешного показа.
+   */
+  async function openTypeGroupIfPropertyInType(propertyId: string): Promise<void> {
+    const requestOwnerId = target.ownerId;
+    const requestTypeId = target.typeId;
+    if (requestTypeId === null) return;
+    const typeOwner = target.ownerType === 'thought' ? 'thought_type' : 'link_type';
+    let definitions: EffectiveTypeProperty[];
+    try {
+      definitions = await etn.types.listTypeProperties(
+        requireNetworkId(),
+        typeOwner,
+        requestTypeId,
+      );
+    } catch {
+      return;
+    }
+    // Пока читали, панель могли перепривязать/перестроить/снять с экрана —
+    // чужой ответ не должен менять раскрытие текущей группы.
+    if (!box.isConnected) return;
+    if (target.ownerId !== requestOwnerId || target.typeId !== requestTypeId) return;
+    if (pendingPropertyRevealFor(target.ownerType, target.ownerId) !== propertyId) return;
+    if (definitions.some((definition) => definition.property_id === propertyId)) {
+      setGroupExpanded(typeGroup, true);
+      return;
+    }
+    setGroupExpanded(outsideGroup, true);
+  }
   // Retarget of the SHOWN pane to another owner of the same type: the pane is
   // reused (editor's `registerTabRetarget`), its bodies reload under the new
   // owner and the outside-type badge is re-resolved (its owner lives on the
@@ -1598,7 +1652,24 @@ function buildOutsidePropertiesBody(
     collectRowNodes();
     nav?.refresh();
     reorder?.refresh();
+    revealRequestedOutsideRow();
   };
+
+  /**
+   * Строка перехода могла оказаться именно здесь, вне типа (задача 3054fe86):
+   * запрос живёт в редакторе до показа, поэтому забираем его после каждой
+   * сверки строк группы.
+   */
+  function revealRequestedOutsideRow(): void {
+    const propertyId = pendingPropertyRevealFor(target.ownerType, target.ownerId);
+    if (propertyId === null) return;
+    const row = shownRows.find((candidate) =>
+      matchesRevealProperty(rowKeyOf(candidate), propertyId),
+    );
+    if (row === undefined) return;
+    clearPendingPropertyReveal();
+    nav?.setCurrent(row, { activate: true, reveal: true, focus: true });
+  }
 
   /**
    * Разложить переупорядочиваемые строки по их слотам, сохранив позиции
@@ -2017,6 +2088,29 @@ function definitionValueKey(definition: EffectiveTypeProperty): string {
   return definition.value_type === 'link'
     ? `${definition.property_id}:${linkSideOf(definition)}`
     : definition.property_id;
+}
+
+/**
+ * Относится ли ТИПОВАЯ строка к запрошенному свойству (задача 3054fe86).
+ * Ключ сверки типовой таблицы — id ПРИВЯЗКИ (`definition.id`, уникален в
+ * эффективном наборе), а датовый факт несёт РЕЕСТРОВЫЙ `property_id`; сравнивать
+ * их нельзя (вердикт 4294f1f3). Свойство-связь находит любая его сторона:
+ * запрос знает только свойство.
+ */
+function matchesRevealDefinition(
+  definition: EffectiveTypeProperty,
+  propertyId: string,
+): boolean {
+  return definition.property_id === propertyId;
+}
+
+/**
+ * Относится ли ключ ВНЕТИПОВОЙ строки к запрошенному свойству: ключ такой
+ * строки — это значение `property_id` (+ сторона связи `:side`), поэтому
+ * совпадение по реестровому id здесь корректно (задача 3054fe86).
+ */
+function matchesRevealProperty(rowKey: string, propertyId: string): boolean {
+  return rowKey === propertyId || rowKey.startsWith(`${propertyId}:`);
 }
 
 /** CSS-класс выделенной (текущей) строки таблицы свойств (навигация ↑/↓). */
@@ -2778,6 +2872,36 @@ function buildTypePropertiesBody(
     nav = null;
   });
 
+  /** Свойство, запрос показа которого уже уходил в группу «Свойства вне типа». */
+  let revealOutsideRequestedFor: string | null = null;
+
+  /**
+   * Показать строку свойства, к которой вёл переход из «Связей дня» (задача
+   * 3054fe86). Поиск идёт по РЕЕСТРОВОМУ property_id определения, а не по ключу
+   * сверки (id привязки, вердикт 4294f1f3); свойство-связь находит любая
+   * сторона — датовый факт знает только свойство. Не нашли в типовой таблице —
+   * просим вкладку раскрыть группу «Свойства вне типа»: свойство могло быть не
+   * подключено к типу.
+   */
+  const revealRequestedRow = (): void => {
+    const propertyId = pendingPropertyRevealFor(target.ownerType, target.ownerId);
+    if (propertyId === null) return;
+    const row = shownRows.find((candidate) =>
+      matchesRevealDefinition(candidate.definition, propertyId),
+    );
+    if (row === undefined) {
+      if (revealOutsideRequestedFor !== propertyId) {
+        revealOutsideRequestedFor = propertyId;
+        box.dispatchEvent(
+          new CustomEvent('etn:reveal-outside', { detail: propertyId, bubbles: true }),
+        );
+      }
+      return;
+    }
+    clearPendingPropertyReveal();
+    nav?.setCurrent(row, { activate: true, reveal: true, focus: true });
+  };
+
   /** Retry watch armed while a connection-lost error is on screen (de34b35b). */
   let retryStop: (() => void) | null = null;
   let disposed = false;
@@ -2869,6 +2993,7 @@ function buildTypePropertiesBody(
         reconcileKeyed(tbody, previousRows, rowSpec);
         collectRowNodes();
         nav?.refresh();
+        revealRequestedRow();
         return;
       }
       // Прежних строк нет (первый показ владельца): строить таблицу не из
@@ -2898,6 +3023,7 @@ function buildTypePropertiesBody(
       shownRows = [];
       rowNodes.clear();
       nav?.refresh();
+      revealRequestedRow();
       tableWrap.replaceChildren(el('p', 'muted', t('properties.uTypeNoProperties')));
       tableAttached = false;
       return;
@@ -3004,6 +3130,7 @@ function buildTypePropertiesBody(
     reconcileKeyed(tbody, rows, rowSpec);
     collectRowNodes();
     nav?.refresh();
+    revealRequestedRow();
     logUiEvent('ui.editor.props.loaded', {
       id: requestOwnerId,
       ms: Date.now() - startedAt,

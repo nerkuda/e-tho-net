@@ -36,6 +36,7 @@ import {
   type FilterPanelState,
   clampFilterPanelSize,
   filterPanelPlacement,
+  filterPanelTopLimit,
   filterPanelWidthLimit,
   parseFilterPanelState,
   serializeFilterPanelState,
@@ -66,8 +67,14 @@ export interface FilterPanelFrameOptions {
    * только в `ui_state`.
    */
   legacySize?: () => number | null;
-  /** Минимум места, которое остаётся результатам, px (по умолчанию 160). */
-  resultsMinSize?: number;
+  /**
+   * Минимум места, которое остаётся результатам, px (по умолчанию 160).
+   * Геттер — когда резерв зависит от фактической раскладки экрана: «Дневник»
+   * отдаёт высоту панели добавления, минимум панели задач, швы и минимум ленты
+   * (`screens/chronicle/tasks-panel-geometry.ts`). Значение читается на каждом
+   * `apply()`, поэтому измерение доступно после монтирования узлов.
+   */
+  resultsMinSize?: number | (() => number);
 }
 
 /** Рукоятка каркаса панели отбора. */
@@ -86,6 +93,9 @@ const PANEL_CLASS = 'fp-panel';
 const SPLITTER_CLASS = 'fp-splitter';
 const TOGGLE_CLASS = 'fp-toggle';
 
+/** Резерв результатов по умолчанию (px) — как CSS-фолбэк `--fp-results-min`. */
+const DEFAULT_RESULTS_MIN_SIZE = 160;
+
 /**
  * Монтирует каркас панели отбора: добавляет плавающую кнопку скрытия, классы
  * положения и обработчики перетаскивания границы. Состояние читается из L4 при
@@ -93,7 +103,15 @@ const TOGGLE_CLASS = 'fp-toggle';
  */
 export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPanelFrameHandle {
   const { container, panel, splitter, stateKey } = opts;
-  const resultsMinSize = opts.resultsMinSize ?? 160;
+  /**
+   * Резерв результатов на текущий момент. Геттер экрана мерит фактическую
+   * высоту своих узлов, поэтому читается при каждом пересчёте, а не один раз.
+   */
+  const resultsMinSize = (): number => {
+    const raw =
+      typeof opts.resultsMinSize === 'function' ? opts.resultsMinSize() : opts.resultsMinSize;
+    return raw !== undefined && Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RESULTS_MIN_SIZE;
+  };
   let state: FilterPanelState = { ...DEFAULT_FILTER_PANEL_STATE };
 
   container.classList.add(HOST_CLASS);
@@ -112,13 +130,14 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
 
   const limitsOf = (placement: FilterPanelPlacement): { min: number; max: number } => {
     const min = placement === 'top' ? (opts.minSizeTop ?? opts.minSize) : opts.minSize;
-    // Размер панели не съедает результаты: верхняя граница упирается в полотно.
-    const room =
-      (placement === 'top' ? container.clientHeight : container.clientWidth) - resultsMinSize;
+    // Размер панели не съедает результаты: верхняя граница упирается в полотно
+    // минус резерв результатов (у «Дневника» — ещё и панель задач с лентой).
     if (placement === 'top') {
       const max = opts.maxSizeTop ?? opts.maxSize;
+      const room = filterPanelTopLimit(container.clientHeight, resultsMinSize());
       return { min, max: Math.max(min, Math.min(max, room)) };
     }
+    const room = container.clientWidth - resultsMinSize();
     // Ширина панели — не больше ПОЛОВИНЫ ПОЛОТНА вида, когда редактор
     // пришвартован слева/справа: половина (окно минус панель редактора)
     // (требование заказчика 2026-10-13; уточнено по живой проверке 2026-10-14,
@@ -160,6 +179,10 @@ export function mountFilterPanelFrame(opts: FilterPanelFrameOptions): FilterPane
 
   const apply = (): void => {
     const placement = currentPlacement();
+    // Тот же резерв, что у границ перетаскивания, — в CSS: до первого драга
+    // высоту панели ограничивает `max-height` в `filter-panel.css`, а не
+    // inline-`flex-basis` (у панели ещё нет сохранённого размера).
+    container.style.setProperty('--fp-results-min', `${resultsMinSize()}px`);
     container.classList.toggle('fp-side', !state.hidden && placement === 'side');
     container.classList.toggle('fp-top', !state.hidden && placement === 'top');
     container.classList.toggle('fp-hidden', state.hidden);

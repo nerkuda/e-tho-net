@@ -29,7 +29,7 @@ import { describe, it } from 'node:test';
 import { BASE_LAYER_ID, type Layer, type LayerColors } from '@etn/shared';
 
 import {
-  DEFAULT_FOCUS_BAND_COLOR,
+  DEFAULT_FOCUS_ACCENT,
   LABEL_FONT_SHARE,
   LABEL_MIN_FONT_PX,
   LABEL_OPACITY,
@@ -103,8 +103,11 @@ function layer(overrides: Partial<Layer> & { id: string; title: string }): Layer
 }
 
 /** Recording style-declaration shim for the CSS-variable application. */
-function shimStyle(): LayerStyleTarget & { vars: Map<string, string> } {
-  const vars = new Map<string, string>();
+function shimStyle(tokens: Record<string, string> = {}): LayerStyleTarget & {
+  vars: Map<string, string>;
+  getPropertyValue(name: string): string;
+} {
+  const vars = new Map<string, string>(Object.entries(tokens));
   return {
     vars,
     setProperty(name: string, value: string): void {
@@ -113,6 +116,19 @@ function shimStyle(): LayerStyleTarget & { vars: Map<string, string> } {
     removeProperty(name: string): void {
       vars.delete(name);
     },
+    getPropertyValue(name: string): string {
+      return vars.get(name) ?? '';
+    },
+  };
+}
+
+/** Корневые токены темы для фейкового документа: пайплайн читает их для --frame-*. */
+function rootThemeTokens(): Record<string, string> {
+  return {
+    '--bg': '#eef0f4',
+    '--cursor': '#c02f77',
+    '--selection': '#0f8f86',
+    '--focus-ring-contrast': '#1b2436',
   };
 }
 
@@ -183,7 +199,11 @@ describe('invertThemeColor + defaultLayerColors', () => {
 
 describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => {
   it('null colors (base layer / layer without colours) resolve to theme defaults', () => {
-    assert.deepEqual(resolveLayerTheme(null, 'dark'), { focusStripe: null, background: null });
+    assert.deepEqual(resolveLayerTheme(null, 'dark'), {
+      focusStripe: null,
+      background: null,
+      focusRing: null,
+    });
     assert.deepEqual(currentLayerColors([], null), null);
 
     const base = layer({ id: BASE_LAYER_ID, title: 'Основа', is_base: true, current: true });
@@ -205,6 +225,8 @@ describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => 
     assert.deepEqual(vars, {
       focusStripe: defaultLayerColors().focus_stripe.dark,
       background: defaultLayerColors().background.dark,
+      // Кольцо экранов считает контекст адаптации, слой о нём не знает.
+      focusRing: null,
     });
   });
 
@@ -216,30 +238,40 @@ describe('resolveLayerTheme + currentLayerColors + applyLayerThemeStyle', () => 
     assert.deepEqual(resolveLayerTheme(colors, 'dark'), {
       focusStripe: '#7e57c2',
       background: '#191327',
+      focusRing: null,
     });
     assert.deepEqual(resolveLayerTheme(colors, 'light'), {
       focusStripe: colors.focus_stripe.light,
       background: colors.background.light,
+      focusRing: null,
     });
   });
 
   it('writes and clears the --layer-* CSS variables', () => {
     const style = shimStyle();
-    applyLayerThemeStyle(style, { focusStripe: '#7e57c2', background: '#191327' });
+    applyLayerThemeStyle(style, {
+      focusStripe: '#7e57c2',
+      background: '#191327',
+      focusRing: '#643da8',
+    });
     assert.equal(style.vars.get('--layer-focus-stripe'), '#7e57c2');
+    assert.equal(style.vars.get('--layer-focus-ring-screen'), '#643da8');
     assert.equal(style.vars.get('--layer-bg'), '#191327');
 
-    applyLayerThemeStyle(style, { focusStripe: null, background: null });
+    applyLayerThemeStyle(style, { focusStripe: null, background: null, focusRing: null });
     assert.equal(style.vars.has('--layer-focus-stripe'), false);
+    assert.equal(style.vars.has('--layer-focus-ring-screen'), false);
     assert.equal(style.vars.has('--layer-bg'), false);
   });
 });
 
 describe('layer theme pipeline (store → document root)', () => {
   it('applies, re-themes and resets the variables as the store changes', () => {
-    const style = shimStyle();
+    const style = shimStyle(rootThemeTokens());
     const originalDocument = (globalThis as any).document;
+    const originalComputed = (globalThis as any).getComputedStyle;
     (globalThis as any).document = { documentElement: { style } };
+    (globalThis as any).getComputedStyle = (element: { style: unknown }) => element.style;
     try {
       initLayerTheme();
 
@@ -276,6 +308,8 @@ describe('layer theme pipeline (store → document root)', () => {
     } finally {
       if (originalDocument === undefined) delete (globalThis as any).document;
       else (globalThis as any).document = originalDocument;
+      if (originalComputed === undefined) delete (globalThis as any).getComputedStyle;
+      else (globalThis as any).getComputedStyle = originalComputed;
       // Leave the store on the base for the other suites.
       store.update({
         layers: [],
@@ -289,9 +323,11 @@ describe('layer theme pipeline (store → document root)', () => {
     // MCP-created layers carry no `colors`; the client must still write the
     // creation defaults so the active layer is visually distinct from the
     // base regardless of how the layer was created.
-    const style = shimStyle();
+    const style = shimStyle(rootThemeTokens());
     const originalDocument = (globalThis as any).document;
+    const originalComputed = (globalThis as any).getComputedStyle;
     (globalThis as any).document = { documentElement: { style } };
+    (globalThis as any).getComputedStyle = (element: { style: unknown }) => element.style;
     try {
       initLayerTheme();
       store.update({
@@ -307,6 +343,8 @@ describe('layer theme pipeline (store → document root)', () => {
     } finally {
       if (originalDocument === undefined) delete (globalThis as any).document;
       else (globalThis as any).document = originalDocument;
+      if (originalComputed === undefined) delete (globalThis as any).getComputedStyle;
+      else (globalThis as any).getComputedStyle = originalComputed;
       store.update({
         layers: [],
         currentLayer: null,
@@ -318,13 +356,7 @@ describe('layer theme pipeline (store → document root)', () => {
 
 describe('map label (0.6.4 §2.2a)', () => {
   it('never appears on the base layer; appears for a layer with/without colours', () => {
-    const base = layerLabelView(
-      { id: BASE_LAYER_ID, title: 'Основа' },
-      null,
-      'dark',
-      300,
-      1000,
-    );
+    const base = layerLabelView({ id: BASE_LAYER_ID, title: 'Основа' }, null, 'dark', 300, 1000);
     assert.equal(base.visible, false);
 
     const colored = layerLabelView(
@@ -347,7 +379,7 @@ describe('map label (0.6.4 §2.2a)', () => {
     // theme-default focus band.
     const plain = layerLabelView({ id: 'l1', title: 'Слой' }, null, 'dark', 300, 1000);
     assert.equal(plain.visible, true);
-    assert.equal(plain.stripe, DEFAULT_FOCUS_BAND_COLOR);
+    assert.equal(plain.stripe, DEFAULT_FOCUS_ACCENT);
 
     // Degenerate geometry: no focus row → no label.
     const flat = layerLabelView({ id: 'l1', title: 'Слой' }, null, 'dark', 0, 1000);
@@ -398,22 +430,30 @@ describe('styles.css rules the runtime relies on', () => {
   });
 
   it('the canvas, structures results and chronicle follow --layer-bg', () => {
-    assert.match(css.match(/^\.canvas \{[^}]*\}/m)?.[0] ?? '', /var\(--layer-bg,\s*var\(--bg\)\)/);
+    assert.match(
+      css.match(/^\.canvas \{[^}]*\}/m)?.[0] ?? '',
+      /var\(--layer-bg,\s*(?:var\(--user-canvas-bg,\s*)?var\(--bg\)/,
+    );
     assert.match(
       css.match(/^\.st-results \{[^}]*\}/m)?.[0] ?? '',
       /var\(--layer-bg,\s*var\(--bg\)\)/,
     );
-    assert.match(css.match(/^\.chronicle \{[^}]*\}/m)?.[0] ?? '', /var\(--layer-bg,\s*var\(--bg\)\)/);
+    assert.match(
+      css.match(/^\.chronicle \{[^}]*\}/m)?.[0] ?? '',
+      /var\(--layer-bg,\s*var\(--bg\)\)/,
+    );
   });
 
-  it('the focus band and the editor halo follow --layer-focus-stripe', () => {
+  it('the focus band and the editor halo follow the focus token chain', () => {
+    // Полоса фокуса — в CSS от цепочки токенов; кольцо открытой считает
+    // lib/cloud-frames.ts (задача c6d74fd4), тема остаётся фолбэком.
     assert.match(
       css.match(/\.canvas::before\s*\{[^}]*\}/)?.[0] ?? '',
-      /var\(--layer-focus-stripe,\s*var\(--focus-band-color\)\)/,
+      /var\(--layer-focus-stripe,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
     );
     assert.match(
       css.match(/\.cloud\.halo\s*\{[^}]*\}/)?.[0] ?? '',
-      /var\(--layer-focus-stripe,\s*var\(--accent\)\)/,
+      /var\(--frame-open,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
     );
   });
 });

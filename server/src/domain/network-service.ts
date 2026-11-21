@@ -23,6 +23,7 @@ import { closeWritePoolNetwork } from '../db/write-pool.js';
 import { closeReaderPoolNetwork } from '../db/reader-pool.js';
 import { networkDir } from '../paths.js';
 import { ensureDefaultShelf } from './publication-service.js';
+import { removeNetworkUserFiles } from './user-file-service.js';
 import type { Logger } from '../logger.js';
 
 /** Network lifecycle operations that require filesystem + per-DB work. */
@@ -159,7 +160,13 @@ export class NetworkServiceImpl implements NetworkService {
 
     // 3. Delete the registry row (cascades to network_members, user_preferences).
     this.systemDb.deleteNetworkRow(networkId);
-    this.log?.info({ networkId }, 'network deleted');
+
+    // 4. Remove the wallpapers of the network: user_files rows + bytes on disk
+    //    (0.16.1, task 5db41abf). There is no FK cascade — networks live in
+    //    separate databases (entity 62fd29b5).
+    const removedWallpapers = removeNetworkUserFiles(this.systemDb, networkId);
+
+    this.log?.info({ networkId, removedWallpapers }, 'network deleted');
   }
 
   validateTypeRoles(networkId: string, typeRoles: TypeRoles): TypeRoles {

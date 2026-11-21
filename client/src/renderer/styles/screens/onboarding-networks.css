@@ -74,8 +74,8 @@
 }
 
 .profile-item.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
+  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
 }
 
 .profile-item .profile-label {

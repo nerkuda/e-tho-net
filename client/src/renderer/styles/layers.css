@@ -6,7 +6,7 @@
    the card shows the RESOLVED state, the mark says «this one travels with a
    merge». */
 .cloud.overridden {
-  outline: 2px dashed var(--accent, #6a7dff);
+  outline: 2px dashed var(--accent);
   outline-offset: 2px;
 }
 
@@ -21,7 +21,7 @@
   width: 27.2px;
   height: 27.2px;
   border-radius: 50%;
-  background: #000;
+  background: var(--badge-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -29,17 +29,17 @@
   cursor: default;
   user-select: none;
   z-index: 3;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 .cloud-layer-badge svg {
-  color: #8c9eff;
+  color: var(--mark-layer);
 }
 
 /* A link overridden by the current layer: dashed, slightly thicker stroke
    with a violet tint so layer-edited links stand out on the canvas. */
 .link-line.link-overridden {
-  stroke: #8c9eff;
+  stroke: var(--mark-layer);
   stroke-dasharray: 5 4;
   stroke-opacity: 0.95;
 }
@@ -64,32 +64,32 @@
   padding: 0;
   border: none;
   border-radius: 50%;
-  background: #000;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  background: var(--badge-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
   cursor: pointer;
   pointer-events: auto;
 }
 
 .link-trash-badge svg {
-  color: #e53935;
+  color: var(--mark-danger);
 }
 
 /* Layer dialogs: the explaining one-liner and the safe-delete note. */
 .layer-hint {
   font-size: 12px;
-  color: var(--text-dim, #777);
+  color: var(--text-dim);
   line-height: 1.45;
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+  background: var(--surface-2);
 }
 
 .layer-hint-safe {
-  color: var(--text, #222);
+  color: var(--text);
 }
 
 .layer-hint-error {
-  color: var(--danger, #c62828);
+  color: var(--danger);
 }
 
 .layer-report-line {
@@ -112,7 +112,7 @@
 .merge-variant-hint {
   display: block;
   font-size: 12px;
-  color: var(--text-dim, #777);
+  color: var(--text-dim);
   line-height: 1.4;
   margin: 0 0 var(--space-3) var(--space-6);
 }
@@ -179,7 +179,7 @@
   margin-top: 8px;
   font-weight: 600;
   font-family: inherit;
-  color: var(--text, #222);
+  color: var(--text);
 }
 
 .diff-group-line {
@@ -196,17 +196,17 @@
 }
 
 .diff-add {
-  background: rgba(46, 160, 67, 0.14);
-  color: #2ea043;
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
 .diff-del {
-  background: rgba(248, 81, 73, 0.12);
-  color: #e5484d;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .diff-same {
-  color: var(--text-dim, #777);
+  color: var(--text-dim);
 }
 
 /* --- Метаданные (задача 04cd9794) --------------------------------------- */
@@ -260,7 +260,7 @@
 }
 
 .metadata-id-value {
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-family: var(--md-mono);
   font-size: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -345,5 +345,3 @@
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
-
-

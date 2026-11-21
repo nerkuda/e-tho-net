@@ -31,10 +31,7 @@ import { describe, it } from 'node:test';
 
 import { ShimElement } from './dom-shim.js';
 import { assertGuardClean } from './guard-helpers.js';
-import {
-  reconcileKeyed,
-  type KeyedRenderSpec,
-} from '../src/renderer/lib/ui/keyed-list.js';
+import { reconcileKeyed, type KeyedRenderSpec } from '../src/renderer/lib/ui/keyed-list.js';
 
 const RENDERER_ROOT = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 const CHRONICLE = fs.readFileSync(
@@ -98,6 +95,13 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
     'одиночный слот дефолтного облачка мысли (задача 26006db4): ' +
       'renderDefaultThoughtIcon кладёт один <svg> в иконный узел, это не список',
   ],
+  [
+    'lib/ui/task-panel.ts',
+    'панель задач и напоминаний (0.16.1, задача 64f7976a): секции, подгруппы и ' +
+      'строки — reconcileKeyed; replaceChildren — одноразовое монтирование/снятие ' +
+      'панели, фиксированный состав ОДНОЙ строки (чекбокс, текст, даты, команды) и ' +
+      'слот статуса загрузки/ошибки, это не коллекции списка',
+  ],
   // screens — монтирование экранов, слоты форм/панелей.
   ['screens/screens.ts', 'монтирование экрана целиком (смена сущности)'],
   ['screens/workspace.ts', 'точечная метка масштаба холста'],
@@ -121,7 +125,10 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
   ],
   ['screens/workspace-menus.ts', 'выпадающие меню — слоты'],
   ['screens/chronicle/filter-panel.ts', 'панель отбора — пересборка формы'],
-  ['screens/chronicle/chronicle.ts', 'монтирование вида и точечные слоты; лента — на reconcileKeyed'],
+  [
+    'screens/chronicle/chronicle.ts',
+    'монтирование вида и точечные слоты; лента — на reconcileKeyed',
+  ],
   [
     'screens/chronicle/record-title.ts',
     'заголовок записи — ОДНА кнопка-группа: `replaceChildren` обновляет только ' +
@@ -135,8 +142,18 @@ const REBUILD_WHITELIST: ReadonlyMap<string, string> = new Map([
       'ленты это не задевает; сверка по ключу не нужна — облачко несёт данные ' +
       'мысли и обязано обновиться вместе с ними',
   ],
+  [
+    'screens/chronicle/day-links.ts',
+    'блок «Связи дня» (0.16.1, задача 710b68aa): коллекции фактов и ссылок ' +
+      'обновляются reconcileKeyed в постоянных контейнерах; `replaceChildren` — ' +
+      'пересборка содержимого ОДНОЙ изменившейся строки (фиксированный состав: ' +
+      'облачко, подпись/время, сниппет, дата источника), это не коллекция списка',
+  ],
   ['screens/structures/filter-panel.ts', 'панель отбора — пересборка формы'],
-  ['screens/structures/structures.ts', 'монтирование вида и наполнение строки; дерево — на reconcileKeyed'],
+  [
+    'screens/structures/structures.ts',
+    'монтирование вида и наполнение строки; дерево — на reconcileKeyed',
+  ],
   // editor — каркас редактора инкрементален (задача 90b2256e), ниже — только
   // легитимные одиночные слоты и пересборка содержимого вкладок.
   [
@@ -206,56 +223,96 @@ describe('guard: инкрементальный рендер списков (695
       update: (_el, item) => updated.push(item.id),
     };
 
-    reconcileKeyed(host, [{ id: 'a', n: 1 }, { id: 'b', n: 2 }], spec);
+    reconcileKeyed(
+      host,
+      [
+        { id: 'a', n: 1 },
+        { id: 'b', n: 2 },
+      ],
+      spec,
+    );
     const [a, b] = host.children as unknown as ShimElement[];
 
-    const same = reconcileKeyed(host, [{ id: 'a', n: 1 }, { id: 'b', n: 2 }], spec);
+    const same = reconcileKeyed(
+      host,
+      [
+        { id: 'a', n: 1 },
+        { id: 'b', n: 2 },
+      ],
+      spec,
+    );
     assert.deepEqual(same, { added: [], removed: [], moved: false, updated: [] });
     assert.equal((host.children as unknown as ShimElement[])[0], a, 'identity узла «a»');
 
-    const inserted = reconcileKeyed(host, [{ id: 'a', n: 1 }, { id: 'x', n: 9 }, { id: 'b', n: 2 }], spec);
+    const inserted = reconcileKeyed(
+      host,
+      [
+        { id: 'a', n: 1 },
+        { id: 'x', n: 9 },
+        { id: 'b', n: 2 },
+      ],
+      spec,
+    );
     assert.deepEqual(inserted.added, ['x']);
     assert.equal((host.children as unknown as ShimElement[])[0], a);
     assert.equal((host.children as unknown as ShimElement[])[2], b);
 
-    const removed = reconcileKeyed(host, [{ id: 'a', n: 1 }, { id: 'b', n: 2 }], spec);
+    const removed = reconcileKeyed(
+      host,
+      [
+        { id: 'a', n: 1 },
+        { id: 'b', n: 2 },
+      ],
+      spec,
+    );
     assert.deepEqual(removed.removed, ['x']);
 
-    const moved = reconcileKeyed(host, [{ id: 'b', n: 2 }, { id: 'a', n: 1 }], spec);
+    const moved = reconcileKeyed(
+      host,
+      [
+        { id: 'b', n: 2 },
+        { id: 'a', n: 1 },
+      ],
+      spec,
+    );
     assert.equal(moved.moved, true);
     assert.equal((host.children as unknown as ShimElement[])[0], b);
 
-    const changed = reconcileKeyed(host, [{ id: 'b', n: 3 }, { id: 'a', n: 1 }], spec);
+    const changed = reconcileKeyed(
+      host,
+      [
+        { id: 'b', n: 3 },
+        { id: 'a', n: 1 },
+      ],
+      spec,
+    );
     assert.deepEqual(changed.updated, ['b']);
     assert.deepEqual(updated, ['b']);
     assert.equal(built.length, 3, 'пересоздаётся только новый узел «x»');
   });
 
   it('(б) полная пересборка списка — только из белого списка файлов', () => {
-    assertGuardClean(
-      RENDERER_ROOT,
-      [
-        {
-          name: 'no-collection-rebuild',
-          description:
-            'Полная пересборка списка в screens/**, lib/ui/** и editor/** ' +
-            'запрещена: используйте reconcileKeyed (lib/ui/keyed-list.ts). ' +
-            'Легитимные исключения перечислены в REBUILD_WHITELIST с обоснованием.',
-          pattern: /\.replaceChildren\(/,
-          include: inScope,
-          allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
-        },
-        {
-          name: 'no-dom-clear',
-          description:
-            'Очистка контейнера `clear(host)` (lib/dom.ts) в screens/**, ' +
-            'lib/ui/** и editor/** запрещена: используйте reconcileKeyed или preserveScroll.',
-          pattern: /(?<![.\w])clear\([^:)]/,
-          include: inScope,
-          allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
-        },
-      ],
-    );
+    assertGuardClean(RENDERER_ROOT, [
+      {
+        name: 'no-collection-rebuild',
+        description:
+          'Полная пересборка списка в screens/**, lib/ui/** и editor/** ' +
+          'запрещена: используйте reconcileKeyed (lib/ui/keyed-list.ts). ' +
+          'Легитимные исключения перечислены в REBUILD_WHITELIST с обоснованием.',
+        pattern: /\.replaceChildren\(/,
+        include: inScope,
+        allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
+      },
+      {
+        name: 'no-dom-clear',
+        description:
+          'Очистка контейнера `clear(host)` (lib/dom.ts) в screens/**, ' +
+          'lib/ui/** и editor/** запрещена: используйте reconcileKeyed или preserveScroll.',
+        pattern: /(?<![.\w])clear\([^:)]/,
+        include: inScope,
+        allow: (rel, line) => isCommentLine(line) || REBUILD_WHITELIST.has(rel),
+      },
+    ]);
   });
 
   it('(б) сторож краснеет на файле вне белого списка', () => {
@@ -263,7 +320,7 @@ describe('guard: инкрементальный рендер списков (695
     try {
       fs.writeFileSync(
         path.join(dir, 'screen.ts'),
-        "list.replaceChildren(...nodes);\nclear(host);\n",
+        'list.replaceChildren(...nodes);\nclear(host);\n',
         'utf8',
       );
       assert.throws(
@@ -316,12 +373,12 @@ describe('guard: инкрементальный рендер списков (695
       /keyAttr:\s*TABLE_ROW_KEY_ATTR/,
       'строки «Дневника» сверяются по ключу записи',
     );
-    assert.match(STRUCTURES, /reconcileKeyed\(results,\s*branches,\s*\{/, 'дерево «Структур» — keyed');
     assert.match(
       STRUCTURES,
-      /keyAttr:\s*'data-root'/,
-      'ветви «Структур» сверяются по ключу корня',
+      /reconcileKeyed\(results,\s*branches,\s*\{/,
+      'дерево «Структур» — keyed',
     );
+    assert.match(STRUCTURES, /keyAttr:\s*'data-root'/, 'ветви «Структур» сверяются по ключу корня');
   });
 
   it('(г) таблица «Свойства» редактора обновляется через reconcileKeyed (90b2256e)', () => {

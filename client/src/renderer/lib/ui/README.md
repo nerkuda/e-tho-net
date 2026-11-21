@@ -110,6 +110,9 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 | `table.ts` / `table.css` | `createTable`, классы `TABLE_*`, `cycleSort`, `sortRows`, `cellText`, `rowsToTsv` | Единственный способ сборки списков (модель таблицы); строки — вендорский Grid, выделение синхронизируется точечно; навигация — из общего ядра `nav-core.ts` | задача `dad2b029`, требование `93115633`, задача `d59fdfb9`, задача `7893e429` |
 | `table-grid.ts` | `vaadinGridAdapter` | Адаптер модели таблицы к Vaadin Grid | задача `dad2b029` |
 | `tree.ts` / `tree.css` | `createTree`, классы `TREE_*`, `treeVisibleIds`, `treeFilterKeepIds` | Единое дерево списков (типы, категории); коллекция строк — на keyed-сверке | задача `d1c15a2d`, требование `0086037c`, задача `d59fdfb9` |
+| `task-panel.ts` / `task-panel.css` | `mountTaskPanel`, `TaskPanelView`, `TaskPanelActions`, `shiftIso`, классы `TASK_PANEL_*` | Панель «Задачи и напоминания» над лентой «Дневника»: группы, секции, счётчики, строки (чекбокс/сырая инлайн-правка), массовые команды и подсветка «Обновить»; данные и действия — колбэками экрана | задача `64f7976a`, элементы `f76ed829`/`15f8ea2f`/`498f23e0` |
+| `task-list.ts` | `mountTaskList`, `TaskListOptions`, `TaskListHandle` | **Единая компонента списка задач** обоих экранов (панель «Дневника» и зона «Задачи» карточки мысли): источник `period`/`thought`, загрузка, операции строк, массовые команды с «Отменить», устаревание и realtime-маркер «Обновить», вложенные строки и исправления; экраны — тонкие обвязки | задача `7446eb25`, требования `0e85b66e`/`e6af8b9e` |
+| `task-panel-model.ts` | `taskGroupingMode`, `groupPanelRows`, `taskRowView`, `taskRowsForFilter`, `planTaskBulk`, `replaceTaskLine`, `reminderPanelRows`, `panelMarkerAdvanced`, `panelNeedsRefresh` | Чистая модель панели: пороги 1/2–14/15–50/>50, неделя сети, секции, счётчики, фильтр массовых команд и строки, маркер `max_revision`, вхождения напоминаний | задача `64f7976a`, требования `6762adb0`/`0e85b66e`/`e6af8b9e` |
 | `chip-list.ts` / `chip-list.css` | `chipList`, классы `CHIP_*` | Чипы выбранных значений с крестиком и полем добавления | требование `d1cd2095` |
 | `publication-cloud.ts` / `publication-cloud.css` | `createPublicationCloud`, классы `PUBLICATION_CLOUD_*` | Облачко публикации: прямые углы, значок-книга, контекстное меню (Открыть/Читать/Найти на полке) и крестик снятия владельца; единственное место показа облачка публикации | замечание Б2 приёмки задачи `b02ef1cf` |
 | `empty-state.ts` / `empty-state.css` | `emptyState`, `loadingState`, `errorState`, классы `EMPTY_STATE_*`/`LOADING_STATE_CLASS`/`ERROR_STATE_CLASS` | «Пусто/грузлю/ошибка» с подсказкой и точкой входа к действию | задача `d7b7c367`, требование `e514768f` |
@@ -117,9 +120,28 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 
 ## Карта токенов
 
-Токены объявлены в `client/src/renderer/styles/tokens.css` (блоки `:root`
-и `[data-theme='dark']`); `styles.css` — манифест модулей, см. `styles/`.
-Компоненты `lib/ui` ссылаются только на токены.
+Нетематические токены (шкалы типографики/отступов, геометрия, длительности,
+группа `--user-*`) объявлены в `client/src/renderer/styles/tokens.css`;
+тематические значения (цвета, тени, радиусы, `--focus-accent`) — в файлах тем
+`client/src/renderer/lib/ui/themes/{current,blue-topaz,catppuccin,nordic,retronotes,wasp}.css`
+по блоку на режим (ADR `de24adef`, требование `7cc0cdad`). Тема выбирается
+атрибутом `data-theme`, режим — `data-mode` на корне документа; дефолт —
+`current` (светлый блок объявлен на `:root`). Полноту набора токенов в каждой
+теме и режиме и контраст пары `--accent`/`--accent-fg` (≥ 4.5:1) стережёт
+`guard-ui-theme-tokens`; прямые цвета вне файлов тем запрещены.
+`styles.css` — манифест модулей стилей,
+см. `styles/`. Компоненты `lib/ui` ссылаются только на токены.
+
+**Фокус-цвет** (требование `c19cbb81`, задача `136575c9`) — один семантический
+токен с тремя ролями: полоса фокуса карты и рамка мысли, открытой в редакторе;
+пара «основа/слой» (на основе — `--focus-accent` файла темы, в не-основном слое
+— runtime `--layer-focus-stripe` из `layers.colors`; фон холста —
+`var(--layer-bg, var(--bg))`); акцент выделения текущего элемента на всех
+прочих экранах (отбор, таблицы, дневник, события, публикации, модалки).
+Потребители берут цвет только цепочкой
+`var(--layer-focus-stripe, var(--focus-accent, var(--accent)))`; мягкий фон
+выделения — `color-mix` от неё. Реестр потребителей и запрет литералов —
+сторож `guard-focus-color-consumers`.
 
 **Шкалы оформления** (требование `0dddd939`, сторож `guard-ui-tokens`):
 
@@ -127,7 +149,7 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
   `--font-weight-normal|medium|semibold|bold`;
 - отступы: `--space-1`…`--space-8` (2→16px);
 - радиусы: `--radius-s|m|l|xl|pill` (+ алиасы `--radius-sm`, `--radius`,
-  `--radius-cloud`);
+  `--radius-cloud`) — имена общие для всех тем, значения задаёт файл темы;
 - состояния и геометрия: `--transition-hover`, `--state-disabled-opacity`,
   `--hit-area`, `--hit-area-min`, `--tree-indent`.
 
@@ -154,10 +176,11 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 ## Порядок CSS
 
 Каталог — источник CSS-словаря (`.ui-btn*`, `.ui-field*`, `.ui-table` и т. д.).
-`lib/ui/register.ts` подключает: стили вендора → `tokens.css` → CSS фасадов.
-Порядок внутри `register.ts` значим (см. грабли `36889dd6` и раздел «Как
-пользоваться», п. 4). Правила вида лежат в `client/src/renderer/styles/**`
-(модульный CSS, задача `de23c709`).
+`lib/ui/register.ts` подключает: стили вендора → файлы тем
+(`themes/*.css`, импортом, не `@import` в `styles.css`) → `tokens.css` →
+CSS фасадов. Порядок внутри `register.ts` значим (см. грабли `36889dd6` и
+раздел «Как пользоваться», п. 4). Правила вида лежат в
+`client/src/renderer/styles/**` (модульный CSS, задача `de23c709`).
 
 ## Сторожа
 
@@ -166,6 +189,6 @@ ADR «Основа lib/ui: готовые Web Components за фасадами»
 `guard-ui-fields`, `guard-ui-comment`, `guard-ui-popover`, `guard-ui-tables`,
 `guard-ui-tree`, `guard-ui-empty-state`, `guard-ui-states`,
 `guard-ui-discoverability`, `guard-ui-hit-area`, `guard-ui-container`,
-`guard-ui-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
+`guard-ui-tokens`, `guard-ui-theme-tokens`, `guard-ui-user-tokens`, `guard-ui-i18n`,
 `guard-ui-licenses`, `guard-ui-dialog`, `guard-ui-icons`, `guard-keyed-lists`,
 `guard-list-nav`, `guard-drag-channel`.

@@ -70,7 +70,6 @@ import {
 import {
   AnchorIdsSchema,
   assertImageIcon,
-  assertKnownBodyFields,
   parseBody,
   RestThoughtCopyBody,
   RestThoughtCreateBody,
@@ -186,9 +185,8 @@ function parseThoughtCreateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtCreateInput {
-  // Неизвестное поле — 422 со списком (ошибка d9ba9e68, 0.15.4): тело больше
-  // не разбирается «по белому списку» с молчаливым отбрасыванием остального.
-  assertKnownBodyFields(RestThoughtCreateBody, body, requestId);
+  // Неизвестное поле тела — 422 со списком (ошибка d9ba9e68, 0.15.4; теперь
+  // общая механика парсера — `assertKnownBodyFields` внутри `parseRest`).
   const out = parseBody(RestThoughtCreateBody, body, requestId);
   const iconKind = out.icon_kind as ThoughtCreateInput['icon_kind'];
   if (iconKind === 'image') {
@@ -219,8 +217,8 @@ function parseThoughtUpdateBody(
   body: Record<string, unknown>,
   requestId: string,
 ): ThoughtUpdateInput {
-  // Неизвестное поле — 422 со списком (ошибка d9ba9e68, 0.15.4).
-  assertKnownBodyFields(RestThoughtUpdateBody, body, requestId);
+  // Неизвестное поле тела — 422 со списком (ошибка d9ba9e68, 0.15.4; общая
+  // механика парсера — `assertKnownBodyFields` внутри `parseRest`).
   const out = parseBody(RestThoughtUpdateBody, body, requestId);
   const changes: ThoughtUpdateInput = {};
   if (out.title !== undefined) changes.title = out.title as string;

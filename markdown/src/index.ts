@@ -35,9 +35,15 @@ export {
   WIKI_LINK_ID_ATTR,
   WIKI_LINK_NETWORK_ATTR,
   WIKI_LINK_MISSING_CLASS,
+  WIKI_LINK_DATE_CLASS,
+  WIKI_LINK_DATE_ATTR,
+  WIKI_LINK_TIME_ATTR,
+  formatDateLinkLabel,
+  parseDateLinkTarget,
   remapSameNetworkLinks,
 } from './wiki-link.js';
 export type {
+  DateLinkParts,
   WikiLinkRef,
   WikiLinkResolution,
   WikiLinkResolver,
@@ -52,6 +58,20 @@ export {
 } from './transclusion.js';
 export { parseSelectionUnits } from './selection.js';
 export type { MarkdownUnit, MarkdownUnitKind } from './selection.js';
+export { parseTaskLines } from './task-lines.js';
+export type { TaskLine, TaskLineDate } from './task-lines.js';
+export { findDateLinkSpans } from './date-links.js';
+export type { DateLinkSpan } from './date-links.js';
+export {
+  addTaskLineMarker,
+  isCanonicalTaskText,
+  isTaskLineMarker,
+  removeTaskLineDates,
+  removeTaskLineMarker,
+  setTaskLineDone,
+  taskLineBodyStart,
+} from './task-line-edit.js';
+export { TASK_MARKER_PATTERN, TASK_MARKER_PREFIX } from './task-list.js';
 export { BLANK_LINE_CLASS, blankLinesPlugin } from './blank-lines.js';
 export { extractHeadings, formatHeading } from './headings.js';
 export type { MarkdownHeading } from './headings.js';
@@ -64,10 +84,7 @@ export {
   TRANSCLUSION_SECTION_ATTR,
   transclusionBlockPlugin,
 } from './transclusion-block.js';
-export type {
-  TransclusionLabels,
-  TransclusionRenderOptions,
-} from './transclusion-block.js';
+export type { TransclusionLabels, TransclusionRenderOptions } from './transclusion-block.js';
 export type {
   TransclusionRef,
   TransclusionResolution,
@@ -151,8 +168,17 @@ export type {
  * после списка добавлялся ещё и `margin-block-end` списка, и она считалась
  * дважды (1 пустая строка = 40.3px вместо 20.15px). Cached `body_html` must
  * re-render: в кеше круга 1 маркер лежит внутри `<li>`.
+ *
+ * `markdown-it/13`: date-ссылки (0.16.1, ТП «Даты, задачи и напоминания») —
+ * `[[YYYY-MM-DD]]` / `[[YYYY-MM-DD HH:MM]]` разбираются как date-ссылка и
+ * рендерятся чипом `wiki-link wiki-link-date` с ISO в `data-wiki-date`
+ * (`data-wiki-time`) и подписью `dd.MM.yyyy[ HH:MM]`. Меняется сам HTML:
+ * раньше такая строка была legacy-ссылкой на мысль с именем-датой
+ * (`data-wiki-target="2026-11-02" data-legacy-link="true"`), поэтому кеш
+ * `body_html` обязан перерисоваться (markdown-sweep, настройка
+ * `md.render_version`).
  */
-export const MD_RENDER_VERSION = 'markdown-it/12';
+export const MD_RENDER_VERSION = 'markdown-it/13';
 
 /** Options for {@link renderMarkdown}. */
 export interface RenderOptions {

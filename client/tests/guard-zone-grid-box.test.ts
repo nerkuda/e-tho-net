@@ -22,10 +22,14 @@ import { fileURLToPath } from 'node:url';
 const CLIENT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CANVAS = path.join(CLIENT_ROOT, 'src', 'renderer', 'canvas', 'canvas.ts');
 
-/** Тело функции `renderZoneContent` из canvas.ts. */
-function renderZoneContentBody(source: string): string {
-  const start = source.indexOf('function renderZoneContent(');
-  assert.ok(start >= 0, 'в canvas.ts не найдена renderZoneContent');
+/**
+ * Тело функции одного прохода раскладки зоны (`renderZonePass`) из canvas.ts.
+ * Раскладка живёт в проходе, а `renderZoneContent` — только цикл с лимитом
+ * проходов (ошибка dc723634), поэтому сторожа интересует тело прохода.
+ */
+function renderZonePassBody(source: string): string {
+  const start = source.indexOf('function renderZonePass(');
+  assert.ok(start >= 0, 'в canvas.ts не найден renderZonePass');
   const next = source.indexOf('\nfunction ', start + 1);
   return source.slice(start, next === -1 ? source.length : next);
 }
@@ -37,8 +41,8 @@ function isComment(line: string): boolean {
 }
 
 describe('guard: сетка сектора якорится по видимому контенту, не по полной коробке', () => {
-  it('renderZoneContent сужает коробку до contentWidth перед якорем', () => {
-    const body = renderZoneContentBody(fs.readFileSync(CANVAS, 'utf8'));
+  it('проход раскладки сужает коробку до contentWidth перед якорем', () => {
+    const body = renderZonePassBody(fs.readFileSync(CANVAS, 'utf8'));
     // Ищем по СТРОКАМ КОДА: закомментированная строка не считается фиксом.
     const code = body.split('\n').filter((line) => !isComment(line));
     assert.ok(
@@ -51,14 +55,14 @@ describe('guard: сетка сектора якорится по видимом�
     );
     assert.ok(
       code.some((line) => /grid\.style\.transform\s*=/.test(line)),
-      'якорь сетки пропал из renderZoneContent',
+      'якорь сетки пропал из renderZonePass',
     );
   });
 
   it('пустой сектор сбрасывает ширину коробки', () => {
-    const body = renderZoneContentBody(fs.readFileSync(CANVAS, 'utf8'));
+    const body = renderZonePassBody(fs.readFileSync(CANVAS, 'utf8'));
     const emptyBranch = body.indexOf('if (entries.length === 0) {');
-    assert.ok(emptyBranch >= 0, 'в renderZoneContent не найдена ветка пустого сектора');
+    assert.ok(emptyBranch >= 0, 'в renderZonePass не найдена ветка пустого сектора');
     const branch = body
       .slice(emptyBranch)
       .split('\n')

@@ -42,6 +42,7 @@ import { div, el, renderHighlightedText, setTooltip, span } from './dom.js';
 import { noteFocusOrigin } from './focus-origin.js';
 import { renderLibraryIcon, svgIcon } from './ui/icon.js';
 import { renderDefaultThoughtIcon } from './ui/thought-default-icon.js';
+import { adaptThoughtColors } from './adaptive-context.js';
 import { contrastText } from './pure.js';
 import { resolveThoughtTypeVisual } from './type-tree.js';
 import { logUiEvent } from './ui-log.js';
@@ -91,18 +92,28 @@ export function resolveCloudStyle(
   };
 }
 
-/** Applies a resolved style to a cloud element. */
+/**
+ * Applies a resolved style to a cloud element.
+ *
+ * Цвета — производные под фактическую подложку (0.16.1, требование 26d53c26):
+ * `lib/adaptive-context.ts::adaptThoughtColors` подгоняет текст под поверхность
+ * облачка, а при нечитаемой паре «фон + авто-текст» сдвигает фон. Исходные
+ * значения пользователя при этом не меняются — адаптация живёт только здесь,
+ * на отрисовке. Шрифтовые флаги остаются данными пользователя: различимость в
+ * светлых темах держат вес и начертание (сценарий 5797c15c).
+ */
 export function applyCloudStyle(cloud: HTMLElement, style: CloudStyle): void {
-  if (style.fg !== null) {
-    cloud.style.color = style.fg;
-  } else if (style.bg !== null) {
+  const adapted = adaptThoughtColors({ fg: style.fg, bg: style.bg });
+  if (adapted.fg !== null) {
+    cloud.style.color = adapted.fg;
+  } else if (adapted.bg !== null) {
     // Only the background is set — pick a readable text colour for it
     // (L12); an explicit fg always wins.
-    cloud.style.color = contrastText(style.bg);
+    cloud.style.color = contrastText(adapted.bg);
   } else {
     cloud.style.color = '';
   }
-  if (style.bg !== null) cloud.style.background = style.bg;
+  if (adapted.bg !== null) cloud.style.background = adapted.bg;
   cloud.classList.toggle('font-bold', style.bold);
   cloud.classList.toggle('font-italic', style.italic);
   cloud.classList.toggle('font-underline', style.underline);
@@ -403,6 +414,34 @@ export interface ThoughtCloudInput {
   active?: boolean;
   /** Помечена на удаление → бледность + метка корзины. */
   marked_for_deletion?: boolean;
+}
+
+/**
+ * Отпечаток визуала мысли для keyed-сверки строк (0.16.1, задача 739eb698):
+ * меняется ровно тогда, когда меняется то, что рисует фабрика, — название,
+ * иконка (вид/цвет/вложение), цвета, стиль шрифта и признаки
+ * `active`/`marked_for_deletion`. Потребитель кладёт отпечаток в модель строки:
+ * совпал — узел не пересобирается, изменился — перерисовывается только эта
+ * строка. Список полей живёт рядом с фабрикой, а не в потребителях (стандарт S1:
+ * представление мысли собирает только она).
+ */
+export function thoughtVisualSignature(input: ThoughtCloudInput): string {
+  return [
+    input.title,
+    input.icon ?? '',
+    input.icon_kind ?? '',
+    input.icon_attachment_id ?? '',
+    input.icon_color ?? '',
+    input.type_id ?? '',
+    input.fg_color ?? '',
+    input.bg_color ?? '',
+    input.font_bold === true ? '1' : '0',
+    input.font_italic === true ? '1' : '0',
+    input.font_underline === true ? '1' : '0',
+    input.font_strike === true ? '1' : '0',
+    input.active === false ? '0' : '1',
+    input.marked_for_deletion === true ? '1' : '0',
+  ].join('\u0001');
 }
 
 /** Признак захвата (блокировки) мысли для индикации на облачке. */

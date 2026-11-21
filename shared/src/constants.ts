@@ -174,6 +174,29 @@ export const PREF_KEY = {
 export type PrefKey = (typeof PREF_KEY)[keyof typeof PREF_KEY];
 
 /**
+ * Набор имён тем интерфейса (L10; требование 7cc0cdad, задача 0e4a52cd) —
+ * единственный источник значений: серверная валидация `ui_theme`
+ * (`routes/me.ts`) и реестр тем клиента (`lib/theme.ts`). Имя совпадает с
+ * файлом `lib/ui/themes/<тема>.css`.
+ */
+export const UI_THEME_NAMES = [
+  'current',
+  'blue-topaz',
+  'catppuccin',
+  'nordic',
+  'retronotes',
+  'wasp',
+] as const;
+export type UiThemeName = (typeof UI_THEME_NAMES)[number];
+
+/**
+ * Допустимые режимы интерфейса (требование 219d030c): ключ `ui_mode`.
+ * Единственный источник для серверной валидации и типа клиента.
+ */
+export const UI_MODES = ['light', 'dark'] as const;
+export type UiModeName = (typeof UI_MODES)[number];
+
+/**
  * L3s server-level user settings stored in `user_settings` of `_system.db`
  * (11-settings-and-state.md §2.1 L3s, ADR 3a829d25). They sit outside any
  * network and are shared by all networks and all devices of the user on this
@@ -191,8 +214,40 @@ export const USER_SETTING_KEY = {
    * пользователя; локальный `client_meta.lang` — только кэш (ADR §5).
    */
   APP_LANGUAGE: 'app_language',
+  /**
+   * Тема интерфейса пользователя (требование 219d030c, задача 0e4a52cd):
+   * имя файла темы из {@link UI_THEME_NAMES}. Живёт на уровне «пользователь ×
+   * сервер» (L3s) и действует на всех клиентах пользователя;
+   * `client_meta.ui_theme` — только кэш для офлайн-старта.
+   */
+  UI_THEME: 'ui_theme',
+  /**
+   * Режим интерфейса пользователя (требование 219d030c): `dark | light`.
+   * L3s, как `ui_theme`; локальный кэш — `client_meta.ui_mode`.
+   */
+  UI_MODE: 'ui_mode',
 } as const satisfies Record<string, string>;
 export type UserSettingKey = (typeof USER_SETTING_KEY)[keyof typeof USER_SETTING_KEY];
+
+/**
+ * Вид файла пользователя серверного уровня (таблица `user_files` в
+ * `_system.db`, сущность 62fd29b5, ADR a5888535). Набор расширяемый; сейчас
+ * единственное значение — фоновая картинка карты (операция 31ef478a).
+ */
+export const USER_FILE_KIND = {
+  MAP_WALLPAPER: 'map_wallpaper',
+} as const satisfies Record<string, string>;
+export type UserFileKind = (typeof USER_FILE_KIND)[keyof typeof USER_FILE_KIND];
+
+/**
+ * Предел размера файла пользователя — 5 МиБ (операция 31ef478a; сервер отвечает
+ * 422 при превышении). Файлы не входят в автоматический бэкап БД (ADR a5888535).
+ */
+export const USER_FILE_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Белый список mime фоновой картинки: форматы, которые поддерживают все целевые клиенты. */
+export const USER_FILE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export type UserFileMimeType = (typeof USER_FILE_MIME_TYPES)[number];
 
 /**
  * L4 client-side UI-state keys stored in the local `ui_state` table
@@ -244,6 +299,11 @@ export const UI_STATE_KEY = {
    *  запись: та же запись в другом дне может остаться развёрнутой. Хранится
    *  локально (L4 `ui_state`), как состояние вида. */
   DIARY_COLLAPSED_RECORDS: 'diary_collapsed_records',
+  /** Состояние панели «Задачи и напоминания» над лентой «Дневника» (0.16.1,
+   *  задача 64f7976a): JSON `{ showDone }` — показывать ли выполненные задачи
+   *  (переключатель в подменю «⋮» группы «Задачи периода»). Хранится локально
+   *  (L4 `ui_state`), как остальные механики вида. */
+  DIARY_TASKS_PANEL: 'diary_tasks_panel',
   /** Настройки строки поиска дневниковых записей (0.10.1, задача 46057359):
    *  JSON `{ includeInactive, includeTrashed }` — показывать ли в результатах
    *  записи, привязанные к неактуальным мыслям и к содержимому корзины.
@@ -277,6 +337,12 @@ export type UiStateKey = (typeof UI_STATE_KEY)[keyof typeof UI_STATE_KEY];
 export const CLIENT_META_KEY = {
   CLIENT_ID: 'client_id',
   LAST_SEQ: 'last_seq',
+  /**
+   * Legacy-ключ РЕЖИМА интерфейса (`light`/`dark`), не имени темы: до
+   * задачи 0e4a52cd клиент хранил здесь бинарный выбор. Значение мигрирует в
+   * серверный `ui_mode` (маркер {@link CLIENT_META_KEY.UI_THEME_MIGRATED});
+   * остаётся только fallback — фон окна до появления `ui_window_bg`.
+   */
   THEME: 'theme',
   /**
    * Кэш последнего известного эффективного языка интерфейса (ADR daab6ac4 §5,
@@ -291,6 +357,37 @@ export const CLIENT_META_KEY = {
    * наследование и не перезаписывается.
    */
   LANG_MIGRATED: 'lang_migrated',
+  /**
+   * Кэш выбора темы интерфейса (`ui_theme`/`ui_mode`, требование 219d030c,
+   * задача 0e4a52cd): значения последнего эффективного выбора для офлайн-старта.
+   * При доступном сервере серверные значения побеждают и перезаписывают кэш.
+   */
+  UI_THEME: 'ui_theme',
+  /** Кэш режима интерфейса (`dark | light`) — см. {@link CLIENT_META_KEY.UI_THEME}. */
+  UI_MODE: 'ui_mode',
+  /**
+   * Идентификатор пользователя сервера, которому принадлежит кэш `ui_theme`/
+   * `ui_mode` (требование 219d030c, ревизия итерации 2). При входе другого
+   * пользователя кэш игнорируется до ответа сервера, затем перезаписывается.
+   */
+  UI_THEME_OWNER: 'ui_theme_owner',
+  /**
+   * Маркер разовой миграции «старый `client_meta.theme` → `ui_mode` на сервере»
+   * (требование 219d030c): `'true'` — перенос выполнен/не требуется.
+   */
+  UI_THEME_MIGRATED: 'theme_migrated',
+  /**
+   * Отложенная синхронизация выбора темы/режима: `'true'` — локальный выбор
+   * ещё не дошёл до сервера (офлайн, старый сервер, 422). Повторная попытка —
+   * при следующем входе.
+   */
+  UI_THEME_PENDING: 'ui_theme_pending',
+  /**
+   * Цвет фона окна, вычисленный из `--bg` применённой темы (ревизия 2026-11-12
+   * задачи 0e4a52cd): main ставит его окну `backgroundColor` до первого кадра,
+   * чтобы тёмная тема не мигала светлым. Хранится установочно (L5).
+   */
+  UI_WINDOW_BG: 'ui_window_bg',
   ZOOM: 'zoom',
   ACTIVE_PROFILE_ID: 'active_profile_id',
   WINDOW_BOUNDS: 'window_bounds',
@@ -438,6 +535,19 @@ export const HIERARCHY_SUBTREE_MAX_NODES = 2_000;
 /** Maximum number of ids accepted by `POST /thoughts/resolve` (03-server-api.md §6.9). */
 export const THOUGHT_RESOLVE_MAX_IDS = 100;
 
+/**
+ * Бюджет блоков «Открытые дела» и «Напоминания» в `meta` карточек мысли
+ * (0.16.1, задача f34066e1, операция 22f1ea95). Карточка — не список: агент
+ * видит ближайшие записи и признак `truncated`, а полный перебор делает
+ * `etn.ops { action: "tasks.list" }` / `reminders.list`. Числа держат бюджет
+ * ответа карточки (сторож `guard-mcp-list-projection`), поэтому растут только
+ * вместе с замером.
+ */
+export const THOUGHT_META_TASKS_LIMIT = 10;
+
+/** См. {@link THOUGHT_META_TASKS_LIMIT}: сколько напоминаний несёт `meta.reminders`. */
+export const THOUGHT_META_REMINDERS_LIMIT = 10;
+
 // ---------------------------------------------------------------------------
 // Слои изменений (фаза S, docs/13-layers.md)
 // ---------------------------------------------------------------------------
@@ -561,7 +671,7 @@ export function validateTypeRoles(input: unknown): TypeRoles {
   if (typeof input !== 'object' || Array.isArray(input)) {
     throw new EtnError(
       'VALIDATION_ERROR',
-      "type_roles must be an object { [role]: type_id | null }.",
+      'type_roles must be an object { [role]: type_id | null }.',
       { field: 'type_roles' },
     );
   }
@@ -575,11 +685,9 @@ export function validateTypeRoles(input: unknown): TypeRoles {
       );
     }
     if (raw !== null && typeof raw !== 'string') {
-      throw new EtnError(
-        'VALIDATION_ERROR',
-        `type_roles["${key}"] must be a string or null.`,
-        { field: `type_roles.${key}` },
-      );
+      throw new EtnError('VALIDATION_ERROR', `type_roles["${key}"] must be a string or null.`, {
+        field: `type_roles.${key}`,
+      });
     }
     (out as Record<string, string | null>)[key] = raw as string | null;
   }
@@ -627,4 +735,3 @@ export const ETNX_MAX_BYTES = 50 * 1024 * 1024;
  * (задача 99c16033, 0.12.2): REST и клиент принимают те же 1..20.
  */
 export const ETNX_SUBTREE_DEPTH_MAX = 20;
-

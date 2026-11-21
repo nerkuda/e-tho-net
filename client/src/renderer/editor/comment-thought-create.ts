@@ -63,7 +63,7 @@
  * сервера и DOM.
  */
 
-import { formatTransclusionRef, parseSelectionUnits, type MarkdownUnit } from '@etn/markdown';
+import { formatTransclusionRef, parseSelectionUnits, TASK_MARKER_PATTERN, type MarkdownUnit } from '@etn/markdown';
 import type { ThoughtCreateInput } from '@etn/shared';
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
@@ -291,7 +291,7 @@ const FENCE_RE = /^(?:```|~~~)/;
 /** Цитата (`>`), маркер списка (`-`, `*`, `+`, `1.`, `1)`), чекбокс, заголовок. */
 const QUOTE_RE = /^>+/;
 const LIST_RE = /^(?:[-*+]|\d{1,9}[.)])(?=\s|$)/;
-const TASK_RE = /^\[[ xX]\](?=\s|$)/;
+const TASK_RE = new RegExp(`^${TASK_MARKER_PATTERN}(?=\\s|$)`);
 const HEADING_RE = /^#{1,6}(?=\s|$)/;
 /** Строка — ATX-заголовок (с учётом ведущих цитатных `>`). */
 const HEADING_LINE_RE = /^(?:>[ \t]?)*[ \t]*#{1,6}(?=\s|$)/;
@@ -798,7 +798,9 @@ export function blockPrefixOf(text: string): string {
   const first = (nl === -1 ? text : text.slice(0, nl)).replace(/\r$/, '');
   const heading = /^#{1,6}[ \t]+/.exec(first);
   if (heading !== null) return heading[0];
-  const list = /^(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/.exec(first);
+  const list = new RegExp(
+    `^(?:[-*+]|\\d{1,9}[.)])[ \\t]+(?:${TASK_MARKER_PATTERN}[ \\t]+)?`,
+  ).exec(first);
   if (list !== null) return list[0];
   const quote = /^(?:>[ \t]*)+/.exec(first);
   if (quote !== null) return quote[0];

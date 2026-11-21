@@ -32,7 +32,7 @@ import { startEventLogCleanup } from '../realtime/event-log-cleanup.js';
 import { EventLogRelay } from '../realtime/event-log-relay.js';
 import { RealtimeGateway, type RealtimeGatewayOptions } from '../realtime/gateway.js';
 import { createIdempotencyMiddleware, registerIdempotencyHooks } from './idempotency.js';
-import { normaliseError, sendEtnError } from './errors.js';
+import { sendEtnError, sendNormalisedError } from './errors.js';
 import { createMaintenanceGuard } from './maintenance-guard.js';
 import { SERVER_UPDATING_MESSAGE, createMaintenanceService } from '../maintenance.js';
 import { createUpdateChecker } from '../update/checker.js';
@@ -45,6 +45,7 @@ import { languageRoutes } from '../routes/language.js';
 import { systemUpdateRoutes } from '../routes/system-update.js';
 import { createImportRoutes } from '../routes/import.js';
 import { usersRoutes } from '../routes/users.js';
+import { createUserFilesRoutes } from '../routes/user-files.js';
 import { createNetworksRoutes } from '../routes/networks.js';
 import { createInstructionsRoutes } from '../routes/instructions.js';
 import { auditRoutes } from '../routes/audit.js';
@@ -53,6 +54,8 @@ import { createLinksRoutes } from '../routes/links.js';
 import { createStructuresRoutes } from '../routes/structures.js';
 import { createChronicleRoutes } from '../routes/chronicle.js';
 import { createPinsRoutes } from '../routes/pins.js';
+import { createRemindersRoutes } from '../routes/reminders.js';
+import { createTasksRoutes } from '../routes/tasks.js';
 import { createTypesRoutes } from '../routes/types.js';
 import { createThoughtTypeViewsRoutes } from '../routes/thought-type-views.js';
 import { createThoughtCustomViewsRoutes } from '../routes/thought-custom-views.js';
@@ -183,13 +186,7 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Registered before any plugin/route so encapsulated child contexts inherit
   // the canonical { error: { code, message, details?, request_id? } } shape.
   app.setErrorHandler((err, req, reply) => {
-    const { statusCode, body, internalMessage } = normaliseError(err, req.id);
-    if (statusCode >= 500) {
-      logger.error({ err, request_id: req.id }, internalMessage);
-    } else {
-      logger.warn({ request_id: req.id, statusCode }, internalMessage);
-    }
-    reply.code(statusCode).send(body);
+    sendNormalisedError(err, req, reply, logger);
   });
 
   // Correlation id on every request: surface it back via X-Request-Id so
@@ -452,6 +449,14 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Pinned-thoughts routes (L18): per-user ordered list (03-server-api.md §19).
   await app.register(createPinsRoutes(routeDeps), { prefix: '/api/v1' });
 
+  // Напоминания (0.16.1, задача b47f1fd2; операции ae19b1bf/500d1b3d):
+  // per-user CRUD, раскрытие повторов на период, snooze/dismiss вхождения.
+  await app.register(createRemindersRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Задачи (0.16.1, задача 632eca85; операции e6d65f51/de4cee18): выборка из
+  // материализованной проекции и правка строк источников.
+  await app.register(createTasksRoutes(routeDeps), { prefix: '/api/v1' });
+
   // Type routes (task D3): thought/link types + type_properties (03-server-api.md §8).
   await app.register(createTypesRoutes(routeDeps), { prefix: '/api/v1' });
 
@@ -476,6 +481,11 @@ export async function createServer(deps: ServerDeps): Promise<FastifyInstance> {
   // Comment and attachment routes (task D5, 03-server-api.md §10–11).
   await app.register(createCommentsRoutes(routeDeps), { prefix: '/api/v1' });
   await app.register(createAttachmentsRoutes(routeDeps), { prefix: '/api/v1' });
+
+  // Файлы пользователя серверного уровня (0.16.1, задача 8e007e63): фоновая
+  // картинка карты — `user_files` в _system.db и `/users/me/wallpaper`
+  // (операция 31ef478a, ADR a5888535). Вне сетей, real-time-событий нет.
+  await app.register(createUserFilesRoutes(routeDeps), { prefix: '/api/v1' });
 
   // Object-lock routes (task 2031df5e, 03-server-api.md §13c):
   // acquire/release/clear/list поверх таблицы object_locks.

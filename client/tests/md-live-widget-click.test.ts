@@ -22,10 +22,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
+import { WIKI_LINK_DATE_ATTR } from '@etn/markdown';
+
 import { ShimElement } from './dom-shim.js';
 import {
   MD_WIDGET_CLASS,
   mdWidgetMouseDown,
+  setDateChipClickHandler,
   setLegacyWikiLinkClickHandler,
 } from '../src/renderer/editor/md-live.js';
 
@@ -196,5 +199,72 @@ describe('легаси-виджет wiki-ссылки: клик уходит в 
     const handled = mdWidgetMouseDown(mouse(2, legacyWidget()), view as any);
     assert.equal(handled, false);
     assert.equal(called, false);
+  });
+});
+
+describe('date-чип live-preview: левый клик открывает день (0.16.1, 31fe2cc9)', () => {
+  afterEach(() => {
+    setDateChipClickHandler(null);
+    setLegacyWikiLinkClickHandler(null);
+  });
+
+  /** Date-чип: `md-widget wiki-link wiki-link-date` с ISO в data-wiki-date. */
+  function dateWidget(date = '2026-11-02'): ShimElement {
+    const el = new ShimElement('span');
+    el.className = `${MD_WIDGET_CLASS} wiki-link wiki-link-date`;
+    el.dataset.mdFrom = '0';
+    el.dataset.mdTo = '16';
+    el.setAttribute(WIKI_LINK_DATE_ATTR, date);
+    (el as any).closest = (selector: string): ShimElement | null =>
+      selector === `.${MD_WIDGET_CLASS}` ? el : null;
+    return el;
+  }
+
+  it('левый клик вызывает обработчик дня и НЕ двигает каретку', () => {
+    const view = fakeView();
+    const dates: string[] = [];
+    setDateChipClickHandler((date) => dates.push(date));
+
+    const event = mouse(0, dateWidget());
+    const handled = mdWidgetMouseDown(event, view as any);
+
+    assert.equal(handled, true, 'клик перехвачен чипом');
+    assert.deepEqual(dates, ['2026-11-02'], 'обработчик получил ISO-дату');
+    assert.equal(view.events.length, 0, 'исходник не раскрывается — выделение не диспатчится');
+    assert.equal(event.defaultPrevented, true, 'событие погашено');
+  });
+
+  it('date-чип приоритетнее легаси-развилки: имя мысли не разыскивается', () => {
+    let legacyCalled = false;
+    setLegacyWikiLinkClickHandler(() => {
+      legacyCalled = true;
+    });
+    const dates: string[] = [];
+    setDateChipClickHandler((date) => dates.push(date));
+
+    mdWidgetMouseDown(mouse(0, dateWidget()), fakeView() as any);
+
+    assert.deepEqual(dates, ['2026-11-02']);
+    assert.equal(legacyCalled, false, 'дата не уходит в резолв имени');
+  });
+
+  it('правый клик обработчик дня не вызывает (меню открывает contextmenu)', () => {
+    let called = false;
+    setDateChipClickHandler(() => {
+      called = true;
+    });
+    const view = fakeView();
+    const handled = mdWidgetMouseDown(mouse(2, dateWidget()), view as any);
+    assert.equal(handled, false);
+    assert.equal(called, false);
+    assert.equal(view.events.length, 0);
+  });
+
+  it('снятый обработчик — чип ведёт себя как прочий md-widget', () => {
+    setDateChipClickHandler(null);
+    const view = fakeView();
+    const handled = mdWidgetMouseDown(mouse(0, dateWidget()), view as any);
+    assert.equal(handled, true);
+    assert.equal(view.events.length, 1, 'без обработчика — прежнее поведение M6');
   });
 });

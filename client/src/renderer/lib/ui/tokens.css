@@ -3,20 +3,23 @@
  *
  * Единственное место, где токены ETN связываются с вендорской дизайн-системой
  * (ADR «Основа lib/ui: готовые Web Components за фасадами», компонент lib/ui).
- * Токены ETN объявлены в `client/src/renderer/styles/tokens.css` (манифест
- * стилей — `client/src/renderer/styles.css`):
- *   • светлая тема — блок `:root`;
- *   • тёмная тема  — блок `[data-theme='dark']`.
+ * Токены ETN: нетематические — в `client/src/renderer/styles/tokens.css`,
+ * тематические значения — в файлах тем `client/src/renderer/lib/ui/themes/`
+ * (манифест стилей — `client/src/renderer/styles.css`):
+ *   • тема выбирается `data-theme`, режим — `data-mode`;
+ *   • светлый режим — блок `:root` файла темы,
+ *     тёмный — `[data-theme='<тема>'][data-mode='dark']`.
  *
  * Переопределения объявлены БЕЗ cascade-слоёв. Web Awesome публикует свои
  * токены внутри `@layer wa-theme`, а unlayered-правила всегда приоритетнее
  * слоёв — поэтому наши значения перекрывают вендорские. Значения ссылаются
- * на токены ETN (`var(--accent)` и т. п.), а те меняются вместе с темой:
- * одна и та же карта красит обе темы, отдельный блок `[data-theme='dark']`
- * не нужен.
+ * на токены ETN (`var(--accent)` и т. п.), а те меняются вместе с темой и
+ * режимом: одна и та же карта красит все темы, отдельный блок для тёмного
+ * режима не нужен.
  *
- * Прямых hex здесь нет — только ссылки на токены ETN (`white` — ключевое
- * слово, не hex). Порядок подключения (после вендорских стилей) задаёт
+ * Прямых цветов здесь нет — только ссылки на токены ETN (надпись поверх
+ * насыщенной заливки — токен темы `--overlay-fg`, а не ключевое слово
+ * `white`). Порядок подключения (после вендорских стилей) задаёт
  * `./register.ts`.
  */
 
@@ -37,7 +40,9 @@
   --wa-color-shadow: var(--shadow-c);
   --wa-color-overlay-modal: var(--backdrop);
 
-  /* brand ↔ акцент ETN (primary-роль кнопок, активные поля). */
+  /* brand ↔ акцент ETN (primary-роль кнопок, активные поля). Надпись на
+     loud-заливке — тематическая пара контраста `--accent-fg` (ADR de24adef):
+     на светлом акценте blue-topaz/nordic она тёмная. */
   --wa-color-brand-fill-quiet: var(--accent-soft);
   --wa-color-brand-fill-normal: var(--accent-soft);
   --wa-color-brand-fill-loud: var(--accent);
@@ -46,7 +51,7 @@
   --wa-color-brand-border-loud: var(--accent-strong);
   --wa-color-brand-on-quiet: var(--accent);
   --wa-color-brand-on-normal: var(--accent-strong);
-  --wa-color-brand-on-loud: white;
+  --wa-color-brand-on-loud: var(--accent-fg);
 
   /* success ↔ «успех» ETN. */
   --wa-color-success-fill-quiet: var(--ok-soft);
@@ -57,7 +62,7 @@
   --wa-color-success-border-loud: var(--ok);
   --wa-color-success-on-quiet: var(--ok);
   --wa-color-success-on-normal: var(--ok);
-  --wa-color-success-on-loud: white;
+  --wa-color-success-on-loud: var(--overlay-fg);
 
   /* warning ↔ «предупреждение» ETN. */
   --wa-color-warning-fill-quiet: var(--warn-soft);
@@ -68,7 +73,7 @@
   --wa-color-warning-border-loud: var(--warn-strong);
   --wa-color-warning-on-quiet: var(--warn-strong);
   --wa-color-warning-on-normal: var(--warn-strong);
-  --wa-color-warning-on-loud: white;
+  --wa-color-warning-on-loud: var(--overlay-fg);
 
   /* danger ↔ «опасность» ETN (удаление, ошибки). */
   --wa-color-danger-fill-quiet: var(--danger-soft);
@@ -79,7 +84,7 @@
   --wa-color-danger-border-loud: var(--danger);
   --wa-color-danger-on-quiet: var(--danger);
   --wa-color-danger-on-normal: var(--danger);
-  --wa-color-danger-on-loud: white;
+  --wa-color-danger-on-loud: var(--overlay-fg);
 
   /* neutral ↔ рамки/текст/поверхности ETN (нейтральные кнопки, границы полей). */
   --wa-color-neutral-fill-quiet: var(--surface-2);
@@ -97,6 +102,13 @@
 
   /* Типографика кода и радиусы: держим плотность и скругления ETN. */
   --wa-font-family-code: var(--md-mono);
+  /* Гарнитуры вендора — из шрифтового бандла клиента (ADR 7f1f924f). Без этой
+     связки Web Awesome ставит `body`/заголовкам/длинному тексту собственный
+     системный стек (`ui-sans-serif, system-ui, sans-serif`) и Inter из
+     поставки не применяется, хотя `@font-face` и загружен. */
+  --wa-font-family-body: var(--user-font-ui);
+  --wa-font-family-heading: var(--user-font-ui);
+  --wa-font-family-longform: var(--user-font-ui);
   --wa-border-radius-s: var(--radius-s);
   --wa-border-radius-m: var(--radius-sm);
   --wa-border-radius-l: var(--radius);

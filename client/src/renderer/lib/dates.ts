@@ -12,7 +12,13 @@
  * Дата принадлежности записи считается в ЛОКАЛЬНОМ поясе наблюдателя
  * (ADR времени 994d076a), а арифметика календарных дней — в UTC (без переходов
  * DST), поэтому «голая дата» здесь однозначна.
+ *
+ * Подписи дней и границы локальных суток переехали сюда из `diary.ts` в 0.16.1
+ * (задача `7446eb25`): их использует единая компонента списка задач
+ * (`lib/ui/task-list.ts`), а библиотека не может зависеть от экрана.
  */
+
+import { formatDateParts, getLang } from './i18n.js';
 
 /** «Голая дата» `YYYY-MM-DD`. */
 export const BARE_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -25,6 +31,43 @@ export function pad2(n: number): string {
 /** Локальная дата сегодняшнего дня наблюдателя (`YYYY-MM-DD`). */
 export function todayLocal(now: Date = new Date()): string {
   return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+}
+
+/**
+ * Календарный день (локальные сутки наблюдателя) из UTC-инстанса — например,
+ * из `valid_from`/`valid_to` хроно-записи. «Голая дата» возвращается как есть;
+ * неразборчивое значение — `null` (период записи неизвестен).
+ */
+export function localDayOfInstant(iso: string | null | undefined): string | null {
+  if (iso === null || iso === undefined) return null;
+  const value = iso.trim();
+  if (value === '') return null;
+  if (BARE_DATE_RE.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+/**
+ * Локальные сутки `now` со ВРЕМЕНЕМ СУТОК инстанса `iso` — «сегодня в тот же
+ * час» (0.16.1, план тестирования 7e12f589: сдвиг «сегодня» у напоминания).
+ * Часы берутся в поясе наблюдателя: вхождение, показанное в 9:00, после сдвига
+ * остаётся в 9:00 местного времени. Неразборчивый `iso` возвращается как есть —
+ * решение о пригодности значения принимает вызывающий.
+ */
+export function todayAtTimeOf(iso: string, now: Date = new Date()): string {
+  const source = new Date(iso);
+  if (Number.isNaN(source.getTime()) || Number.isNaN(now.getTime())) return iso;
+  const target = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    source.getHours(),
+    source.getMinutes(),
+    source.getSeconds(),
+    source.getMilliseconds(),
+  );
+  return target.toISOString();
 }
 
 /**
@@ -45,11 +88,7 @@ export function isValidLocalDay(value: string): boolean {
  * началу (валидация периода — «По» не меньше «С»). Общая точка правды для
  * диалога даты/периода и полей «Даты» панели отбора (итерация приёмки №8, п.4).
  */
-export function setPeriodFrom(
-  from: string,
-  to: string,
-  day: string,
-): { from: string; to: string } {
+export function setPeriodFrom(from: string, to: string, day: string): { from: string; to: string } {
   return { from: day, to: to < day ? day : to };
 }
 
@@ -57,11 +96,7 @@ export function setPeriodFrom(
  * Назначить «По» периода: при «По» < «С» начало автоматически становится равно
  * концу (валидация периода).
  */
-export function setPeriodTo(
-  from: string,
-  to: string,
-  day: string,
-): { from: string; to: string } {
+export function setPeriodTo(from: string, to: string, day: string): { from: string; to: string } {
   return { from: day < from ? day : from, to: day };
 }
 
@@ -91,6 +126,24 @@ export function setPeriodTimeTo(
   time: string,
 ): { fromTime: string; toTime: string } {
   return { fromTime: time < fromTime ? time : fromTime, toTime: time };
+}
+
+/**
+ * Сдвиг UTC-инстанса на календарный сдвиг (`days`/`months`) — арифметика команд
+ * «Отложить» и «Перенести на…». До дня считается в миллисекундах, до месяца —
+ * календарно (31.01 + 1 мес = 28/29.02). Реализация ОДНА: ею пользуются панель
+ * задач (`shiftIso` в `lib/ui/task-panel.ts`) и меню флага напоминаний
+ * (`editor/reminder-flag.ts`) — второго счёта сдвига в клиенте нет.
+ */
+export function shiftInstant(iso: string, shift: { days?: number; months?: number }): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  if (shift.months !== undefined) {
+    const target = new Date(date.getTime());
+    target.setMonth(target.getMonth() + shift.months);
+    return target.toISOString();
+  }
+  return new Date(date.getTime() + (shift.days ?? 0) * 86_400_000).toISOString();
 }
 
 /** Сдвиг календарного дня на `n` суток (арифметика в UTC — без переходов DST). */
@@ -186,11 +239,7 @@ export interface CalendarWeek {
  * «срединного» дня строки (4-го): при `firstDayOfWeek = 1` это четверг той же
  * ISO-недели, что и прежний расчёт по понедельнику строки, — номер не меняется.
  */
-export function buildMonthWeeks(
-  year: number,
-  month: number,
-  firstDayOfWeek = 1,
-): CalendarWeek[] {
+export function buildMonthWeeks(year: number, month: number, firstDayOfWeek = 1): CalendarWeek[] {
   const first = firstOfMonth(year, month);
   const lead = weekStartOffset(first, firstDayOfWeek);
   let cursor = addDays(first, -lead);
@@ -324,4 +373,43 @@ export function monthEdge(firstOfMonth: string, edge: 'start' | 'end'): string {
   if (m === null) return '';
   if (edge === 'start') return firstOfMonth;
   return new Date(Date.UTC(Number(m[1]), Number(m[2]), 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * Подпись календарного дня (локализованная, с днём недели). Локаль суток и
+ * порядок частей — общий форматтер клиента (`formatDateParts`); хвостовые
+ * литералы («г.») снимаются, первая буква поднимается. `day` — как есть, если
+ * форматтер ничего не дал.
+ */
+export function formatDayLabel(day: string): string {
+  const parts = formatDateParts(new Date(`${day}T00:00:00`), {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  if (parts.length === 0) return day;
+  while (parts.length > 1 && parts[parts.length - 1]?.type === 'literal') parts.pop();
+  const text = parts
+    .map((part) => part.value)
+    .join('')
+    .trim();
+  if (text === '') return day;
+  return text.charAt(0).toLocaleUpperCase(getLang()) + text.slice(1);
+}
+
+/** Начало локального дня наблюдателя как полный UTC-инстанс. */
+export function localDayStart(day: string): string {
+  const m = BARE_DATE_RE.exec(day.trim());
+  if (m === null) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+/** Конец локального дня наблюдателя как полный UTC-инстанс (включительно). */
+export function localDayEnd(day: string): string {
+  const m = BARE_DATE_RE.exec(day.trim());
+  if (m === null) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
 }

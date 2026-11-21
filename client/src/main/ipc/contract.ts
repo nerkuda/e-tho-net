@@ -30,7 +30,11 @@ export type {
   UpdateChannel,
 } from '@etn/shared';
 
-export type { CompatibilityResult, CompatibilityStatus, CompatibilityBannerState } from '../compatibility.js';
+export type {
+  CompatibilityResult,
+  CompatibilityStatus,
+  CompatibilityBannerState,
+} from '../compatibility.js';
 
 import type {
   ApiKey,
@@ -52,6 +56,7 @@ import type {
   AttachmentUpdateInput,
   AttachmentUsage,
   ActivitySavedFilter,
+  CalendarMarkersResult,
   ChronicleFilterDefinition,
   ChronicleQueryRequest,
   ChronicleQueryResponse,
@@ -60,6 +65,7 @@ import type {
   CommentInput,
   CommentTarget,
   CurrentUser,
+  DayLinksResult,
   CrossNetworkDuplicateResponse,
   CrossNetworkStructureQueryResponse,
   PropertyCrossResolveResult,
@@ -131,6 +137,19 @@ import type {
   StructureQueryRequest,
   StructureQueryResponse,
   StructureIdsQueryResult,
+  TaskMassAction,
+  TaskMassFilter,
+  TaskListPage,
+  TaskOpAction,
+  TaskPatchResult,
+  TaskScope,
+  Reminder,
+  ReminderDeleteResult,
+  ReminderKind,
+  ReminderListResult,
+  ReminderOccurrenceChange,
+  ReminderSchedule,
+  ReminderSubjectType,
   Thought,
   ThoughtBatchInput,
   ThoughtBatchResult,
@@ -244,12 +263,7 @@ export interface IpcErrorEnvelope {
  *  - `other` — прочий сетевой сбой без различимой причины.
  */
 export type ConnectFailureReason =
-  | 'refused'
-  | 'timeout'
-  | 'dns'
-  | 'unreachable'
-  | 'reset'
-  | 'other';
+  'refused' | 'timeout' | 'dns' | 'unreachable' | 'reset' | 'other';
 
 /** `details` транспортного отказа запроса — контракт main → renderer. */
 export interface ConnectFailureDetails {
@@ -324,20 +338,50 @@ export interface FocusHistoryEntry {
  * Result of the system image picker (workplan L16): the ORIGINAL file as a
  * `data:` URL plus its meta, so the caller can upload it as an attachment and
  * derive an icon-sized preview from it.
+ *
+ * Отказ несёт КОД причины, а не готовый текст: тексты интерфейса живут только
+ * в словаре рендерера (требование 0e5ff1c6), а главный процесс языка интерфейса
+ * не знает. Русская строка из main показывалась как есть в en/zh (вердикт
+ * проверки задачи 80324150).
  */
 export type PickImageResult =
   | { status: 'ok'; dataUrl: string; name: string; mime: string; size: number }
   | { status: 'cancel' }
-  | { status: 'error'; message: string };
+  /** Файл больше потолка `max_bytes` (байты) — лимит зависит от потребителя. */
+  | { status: 'error'; code: 'image_too_large'; max_bytes: number }
+  /** Файл не читается с диска. */
+  | { status: 'error'; code: 'image_unreadable' };
+
+/**
+ * Состояние фоновой картинки карты для рендерера (0.16.1, задача 80324150;
+ * операция API 31ef478a, сценарий офлайн-старта 0ec86f0b).
+ *
+ * `none` — картинки нет (или сервер ответил 404, или офлайн без кэша): карта
+ * показывает цветовой фон темы/слоя и точечную сетку, ошибка пользователю не
+ * показывается. `ok` — готовая картинка: `data_url` уже собран главным
+ * процессом (рендерер не ходит в сеть), `source` говорит, свежая она с сервера
+ * или из локального кэша прошлого запуска.
+ */
+export type WallpaperState =
+  | { status: 'none' }
+  | {
+      status: 'ok';
+      /** Сеть, к которой относится картинка (ревизия 2026-11-13). */
+      network_id: string;
+      data_url: string;
+      mime_type: string;
+      file_size: number;
+      content_hash: string;
+      meta: import('@etn/shared').WallpaperMeta;
+      source: 'server' | 'cache';
+    };
 
 /**
  * Result of the generic OS file picker: the chosen file's absolute path and
  * name. No bytes are read — the add-attachment dialog only fills its path
  * field with it; the server sees the file once «Добавить» is pressed.
  */
-export type PickFileResult =
-  | { status: 'ok'; path: string; name: string }
-  | { status: 'cancel' };
+export type PickFileResult = { status: 'ok'; path: string; name: string } | { status: 'cancel' };
 
 /**
  * Содержимое системного буфера обмена, прочитанное главным процессом
@@ -404,8 +448,7 @@ export type TabViewMode = 'map' | 'structures' | 'chronicle' | 'activity' | 'pub
  * (`publicationId`). Формы взаимоисключающи.
  */
 export type DeepLinkPayload =
-  | { networkId: string; thoughtId: string }
-  | { networkId: string; publicationId: string };
+  { networkId: string; thoughtId: string } | { networkId: string; publicationId: string };
 
 /**
  * Public DTO of an open tab (07-client-electron.md §3.6, workplan Q2).
@@ -476,6 +519,127 @@ export interface DraftRecord {
 
 /** Which stored drafts {@link EtnApi.ui.draftList} returns (default `pending`). */
 export type DraftListFilter = 'pending' | 'conflict' | 'all';
+
+/**
+ * Одна операция правки строки задачи для `PATCH /networks/{nid}/tasks`
+ * (операция de4cee18, 0.16.1). `line_no` — номер строки `body_md` С НУЛЯ,
+ * `expected_revision` — ревизия комментария-источника (обязательна для первой
+ * операции, иначе сервер ответит 400; несовпадение — 409). `date` — цель
+ * операции `set_due` (ошибка 3f9ea2ee): срок строки встаёт на выбранный
+ * календарный день, у строки без дат появляется новая date-ссылка.
+ */
+export interface TaskOpInput {
+  comment_id: string;
+  line_no: number;
+  action: TaskOpAction;
+  done?: boolean;
+  days?: number;
+  months?: number;
+  date?: string;
+  expected_revision?: number;
+}
+
+/**
+ * Массовая команда группы «Задачи периода» (`PATCH /tasks`, требование
+ * e6af8b9e): адресация — фильтр проекции, а не список строк. `cancel-all`
+ * снимает маркер задачи (строки становятся `- текст`), `move-all` двигает все
+ * date-ссылки строк на один сдвиг (`days`/`months`, ровно один), `undate-all`
+ * снимает у строк все date-ссылки («Сделать бессрочными», ошибка 3cef7466) и
+ * сдвига не берёт. Строки хроно-записей в `undate-all` пропускаются
+ * (`undate_not_allowed`): их период вернёт пере-парс (уточнение 2026-11-16).
+ */
+export interface TaskMassCommandInput {
+  action: TaskMassAction;
+  filter: TaskMassFilter;
+  days?: number;
+  months?: number;
+}
+
+/**
+ * Тело `PATCH /networks/{nid}/tasks`: либо список операций по строкам, либо одна
+ * массовая команда по фильтру. Форма взаимоисключающая (сервер отвергает оба
+ * набора сразу).
+ */
+export type TaskPatchInput = { ops: TaskOpInput[] } | TaskMassCommandInput;
+
+/**
+ * Запрос `GET /networks/{nid}/tasks` (операция e6d65f51): основа выборки,
+ * период, адресация строки и keyset-страница. `today` — локальные сутки
+ * клиента (`YYYY-MM-DD`), обязательны для `scope: 'overdue'`.
+ */
+export interface TaskListQuery {
+  scope?: TaskScope;
+  from?: string;
+  to?: string;
+  thought_id?: string;
+  comment_id?: string;
+  today?: string;
+  cursor?: string;
+  limit?: number;
+  count?: boolean;
+  /**
+   * Дополнить страницу вложенными не-задачными строками её задач (уточнение ТЗ
+   * 2026-11-17, пункт F): сервер дочитывает пункты чек-листа и вложенный текст
+   * тех же комментариев, проекция при этом не меняется.
+   */
+  include_nested?: boolean;
+}
+
+/**
+ * Запрос `GET /networks/{nid}/chronicle/day-links` (операция 0.16.1,
+ * требование `1fb1047d`): календарный диапазон ленты «Дневника» (`YYYY-MM-DD`,
+ * сутки наблюдателя считает клиент). `to` не задан — ровно один день `from`.
+ */
+export interface DayLinksQuery {
+  from: string;
+  to?: string;
+}
+
+/**
+ * Запрос `GET /networks/{nid}/chronicle/calendar-markers` (операция 0.16.1,
+ * требование `ab9d627b`): отображаемый месяц и «сегодня» клиента (`YYYY-MM-DD`,
+ * сутки наблюдателя считает клиент — требование `fcdcd75f`).
+ */
+export interface CalendarMarkersQuery {
+  /** Первый день месяца. */
+  from: string;
+  /** Последний день месяца. */
+  to: string;
+  /** Локальные сутки клиента — граница просрочки (`due < today`). */
+  today: string;
+}
+
+/**
+ * Запрос `GET /networks/{nid}/reminders` (операция ae19b1bf): период раскрытия
+ * повторов в UTC-инстансах и фильтр по субъекту.
+ */
+export interface ReminderListQuery {
+  from?: string;
+  to?: string;
+  horizon_days?: number;
+  subject_type?: ReminderSubjectType;
+  subject_id?: string;
+}
+
+/**
+ * Вход `POST /networks/{nid}/reminders` (операция ae19b1bf): вид, грамматика
+ * повтора и опорное вхождение. Согласованность `kind` ↔ `schedule.type`
+ * проверяет сервер (расхождение — 400).
+ */
+export interface ReminderCreateInput {
+  subject_type: ReminderSubjectType;
+  subject_id: string;
+  kind: ReminderKind;
+  schedule: ReminderSchedule;
+  anchor_at: string;
+}
+
+/** Вход `PATCH /networks/{nid}/reminders/{id}` — правка расписания серии. */
+export interface ReminderUpdateInput {
+  kind?: ReminderKind;
+  schedule?: ReminderSchedule;
+  anchor_at?: string;
+}
 
 /** The full `window.etn` surface (docs/07-client-electron.md §6). */
 export interface EtnApi {
@@ -729,6 +893,17 @@ export interface EtnApi {
   chronicle: {
     /** `POST /chronicle/query` — two-phase chronological-comment query (L20). */
     query(networkId: string, request: ChronicleQueryRequest): Promise<ChronicleQueryResponse>;
+    /**
+     * `GET /chronicle/day-links` — датовые факты мыслей и date-ссылки дня
+     * (0.16.1, требование `1fb1047d`): блок «Связи дня» ленты «Дневника».
+     */
+    dayLinks(networkId: string, query: DayLinksQuery): Promise<DayLinksResult>;
+    /**
+     * `GET /chronicle/calendar-markers` — маркеры дней месяца для календаря
+     * панели «Дневника» (0.16.1, требование `ab9d627b`): записи, задачи и
+     * напоминания, датовые факты и date-ссылки, просрочка.
+     */
+    calendarMarkers(networkId: string, query: CalendarMarkersQuery): Promise<CalendarMarkersResult>;
   };
   chronicleFilters: {
     /** `GET /saved-filters?view=chronicle` — the user's chronicle filters (L20). */
@@ -1074,7 +1249,12 @@ export interface EtnApi {
       networkId: string,
       thoughtId: string,
       viewName: string,
-      opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+      opts?: {
+        sort?: import('@etn/shared').StructureSort;
+        order?: import('@etn/shared').SortOrder;
+        limit?: number;
+        offset?: number;
+      },
       options?: { signal?: AbortSignal },
     ): Promise<RunThoughtTypeViewResult>;
     /**
@@ -1229,10 +1409,7 @@ export interface EtnApi {
      * dialog can quote it directly (0.8.1, требование 09f692ff); for
      * scalar properties the field is `null`.
      */
-    remove(
-      networkId: string,
-      id: string,
-    ): Promise<NetworkPropertyDeleteResult>;
+    remove(networkId: string, id: string): Promise<NetworkPropertyDeleteResult>;
     /**
      * `GET /networks/{nid}/properties/{id}/usage` — type bindings, in-type
      * values per binding and out-of-type values count (the two numbers the
@@ -1275,6 +1452,44 @@ export interface EtnApi {
       ownerId: string,
       expectedVersion?: number,
     ): Promise<Comment>;
+  };
+  /**
+   * Задачи — проекция строк `- [ ]` в `body_md` (0.16.1, задача 632eca85;
+   * операции e6d65f51/de4cee18). Клиент правит ТОЛЬКО строки (toggle/move/
+   * cancel) и запускает массовые команды группы (требование e6af8b9e).
+   */
+  tasks: {
+    /** `GET /networks/{nid}/tasks` — выборка из проекции (сквозные overdue/undated). */
+    list(networkId: string, query?: TaskListQuery): Promise<TaskListPage>;
+    /** `PATCH /networks/{nid}/tasks` — правка строк или массовая команда; ответ несёт новые ревизии. */
+    patch(networkId: string, input: TaskPatchInput): Promise<TaskPatchResult>;
+  };
+  /**
+   * Напоминания — персональные строки владельца (0.16.1, задача b47f1fd2;
+   * операции ae19b1bf/500d1b3d). Время сервера — UTC; «сегодня» считает клиент.
+   */
+  reminders: {
+    /** `GET /networks/{nid}/reminders` — строки владельца с раскрытием повторов. */
+    list(networkId: string, query?: ReminderListQuery): Promise<ReminderListResult>;
+    /** `POST /networks/{nid}/reminders` — создать напоминание владельца. */
+    create(networkId: string, input: ReminderCreateInput): Promise<Reminder>;
+    /** `PATCH /networks/{nid}/reminders/{id}` — изменить расписание серии. */
+    update(networkId: string, id: string, input: ReminderUpdateInput): Promise<Reminder>;
+    /** `POST …/reminders/{id}/snooze` — отложить ТОЛЬКО это вхождение. */
+    snooze(
+      networkId: string,
+      id: string,
+      until: string,
+      occurrenceAt?: string,
+    ): Promise<ReminderOccurrenceChange>;
+    /** `POST …/reminders/{id}/dismiss` — убрать вхождение (`occurrenceAt` — показанное). */
+    dismiss(
+      networkId: string,
+      id: string,
+      occurrenceAt?: string,
+    ): Promise<ReminderOccurrenceChange>;
+    /** `DELETE /networks/{nid}/reminders/{id}` — удалить напоминание владельца. */
+    remove(networkId: string, id: string): Promise<ReminderDeleteResult>;
   };
   attachments: {
     list(networkId: string, ownerType: AttachmentOwnerType, ownerId: string): Promise<Attachment[]>;
@@ -1412,6 +1627,36 @@ export interface EtnApi {
      * клиент трактует это как отсутствие серверной настройки.
      */
     getLanguageSettings(): Promise<UserLanguageSettings>;
+    /**
+     * `GET /users/me/wallpaper?network_id=…` + байты: фоновая картинка карты
+     * ЗАДАННОЙ сети (ревизия 2026-11-13, задача 5db41abf). Онлайн — свежая с
+     * сервера (и кэш обновляется), офлайн — последняя из локального кэша этой
+     * сети, иначе `none` (цветовой фон и сетка).
+     *
+     * `null` — активной сети ещё нет (старт/восстановление сессии): главный
+     * процесс берёт последнюю сеть, для которой картинку читали или писали, —
+     * так офлайн-старт показывает картинку активной сети из кэша (сценарий
+     * 0ec86f0b).
+     */
+    getWallpaper(networkId: string | null): Promise<WallpaperState>;
+    /**
+     * `PUT /users/me/wallpaper?network_id=…` — загрузить/перезаписать картинку
+     * В СЕТИ. Клиент готовит байты сам (даунскейл до 3840 px / 5 МиБ,
+     * метаданные светлоты — задача 80324150); ответ и локальный кэш сети
+     * обновляются сразу.
+     */
+    uploadWallpaper(input: {
+      /** Сеть, для которой выбирается картинка (активная сеть). */
+      networkId: string;
+      data_base64: string;
+      mime_type: string;
+      meta: import('@etn/shared').WallpaperMeta;
+    }): Promise<WallpaperState>;
+    /**
+     * `DELETE /users/me/wallpaper?network_id=…` — отказ от картинки в этой
+     * сети; кэш именно этой сети очищается.
+     */
+    removeWallpaper(networkId: string): Promise<{ status: 'none' }>;
   };
   /**
    * Object-locks REST bridge (task 4f141756, операция 8919b057 «/locks»,
@@ -1422,11 +1667,7 @@ export interface EtnApi {
    */
   locks: {
     /** `POST /networks/{nid}/locks` — acquire (idempotent for self). */
-    acquire(
-      networkId: string,
-      entityType: string,
-      entityId: string,
-    ): Promise<LockRow>;
+    acquire(networkId: string, entityType: string, entityId: string): Promise<LockRow>;
     /** `DELETE /networks/{nid}/locks/:lockId` — release (owner only). */
     release(networkId: string, lockId: string): Promise<void>;
     /**
@@ -1434,10 +1675,7 @@ export interface EtnApi {
      * `userId`/`clientId`. Cold-start resync and the «Участники мыслесети»
      * panel both consume this.
      */
-    list(
-      networkId: string,
-      filters?: { userId?: string; clientId?: string },
-    ): Promise<LockRow[]>;
+    list(networkId: string, filters?: { userId?: string; clientId?: string }): Promise<LockRow[]>;
     /** `POST /networks/{nid}/locks/clear` — manual reset for a participant. */
     clear(networkId: string, userId: string): Promise<LocksClearResult>;
   };
@@ -1480,7 +1718,9 @@ export interface EtnApi {
      */
     onStale(cb: (payload: { networkId: string; lastSeq: number }) => void): () => void;
     /** Per-network terminal close (Q5) — `network.deleted` or membership lost. */
-    onNetworkLost(cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void): () => void;
+    onNetworkLost(
+      cb: (payload: { networkId: string; reason: 'unauthorized' | 'not-found' }) => void,
+    ): () => void;
     /**
      * Layer control frames (S11, 13-layers.md §12, §2.4): the server switched
      * this session's layer (`switched`) or deleted the layer the session was
@@ -1502,11 +1742,7 @@ export interface EtnApi {
      * активная сеть (задача faba9ff4).
      */
     onLanguage(
-      cb: (payload: {
-        networkId: string;
-        language: string;
-        source: LanguageSource;
-      }) => void,
+      cb: (payload: { networkId: string; language: string; source: LanguageSource }) => void,
     ): () => void;
     /**
      * Own-mutation flag (S11, 08-ui-spec.md §2.2): the write may have created
@@ -1563,7 +1799,10 @@ export interface EtnApi {
   meta: {
     /**
      * Reads an L5 `client_meta` key — installation-scoped state such as the
-     * UI theme (`CLIENT_META_KEY.THEME`, L10). Works without a connection.
+     * cached UI theme and mode (`CLIENT_META_KEY.UI_THEME` / `UI_MODE`, L10).
+     * `CLIENT_META_KEY.THEME` — legacy-ключ РЕЖИМА (`light`/`dark`): он
+     * мигрирует в серверный `ui_mode` (задача 0e4a52cd) и читается только как
+     * fallback (фон окна до первого кэша). Works without a connection.
      */
     get(key: string): Promise<string | null>;
     /** Upserts an L5 `client_meta` key. */
@@ -1583,7 +1822,12 @@ export interface EtnApi {
       tabId?: string | null,
       limit?: number,
     ): Promise<FocusHistoryEntry[]>;
-    push(profileId: string, networkId: string, tabId: string | null, thoughtId: string): Promise<void>;
+    push(
+      profileId: string,
+      networkId: string,
+      tabId: string | null,
+      thoughtId: string,
+    ): Promise<void>;
     /**
      * Rotates the visit history on an editor-thought change `oldId → newId`
      * in one local transaction (11-settings-and-state.md §2.3, H7, Q4). Uses
@@ -1677,7 +1921,11 @@ export interface EtnApi {
      * мысли (она вернётся к состоянию основы; созданная только в слое —
      * исчезнет). Основа не затрагивается.
      */
-    discardThought(networkId: string, layerId: string, thoughtId: string): Promise<LayerDiscardReport>;
+    discardThought(
+      networkId: string,
+      layerId: string,
+      thoughtId: string,
+    ): Promise<LayerDiscardReport>;
     /** Structural diff + overridden ids (§10.3). */
     diff(networkId: string, layerId: string): Promise<LayerDiffResult>;
     /**
@@ -1703,6 +1951,13 @@ export interface EtnApi {
      * a connection.
      */
     appInfo(): Promise<AppInfo>;
+    /**
+     * Фон окна под применённую тему (ревизия 2026-11-12 задачи 0e4a52cd):
+     * renderer вычисляет цвет `--bg` применённой темы и просит main покрасить
+     * фон окна без перезапуска. `color` — `#rrggbb`; иное значение —
+     * `VALIDATION_ERROR`. Работает без соединения с сервером.
+     */
+    setWindowBackground(color: string): Promise<void>;
     /**
      * Язык системного окружения для ПЕРВОГО запуска (задача e6374cd1): первый
      * элемент `app.getPreferredSystemLanguages()`, сведённый к коду каталога
@@ -1814,8 +2069,13 @@ export interface EtnApi {
      * Opens the OS file picker for an image and returns the original file as a
      * `data:` URL with its name/mime/size (≤ the attachment upload limit). The
      * caller decides how to fit it into the icon limit (workplan L16).
+     *
+     * `maxBytes` — необязательный потолок ИСХОДНОГО файла (по умолчанию
+     * лимит вложения). Фоновая картинка передаёт свой потолок: фото-исходник
+     * может быть крупнее, клиент всё равно даунскейлит его перед отправкой
+     * (задача 80324150).
      */
-    pickImage(): Promise<PickImageResult>;
+    pickImage(options?: { maxBytes?: number }): Promise<PickImageResult>;
     /**
      * Opens the OS file picker for a file of ANY type and returns its absolute
      * path (no content is read). The add-attachment dialog's «Открыть с диска»
@@ -1950,7 +2210,12 @@ export type EtnBridgeThoughtTypeViews = Omit<EtnApi['thoughtTypeViews'], 'run'> 
     networkId: string,
     thoughtId: string,
     viewName: string,
-    opts?: { sort?: import('@etn/shared').StructureSort; order?: import('@etn/shared').SortOrder; limit?: number; offset?: number },
+    opts?: {
+      sort?: import('@etn/shared').StructureSort;
+      order?: import('@etn/shared').SortOrder;
+      limit?: number;
+      offset?: number;
+    },
     requestId?: string,
   ): Promise<RunThoughtTypeViewResult>;
 };

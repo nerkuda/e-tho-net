@@ -47,6 +47,7 @@ import {
 } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { notice } from '../lib/notice.js';
+import { measureSegment, segmentStart } from '../lib/slow-segment.js';
 // Канон стиля/значка облачка и отложенный одиночный клик живут в общей
 // фабрике (задача b28ab6d6): облачка холста собирает `createThoughtCloud`,
 // `deferSingleClick`/`SINGLE_CLICK_DELAY_MS` реэкспортируются для
@@ -61,7 +62,6 @@ import {
   CLOUD_TITLE_LINES_MIN,
   cloudGeom,
   cloudHeight,
-  contrastText,
   neighborsDirForEllipse,
   neighborsPreviewBounds,
   neighborsPreviewHeading,
@@ -69,6 +69,7 @@ import {
   sortRefsByTitle,
   ZONE_ANCHOR_BY_DIR,
   zoneContentWidth,
+  zoneCountTextColor,
 } from '../lib/pure.js';
 import {
   createZonePaging,
@@ -80,12 +81,24 @@ import {
   type ZonePagingCounters,
 } from '../lib/zone-paging.js';
 import { notifyPropertyValuesRefreshed } from '../lib/property-values-refresh.js';
-import { LABEL_OPACITY, currentLayerColors, layerLabelView } from '../lib/layer-colors.js';
+import {
+  LABEL_OPACITY,
+  currentLayerColors,
+  effectiveLayerStripe,
+  layerLabelView,
+} from '../lib/layer-colors.js';
+import { subscribeWallpaper } from '../lib/wallpaper-state.js';
+import { WALLPAPER_ATTR } from './wallpaper.js';
+import { logUiEvent } from '../lib/ui-log.js';
 import { store } from '../state.js';
 import {
   releaseCloudIndicatorInterest,
   setCloudIndicatorInterest,
 } from '../lib/cloud-indicators.js';
+import {
+  reminderIndicatorCell,
+  refreshReminderIndicators,
+} from '../lib/reminder-indicators.js';
 import {
   initLinksOverlay,
   drawLinksNow,
@@ -452,6 +465,21 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     // The label follows layer/theme changes even when the canvas data itself
     // is unchanged (the fast path below skips the full rebuild).
     updateLayerLabel();
+    // Счётчики зон перекрашиваются при смене темы/режима/слоя (ошибка
+    // f245c5ac). Их inline-цвет считается из ЖИВЫХ токенов (`--surface` +
+    // фактический фон зоны), но `positionZoneIndicators` звался только из
+    // `updateFocusBand` (рендер/ресайз): после переключения светлый↔тёмный
+    // плашка перекрашивалась CSS, а цвет цифр оставался от прежней темы до
+    // ближайшего рендера. Тема/режим/слой в `canvasRenderKey` НЕ входят
+    // намеренно — полный рендер канвы на каждый переключатель дорог и ломает
+    // прокрутку зон; здесь пересчёт точечный (getComputedStyle + позиции трёх
+    // индикаторов). Ключ строится по ФАКТИЧЕСКОМУ фону (`--layer-bg` либо
+    // `--bg`), а не по id слоя: правка цвета активного слоя меняет фон, не
+    // меняя id (блокер проверки fef9350f).
+    const chromeKey = zoneChromeKey();
+    if (chromeKey !== lastZoneChromeKey) {
+      refreshZoneCounterChrome();
+    }
     // Свежий ответ фокуса мог не изменить ничего рисуемого: мысль, добавленная
     // за уже загруженной порцией сектора, в ответе не видна, а индикатор-число
     // и порция обязаны обновиться сразу (ошибка ec5ba58c). Поэтому сверка
@@ -522,7 +550,17 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
   const resizeObserver = new ResizeObserver(() => {
     if (host?.isConnected === true) updateFocusBand();
   });
+  // Асинхронная смена картинки меняет плашку под счётчиком (композиция 78 %
+  // `--surface` над фоном → непрозрачный `--surface`) без тика store: цифры
+  // перекрашиваются сразу, не дожидаясь рендера/ресайза.
+  const wallpaperUnsubscribe = subscribeWallpaper(() => {
+    if (host?.isConnected === true) refreshZoneCounterChrome();
+  });
   resizeObserver.observe(host);
+  // Индикаторы напоминаний (⏰, 0.16.1): список владельца на сеть читается
+  // один раз на монтирование и дальше обновляется событием `reminders.changed`;
+  // ячейки строятся из кэша, поэтому запрос идёт параллельно с раскладкой.
+  void refreshReminderIndicators();
   scheduleRender();
 
   // Teardown handle: releases every global subscription/observer wired above.
@@ -533,6 +571,7 @@ export function mountCanvas(canvasHost: HTMLElement): () => void {
     storeUnsubscribe?.();
     storeUnsubscribe = null;
     invalidationUnsubscribe();
+    wallpaperUnsubscribe();
     lockBadgeUnsubscribe?.();
     lockBadgeUnsubscribe = null;
     lockBadgeRefreshWired = false;
@@ -756,6 +795,16 @@ let renderCount = 0;
  */
 let renderEnterCount = 0;
 
+/**
+ * Счётчики раскладки зон (ошибка dc723634): число серий `renderZoneContent` и
+ * число фактически построенных облачков (`buildCloud`). Тестовые швы гейта
+ * «осцилляция раскладки»: серия, перезапускаемая внешним триггером, взлетает в
+ * первом счётчике, пересборка DOM на каждом проходе — во втором
+ * ({@link canvasInternals}.zoneLayoutRuns / .zoneCloudBuilds).
+ */
+let zoneLayoutRunCount = 0;
+let zoneCloudBuildCount = 0;
+
 /** Отметка «рендер уже запланирован на текущий тик» — схлопывает все
  *  синхронные триггеры в один `render()` (см. {@link scheduleRender}). */
 let renderScheduled = false;
@@ -786,6 +835,10 @@ function scheduleRender(): void {
       // render()` оставлял исключение необработанным отказом, и сбой выглядел
       // как «зависание» без реакции. Логируем и повторяем расклад целиком.
       console.error('[canvas] рендер прерван — повтор на следующем тике', error); // i18n: technical — диагностика для разработчика
+      // Переполнение стека детерминировано: повтор целиком прогонит ту же
+      // раскладку и снова упрётся в тот же предел стека (ошибка dc723634).
+      // Оставляем расклад до следующего внешнего триггера.
+      if (error instanceof RangeError) return;
       rebuildFailures += 1;
       scheduleRebuildRetry();
     });
@@ -805,7 +858,7 @@ function scheduleRender(): void {
  * `REBUILD_RETRY_LIMIT = 3` — это число ПОВТОРОВ после первой неудачной
  * пересборки: итого до 4 входов в render() — сама попытка + 3 повтора.
  */
-const REBUILD_RETRY_LIMIT = 3;
+export const REBUILD_RETRY_LIMIT = 3;
 /** Сколько подряд пересборок упало — сбрасывается успешной. */
 let rebuildFailures = 0;
 /** Повтор уже стоит в очереди — не плодим таймеры одной пачки триггеров. */
@@ -939,6 +992,11 @@ async function render(): Promise<void> {
   // Проиграл гонку — уступил более свежему рендеру: DOM не трогаем вовсе
   // (иначе две дорисовки пересобирали бы расклад по очереди и облачка мелькали).
   if (generation !== renderGeneration) return;
+  // Замер синхронной пересборки расклада (ошибка dc723634): дольше порога
+  // пишется отдельной меткой журнала. Смена фокуса пересобирает зоны одним
+  // синхронным проходом — единственное место холста, способное долго держать
+  // главный поток.
+  const rebuildAt = segmentStart();
   try {
     // Смена фокуса: прежняя позиция прокрутки принадлежит прежнему набору
     // соседей. Без сброса окно виртуализации считается по старому `scrollTop`
@@ -981,10 +1039,18 @@ async function render(): Promise<void> {
     // двигаем), следующий тик повторяет render() целиком. Без этого фокус
     // оставался новым, а зоны — прежними до следующего внешнего триггера.
     console.error('[canvas] пересборка расклада прервана — повтор целиком', error); // i18n: technical — диагностика для разработчика
+    // Переполнение стека — ДЕТЕРМИНИРОВАННЫЙ сбой входа (ошибка dc723634): та
+    // же раскладка на тех же данных упрётся в тот же предел стека, и «повтор
+    // целиком» лишь умножит фриз на число повторов. Оставляем расклад до
+    // следующего внешнего триггера (уведомление стора, resize, realtime).
+    if (error instanceof RangeError) return;
+    // Число повторов ограничено REBUILD_RETRY_LIMIT (scheduleRebuildRetry),
+    // так что и общий сбой посередине пересборки не крутит микротаски вечно.
     rebuildFailures += 1;
     scheduleRebuildRetry();
     return;
   }
+  measureSegment('canvas.rebuild', rebuildAt, { focus: focus.focused.id });
   // Totals for the count indicators (async) — a fresh focus seeds every
   // sector's counters; a fresh response for the SAME focus is reconciled by
   // `syncZoneTotalsWithFreshFocus` from the store subscriber.
@@ -1142,6 +1208,9 @@ let lastFocusResponse: FocusResponse | null = null;
  *  selection-only fast path (2e418bc3). */
 let lastRenderKey: string | null = null;
 let lastSelectionKey = '';
+/** Подпись «внешнего вида» счётчиков (тема/режим/слой/картинка) — гейт
+ *  точечной перекраски в подписке на store (ошибка f245c5ac). */
+let lastZoneChromeKey = '';
 /** Id of the cloud currently carrying the `.halo` class (task ff82809a).
  *  Used to repaint the halo in the selection-only fast path without
  *  rebuilding any zone. */
@@ -1183,6 +1252,7 @@ function updateLayerLabel(): void {
     s.theme,
     Math.round(focusRow.getBoundingClientRect().height),
     Math.round(host.getBoundingClientRect().width),
+    effectiveLayerStripe(),
   );
   const key = `${view.visible}|${view.title}|${view.color}|${view.fontPx}`;
   if (key !== lastLabelKey) {
@@ -1431,15 +1501,17 @@ function renderFocusRow(focus: FocusResponse): void {
   markNeighborsPreview(topEllipse, thought.id, neighborsDirForEllipse('top'), thought.title);
   markNeighborsPreview(bottomEllipse, thought.id, neighborsDirForEllipse('bottom'), thought.title);
 
-  // Indicator row identical to the zone clouds: 📝/📅/📎 under the title.
+  // Indicator row identical to the zone clouds: ⏰/📝/📅/📎 under the title.
+  // ⏰ (напоминания, элемент ba827eb6) стоит ПЕРВОЙ — перед 📝.
   const ind = div('cloud-ind');
-  const focusPerm = span('📝', 'ind dim');
-  const focusChrono = span('📅', 'ind dim');
-  const focusAtt = span('📎', 'ind dim');
+  const focusReminder = reminderIndicatorCell(thought.id, thought.title);
+  const focusPerm = span('📝', 'ind ind-comment dim');
+  const focusChrono = span('📅', 'ind ind-chrono dim');
+  const focusAtt = span('📎', 'ind ind-att dim');
   markCommentPreview(focusPerm, 'thought', thought.id, thought.title);
   markChronoPreview(focusChrono, 'thought', thought.id, thought.title);
   markAttachmentsPreview(focusAtt, 'thought', thought.id, thought.title);
-  ind.append(focusPerm, focusChrono, focusAtt);
+  ind.append(focusReminder, focusPerm, focusChrono, focusAtt);
   const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
   main?.append(ind);
 
@@ -1900,17 +1972,64 @@ function paintZoneIndicators(): void {
 }
 
 /**
- * Pins each count overlay to the top-right corner of its zone (canvas-space),
- * reading the theme background under it so the number stays readable on any
- * backdrop (contrast text colour). Called from {@link updateFocusBand} on every
- * render, host resize and splitter drag.
+ * Подпись внешнего вида счётчиков: тема, режим, активный слой, картинка и
+ * ФАКТИЧЕСКИЙ фон под плашкой. Всё, от чего зависит цвет цифры, но что НЕ
+ * входит в {@link canvasRenderKey} — смена любой части требует пересчёта
+ * inline-цвета немедленно (ошибка f245c5ac).
+ *
+ * Фон читается из живых CSS-переменных (`--layer-bg` слоя, иначе `--bg`
+ * темы), а не выводится из id слоя: правка цвета активного слоя («Свойства
+ * слоя» → «Фон холста» → Сохранить) перезаписывает `--layer-bg`, оставляя id
+ * прежним (блокер проверки fef9350f), поэтому ключ по id такую правку не
+ * видел. Ключ вычисляется ТОЛЬКО внутри подписки на store: смена фона без
+ * тика store (hot-reload CSS/темы, прямая правка переменной) подхватывается
+ * ближайшим тиком store, а не отдельным слушателем.
+ * Одно чтение стиля на тик store — как в `refreshWallpaperBackdrop`.
+ */
+function zoneChromeKey(): string {
+  const s = store.state;
+  const rootStyle = getComputedStyle(document.documentElement);
+  const layerBg = rootStyle.getPropertyValue('--layer-bg').trim();
+  const background = layerBg !== '' ? layerBg : rootStyle.getPropertyValue('--bg').trim();
+  const wallpaper = document.documentElement.getAttribute?.(WALLPAPER_ATTR) ?? '';
+  return `${s.uiTheme}|${s.theme}|${s.currentLayer?.id ?? ''}|${wallpaper}|${background}`;
+}
+
+/**
+ * Немедленная перекраска счётчиков зон: запоминает текущую подпись внешнего
+ * вида и пересчитывает inline-цвет/позиции всех индикаторов. Точка входа для
+ * событий, которые меняют плашку под цифрой без полного рендера канвы —
+ * смена темы/режима/слоя (store) и асинхронная смена картинки.
+ */
+function refreshZoneCounterChrome(): void {
+  lastZoneChromeKey = zoneChromeKey();
+  positionZoneIndicators();
+}
+
+/**
+ * Pins each count overlay to the top-right corner of its zone (canvas-space) and
+ * picks the number colour from the ACTUAL plate under it (вердикт проверки
+ * 80324150, круг 2): with a wallpaper the plate is opaque `--surface`, without
+ * one — `--surface` mixed 78 % over the effective zone background. The
+ * background is the LAYER's own colour when the active layer carries one
+ * (`--layer-bg`, 13-layers.md §2.2a) and the theme `--bg` otherwise: reading
+ * `--bg` alone gave white text on the white plate in blue-topaz light
+ * (1.00 : 1) and a colour picked against a background the counter does not sit
+ * on in a coloured layer.
+ * Called from {@link updateFocusBand} on every render, host resize and splitter
+ * drag, and from the store subscription on theme/mode/layer changes.
  */
 function positionZoneIndicators(): void {
   if (host === null) return;
   const hostRect = host.getBoundingClientRect();
-  const bg =
-    getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#eef0f4';
-  const color = contrastText(bg);
+  const rootStyle = getComputedStyle(document.documentElement);
+  const surface = rootStyle.getPropertyValue('--surface').trim();
+  const layerBg = rootStyle.getPropertyValue('--layer-bg').trim();
+  const themeBg = layerBg !== '' ? layerBg : rootStyle.getPropertyValue('--bg').trim();
+  // DOM-заглушки тестов могут не иметь getAttribute — состояние картинки тогда
+  // считается выключенным (плашка в основе); рабочая ветка с картинкой — ниже.
+  const wallpaperOn = document.documentElement.getAttribute?.('data-canvas-wallpaper') === 'on';
+  const color = zoneCountTextColor(surface, themeBg, wallpaperOn);
   for (const dir of ZONE_DIRS) {
     const el = zoneCountEls[dir];
     const zone = zones?.[dir];
@@ -2089,9 +2208,17 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
   // scrollbar (ошибка 1deced69). Deliberately re-laid out in place instead of
   // through `render()`: `render()` starts with `finishFocusTransition()`, so a
   // resize mid-flight would snap a running focus animation.
+  //
+  // Наблюдается `border-box`, а не content-box: переключение полосы прокрутки
+  // (spacer вырос/уменьшился) меняет ТОЛЬКО content-box, а раскладка зоны зависит
+  // именно от него (`zone.clientWidth` → число колонок → окно виртуализации).
+  // Наблюдение content-box замыкало контур «измерили высоты → вырос spacer →
+  // появилась полоса → сузился content-box → новый renderZoneContent сам собой»:
+  // сотни серий проходов и мерцание облачков (ошибка dc723634). Ширину держит и
+  // `scrollbar-gutter: stable` у `.zone` — жёлоб полосы зарезервирован всегда.
   new ResizeObserver(() => {
     if (host?.isConnected === true) void renderZoneContent(dir);
-  }).observe(zone);
+  }).observe(zone, { box: 'border-box' });
 
   // Zone context menu (sorting, H15). Cloud drag-n-drop is wired once on the
   // canvas host in mountCanvas.
@@ -2134,10 +2261,21 @@ function buildZone(dir: 'parents' | 'siblings' | 'children'): HTMLElement {
 
 /** Renders a zone from the current focus data. */
 function renderZone(dir: 'parents' | 'siblings' | 'children', entries: ZoneEntry[]): void {
+  const previous = zoneData.get(dir);
+  // Тот же состав строк (перерисовка от инвалидации ref/индикаторов) сохраняет
+  // измеренные высоты: сброс к оценкам в каждом полном рендере заново двигал
+  // `.zone-spacer`, переключал полосу прокрутки и — через content-box — число
+  // колонок; вместе с зонным `ResizeObserver` это держало самоподдерживающийся
+  // цикл перестроек (ошибка dc723634). Смена СОСТАВА делает высоты неверными
+  // здесь; смена ГЕОМЕТРИИ (масштаб, ширина облачка, число колонок) — тоже, но
+  // видна и без полного рендера, поэтому проверяется на старте серии
+  // ({@link rowHeightsGeometry}).
+  const sameEntries =
+    previous !== undefined &&
+    previous.length === entries.length &&
+    previous.every((entry, i) => entry.id === entries[i]?.id);
   zoneData.set(dir, entries);
-  // The entry set changed — per-row height measurements no longer apply
-  // (rows shift with the order and the column count).
-  rowHeights.delete(dir);
+  if (!sameEntries) rowHeights.delete(dir);
   renderZoneContent(dir);
 }
 
@@ -2216,22 +2354,160 @@ function zoneGridOf(dir: 'parents' | 'siblings' | 'children'): {
 /**
  * Measured heights of a zone's grid rows (px, gap excluded). Rows that were
  * never rendered fall back to the one-line estimate; every render re-measures
- * its visible rows and re-runs the layout once when anything changed, so the
- * virtualization never diverges from the DOM. A cloud's height depends only
- * on its title, the fixed cloud width and the zoom — deterministic per row,
- * so the re-run converges immediately.
+ * its visible rows and re-runs the layout while anything changed, so the
+ * virtualization never diverges from the DOM. A row's height is NOT
+ * deterministic, though: the measured heights set the spacer's height, which
+ * toggles the zone's scrollbar and changes its content box — that feeds back
+ * into the column count, the virtualization window and the very rows being
+ * measured (ошибка dc723634). The re-run is therefore capped at
+ * {@link ZONE_MEASURE_PASS_LIMIT} passes; a non-converging (oscillating)
+ * layout keeps its last built result instead of recursing until the stack
+ * overflows.
  */
 const rowHeights = new Map<'parents' | 'siblings' | 'children', number[]>();
 
-/** Renders the visible window of one zone (virtualized grid, auto rows). */
+/**
+ * Геометрия, для которой измерены высоты строк зоны: масштаб канвы, ширина
+ * облачка и число колонок. Первые две меняют размер и перенос заголовка, третья
+ * — состав строки; при любом изменении измеренные высоты устаревают
+ * (замечание проверки 835815ac). Без этого после смены `canvasZoom` невидимые
+ * строки оставались с высотами прежнего масштаба: `.zone-spacer` был занижен, и
+ * первая прокрутка «досчитывала» строки прыжком.
+ */
+const rowHeightsGeometry = new Map<'parents' | 'siblings' | 'children', string>();
+
+/** Текущий ключ геометрии зоны — входы, от которых зависят высоты строк. */
+function zoneMeasuredGeometry(dir: 'parents' | 'siblings' | 'children'): string {
+  const cols = zoneGridOf(dir)?.cols ?? 0;
+  return `${store.state.canvasZoom}|${store.state.cloudWidth}|${cols}`;
+}
+
+/**
+ * Подпись окна, построенного ПРЕДЫДУЩИМ проходом текущей серии (id видимых
+ * мыслей по порядку). Проход перестраивает облачка только при смене состава
+ * окна: измерение высот само по себе DOM не трогает (мерцание дефекта
+ * dc723634 — облачка, пересозданные в каждом проходе). На старте серии подпись
+ * сбрасывается.
+ */
+const zoneBuiltIds = new Map<'parents' | 'siblings' | 'children', string>();
+
+/**
+ * Сколько проходов измерения высот допускает одна перерисовка зоны (ошибка
+ * dc723634). Высоты строк не обязаны сходиться (см. {@link rowHeights}), а
+ * прежний самовызов из каждого прохода на такой осцилляции уходил в
+ * переполнение стека (`RangeError`), которое внешний catch встречал повтором
+ * всей пересборки — до многосекундного фриза. Лимит делает проходы конечными:
+ * последний построенный расклад остаётся на экране, а следующий внешний
+ * триггер (уведомление стора, resize, realtime) пробует расклад заново.
+ */
+export const ZONE_MEASURE_PASS_LIMIT = 5;
+
+/**
+ * Renders the visible window of one zone (virtualized grid, auto rows).
+ *
+ * Один вызов — до {@link ZONE_MEASURE_PASS_LIMIT} ИТЕРАТИВНЫХ проходов: проход
+ * измеряет высоты видимых строк и просит следующий, если они изменились.
+ * Итерация, а не рекурсия: осциллирующие высоты не могут исчерпать стек.
+ *
+ * Постработка (набор видимых мыслей и подписка индикаторов, курсор, линии)
+ * выполняется РОВНО ОДИН раз после цикла и при ЛЮБОМ исходе — расклад сошёлся
+ * или серия прервана. Внутри прохода она стояла после раннего «нужен ещё
+ * проход», поэтому на осцилляции не выполнялась вовсе (замечание проверки).
+ *
+ * Серия обрывается не только по лимиту проходов, но и по ПОВТОРУ состояния
+ * прохода: раскладка, вернувшаяся в уже виденное состояние, будет повторять
+ * цикл до конца лимита (ошибка dc723634: «высоты ↔ полоса прокрутки ↔ число
+ * колонок ↔ окно» — мерцание вместо фриза).
+ */
 function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
-  if (zones === null) return;
+  zoneLayoutRunCount += 1;
+  // Смена геометрии зоны (масштаб/ширина облачка/число колонок) устаревает
+  // измеренные высоты, даже когда состав строк тот же. Проверка на старте серии
+  // покрывает оба входа: полный рендер и ресайз зоны (только RO), — иначе
+  // spacer остаётся заниженным, а первая прокрутка «досчитывает» строки
+  // прыжком (замечание проверки 835815ac).
+  const geometry = zoneMeasuredGeometry(dir);
+  if (rowHeightsGeometry.get(dir) !== geometry) {
+    rowHeights.delete(dir);
+    rowHeightsGeometry.set(dir, geometry);
+  }
+  // Переиспользование облачков действует ТОЛЬКО внутри серии: между сериями
+  // DOM строится заново. За серию проходы меняют лишь измеренные высоты, а
+  // между сериями мог измениться любой вход облачка (инвалидация ref, бейдж
+  // удаления, сортировка, сокращение имён) — устаревшее облачко показало бы
+  // старые данные.
+  zoneBuiltIds.delete(dir);
+  let visibleIds: string[] = [];
+  /** Почему серия не сошлась: исчерпан лимит проходов или состояние повторилось. */
+  let exhausted: 'passes' | 'cycle' | null = 'passes';
+  let passes = 0;
+  /** Состояния проходов этой серии: повтор означает цикл (см. `cycleKey`). */
+  const seen = new Set<string>();
+  for (let pass = 0; pass < ZONE_MEASURE_PASS_LIMIT; pass++) {
+    const result = renderZonePass(dir);
+    // Рисовать нечего (нет зон, разметки или геометрии) — DOM и набор
+    // индикаторов не трогаем, как и прежде.
+    if (result === null) return;
+    passes = pass + 1;
+    visibleIds = result.visibleIds;
+    if (!result.again) {
+      exhausted = null;
+      break;
+    }
+    if (seen.has(result.cycleKey)) {
+      exhausted = 'cycle';
+      break;
+    }
+    seen.add(result.cycleKey);
+  }
+  if (exhausted !== null) {
+    // Серия не сошлась: на экране остался расклад последнего прохода — не
+    // бросаем и не повторяем пересборку целиком (дефект dc723634 превращал
+    // это в многосекундный фриз). След в ФАЙЛОВОМ журнале клиента (§9.7):
+    // console.warn туда не попадает.
+    logUiEvent('ui.zone_measure_exhausted', { dir, passes, reason: exhausted });
+  }
+  // Request indicators only AFTER the clouds are in the DOM: a cached value is
+  // applied synchronously and would otherwise patch nothing (the focus row
+  // loads it after mounting for the same reason). Видимый набор зоны заменяет
+  // прежний окно-набор целиком: мысли, ушедшие из окна прокруткой, отпишутся
+  // (ошибка 46bda0e8).
+  zoneVisibleThoughtIds.set(dir, visibleIds);
+  syncCanvasIndicatorInterest();
+  // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
+  syncCanvasCursor();
+  redrawLinks?.();
+}
+
+/** Исход одного прохода раскладки зоны. */
+interface ZonePassResult {
+  /** `true` — измеренные высоты строк изменились, нужен ещё проход. */
+  again: boolean;
+  /** Мысли, реально попавшие в окно виртуализации (набор подписки индикаторов). */
+  visibleIds: string[];
+  /**
+   * Состояние, из которого проход построил расклад: колонки, прокрутка, состав
+   * окна и измеренные высоты строк. Повтор ключа в одной серии означает, что
+   * следующий проход даст ровно тот же расклад, — серия зациклилась.
+   */
+  cycleKey: string;
+}
+
+/** Проход, после которого повтор не нужен и в окне нет ни одной мысли. */
+const ZONE_PASS_DONE: ZonePassResult = { again: false, visibleIds: [], cycleKey: '' };
+
+/**
+ * Один проход раскладки зоны. `null` — рисовать нечего (нет зон, разметки или
+ * геометрии): DOM и набор индикаторов не тронуты.
+ */
+function renderZonePass(dir: 'parents' | 'siblings' | 'children'): ZonePassResult | null {
+  if (zones === null) return null;
   const zone = zones[dir];
   const entries = zoneData.get(dir) ?? [];
   const spacer = zone.querySelector<HTMLElement>('.zone-spacer');
   const grid = zone.querySelector<HTMLElement>('.zone-grid');
   const empty = zone.querySelector<HTMLElement>('.zone-empty');
-  if (spacer === null || grid === null || empty === null) return;
+  if (spacer === null || grid === null || empty === null) return null;
 
   // Effective (zoom-multiplied) sizes; the --cloud-* CSS variables with the
   // same numbers live on the canvas host (applyCanvasScaleVars).
@@ -2246,9 +2522,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
 
   if (entries.length === 0) {
     // Зона пуста — её прежние облачка уходят из DOM: мысли отписываются от
-    // счётчиков (ошибка 46bda0e8).
-    zoneVisibleThoughtIds.set(dir, []);
-    syncCanvasIndicatorInterest();
+    // счётчиков (ошибка 46bda0e8) постработой цикла (пустой набор видимых id).
     spacer.style.height = '0px';
     empty.classList.remove('hidden');
     clear(grid);
@@ -2268,11 +2542,11 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     if (dir === 'children') {
       if (childrenZonePhase === 'loading') {
         empty.replaceChildren(loadingState());
-        return;
+        return ZONE_PASS_DONE;
       }
       if (childrenZonePhase === 'error') {
         empty.replaceChildren(errorState(getViewRunError() ?? t('strip.runFailed')));
-        return;
+        return ZONE_PASS_DONE;
       }
       const viewResult = zone.dataset['viewResult'];
       if (viewResult === 'unresolved') {
@@ -2300,7 +2574,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
     } else {
       empty.textContent = ZONE_EMPTY_LABELS[dir];
     }
-    return;
+    return ZONE_PASS_DONE;
   }
   empty.classList.add('hidden');
   // Скрытое пустое состояние не должно хранить разметку прежнего состояния
@@ -2309,7 +2583,7 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   empty.replaceChildren();
 
   const gridInfo = zoneGridOf(dir);
-  if (gridInfo === null) return;
+  if (gridInfo === null) return null;
   const { cols, rows } = gridInfo;
   const heights = rowHeights.get(dir) ?? [];
   while (heights.length < rows) heights.push(estimate);
@@ -2383,62 +2657,78 @@ function renderZoneContent(dir: 'parents' | 'siblings' | 'children'): void {
   grid.style.width = `${contentWidth}px`;
   grid.style.transform = `translate(${origin.x}px, ${origin.y + prefix[startRow]!}px)`;
 
-  clear(grid);
-  // Row-major fill (08-ui-spec.md §2.1.1): DOM order = entries order
-  // (`entries[i]`); CSS Grid `grid-auto-flow: row` (fixed above) lays them
-  // out left-to-right within a row, then advances to the next row. Visual
-  // slot `(col = i % cols, row = floor(i / cols))` therefore contains the
-  // entry with row-major index i — i.e. the same position it occupies in
-  // the server-returned neighbours array (zoneOrder). This matches the
-  // keyboard cursor model (↑/↓/←/→ step by row-major index) and
-  // `Ctrl+Shift+↑/↓` (which moves by one position in zoneOrder).
-  const showPosition = dir !== 'siblings' && store.state.zoneSorts[dir].sort === 'manual';
+  // Окно виртуализации — состав, который обязан быть в DOM. Собираем его
+  // подписью (id по порядку): если проход не изменил состав окна, облачка
+  // ПЕРЕИСПОЛЬЗУЮТСЯ. Измерение высот — не повод пересобирать DOM: облачка,
+  // пересозданные в каждом проходе, и есть видимое мерцание дефекта dc723634
+  // (серия проходов перезапускалась внешним триггером сотни раз).
   const first = startRow * cols;
-  const last = endRow * cols;
-  const rowClouds = new Map<number, HTMLElement[]>();
+  const last = Math.min(entries.length, endRow * cols);
   const visibleIds: string[] = [];
   for (let i = first; i < last; i++) {
     const entry = entries[i];
-    if (entry === undefined) continue;
-    visibleIds.push(entry.id);
-    const position = showPosition ? (entry.links[0]?.manual_position ?? null) : null;
-    const cloud = buildCloud(entry, dir, position);
-    const r = Math.floor(i / cols);
+    if (entry !== undefined) visibleIds.push(entry.id);
+  }
+  const windowSignature = visibleIds.join('\u0001');
+  let built: HTMLElement[];
+  if (zoneBuiltIds.get(dir) === windowSignature && grid.childElementCount === visibleIds.length) {
+    built = Array.from(grid.children as unknown as HTMLElement[]);
+  } else {
+    // Row-major fill (08-ui-spec.md §2.1.1): DOM order = entries order
+    // (`entries[i]`); CSS Grid `grid-auto-flow: row` (fixed above) lays them
+    // out left-to-right within a row, then advances to the next row. Visual
+    // slot `(col = i % cols, row = floor(i / cols))` therefore contains the
+    // entry with row-major index i — i.e. the same position it occupies in
+    // the server-returned neighbours array (zoneOrder). This matches the
+    // keyboard cursor model (↑/↓/←/→ step by row-major index) and
+    // `Ctrl+Shift+↑/↓` (which moves by one position in zoneOrder).
+    const showPosition = dir !== 'siblings' && store.state.zoneSorts[dir].sort === 'manual';
+    clear(grid);
+    built = [];
+    for (let i = first; i < last; i++) {
+      const entry = entries[i];
+      if (entry === undefined) continue;
+      const position = showPosition ? (entry.links[0]?.manual_position ?? null) : null;
+      const cloud = buildCloud(entry, dir, position);
+      built.push(cloud);
+      grid.append(cloud);
+    }
+    zoneBuiltIds.set(dir, windowSignature);
+  }
+  // Строка → её облачка. Индекс в DOM-окне отсчитывается от `first`
+  // (startRow * cols), поэтому строка = startRow + floor(индекс / cols).
+  const rowClouds = new Map<number, HTMLElement[]>();
+  for (let i = 0; i < built.length; i++) {
+    const r = startRow + Math.floor(i / cols);
+    const cloud = built[i]!;
     const clouds = rowClouds.get(r);
     if (clouds === undefined) rowClouds.set(r, [cloud]);
     else clouds.push(cloud);
-    grid.append(cloud);
   }
 
-  // Measure the rendered rows and re-run the layout once when any height
-  // changed (heights are deterministic — the re-run converges immediately).
+  // Measure the rendered rows and ask for another pass when any height
+  // changed. The wrapper caps the passes: measured heights CAN oscillate (see
+  // rowHeights), and a self-call here recursed until the stack overflowed —
+  // the freeze of ошибка dc723634.
   let measured = false;
   for (let r = startRow; r < endRow; r++) {
     const clouds = rowClouds.get(r);
     if (clouds === undefined) continue;
     let h = estimate;
     for (const cloud of clouds) h = Math.max(h, cloud.offsetHeight);
-    if (heights[r] !== h) {
-      heights[r] = h;
-      measured = true;
-    }
+    // Высота облачка целочисленная (`offsetHeight`), `Math.round` — страховка
+    // от дробных источников (масштаб канвы, тестовый шим): любое отличие от
+    // прежнего значения требует ещё одного прохода.
+    const next = Math.round(h);
+    if ((heights[r] ?? estimate) === next) continue;
+    heights[r] = next;
+    measured = true;
   }
   rowHeights.set(dir, heights);
-  if (measured) {
-    renderZoneContent(dir);
-    return;
-  }
-
-  // Request indicators only AFTER the clouds are in the DOM: a cached value is
-  // applied synchronously and would otherwise patch nothing (the focus row
-  // loads it after mounting for the same reason). Видимый набор зоны заменяет
-  // прежний окно-набор целиком: мысли, ушедшие из окна прокруткой, отпишутся
-  // (ошибка 46bda0e8).
-  zoneVisibleThoughtIds.set(dir, visibleIds);
-  syncCanvasIndicatorInterest();
-  // The rebuilt clouds lost the keyboard cursor frame — repaint it (§2.9).
-  syncCanvasCursor();
-  redrawLinks?.();
+  // Ключ состояния: геометрия + окно + измеренные высоты строк. Повтор в одной
+  // серии = цикл, следующий проход ничего не изменит (см. renderZoneContent).
+  const cycleKey = `${cols}|${zone.scrollTop}|${windowSignature}|${heights.slice(0, rows).join(',')}`;
+  return { again: measured, visibleIds, cycleKey };
 }
 
 // ---------------------------------------------------------------------------
@@ -2451,6 +2741,7 @@ function buildCloud(
   dir: 'parents' | 'siblings' | 'children',
   position: number | null,
 ): HTMLElement {
+  zoneCloudBuildCount += 1;
   const ref = entry.ref;
   // The live neighbour carries a fresh `active` flag in every focus response —
   // prefer it over the cached ref, which can lag after a local toggle until the
@@ -2544,14 +2835,17 @@ function buildCloud(
   markNeighborsPreview(topEllipse, entry.id, neighborsDirForEllipse('top'), cloudTitleFull);
   markNeighborsPreview(bottomEllipse, entry.id, neighborsDirForEllipse('bottom'), cloudTitleFull);
 
+  // Ряд индикаторов: ⏰/📝/📅/📎. Индикатор напоминаний — ПЕРВЫМ (элемент
+  // ba827eb6), клик по нему ведёт в карточку мысли с секцией напоминаний.
   const ind = div('cloud-ind');
-  const perm = span('📝', 'ind dim');
-  const chrono = span('📅', 'ind dim');
-  const att = span('📎', 'ind dim');
+  const reminder = reminderIndicatorCell(entry.id, cloudTitleFull);
+  const perm = span('📝', 'ind ind-comment dim');
+  const chrono = span('📅', 'ind ind-chrono dim');
+  const att = span('📎', 'ind ind-att dim');
   markCommentPreview(perm, 'thought', entry.id, cloudTitleFull);
   markChronoPreview(chrono, 'thought', entry.id, cloudTitleFull);
   markAttachmentsPreview(att, 'thought', entry.id, cloudTitleFull);
-  ind.append(perm, chrono, att);
+  ind.append(reminder, perm, chrono, att);
 
   const main = cloud.querySelector<HTMLElement>(':scope > .cloud-main');
   main?.append(ind);
@@ -2735,6 +3029,12 @@ export const canvasInternals = {
   renderCount: () => renderCount,
   /** Число ВХОДОВ в `render()` (до гварда хозяина) — отличает no-op по `host === null` от потерянного микротаска. */
   renderEnterCount: () => renderEnterCount,
+  /** Видимые мысли зоны (набор подписки индикаторов) — тестовый шов ошибки dc723634. */
+  zoneVisibleIds: (dir: ZoneDir): string[] => [...(zoneVisibleThoughtIds.get(dir) ?? [])],
+  /** Число серий раскладки зон (вызовов `renderZoneContent`) — шов гейта осцилляции. */
+  zoneLayoutRuns: () => zoneLayoutRunCount,
+  /** Число фактически построенных облачков (`buildCloud`) — шов гейта осцилляции. */
+  zoneCloudBuilds: () => zoneCloudBuildCount,
 };
 
 // ---------------------------------------------------------------------------

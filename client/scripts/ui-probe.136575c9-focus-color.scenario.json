@@ -1,0 +1,346 @@
+{
+  "name": "136575c9-focus-color",
+  "description": "Задача 136575c9 «Токен фокуса — полоса слоя и акцент всех экранов» (требование c19cbb81, сценарий ead5234d). Стенд сеет слой «Слой 136575c9» с явными цветами пары focus_stripe/background. Проверяется единая цепочка фокуса var(--frame-open, var(--focus-accent, var(--accent))) и пара var(--layer-bg, var(--bg)): на основе — фокус-акцент темы и фон темы; в слое — пользовательский цвет слоя. С 0.16.1 (задача 6e171b39) цвета слоя — ПРОИЗВОДНЫЕ под подложку темы: вместо точного совпадения с seed проверяется, что видимая полоса различима (≥ 3 : 1 к холсту), а текст темы читается на фоне слоя (≥ 4.5 : 1). Покрытие: полоса фокуса карты, гало открытой мысли, фон холста, «Структур», «Дневника», «Событий», «Публикаций», мягкое выделение текущей строки в модалке «Типы и свойства». Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.136575c9-focus-color.scenario.json --scenario-seed client/scripts/ui-probe.136575c9-seed.mjs --server-language ru",
+  "timeout": 420000,
+  "texts": {
+    "netMenu": {
+      "ru": "Меню мыслесети",
+      "en": "Thought network menu"
+    },
+    "thoughtTypes": {
+      "ru": "Типы мыслей",
+      "en": "Thought types"
+    },
+    "structures": {
+      "ru": "Структуры мыслей",
+      "en": "Thought structures"
+    },
+    "diary": {
+      "ru": "Дневник",
+      "en": "Diary"
+    },
+    "events": {
+      "ru": "События",
+      "en": "Events"
+    },
+    "publications": {
+      "ru": "Публикации",
+      "en": "Publications"
+    },
+    "map": {
+      "ru": "Карта мыслей",
+      "en": "Thought map"
+    },
+    "baseLayer": {
+      "ru": "Основа",
+      "en": "Base"
+    }
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "canvas-ready",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.canvas-focus-row .focus-cloud') !== null"
+    },
+    {
+      "name": "install-helpers",
+      "probe": "(() => {\n  window.__fc = {\n    root: (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(),\n    res: (expr) => { const d = document.createElement('div'); d.style.setProperty('color', expr); document.body.append(d); const v = getComputedStyle(d).color; d.remove(); return v; },\n    bgIs: (sel, expr) => { const el = document.querySelector(sel); if (el === null) return 'no-el:' + sel; const d = document.createElement('div'); d.style.setProperty('background-color', expr); document.body.append(d); const want = getComputedStyle(d).backgroundColor; d.remove(); return getComputedStyle(el).backgroundColor === want; },\n    colorIs: (sel, prop, expr) => { const el = document.querySelector(sel); if (el === null) return 'no-el:' + sel; return getComputedStyle(el)[prop] === window.__fc.res(expr); },\n    beforeHas: (sel, expr) => { const el = document.querySelector(sel); if (el === null) return 'no-el:' + sel; const img = getComputedStyle(el, '::before').backgroundImage; return img.includes(window.__fc.res(expr)); },\n    mixIs: (sel, expr) => { const el = document.querySelector(sel); if (el === null) return 'no-el:' + sel; const d = document.createElement('div'); d.style.setProperty('background-color', 'color-mix(in srgb, ' + expr + ' 18%, transparent)'); document.body.append(d); const want = getComputedStyle(d).backgroundColor; d.remove(); return getComputedStyle(el).backgroundColor === want; },\n    openLayerMenu: () => { const b = [...document.querySelectorAll('.toolbar .tb-label')].find((x) => { const t = (x.textContent || '').trim(); return t === 'Основа' || t === 'Слой 136575c9'; }); if (b === undefined) return 'no-button'; b.closest('button').click(); return 'ok'; },\n    pickLayer: (title) => { const item = [...document.querySelectorAll('.menu .menu-item')].find((e) => { const l = e.querySelector('.menu-item-label'); return ((l ? l.textContent : e.textContent) || '').trim() === title; }); if (item === undefined) return 'no-item'; item.click(); return 'ok'; },\n    openMenu: (title) => { const btn = document.querySelector('button[title=\"' + title + '\"]'); if (btn === null) return 'no-btn'; btn.click(); return 'ok'; },\n    pickMenuItem: (text) => { const item = [...document.querySelectorAll('.menu .menu-item')].find((b) => (b.textContent || '').includes(text)); if (item === undefined) return 'no-item'; item.click(); return 'ok'; },\n    clickTreeRow: () => { const row = document.querySelector('.dialog-backdrop [role=\"treeitem\"]'); if (row === null) return 'no-row'; row.click(); return 'ok'; },\n    bandOk: () => {\n      const parseRgb = (v) => { const m = /rgba?\\(([^)]+)\\)/.exec(v); if (m === null) return null; return m[1].split(',').slice(0, 3).map((x) => Number.parseFloat(x)); };\n      const lin = (x) => { const v = x / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n      const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n      const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n      const stripe = parseRgb(window.__fc.res('var(--layer-focus-stripe, var(--focus-accent, var(--accent)))'));\n      const bg = parseRgb(window.__fc.res('var(--layer-bg, var(--bg))'));\n      if (stripe === null || bg === null) return false;\n      const visible = stripe.map((c, i) => Math.round(0.7 * c + 0.3 * bg[i]));\n      return ratio(visible, bg) >= 3;\n    },\n    bgTextOk: () => {\n      const parseRgb = (v) => { const m = /rgba?\\(([^)]+)\\)/.exec(v); if (m === null) return null; return m[1].split(',').slice(0, 3).map((x) => Number.parseFloat(x)); };\n      const lin = (x) => { const v = x / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n      const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n      const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n      const bg = parseRgb(window.__fc.res('var(--layer-bg, var(--bg))'));\n      const text = parseRgb(window.__fc.res('var(--text)'));\n      if (bg === null || text === null) return false;\n      return ratio(bg, text) >= 4.5;\n    },\n    hasCurrentRow: () => document.querySelector('.ui-tree-row--current') !== null,\n  };\n  return 'ok';\n})()",
+      "expect": "ok"
+    },
+    {
+      "name": "base-root-vars",
+      "probe": "(() => ({ stripe: window.__fc.root('--layer-focus-stripe'), bg: window.__fc.root('--layer-bg') }))()",
+      "expect": {
+        "stripe": "",
+        "bg": ""
+      }
+    },
+    {
+      "name": "open-focus-thought",
+      "timeout": 30000,
+      "click": ".canvas-focus-row .focus-cloud"
+    },
+    {
+      "name": "halo-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.cloud.halo') !== null"
+    },
+    {
+      "name": "base-halo-focus-chain",
+      "probe": "window.__fc.colorIs('.cloud.halo', 'borderTopColor', 'var(--frame-open, var(--focus-accent, var(--accent)))')",
+      "expect": true
+    },
+    {
+      "name": "base-canvas-layer-bg-chain",
+      "probe": "window.__fc.bgIs('.canvas', 'var(--layer-bg, var(--bg))')",
+      "expect": true
+    },
+    {
+      "name": "base-band-focus-chain",
+      "probe": "window.__fc.beforeHas('.canvas', 'var(--layer-focus-stripe, var(--focus-accent, var(--accent)))')",
+      "expect": true
+    },
+    {
+      "name": "open-net-menu",
+      "probe": "window.__fc.openMenu(\"{{text:netMenu}}\")",
+      "expect": "ok"
+    },
+    {
+      "name": "net-menu-visible",
+      "waitFor": "(() => [...document.querySelectorAll('.menu .menu-item')].some((b) => (b.textContent || '').includes('{{text:thoughtTypes}}')))()"
+    },
+    {
+      "name": "open-thought-types",
+      "probe": "window.__fc.pickMenuItem(\"{{text:thoughtTypes}}\")",
+      "expect": "ok"
+    },
+    {
+      "name": "types-dialog-visible",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop [role=\"treeitem\"]') !== null"
+    },
+    {
+      "name": "click-type-row",
+      "probe": "window.__fc.clickTreeRow()",
+      "expect": "ok"
+    },
+    {
+      "name": "base-tree-current-visible",
+      "timeout": 10000,
+      "waitFor": "window.__fc.hasCurrentRow() === true"
+    },
+    {
+      "name": "base-tree-current-mix",
+      "probe": "window.__fc.mixIs('.ui-tree-row--current', 'var(--layer-focus-stripe, var(--focus-accent, var(--accent)))')",
+      "expect": true
+    },
+    {
+      "name": "close-types-dialog",
+      "key": "Escape"
+    },
+    {
+      "name": "dialog-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-layer-menu",
+      "probe": "window.__fc.openLayerMenu()",
+      "expect": "ok"
+    },
+    {
+      "name": "layer-menu-visible",
+      "waitFor": "(() => [...document.querySelectorAll('.menu .menu-item')].some((e) => ((e.querySelector('.menu-item-label') || e).textContent || '').trim() === 'Слой 136575c9'))()"
+    },
+    {
+      "name": "pick-layer",
+      "probe": "window.__fc.pickLayer('Слой 136575c9')",
+      "expect": "ok"
+    },
+    {
+      "name": "layer-stripe-readable-on-canvas",
+      "timeout": 30000,
+      "waitFor": "window.__fc.bandOk() === true"
+    },
+    {
+      "name": "layer-bg-readable-with-text",
+      "timeout": 30000,
+      "probe": "window.__fc.bgTextOk()",
+      "expect": true
+    },
+    {
+      "name": "layer-halo-focus-chain",
+      "timeout": 30000,
+      "waitFor": "window.__fc.colorIs('.cloud.halo', 'borderTopColor', 'var(--frame-open, var(--focus-accent, var(--accent)))') === true"
+    },
+    {
+      "name": "layer-canvas-layer-bg-chain",
+      "probe": "window.__fc.bgIs('.canvas', 'var(--layer-bg, var(--bg))')",
+      "expect": true
+    },
+    {
+      "name": "layer-band-focus-chain",
+      "probe": "window.__fc.beforeHas('.canvas', 'var(--layer-focus-stripe, var(--focus-accent, var(--accent)))')",
+      "expect": true
+    },
+    {
+      "name": "open-net-menu-layer",
+      "probe": "window.__fc.openMenu(\"{{text:netMenu}}\")",
+      "expect": "ok"
+    },
+    {
+      "name": "net-menu-visible-layer",
+      "waitFor": "(() => [...document.querySelectorAll('.menu .menu-item')].some((b) => (b.textContent || '').includes('{{text:thoughtTypes}}')))()"
+    },
+    {
+      "name": "open-thought-types-layer",
+      "probe": "window.__fc.pickMenuItem(\"{{text:thoughtTypes}}\")",
+      "expect": "ok"
+    },
+    {
+      "name": "types-dialog-visible-layer",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop [role=\"treeitem\"]') !== null"
+    },
+    {
+      "name": "click-type-row-layer",
+      "probe": "window.__fc.clickTreeRow()",
+      "expect": "ok"
+    },
+    {
+      "name": "layer-tree-current-visible",
+      "timeout": 10000,
+      "waitFor": "window.__fc.hasCurrentRow() === true"
+    },
+    {
+      "name": "layer-tree-current-mix",
+      "probe": "window.__fc.mixIs('.ui-tree-row--current', 'var(--layer-focus-stripe, var(--focus-accent, var(--accent)))')",
+      "expect": true
+    },
+    {
+      "name": "close-types-dialog-layer",
+      "key": "Escape"
+    },
+    {
+      "name": "dialog-closed-layer",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "open-structures",
+      "probe": "(() => { const b = document.querySelector('button.view-tab[title=\"{{text:structures}}\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "structures-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.st-results') !== null"
+    },
+    {
+      "name": "structures-layer-bg-chain",
+      "probe": "window.__fc.bgIs('.st-results', 'var(--layer-bg, var(--bg))')",
+      "expect": true
+    },
+    {
+      "name": "open-diary",
+      "probe": "(() => { const b = document.querySelector('button.view-tab[title=\"{{text:diary}}\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "diary-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.chronicle') !== null"
+    },
+    {
+      "name": "diary-layer-bg-chain",
+      "probe": "window.__fc.bgIs('.chronicle', 'var(--layer-bg, var(--bg))')",
+      "expect": true
+    },
+    {
+      "name": "open-events",
+      "probe": "(() => { const b = document.querySelector('button.view-tab[title=\"{{text:events}}\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "events-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.activity') !== null"
+    },
+    {
+      "name": "events-layer-bg-chain",
+      "probe": "window.__fc.bgIs('.activity', 'var(--layer-bg, var(--bg))')",
+      "expect": true
+    },
+    {
+      "name": "open-publications",
+      "probe": "(() => { const b = document.querySelector('button.view-tab[title=\"{{text:publications}}\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "publications-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.publications') !== null"
+    },
+    {
+      "name": "publications-layer-bg-chain",
+      "probe": "window.__fc.bgIs('.publications', 'var(--layer-bg, var(--bg))')",
+      "expect": true
+    },
+    {
+      "name": "back-to-map",
+      "probe": "(() => { const b = document.querySelector('button.view-tab[title=\"{{text:map}}\"]'); if (b === null) return 'no-tab'; b.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "map-visible",
+      "timeout": 60000,
+      "waitFor": "document.querySelector('.canvas-focus-row .focus-cloud') !== null"
+    },
+    {
+      "name": "switch-to-base",
+      "probe": "window.__fc.openLayerMenu()",
+      "expect": "ok"
+    },
+    {
+      "name": "base-menu-visible",
+      "waitFor": "(() => [...document.querySelectorAll('.menu .menu-item')].some((e) => ((e.querySelector('.menu-item-label') || e).textContent || '').trim() === '{{text:baseLayer}}'))()"
+    },
+    {
+      "name": "pick-base",
+      "probe": "window.__fc.pickLayer(\"{{text:baseLayer}}\")",
+      "expect": "ok"
+    },
+    {
+      "name": "base-root-vars-cleared",
+      "timeout": 30000,
+      "waitFor": "window.__fc.root('--layer-focus-stripe') === '' && window.__fc.root('--layer-bg') === ''"
+    },
+    {
+      "name": "base-halo-chain-again",
+      "timeout": 30000,
+      "waitFor": "window.__fc.colorIs('.cloud.halo', 'borderTopColor', 'var(--frame-open, var(--focus-accent, var(--accent)))') === true"
+    },
+    {
+      "name": "base-canvas-bg-fallback",
+      "probe": "window.__fc.bgIs('.canvas', 'var(--layer-bg, var(--bg))')",
+      "expect": true
+    },
+    {
+      "name": "base-band-chain-again",
+      "probe": "window.__fc.beforeHas('.canvas', 'var(--layer-focus-stripe, var(--focus-accent, var(--accent)))')",
+      "expect": true
+    }
+  ]
+}

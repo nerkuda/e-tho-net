@@ -97,6 +97,11 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   attachments: ['kind'],
   chronology: ['kind'],
   comment: ['kind'],
+  // Задачи и напоминания мысли (0.16.1, задача 4cfc6257): предикаты наличия
+  // и датовый операнд «Дата напоминания» — без дополнительных ключей операнда.
+  tasks: ['kind'],
+  reminders: ['kind'],
+  reminder_at: ['kind'],
   targets: ['kind'],
   active: ['kind'],
   trashed: ['kind'],
@@ -112,6 +117,8 @@ const ENTITY_KEYS: Record<FilterAstEntity['kind'], readonly string[]> = {
   record_body: ['kind'],
   record_author: ['kind'],
   record_editor: ['kind'],
+  // «Есть задачи» в записи (уточнение 2026-11-19, п.8): предикат наличия.
+  record_tasks: ['kind'],
   // Профиль «события» (задача 2b230e8e): характеристики записи журнала активности.
   occurred_at: ['kind'],
   action: ['kind'],

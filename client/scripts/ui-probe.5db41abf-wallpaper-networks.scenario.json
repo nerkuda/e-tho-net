@@ -1,0 +1,387 @@
+{
+  "name": "5db41abf-wallpaper-networks",
+  "description": "Задача 5db41abf «Фоновая картинка — на каждую мыслесеть» (0.16.1; требование e6d586d3, операция 31ef478a, сценарий 88a8879d). Стенд: язык сервера ru, две сети (A — пробная сеть стенда, B — из --scenario-seed). Проверено: в сети A картинки нет (фон и сетка); загрузка через IPC me.uploadWallpaper с network_id A; переключение на сеть B даёт сетку и пустые контролы «Оформления» (подпись называет B), сервер для B отвечает «нет картинки»; загрузка для B и возврат в A дают РАЗНЫЕ подложки (сравнение --canvas-wallpaper-image), возврат в B — его картинку; сервер отдаёт картинки с разными network_id; «Убрать картинку» в A возвращает сетку и не трогает картинку B (getWallpaper B = ok); финальный переход в B показывает его картинку с сервера. Офлайн-старт из кэша — отдельный прогон ui-probe.5db41abf-wallpaper-offline.scenario.json при погашенном сервере. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.5db41abf-wallpaper-networks.scenario.json --scenario-seed client/scripts/ui-probe.5db41abf-wallpaper-networks-seed.mjs --server-language ru --keep --out .tmp/5db41abf/out",
+  "timeout": 300000,
+  "texts": {
+    "wallpaperUpload": {
+      "ru": "Загрузить…",
+      "en": "Upload…"
+    },
+    "wallpaperRemove": {
+      "ru": "Убрать картинку",
+      "en": "Remove image"
+    },
+    "userMenuTitle": {
+      "ru": "Меню пользователя",
+      "en": "User menu"
+    },
+    "userMenuSettings": {
+      "ru": "Настройки",
+      "en": "Settings"
+    },
+    "settingsAppearanceSection": {
+      "ru": "Оформление",
+      "en": "Appearance"
+    },
+    "wallpaperHint": {
+      "ru": "Каждый пользователь может задать свою картинку для каждой мыслесети.",
+      "en": "Each user can set their own image for each network."
+    }
+  },
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": {
+          "language": "ru"
+        },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "probe": "(() => { const items = [...document.querySelectorAll('.network-item')]; const item = items.find((e) => (e.textContent || '').includes('{{networkName}}')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-a-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.view-switch') !== null && document.querySelector('.canvas') !== null"
+    },
+    {
+      "name": "canvas-a-empty",
+      "probe": "(() => { const bg = getComputedStyle(document.querySelector('.canvas')).backgroundImage; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_grid: bg.includes('radial-gradient'), has_image: bg.includes('data:image/') }; })()",
+      "expect": {
+        "attr": null,
+        "has_grid": true,
+        "has_image": false
+      }
+    },
+    {
+      "name": "upload-a",
+      "expect": {
+        "status": "ok",
+        "network_id": "{{networkId}}",
+        "source": "server"
+      },
+      "probe": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); ctx.fillStyle = '#c02020'; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); const state = await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.4 } }); return { status: state.status, network_id: state.network_id, source: state.source }; })()"
+    },
+    {
+      "name": "open-network-picker",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) throw new Error('нет .tab-plus'); plus.click(); return true; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('Сеть B 5db41abf wallpaper'))"
+    },
+    {
+      "name": "switch-to-b",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('Сеть B 5db41abf wallpaper')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 5db41abf wallpaper'))"
+    },
+    {
+      "name": "canvas-b-grid",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === null"
+    },
+    {
+      "name": "canvas-b-state",
+      "probe": "(() => { const bg = getComputedStyle(document.querySelector('.canvas')).backgroundImage; const imageVar = getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim(); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_grid: bg.includes('radial-gradient'), has_image: bg.includes('data:image/'), image_var_len: imageVar.length }; })()",
+      "expect": {
+        "attr": null,
+        "has_grid": true,
+        "has_image": false,
+        "image_var_len": 0
+      }
+    },
+    {
+      "name": "state-b-none",
+      "expect": {
+        "status": "none"
+      },
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkB}}'); return { status: s.status }; })()"
+    },
+    {
+      "name": "open-user-menu-b",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible-b",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-b",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}'); if (row === undefined) throw new Error('settings menu item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog-b",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section-b",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsAppearanceSection}}'); if (nav === undefined) throw new Error('appearance section not found'); nav.click(); return true; })()"
+    },
+    {
+      "name": "wallpaper-block-b",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.settings-wallpaper') !== null"
+    },
+    {
+      "name": "settings-b-empty",
+      "probe": "(() => { const section = document.querySelector('.settings-section'); const paragraphs = Array.from(section.querySelectorAll('p.muted')).map((e) => (e.textContent || '').trim()); const block = document.querySelector('.settings-wallpaper'); const [upload, img, remove] = block.children; return { hint_generic: paragraphs.some((text) => text === '{{text:wallpaperHint}}'), preview_hidden: img.hidden === true, remove_disabled: remove.disabled === true, upload_enabled: upload.disabled === false }; })()",
+      "expect": {
+        "hint_generic": true,
+        "preview_hidden": true,
+        "remove_disabled": true,
+        "upload_enabled": true
+      }
+    },
+    {
+      "name": "close-settings-b",
+      "key": "Escape"
+    },
+    {
+      "name": "settings-closed-b",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "upload-b",
+      "expect": {
+        "status": "ok",
+        "network_id": "{{networkB}}"
+      },
+      "probe": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); ctx.fillStyle = '#2060c0'; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); const state = await window.etn.me.uploadWallpaper({ networkId: '{{networkB}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.3 } }); return { status: state.status, network_id: state.network_id }; })()"
+    },
+    {
+      "name": "back-to-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "canvas-a-restored",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "canvas-a-state",
+      "probe": "(() => { const imageVar = getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim(); window.__wpA = imageVar; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), image_var_nonempty: imageVar.length > 0, has_grid: getComputedStyle(document.querySelector('.canvas')).backgroundImage.includes('radial-gradient') }; })()",
+      "expect": {
+        "attr": "on",
+        "image_var_nonempty": true,
+        "has_grid": false
+      }
+    },
+    {
+      "name": "api-a-image",
+      "api": {
+        "name": "api-a-image",
+        "method": "GET",
+        "path": "/users/me/wallpaper?network_id={{networkId}}",
+        "expression": "({ network_id: data.network_id, mime: data.mime_type })"
+      },
+      "expect": {
+        "network_id": "{{networkId}}",
+        "mime": "image/jpeg"
+      }
+    },
+    {
+      "name": "api-b-image",
+      "api": {
+        "name": "api-b-image",
+        "method": "GET",
+        "path": "/users/me/wallpaper?network_id={{networkB}}",
+        "expression": "({ network_id: data.network_id, mime: data.mime_type })"
+      },
+      "expect": {
+        "network_id": "{{networkB}}",
+        "mime": "image/jpeg"
+      }
+    },
+    {
+      "name": "switch-to-b-again",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 5db41abf wallpaper')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active-again",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('Сеть B 5db41abf wallpaper'))"
+    },
+    {
+      "name": "canvas-b-restored",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas') !== null && getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim() !== window.__wpA"
+    },
+    {
+      "name": "canvas-b-state-2",
+      "probe": "(() => { const imageVar = getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim(); window.__wpB = imageVar; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), b_differs_from_a: imageVar !== window.__wpA, b_captured: imageVar.length > 0 }; })()",
+      "expect": {
+        "attr": "on",
+        "b_differs_from_a": true,
+        "b_captured": true
+      }
+    },
+    {
+      "name": "back-to-a-2",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active-2",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "canvas-a-again",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.canvas') !== null && getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim() === window.__wpA"
+    },
+    {
+      "name": "canvas-a-same-image",
+      "probe": "(() => { const imageVar = getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim(); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), a_same_as_before: imageVar === window.__wpA, a_differs_from_b: imageVar !== window.__wpB }; })()",
+      "expect": {
+        "attr": "on",
+        "a_same_as_before": true,
+        "a_differs_from_b": true
+      }
+    },
+    {
+      "name": "open-user-menu-a2",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible-a2",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-a2",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}'); if (row === undefined) throw new Error('settings menu item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog-a2",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section-a2",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsAppearanceSection}}'); if (nav === undefined) throw new Error('appearance section not found'); nav.click(); return true; })()"
+    },
+    {
+      "name": "wallpaper-block-a2",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.settings-wallpaper') !== null"
+    },
+    {
+      "name": "settings-a-hint",
+      "probe": "(() => { const section = document.querySelector('.settings-section'); const paragraphs = Array.from(section.querySelectorAll('p.muted')).map((e) => (e.textContent || '').trim()); const block = document.querySelector('.settings-wallpaper'); const [upload, img, remove] = block.children; return { upload_label: (upload.textContent || '').trim(), remove_label: (remove.textContent || '').trim(), hint_generic: paragraphs.some((text) => text === '{{text:wallpaperHint}}'), preview_visible: img.hidden === false, remove_enabled: remove.disabled === false, upload_enabled: upload.disabled === false }; })()",
+      "expect": {
+        "upload_label": "{{text:wallpaperUpload}}",
+        "remove_label": "{{text:wallpaperRemove}}",
+        "hint_generic": true,
+        "preview_visible": true,
+        "remove_enabled": true,
+        "upload_enabled": true
+      }
+    },
+    {
+      "name": "remove-a",
+      "eval": "(() => { const block = document.querySelector('.settings-wallpaper'); if (block === null) throw new Error('нет блока картинки'); const remove = block.children[2]; if (remove === undefined) throw new Error('нет кнопки удаления'); remove.click(); return true; })()"
+    },
+    {
+      "name": "canvas-a-grid-after-remove",
+      "timeout": 20000,
+      "waitFor": "document.documentElement.getAttribute('data-canvas-wallpaper') === null"
+    },
+    {
+      "name": "isolation-after-remove",
+      "expect": {
+        "a": "none",
+        "b": "ok",
+        "b_network": "{{networkB}}"
+      },
+      "probe": "(async () => { const a = await window.etn.me.getWallpaper('{{networkId}}'); const b = await window.etn.me.getWallpaper('{{networkB}}'); return { a: a.status, b: b.status, b_network: b.status === 'ok' ? b.network_id : null }; })()"
+    },
+    {
+      "name": "apply-remove-a",
+      "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[0]) throw new Error('нет кнопки «Применить»'); buttons[0].click(); return true; })()"
+    },
+    {
+      "name": "apply-remove-a-settled",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.settings-footer-buttons button')[0].disabled === true"
+    },
+    {
+      "name": "close-settings-a2",
+      "key": "Escape"
+    },
+    {
+      "name": "settings-closed-a2",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "switch-to-b-final",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('Сеть B 5db41abf wallpaper')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "canvas-b-final",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "final-b-state",
+      "expect": {
+        "status": "ok",
+        "source": "server",
+        "image_matches": true
+      },
+      "probe": "(async () => { const b = await window.etn.me.getWallpaper('{{networkB}}'); const imageVar = getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim(); return { status: b.status, source: b.source, image_matches: imageVar.length > 0 && imageVar.includes((b.data_url || '').slice(0, 40)) }; })()"
+    }
+  ]
+}

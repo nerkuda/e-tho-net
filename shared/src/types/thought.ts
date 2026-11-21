@@ -11,6 +11,9 @@ import type { EtnErrorCode } from '../errors.js';
 import type { FocusDir, IconKind, LinkStyle, SortKind, SortOrder } from '../enums.js';
 import type { HoldingLayerRef } from './trash.js';
 import type { ThoughtViewScope } from './thought-type-view.js';
+import type { CommentOwnerKind } from './comment.js';
+import type { TaskRef, TaskSubjectState } from './task.js';
+import type { ReminderKind } from './reminder.js';
 
 /** A thought entity (02-data-model.md §3.1, 03-server-api.md §6.1). */
 export interface Thought {
@@ -489,6 +492,77 @@ export interface LinkStats {
   stats: LinkStatEntry[];
 }
 
+/**
+ * Одна строка задачи в блоке «Открытые дела» карточки мысли (0.16.1, задача
+ * f34066e1, операция 22f1ea95): адрес строки, её текст и даты. Полный набор
+ * полей строки — `TaskDTO`; карточка отдаёт только то, по чему агент решает
+ * «закрыть/перенести» и адресует действие `etn.ops { action: "tasks.*" }`.
+ */
+export interface ThoughtOpenTaskItem extends TaskRef {
+  /** Снапшот строки без маркера задачи. */
+  text: string;
+  /** Срок (последняя date-ссылка строки) либо `null`. */
+  due: string | null;
+  /** Первая date-ссылка строки либо `null`. */
+  period_from: string | null;
+  /** Последняя date-ссылка строки либо `null`. */
+  period_to: string | null;
+  /** Владелец комментария-источника строки — адрес «Открыть источник». */
+  owner_type: CommentOwnerKind;
+  owner_id: string;
+  /** Худшее состояние владельца и субъектов строки (см. `TaskSubjectState`). */
+  subject_state: TaskSubjectState;
+}
+
+/**
+ * Блок «Открытые дела» карточки мысли (0.16.1, задача f34066e1, операция
+ * 22f1ea95): незакрытые задачи, где мысль — субъект строки (`[[#uuid]]`).
+ *
+ * Бюджет: `items` — не больше {@link THOUGHT_META_TASKS_LIMIT} записей,
+ * `total` считает все подходящие строки. `truncated: true` — в карточке не всё,
+ * остальное агент добирает `etn.ops { action: "tasks.list", params: { thought_id,
+ * scope: "open" } }`.
+ */
+export interface ThoughtOpenTasksMeta {
+  /** Всего незакрытых задач субъекта (без учёта лимита карточки). */
+  total: number;
+  /** Сколько записей реально в `items`. */
+  shown: number;
+  /** `true` — подходящих строк больше, чем в `items`. */
+  truncated: boolean;
+  items: ThoughtOpenTaskItem[];
+}
+
+/**
+ * Одно напоминание запросившего в `meta.reminders` карточки мысли (0.16.1,
+ * задача f34066e1, операция 22f1ea95). Напоминания персональны: в блоке только
+ * напоминания владельца ключа о субъекте карточки.
+ */
+export interface ThoughtReminderItem {
+  id: string;
+  kind: ReminderKind;
+  /** Ближайшее видимое вхождение (ленивое вычисление) либо `null`. */
+  next_at: string | null;
+  /** Состояние субъекта напоминания: `inactive` — неактуальная мысль. */
+  subject_state: 'active' | 'inactive';
+}
+
+/**
+ * Блок `meta.reminders` карточки мысли (0.16.1, задача f34066e1, операция
+ * 22f1ea95): напоминания запросившего о субъекте. Бюджет — не больше
+ * {@link THOUGHT_META_REMINDERS_LIMIT} записей, полный список —
+ * `etn.ops { action: "reminders.list" }`.
+ */
+export interface ThoughtRemindersMeta {
+  /** Всего видимых напоминаний субъекта у запросившего. */
+  total: number;
+  /** Сколько записей реально в `items`. */
+  shown: number;
+  /** `true` — подходящих напоминаний больше, чем в `items`. */
+  truncated: boolean;
+  items: ThoughtReminderItem[];
+}
+
 /** «Сигналы полноты» мысли для MCP-чтения (task N2, docs/05-mcp-server.md
  * §3): счётчики соседних сущностей и превью постоянного комментария. */
 export interface ThoughtMeta {
@@ -530,6 +604,17 @@ export interface ThoughtMeta {
    * мысли, внутри уровня по `position` (требование eaca1253).
    */
   views: ThoughtMetaView[];
+  /**
+   * «Открытые дела» (0.16.1, задача f34066e1, операция 22f1ea95) — только по
+   * флагу `include_task_meta` (по умолчанию блок отсутствует: карточка не
+   * платит за задачи, если агент их не спрашивал).
+   */
+  open_tasks?: ThoughtOpenTasksMeta;
+  /**
+   * Напоминания запросившего о субъекте — только по флагу
+   * `include_task_meta` (см. {@link ThoughtRemindersMeta}).
+   */
+  reminders?: ThoughtRemindersMeta;
 }
 
 /**
@@ -635,6 +720,10 @@ export interface ThoughtMetaFull {
    * cb8d8e43). Содержимое идентично {@link ThoughtMeta.views}.
    */
   views: ThoughtMetaView[];
+  /** См. {@link ThoughtMeta.open_tasks}: только по флагу `include_task_meta`. */
+  open_tasks?: ThoughtOpenTasksMeta;
+  /** См. {@link ThoughtMeta.reminders}: только по флагу `include_task_meta`. */
+  reminders?: ThoughtRemindersMeta;
 }
 
 /**

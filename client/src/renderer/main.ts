@@ -8,6 +8,7 @@
 
 import { boot, initKeyboard } from './app.js';
 import { initDrafts } from './drafts.js';
+import { initDateChipMenu } from './editor/date-chip-menu.js';
 import { startDeepLinks } from './editor/deep-link-handler.js';
 import { initExternalLinkNavigation } from './editor/external-link.js';
 import { initWikiLinkNavigation } from './editor/wiki-link.js';
@@ -36,6 +37,9 @@ initDrafts();
 initImageZoom();
 initHoverPreview();
 initWikiLinkNavigation();
+// Контекстное меню date-чипов (0.16.1, элемент c85ca40d): «Открыть день»,
+// «Изменить дату», перенос строки задачи единым сдвигом.
+initDateChipMenu();
 // etnimg:// attachment links in comment view mode (карточка ETN 33379769).
 initEtnimgLinkNavigation();
 // External http(s)/mailto links in view mode (ошибка 37458cbc): open in the

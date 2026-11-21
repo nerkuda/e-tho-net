@@ -15,9 +15,41 @@
      for the zoom level. The zones themselves stay transparent.
      --layer-bg (0.6.4, 13-layers.md §2.2a) recolours the canvas while a
      non-base layer with explicit colours is active; absent — theme default. */
+  /* Пользовательские токены холста (--user-canvas-*, требование e2895c24):
+     фон, картинка и цвет сетки берутся из них с фолбэком на тему — экрана
+     настроек пока нет, значения группы совпадают с темой, а токены остаются
+     рабочим источником (сторож guard-ui-user-tokens требует потребителя у
+     каждого --user-*). Картинка пользователя лежит НАД сеткой (сетка видна
+     сквозь прозрачные участки), обои приоритетнее — своё правило ниже. */
   background:
-    radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
-    var(--layer-bg, var(--bg));
+    var(--user-canvas-image) center / cover no-repeat fixed,
+    radial-gradient(circle, var(--user-canvas-dot, var(--canvas-dot)) 1px, transparent 1.4px) 0 0 /
+      24px 24px,
+    var(--layer-bg, var(--user-canvas-bg, var(--bg)));
+}
+
+/* Пользовательская фоновая картинка (0.16.1, задача 80324150, элемент
+ * ef8112b0, требование e6d586d3): картинка привязана к окну
+ * (background-attachment: fixed — панорамирование и зум карты её не двигают) и
+ * заполняет окно по cover; поверх — тинт цвета фона темы (в основе) либо цвета
+ * фона слоя с повышенной прозрачностью (в слое). Плотность тинта и url
+ * картинки приходят переменными от `canvas/wallpaper.ts`.
+ *
+ * Точечная сетка в этом состоянии ОТКЛЮЧЕНА: правило заменяет фон целиком, а не
+ * добавляет слой к базовому. Без картинки действует правило `.canvas` выше.
+ *
+ * Картинка живёт ТОЛЬКО на карте, но с этапа 2 (80324150) её ЛЁГКИЙ тинт
+ * распространяется на фон прочих экранов: они подмешивают
+ * `--wallpaper-screen-tint` первым слоем своего фона (styles/screens/*.css,
+ * styles/filter-panel.css). Контентные поверхности остаются непрозрачными. */
+:root[data-canvas-wallpaper='on'] .canvas {
+  background:
+    linear-gradient(
+      var(--canvas-wallpaper-tint, transparent),
+      var(--canvas-wallpaper-tint, transparent)
+    ),
+    var(--canvas-wallpaper-image) center / cover no-repeat fixed,
+    var(--layer-bg, var(--user-canvas-bg, var(--bg)));
 }
 
 /* The host is focusable (§2.9 keyboard navigation, kbd-nav.ts) — the keyboard
@@ -27,25 +59,32 @@
 }
 
 /* Focus band (L12, 08-ui-spec.md §2.1): a horizontal stripe of
- * --focus-band-color across the focus row, fading out over --focus-band-fade
+ * the theme focus accent (--focus-accent) across the focus row, fading out
+ * over --focus-band-fade
  * towards the top and bottom edges. The renderer anchors it via
  * --focus-band-top/--focus-band-bottom on the host (updateFocusBand in
  * canvas.ts); the off-screen defaults keep it invisible until then. Painted
  * as ::before it sits under the zones, clouds and all link layers.
  * --layer-focus-stripe (0.6.4, 13-layers.md §2.2a) recolours the band while
- * a non-base layer with explicit colours is active; absent — theme default. */
+ * a non-base layer with explicit colours is active; absent — theme default.
+ * Доработка среза 2026-11-13 (задача 80324150, замечание 2), круг 2: видимая
+ * протяжённость полосы доведена до честного ÷2. Она равна ядру (высота строки
+ * фокуса, на стенде 67px) + 2 × fade: 67 + 2×180 = 427px → 67 + 2×73 = 213px.
+ * Плотность снижена на 30 % — `--focus-band-opacity: 0.7` на весь слой полосы
+ * (затухание сохраняется: прозрачность умножает и его). */
 .canvas::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  opacity: var(--focus-band-opacity, 0.7);
   background: linear-gradient(
     to bottom,
-    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 180px)),
-    var(--layer-focus-stripe, var(--focus-band-color)) var(--focus-band-top, 9999px),
-    var(--layer-focus-stripe, var(--focus-band-color)) var(--focus-band-bottom, 0px),
-    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 180px))
+    transparent calc(var(--focus-band-top, 9999px) - var(--focus-band-fade, 73px)),
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) var(--focus-band-top, 9999px),
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) var(--focus-band-bottom, 0px),
+    transparent calc(var(--focus-band-bottom, 0px) + var(--focus-band-fade, 73px))
   );
 }
 
@@ -98,6 +137,12 @@
   min-height: 0;
   position: relative;
   overflow-y: auto;
+  /* Жёлоб полосы прокрутки зарезервирован всегда: появление/исчезновение
+     полосы от смены высоты .zone-spacer больше не меняет content-box
+     (clientWidth), а значит и число колонок, окно виртуализации и измеряемые
+     высоты тех же строк — иначе контур замкнут сам на себя (ошибка
+     dc723634: сотни серий проходов раскладки и мерцание облачков). */
+  scrollbar-gutter: stable;
   padding: 12px;
 }
 
@@ -196,16 +241,83 @@ body.resizing-h {
   color: var(--text-faint);
   font-size: 12px;
   pointer-events: none;
+  /* z-index 2 — подпись канвы обязана быть поверх фонов и сетки зоны
+   * (`.zone-grid` — 1), доработка среза 2026-11-13, замечание 3. */
+  z-index: 2;
+}
+
+/* Подписи канвы поверх фоновой картинки (доработки среза 2026-11-13: круг 3 —
+ * «надписи не читаются», круг 4 — «слишком громкие»).
+ *
+ * Круг 1 давал z=2 и контур `text-shadow` цвета `--bg` — на СВЕТЛОЙ картинке
+ * светлый контур сливается с фоном. Круг 3 заменил контур на непрозрачную
+ * плашку `--surface` и текст `--text`; заказчик увидел в этом «полноценного
+ * участника карты». Круг 4 возвращает роль «информатора»: плашка слегка
+ * прозрачная (85 % `--surface`), текст приглушён (92 % `--text`).
+ *
+ * Числа выбраны инвариантом читаемости, а не на глаз: текст считается к
+ * КОМПОЗИТУ плашки (плашка 85 % над картинкой средней светлоты), порог AA
+ * 4.5 : 1 по 12 блокам тем при любой средней светлоте картинки 0…1 — худший
+ * случай 4.77 : 1 (catppuccin light над чёрной картинкой). Композиция 80 %/88 %
+ * давала 3.96 : 1, `--text-dim` — 2.46 : 1, поэтому обе отклонены.
+ * Цвет берётся CSS-токеном, а не inline-расчётом: плашка и текст
+ * перекрашиваются браузером при смене темы/режима без перерисовки канвы.
+ *
+ * Геометрия: в основе `.zone-empty`/`.canvas-empty` растянуты на зону и
+ * центрируют текст; с картинкой они сжимаются до содержимого (`inset: 50%` +
+ * `translate`), поэтому плашка обнимает надпись, а не весь холст. Без картинки
+ * блок ниже не действует — вид канвы тематический, как раньше. */
+:root[data-canvas-wallpaper='on'] .zone-empty,
+:root[data-canvas-wallpaper='on'] .canvas-empty {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  box-sizing: border-box;
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  box-shadow:
+    0 0 0 1px var(--border),
+    0 1px 2px var(--shadow-xs-c);
+  color: color-mix(in srgb, var(--text) 92%, transparent);
+  text-align: center;
+}
+
+/* Вложенные состояния подписи (`loadingState`/`errorState` из `lib/ui`) несут
+ * собственные цвета (`--text-dim`, `--danger`) — на плашке они не гарантируют
+ * контраст (blue-topaz light `--text-dim` 4.00 : 1, nordic dark `--danger`
+ * 2.46 : 1). На картинке весь текст подписи берёт цвет плашки: читаемость
+ * важнее оттенка, а состояние ошибки остаётся различимым текстом и `role`.
+ * Кнопки действий (`ui-btn`) исключены — у них собственные поверхности и
+ * цвета, плашка их не перекрашивает. Отступы состояний внутри плашки лишние —
+ * плашка уже даёт их сама. */
+:root[data-canvas-wallpaper='on'] .zone-empty *:not(.ui-btn):not(.ui-btn *),
+:root[data-canvas-wallpaper='on'] .canvas-empty *:not(.ui-btn):not(.ui-btn *) {
+  color: inherit;
+  text-shadow: none;
+}
+
+:root[data-canvas-wallpaper='on'] .zone-empty > .ui-state-loading,
+:root[data-canvas-wallpaper='on'] .zone-empty > .ui-state-error {
+  padding: 0;
 }
 
 /* Floating per-zone count (задача c8fa74ba): overlay on the canvas host,
  * pinned to the zone's top-right corner by inline `top`/`left` (canvas-space)
  * + `translateX(-100%)`. Text colour is set inline to stay contrast against
- * the theme backdrop; the faint pill keeps it legible over clouds. */
+ * the theme backdrop; the faint pill keeps it legible over clouds.
+ *
+ * z-index 12 — верхний слой канвы (доработка среза 2026-11-13, задача 80324150,
+ * замечание 1): счётчик обязан быть поверх ВСЕХ фонов и слоёв канвы — полосы
+ * фокуса (0), облачков/сетки (1), верхних слоёв связей (6/7) и анимационных
+ * копий облачков (8). Прежние 4 оставляли его под анимационным слоем, а на
+ * фоновой картинке полупрозрачная плашка терялась — см. правило плашки ниже. */
 .zone-count {
   position: absolute;
   transform: translateX(-100%);
-  z-index: 4;
+  z-index: 12;
   pointer-events: none;
   padding: 1px 7px;
   border-radius: 999px;
@@ -213,11 +325,24 @@ body.resizing-h {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+  /* Микро-тень: у бейджика счётчика она заметно легче крупной тени панелей. */
+  box-shadow: 0 1px 2px var(--shadow-xs-c);
 }
 
 .zone-count.hidden {
   display: none;
+}
+
+/* Счётчик поверх фоновой картинки (доработка среза 2026-11-13, замечание 1):
+ * полупрозрачная плашка 78 % над фотографией «плавает» и номер теряется.
+ * При активной картинке плашка становится непрозрачной тематической
+ * (`--surface` + тонкая рамка), а цвет текста остаётся инлайновым — он уже
+ * подобран под `--surface` темы, поэтому контраст возвращается к штатному. */
+:root[data-canvas-wallpaper='on'] .zone-count {
+  background: var(--surface);
+  box-shadow:
+    0 1px 2px var(--shadow-xs-c),
+    0 0 0 1px var(--border);
 }
 
 .zone-spacer {
@@ -532,34 +657,44 @@ body.resizing-h {
   box-shadow: var(--shadow-hover);
 }
 
-/* Clouds picked into the selection panel (§5): a teal outline, clearly
- * distinct from the editor halo of the opened thought (.cloud.halo below). */
+/* Clouds picked into the selection panel (§5): сплошная рамка состояния
+ * «выделенная», отличная от гало открытой (.cloud.halo ниже) и от пунктира
+ * текущей (.cloud.kbd-cursor). Цвет считает lib/cloud-frames.ts и кладёт в
+ * --frame-selected: на базовом слое это токен темы --selection, на слое с
+ * собственной полосой фокуса — полоса, повёрнутая по тону (задача c6d74fd4:
+ * рамки трёх состояний производны от слоя). */
 .cloud.selected {
-  outline: 2px solid var(--selection);
+  outline: 2px solid var(--frame-selected, var(--selection));
   outline-offset: 1px;
 }
 
 /* Halo (§2.2.4): the thought is open in the editor — single click, Enter or a
- * pick from another view. A double ring around the cloud: the inner band takes
- * the layer's focus-stripe colour (0.6.4, 13-layers.md §2.2a) — the border of
- * the edited thought is part of the layer indication — and the outer thin
- * contrast band (`--focus-ring-contrast`) keeps it readable on the focus band,
- * which is painted in the SAME stripe colour (задача 3af98e31). Единый механизм
- * двойной рамки открытого: тот же токен канта используют `.pub-open` и
+ * pick from another view. Рамка — 2px цветное кольцо (1px border + 1px
+ * box-shadow) цвета --frame-open и 1px контрастный кант --focus-ring-contrast.
+ * Цвет кольца считает lib/cloud-frames.ts: на базовом слое это тон пунктира
+ * (--cursor), поднятый по светлоте («в тон, но ярче»), на слое с собственной
+ * полосой — производное от --layer-focus-stripe (задача c6d74fd4). Кант
+ * оставлен 1px вместо прежних 4px почти чёрного цвета темы: он держит
+ * читаемость на полосе фокуса того же цвета (задача 3af98e31), но не давит.
+ * Единый механизм рамки открытого: тот же токен канта используют `.pub-open` и
  * `.pub-doc-editor`; «Структуры» переиспользуют этот класс. */
 .cloud.halo {
-  border-color: var(--layer-focus-stripe, var(--accent));
+  border-color: var(--frame-open, var(--focus-accent, var(--accent)));
   box-shadow:
-    0 0 0 1px var(--layer-focus-stripe, var(--accent)),
-    0 0 0 4px var(--focus-ring-contrast),
+    0 0 0 1px var(--frame-open, var(--focus-accent, var(--accent))),
+    0 0 0 2px var(--focus-ring-contrast),
     var(--shadow-focus);
 }
 
 /* Keyboard cursor frame (§2.9): the cloud the arrow navigation points at.
  * Dashed and offset further than the selection outline so both stay visible
- * when they combine. */
+ * when they combine. Цвет — `--frame-current` (lib/cloud-frames.ts): на
+ * базовом слое это токен темы `--cursor`, на слое с собственной полосой —
+ * полоса, повёрнутая по тону (задача c6d74fd4). Состояние «текущий элемент»
+ * не является предупреждением, `--warn-strong` был чужой семантикой
+ * (задача 7a652ce8). */
 .cloud.kbd-cursor {
-  outline: 2px dashed var(--warn-strong);
+  outline: 2px dashed var(--frame-current, var(--cursor));
   outline-offset: 3px;
 }
 
@@ -877,8 +1012,8 @@ body.cloud-dragging * {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #000;
-  color: #d0d0d0;
+  background: var(--badge-bg);
+  color: var(--badge-fg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -888,7 +1023,7 @@ body.cloud-dragging * {
   pointer-events: none;
   user-select: none;
   z-index: 2;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 .cloud-pos[hidden] {
@@ -908,7 +1043,7 @@ body.cloud-dragging * {
   width: 27.2px;
   height: 27.2px;
   border-radius: 50%;
-  background: #000;
+  background: var(--badge-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -916,13 +1051,13 @@ body.cloud-dragging * {
   cursor: pointer;
   user-select: none;
   z-index: 3;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 /* The trash glyph (lucide «trash», lib/icons.ts) is drawn bright red on the
    black circle — well readable on both light and dark themes. */
 .cloud-trash-badge svg {
-  color: #e53935;
+  color: var(--mark-danger);
 }
 
 /* Метка «мысль чужой сети» облачка (кросс-сетевая ссылка, ошибка 9be98ae1):
@@ -935,20 +1070,20 @@ body.cloud-dragging * {
   width: 27.2px;
   height: 27.2px;
   border-radius: 50%;
-  background: #000;
+  background: var(--badge-bg);
   display: flex;
   align-items: center;
   justify-content: center;
   line-height: 1;
   user-select: none;
   z-index: 3;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 /* Глиф «сеть» (lucide «network», lib/icons.ts) — акцентный голубой на чёрном
    круге, читаемый на обеих темах и отличимый от красной корзины. */
 .cloud-network-badge svg {
-  color: #4a9eff;
+  color: var(--mark-network);
 }
 
 /* Object-lock badge (task 4f141756, UI element 8e3703ee): small 🔒 chip
@@ -964,28 +1099,28 @@ body.cloud-dragging * {
   line-height: 1;
   padding: 2px 4px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #ffd54f;
+  background: color-mix(in srgb, var(--badge-bg) 72%, transparent);
+  color: var(--mark-warn);
   user-select: none;
   pointer-events: auto;
   z-index: 4;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--overlay-fg) 40%, transparent);
 }
 
 .cloud-lock-badge.own {
-  background: rgba(33, 150, 243, 0.85);
-  color: #fff;
+  background: color-mix(in srgb, var(--mark-lock-own) 85%, transparent);
+  color: var(--overlay-fg);
 }
 
 /* A locked-by-other cloud wears a soft red outline; a locked-by-self cloud
    wears a soft blue one — visually distinct from the trash dim and the
    layer-override dashed outline so the three states never collide. */
 .cloud.locked-by-other {
-  outline: 2px solid rgba(229, 57, 53, 0.55);
+  outline: 2px solid color-mix(in srgb, var(--mark-danger) 55%, transparent);
   outline-offset: 1px;
 }
 .cloud.locked-by-self {
-  outline: 2px solid rgba(33, 150, 243, 0.45);
+  outline: 2px solid color-mix(in srgb, var(--mark-lock-own) 45%, transparent);
   outline-offset: 1px;
 }
 
@@ -995,15 +1130,15 @@ body.cloud-dragging * {
    slight dash gap distinguishes the two without giving up readability. */
 .link-line.link-locked-other {
   stroke-dasharray: 6 4;
-  filter: drop-shadow(0 0 1.5px rgba(229, 57, 53, 0.5));
+  filter: drop-shadow(0 0 1.5px color-mix(in srgb, var(--mark-danger) 50%, transparent));
 }
 .link-line.link-locked-own {
   stroke-dasharray: 4 2;
-  filter: drop-shadow(0 0 1.5px rgba(33, 150, 243, 0.4));
+  filter: drop-shadow(0 0 1.5px color-mix(in srgb, var(--mark-lock-own) 40%, transparent));
 }
 
 .cloud.font-bold .cloud-title {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .cloud.font-italic .cloud-title {
@@ -1045,15 +1180,15 @@ body.cloud-dragging * {
  * focus (`editorTarget=null`, the default) — and it is the case the halo is
  * usually seen in. `.cloud.focus-cloud` (below `.cloud.halo` in this module,
  * equal specificity) would otherwise override the halo's border and box-shadow
- * and the double ring would silently disappear. Re-assert it here (specificity
- * 0,3,0 wins). The inner band keeps the layer focus colour — per spec the
- * opened thought's frame IS the focus-stripe colour (13-layers.md §2.2a),
- * so a layer recolours it; the outer contrast band stays (задача 3af98e31). */
+ * and the ring would silently disappear. Re-assert it here (specificity
+ * 0,3,0 wins). Кольцо и кант — те же, что у `.cloud.halo`: цвет открытой
+ * производен от полосы слоя внутри lib/cloud-frames.ts (задача c6d74fd4),
+ * кант темы остаётся 1px (задача 3af98e31). */
 .cloud.focus-cloud.halo {
-  border-color: var(--layer-focus-stripe, var(--accent));
+  border-color: var(--frame-open, var(--focus-accent, var(--accent)));
   box-shadow:
-    0 0 0 1px var(--layer-focus-stripe, var(--accent)),
-    0 0 0 4px var(--focus-ring-contrast),
+    0 0 0 1px var(--frame-open, var(--focus-accent, var(--accent))),
+    0 0 0 2px var(--focus-ring-contrast),
     var(--shadow-focus);
 }
 
@@ -1075,4 +1210,3 @@ body.cloud-dragging * {
   background: var(--accent);
   border-color: var(--accent-strong);
 }
-

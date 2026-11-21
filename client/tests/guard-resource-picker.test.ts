@@ -33,6 +33,13 @@ import { assertGuardClean } from './guard-helpers.js';
 const RENDERER_ROOT = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 const PICKER = 'editor/resource-picker.ts';
 const ATTACHMENT_PICKER = 'editor/attachment-picker.ts';
+/**
+ * Единственная обёртка системного выбора изображения (0.16.1, задача
+ * 80324150): сам IPC-канал зовётся только отсюда, потребители — общий
+ * компонент выбора вложения и «Фоновая картинка карты» в настройках. Это НЕ
+ * второй диалог, а общая точка одного канала.
+ */
+const IMAGE_SOURCE = 'lib/image-source.ts';
 
 /** Файлы, которым разрешено пользоваться фабриками источников ресурса. */
 const SOURCE_CONSUMERS = new Set([
@@ -55,11 +62,12 @@ describe('сторож: единый диалог выбора ресурса (d
       {
         name: 'single-image-picker',
         description:
-          '`etn.system.pickImage` — только в общем компоненте выбора вложения ' +
-          '(editor/attachment-picker.ts). Второй вызов — вторая реализация ' +
-          'выбора картинки: соберите источник в компоненте.',
+          '`etn.system.pickImage` — только в единственной обёртке ' +
+          'lib/image-source.ts (общий компонент выбора вложения и фоновая ' +
+          'картинка настроек). Второй вызов канала — вторая реализация выбора ' +
+          'картинки.',
         pattern: /pickImage/,
-        allow: (rel) => rel === ATTACHMENT_PICKER,
+        allow: (rel) => rel === IMAGE_SOURCE,
       },
     ]);
   });

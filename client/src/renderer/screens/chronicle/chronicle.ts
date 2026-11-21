@@ -34,9 +34,9 @@
 
 import {
   CHRONICLE_PAGE_SIZE,
-  CHRONICLE_QUERY_MAX_LIMIT,
   UI_STATE_KEY,
-  type ChronicleFilterDefinition,
+  type CalendarMarkerKind,
+  type CalendarMarkersResult,
   type ChronicleRow,
   type ChronicleTarget,
   type ChronicleTargetLink,
@@ -51,16 +51,26 @@ import { requireNetworkId } from '../../app.js';
 import { pickThoughtsDialog } from '../../canvas/add-dialog.js';
 import { showOutOfCanvasThoughtMenu } from '../../canvas/context-menu.js';
 import { registerDropActions } from '../../canvas/drag-cloud.js';
-import { openLinkInEditor, setThoughtEditorTarget } from '../../editor/editor.js';
+import {
+  openLinkInEditor,
+  openThoughtCommentTaskLine,
+  setThoughtEditorTarget,
+} from '../../editor/editor.js';
 import {
   cancelMarkdownFieldEdit,
   commitMarkdownField,
   createMarkdownField,
   editMarkdownField,
+  focusMarkdownFieldLineStart,
   focusMarkdownFieldStart,
   insertMentionLinkIntoField,
+  markdownFieldValue,
+  replaceMarkdownFieldDraft,
+  setMarkdownField,
 } from '../../editor/markdown-field.js';
 import { annotateMentions } from '../../editor/mentions-annotate.js';
+import { wireTaskCheckboxes } from '../../editor/task-checkbox-toggle.js';
+import { markOverdueTaskItems } from '../../editor/task-lines-view.js';
 import {
   paintWikiIdsInSnippet,
   resolveWikiIdsInSnippet,
@@ -68,6 +78,7 @@ import {
 } from '../../editor/wiki-link-resolver.js';
 import { createCommentCollapseState, decorateCommentView } from '../../editor/comment-collapse.js';
 import { confirmDialog } from '../../lib/dialog.js';
+import { isValidLocalDay, localDayOfInstant } from '../../lib/dates.js';
 import { div, el, errText, span } from '../../lib/dom.js';
 import { etn } from '../../lib/etn.js';
 import { mountFilterPanelFrame } from '../../lib/filter-panel-frame.js';
@@ -76,9 +87,8 @@ import { svgIcon } from '../../lib/ui/icon.js';
 import { cachedHomeId, getHomeId, resetHomeCache } from '../../lib/home.js';
 import { menuAction, showMenuAt, MENU_SEPARATOR, type MenuItem } from '../../lib/menu.js';
 import { notice } from '../../lib/notice.js';
-import {
-  resolvePeriodInstants,
-} from '../../lib/period-editor.js';
+import { holdStatusMessage, type StatusMessageHold } from '../../lib/status-message.js';
+import { resolvePeriodInstants } from '../../lib/period-editor.js';
 import {
   datePeriodValueFromInstants,
   formatRecordPeriod,
@@ -100,13 +110,17 @@ import { commentShell } from '../../lib/ui/comment.js';
 import { bindWikiCreateContext } from '../../lib/wiki-create-context.js';
 import { operationError } from '../../lib/ui/messages.js';
 import { reconcileKeyed } from '../../lib/ui/keyed-list.js';
-import { splitterElement } from '../../lib/ui/splitter.js';
+import { splitterElement, wireSplitter, type SplitterPlan } from '../../lib/ui/splitter.js';
 import { TABLE_ROW_KEY_ATTR } from '../../lib/ui/table.js';
 import { shouldLoadMore, type ZonePagingCounters } from '../../lib/zone-paging.js';
 import { store } from '../../state.js';
 import { t } from '../../lib/i18n.js';
+import { onRoutedRealtimeEvent } from '../../lib/live/event-router.js';
+import { isThoughtVisualEvent } from '../../lib/live/thought-visual-events.js';
+import { isTrashVisibilityEvent } from '../../lib/live/trash-events.js';
 import { matchesKeyPrefix, queryKeys } from '../../lib/live/query-keys.js';
 import {
+  asRealtimeCause,
   invalidateQueries,
   onQueryInvalidated,
   registerQuery,
@@ -125,21 +139,23 @@ import {
   isLastChip,
   isWeekend,
   localDay,
-  localDayEnd,
-  localDayStart,
   parentThoughtIds,
   periodValuesForRange,
   recordMentionsExcludeThoughtId,
   resolvePeriodDay,
-  rowDays,
   todayLocal,
   weekPeriod,
+  type DiaryDay,
 } from './diary.js';
+import {
+  groupCalendarMarkers,
+  calendarDayCounts,
+  type CalendarMarkersByDay,
+} from './calendar-markers.js';
 import { recordDisplayTitle, recordTitleFromBody } from '../../lib/record-title.js';
 import {
   addThoughtToFilter,
   chronicleDefinition,
-  chronicleDefinitionForPeriod,
   chroniclePeriod,
   chronicleQueryDefinition,
   clearFilter,
@@ -169,7 +185,16 @@ import {
   type ScreenPair,
 } from '../tabs/tab-state.js';
 import { attachFeedNav, type FeedNavHandle } from './feed-nav.js';
+import { feedEventRelevant } from './feed-relevance.js';
 import { applyDayCollapsed, findDaySection, type DayGroupLabels } from './day-groups.js';
+import {
+  buildDayLinksBlock,
+  groupDayLinks,
+  renderDayLinks,
+  withLinkDays,
+  type DayLinksActions,
+  type DayLinksData,
+} from './day-links.js';
 import {
   applyRecordCollapsed,
   applyRecordCollapsedForDay,
@@ -179,9 +204,19 @@ import {
   type RecordGroupLabels,
 } from './record-groups.js';
 import { type RecordTitleHandle } from './record-title.js';
+import { pinFeedTop, recordEditPair, type RecordEditPairActions } from './record-edit-pair.js';
 import { buildRecordHead, createRecordChips } from './record-head.js';
 import { parseChronicleState } from './state.js';
+import {
+  mountTasksPanel,
+  TASKS_PANEL_FEED_MIN,
+  TASKS_PANEL_H_MAX,
+  TASKS_PANEL_H_MIN,
+  type TasksPanelHandle,
+} from './tasks-panel.js';
+import { filterPanelReserve, tasksPanelMaxHeight } from './tasks-panel-geometry.js';
 import { renderRecordView } from './record-body.js';
+import { mergeRecordBody } from './record-body-merge.js';
 import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
 
 /**
@@ -190,12 +225,6 @@ import { htmlHasTransclusionMarkup } from '../../editor/transclusion.js';
  */
 const CHRONICLE_FILTER_MIN_W = 230;
 const CHRONICLE_FILTER_MAX_W = 480;
-
-/**
- * Потолок страниц запроса счётчиков календаря (страница — `CHRONICLE_QUERY_MAX_LIMIT`):
- * защита от неограниченного цикла на месяце с очень большим числом записей.
- */
-const CAL_COUNTS_MAX_PAGES = 20;
 
 let host: HTMLElement | null = null;
 /** Composite cache key of the last init: `${networkId}:${tabId}`. */
@@ -249,6 +278,30 @@ let feedWrap: HTMLElement | null = null;
 let feedList: HTMLElement | null = null;
 /** Контроллер клавиатурной навигации ленты (0.10.1, приёмка №9). */
 let feedNav: FeedNavHandle | null = null;
+/** Панель «Задачи и напоминания» над лентой (0.16.1, задача 64f7976a). */
+let tasksPanel: TasksPanelHandle | null = null;
+/** Данные блока «Связи дня» по дням последней загрузки (0.16.1, элемент 8ecc30cd). */
+let dayLinksData = new Map<string, DayLinksData>();
+/** Поколение чтения «связей дня»: ответ устаревшего запроса не перерисовывает. */
+let dayLinksSeq = 0;
+
+/**
+ * Мысль видна в загруженных «связях дня» — фактом или владельцем-мыслью
+ * date-ссылки (0.16.1, задача 739eb698). Смена визуала такой мысли требует
+ * перечитать блоки; чужое событие запроса не стоит.
+ */
+function dayLinksContain(id: string): boolean {
+  for (const day of dayLinksData.values()) {
+    if (day.facts.some((fact) => fact.thought_id === id)) return true;
+    if (
+      day.links.some((link) => link.source.owner_type === 'thought' && link.source.owner_id === id)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Единый контроллер правки карточки записи (ТП «Дневник без псевдослота»):
  * режим правки принадлежит КАРТОЧКЕ — вход в правку любого поля (заголовок или
@@ -265,12 +318,36 @@ interface CardEditor {
   /** Войти в правку с фокусом в теле. */
   openBody(): void;
   /**
+   * Войти в единую правку тела и поставить каретку в НАЧАЛО строки `lineNo`
+   * (с нуля) — переход «Открыть источник» строки задачи из панели «Дневника»
+   * (0.16.1, задача `cfb8cb72`, пункт 3). Тело дочитывается точечно, как и при
+   * обычном входе в правку. Промис завершается, когда правка уже открыта и
+   * каретка поставлена: вызывающий скроллит ленту ПОСЛЕ этого (иначе прокрутка
+   * к полю перебивает намеренный переход в начало — блокер `84c71c37`).
+   */
+  editLine(lineNo: number): Promise<void>;
+  /**
    * Синхронизировать ШАПКУ карточки со свежей строкой модели (дата/период и
    * облачка привязок), не пересобирая карточку и не отсоединяя живой редактор.
    * Привязки не входят в поля единой правки: добавленная к несохранённой записи
    * мысль обязана появиться сразу (ошибка 78d600c9).
    */
   syncHead(next: ChronicleRow): void;
+  /**
+   * Вход в правку ЗАПРОШЕН и ещё не завершён: тело дочитывается
+   * (`etn.comments.get`) перед созданием поля. Пересборка карточки в это окно
+   * отсоединила бы тело, и `ensureWidget` вернул бы `null` — правка не открылась
+   * бы вовсе (гонка пачки 4, вердикт `6df70910`).
+   */
+  pendingEdit(): boolean;
+  /**
+   * Свежее тело — в ОТКРЫТУЮ правку (пачка 4, замечание вердикта `6df70910`):
+   * чужое изменение источника (например «Отменить задачу» из панели) не должно
+   * оставлять в поле устаревший черновик — иначе сохранение вернёт отменённую
+   * строку. Модель обновляется всегда, документ поля — только если пользователь
+   * ничего не набрал поверх.
+   */
+  syncBody(next: ChronicleRow): void;
 }
 
 const cardEditors = new WeakMap<HTMLElement, CardEditor>();
@@ -284,8 +361,20 @@ let calendar: MonthCalendarHandle | null = null;
 let calendarFirstDayOfWeek: number | null = null;
 /** Persisted month of the calendar (`chronicle_state.month`). */
 let month: { year: number; month: number } | null = null;
-/** Счётчики записей по дням (для календаря), пересчитываются при отрисовке. */
-const dayCounts = new Map<string, number>();
+/**
+ * Маркеры дней календаря (0.16.1, требование ab9d627b): раскладка ответа
+ * `etn.chronicle.calendarMarkers` по локальным дням. Источник для компонента —
+ * замыкание `markers`, перерисовка — `calendar.refresh()`.
+ */
+let calendarMarkersByDay: CalendarMarkersByDay = new Map();
+/**
+ * Сырой ответ маркеров текущего месяца — источник СЧЁТЧИКОВ попапа даты
+ * (0.16.1, уточнение 2026-11-19, пункт 7). Раскладка по дням не хранит чисел,
+ * поэтому попап считает `calendarDayCounts` по ответу сервера.
+ */
+let calendarMarkersResult: CalendarMarkersResult | null = null;
+/** Поколение чтения маркеров: ответ устаревшего запроса не перерисовывает. */
+let calendarMarkersSeq = 0;
 /** Запись, к которой выполнен переход: карточка подсвечена до следующего применения. */
 let jumpHighlightId: string | null = null;
 /** Строка поиска дневниковых записей (0.10.1, задача 46057359). */
@@ -595,15 +684,33 @@ async function retryPendingFilterSnapshot(): Promise<void> {
   }
 }
 
+/**
+ * Инициализация пары «сеть + вкладка», которая ещё идёт. Второй вызов с той же
+ * парой обязан ДОЖДАТЬСЯ её, а не вернуться сразу (0.16.1, задача 9ec9d72a):
+ * `openChronicleDay` ставит период после загрузки снимка отбора, иначе
+ * загруженный снимок перетёр бы выбранный кликом день.
+ */
+let initInFlight: { key: string; promise: Promise<void> } | null = null;
+
 /** Switches to the diary view — lazily loads persisted state (L4). */
-export async function ensureChronicleInitialised(): Promise<void> {
+export function ensureChronicleInitialised(): Promise<void> {
   const networkId = store.state.networkId;
   const tabId = store.state.activeTabId;
-  if (networkId === null || host === null) return;
+  if (networkId === null || host === null) return Promise.resolve();
   const key = `${networkId}:${tabId ?? ''}`;
-  if (networkIdSeen === key) return;
+  if (networkIdSeen === key) {
+    return initInFlight?.key === key ? initInFlight.promise : Promise.resolve();
+  }
   networkIdSeen = key;
+  const promise = initialiseChronicle(networkId, tabId).finally(() => {
+    if (initInFlight?.promise === promise) initInFlight = null;
+  });
+  initInFlight = { key, promise };
+  return promise;
+}
 
+/** Ленивая инициализация «Дневника» для уже смонтированного экрана. */
+async function initialiseChronicle(networkId: string, tabId: string | null): Promise<void> {
   rows = [];
   total = 0;
   month = null;
@@ -659,10 +766,8 @@ export async function ensureChronicleInitialised(): Promise<void> {
   }
   // Календарь собран в `mountChronicle` ДО чтения снимка: показываем месяц
   // входа — восстановленный из снимка (`month`, ошибка 9b49d672) либо месяц
-  // сегодняшней даты, когда снимка месяца нет (ошибка 167860ac). Выделение дня
-  // поставит `syncCalendar` после запроса ленты; `showDate` не уведомляет
-  // `onMonthChange`, поэтому счётчики нового месяца пересчитываются явно.
-  const entryMonthCounts = alignEntryMonth();
+  // сегодняшней даты, когда снимка месяца нет (ошибка 167860ac).
+  alignEntryMonth();
   await getHomeId(requireNetworkId()).catch(() => undefined);
   if (!isCurrentScreenPair(pair)) return;
   await loadCollapsedDays();
@@ -670,7 +775,14 @@ export async function ensureChronicleInitialised(): Promise<void> {
   if (!isCurrentScreenPair(pair)) return;
   await reload();
   syncCalendar();
-  if (entryMonthCounts !== null) void refreshCalendarCounts(entryMonthCounts);
+  // Маркеры показанного месяца — ВСЕГДА после входа (0.16.1, доработка по
+  // вердикту приёмки): раньше запрос шёл только при фактической смене месяца
+  // (`alignEntryMonth` возвращал снимок), и первый вход в «Дневник» оставался
+  // с пустыми клетками, хотя месяц уже был нужный. Снимок строится по
+  // фактически показанному месяцу после `syncCalendar`.
+  void refreshCalendarMarkers(calendarMarkersSnapshot());
+  // Панель задач — тоже период отбора: после входа в вид её данные актуальны.
+  tasksPanel?.refresh();
 }
 
 /** Persists the current filter + month to L4 (per-tab). Запись адресуется
@@ -713,72 +825,15 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   // запускает инициализацию нового хоста.
   networkIdSeen = null;
 
-  const filterArea = div('chron-filter-area');
-  const splitter = splitterElement('chron-splitter');
-  const main = div('chron-main');
-  // Строка поиска записей — над панелью отбора и лентой, во всю ширину области
-  // дневника (0.10.1, задача 46057359). Каркас панели отбора переезжает на
-  // внутренний контейнер: полотно вида остаётся колонкой (строка + каркас).
-  const searchArea = div('chron-search-area');
-  const frameHost = div('chron-frame');
-  hostEl.append(searchArea, frameHost);
-  frameHost.append(filterArea, splitter, main);
-  mountFilterPanelFrame({
-    container: frameHost,
-    panel: filterArea,
-    splitter,
-    stateKey: UI_STATE_KEY.CHRONICLE_FILTER_PANEL,
-    minSize: CHRONICLE_FILTER_MIN_W,
-    maxSize: CHRONICLE_FILTER_MAX_W,
-    minSizeTop: 80,
-    maxSizeTop: 800,
-  });
-
-  // Строка поиска дневниковых записей — переиспользуемый компонент
-  // (`lib/record-search.ts`): мини-синтаксис keywords, выпадающий список
-  // записей, настройки «неактивные мысли»/«корзина», переход к записи.
-  recordSearch = mountRecordSearch(searchArea, {
-    search: (query) => searchRecords(query),
-    onPick: (row) => void jumpToRecord(row),
-    loadSettings: () => loadRecordSearchSettings(),
-    saveSettings: (settings) => persistRecordSearchSettings(settings),
-  });
-
-  // Календарь — первый элемент панели отбора (0.10.1, элемент 9b424548).
-  const calWrap = div('chron-cal');
-  calendarFirstDayOfWeek = networkFirstDayOfWeek();
-  calendar = buildMonthCalendar({
-    today: todayLocal(),
-    month: month ?? undefined,
-    counts: (day) => dayCount(day),
-    firstDayOfWeek: calendarFirstDayOfWeek,
-    onPickDay: (day) => void pickPeriod(dayPeriod(day)),
-    onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
-    onToday: () => goToday(),
-    onMonthChange: (year, monthNo) => {
-      month = { year, month: monthNo };
-      persistState();
-      void refreshCalendarCounts(calendarCountsSnapshot());
-    },
-  });
-  calWrap.append(calendar.root);
-
-  mountChronicleFilterPanel(
-    filterArea,
-    {
-      apply: () => void applyFilter(),
-      jumpToRecord: (row) => void jumpToRecord(row),
-    },
-    { header: [calWrap] },
-  );
-
   // Верхняя (непрокручиваемая) панель над лентой: кнопка «Добавить
   // хроно-запись» и компактные иконки «Развернуть все»/«Свернуть все» рядом
-  // (0.10.1, приёмка №2 — кнопки не во всю ширину).
+  // (0.10.1, приёмка №2 — кнопки не во всю ширину). Создаётся ДО каркаса панели
+  // отбора: фактическая высота строки входит в резерв результатов (замечание Н1
+  // репроверки 4b755c93), а геттер резерва мерит узел при каждом `apply()`.
   const addBar = div('chron-addbar');
-  addBar.append(
-    div('chron-addbar-actions'),
-  );
+  addBar.append(div('chron-addbar-actions'));
+  /** Фактическая высота панели добавления, px (0, пока она не в DOM). */
+  const addBarHeight = (): number => addBar.getBoundingClientRect().height;
   const addActions = addBar.firstElementChild as HTMLElement;
   addActions.append(
     uiButton({
@@ -805,6 +860,87 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     }),
   );
 
+  const filterArea = div('chron-filter-area');
+  const splitter = splitterElement('chron-splitter');
+  const main = div('chron-main');
+  // Минимум места для ленты при auto-высоте панели задач (замечание Н1 вердикта
+  // 84c71c37): панель без потолка выдавливала ленту до 22px при окне 761px.
+  // Значение — TASKS_PANEL_FEED_MIN (тот же, что у слайдера высоты панели), оно
+  // нужно обоим детям колонки (панель и лента) — переменная на общем родителе.
+  main.style.setProperty('--tasks-panel-feed-min', `${TASKS_PANEL_FEED_MIN}px`);
+  // Строка поиска записей — над панелью отбора и лентой, во всю ширину области
+  // дневника (0.10.1, задача 46057359). Каркас панели отбора переезжает на
+  // внутренний контейнер: полотно вида остаётся колонкой (строка + каркас).
+  const searchArea = div('chron-search-area');
+  const frameHost = div('chron-frame');
+  hostEl.append(searchArea, frameHost);
+  frameHost.append(filterArea, splitter, main);
+  const filterFrame = mountFilterPanelFrame({
+    container: frameHost,
+    panel: filterArea,
+    splitter,
+    stateKey: UI_STATE_KEY.CHRONICLE_FILTER_PANEL,
+    minSize: CHRONICLE_FILTER_MIN_W,
+    maxSize: CHRONICLE_FILTER_MAX_W,
+    minSizeTop: 80,
+    maxSizeTop: 800,
+    // Резерв полотна под панелью отбора: панель добавления + минимум панели
+    // задач, её шов, минимум ленты + шов панели отбора (tasks-panel-geometry.ts).
+    // Высота полотна — фактическая: на низком полотне резерв упирается в
+    // минимальную рабочую высоту отбора и не выдавливает его содержимое.
+    resultsMinSize: () => filterPanelReserve(frameHost.clientHeight, addBarHeight()),
+  });
+
+  // Строка поиска дневниковых записей — переиспользуемый компонент
+  // (`lib/record-search.ts`): мини-синтаксис keywords, выпадающий список
+  // записей, настройки «неактивные мысли»/«корзина», переход к записи.
+  recordSearch = mountRecordSearch(searchArea, {
+    search: (query) => searchRecords(query),
+    onPick: (row) => void jumpToRecord(row),
+    loadSettings: () => loadRecordSearchSettings(),
+    saveSettings: (settings) => persistRecordSearchSettings(settings),
+  });
+
+  // Календарь — первый элемент панели отбора (0.10.1, элемент 9b424548).
+  const calWrap = div('chron-cal');
+  calendarFirstDayOfWeek = networkFirstDayOfWeek();
+  calendar = buildMonthCalendar({
+    today: todayLocal(),
+    month: month ?? undefined,
+    // Маркеры дня — ТОЛЬКО у календаря панели отбора «Дневника» (0.16.1,
+    // требование ab9d627b): диалог «Дата/период» режим `markers: off`.
+    markers: (day) => dayMarkers(day),
+    // Попап даты (0.16.1, уточнение 2026-11-19, пункт 7): наведение ровно 0.5 с
+    // показывает цветные маркеры с количествами дня. Числа — из серверного
+    // агрегата маркеров (`calendarDayCounts`), локальные сутки считает клиент.
+    dayInfo: (day) =>
+      calendarMarkersResult === null ? null : calendarDayCounts(calendarMarkersResult, day),
+    firstDayOfWeek: calendarFirstDayOfWeek,
+    // Перетаскивание по дням (задача 3054fe86): отпускание применяет период
+    // через ту же `pickPeriod`, что клик по дню/неделе; выделение в процессе
+    // рисует сам календарь. Клик без движения остаётся выбором одного дня.
+    enableRangeDrag: true,
+    onRangeChange: (from, to) => void pickPeriod({ from, to }),
+    onPickDay: (day) => void pickPeriod(dayPeriod(day)),
+    onPickWeek: (firstDay) => void pickPeriod(weekPeriod(firstDay, networkFirstDayOfWeek())),
+    onToday: () => goToday(),
+    onMonthChange: (year, monthNo) => {
+      month = { year, month: monthNo };
+      persistState();
+      void refreshCalendarMarkers(calendarMarkersSnapshot());
+    },
+  });
+  calWrap.append(calendar.root);
+
+  mountChronicleFilterPanel(
+    filterArea,
+    {
+      apply: () => void applyFilter(),
+      jumpToRecord: (row) => void jumpToRecord(row),
+    },
+    { header: [calWrap] },
+  );
+
   // Центр: лента, сгруппированная по локальным дням.
   feedWrap = div('admin-table-wrap chron-table-wrap chron-feed-wrap');
   feedList = div('chron-feed');
@@ -827,8 +963,78 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     onAddThought: (id) => void pickAndAttach(id),
   });
 
-  main.append(addBar, feedWrap);
-  void refreshCalendarCounts(calendarCountsSnapshot());
+  // Панель «Задачи и напоминания» — НАД лентой, вне блоков дней; при любом
+  // периоде одна (0.16.1, задача 64f7976a, спека f76ed829/15f8ea2f).
+  const tasksHost = div('chron-tasks-panel-host');
+  // Слайдер высоты панели (пункт B ТЗ 2026-11-17): вертикальный сплиттер
+  // между панелью и лентой, доступен только у развёрнутой панели.
+  const tasksSplitter = splitterElement('chron-tasks-splitter');
+  // Доступное имя грифа ставится СРАЗУ при создании: до первого взаимодействия
+  // экранный диктор и подсказка обязаны называть элемент, а `plan()` вызывается
+  // только началом драга/клавиатурной сессии (замечание проверки 2026-11-17).
+  // В `plan()` имя лишь обновляется — на случай смены языка.
+  tasksSplitter.title = t('tasks.panelHeightHint');
+  tasksSplitter.setAttribute('aria-label', t('tasks.panelHeightAria'));
+  wireSplitter(tasksSplitter, {
+    stateClass: 'resizing',
+    stateHost: () => main,
+    plan: (): SplitterPlan | null => {
+      if (tasksPanel === null || tasksPanel.panelCollapsed()) return null;
+      tasksSplitter.title = t('tasks.panelHeightHint');
+      tasksSplitter.setAttribute('aria-label', t('tasks.panelHeightAria'));
+      // Стартовая метрика — фактическая высота панели: у панели ещё не было
+      // сохранённой высоты, и по умолчанию её задаёт CSS (`40vh`).
+      const start = tasksPanel.panelHeight() ?? tasksHost.getBoundingClientRect().height;
+      // Потолок — остаток колонки центра после панели добавления, шва и ленты
+      // (tasks-panel-geometry.ts): тот же резерв, что у панели отбора.
+      const max = Math.min(
+        TASKS_PANEL_H_MAX,
+        Math.max(TASKS_PANEL_H_MIN + 1, tasksPanelMaxHeight(main.clientHeight, addBarHeight())),
+      );
+      return { axis: 'y', sign: 1, start, min: TASKS_PANEL_H_MIN, max };
+    },
+    apply: (size) => tasksPanel?.setPanelHeight(size),
+  });
+  tasksSplitter.hidden = true;
+  tasksPanel?.destroy();
+  tasksPanel = mountTasksPanel(tasksHost, {
+    getPeriod: () => currentFromTo(),
+    openDay: (day) => void openChronicleDay(day),
+    // «Открыть источник» строки: хроно-строка ведёт в свою запись (правка на
+    // строке задачи, пункт 3), прочие — прежним путём по дню строки.
+    openRowSource: (row) => {
+      if (row.kind === 'chronological') {
+        void openChronicleTaskLine(row);
+        return;
+      }
+      // Задача из ПОСТОЯННОГО комментария (0.16.1, пачка 3, пункт 1): у записи
+      // «Дневника» такого источника нет, поэтому открываем карточку владельца,
+      // вкладку «Основное» и правку комментария на строке задачи. Раньше строка
+      // без дат не находила день, и команда молча ничего не делала.
+      if (row.ownerType === 'thought') {
+        openThoughtCommentTaskLine(row.ownerId, row.lineNo);
+        return;
+      }
+      const day = row.due ?? row.periodFrom;
+      if (day !== null) void openChronicleDay(day);
+    },
+    // Созданная «на сегодня» задача — сразу к её строке (0.16.1, пачка 4,
+    // пункт 3): тот же вход, что у «Открыть источник», второй копии перехода
+    // нет.
+    openCreatedTask: (ref) => void openChronicleTaskLine(ref),
+    onRecordsChanged: () => void refreshFeedAndCalendar(),
+    // Свёрнутая панель не имеет высоты: слайдер прячется (пункт B ТЗ).
+    onPanelCollapsed: (collapsed) => {
+      tasksSplitter.hidden = collapsed;
+    },
+  });
+
+  main.append(addBar, tasksHost, tasksSplitter, feedWrap);
+  // Пересчёт каркаса после вставки в DOM: до неё высота панели добавления была
+  // 0, и резерв результатов оказался заниженным (замечание Н1 репроверки
+  // 4b755c93). `apply()` мерит узел заново и обновляет `--fp-results-min`.
+  filterFrame.apply();
+  void refreshCalendarMarkers(calendarMarkersSnapshot());
 
   // Лента — запрос слоя: подписка на инвалидации ключа `chronicle-feed` (G3).
   bindChronicleFeed();
@@ -838,6 +1044,25 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
     chronicleAttach: (thoughtId, rowId) => void attachToRecord(rowId, [thoughtId]),
     chronicleNewEntry: (thoughtId) => void addRecord([thoughtId]),
     chronicleFilterAdd: (thoughtId) => addThoughtToFilter(thoughtId),
+  });
+
+  // Удаление мысли/связи, корзина и смена настройки «показывать содержимое
+  // корзины» меняют состав ленты, «связей дня» и маркеров календаря, не двигая
+  // ревизию комментариев (пачка 11, задача 173e8368). Перечитываем тем же
+  // путём, что инвалидация слоя: сохранение глубины, затем календарь и счётчики.
+  // Смена визуала мысли (название/иконка/цвета/стиль) меняет только облачка
+  // «связей дня» — их блоки перерисовываются без перечитывания всей ленты
+  // (0.16.1, задача 739eb698).
+  const trashUnsub = onRoutedRealtimeEvent((event) => {
+    if (host === null) return;
+    if (event.network_id !== store.state.networkId) return;
+    if (isTrashVisibilityEvent(event)) {
+      scheduleChronicleFeedRefresh();
+      return;
+    }
+    if (isThoughtVisualEvent(event) && dayLinksContain((event.data as { id: string }).id)) {
+      scheduleDayLinksRefresh();
+    }
   });
 
   const unsubscribe = store.subscribe(() => {
@@ -871,8 +1096,10 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
       calendar?.setFirstDayOfWeek(firstDayOfWeek);
       syncCalendar();
       scheduleChronicleFeedRefresh();
+      // Пороги группировки панели считают недели по этой же настройке.
+      tasksPanel?.refresh();
       if (store.state.activeView === 'chronicle') {
-        void refreshCalendarCounts(calendarCountsSnapshot());
+        void refreshCalendarMarkers(calendarMarkersSnapshot());
       }
     }
     // Показ скрытого вида снимает отложенную пометку одним перезапросом
@@ -886,8 +1113,11 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
   return () => {
     unmountChronicleFilterPanel();
     unsubscribe();
+    trashUnsub();
     feedNav?.destroy();
     feedNav = null;
+    tasksPanel?.destroy();
+    tasksPanel = null;
     host = null;
   };
 }
@@ -898,12 +1128,12 @@ export function mountChronicle(hostEl: HTMLElement): () => void {
 
 /** Applies the current filter from scratch (the «Применить» path). */
 async function applyFilter(): Promise<void> {
-  // Пара и отбор снимаются ДО ожиданий: после `await` текущая сеть может быть
-  // уже другой (окно openNetwork), и счётчики ушли бы чужим отбором в неё
+  // Пара и месяц снимаются ДО ожиданий: после `await` текущая сеть может быть
+  // уже другой (окно openNetwork), и маркеры ушли бы чужим месяцем в неё
   // (ошибка 58c55bb9).
   const pair = currentScreenPair();
   if (pair === null) return;
-  const counts = calendarCountsSnapshot();
+  const markersSnapshot = calendarMarkersSnapshot();
   // Ручное применение снимает подсветку перехода.
   jumpHighlightId = null;
   persistState();
@@ -915,7 +1145,40 @@ async function applyFilter(): Promise<void> {
   if (feedWrap !== null) feedWrap.scrollTop = 0;
   if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts(counts);
+  void refreshCalendarMarkers(markersSnapshot);
+  // Панель «Задачи и напоминания» живёт периодом отбора — применяем новый.
+  tasksPanel?.refresh();
+}
+
+/**
+ * Задержка показа индикатора долгой перезагрузки ленты в статус-строке, мс
+ * (пачка 10, задача a33b5fc7): быстрый ответ не мелькает «Загрузкой…».
+ */
+export const FEED_LOADING_NOTICE_DELAY_MS = 300;
+
+/**
+ * Индикатор перечитывания ленты, когда содержимое уже показано: через
+ * {@link FEED_LOADING_NOTICE_DELAY_MS} в статус-строке появляется «Загрузка…»,
+ * по завершении операции сообщение гасится. Первая загрузка (лента пуста) идёт
+ * прежним путём — `renderStatus('loading')` в области ленты, статус-бар её не
+ * дублирует. `clear` идемпотентен и безопасен, если показ не состоялся.
+ */
+function startFeedLoadingNotice(): StatusMessageHold {
+  let hold: StatusMessageHold | null = null;
+  let timer: number | null = window.setTimeout(() => {
+    timer = null;
+    hold = holdStatusMessage(t('common.loading'));
+  }, FEED_LOADING_NOTICE_DELAY_MS);
+  return {
+    clear: () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      hold?.clear();
+      hold = null;
+    },
+  };
 }
 
 /**
@@ -943,7 +1206,18 @@ async function reload(preserveDepth = false): Promise<void> {
   // на новый ключ (инвалидации роутера адресуют актуальный ключ).
   retargetChronicleFeed();
   const seq = ++querySeq;
-  renderStatus('loading');
+  // «Связи дня» читаются ДО отрисовки ленты (пачка 9, задача ef6d1aab): блоки
+  // дня появляются вместе с секциями, одним изменением содержимого. Период
+  // известен до обоих запросов, поэтому чтение идёт параллельно страницам
+  // записей — ожидание не удлиняет смену периода.
+  const dayLinksPending = fetchDayLinks();
+  // Уже показанное содержимое при перечитывании не прячем, а долгую загрузку
+  // показываем в статус-строке (пачка 10, задача a33b5fc7) — без мелькания на
+  // быстрых ответах. Статус в области ленты остаётся для первой загрузки,
+  // когда показывать нечего (образец — панель задач редактора, пачка 4).
+  const hasContent = feedHasContent();
+  const loadingNotice = hasContent ? startFeedLoadingNotice() : null;
+  if (!hasContent) renderStatus('loading');
   try {
     const def = chronicleQueryDefinition();
     // Диагностика ядра едет в каждой странице конверта `meta`; редактору нужна
@@ -958,10 +1232,16 @@ async function reload(preserveDepth = false): Promise<void> {
           return page;
         }),
     );
+    // Связи дня ждём до отрисовки: `renderFeed` строит секции дней уже с ними.
+    const dayLinksNext = await dayLinksPending;
     if (seq !== querySeq) return;
     if (!isCurrentScreenPair(pair)) return;
     rows = result.rows;
     total = result.total;
+    // Устаревшее чтение связей (период перечитан позже) не подменяет данные:
+    // `null` — отрисовка пройдёт со снимком прежнего прохода, а его перечитает
+    // более поздний запрос.
+    if (dayLinksNext !== null) dayLinksData = dayLinksNext;
     pendingReconcile = false;
     // Успешный запрос: строки редактора получают актуальную диагностику ядра
     // (жёлтое — не блокирует; красное пришло бы ошибкой выше).
@@ -976,6 +1256,10 @@ async function reload(preserveDepth = false): Promise<void> {
     // Красная диагностика ядра (`details.diagnostics`) — в строки редактора.
     setFilterServerIssues(filterIssuesFromQueryError(err));
     renderStatus('error', err);
+  } finally {
+    // Индикатор статус-строки снимается на любом исходе (успех, ошибка,
+    // вытеснение более поздним запросом) и гасит ТОЛЬКО своё сообщение.
+    loadingNotice?.clear();
   }
 }
 
@@ -1063,6 +1347,8 @@ let chronicleSnapshotSeq = 0;
 /** Окно дебаунса перезапроса ленты: одна пачка событий → один перезапрос. */
 const CHRONICLE_REFRESH_WINDOW_MS = 250;
 let feedRefreshTimer: number | null = null;
+/** Отложенное перечитывание «связей дня» при смене визуала мысли (739eb698). */
+let dayLinksRefreshTimer: number | null = null;
 /**
  * Скрытый экран получил событие (ошибка 8e702d8c): снимок грязный, перезапрос
  * отложен до показа вида «Дневник».
@@ -1081,17 +1367,19 @@ function retargetChronicleFeed(): void {
 function bindChronicleFeed(): void {
   retargetChronicleFeed();
   if (chronicleInvalidationUnsub !== null) return;
-  chronicleInvalidationUnsub = onQueryInvalidated((prefix) => {
+  chronicleInvalidationUnsub = onQueryInvalidated((prefix, _keys, cause) => {
     // Содержимое ленты (записи): роутер гасит `chronicle-feed`.
     if (matchesKeyPrefix(prefix, 'chronicle-feed')) {
-      scheduleChronicleFeedRefresh();
+      if (feedEventRelevant(asRealtimeCause(cause), rows)) scheduleChronicleFeedRefresh();
       return;
     }
     // Правка/удаление мысли адресна: перечитываем ленту ТОЛЬКО если мысль видна
     // чипсом загруженной записи (замечание G3: невидимая правка не тратит запрос).
     if (prefix.startsWith('chronicle-thought:@')) {
       const id = prefix.slice('chronicle-thought:@'.length);
-      if (rows.some((row) => row.targets.some((t) => t.kind === 'thought' && t.thought.id === id))) {
+      if (
+        rows.some((row) => row.targets.some((t) => t.kind === 'thought' && t.thought.id === id))
+      ) {
         scheduleChronicleFeedRefresh();
       }
       return;
@@ -1141,15 +1429,15 @@ async function refreshFeedAndCalendar(): Promise<void> {
     window.clearTimeout(feedRefreshTimer);
     feedRefreshTimer = null;
   }
-  // Отбор и пара — на входе: перезапрос, переживший смену сети/вкладки, не
-  // должен посчитать календарь новой сети чужим отбором (ошибка 58c55bb9).
+  // Пара и месяц — на входе: перезапрос, переживший смену сети/вкладки, не
+  // должен посчитать календарь новой сети чужим месяцем (ошибка 58c55bb9).
   const pair = currentScreenPair();
   if (pair === null) return;
-  const counts = calendarCountsSnapshot();
+  const markersSnapshot = calendarMarkersSnapshot();
   await reloadKeepingDepth();
   if (!isCurrentScreenPair(pair)) return;
   syncCalendar();
-  void refreshCalendarCounts(counts);
+  void refreshCalendarMarkers(markersSnapshot);
 }
 
 /** Опубликовать снимок ленты в кэш слоя (наблюдатели/диагностика). */
@@ -1157,6 +1445,12 @@ export function publishChronicleSnapshot(): void {
   retargetChronicleFeed();
   if (chronicleQueryKey === null) return;
   setQueryData(chronicleQueryKey, { seq: ++chronicleSnapshotSeq, rows, total });
+}
+
+/** В ленте есть что показывать: строки уже отрисованы либо есть секции дней. */
+function feedHasContent(): boolean {
+  if (rows.length > 0) return true;
+  return feedList !== null && feedList.querySelector('.diary-day') !== null;
 }
 
 function renderStatus(kind: 'loading' | 'error', err?: unknown): void {
@@ -1195,9 +1489,127 @@ function currentFromTo(): { from: string; to: string } {
   };
 }
 
-/** Число записей, попавших в день (счётчик календаря). */
-function dayCount(day: string): number {
-  return dayCounts.get(day) ?? 0;
+/** Маркеры дня для календаря (пусто — клетка без маркеров). */
+function dayMarkers(day: string): readonly CalendarMarkerKind[] {
+  return calendarMarkersByDay.get(day) ?? [];
+}
+
+/** Действия блока «Связи дня»: карточки владельцев и переход к дню источника. */
+function dayLinksActions(): DayLinksActions {
+  return {
+    openThought: (id) => void openChronicleThought(id),
+    // Подпись свойства датового факта (задача 3054fe86): та же мысль, но
+    // редактор открывает вкладку «Свойства» и показывает строку свойства.
+    openThoughtProperty: (id, propertyId) => void openChronicleThoughtProperty(id, propertyId),
+    openSource: (source) => {
+      if (source.owner_type === 'thought') {
+        void openChronicleThought(source.owner_id);
+        return;
+      }
+      if (source.owner_type === 'link') {
+        void openChronicleLinkById(source.owner_id);
+        return;
+      }
+      // Публикация: ленивый импорт — статический замкнул бы цикл экранов.
+      void import('../active-view.js').then((mod) =>
+        mod.openPublicationInWorkspace(source.owner_id),
+      );
+    },
+    openSourceDay: (day) => void openChronicleDay(day),
+  };
+}
+
+/**
+ * Прочитать «связи дня» применённого периода. Отрисовку НЕ делает — данные
+ * нужны вызывающему ДО `renderFeed` (пачка 9). `null` — чтение устарело: пока
+ * шёл запрос, период перечитан более поздним проходом (`dayLinksSeq`).
+ * Таблица проекции индексная, поэтому чтение одно на ленту: разбор по дням
+ * делает клиент (`groupDayLinks`).
+ */
+async function fetchDayLinks(): Promise<Map<string, DayLinksData> | null> {
+  const networkId = store.state.networkId;
+  if (networkId === null) return null;
+  const { from, to } = currentFromTo();
+  const seq = (dayLinksSeq += 1);
+  let next: Map<string, DayLinksData>;
+  try {
+    const result = await etn.chronicle.dayLinks(networkId, { from, to });
+    next = groupDayLinks(result);
+  } catch {
+    // Сбой чтения блока не ломает ленту: блоки остаются пустыми до повтора.
+    next = new Map();
+  }
+  return seq === dayLinksSeq ? next : null;
+}
+
+/**
+ * Отложить перечитывание «связей дня» по событию смены визуала мысли (0.16.1,
+ * задача 739eb698). Лента записей от такой правки не меняется — перезапрашивать
+ * её незачем; облачка блока дня читают канон отображения из ответа
+ * `chronicle.dayLinks`. Дебаунс склеивает пачку событий в один запрос.
+ */
+function scheduleDayLinksRefresh(): void {
+  if (host === null) return;
+  if (store.state.activeView !== 'chronicle') {
+    // Скрытый вид перечитает связи при показе (`fullRefreshPending` → reload).
+    fullRefreshPending = true;
+    return;
+  }
+  if (dayLinksRefreshTimer !== null) window.clearTimeout(dayLinksRefreshTimer);
+  dayLinksRefreshTimer = window.setTimeout(() => {
+    dayLinksRefreshTimer = null;
+    if (host === null) return;
+    void refreshDayLinks();
+  }, CHRONICLE_REFRESH_WINDOW_MS);
+}
+
+/**
+ * Перечитать «связи дня» за применённый период и обновить блоки уже
+ * отрисованных дней (точечные пути: локальная вставка записи, ручной refresh).
+ * Смена периода сюда не ходит — `reload` читает связи до единственной
+ * отрисовки ленты.
+ */
+async function refreshDayLinks(): Promise<void> {
+  if (feedList === null) return;
+  const next = await fetchDayLinks();
+  if (next === null) return;
+  dayLinksData = next;
+  // Состав дней мог измениться: день без своих записей, но со «связями дня»,
+  // обязан появиться секцией (замечание финальной приёмки 399c25d5). Секции
+  // дней строит `renderFeed` — при расхождении перерисовываем ленту (keyed-
+  // сверка не тронет существующие узлы и прокрутку).
+  const expected = feedDays().map((day) => day.day);
+  const rendered = Array.from(feedList.querySelectorAll<HTMLElement>('.diary-day')).map(
+    (section) => section.dataset['day'] ?? '',
+  );
+  if (expected.length !== rendered.length || expected.some((day) => !rendered.includes(day))) {
+    renderFeed();
+    return;
+  }
+  const actions = dayLinksActions();
+  for (const section of Array.from(feedList.querySelectorAll<HTMLElement>('.diary-day'))) {
+    const day = section.dataset['day'] ?? '';
+    const block = section.querySelector<HTMLElement>('.diary-day-links');
+    if (block !== null) renderDayLinks(block, dayLinksData.get(day), actions);
+  }
+}
+
+/**
+ * Дни ленты за применённый период: локальные дни записей (порядок сервера) плюс
+ * дни, у которых есть ТОЛЬКО «связи дня» (`withLinkDays`, замечание финальной
+ * приёмки 399c25d5). Одна точка правды и для `renderFeed`, и для проверки
+ * состава секций в `refreshDayLinks`.
+ */
+function feedDays(): DiaryDay[] {
+  const { from, to } = currentFromTo();
+  // Направление сортировки ленты (0.10.1, итерация приёмки №8, п.3): сервер
+  // отдаёт строки в выбранном порядке, клиент уважает его и в группировке дней.
+  const order = getFilterState().order;
+  return withLinkDays(groupByLocalDays(rows, { from, to, order }), dayLinksData, {
+    from,
+    to,
+    order,
+  });
 }
 
 function renderFeed(): void {
@@ -1206,14 +1618,11 @@ function renderFeed(): void {
   if (statusEl !== null) statusEl.hidden = true;
   list.hidden = false;
 
-  const { from, to } = currentFromTo();
-  // Направление сортировки ленты (0.10.1, итерация приёмки №8, п.3): сервер
-  // отдаёт строки в выбранном порядке, клиент уважает его и в группировке дней.
-  const order = getFilterState().order;
-  const days = groupByLocalDays(rows, { from, to, order });
-  // Счётчики календаря приходят из отдельного запроса по месяцу
-  // (`refreshCalendarCounts`) — они не зависят от применённого периода, поэтому
-  // видны и на выделенной, и на невыделенной дате (0.10.1, дефект приёмки).
+  // Дни ленты — записи + дни, у которых есть только «связи дня» (`feedDays`).
+  const days = feedDays();
+  // Маркеры календаря приходят из отдельного запроса по месяцу
+  // (`refreshCalendarMarkers`) — они не зависят от применённого периода, поэтому
+  // видны и на выделенной, и на невыделенной дате (0.16.1, требование ab9d627b).
   // Инкрементальное обновление ленты (уровень 2 тех.проекта `1d48df6d`):
   // ВНЕШНИЙ уровень — группы дней по ключу дня (`data-day`), ВНУТРЕННИЙ —
   // карточки записей по `data-row-key`. Неизменные узлы не пересоздаются,
@@ -1226,6 +1635,7 @@ function renderFeed(): void {
     update: (section, day) => updateDaySection(section, day.day),
   });
 
+  const linkActions = dayLinksActions();
   for (const day of days) {
     const section = findDaySection(list, day.day);
     if (section === null) continue;
@@ -1241,6 +1651,11 @@ function renderFeed(): void {
       build: (row) => buildRecordCard(row, day.day),
       update: (card, row) => updateRecordCard(card, row, day.day),
     });
+    // «Связи дня» — между записями и хвостом дня (элемент 8ecc30cd).
+    const linksBlock = section.querySelector<HTMLElement>('.diary-day-links');
+    if (linksBlock !== null) {
+      renderDayLinks(linksBlock, dayLinksData.get(day.day), linkActions);
+    }
   }
 
   // Хвост ленты («пусто»/«осталось N») — вне reconcile, монтируется после:
@@ -1263,10 +1678,7 @@ function renderFeed(): void {
  * вызывающий откатывается на полную перезагрузку ленты (в этом случае
  * спокойствие позиции не гарантируется, зато данные точны).
  */
-async function localRowFromComment(
-  comment: Comment,
-  home: string,
-): Promise<ChronicleRow | null> {
+async function localRowFromComment(comment: Comment, home: string): Promise<ChronicleRow | null> {
   const targets = await resolveRowTargets(comment.targets, home);
   if (targets === null) return null;
   return {
@@ -1314,12 +1726,11 @@ async function resolveRowTargets(
   return out;
 }
 
-
 /**
  * Локальная вставка только что созданной записи: строка встаёт на своё место
  * (`insertRowByDay`), лента пересобирается keyed-сверкой без сетевого
- * перезапроса — соседние карточки и прокрутка сохраняются. Метка дня календаря
- * обновляется сразу (`syncCalendar` + `refreshCalendarCounts`).
+ * перезапроса — соседние карточки и прокрутка сохраняются. Маркеры дня
+ * календаря обновляются сразу (`syncCalendar` + `refreshCalendarMarkers`).
  *
  * Дедупликация по id: строку могла вставить другая ветка (realtime-событие,
  * перезагрузка/сверка) — повторная вставка дала бы ленте два узла с одним
@@ -1335,9 +1746,10 @@ async function insertCreatedRecord(row: ChronicleRow): Promise<void> {
   }
   pendingReconcile = true;
   renderFeed();
+  void refreshDayLinks();
   publishChronicleSnapshot();
   syncCalendar();
-  void refreshCalendarCounts(calendarCountsSnapshot());
+  void refreshCalendarMarkers(calendarMarkersSnapshot());
   feedNav?.refresh();
 }
 
@@ -1468,7 +1880,9 @@ function buildDaySection(day: string): HTMLElement {
   });
   head.prepend(svgIcon('chevron-down', 18));
   const list = div('diary-day-list');
-  section.append(head, list);
+  // Блок «Связи дня» (0.16.1, элемент 8ecc30cd) — после записей дня; данные
+  // приходят отдельным чтением периода, до него блок скрыт.
+  section.append(head, list, buildDayLinksBlock());
   // Начальное состояние группы — тем же помощником, что и in-place переключение
   // (одна точка правды о классах/атрибутах свёрнутой группы).
   applyDayCollapsed(section, collapsedDays.has(day), dayGroupLabels());
@@ -1500,8 +1914,11 @@ function buildRecordCard(row: ChronicleRow, day: string): HTMLElement {
  * содержимое, сам узел карточки (и его DOM-позиция) сохраняется, поэтому правка
  * одной записи не пересоздаёт соседние карточки и не сбрасывает прокрутку.
  * Карточка В ЕДИНОЙ ПРАВКЕ не пересобирается: пересборка отсоединила бы живой
- * редактор и потеряла несохранённый текст. При этом шапка (дата/период и
- * облачка привязок) — не поля правки, её обновляет `syncHead` (78d600c9).
+ * редактор и потеряла несохранённый текст. То же — пока вход в правку В ПОЛЁТЕ
+ * (тело дочитывается перед созданием поля): пересборка отсоединила бы тело, и
+ * вход терялся бы (гонка пачки 4, вердикт `6df70910`). При этом шапка
+ * (дата/период и облачка привязок) — не поля правки, её обновляет `syncHead`
+ * (78d600c9).
  */
 function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void {
   const editor = cardEditors.get(card);
@@ -1510,8 +1927,11 @@ function updateRecordCard(card: HTMLElement, row: ChronicleRow, day: string): vo
   // облачка привязок — НЕ поля правки, а часть модели записи: шапка
   // синхронизируется сразу. Без этого добавленная к несохранённой записи мысль
   // появлялась в шапке только после сохранения (ошибка 78d600c9).
-  if (editor !== undefined && editor.editing()) {
+  if (editor !== undefined && (editor.editing() || editor.pendingEdit())) {
     editor.syncHead(row);
+    // Открытая правка держит черновик: свежее тело источника подтягивается в
+    // поле, иначе там остаётся устаревший текст (замечание вердикта 6df70910).
+    if (editor.editing()) editor.syncBody(row);
     return;
   }
   fillRecordCard(card, row, day);
@@ -1543,17 +1963,46 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   const bodyHtml = row.body_html ?? '';
 
   let editing = false;
+  /** Вход в правку запрошен, поле ещё дочитывает тело (гонка с пересборкой). */
+  let enterPending = false;
   /** md тела загружен (лента несёт только `body_html`/`snippet`). */
   let bodyLoaded = false;
   let bodyDraft = '';
+  /**
+   * Последний известный СЕРВЕРНЫЙ `body_md` — база сравнения «пользователь
+   * ничего не набрал поверх» при синхронизации открытой правки.
+   */
+  let serverMd = '';
+  /** Версия записи, для которой черновик уже сверен с источником. */
+  let knownVersion = row.version;
   let widget: HTMLElement | null = null;
   let title: RecordTitleHandle | null = null;
+
+  /**
+   * Действия пары «заголовок ↔ тело» единой правки: правило фокуса живёт в
+   * `record-edit-pair.ts` (проверяется без Electron), экран даёт реализации.
+   * 0.16.1, блокер `84c71c37`: программно открытый заголовок фокус не забирает.
+   */
+  const recordEditActions: RecordEditPairActions = {
+    bodyEditing: () => editing,
+    titleEditing: () => title?.isEditing() === true,
+    openTitle: () => title?.beginEdit(false),
+    closeTitle: () => title?.endEdit(false, false),
+    // Вход начался с ЗАГОЛОВКА: тело открывается, фокус остаётся в заголовке —
+    // так решает `enterBodyEdit('title')` (дочитывание тела его не перебивает).
+    enterBodyEdit: () => void enterBodyEdit('title'),
+    focusFeedNavigation: () => feedNav?.focusNavigation(),
+  };
 
   const shell = commentShell({ variant: 'plain' });
   const body = div('diary-record-body');
   // Тело просмотра — статичный `body_html`; декорируем его теми же шагами, что и
   // поле markdown (авто-подсветка упоминаний). Держим элемент для декорации.
   const recordView = renderRecordView(shell, { body_html: bodyHtml });
+  // Просроченные задачи в тексте записи красным — там, где они фактически
+  // записаны (0.16.1, пачка 7): тот же вид, что у строки панели, по готовому
+  // DOM (`data-wiki-date` чекбокс-пункта).
+  markOverdueTaskItems(recordView);
   body.append(shell.root);
   // Сворачивание заголовков в просмотре записи — тем же механизмом, что у
   // комментария мысли (ошибка c91a0067): статичный `body_html` без декоратора
@@ -1571,10 +2020,34 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     // `paintView`, лента «Дневника» обязана делать то же — иначе в режиме
     // ПРОСМОТРА ссылки на мысли невидимы (в правке имя подтягивает wikiIdPlugin).
     void resolveWikiLinksInDom(recordView, collapseNetworkId);
-    decorateCommentView(
-      recordView,
-      createCommentCollapseState(collapseNetworkId, row.id),
-    );
+    decorateCommentView(recordView, createCommentCollapseState(collapseNetworkId, row.id));
+    // Чекбоксы задач в СТАТИЧНОМ просмотре записи кликабельны (0.16.1, задача
+    // `cfb8cb72`, пункт 8): клик переключает `- [ ]` ↔ `- [x]` в `body_md`
+    // источника. Панели задач/напоминаний светят «Обновить» штатно — запись
+    // публикует `comment.updated`, отдельной проводки из ленты нет.
+    wireTaskCheckboxes(recordView, () => ({
+      commentId: row.id,
+      /**
+       * Точечное обновление снапшота записи (0.16.1, уточнение 2026-11-19,
+       * пункт 9). Прежде здесь гасился ключ ленты: полный перезапрос
+       * пересобирал карточку и уводил прокрутку ленты вверх. Теперь строка
+       * ленты получает ровно те поля, что изменились, — keyed-сверка видит
+       * равенство и НЕ пересобирает карточку. Отложенный realtime-перезапрос
+       * (событие `comment.updated` гасит ключ слоя) сравнивает свежие данные с
+       * уже обновлённой строкой и тоже не трогает DOM: прокрутка, hover и фокус
+       * живут.
+       */
+      onSaved: (md, html, comment) => {
+        row.body_html = html;
+        row.version = comment.version;
+        row.updated_at = comment.updated_at;
+        row.updated_by = comment.updated_by;
+        row.snippet = recordTitleFromBody(md);
+        bodyDraft = md;
+        serverMd = md;
+        bodyLoaded = true;
+      },
+    }));
   }
 
   /**
@@ -1605,6 +2078,8 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       try {
         const comment = await etn.comments.get(requireNetworkId(), row.id);
         bodyDraft = comment.body_md;
+        serverMd = comment.body_md;
+        knownVersion = comment.version;
         row.body_html = comment.body_html;
         row.version = comment.version;
         bodyLoaded = true;
@@ -1621,6 +2096,13 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       md: bodyDraft,
       html: bodyHtml,
       placeholder: t('diary.emptyRecordHint'),
+      // Тихая подсказка задачи знает период записи (ошибка f720cfff): строка
+      // без своих дат живёт в периоде этой хроно-записи.
+      taskHintContext: {
+        owner: 'chronological',
+        fromDay: localDayOfInstant(row.valid_from),
+        toDay: localDayOfInstant(row.valid_to ?? row.valid_from),
+      },
       // Каретка/выделение при входе в правку — в месте клика в просмотре
       // (требование bac754e4, задача 189da39e).
       sourceMapView: true,
@@ -1630,7 +2112,7 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       // Заголовок пишется тем же PATCH: коммит уходит, когда изменён заголовок
       // (тело поле видит само). При неизменных обоих полях PATCH не уходит.
       externalChanges: () =>
-        (title !== null ? title.value().trim() : row.title ?? '') !== (row.title ?? ''),
+        (title !== null ? title.value().trim() : (row.title ?? '')) !== (row.title ?? ''),
       ...(owner !== null ? { attachmentsOwner: owner } : {}),
       // Авто-подсветка упоминаний в правке записи — БЕЗ исключения владельца
       // (ошибка 3ebb6512): геттер задан явно и перекрывает fallback
@@ -1662,14 +2144,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       onEditChange: (isEdit) => {
         editing = isEdit;
         shell.setMode(isEdit ? 'edit' : 'view');
-        if (isEdit) {
-          // Единая правка: вход в тело открывает и заголовок (без кражи фокуса).
-          if (title !== null && !title.isEditing()) title.beginEdit(false);
-        } else {
-          if (title !== null && title.isEditing()) title.endEdit(false, false);
-          // Выход из правки — фокус возвращается в навигацию записи.
-          feedNav?.focusNavigation();
-        }
+        // Заголовок присоединяется к правке тела БЕЗ фокуса, а на выходе
+        // закрывается вместе с ней: вход в тело владеет фокусом (блокер 84c71c37).
+        recordEditPair.bodyChanged(recordEditActions, isEdit);
       },
     });
     shell.setField(widget);
@@ -1719,25 +2196,53 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
   }, 0);
 
   /**
+   * Провести вход в правку под признаком «вход в полёте»: пока дочитывается
+   * тело, карточка не пересобирается (`updateRecordCard`) — иначе отсоединённое
+   * тело не дало бы создать поле (гонка пачки 4, вердикт `6df70910`).
+   */
+  const whileEntering = async (enter: () => Promise<void>): Promise<void> => {
+    enterPending = true;
+    try {
+      await enter();
+    } finally {
+      enterPending = false;
+    }
+  };
+
+  /**
    * Войти в единую правку с фокусом в заданном поле: тело создаётся при первом
    * входе, заголовок открывается тем же действием (через `onEditChange`).
    */
-  const enterBodyEdit = async (focus: 'title' | 'body'): Promise<void> => {
-    const w = await ensureWidget();
-    if (w === null) return;
-    if (editing) {
+  const enterBodyEdit = async (focus: 'title' | 'body'): Promise<void> =>
+    whileEntering(async () => {
+      const w = await ensureWidget();
+      if (w === null) return;
+      if (editing) {
+        if (focus === 'title') title?.beginEdit(true);
+        else focusMarkdownFieldStart(w);
+        return;
+      }
+      editMarkdownField(w);
       if (focus === 'title') title?.beginEdit(true);
-      else focusMarkdownFieldStart(w);
-      return;
-    }
-    editMarkdownField(w);
-    if (focus === 'title') title?.beginEdit(true);
-  };
+    });
+
+  /**
+   * Войти в единую правку тела и поставить каретку в НАЧАЛО строки `lineNo`
+   * (0.16.1, задача `cfb8cb72`, пункт 3): тело дочитывается тем же штатным
+   * `ensureWidget`, вход в правку и позиция каретки — жестом поля
+   * (`focusMarkdownFieldLineStart`), второй копии разбора смещений нет.
+   */
+  const enterBodyEditAtLine = async (lineNo: number): Promise<void> =>
+    whileEntering(async () => {
+      const w = await ensureWidget();
+      if (w === null) return;
+      focusMarkdownFieldLineStart(w, lineNo);
+    });
 
   /** ЕДИНАЯ запись обоих полей одним PATCH (требование 26f0aa52). */
   const saveBoth = async (md: string): Promise<string> => {
     const networkId = requireNetworkId();
-    const nextTitle = (title !== null ? title.value() : row.title ?? '').trim();
+    const nextTitle = (title !== null ? title.value() : (row.title ?? '')).trim();
     const fresh = await etn.comments.get(networkId, row.id);
     const updated = await etn.comments.update(
       networkId,
@@ -1757,14 +2262,13 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     row.title = updated.title;
     row.body_html = updated.body_html;
     row.version = updated.version;
+    knownVersion = updated.version;
     row.snippet = recordTitleFromBody(updated.body_md);
     bodyDraft = updated.body_md;
+    serverMd = updated.body_md;
     bodyLoaded = true;
     if (title !== null) {
-      title.setContent(
-        updated.title ?? '',
-        derivedTitleLabel(updated.title, updated.body_md),
-      );
+      title.setContent(updated.title ?? '', derivedTitleLabel(updated.title, updated.body_md));
       refreshDerivedTitle(title, updated.title, updated.body_md);
     }
   };
@@ -1810,7 +2314,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
         toggleRecordCollapsed(d, row.id);
       },
       // Двойной клик / вход в правку заголовка открывает и тело записи.
-      onBeginEdit: () => void enterBodyEdit('title'),
+      // Вход с заголовка открывает и тело; тело УЖЕ в правке — заголовок лишь
+      // присоединился, фокус не перебиваем (блокер 84c71c37).
+      onBeginEdit: () => recordEditPair.titleBegan(recordEditActions),
       // Enter в заголовке: Ctrl/Cmd — записать оба поля, иначе — фокус в тело,
       // курсор в позицию 0.
       onEnter: (event) => {
@@ -1830,6 +2336,9 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
     // Вход в правку заголовка через компонент: он же откроет и тело (`onBeginEdit`).
     openTitle: () => title?.beginEdit(true),
     openBody: () => void enterBodyEdit('body'),
+    // «Открыть источник» строки задачи (пункт 3): та же единая правка, каретка —
+    // в начало строки задачи.
+    editLine: (lineNo: number) => enterBodyEditAtLine(lineNo),
     // Шапка вне правки: свежая строка модели обновляет дату/период и облачка
     // привязок НА МЕСТЕ (карточка не пересобирается — живой редактор цел).
     syncHead: (next: ChronicleRow): void => {
@@ -1839,6 +2348,53 @@ function fillRecordCard(card: HTMLElement, row: ChronicleRow, day: string): void
       row.use_time = next.use_time;
       chips.sync(row);
       head.setDayLabel(recordDateLabel(row));
+    },
+    pendingEdit: () => enterPending,
+    syncBody: (next: ChronicleRow): void => {
+      if (next.version === knownVersion) return;
+      // Версию запоминаем сразу: повторные отрисовки той же ленты не должны
+      // плодить точечные чтения одной и той же редакции.
+      knownVersion = next.version;
+      void (async () => {
+        let comment: Comment;
+        try {
+          comment = await etn.comments.get(requireNetworkId(), row.id);
+        } catch {
+          // Сбой дочитывания правку не отменяет: черновик остаётся прежним,
+          // а лента попробует снова на следующем обновлении.
+          return;
+        }
+        knownVersion = comment.version;
+        row.body_html = comment.body_html;
+        row.version = comment.version;
+        row.snippet = recordTitleFromBody(comment.body_md);
+        const field = widget;
+        if (!editing || field === null) {
+          bodyDraft = comment.body_md;
+          serverMd = comment.body_md;
+          bodyLoaded = true;
+          return;
+        }
+        // Правки источника применяются ПОСТРОЧНО: строки, которых пользователь
+        // не касался, берутся из свежего тела, набранные — остаются. Иначе
+        // сохранение возвращало отменённую строку (блокер репроверки 90c35105).
+        const userMd = markdownFieldValue(field);
+        const merged = mergeRecordBody(serverMd, userMd, comment.body_md);
+        bodyDraft = merged ?? userMd;
+        serverMd = comment.body_md;
+        bodyLoaded = true;
+        // `null` — структура разошлась (строки добавили/удалили): документ не
+        // трогаем, как и прежде.
+        if (merged === null || merged === userMd) return;
+        if (merged === comment.body_md) {
+          // В слитом тексте только серверные редакции — поле получает снапшот.
+          setMarkdownField(field, comment.body_md, comment.body_html);
+          return;
+        }
+        // В слитом тексте остались набранные строки — это ЧЕРНОВИК: `Ctrl+Enter`
+        // обязан его сохранить, поэтому снапшот поля не подменяем.
+        replaceMarkdownFieldDraft(field, merged);
+      })();
     },
   };
 
@@ -1934,12 +2490,7 @@ async function editRecordDates(row: ChronicleRow): Promise<void> {
     allowTime: true,
     firstDayOfWeek: networkFirstDayOfWeek(),
     // Время показано, только когда запись его уже учитывает; иначе — скрыто.
-    initial: datePeriodValueFromInstants(
-      previous.from,
-      previous.to,
-      row.use_time === true,
-      true,
-    ),
+    initial: datePeriodValueFromInstants(previous.from, previous.to, row.use_time === true, true),
   });
   if (result === null) return;
   await saveRecordDates(row.id, result, previous);
@@ -1979,7 +2530,6 @@ async function saveRecordDates(
   }
 }
 
-
 async function removeRecord(id: string): Promise<void> {
   const ok = await confirmDialog(t('diary.deleteTitle'), t('diary.deleteQuestion'), true);
   if (!ok) return;
@@ -2005,10 +2555,7 @@ async function copyRecord(id: string): Promise<void> {
     // Даты = сегодня + текущее время; голую дату не шлём (ADR 994d076a,
     // требование d58aa1a4 — полные UTC-инстансы, `valid_to` непуст).
     const now = new Date().toISOString();
-    const { from, to } = resolvePeriodInstants(
-      { from: today, to: today },
-      { from: now, to: now },
-    );
+    const { from, to } = resolvePeriodInstants({ from: today, to: today }, { from: now, to: now });
     await etn.comments.createMulti(networkId, source.targets, {
       kind: 'chronological',
       title: source.title,
@@ -2304,11 +2851,12 @@ function syncCalendar(): void {
  *   • месяц сегодняшней даты, когда снимок месяца не нёс, — ошибка 167860ac:
  *     вход без отбора позиционируется на текущей дате.
  * `showDate` не уведомляет `onMonthChange` (месяц уже проставлен в `month`),
- * поэтому счётчики нового месяца пересчитывает вызывающий: возвращённый снимок
- * — признак реальной смены месяца.
+ * поэтому маркеры показанного месяца загружает вызывающий ОТДЕЛЬНЫМ шагом —
+ * всегда, а не только при фактической смене месяца (доработка 0.16.1 по
+ * вердикту приёмки: первый вход оставался без маркеров).
  */
-function alignEntryMonth(): CalendarCountsSnapshot | null {
-  if (calendar === null) return null;
+function alignEntryMonth(): void {
+  if (calendar === null) return;
   const today = todayLocal();
   const target = month ?? {
     year: Number(today.slice(0, 4)),
@@ -2317,11 +2865,10 @@ function alignEntryMonth(): CalendarCountsSnapshot | null {
   const shown = calendar.getMonth();
   if (shown.year === target.year && shown.month === target.month) {
     month = target;
-    return null;
+    return;
   }
   calendar.showDate(`${target.year}-${pad2(target.month)}-01`);
   month = target;
-  return calendarCountsSnapshot();
 }
 
 /**
@@ -2341,98 +2888,80 @@ function showRecordDayInCalendar(day: string): void {
 }
 
 /**
- * Снимок для счётчиков календаря: пара «сеть + вкладка» и отбор месяца
- * снимаются ВМЕСТЕ, в одной точке. Иначе запрос уходит с сетью текущего тика и
- * отбором прежней пары: окно `openNetwork` между публикацией новой сети и
- * переинициализацией скрытого экрана (ошибка 58c55bb9) — 422 «Тип … удалён из
- * сети» на `POST /networks/<B>/chronicle/query` с чужим отбором.
+ * Снимок для маркеров календаря: пара «сеть + вкладка», показанный месяц и
+ * «сегодня» клиента снимаются ВМЕСТЕ, в одной точке. Иначе запрос уходит с
+ * сетью текущего тика и месяцем прежней пары: окно `openNetwork` между
+ * публикацией новой сети и переинициализацией скрытого экрана (ошибка
+ * 58c55bb9) — маркеры чужой сети в клетках новой.
  */
-interface CalendarCountsSnapshot {
+interface CalendarMarkersSnapshot {
   pair: ScreenPair;
-  definition: ChronicleFilterDefinition;
-  /** Границы месяца для разбора длительности записей (`rowDays`). */
-  first: string;
-  last: string;
+  /** Первый день показанного месяца (`YYYY-MM-DD`). */
+  from: string;
+  /** Последний день показанного месяца. */
+  to: string;
+  /** Локальные сутки клиента — граница просрочки (требование fcdcd75f). */
+  today: string;
 }
 
-/** Снять пару и отбор месяца в текущей точке; `null` — считать нечего. */
-function calendarCountsSnapshot(): CalendarCountsSnapshot | null {
+/** Снять пару, месяц и «сегодня» в текущей точке; `null` — считать нечего. */
+function calendarMarkersSnapshot(): CalendarMarkersSnapshot | null {
   const pair = currentScreenPair();
   if (pair === null || calendar === null) return null;
-  // Счётчики считаются отбором ТОЛЬКО своей пары: в окне `openNetwork` сеть
-  // уже новая, а отбор — ещё прежней пары; такой снимок не снимается вовсе
-  // (ошибка 58c55bb9 — 422 «Тип … удалён из сети» на счётчиках календаря).
+  // Маркеры считаются ТОЛЬКО своей парой: в окне `openNetwork` сеть уже новая,
+  // а отбор — ещё прежней пары; такой снимок не снимается вовсе (ошибка
+  // 58c55bb9).
   if (!chronicleFilterIsCurrent(pair)) return null;
   const { year, month: monthNo } = calendar.getMonth();
-  const first = `${year}-${pad2(monthNo)}-01`;
-  const last = new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10);
-  // Границы месяца — ЛОКАЛЬНЫЕ сутки (как и период ленты): «голая дата» на
-  // сервере = сутки UTC (469d8d69), и запись у локальной полуночи первого/1-го
-  // числа выпадала бы из счётчиков месяца (приёмка №4, задача fd9eef49).
-  // Период ПОДМЕНЯЕТСЯ внутри AST-отбора (задача 608ecb79): тело-дерево и
-  // плоские границы вместе сервер отвергает.
   return {
     pair,
-    first,
-    last,
-    definition: chronicleDefinitionForPeriod(localDayStart(first), localDayEnd(last)),
+    from: `${year}-${pad2(monthNo)}-01`,
+    to: new Date(Date.UTC(year, monthNo, 0)).toISOString().slice(0, 10),
+    today: todayLocal(),
   };
 }
 
 /**
- * Счётчики записей по дням ОТОБРАЖАЕМОГО месяца (0.10.1, элемент 55b07702):
- * отдельный запрос по границам месяца с текущими критериями, БЕЗ периода —
- * поэтому счётчик виден и на выделенной, и на невыделенной дате. Числа дней
- * считаются тем же разбором длительности записи, что и лента (`rowDays`).
+ * Маркеры дней ОТОБРАЖАЕМОГО месяца (0.16.1, требование ab9d627b): ОДИН
+ * агрегатный запрос `GET /chronicle/calendar-markers` за месяц и «сегодня» —
+ * вместо прежнего counts-запроса записей (упразднён) и поштучных чтений.
+ * Данные маркеров НЕ зависят от применённого отбора: это ось времени, она
+ * видна и на выделенной, и на невыделенной дате.
  *
- * Пара и отбор — из {@link CalendarCountsSnapshot}: смена пары после любого
- * `await` отменяет запрос (чужие типы/период в новой сети не применяются),
- * ошибка текущей пары показывается штатной диагностикой отбора, а не тишиной.
+ * Пара и месяц — из {@link CalendarMarkersSnapshot}: смена пары после `await`
+ * отменяет запрос (маркеры чужой сети не рисуются). Сбой чтения не ломает
+ * ленту, но и не остаётся незамеченным: клетки очищаются, а пользователю
+ * показывается тост (как у прежних counts; штатная диагностика отбора — для
+ * ошибок самого отбора — при этом не подменяется).
  */
-async function refreshCalendarCounts(snapshot: CalendarCountsSnapshot | null): Promise<void> {
+async function refreshCalendarMarkers(snapshot: CalendarMarkersSnapshot | null): Promise<void> {
   if (snapshot === null || calendar === null) return;
-  const { pair, definition, first, last } = snapshot;
+  const { pair, from, to, today } = snapshot;
   if (!isCurrentScreenPair(pair)) return;
-  const tally = new Map<string, number>();
+  const seq = (calendarMarkersSeq += 1);
+  let next: CalendarMarkersByDay;
+  let raw: CalendarMarkersResult | null = null;
   try {
-    let offset = 0;
-    for (let page = 0; page < CAL_COUNTS_MAX_PAGES; page += 1) {
-      const res = await etn.chronicle.query(pair.networkId, {
-        ...definition,
-        limit: CHRONICLE_QUERY_MAX_LIMIT,
-        offset,
-      });
-      // Пара сменилась, пока шла страница: её строки принадлежат прежнему
-      // отбору и не считаются (ошибка 58c55bb9).
-      if (!isCurrentScreenPair(pair)) return;
-      for (const row of res.rows) {
-        for (const day of rowDays(row, first, last)) tally.set(day, (tally.get(day) ?? 0) + 1);
-      }
-      offset += res.rows.length;
-      if (res.rows.length === 0 || offset >= res.total) break;
-    }
+    const result = await etn.chronicle.calendarMarkers(pair.networkId, { from, to, today });
+    next = groupCalendarMarkers(result, { from, to });
+    raw = result;
   } catch (err) {
-    // Сбой текущей пары не глотаем: красная диагностика ядра — в строки
-    // редактора (штатный канал, как у запроса ленты). Ошибка прежней пары к
-    // новой не относится — молча выходим.
+    // Сбой чтения маркеров ТЕКУЩЕЙ пары — видимая проблема, а не тишина:
+    // прежние counts показывали notice, и пользователь иначе видит пустой
+    // календарь без объяснения. Отказ прежней пары после смены сети молчит —
+    // его маркеры и не должны рисоваться.
     if (!isCurrentScreenPair(pair)) return;
-    const issues = filterIssuesFromQueryError(err);
-    if (issues.length > 0) {
-      setFilterServerIssues(issues);
-    } else {
-      notice(`${t('diary.countsFailed', [errText(err)])}`, 'error');
-    }
-    return; // прежние счётчики остаются на месте
+    next = new Map();
+    notice(t('diary.markersFailed', [errText(err)]), 'error');
   }
-  if (!isCurrentScreenPair(pair)) return;
-  dayCounts.clear();
-  for (const [day, count] of tally) dayCounts.set(day, count);
-  const period = chroniclePeriod();
-  const fdw = networkFirstDayOfWeek();
-  calendar.setSelection(
-    resolvePeriodDay(period.from, todayLocal(), fdw),
-    resolvePeriodDay(period.to, todayLocal(), fdw),
-  );
+  if (seq !== calendarMarkersSeq || !isCurrentScreenPair(pair) || calendar === null) return;
+  calendarMarkersByDay = next;
+  // Сырой ответ — источник счётчиков попапа даты (пункт 7): без данных месяц
+  // показывает только маркеры, а попап не открывается (`dayInfo` → `null`).
+  calendarMarkersResult = raw;
+  // Источник маркеров — замыкание `dayMarkers`: новые данные видны только
+  // после перерисовки сетки, выделение периода при этом не трогается.
+  calendar.refresh();
 }
 
 /** Двузначная запись числа. */
@@ -2577,6 +3106,76 @@ export interface ChronicleRecordRef {
 }
 
 /**
+ * Открыть ИСТОЧНИК строки задачи из панели «Задачи и напоминания» (0.16.1,
+ * задача `cfb8cb72`, пункт 3): запись → текущая, лента — в самый верх, режим
+ * правки тела, каретка в начало строки задачи. Запись не отображается в ленте —
+ * сначала общий переход поиска (сброс отбора при необходимости, период записи,
+ * дата в календарике, прокрутка к записи), затем тот же вход в правку.
+ *
+ * Единый вход для пунктов меню и чипа даты, адресация — `comment_id` + `line_no`
+ * проекции строки (`line_no` — номер строки `body_md` С НУЛЯ, как в `TaskDTO`
+ * и `PATCH /tasks`; поле переводит его в смещение символа само).
+ */
+export async function openChronicleTaskLine(ref: {
+  commentId: string;
+  lineNo: number;
+}): Promise<void> {
+  // Ленивый импорт: статический замкнул бы цикл active-view → chronicle.
+  const { setActiveView } = await import('../active-view.js');
+  setActiveView('chronicle');
+  await ensureChronicleInitialised();
+  let record = rows.find((item) => item.id === ref.commentId);
+  if (record === undefined) {
+    // Дату начала записи знает только сам источник: лента её не несёт, пока
+    // запись не загружена. Точечное чтение — как у входа в правку тела.
+    try {
+      const comment = await etn.comments.get(requireNetworkId(), ref.commentId);
+      await jumpToRecord({
+        id: comment.id,
+        valid_from: comment.valid_from,
+        valid_to: comment.valid_to,
+      });
+    } catch (err) {
+      notice(t('diary.loadFailed', [errText(err)]), 'error');
+      return;
+    }
+    record = rows.find((item) => item.id === ref.commentId);
+    if (record === undefined) return;
+    await editRecordLine(record.id, ref.lineNo);
+    // В самый верх — ПОСЛЕ входа в правку И её отложенного скролла: CodeMirror
+    // прокручивает поле к каретке уже после завершения `editLine`, поэтому
+    // одного `scrollTop = 0` мало (блокер Б2-Н репроверки 4b755c93): значение
+    // переустанавливается в следующих кадрах (`pinFeedTop`).
+    const wrap = feedWrap;
+    if (wrap !== null) pinFeedTop((top) => (wrap.scrollTop = top));
+    return;
+  }
+  const day = localDay(record.valid_from);
+  if (day === '') return;
+  // Запись УЖЕ в ленте: текущая + развёрнутое тело (иначе поле правки скрыто
+  // свёрнутой карточкой).
+  feedNav?.selectRecord(record.id, day);
+  setRecordCollapsed(day, record.id, false);
+  await editRecordLine(record.id, ref.lineNo);
+  // Лента встаёт в самое начало уже после того, как каретка заняла строку
+  // задачи, и удерживается там через отложенный скролл правки (Б2-Н).
+  const localWrap = feedWrap;
+  if (localWrap !== null) pinFeedTop((top) => (localWrap.scrollTop = top));
+}
+
+/**
+ * Войти в правку тела записи на строке `lineNo` (карточка адресуется по id).
+ * Промис завершается, когда правка открыта и каретка поставлена, — порядок
+ * нужен вызывающему для прокрутки ленты после входа (блокер `84c71c37`).
+ */
+async function editRecordLine(id: string, lineNo: number): Promise<void> {
+  if (feedList === null) return;
+  const card = feedList.querySelector<HTMLElement>(`[${TABLE_ROW_KEY_ATTR}="${id}"]`);
+  if (card === null) return;
+  await cardEditors.get(card)?.editLine(lineNo);
+}
+
+/**
  * Открыть экран «Дневник» на конкретной записи (0.10.1, задача 8012a9b0):
  * переключить вид, установить в календаре дату записи и сделать запись текущей
  * в ленте. Единый вход для пункта меню строки вкладки «Дневник» редактора —
@@ -2588,6 +3187,32 @@ export async function openChronicleRecord(record: ChronicleRecordRef): Promise<v
   setActiveView('chronicle');
   await ensureChronicleInitialised();
   await jumpToRecord(record);
+}
+
+/**
+ * Открыть «Дневник» на конкретном дне (0.16.1, требование 31fe2cc9 «Клик по
+ * date-чипу открывает день»): период ленты — эти ЛОКАЛЬНЫЕ сутки, календарь
+ * переводится на месяц дня, прочие критерии отбора сохраняются. Единый вход
+ * для чипа в просмотре и в live-preview — второй копии перехода нет.
+ *
+ * Значения периода пишутся через mode-конвертер `periodValuesForRange` (так же
+ * как переход к записи): period-editor в режиме «Пресеты» не отображает сырые
+ * даты, и панель показывала бы «сегодня» (ошибка ecd91c1d/8012a9b0).
+ */
+export async function openChronicleDay(day: string): Promise<void> {
+  if (!isValidLocalDay(day)) return;
+  // Ленивый импорт: статический замкнул бы цикл active-view → chronicle.
+  const { setActiveView } = await import('../active-view.js');
+  setActiveView('chronicle');
+  await ensureChronicleInitialised();
+  const values = periodValuesForRange(day, day, todayLocal(), 'presets');
+  setChroniclePeriod(values.from, values.to);
+  persistState();
+  // HOME нужен запросу ленты; без него первый запрос уходил бы с пустым HOME
+  // (та же страховка, что в `jumpToRecord`).
+  await getHomeId(requireNetworkId()).catch(() => undefined);
+  await reload();
+  showRecordDayInCalendar(day);
 }
 
 // ---------------------------------------------------------------------------
@@ -2632,6 +3257,17 @@ export async function openChronicleThought(id: string): Promise<void> {
   const networkId = requireNetworkId();
   const thought = await etn.thoughts.get(networkId, id);
   await setThoughtEditorTarget(thought);
+}
+
+/**
+ * Открыть мысль датового факта на вкладке «Свойства» с показом строки свойства
+ * (задача 3054fe86). Клик по облачку идёт прежним путём (`openChronicleThought`)
+ * — вкладка не меняется.
+ */
+export async function openChronicleThoughtProperty(id: string, propertyId: string): Promise<void> {
+  const networkId = requireNetworkId();
+  const thought = await etn.thoughts.get(networkId, id);
+  await setThoughtEditorTarget(thought, { tab: 'properties', revealPropertyId: propertyId });
 }
 
 export async function openChronicleLink(link: Link): Promise<void> {

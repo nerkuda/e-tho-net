@@ -51,6 +51,7 @@ const EXPECTED_GUARD_UI = [
   'guard-ui-slider.test.ts',
   'guard-ui-states.test.ts',
   'guard-ui-tables.test.ts',
+  'guard-ui-theme-tokens.test.ts',
   'guard-ui-tokens.test.ts',
   'guard-ui-tree.test.ts',
   'guard-ui-user-tokens.test.ts',

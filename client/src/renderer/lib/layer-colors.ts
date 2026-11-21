@@ -19,18 +19,34 @@
  * variables are absent (the base layer never sets them).
  *
  * Editing: the «Свойства слоя» dialog picks the two colours for the CURRENT
- * theme only — the opposite theme's pair is computed by flipping the HSL
- * lightness (L → 1−L, hue/saturation preserved), so one choice themes both
- * modes. The same inversion derives the light defaults from the dark ones.
+ * theme only — the opposite mode's slot is computed by the SAME adaptive
+ * module (`lib/adaptive-context.ts::deriveOppositeSlot`), so one choice themes
+ * both modes. The same inversion derives the creation defaults from the dark
+ * ones.
+ *
+ * **Производные вместо исходников (0.16.1, требование 26d53c26).** В хранилище
+ * лежат цвета ПОЛЬЗОВАТЕЛЯ (`layers.colors` — пара dark/light), а на экран
+ * идут производные под фактическую подложку активной темы и режима: фон
+ * подгоняется под текст темы, полоса — под итоговую подложку холста (с
+ * картинкой — композит «тинт × картинка»). Считает их `lib/adaptive-color.ts`,
+ * контекст (тема, `--text`, тинт) читает `lib/adaptive-context.ts`.
  */
 
 import { BASE_LAYER_ID, type Layer, type LayerColors, type LayerEcho } from '@etn/shared';
 
 import { store, type Theme } from '../state.js';
+import { subscribeWallpaper } from './wallpaper-state.js';
+import {
+  adaptLayerColors,
+  deriveOppositeSlot,
+  wallpaperSignature,
+} from './adaptive-context.js';
+import { applyCloudFrameStyle, cloudFrameColors } from './cloud-frames.js';
 
-/** Theme default of the focus band (styles.css `--focus-band-color`, L12) —
- *  the label contrast fallback for a layer without explicit colours. */
-export const DEFAULT_FOCUS_BAND_COLOR = '#1e62be';
+/** Focus accent of the `current` theme (`--focus-accent`, requirement
+ *  c19cbb81) — the label contrast fallback for a layer without explicit
+ *  colours. */
+export const DEFAULT_FOCUS_ACCENT = '#1e62be';
 
 /** Creation defaults of the dark theme (0.6.4): a violet stripe clearly
  *  distinct from the blue base band (#1e62be) and a violet-tinted canvas
@@ -46,6 +62,9 @@ const DEFAULT_BACKGROUND_DARK = '#191327';
 export interface LayerThemeVars {
   focusStripe: string | null;
   background: string | null;
+  /** Кольцо фокуса экранов (`--layer-focus-ring-screen`): адаптировано к
+   *  `--surface`/поверхности слоя, а не к холсту карты (круг 3). */
+  focusRing: string | null;
 }
 
 /** Minimal style-declaration surface (CSSStyleDeclaration in the renderer). */
@@ -134,6 +153,22 @@ export function invertThemeColor(
 }
 
 /**
+ * Пара слотов из значения, выбранного в диалоге для ТЕКУЩЕГО режима:
+ * выбранный слот остаётся ровно как задан (это данные пользователя), второй
+ * вычисляет общий модуль адаптации под подложку противоположного режима
+ * (`deriveOppositeSlot`). Прямая инверсия светлоты из диалога убрана —
+ * требование 26d53c26, стандарт библиотечного модуля a2488f05.
+ */
+export function layerColorPair(
+  value: string,
+  kind: 'focus_stripe' | 'background',
+  theme: Theme,
+): LayerColors['focus_stripe'] {
+  const other = deriveOppositeSlot(value, kind, theme);
+  return theme === 'dark' ? { dark: value, light: other } : { dark: other, light: value };
+}
+
+/**
  * Creation defaults (0.6.4): the client passes them in `POST /layers`, so a
  * new layer is visually distinct from the base right away. The dark values
  * are canonical; the light ones are their lightness inversions.
@@ -167,42 +202,95 @@ export function currentLayerColors(layers: Layer[], current: LayerEcho | null): 
 
 /** The current theme's variant of a layer's colours; `null` → theme defaults. */
 export function resolveLayerTheme(colors: LayerColors | null, theme: Theme): LayerThemeVars {
-  if (colors === null) return { focusStripe: null, background: null };
+  if (colors === null) return { focusStripe: null, background: null, focusRing: null };
   return {
     focusStripe: colors.focus_stripe[theme],
     background: colors.background[theme],
+    // Производное экранов считает `adaptLayerColors`: кольцо зависит от
+    // поверхности темы, слой о ней ничего не знает.
+    focusRing: null,
   };
 }
 
 /**
  * Writes (or clears) the layer CSS variables on a style target:
- * `--layer-focus-stripe` / `--layer-bg`. Absent variables fall back to the
- * theme tokens in styles.css (`.canvas`, `.canvas::before`, `.cloud.halo`,
+ * `--layer-focus-stripe` (полоса карты), `--layer-focus-ring-screen` (кольца
+ * фокуса экранов) / `--layer-bg`. Absent variables fall back to the theme
+ * tokens in styles.css (`.canvas`, `.canvas::before`, `.cloud.halo`,
  * `.st-results`, `.chronicle`), so the base layer keeps the current look.
  */
 export function applyLayerThemeStyle(style: LayerStyleTarget, vars: LayerThemeVars): void {
   if (vars.focusStripe === null) style.removeProperty('--layer-focus-stripe');
   else style.setProperty('--layer-focus-stripe', vars.focusStripe);
+  if (vars.focusRing === null) style.removeProperty('--layer-focus-ring-screen');
+  else style.setProperty('--layer-focus-ring-screen', vars.focusRing);
   if (vars.background === null) style.removeProperty('--layer-bg');
   else style.setProperty('--layer-bg', vars.background);
 }
 
 /** Signature of the last applied variables — skips no-op style writes. */
 let lastAppliedKey = '';
+/** Последние применённые (уже адаптированные) значения — для подписи слоя. */
+let lastApplied: LayerThemeVars | null = null;
 let themeWired = false;
 
+/**
+ * Действующая (адаптированная) полоса слоя — та, что видит пользователь.
+ * Подпись слоя считает свой чёрный/белый по НЕЙ, а не по исходному цвету
+ * пользователя: адаптация сдвигает светлоту, и цвет подписи иначе разъедется
+ * с фактической полосой. `null` — полосы слоя нет (основа).
+ */
+export function effectiveLayerStripe(): string | null {
+  return lastApplied?.focusStripe ?? null;
+}
+
+/**
+ * Перекраска рамок трёх состояний мысли (`--frame-open` / `--frame-current` /
+ * `--frame-selected`, задача c6d74fd4). Источники — токены применённой темы и
+ * полоса активного слоя; цвета считает `lib/cloud-frames.ts`. Вызывается
+ * ТОЛЬКО при смене ключа (тема, режим, слой), поэтому computed-стиль читается
+ * на смену темы/слоя, а не на каждый тик store.
+ */
+function applyCloudFrames(vars: LayerThemeVars): void {
+  const rootStyle = getComputedStyle(document.documentElement);
+  const frames = cloudFrameColors({
+    stripe: vars.focusStripe,
+    cursor: rootStyle.getPropertyValue('--cursor'),
+    selection: rootStyle.getPropertyValue('--selection'),
+    // Фон холста: у слоя свой (--layer-bg), на базовом — темы (--bg).
+    background: vars.background ?? rootStyle.getPropertyValue('--bg'),
+  });
+  if (frames !== null) applyCloudFrameStyle(document.documentElement.style, frames);
+}
+
 /** Reads the store and applies the current layer's theme variables to the
- *  document root. Cheap enough to call on every store change (layer switch,
- *  theme toggle, network close) thanks to the change-detection key. */
+ *  document root: `--layer-focus-stripe`/`--layer-bg` и производные от них
+ *  `--frame-*` (рамки трёх состояний). Cheap enough to call on every store
+ *  change (layer switch, theme toggle, network close) thanks to the
+ *  change-detection key. */
 export function refreshLayerTheme(): void {
   if (typeof document === 'undefined') return;
   const s = store.state;
   const colors = currentLayerColors(s.layers, s.currentLayer);
   const vars = resolveLayerTheme(colors, s.theme);
-  const key = `${s.theme}|${vars.focusStripe ?? ''}|${vars.background ?? ''}`;
+  // Тема входит в ключ: цвета токенов темы меняются вместе с ней (--cursor,
+  // --selection, --bg), и рамки обязаны пересчитаться тем же тиком. Картинка —
+  // тоже: композит «тинт × картинка» меняет подложку холста, а с ней и полосу.
+  const key =
+    `${s.uiTheme}|${s.theme}|${vars.focusStripe ?? ''}|${vars.background ?? ''}` +
+    `|${wallpaperSignature()}`;
   if (key === lastAppliedKey) return;
+  // Исходные значения пользователя остаются в `layers.colors`; на экран идут
+  // производные под фактическую подложку (0.16.1, требование 26d53c26).
+  const adapted = adaptLayerColors(vars, `${s.uiTheme}|${s.theme}`);
+  const applied = adapted.colors;
+  lastApplied = applied;
+  applyLayerThemeStyle(document.documentElement.style, applied);
+  applyCloudFrames(applied);
+  // Тема ещё не применена (нет токенов) — ключ не фиксируем: производные
+  // пересчитаются на следующем тике store.
+  if (adapted.context === null) return;
   lastAppliedKey = key;
-  applyLayerThemeStyle(document.documentElement.style, vars);
 }
 
 /**
@@ -214,6 +302,9 @@ export function initLayerTheme(): void {
   if (themeWired) return;
   themeWired = true;
   store.subscribe(refreshLayerTheme);
+  // Картинка меняется вне store (загрузка/удаление/перечитывание) — полоса и
+  // фон слоя обязаны пересчитаться под новый композит «тинт × картинка».
+  subscribeWallpaper(() => refreshLayerTheme());
   refreshLayerTheme();
 }
 
@@ -281,10 +372,19 @@ export function layerLabelView(
   theme: Theme,
   zoneHeight: number,
   canvasWidth: number,
+  /**
+   * Действующая полоса (`effectiveLayerStripe()`): подпись лежит на ней,
+   * поэтому чёрный/белый выбирается по адаптированному цвету. `undefined` —
+   * исходный цвет пары (чистая модель без адаптации).
+   */
+  stripeOverride?: string | null,
 ): LayerLabelView {
   const visible =
     current !== null && current.id !== BASE_LAYER_ID && zoneHeight > 0 && canvasWidth > 0;
-  const stripe = colors?.focus_stripe[theme] ?? DEFAULT_FOCUS_BAND_COLOR;
+  const stripe =
+    stripeOverride === undefined
+      ? (colors?.focus_stripe[theme] ?? DEFAULT_FOCUS_ACCENT)
+      : (stripeOverride ?? DEFAULT_FOCUS_ACCENT);
   return {
     visible,
     title: current?.title ?? '',

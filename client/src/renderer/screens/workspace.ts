@@ -30,6 +30,7 @@ import { activeServerMaintenanceText } from '../lib/server-maintenance-text.js';
 import { mountStatusMessage, unmountStatusMessage } from '../lib/status-message.js';
 import { initUpdateBanner, createUpdateBannerHost } from '../lib/update-banner.js';
 import { svgIcon } from '../lib/ui/icon.js';
+import { todayLocal } from '../lib/dates.js';
 import { store, getRtStatus, getRtStatusDetail, type RtStatus, type RtStatusDetail } from '../state.js';
 import type { ServerMaintenanceDto } from '../../main/ipc/contract.js';
 import { wireNetMenu, wireUserMenu } from './workspace-menus.js';
@@ -50,7 +51,8 @@ import { hidePanel as hideSearchPanel, mountSearch } from '../search/search.js';
 import { mountSelection } from '../selection/selection.js';
 import { mountUsagePanel } from './usage-panel.js';
 import { mountStructures } from './structures/structures.js';
-import { mountChronicle } from './chronicle/chronicle.js';
+import { mountChronicle, openChronicleDay } from './chronicle/chronicle.js';
+import { mountReminderTodayBadge } from './chronicle/reminder-badge.js';
 import { mountActivity } from './activity/activity.js';
 import { mountPublications } from './publications/publications.js';
 import { setActiveView } from './active-view.js';
@@ -300,6 +302,15 @@ export function buildWorkspace(): HTMLElement {
     class: 'view-tab',
     onClick: () => setActiveView('chronicle'),
   });
+  // Бейдж «сегодня» на закладке «Дневник» (0.16.1, элемент 23887005): число —
+  // напоминания сегодня + просрочки, ноль — скрыт, клик — «Дневник» на сегодня.
+  onWorkspaceTeardown(
+    mountReminderTodayBadge(chronicleViewButton, {
+      openToday: () => {
+        void openChronicleDay(todayLocal());
+      },
+    }),
+  );
 
   // Activity-feed view button (задача f27809d0 «События»): fourth view
   // showing the network's `activity_log` (lenta from `GET /activity`).

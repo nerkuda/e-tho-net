@@ -127,7 +127,10 @@ describe('структура экрана: единая правка и неме
     insertLocal({ id: 'rec-1' });
     assert.equal(rows.length, 1, 'дубль не появился');
     insertLocal({ id: 'rec-2' });
-    assert.deepEqual(rows.map((r) => r.id), ['rec-1', 'rec-2']);
+    assert.deepEqual(
+      rows.map((r) => r.id),
+      ['rec-1', 'rec-2'],
+    );
   });
 });
 
@@ -154,7 +157,9 @@ describe('доводка цикла A: коммит только при реал
   it('экран «Дневник» коммитит только при изменении заголовка', () => {
     assert.match(
       CHRONICLE,
-      /externalChanges: \(\) =>\s*\n\s*\(title !== null \? title\.value\(\)\.trim\(\) : row\.title \?\? ''\) !== \(row\.title \?\? ''\)/,
+      // Скобки вокруг `row.title ?? ''` — вариант форматтера Prettier (проект
+      // форматирует файл при записи, `formatter: true`), смысл предиката тот же.
+      /externalChanges: \(\) =>\s*\n\s*\(title !== null \? title\.value\(\)\.trim\(\) : \(?row\.title \?\? ''\)?\) !== \(row\.title \?\? ''\)/,
       'предикат сравнивает живой заголовок с сохранённым',
     );
   });

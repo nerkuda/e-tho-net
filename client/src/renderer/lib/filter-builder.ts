@@ -690,6 +690,11 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   get attachments() { return t('filter.attachments.hasAttachments'); },
   get chronology() { return t('filter.chronology.hasDnevnikovyeRecords'); },
   get comment() { return t('filter.comment.hasKommentariy'); },
+  // Задачи и напоминания мысли (0.16.1, задача 4cfc6257): наличие незакрытых
+  // субъектных задач, наличие и дата напоминаний запросившего.
+  get tasks() { return t('filter.tasks.hasTasks'); },
+  get reminders() { return t('filter.reminders.hasReminders'); },
+  get reminder_at() { return t('filter.reminder_at.dateReminder'); },
   get active() { return t('filter.active.active'); },
   get trashed() { return t('filter.trashed.markedDelete'); },
   get keywords() { return t('filter.keywords.findSlova'); },
@@ -704,6 +709,7 @@ export const OPERAND_KIND_LABELS: Readonly<Record<string, string>> = {
   get record_body() { return t('filter.record_body.textRecords'); },
   get record_author() { return t('filter.record_author.avtorRecords'); },
   get record_editor() { return t('filter.record_editor.editorRecords'); },
+  get record_tasks() { return t('filter.record_tasks.hasTasks'); },
   get occurred_at() { return t('filter.occurred_at.timeEvents'); },
   get action() { return t('filter.action.typeActions'); },
   get entity_type() { return t('filter.entity_type.vidSuschnosti'); },
@@ -1973,10 +1979,17 @@ export const FILTER_COLLECTION_PREDICATE_KINDS: ReadonlySet<string> = new Set([
   'comment',
   'attachments',
   'chronology',
+  // Задачи и напоминания мысли (0.16.1, задача 4cfc6257): «Есть задачи»/
+  // «Есть напоминание» — та же триада «(да) (нет)», что у коллекций.
+  'tasks',
+  'reminders',
   // Наличие рёбер любого типа (требование 60db9614): «да/нет» — это оператор
   // `not_empty`/`is_empty`, плюс полоса состояний ребра под строкой.
   'incoming_links',
   'outgoing_links',
+  // «Есть задачи» в ЗАПИСИ «Дневника» (уточнение 2026-11-19, пункт 8): ячейка
+  // значения — та же триада «(да) (нет)».
+  'record_tasks',
 ]);
 
 /**
@@ -2042,7 +2055,14 @@ function operatorNeedsValue(operator: FilterAstOperator): boolean {
 
 /** Датовые ОПЕРАНДЫ листа — вид значения которых «дата» без реестра свойств. */
 function isDateOperandKind(kind: FilterAstEntityKind): boolean {
-  return kind === 'created_at' || kind === 'updated_at' || kind === 'record_time' || kind === 'occurred_at';
+  return (
+    kind === 'created_at' ||
+    kind === 'updated_at' ||
+    kind === 'record_time' ||
+    kind === 'occurred_at' ||
+    // «Дата напоминания» — датовый операнд (0.16.1, задача 4cfc6257).
+    kind === 'reminder_at'
+  );
 }
 
 /** True — у дерева есть хотя бы одно условие (пустые группы не считаются). */

@@ -12,9 +12,15 @@
  * транспорту, который эмитит `thought-type-view.deleted` на каждый отбор
  * (полная карточка, ошибка 69aa355c) и `thought-type.deleted` на тип.
  *
- * Циклического импорта нет: модуль зависит от `thought-type-service` и
- * `thought-type-views-service`, а те друг от друга — нет (views-service уже
- * читает type-service, поэтому каскад не мог жить внутри type-service).
+ * С 0.16.1 (ошибка d4802371) то же выполняется для ВСЕГО поддерева типа:
+ * снапшоты карточек и собственных отборов снимаются с каждого типа, а само
+ * удаление делает доменный каскад `deleteThoughtType` с `force` (дети раньше
+ * родителя).
+ *
+ * Циклического импорта нет: модуль зависит от `thought-type-service`,
+ * `thought-type-views-service` и `type-hierarchy` — последние друг от друга
+ * циклически не зависят (views-service уже читает type-service, поэтому каскад
+ * не мог жить внутри type-service).
  */
 
 import type { EffectiveThoughtTypeView, ThoughtType } from '@etn/shared';
@@ -29,12 +35,22 @@ import {
   deleteThoughtTypeView,
   listOwnEffectiveTypeViews,
 } from './thought-type-views-service.js';
+import { subtreeIds } from './type-hierarchy.js';
 
-/** Итог удаления типа: карточка типа и снапшоты каскадно удалённых отборов. */
+/**
+ * Итог удаления типа: карточки удалённых типов и снапшоты каскадно удалённых
+ * отборов.
+ */
 export interface DeleteThoughtTypeWithViewsResult {
-  /** Карточка типа ДО удаления (`null`, если строки не было — тогда бросит). */
+  /** Карточка ЗАПРОШЕННОГО типа ДО удаления (`null`, если строки не было — тогда бросит). */
   type: ThoughtType | null;
-  /** Собственные отборы типа, удалённые каскадом (снапшоты ДО удаления). */
+  /**
+   * Карточки всех удалённых типов: запрошенный первым, затем потомки (preorder
+   * поддерева, ошибка d4802371). Транспорт эмитит `thought-type.deleted` и
+   * запись активности на КАЖДЫЙ тип из списка.
+   */
+  types: ThoughtType[];
+  /** Собственные отборы удалённых типов, удалённые каскадом (снапшоты ДО удаления). */
   views: EffectiveThoughtTypeView[];
 }
 
@@ -60,11 +76,23 @@ export function deleteThoughtTypeWithViews(
     // Снапшоты и каскад — только для существующего типа: `deleteThoughtType`
     // ниже отдаст канонический NOT_FOUND, если строки нет.
     const type = getThoughtType(ndb, id);
-    const views = type === null ? [] : listOwnEffectiveTypeViews(ndb, id);
+    const types: ThoughtType[] = [];
+    const views: EffectiveThoughtTypeView[] = [];
+    if (type !== null) {
+      // Всё поддерево: `deleteThoughtType` с `force` уносит его целиком
+      // (ошибка d4802371), поэтому отборы снимаются с каждого типа — ДО
+      // удаления типа, пока `thought_type_views_v` ещё разрешает владельца.
+      for (const typeId of subtreeIds(ndb, 'thought_types', id)) {
+        const card = getThoughtType(ndb, typeId);
+        if (card === null) continue;
+        types.push(card);
+        views.push(...listOwnEffectiveTypeViews(ndb, typeId));
+      }
+    }
     for (const view of views) {
       deleteThoughtTypeView(ndb, view.id);
     }
     deleteThoughtType(ndb, id, expectedVersion, opts);
-    return { type, views };
+    return { type, types, views };
   });
 }

@@ -32,12 +32,34 @@ import { etn } from '../lib/etn.js';
 import { uiButton } from '../lib/ui/button.js';
 import { checkboxRow, choiceControl } from '../lib/ui/choice-row.js';
 
+/** Текущее состояние тумблеров журналирования (для снимка «Применить»). */
+export interface LogsSectionState {
+  /** Включено ли журналирование клиента; `null` — ещё не известно. */
+  client: boolean | null;
+  /** Включено ли журналирование сервера; `null` — недоступно (не admin). */
+  server: boolean | null;
+}
+
 /**
  * Confirmation seam: unit tests substitute their own resolver, the dialog
  * stays the production default.
  */
 export interface LogsSectionOptions {
   confirm?: (title: string, message: string) => Promise<boolean>;
+  /**
+   * Смена состояния тумблеров (задача a6ad0143): диалог настроек держит снимок
+   * «принятого» состояния и включает мгновенные изменения в «Применить».
+   * Вызывается после каждой загрузки и после запроса на переключение —
+   * с «последним запрошенным» значением, не дожидаясь ответа сервера, — и
+   * повторно по завершении записи (подтверждённым или откаченным при ошибке).
+   */
+  onChange?: (state: LogsSectionState) => void;
+  /**
+   * Запись тумблера начата (задача a6ad0143, гонка «Отмены»): диалог ждёт её
+   * перед откатом снимка — иначе откат уйдёт параллельно записи и сервер
+   * получит не тот итог. Ошибки записи раздел обрабатывает сам.
+   */
+  onWrite?: (write: Promise<unknown>) => void;
 }
 
 /** Builds the whole «Логирование» section of the settings dialog. */
@@ -70,22 +92,33 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       disabled: clientState === null,
       onChange: (next) => {
         const toggle = logToggle.input;
+        const confirmed = clientState;
         toggle.disabled = true;
-        void etn.system
+        // «Последнее запрошенное» значение диалог видит СРАЗУ (задача a6ad0143):
+        // признак «есть непринятые изменения» и откат считаются по выбору
+        // пользователя, а не по подтверждённому ответу сервера.
+        if (clientState !== null) clientState = { ...clientState, enabled: next };
+        notify();
+        const write = etn.system
           .setClientLogging(next)
           .then((state) => {
             clientState = state;
             setClientMsg(next ? t('settingsLogs.loggingClientEnabled') : t('settingsLogs.loggingClientDisabled'));
             renderClient();
+            notify();
           })
           .catch((err: unknown) => {
-            // Immediate apply failed — revert the visual state and say why.
-            toggle.checked = !next;
+            // Запись не прошла: возвращаем подтверждённое состояние и говорим
+            // причину — выбор не остаётся «применённым» молча.
+            clientState = confirmed;
+            toggle.checked = confirmed?.enabled ?? !next;
             setClientMsg(errText(err), true);
+            notify();
           })
           .finally(() => {
             toggle.disabled = false;
           });
+        opts.onWrite?.(write);
       },
     });
     const toggleLabel = logToggle.row;
@@ -142,6 +175,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       setClientMsg(t('settingsLogs.deletedFilesCurrentFileUsechen', result.deleted));
       clientState = await etn.system.getClientLogState();
       renderClient();
+      notify();
     } catch (err) {
       setClientMsg(errText(err), true);
     }
@@ -158,6 +192,14 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
 
   function setServerMsg(text: string, isError = false): void {
     setStatusText(serverMsg, text, isError);
+  }
+
+  /** Сообщить диалогу текущее состояние тумблеров (снимок/«Применить»). */
+  function notify(): void {
+    opts.onChange?.({
+      client: clientState?.enabled ?? null,
+      server: serverStatus?.enabled ?? null,
+    });
   }
 
   function renderServer(): void {
@@ -190,21 +232,32 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       disabled: status === null,
       onChange: (next) => {
         const toggle = logToggle.input;
+        const confirmed = serverStatus;
         toggle.disabled = true;
-        void etn.system
+        // «Последнее запрошенное» значение — сразу (задача a6ad0143): откат
+        // снимка считается по нему, а не по подтверждённому ответу сервера.
+        if (serverStatus !== null) serverStatus = { ...serverStatus, enabled: next };
+        notify();
+        const write = etn.system
           .setServerLogging(next)
           .then((fresh) => {
             serverStatus = fresh;
             setServerMsg(next ? t('settingsLogs.loggingServerEnabled') : t('settingsLogs.loggingServerDisabled'));
             renderServer();
+            notify();
           })
           .catch((err: unknown) => {
-            toggle.checked = !next;
+            // Запись не прошла: возвращаем подтверждённое состояние и говорим
+            // причину — выбор не остаётся «применённым» молча.
+            serverStatus = confirmed;
+            toggle.checked = confirmed?.enabled ?? !next;
             setServerMsg(errText(err), true);
+            notify();
           })
           .finally(() => {
             toggle.disabled = false;
           });
+        opts.onWrite?.(write);
       },
     });
     const toggleLabel = logToggle.row;
@@ -317,6 +370,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
       setServerMsg(t('settingsLogs.filesLogServerDeleted'));
       selectedServerFile = null;
       renderServer();
+      notify();
     } catch (err) {
       setServerMsg(errText(err), true);
     }
@@ -333,6 +387,7 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     .then((state) => {
       clientState = state;
       renderClient();
+      notify();
     })
     .catch((err: unknown) => {
       setClientMsg(errText(err), true);
@@ -343,10 +398,12 @@ export function buildLogsSection(opts: LogsSectionOptions = {}): HTMLElement {
     .then((status) => {
       serverStatus = status;
       renderServer();
+      notify();
     })
     .catch((err: unknown) => {
       serverError = serverUnavailableReason(err);
       renderServer();
+      notify();
     });
 
   return root;

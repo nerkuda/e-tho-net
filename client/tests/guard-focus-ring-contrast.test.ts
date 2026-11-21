@@ -2,10 +2,12 @@
  * Сторож двойной рамки открытого в редакторе элемента (задача 3af98e31).
  *
  * Правило: сплошная рамка открытого в редакторе элемента рисуется ОДНИМ
- * механизмом — внутренняя полоса цветом фокуса активного слоя
- * (`--layer-focus-stripe`) плюс внешний тонкий контрастный кант
+ * механизмом — кольцо цвета `--frame-open` (его считает `lib/cloud-frames.ts`
+ * как производное от полосы активного слоя или от токена курсора темы, задача
+ * c6d74fd4) плюс внешний тонкий контрастный кант
  * (`--focus-ring-contrast`), иначе рамка сливается с фоном фокуса того же
- * цвета. Контрастный кант — единый токен темы; его обязаны использовать ВСЕ
+ * цвета. В списках публикаций кольцо по-прежнему берётся прямо из цепочки
+ * `--layer-focus-stripe` → `--focus-accent` → `--accent`. Контрастный кант — единый токен темы; его обязаны использовать ВСЕ
  * сплошные рамки открытого: гало карты и «Структур» (общий класс
  * `.cloud.halo`), строка библиотеки (`.pub-open`) и блок документа публикации
  * (`.pub-doc-editor`). Пунктирную рамку текущего (`.cloud.kbd-cursor`,
@@ -20,6 +22,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { THEMES_DIR, THEME_MODES, readTheme, themeBlockBody } from './theme-css.js';
+
 const RENDERER = path.resolve(import.meta.dirname, '..', 'src', 'renderer');
 
 function read(...parts: string[]): string {
@@ -28,34 +32,55 @@ function read(...parts: string[]): string {
 
 /** Тело CSS-правила по точному селектору (первое совпадение). */
 function ruleBody(css: string, selector: string): string {
-  const rx = new RegExp(
-    selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}',
-  );
+  const rx = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}');
   const match = rx.exec(css);
   assert.ok(match !== null, `найдено правило ${selector}`);
   return match[1] ?? '';
 }
 
-const TOKENS = read('styles', 'tokens.css');
+/**
+ * Все файлы тем версии (`lib/ui/themes/*.css`) — фокус-пара обязана быть в
+ * КАЖДОЙ теме, а не только в `current` (карточка сторожа 642ff492).
+ */
+const THEMES = fs
+  .readdirSync(THEMES_DIR)
+  .filter((file) => file.endsWith('.css'))
+  .map((file) => file.replace(/\.css$/, ''))
+  .sort();
+
 const CANVAS = read('styles', 'canvas.css');
 const PUBLICATIONS = read('styles', 'screens', 'publications.css');
 const STRUCTURES_VISUAL = read('screens', 'structures', 'visual-states.ts');
 
 describe('guard: двойная рамка открытого — единый контрастный кант (3af98e31)', () => {
-  it('токен контраста объявлен в обеих темах', () => {
-    const rootBlock = /:root\s*\{([\s\S]*?)\n\}/.exec(TOKENS)?.[1] ?? '';
-    const darkBlock = /\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/.exec(TOKENS)?.[1] ?? '';
-    assert.match(rootBlock, /--focus-ring-contrast:\s*#[0-9a-f]{6};/i, 'кант объявлен в :root');
-    assert.match(
-      darkBlock,
-      /--focus-ring-contrast:\s*#[0-9a-f]{6};/i,
-      'кант объявлен в тёмной теме',
-    );
+  it('токены фокуса объявлены в каждой теме в обоих режимах', () => {
+    assert.ok(THEMES.length >= 2, `ожидались файлы тем, найдено: ${THEMES.join(', ')}`);
+    for (const name of THEMES) {
+      const css = readTheme(name);
+      for (const mode of THEME_MODES) {
+        const body = themeBlockBody(css, name, mode);
+        assert.ok(body !== null, `${name}.css: нет блока режима '${mode}'`);
+        assert.match(
+          body!,
+          /--focus-accent:\s*[^;]+;/i,
+          `${name}.css [${mode}]: нет программного фокус-акцента основы (--focus-accent)`,
+        );
+        assert.match(
+          body!,
+          /--focus-ring-contrast:\s*#[0-9a-f]{6};/i,
+          `${name}.css [${mode}]: кант объявлен`,
+        );
+      }
+    }
   });
 
   it('гало карты и «Структур» (.cloud.halo) несёт контрастный кант', () => {
     const body = ruleBody(CANVAS, '.cloud.halo');
-    assert.match(body, /var\(--layer-focus-stripe/, 'внутренняя полоса — цвет фокуса слоя');
+    assert.match(
+      body,
+      /var\(--frame-open,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
+      'кольцо — --frame-open (производное от полосы слоя/курсора темы)',
+    );
     assert.match(body, /var\(--focus-ring-contrast\)/, 'внешний кант — общий токен контраста');
   });
 
@@ -65,7 +90,11 @@ describe('guard: двойная рамка открытого — единый �
     // правилом, иначе у фокуса (обычный случай: редактор следует за фокусом)
     // двойного кольца нет (ошибка реализации задачи 3af98e31).
     const body = ruleBody(CANVAS, '.cloud.focus-cloud.halo');
-    assert.match(body, /var\(--layer-focus-stripe/, 'внутренняя полоса — цвет фокуса слоя');
+    assert.match(
+      body,
+      /var\(--frame-open,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
+      'кольцо — --frame-open (производное от полосы слоя/курсора темы)',
+    );
     assert.match(body, /var\(--focus-ring-contrast\)/, 'внешний кант — общий токен контраста');
   });
 
@@ -74,7 +103,7 @@ describe('guard: двойная рамка открытого — единый �
       const body = ruleBody(PUBLICATIONS, selector);
       assert.match(
         body,
-        /var\(--layer-focus-stripe/,
+        /var\(--layer-focus-ring-screen,\s*var\(--focus-accent,\s*var\(--accent\)\)\)/,
         `${selector}: внутренняя полоса — цвет фокуса слоя`,
       );
       assert.match(body, /var\(--focus-ring-contrast\)/, `${selector}: внешний кант — общий токен`);

@@ -298,6 +298,11 @@ export interface CrossNetworkQueryArgs {
   /** Профиль точки применения отбора (требование 0095daad, ADR 0c02ab4f).
    *  По умолчанию `thoughts`; задаётся фасадом точки. */
   profile?: FilterProfileId;
+  /**
+   * Видимость содержимого корзины по сети (0.16.1, пачка 11, задача 173e8368):
+   * настройка per-user и per-network, поэтому фабрика берёт networkId.
+   */
+  showTrashFor?: (networkId: string) => boolean;
 }
 
 /** Запустить веером {@link queryThoughtsAsync} по всем сетям. */
@@ -333,7 +338,13 @@ export async function fanOutQuery(
         limit: args.limit * Math.max(accessible.length, 1),
         offset: 0,
       },
-      { maxLimit: 200, emptyFilterMode: 'all', profile: args.profile ?? 'thoughts', ...(args.tokenContextFor !== undefined ? { tokenContext: args.tokenContextFor(net.id) } : {}) },
+      {
+        maxLimit: 200,
+        emptyFilterMode: 'all',
+        profile: args.profile ?? 'thoughts',
+        ...(args.tokenContextFor !== undefined ? { tokenContext: args.tokenContextFor(net.id) } : {}),
+        ...(args.showTrashFor !== undefined ? { showTrash: args.showTrashFor(net.id) } : {}),
+      },
     );
     for (const item of acceptWithBudget(budget, result.items)) {
       hits.push({

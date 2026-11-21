@@ -21,7 +21,9 @@
  *    (`export { t } from './i18n.js'`, `export { t as tr } from './i18n.js'`,
  *    `export *`) разрешаются транзитивно.
  * 3. **Полнота каталога.** У каждого ключа `ru` непустой русский текст —
- *    «перевод» не может остаться заглушкой.
+ *    «перевод» не может остаться заглушкой. Исключение — закрытый список
+ *    имён собственных (`PROPER_NAME_KEYS`: названия наборов тем латиницей),
+ *    он же проверяется отдельным тестом.
  * 4. **Ленивое вычисление текста (ошибка ebed42d3).** `t()`/`tp()` не
  *    вызываются на верхнем уровне модуля: такой текст фиксирует язык импорта
  *    и не следует живой смене языка. Текст вычисляется лениво — функцией или
@@ -94,6 +96,21 @@ const MODULE_LEVEL_MARKER = 'i18n: module-level';
  * их содержимое — сами тексты, а не разметка.
  */
 const SCANNED_FILES = (rel: string): boolean => !rel.startsWith('lib/locales/');
+
+/**
+ * Ключи, чьё значение — ИМЯ СОБСТВЕННОЕ, а не перевод: названия наборов тем
+ * интерфейса (требование 7cc0cdad, задача 0e4a52cd) пишутся латиницей в любом
+ * языке, потому что это марки. Список закрытый и проверяется отдельным тестом
+ * (ключ обязан существовать и действительно не иметь кириллицы): иначе
+ * исключение станет способом пронести неработающий текст.
+ */
+const PROPER_NAME_KEYS = new Set([
+  'settings.theme.blueTopaz',
+  'settings.theme.catppuccin',
+  'settings.theme.nordic',
+  'settings.theme.retronotes',
+  'settings.theme.wasp',
+]);
 
 /**
  * Методы массива, которые вызывают колбэк синхронно, во время самого вызова.
@@ -920,9 +937,24 @@ describe('guard: локализация renderer', () => {
       .map(([key]) => key);
     assert.deepEqual(empty, [], `Пустые значения словаря ru: ${empty.join(', ')}`);
     const nonRussian = Object.entries(ru)
+      .filter(([key]) => !PROPER_NAME_KEYS.has(key))
       .filter(([, value]) => !/[А-Яа-яЁё]/.test(value))
       .map(([key]) => key);
     assert.deepEqual(nonRussian, [], `Ключи без русского текста: ${nonRussian.join(', ')}`);
+  });
+
+  it('исключение для имён собственных не глохнет: ключи живые и действительно латинские', () => {
+    for (const key of PROPER_NAME_KEYS) {
+      const value = (ru as Record<string, string | undefined>)[key];
+      if (typeof value !== 'string') throw new Error(`ключ-имя собственное ${key} есть в ru`);
+      assert.ok(
+        value.trim() !== '' && !CYRILLIC.test(value),
+        `${key} — имя собственное латиницей (иначе исключение не нужно)`,
+      );
+    }
+    // Исключение не должно расширяться на переведённые ключи: «Стандартная»
+    // в него не входит.
+    assert.equal(PROPER_NAME_KEYS.has('settings.theme.current'), false);
   });
 
   it('детектор модульных t()/tp() различает импорт и ленивое вычисление', () => {

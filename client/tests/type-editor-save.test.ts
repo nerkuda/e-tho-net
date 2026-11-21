@@ -34,7 +34,6 @@ import {
   typeRowRevealIds,
   type ThoughtTypeDraft,
 } from '../src/renderer/screens/type-manager.js';
-import { assembledStylesFile } from './renderer-css.js';
 
 const SOURCE_PATH = resolve(
   import.meta.dirname,
@@ -325,8 +324,18 @@ describe('type-manager — вкладки несохранённого типа:
       /color:\s*var\(--accent-fg\)/.test(css),
       'primary-роль должна брать цвет текста из var(--accent-fg)',
     );
-    const styles = readFileSync(assembledStylesFile(), 'utf8');
-    assert.ok(/--accent-fg:\s*#ffffff/.test(styles), '--accent-fg должен быть белым (#ffffff)');
+    const theme = readFileSync(resolve(renderer, 'lib', 'ui', 'themes', 'current.css'), 'utf8');
+    // `--accent-fg` — токен ТЕМЫ (ADR de24adef), у других тем он свой (на
+    // светлом акценте — тёмная надпись). Здесь проверяется только светлый
+    // режим темы `current`; контраст пары во всех темах стережёт
+    // `guard-ui-theme-tokens`.
+    const lightAt = theme.indexOf("[data-theme='current'][data-mode='light']");
+    assert.ok(lightAt >= 0, 'в current.css нет блока светлого режима');
+    const lightBody = theme.slice(theme.indexOf('{', lightAt), theme.indexOf('}', lightAt));
+    assert.ok(
+      /--accent-fg:\s*#ffffff/.test(lightBody),
+      '--accent-fg в светлом режиме current должен быть белым (#ffffff)',
+    );
   });
 
   it('регрессия 74d9b4ed: ключ дедупликации нового типа не сломан', () => {

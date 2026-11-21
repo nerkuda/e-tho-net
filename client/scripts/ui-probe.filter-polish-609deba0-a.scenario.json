@@ -358,11 +358,11 @@
     },
     {
       "name": "switch-to-dark",
-      "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()"
+      "eval": "(() => { document.documentElement.dataset.mode = 'dark'; return document.documentElement.dataset.mode; })()"
     },
     {
       "name": "dark-theme-on",
-      "probe": "document.documentElement.dataset.theme === 'dark'",
+      "probe": "document.documentElement.dataset.mode === 'dark'",
       "expect": true
     },
     {

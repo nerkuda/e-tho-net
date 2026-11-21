@@ -43,7 +43,6 @@ const ALLOWED_RAW_BUTTON_CLASSES = [
   'menu-item', // строки меню (lib/menu.ts)
   'st-f-', // контролы фильтров (filter-form, filter-panel, thought-cloud)
   'st-more', // «показать ещё» в структурах
-  'sfd-row', // строка списка сохранённых отборов
   'selection-menu-btn', // кнопка меню выделения
   'settings-nav-item', // навигация диалога настроек
   'settings-md-tab', // вкладки markdown-настроек

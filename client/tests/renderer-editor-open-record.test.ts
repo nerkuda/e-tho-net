@@ -368,11 +368,7 @@ describe('программный вход «открыть привязку с �
     installEtn();
     const { editor, scrollBox } = await mountThoughtEditor(makeThought('t1', 'T1'));
     const buildsBefore = editor.editorInternals.paneBuildCount('chrono');
-    assert.equal(
-      activeTabTitle(scrollBox),
-      'Комментарий',
-      'до входа показана вкладка по умолчанию',
-    );
+    assert.equal(activeTabTitle(scrollBox), 'Основное', 'до входа показана вкладка по умолчанию');
 
     // Запись c2 принадлежит HOME и привязана к t1 (m2m-цель) — главный случай.
     editor.openRecordInEditor('t1', 'c2');

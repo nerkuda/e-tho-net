@@ -16,11 +16,12 @@
  */
 
 import { EditorView } from '@codemirror/view';
-import type { Attachment, MentionsScanThought } from '@etn/shared';
+import type { Attachment, Comment, MentionsScanThought } from '@etn/shared';
 import {
   parseTransclusions,
   renderMarkdown,
   sourceOffsetFromCaret,
+  taskLineBodyStart,
   TRANSCLUSION_BLOCK_CLASS,
   TRANSCLUSION_DEPTH_ATTR,
   TRANSCLUSION_MARKER_PREFIX,
@@ -44,7 +45,13 @@ import { pickEntitiesModal } from '../lib/entity-picker.js';
 import { t } from '../lib/i18n.js';
 import { etn } from '../lib/etn.js';
 import { wireCommentLinksInDom } from '../lib/hover-preview.js';
-import { guardMenuFocus, showMenuAt, menuAction, MENU_SEPARATOR, type MenuItem } from '../lib/menu.js';
+import {
+  guardMenuFocus,
+  showMenuAt,
+  menuAction,
+  MENU_SEPARATOR,
+  type MenuItem,
+} from '../lib/menu.js';
 import { pushKeyOverlay, type KeyOverlayHandle } from '../lib/keymap.js';
 import { notice } from '../lib/notice.js';
 import { isInsidePopover, watchOutsideTap } from '../lib/ui/popover.js';
@@ -69,7 +76,11 @@ import {
   type CommentCollapseState,
 } from './comment-collapse.js';
 import { createCommentSearch } from './comment-search.js';
+import { registerCommentField } from './comment-source.js';
 import { createMdEditor, type MdEditor } from './md-editor.js';
+import { wireTaskCheckboxes } from './task-checkbox-toggle.js';
+import { markOverdueTaskItems } from './task-lines-view.js';
+import type { TaskHintContext } from './md-live.js';
 import { annotateMentions, resolveMentionsExcludeThoughtId } from './mentions-annotate.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
 import {
@@ -110,6 +121,14 @@ interface MarkdownFieldHandle {
   showEdit(md?: string): void;
   set(md: string, html: string): void;
   /**
+   * Заменить ЧЕРНОВИК правки, не выдавая его за сохранённый снапшот: поле
+   * остаётся «грязным», `Ctrl+Enter` сохранит содержимое. Нужно построчному
+   * слиянию черновика записи с внешней правкой (0.16.1, задача `b36a3d49`).
+   */
+  replaceDraft(md: string): void;
+  /** Текущий markdown поля: текст правки, если поле в правке, иначе снапшот. */
+  value(): string;
+  /**
    * Переключает поле в правку и ставит каретку: по вхождению `findText` в
    * исходнике markdown (вхождение выделяется — слово, кликнутое в ленте
    * публикаций, остаётся выделенным), а если его нет — в начало документа.
@@ -144,6 +163,20 @@ interface MarkdownFieldHandle {
    * сохраняется.
    */
   focusStart(): void;
+  /**
+   * Переключает поле в правку и ставит каретку в НАЧАЛО строки `lineNo`
+   * (с нуля) — переход «Открыть источник» строки задачи из панели «Дневника»
+   * (0.16.1, задача `cfb8cb72`, пункт 3). Номер строки адресует `body_md`
+   * записи: панель и карточка знают строку задачи, а её смещение в исходнике
+   * считает само поле.
+   */
+  focusLineStart(lineNo: number): void;
+  /**
+   * Переключает поле в правку и ставит каретку ПОСЛЕ маркера задачи
+   * (`- [ ] `) строки `lineNo` (0.16.1, пачка 3, пункт 1): переход «Открыть
+   * источник» задачи постоянного комментария — сразу к тексту задачи.
+   */
+  focusTaskLine(lineNo: number): void;
   /**
    * «Вставить ссылку на <мысль>» из меню авто-подсветки упоминания: заменяет
    * первое вхождение `matchedText` в исходнике на wiki-ссылку и сохраняет (см.
@@ -284,11 +317,7 @@ function transclusionChunkBounds(
  * блок большей глубины лежит внутри одного из них, поэтому глубже не разбираем.
  * `missing`/`skip` — одна строка (`begin` без парного `end` не встречается).
  */
-function nestedChunkRanges(
-  expanded: string,
-  from: number,
-  to: number,
-): NestedChunkRange[] {
+function nestedChunkRanges(expanded: string, from: number, to: number): NestedChunkRange[] {
   const ranges: NestedChunkRange[] = [];
   let pos = from;
   while (pos < to) {
@@ -586,8 +615,14 @@ function viewSelectionNodes(
 export function viewSelectionOffsets(view: HTMLElement): { from: number; to: number } | null {
   const nodes = viewSelectionNodes(view);
   if (nodes === null) return null;
-  const from = sourceOffsetFromCaret(nodes.anchor.node as unknown as SourceMapNode, nodes.anchor.offset);
-  const to = sourceOffsetFromCaret(nodes.focus.node as unknown as SourceMapNode, nodes.focus.offset);
+  const from = sourceOffsetFromCaret(
+    nodes.anchor.node as unknown as SourceMapNode,
+    nodes.anchor.offset,
+  );
+  const to = sourceOffsetFromCaret(
+    nodes.focus.node as unknown as SourceMapNode,
+    nodes.focus.offset,
+  );
   if (from === null || to === null) return null;
   return { from, to };
 }
@@ -634,7 +669,6 @@ function ensureTransclusionViewRefresh(): void {
     }
   });
 }
-
 
 /**
  * Узел DOM ли `target` (`Window` — нет). Без `instanceof Node`: в тестовом
@@ -769,6 +803,19 @@ export function createMarkdownField(opts: {
      * хук: вставка ссылки/трансклюзии не отменяется.
      */
     attachCreatedThought?: (thoughtId: string) => void | Promise<void>;
+    /**
+     * Сохранён чекбокс задачи В ПРОСМОТРЕ (0.16.1, живая приёмка пачки 3, пункт 2):
+     * ответ `comments.update` отдаётся владельцу поля, чтобы тот обновил свой
+     * снапшот комментария (версия/HTML) и realtime-эхо СВОЕЙ правки не считалось
+     * внешним изменением — поле не перерисовывается, прокрутка просмотра стоит.
+     */
+    onTaskSaved?: (comment: Comment) => void;
+    /**
+     * Своя запись чекбокса просмотра «в полёте» (0.16.1, пачка 3, пункт 2):
+     * метка гасит realtime-эхо, которое сервер публикует до ответа PATCH.
+     * Возвращает освобождение метки.
+     */
+    beginTaskSave?: (commentId: string) => () => void;
   };
   /**
    * Плейсхолдер для пустого комментария (задача 8ab775d9). Показывается
@@ -776,6 +823,13 @@ export function createMarkdownField(opts: {
    * редактировании или при сохранении непустого значения.
    */
   placeholder?: string;
+  /**
+   * Контекст владельца строк для тихой подсказки задачи (ошибка f720cfff, ТЗ
+   * 2026-11-17 пункт A): хроно-вкладка записи и карточка Дневника передают
+   * период записи (`owner: 'chronological'`), постоянный комментарий мысли —
+   * `owner: 'permanent'`. Не задано — контекст неизвестен.
+   */
+  taskHintContext?: TaskHintContext;
   /**
    * Просмотр рендерит сам единый рендерер `@etn/markdown` с разметкой позиций
    * (`renderMarkdown(md, { sourceMap: true })`), а не серверный HTML: узлы
@@ -807,6 +861,11 @@ export function createMarkdownField(opts: {
   externalChanges?: () => boolean;
 }): HTMLElement {
   const root = div('md-field');
+  // Регистрация источника комментария для меню date-чипа (0.16.1): поле знает
+  // свой комментарий, а чип в просмотре — нет (см. `editor/comment-source.ts`).
+  if (opts.commentContext !== undefined) {
+    registerCommentField(root, { getCommentId: opts.commentContext.getCommentId });
+  }
   const view = div('md-field-view comment-view');
   // Просмотр фокусируем по клику (но не добавляем в порядок табуляции): поле —
   // текущий элемент для сочетаний, поэтому Ctrl+F открывает поиск и в
@@ -867,6 +926,8 @@ export function createMarkdownField(opts: {
   let commitPending = false;
   /** Счётчик рендеров просмотра — защита от гонок асинхронной развёртки трансклюзий (a2b68d72). */
   let renderSeq = 0;
+  /** Отключение живых чекбоксов просмотра (0.16.1, задача `cfb8cb72`, п.8). */
+  let detachTaskCheckboxes: (() => void) | null = null;
   /**
    * Карта смещений текущего просмотра с развёрнутыми трансклюзиями (ошибка
    * 0fdd8c86): разметка позиций идёт в координатах развёрнутого текста, карта
@@ -1107,13 +1168,13 @@ export function createMarkdownField(opts: {
   const insertMentionLink = (thought: MentionsScanThought, matchedText: string): void => {
     const idx = currentMd.indexOf(matchedText);
     if (idx === -1) {
-      notice(
-        t('markdownField.notSucceededPasteLinkRefTextNot', matchedText),
-      );
+      notice(t('markdownField.notSucceededPasteLinkRefTextNot', matchedText));
       return;
     }
     const newMd =
-      currentMd.slice(0, idx) + `[[${thought.title}|${matchedText}]]` + currentMd.slice(idx + matchedText.length);
+      currentMd.slice(0, idx) +
+      `[[${thought.title}|${matchedText}]]` +
+      currentMd.slice(idx + matchedText.length);
     if (opts.onSave === undefined) {
       showEdit(newMd);
       return;
@@ -1149,6 +1210,10 @@ export function createMarkdownField(opts: {
     view.replaceChildren();
     if (html.trim() !== '') {
       renderHtml(view, html);
+      // Просроченные задачи в комментарии красным — там, где они фактически
+      // записаны (0.16.1, пачка 7): тот же вид, что у строки панели, по
+      // готовому DOM (date-чипы пункта, последняя дата = срок).
+      markOverdueTaskItems(view);
       renderMermaidBlocks(view);
       annotateMentions(view, {
         excludeThoughtId: excludeThoughtId(),
@@ -1178,6 +1243,34 @@ export function createMarkdownField(opts: {
       // приложение — поля пересоздаются, «подписка на поле» текла бы.
       decorateViewTransclusionLocks(view);
       wireViewTransclusionLocks();
+      // Чекбоксы задач в режиме просмотра кликабельны (0.16.1, задача
+      // `cfb8cb72`, пункт 8): клик переключает `- [ ]` ↔ `- [x]` в `body_md`
+      // источника тем же `etn.comments.update`. Подключение повторяется на
+      // каждой перерисовке просмотра (разметка пересоздаётся), прежнее —
+      // снимается.
+      detachTaskCheckboxes?.();
+      detachTaskCheckboxes = null;
+      const commentIdOfView = opts.commentContext?.getCommentId;
+      if (commentIdOfView !== undefined) {
+        detachTaskCheckboxes = wireTaskCheckboxes(view, () => {
+          const commentId = commentIdOfView();
+          if (commentId === null) return null;
+          return {
+            commentId,
+            beginSave: (id) => opts.commentContext?.beginTaskSave?.(id) ?? (() => undefined),
+            onSaved: (md, html, comment) => {
+              // Снапшот просмотра — новый: следующая правка начнётся с него,
+              // а разметку чекбоксов уже переключил сам клик. Версию/HTML
+              // получает и владелец поля (пункт 2 пачки 3): иначе realtime-эхо
+              // своей правки выглядело внешним изменением и перерисовывало
+              // просмотр, сбрасывая прокрутку к первой строке.
+              currentMd = md;
+              currentHtml = html;
+              opts.commentContext?.onTaskSaved?.(comment);
+            },
+          };
+        });
+      }
     } else if (opts.placeholder !== undefined && opts.placeholder !== '') {
       // Пустой комментарий — показываем плейсхолдер (задача 8ab775d9).
       const ph = el('div', 'md-field-placeholder', opts.placeholder);
@@ -1468,6 +1561,8 @@ export function createMarkdownField(opts: {
     const store = nestedStore;
     cancelled = false;
     editor = createMdEditor(currentMd, {
+      // Контекст владельца строк — тихая подсказка задачи (ошибка f720cfff).
+      ...(opts.taskHintContext !== undefined ? { taskHintContext: opts.taskHintContext } : {}),
       onInput: (md) => opts.onInput?.(md),
       onEscape: () => {
         finishEdit(true);
@@ -1814,14 +1909,30 @@ export function createMarkdownField(opts: {
   handles.set(root, {
     showEdit,
     insertMentionLink,
+    value: () => (editing && editor !== null ? editor.getValue() : currentMd),
     set: (md, html) => {
+      // Эхо/повтор с ТЕМ ЖЕ содержимым (в т.ч. событие своей правки после
+      // точечного обновления снапшота) не перерисовывает просмотр: замена DOM
+      // сбрасывала прокрутку длинного комментария к первой строке (0.16.1,
+      // живая приёмка пачки 3, пункт 2).
+      const changed = md !== currentMd || html !== currentHtml;
       currentMd = md;
       currentHtml = html;
-      renderView();
-      if (editor !== null && !area.classList.contains('hidden')) {
-        // Внешнее (серверное) обновление текста — не правка пользователя.
-        editor.setValue(md, true);
+      if (changed) {
+        renderView();
+        if (editor !== null && !area.classList.contains('hidden')) {
+          // Внешнее (серверное) обновление текста — не правка пользователя.
+          editor.setValue(md, true);
+        }
+        search.refresh();
       }
+    },
+    replaceDraft: (md) => {
+      // Текст пришёл построчным слиянием с серверной правкой: снапшот
+      // (`currentMd`) остаётся последним сохранённым, поэтому поле «грязное» и
+      // `Ctrl+Enter` сохранит содержимое (0.16.1, задача `b36a3d49`).
+      if (editor === null || !editing) return;
+      editor.setValue(md, true);
       search.refresh();
     },
     focusAt: (findText) => {
@@ -1854,8 +1965,39 @@ export function createMarkdownField(opts: {
       editor.setCaret(0);
       editor.focus();
     },
+    focusLineStart: (lineNo: number) => {
+      if (!editing || editor === null) {
+        showEdit();
+        if (editor === null) return;
+      }
+      // Смещение начала строки в текущем исходнике: редактор держит тот же
+      // `currentMd`, что и поле. Строки вне документа — каретка в начало.
+      const lines = (editor.getValue() ?? '').split('\n');
+      let offset = 0;
+      const limit = Math.max(0, Math.min(lineNo, lines.length - 1));
+      for (let i = 0; i < limit; i += 1) offset += (lines[i]?.length ?? 0) + 1;
+      editor.setCaret(offset);
+      editor.focus();
+    },
+    focusTaskLine: (lineNo: number) => {
+      if (!editing || editor === null) {
+        showEdit();
+        if (editor === null) return;
+      }
+      // Переход «Открыть источник» задачи постоянного комментария (0.16.1,
+      // пачка 3, пункт 1): каретка сразу ПОСЛЕ маркера `- [ ] ` — в начало
+      // текста задачи. Строка без маркера задачи — каретка в начало строки.
+      const lines = (editor.getValue() ?? '').split('\n');
+      let offset = 0;
+      const limit = Math.max(0, Math.min(lineNo, lines.length - 1));
+      for (let i = 0; i < limit; i += 1) offset += (lines[i]?.length ?? 0) + 1;
+      editor.setCaret(offset + (taskLineBodyStart(lines[limit] ?? '') ?? 0));
+      editor.focus();
+    },
     dispose: () => {
       detachOutsidePointer();
+      detachTaskCheckboxes?.();
+      detachTaskCheckboxes = null;
       // Поле снимают вместе с экраном/диалогом — слой `Escape` правки не должен
       // пережить его и отнимать нажатие у следующего диалога.
       editEscapeOverlay?.release();
@@ -1928,9 +2070,45 @@ export function focusMarkdownFieldStart(root: HTMLElement): void {
   handles.get(root)?.focusStart();
 }
 
+/**
+ * Переводит поле в правку и ставит каретку в НАЧАЛО строки `lineNo` (с нуля) —
+ * переход «Открыть источник» строки задачи из панели «Дневника» (0.16.1,
+ * задача `cfb8cb72`, пункт 3): запись разворачивается в правке на своей строке.
+ */
+export function focusMarkdownFieldLineStart(root: HTMLElement, lineNo: number): void {
+  handles.get(root)?.focusLineStart(lineNo);
+}
+
+/**
+ * Переводит поле в правку и ставит каретку ПОСЛЕ маркера задачи `- [ ] `
+ * строки `lineNo` (0.16.1, живая приёмка, пачка 3, пункт 1): «Открыть источник»
+ * задачи из постоянного комментария мысли.
+ */
+export function focusMarkdownFieldTaskLine(root: HTMLElement, lineNo: number): void {
+  handles.get(root)?.focusTaskLine(lineNo);
+}
+
 /** Updates an already-built field's content (e.g. after an external change). */
 export function setMarkdownField(root: HTMLElement, md: string, html: string): void {
   handles.get(root)?.set(md, html);
+}
+
+/**
+ * Заменить ЧЕРНОВИК правки, не выдавая его за сохранённый снапшот: поле
+ * остаётся «грязным», `Ctrl+Enter` сохранит содержимое. Нужно построчному
+ * слиянию черновика записи с внешней правкой (0.16.1, задача `b36a3d49`).
+ */
+export function replaceMarkdownFieldDraft(root: HTMLElement, md: string): void {
+  handles.get(root)?.replaceDraft(md);
+}
+
+/**
+ * Текущий markdown поля: текст правки, пока поле в правке, иначе снапшот
+ * просмотра. Нужен строке задачи (`editor/task-row-editor.ts`): она сохраняется
+ * своим основанием (`Ctrl+Enter`), а не общим коммитом поля.
+ */
+export function markdownFieldValue(root: HTMLElement): string {
+  return handles.get(root)?.value() ?? '';
 }
 
 /**
@@ -2021,7 +2199,10 @@ async function uploadAttachment(
  * владельцем (`POST /attachments/{id}/owners`, идемпотентно). `true` — владение
  * подтверждено (или владельца у поля нет), `false` — сбой запроса.
  */
-async function ensureAttachmentOwner(owner: AttachmentsOwner, attachmentId: string): Promise<boolean> {
+async function ensureAttachmentOwner(
+  owner: AttachmentsOwner,
+  attachmentId: string,
+): Promise<boolean> {
   const networkId = store.state.networkId;
   if (networkId === null) return false;
   try {
@@ -2148,7 +2329,10 @@ function readFileAsDataUrl(file: File): Promise<string> {
  * dev http origin and from the packaged file:// page, unlike raw file://).
  */
 export function etnimgUrl(filePath: string): string {
-  const segments = filePath.replace(/\\/g, '/').split('/').filter((s) => s !== '');
+  const segments = filePath
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((s) => s !== '');
   const encoded = segments.map((seg, i) => {
     // A Windows drive segment ("C:") becomes the URL host — a bare letter,
     // because ':' would parse as a port separator.

@@ -23,15 +23,63 @@ import type Token from 'markdown-it/lib/token.mjs';
 const TASK_MARKER_RE = /^\[([ xX])\]\s+/;
 const TASK_MARKER_ONLY_RE = /^\[([ xX])\]/;
 
-/** The `list_item_open` owning the inline token at `idx`, if any. */
-function ownerListItemOpen(tokens: Token[], idx: number): Token | null {
+/**
+ * Исходник регэкспа маркера чекбокса (`[ ]` / `[x]`) — единственное место
+ * грамматики маркера. Примитивы правки строки задачи (`task-line-edit.ts`)
+ * собирают из него свой построчный регэксп, а клиент — свои регэкспы команд
+ * списка: символьный класс маркера вне этого модуля не повторяется
+ * (сторож `guard-task-line-grammar`).
+ */
+export const TASK_MARKER_PATTERN = String.raw`\[[ xX]\]`;
+
+/**
+ * Текст маркера ОТКРЫТОЙ задачи (`[ ] `) — единственное место его записи в
+ * пакете (сторож `guard-task-line-grammar`): из него собирается и префикс
+ * нового пункта, и возврат маркера отменённой строке (`addTaskLineMarker`).
+ */
+export const TASK_MARKER_UNCHECKED = '[ ] ';
+
+/** Новый пункт задачи — вставка редактора (`- [ ] `). */
+export const TASK_MARKER_PREFIX = `- ${TASK_MARKER_UNCHECKED}`;
+
+/**
+ * Индекс `list_item_open`, которому принадлежит inline-токен `idx`, или -1.
+ *
+ * Inline принадлежит пункту списка, если между ним и `list_item_open` нет
+ * `list_item_close` (закрытие предыдущего пункта — уже не наш владелец). Тот же
+ * ответ нужен правилу рендера (`taskListPlugin`) и парсеру строк задач
+ * (`task-lines.ts`): грамматика «этот inline принадлежит пункту списка» живёт в
+ * одном месте.
+ */
+export function ownerListItemIndex(tokens: readonly Token[], idx: number): number {
   for (let i = idx - 1; i >= 0; i--) {
     const type = tokens[i]!.type;
-    if (type === 'list_item_open') return tokens[i]!;
-    // Leaving the item (a previous sibling's close) — no owner.
-    if (type === 'list_item_close') return null;
+    if (type === 'list_item_open') return i;
+    if (type === 'list_item_close') return -1;
   }
-  return null;
+  return -1;
+}
+
+/** The `list_item_open` owning the inline token at `idx`, if any. */
+function ownerListItemOpen(tokens: Token[], idx: number): Token | null {
+  const index = ownerListItemIndex(tokens, idx);
+  return index === -1 ? null : tokens[index]!;
+}
+
+/**
+ * Состояние чек-бокса task-строки на inline-токене: `true` — `[x]`/`[X]`,
+ * `false` — `[ ]`, `null` — inline не является задачей.
+ *
+ * Признак задачи — токен `task_list_checkbox`, который ставит само правило
+ * `task_list` (см. ниже): парсер строк задач не разбирает `- [ ]` заново, а
+ * читает уже готовый результат единого рендера (ADR «парсер строк задач —
+ * библиотечный модуль», требование d957a49d).
+ */
+export function taskListCheckbox(inline: Token): boolean | null {
+  const first = inline.children?.[0];
+  if (first === undefined || first.type !== 'task_list_checkbox') return null;
+  const meta = first.meta as { checked?: boolean } | null;
+  return meta?.checked === true;
 }
 
 /** The nearest enclosing list-open token before `itemIdx`. */

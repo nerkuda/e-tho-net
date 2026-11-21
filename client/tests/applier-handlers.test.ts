@@ -290,3 +290,65 @@ describe('IPC handler factory (G7)', () => {
     assert.equal(handlers.has('does.not.exist'), false);
   });
 });
+
+/** Заглушка главного окна: запоминает цвета фона, умеет «быть уничтоженной». */
+function windowStub(options: { destroyed?: boolean } = {}): {
+  colors: string[];
+  win: { isDestroyed: () => boolean; setBackgroundColor: (color: string) => void };
+} {
+  const colors: string[] = [];
+  return {
+    colors,
+    win: {
+      isDestroyed: () => options.destroyed === true,
+      setBackgroundColor: (color: string) => {
+        colors.push(color);
+      },
+    },
+  };
+}
+
+describe('IPC system.setWindowBackground (0e4a52cd)', () => {
+  it('красит фон окна валидным #rrggbb', async () => {
+    const stub = windowStub();
+    const handlers = createHandlers({
+      getWindow: () => stub.win as never,
+    } as unknown as HandlerDeps);
+    const result = await handlers.get('system.setWindowBackground')!(
+      ['#0e1116'],
+      noopContext(),
+    );
+    assert.equal(result, undefined);
+    assert.deepEqual(stub.colors, ['#0e1116'], 'фон окна — цвет применённой темы');
+  });
+
+  it('отклоняет не-hex цвет канонической ошибкой VALIDATION_ERROR', async () => {
+    const stub = windowStub();
+    const handlers = createHandlers({
+      getWindow: () => stub.win as never,
+    } as unknown as HandlerDeps);
+    for (const bad of ['dark', '#0e111', '', 'rgb(14, 17, 22)']) {
+      await assert.rejects(
+        async () =>
+          await handlers.get('system.setWindowBackground')!([bad], noopContext()),
+        (err: unknown) => (err as { code?: string }).code === 'VALIDATION_ERROR',
+        `«${bad}» обязан быть отвергнут`,
+      );
+    }
+    assert.deepEqual(stub.colors, [], 'невалидный цвет не применяется');
+  });
+
+  it('окна ещё нет — вызов безопасен (ранний старт renderer)', async () => {
+    const handlers = createHandlers({ getWindow: () => null } as unknown as HandlerDeps);
+    await handlers.get('system.setWindowBackground')!(['#eef0f4'], noopContext());
+  });
+
+  it('окно уничтожено — цвет не применяется, исключения нет', async () => {
+    const stub = windowStub({ destroyed: true });
+    const handlers = createHandlers({
+      getWindow: () => stub.win as never,
+    } as unknown as HandlerDeps);
+    await handlers.get('system.setWindowBackground')!(['#eef0f4'], noopContext());
+    assert.deepEqual(stub.colors, []);
+  });
+});

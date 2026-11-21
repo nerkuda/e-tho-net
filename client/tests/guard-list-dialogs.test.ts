@@ -195,10 +195,7 @@ describe('guard: единые правила диалогов-списков (11
       thoughtTypesDialog().includes("t('actions.delete')"),
       'Типы мыслей: нет кнопки «Удалить»',
     );
-    assert.ok(
-      propertyList().includes("t('actions.delete')"),
-      'Свойства: нет кнопки «Удалить»',
-    );
+    assert.ok(propertyList().includes("t('actions.delete')"), 'Свойства: нет кнопки «Удалить»');
     assert.ok(
       !linkTypesDialog().includes("t('listActions.deleteHint')"),
       'Типы связей: кнопки «Удалить» быть не должно (требование 09f692ff)',
@@ -334,12 +331,16 @@ describe('guard: единые правила диалогов-списков (11
       ['Сохранённые отборы', savedFilterDialog()],
     ] as const) {
       assert.ok(
-        src.includes("list-dialog-body"),
+        src.includes('list-dialog-body'),
         `${name}: тело диалога-списка без раскладки .list-dialog-body`,
       );
     }
     const css = source('styles/dialogs.css');
-    assert.match(css, /\.list-dialog-body\s*\{[^}]*display:\s*flex/s, 'нет раскладки .list-dialog-body');
+    assert.match(
+      css,
+      /\.list-dialog-body\s*\{[^}]*display:\s*flex/s,
+      'нет раскладки .list-dialog-body',
+    );
     assert.match(
       css,
       /\.list-dialog-body\s*\{[^}]*gap:\s*var\(--space-\d\)/s,
@@ -595,8 +596,7 @@ describe('guard: единые правила диалогов-списков (11
       'Корзина: Enter не открывает панель использования',
     );
     assert.ok(
-      !trashDialog().includes('openThoughtInEditor') &&
-        !trashDialog().includes('openLinkInEditor'),
+      !trashDialog().includes('openThoughtInEditor') && !trashDialog().includes('openLinkInEditor'),
       'Корзина: двойной клик не должен открывать редактор (исключение из правила 6)',
     );
     // Отборы — ПИКЕР одиночного значения (есть кнопка «Выбрать»): по правилу 6
@@ -710,6 +710,10 @@ const DIALOG_FILES = new Set([
   // 00160da1): фасад для мыслей, связей, публикаций и полок.
   'lib/delete-dialog.ts',
   'lib/entity-picker.ts',
+  // Редактор напоминания (0.16.1, задача 173f1540; элемент 58cca4f7): форма
+  // вида/повтора/даты с preview первых вхождений; ошибка сохранения — в панели
+  // кнопок (`footerError`), поэтому не диалог-список.
+  'lib/reminder-editor.ts',
   // Модальный слой под-выборки редактора отбора (задача 3644342c, ADR 4396ca00):
   // в общей оболочке `showDialog` живёт то же дерево условий (`buildFilterTree`)
   // с кнопками «Готово»/«Отмена»; не список-диалог.

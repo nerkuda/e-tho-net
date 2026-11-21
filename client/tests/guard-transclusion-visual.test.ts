@@ -92,7 +92,12 @@ describe('guard: визуальные слои блока трансклюзии
       /animation:\s*md-transclusion-in\s+var\(--md-transclusion-anim/,
       'анимация блока/ссылки обязана ссылаться на токен --md-transclusion-anim',
     );
-    const rootEnd = CSS.indexOf("[data-theme='dark'] {");
+    // Корневые токены читаются из собранного CSS: блоки тем в Vite-ассете
+    // ЕСТЬ (`[data-theme='current']`, `[data-mode='light'|'dark']`), а вот
+    // старой однотемной формы `[data-theme='dark'] {` в нём не осталось
+    // (ADR de24adef). Прежний срез по этому маркеру молча терялся — ревизия
+    // задачи 2bf4b53e; граница теперь блок reduced-motion.
+    const rootEnd = CSS.indexOf('@media (prefers-reduced-motion: reduce)');
     const root = CSS.slice(0, rootEnd === -1 ? CSS.length : rootEnd);
     assert.match(root, /--md-transclusion-anim\s*:/, 'токен не объявлен в :root');
     const reduced = CSS.slice(CSS.indexOf('prefers-reduced-motion: reduce'));

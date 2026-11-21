@@ -1,0 +1,562 @@
+/*
+ * Панель «Задачи и напоминания» (0.16.1, задача 64f7976a) — вид библиотечной
+ * компоненты `task-panel.ts`. Только токены: цвета — из файлов тем, размеры —
+ * из шкал `styles/tokens.css` (требование 0dddd939, сторож guard-ui-tokens).
+ */
+
+.ui-task-panel {
+  /* `1 1 auto`, а не `0 0 auto`: в хосте «Дневника» панель — flex-элемент
+   * колонки и обязана ужиматься до высоты хоста (замечание Н1 репроверки
+   * 4b755c93): хост ограничен остатком колонки центра, а панель прокручивает
+   * строки сама. Сохранённую высоту (`--task-panel-height`) уменьшает
+   * flex-shrink, `max-height` остаётся лишь потолком по умолчанию. */
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  /* Высота панели «Дневника» — из `ui_state` через переменную (пункт B ТЗ
+   * 2026-11-17); по умолчанию её задаёт `40vh`, а `auto` держит панель по
+   * содержимому, когда высоту не выбирали. */
+  height: var(--task-panel-height, auto);
+  max-height: var(--task-panel-height, 40vh);
+  overflow: auto;
+  /* Фон полосы панели — «элемент UI», а не часть списка (пункт E ТЗ): в тёмной
+   * теме светлее поверхности, в светлой — темнее. Один `color-mix` от цвета
+   * текста даёт оба направления без правки файлов тем. */
+  background: color-mix(in srgb, var(--text) 4%, var(--surface));
+  border-bottom: 1px solid var(--border);
+}
+
+/* Скрытый узел панели: атрибут `hidden` обязан перебивать собственный
+ * `display` кнопки/группы. */
+.ui-task-panel [hidden] {
+  display: none;
+}
+
+/* Свёрнутая панель (0.16.1, уточнение 2026-11-19, пункт 1): видна только
+ * шапка, и сохранённая слайдером высота (`--task-panel-height`) больше не
+ * держит пустое место. Высота — по содержимому, поэтому под шапкой сразу идёт
+ * лента записей; развёрнутая панель возвращается к своей высоте. */
+.ui-task-panel.is-collapsed {
+  flex: 0 0 auto;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+/*
+ * Шапка приклеена к верху панели и не уезжает при прокрутке списка (ошибка
+ * 58c470a3). Прокручивается сама панель, поэтому отступы панели ушли в шапку и
+ * тело: иначе содержимое шло бы под шапкой в полосе отступа.
+ */
+.ui-task-panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-task-panel-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ui-task-panel-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-task-panel-undo,
+.ui-task-panel-refresh {
+  flex: 0 0 auto;
+}
+
+/* Подсветка «Обновить»: данные устарели (требование 0e85b66e). */
+.ui-task-panel-refresh.is-stale {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ui-task-panel-status {
+  padding: var(--space-2) 0;
+}
+
+.ui-task-panel-error {
+  color: var(--danger);
+  font-size: var(--font-size-xs);
+}
+
+.ui-task-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+}
+
+.ui-task-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ui-task-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ui-task-group-title {
+  /* Заголовок группы на полшага типографской шкалы крупнее строки (пункт E
+   * ТЗ 2026-11-17): полшага — токен, а не литерал (сторож guard-ui-tokens). */
+  font-size: calc(var(--font-size-s) + var(--font-size-step-half));
+  font-weight: var(--font-weight-semibold);
+  color: var(--text);
+}
+
+.ui-task-group-counters {
+  flex: 1 1 auto;
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}
+
+.ui-task-group-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Каретка сворачиваемых блоков панели: панель, группы, секции (ошибка d0801eea). */
+.ui-task-caret,
+.ui-task-panel-caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  transition: transform var(--transition-hover);
+}
+
+.ui-task-caret.collapsed,
+.ui-task-panel-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+/* Заголовок секции списка — сворачиваемый, как группа (ошибка d0801eea). */
+.ui-task-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ui-task-section-head:hover {
+  color: var(--accent);
+}
+
+/* Команды группы и строки — только при наведении (спека f76ed829). */
+.ui-task-group-menu,
+.ui-task-subgroup-menu,
+.ui-task-row-actions {
+  opacity: 0;
+  transition: opacity var(--transition-hover);
+}
+
+.ui-task-group-head:hover .ui-task-group-menu,
+.ui-task-group-head:focus-within .ui-task-group-menu,
+.ui-task-subgroup-head:hover .ui-task-subgroup-menu,
+.ui-task-subgroup-head:focus-within .ui-task-subgroup-menu,
+.ui-task-row:hover .ui-task-row-actions,
+.ui-task-row:focus-within .ui-task-row-actions {
+  opacity: 1;
+}
+
+.ui-task-group-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ui-task-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-task-section-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-dim);
+}
+
+.ui-task-subgroup-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--space-2);
+}
+
+.ui-task-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-task-subgroup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-task-subgroup-title {
+  font-size: var(--font-size-xs);
+  color: var(--text);
+}
+
+/* Значок группы-даты (календарик) и облачко группы-мысли (пункт E ТЗ
+ * 2026-11-17). Облачко — эталонный чип поля свойств: он не должен раздувать
+ * заголовок, имя обрезается многоточием по своей ширине (профиль `container`). */
+.ui-task-subgroup-icon,
+.ui-task-subgroup-subject {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Облачко группы-мысли — живой субъект: клик ведёт к мысли, правый клик
+ * открывает меню (замечание 5 ТЗ 2026-11-18). */
+.ui-task-subgroup-subject {
+  cursor: pointer;
+}
+
+.ui-task-subgroup-icon {
+  color: var(--text-dim);
+}
+
+.ui-task-subgroup-icon[hidden],
+.ui-task-subgroup-subject[hidden],
+.ui-task-subgroup-title[hidden] {
+  display: none;
+}
+
+.ui-task-subgroup-count {
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}
+
+.ui-task-subgroup-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-task-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--hit-area);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-s);
+  cursor: default;
+}
+
+.ui-task-row:hover {
+  background: var(--bg-hover);
+}
+
+.ui-task-row.is-current {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ui-task-row.is-subtask {
+  margin-left: var(--tree-indent);
+}
+
+/* Серая строка: правка из панели или внешнее изменение источника ждёт
+ * «Обновить» (0e85b66e). Гасится ТОЛЬКО текст: чекбокс — команда, он работает
+ * и на серой строке (ошибка d318a647). */
+.ui-task-row.is-stale {
+  color: var(--text-dim);
+}
+
+.ui-task-row.is-done .ui-task-row-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+/* Просроченная строка (срок задачи или момент напоминания в прошлом) — красным
+ * (пункт D ТЗ 2026-11-17). Красный — токен темы, не литерал. */
+.ui-task-row.is-overdue .ui-task-row-text,
+.ui-task-row.is-overdue .ui-task-row-date {
+  color: var(--danger);
+}
+
+/* Строка с вложенными строками: каретка слева, дети — блоком ниже (пункт F ТЗ
+ * 2026-11-17). Раскрытие по умолчанию СВЁРНУТО; каретка видна всегда — это
+ * единственная подсказка о вложенности. */
+.ui-task-row.has-children {
+  flex-wrap: wrap;
+}
+
+.ui-task-row-caret {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Каретка выравнивается по ВЕРХНЕМУ краю строки (0.16.1, пачка 7): при
+   * переносе длинной строки на несколько строк центр по вертикали уводил бы
+   * треугольник к середине блока, как во всех редакторах он стоит у первой
+   * строки. Тот же принцип у маркера просмотра комментария (полоса-гаттер
+   * `md-collapse-rail` ставит `top` по верхнему краю якоря). */
+  align-self: flex-start;
+  width: var(--hit-area);
+  height: var(--hit-area);
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.ui-task-row-caret:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.ui-task-row-caret.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+/* Подчинённый блок строки задачи (0.16.1, пачка 7): это ПРОСМОТР КОММЕНТАРИЯ
+ * (`.comment-view`), а не плоские строки панели. Раскладку, вложенные списки,
+ * чекбоксы, код и сворачивание задаёт единый рендерер и `decorateCommentView`;
+ * здесь — только место блока в строке панели и отступ от строки-родителя.
+ * Полоса-гаттер маркеров сворачивания (`.md-collapse-host`) резервирует слева
+ * собственный `--hit-area`, поэтому отступ родителя и полоса не спорят. */
+.ui-task-row-children {
+  flex: 1 0 100%;
+  padding-left: var(--tree-indent);
+}
+
+/* Субъект строки напоминания — облачко мысли (пункт C ТЗ 2026-11-17): строка
+ * уже мысль, отдельный заголовок группы не нужен. */
+.ui-task-row-subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.ui-task-row-check {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+/* Строка в правке (0.16.1, уточнение 2026-11-19, пункт 3): многострочное поле
+ * растягивает строку вниз, чекбокс прижимается к ВЕРХУ — к первой строке
+ * текста, а не к вертикальному центру всего блока. Отступ сверху совпадает с
+ * отступом строки (`--space-1`), поэтому контрол стоит напротив первой строки. */
+.ui-task-row.is-editing .ui-task-row-check {
+  align-self: flex-start;
+  margin-top: var(--space-1);
+}
+
+/* Чекбокс вхождения напоминания (0.16.1, задача cfb8cb72, пункт 7): отметка =
+ * «отработал» (dismiss вхождения), серия напоминания остаётся. */
+.ui-reminder-row-check {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.ui-task-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-s);
+  line-height: var(--line-height-snug);
+  overflow-wrap: anywhere;
+}
+
+.ui-task-row-text a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.ui-task-row-text a:hover {
+  text-decoration: underline;
+}
+
+.ui-task-row-edit {
+  width: 100%;
+}
+
+/* Правка строки — КОМПОНЕНТА РЕДАКТИРОВАНИЯ КОММЕНТАРИЯ (0.16.1, задача
+ * cfb8cb72, пункт 1): внутри строки списка поле показывается компактно —
+ * без просмотра, панели форматирования и кнопок режима (сохранение — один
+ * Ctrl+Enter, отмена — Esc). Контекстное меню правого клика работает и без
+ * панели: его открывает сам редактор. */
+.ui-task-row-md .md-field-view,
+.ui-task-row-md .md-field-toolbar,
+.ui-task-row-md .md-field-actions {
+  display: none;
+}
+
+.ui-task-row-md .md-field-area {
+  padding: 0;
+}
+
+.ui-task-row-md .md-field-scroll {
+  max-block-size: none;
+  overflow: visible;
+}
+
+.ui-task-row-md .cm-editor {
+  min-block-size: 0;
+}
+
+/* Блочная правка «как трансклюзия» (0.16.1, задача 7446eb25): многострочное
+ * поле занимает всю строку — под ним строки-дети не дублируются. */
+.ui-task-row-block-edit {
+  flex: 1 0 100%;
+  width: 100%;
+  min-block-size: calc(var(--hit-area) * 2);
+}
+
+/* Облачка связанных мыслей строки рядом с датой (пункт 6 ТЗ 2026-11-18). */
+.ui-task-row-subjects {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 40%;
+  overflow: hidden;
+}
+
+.ui-task-row-subject-cloud {
+  display: inline-flex;
+  min-width: 0;
+  font-size: var(--font-size-2xs);
+}
+
+.ui-task-row-dates {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.ui-task-row-date {
+  font-size: var(--font-size-2xs);
+  color: var(--text-dim);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.ui-task-row-date:hover {
+  color: var(--accent);
+}
+
+.ui-task-row-repeat {
+  flex: 0 0 auto;
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}
+
+.ui-task-row-flags {
+  flex: 0 0 auto;
+}
+
+.ui-task-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.ui-reminder-row .ui-task-row-text {
+  cursor: pointer;
+}
+
+.ui-reminder-row .ui-task-row-text:hover {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Панель редактора мысли (headless, 0.16.1, элемент f3893859)
+ *
+ * Своей шапки и рамки хоста «Дневника» нет: панель — тело группы `main.tasks`,
+ * заголовок/счётчики/«Обновить»/«⋮» стоят в шапке группы. Строки листаются
+ * прокруткой тела группы, поэтому собственную высоту не задаёт.
+ * ------------------------------------------------------------------------- */
+
+.ui-task-panel.is-headless {
+  flex: 1 1 auto;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+}
+
+/* Отступы панели «Дневника» живут в её шапке и теле; в чужой группе редактора
+ * отступы даёт сама группа — тело панели их не добавляет. */
+.ui-task-panel.is-headless .ui-task-panel-body {
+  padding: 0;
+}
+
+.ui-task-flat-sections,
+.ui-task-flat-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Секция «Выполненные задачи (n)» — свёрнутая группа внутри плоского списка. */
+.ui-task-flat-collapsible {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.ui-task-flat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ui-task-flat-head:hover {
+  color: var(--accent);
+}
+
+.ui-task-flat-caret {
+  display: inline-flex;
+  transition: transform var(--transition-hover);
+}
+
+.ui-task-flat-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.ui-task-section-count {
+  font-size: var(--font-size-2xs);
+  color: var(--text-faint);
+}

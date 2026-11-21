@@ -67,6 +67,12 @@ export const MENU_SEPARATOR: MenuItem = { label: '—' };
 export interface MenuOptions {
   /** Клавиатурный профиль списка выбора (↑/↓/Enter, ARIA listbox/option). */
   keyboard?: boolean;
+  /**
+   * Владелец меню — метка источника, который его открыл (`reminder-flag` и т. п.).
+   * Нужна, чтобы фоновое обновление компонента закрывало ТОЛЬКО своё меню:
+   * {@link closeMenuOwnedBy} (ошибка 0ffa00e4).
+   */
+  owner?: string;
 }
 
 /** Опции пункта словаря — всё, кроме подписи, обработчика и подменю. */
@@ -141,6 +147,8 @@ export function menuSubmenu(
 
 let roots: HTMLElement[] = [];
 let dismissers: Array<() => void> = [];
+/** Владелец открытого меню (`MenuOptions.owner`); `null` — меню без владельца. */
+let currentOwner: string | null = null;
 
 /** Closes the open menu (if any) and its submenus. */
 export function closeMenu(): void {
@@ -148,6 +156,17 @@ export function closeMenu(): void {
   dismissers = [];
   for (const root of roots) root.remove();
   roots = [];
+  currentOwner = null;
+}
+
+/**
+ * Закрывает меню, только если его открыл указанный владелец. Фоновое обновление
+ * компонента не должно сносить чужое меню: пока пользователь смотрит меню, смена
+ * выделенной мысли (перенацеливание шапки редактора) не имеет права его закрыть
+ * (ошибка 0ffa00e4).
+ */
+export function closeMenuOwnedBy(owner: string): void {
+  if (currentOwner === owner) closeMenu();
 }
 
 /** True when any menu is currently open. */
@@ -341,6 +360,7 @@ export function showMenuAt(
   const root = buildMenu(items);
   document.body.append(root);
   roots.push(root);
+  currentOwner = options.owner ?? null;
   const keyboard = options.keyboard === true ? setupMenuKeyboard(root) : null;
 
   const rect = root.getBoundingClientRect();

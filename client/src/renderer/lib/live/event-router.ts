@@ -750,6 +750,10 @@ export const realtimeRoutes: RouteTable = {
  *  - `thought-type-view.run` — аудит исполнения отбора, клиент переисполняет
  *    отборы сам при смене режима; `thought-custom-view.run` — то же для
  *    внетиповых отборов мысли.
+ *  - `reminders.changed` — напоминания (0.16.1, задача b47f1fd2) живут в
+ *    сервисной per-user таблице и не входят в нормализованный кэш графа;
+ *    маршрут для индикаторов появится вместе с редактором напоминаний
+ *    (задача 173f1540).
  */
 export const IGNORED_REALTIME_EVENT_TYPES: readonly RealtimeEventType[] = [
   'network.deleted',
@@ -765,6 +769,7 @@ export const IGNORED_REALTIME_EVENT_TYPES: readonly RealtimeEventType[] = [
   'edit.cleared',
   'thought-type-view.run',
   'thought-custom-view.run',
+  'reminders.changed',
 ];
 
 /** Быстрый поиск по {@link IGNORED_REALTIME_EVENT_TYPES}. */

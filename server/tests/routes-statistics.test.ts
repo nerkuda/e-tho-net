@@ -311,6 +311,67 @@ describe(
       }
     });
 
+    it('считает задачи (проекция) и напоминания прямым SQL', async () => {
+      const ctx = await buildRestContext();
+      try {
+        const base = await fetchStats(ctx);
+        assert.equal(base.data.tasks.total, 0);
+        assert.equal(base.data.reminders, 0);
+
+        const thoughtId = await createThought(ctx, 'Задачи');
+        const comment = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/comments`,
+          headers: authHeaders(ctx),
+          payload: {
+            kind: 'chronological',
+            body_md: '- [ ] A [[2026-11-20]]\n- [x] B [[2026-11-21]]',
+            valid_from: '2026-11-01',
+          },
+        });
+        assert.equal(comment.statusCode, 201);
+
+        // Неактуальный субъект строки: задача попадает в subjects_inactive.
+        const inactiveSubject = await createThought(ctx, 'Неактуальный субъект');
+        await patchThought(ctx, inactiveSubject, { active: false });
+        const withSubject = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/thoughts/${thoughtId}/comments`,
+          headers: authHeaders(ctx),
+          payload: {
+            kind: 'chronological',
+            body_md: `- [ ] C [[#${inactiveSubject}]] [[2026-11-22]]`,
+            valid_from: '2026-11-02',
+          },
+        });
+        assert.equal(withSubject.statusCode, 201);
+
+        const reminder = await ctx.app.inject({
+          method: 'POST',
+          url: `/api/v1/networks/${ctx.networkId}/reminders`,
+          headers: authHeaders(ctx),
+          payload: {
+            subject_type: 'thought',
+            subject_id: thoughtId,
+            kind: 'one',
+            schedule: { type: 'once' },
+            anchor_at: '2030-01-15T09:00:00.000Z',
+          },
+        });
+        assert.equal(reminder.statusCode, 201);
+
+        const after = await fetchStats(ctx);
+        assert.equal(after.data.tasks.total - base.data.tasks.total, 3);
+        assert.equal(after.data.tasks.open - base.data.tasks.open, 2);
+        assert.equal(after.data.tasks.done - base.data.tasks.done, 1);
+        assert.equal(after.data.tasks.subjects_active - base.data.tasks.subjects_active, 2);
+        assert.equal(after.data.tasks.subjects_inactive - base.data.tasks.subjects_inactive, 1);
+        assert.equal(after.data.reminders - base.data.reminders, 1);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('закрыт для пользователя без членства в сети', async () => {
       const ctx = await buildRestContext();
       try {

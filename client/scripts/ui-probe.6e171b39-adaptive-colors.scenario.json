@@ -1,0 +1,633 @@
+{
+  "name": "6e171b39-adaptive-colors",
+  "description": "Задача 6e171b39 «Тема-осведомлённая адаптация пользовательских цветов». Стенд ru, тема current. Проверено: (1) экстремальные цвета слоя (белая полоса, чёрный фон) на экран уходят производными — видимая полоса ≥ 3 : 1 к подложке, текст темы на фоне слоя ≥ 4.5 : 1, исходные #ffffff/#000000 в данных; (2) повторное открытие «Свойств слоя» показывает ИСХОДНЫЕ значения — данные пользователя не переписаны; (3) смена режима светлый → тёмный пересчитывает производные (значения меняются, пороги держатся); (4) мысль с экстремальными цветами (жёлтый текст на белом фоне) читается ≥ 4.5 : 1; (5) со светлой картинкой полоса читается ≥ 3 : 1 на композите «тинт × картинка». Круг 2 (блокеры проверки): (6) светлый слой (фон #ffffff, полоса #000000) + сплошная ЧЁРНАЯ картинка — фактическая подложка rgb(61, 61, 61) считается из α и средней светлоты, видимая полоса ≥ 3 : 1 (прежде 1.72 : 1); (7) та же пара на серой картинке avg_luminance 0.04 — подложка rgb(104, 104, 104), граничный случай подгонки светлоты, полоса ≥ 3 : 1. Круг 3: (8) экранное кольцо фокуса (`--layer-focus-ring-screen`) читается на `--surface` и на поверхности слоя (≥ 3 : 1) — полоса карты остаётся отдельной. Круг 4 (приёмка): (9) inset-полоски экранов (хроника `.diary-day-head.diary-nav-current`, поиск `.search-hit.selected`, публикации `.pub-toc-line.pub-toc-selected`) перекрашены кольцом поверхностей — цвет тени равен `--layer-focus-ring-screen`, порог ≥ 3 : 1 держится к `--surface`, `--surface-2` и поверхности слоя на экстремальном слое (полоса #ffffff / фон #000000). Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.6e171b39-adaptive-colors.scenario.json --server-language ru --out .tmp/6e171b39/out Ожидания слоя — по конкретным цветам (--layer-bg/--layer-focus-stripe): дефолты создания #ded8ec/#643da8, после правки цвета #8a8a8a/#1f1f1f, — поэтому прогон с --delay-seed-ms 300 не читает цвета до применения слоя.",
+  "timeout": 300000,
+  "texts": {
+    "userMenuTitle": {
+      "ru": "Меню пользователя",
+      "en": "User menu"
+    },
+    "userMenuSettings": {
+      "ru": "Настройки",
+      "en": "Settings"
+    },
+    "appearance": {
+      "ru": "Оформление",
+      "en": "Appearance"
+    },
+    "layerMenuBase": {
+      "ru": "Основа",
+      "en": "Base"
+    },
+    "layerCreate": {
+      "ru": "Создать новый слой…",
+      "en": "Create new layer…"
+    },
+    "layerProps": {
+      "ru": "Свойства слоя…",
+      "en": "Layer properties…"
+    },
+    "layerCreatePlaceholder": {
+      "ru": "Например: Правки августа",
+      "en": "e.g. August edits"
+    },
+    "layersFocusStripe": {
+      "ru": "Полоса фокуса",
+      "en": "Focus strip"
+    },
+    "layersBackground": {
+      "ru": "Фон холста",
+      "en": "Canvas background"
+    },
+    "probeLayerTitle": {
+      "ru": "Проба адаптации",
+      "en": "Adaptation probe"
+    },
+    "unsavedApply": {
+      "ru": "Применить",
+      "en": "Apply"
+    }
+  },
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": {
+          "language": "ru"
+        },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "seed-colored-thought",
+      "api": {
+        "name": "seed-colored-thought",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": {
+          "title": "Проба цвета",
+          "parent_id": "{{homeId}}",
+          "fg_color": "#ffff00",
+          "bg_color": "#ffffff"
+        },
+        "expression": "data.title"
+      },
+      "expect": "Проба цвета"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.canvas') !== null"
+    },
+    {
+      "name": "clouds-ready",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.cloud').length >= 1"
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => {\n  const raw = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();\n  const parse = (value) => {\n    const v = raw(value);\n    if (v === '' || v === 'none') return null;\n    if (v.startsWith('#')) {\n      const hex = v.length === 4 ? v.slice(1).split('').map((c) => c + c).join('') : v.slice(1);\n      if (hex.length < 6) return null;\n      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/.exec(v);\n    if (cs !== null) return [1, 2, 3].map((i) => Math.round(Number(cs[i]) * 255));\n    const m = /^rgba?\\(([^)]+)\\)/.exec(v);\n    if (m === null) return null;\n    return m[1].split(\",\").map((x) => Number.parseFloat(x)).slice(0, 3).map((x) => Math.round(x));\n  };\n  const alphaOf = (value) => {\n    const m = /^rgba?\\(([^)]+)\\)$/.exec(raw(value));\n    if (m === null) return 1;\n    const parts = m[1].split(\",\").map((x) => x.trim());\n    return parts.length === 4 ? Number.parseFloat(parts[3]) : 1;\n  };\n  const lin = (x) => {\n    const v = x / 255;\n    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;\n  };\n  const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n  const ratio = (a, b) => {\n    if (a === null || b === null) return 0;\n    const x = lum(a);\n    const y = lum(b);\n    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);\n  };\n  const dist = (a, b) =>\n    a === null || b === null ? 0 : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);\n  const prop = (name) =>\n    getComputedStyle(document.documentElement).getPropertyValue(name).trim();\n  const colour = (name) => parse(prop(name));\n  const mix = (top, bottom, alpha) =>\n    top.map((c, i) => Math.round(alpha * c + (1 - alpha) * bottom[i]));\n  const bandRatio = (stripe, backdrop) => {\n    const s = typeof stripe === \"string\" ? parse(stripe) : stripe;\n    const b = typeof backdrop === \"string\" ? parse(backdrop) : backdrop;\n    if (s === null || b === null) return 0;\n    return ratio(mix(s, b, 0.7), b);\n  };\n  const styleOf = (el, name) => parse(getComputedStyle(el)[name]);\n  window.__ac = { parse, alphaOf, ratio, dist, prop, colour, mix, bandRatio, styleOf };\n  return Object.keys(window.__ac).length;\n})()"
+    },
+    {
+      "name": "open-user-menu",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}');\n  if (row === undefined) throw new Error('settings menu item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-section",
+      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n  if (nav === undefined) throw new Error('нет раздела «Оформление»');\n  nav.click();\n  return true;\n})()"
+    },
+    {
+      "name": "pick-current-theme",
+      "probe": "(() => {\n  const select = Array.from(document.querySelectorAll('.settings-section select')).find((s) =>\n    Array.from(s.options).some((option) => option.value === 'current'),\n  );\n  if (select === undefined) throw new Error('theme select not found');\n  select.value = 'current';\n  select.dispatchEvent(new Event('change', { bubbles: true }));\n  return select.value;\n})()",
+      "expect": "current"
+    },
+    {
+      "name": "pick-light-mode",
+      "probe": "(() => {\n  const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]');\n  if (radio === null) throw new Error('mode radio not found');\n  radio.click();\n  return radio.checked;\n})()",
+      "expect": true
+    },
+    {
+      "name": "current-light-applied",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.theme === 'current' && document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "close-settings",
+      "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
+    },
+    {
+      "name": "settings-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "layer-menu-open",
+      "click": "button[title=\"{{text:layerMenuBase}}\"]"
+    },
+    {
+      "name": "layer-menu-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "layer-create-item",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerCreate}}'); if (row === undefined) throw new Error('create-layer item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "layer-create-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop input[placeholder=\"{{text:layerCreatePlaceholder}}\"]') !== null"
+    },
+    {
+      "name": "fill-layer-title",
+      "click": "input[placeholder=\"{{text:layerCreatePlaceholder}}\"]"
+    },
+    {
+      "name": "layer-title-typed",
+      "text": "Проба адаптации"
+    },
+    {
+      "name": "create-layer",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+    {
+      "name": "layer-created",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null && window.__ac.prop('--layer-bg').trim().toLowerCase() === '#ded8ec' && window.__ac.prop('--layer-focus-stripe').trim().toLowerCase() === '#643da8'"
+    },
+    {
+      "name": "layer-stripe-applied",
+      "timeout": 20000,
+      "waitFor": "window.__ac.prop('--layer-focus-stripe') !== ''"
+    },
+    {
+      "name": "layer-menu-open-props",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+    {
+      "name": "layer-menu-visible-props",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "layer-props-item",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "layer-props-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+    {
+      "name": "set-stripe-white",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\n  const row = rows.find((r) => {\n    const scope = r.closest(\".ui-field\") || r.parentElement;\n    const caption = scope === null ? null : scope.querySelector(\"label\");\n    return ((caption === null ? \"\" : caption.textContent) || \"\").trim() === '{{text:layersFocusStripe}}';\n  });\n  if (row === undefined) throw new Error('color row not found');\n  const input = row.querySelector(\"input.ui-color-hex\");\n  if (input === null) throw new Error(\"hex input not found\");\n  input.value = '#ffffff';\n  input.dispatchEvent(new Event('change', { bubbles: true }));\n  return input.value;\n})()",
+      "expect": "#ffffff"
+    },
+    {
+      "name": "set-bg-black",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\n  const row = rows.find((r) => {\n    const scope = r.closest(\".ui-field\") || r.parentElement;\n    const caption = scope === null ? null : scope.querySelector(\"label\");\n    return ((caption === null ? \"\" : caption.textContent) || \"\").trim() === '{{text:layersBackground}}';\n  });\n  if (row === undefined) throw new Error('color row not found');\n  const input = row.querySelector(\"input.ui-color-hex\");\n  if (input === null) throw new Error(\"hex input not found\");\n  input.value = '#000000';\n  input.dispatchEvent(new Event('change', { bubbles: true }));\n  return input.value;\n})()",
+      "expect": "#000000"
+    },
+    {
+      "name": "save-layer-props",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+    {
+      "name": "layer-props-saved",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "layer-applied",
+      "timeout": 30000,
+      "waitFor": "window.__ac.prop('--layer-bg').trim().toLowerCase() === '#8a8a8a' && window.__ac.prop('--layer-focus-stripe').trim().toLowerCase() === '#1f1f1f'"
+    },
+    {
+      "name": "screen-inset-stripe",
+      "probe": "(() => {\n  const p = window.__ac;\n  const ring = p.prop('--layer-focus-ring-screen');\n  const surfaces = {\n    surface: p.prop('--surface'),\n    surface2: p.prop('--surface-2'),\n    layer: p.prop('--layer-bg'),\n  };\n  const specs = [\n    ['diary', 'diary-day-head diary-nav-current'],\n    ['search', 'search-hit selected'],\n    ['publications', 'pub-toc-line pub-toc-selected'],\n  ];\n  const rows = specs.map(([key, cls]) => {\n    const el = document.createElement('div');\n    el.className = cls;\n    el.textContent = 'проба';\n    document.body.append(el);\n    const shadow = getComputedStyle(el).boxShadow;\n    el.remove();\n    const color = (shadow.match(/rgba?\\([^)]+\\)/) || [''])[0];\n    return { key: key, shadow: shadow, color: color };\n  });\n  const ratios = {};\n  for (const name of Object.keys(surfaces)) {\n    ratios[name] = Number(p.ratio(p.parse(ring), p.parse(surfaces[name])).toFixed(3));\n  }\n  return { ring: ring, surfaces: surfaces, ratios: ratios, rows: rows };\n})()"
+    },
+    {
+      "name": "screen-inset-ok",
+      "probe": "(() => {\n  const p = window.__ac;\n  const ring = p.prop('--layer-focus-ring-screen');\n  const surfaces = [p.prop('--surface'), p.prop('--surface-2'), p.prop('--layer-bg')];\n  const specs = [\n    ['diary', 'diary-day-head diary-nav-current'],\n    ['search', 'search-hit selected'],\n    ['publications', 'pub-toc-line pub-toc-selected'],\n  ];\n  const colors = specs.map(([key, cls]) => {\n    const el = document.createElement('div');\n    el.className = cls;\n    el.textContent = 'проба';\n    document.body.append(el);\n    const shadow = getComputedStyle(el).boxShadow;\n    el.remove();\n    const color = (shadow.match(/rgba?\\([^)]+\\)/) || [''])[0];\n    return color;\n  });\n  const ge3 = surfaces.every(\n    (surface) => surface !== '' && p.ratio(p.parse(ring), p.parse(surface)) >= 3,\n  );\n  return {\n    inset_count: colors.length,\n    all_on_ring:\n      colors.every((color) => color !== '') &&\n      colors.every((color) => p.dist(p.parse(color), p.parse(ring)) === 0),\n    ring_ge_3_on_all_surfaces: ge3,\n  };\n})()",
+      "expect": {
+        "inset_count": 3,
+        "all_on_ring": true,
+        "ring_ge_3_on_all_surfaces": true
+      }
+    },
+    {
+      "name": "screen-focus-ring",
+      "probe": "(() => {\n  const p = window.__ac;\n  const ring = p.prop('--layer-focus-ring-screen');\n  const surface = p.prop('--surface');\n  const bg = p.prop('--layer-bg');\n  const onSurface = p.ratio(p.parse(ring), p.parse(surface));\n  const onLayer = p.ratio(p.parse(ring), p.parse(bg));\n  return {\n    ring_present: ring !== '',\n    ring_ge_3_on_surface: onSurface >= 3,\n    ring_ge_3_on_layer: onLayer >= 3,\n  };\n})()",
+      "expect": {
+        "ring_present": true,
+        "ring_ge_3_on_surface": true,
+        "ring_ge_3_on_layer": true
+      }
+    },
+    {
+      "name": "layer-adaptive-light",
+      "probe": "(() => {\n  const p = window.__ac;\n  const stripe = p.prop('--layer-focus-stripe');\n  const bg = p.prop('--layer-bg');\n  const text = p.colour('--text');\n  const themeBg = p.prop('--bg');\n  return {\n    stripe_present: stripe !== '',\n    bg_present: bg !== '',\n    band_contrast_ge_3: Number(p.bandRatio(stripe, bg).toFixed(2)) >= 3,\n    band_contrast: Number(p.bandRatio(stripe, bg).toFixed(2)),\n    bg_text_contrast_ge_4_5: Number(p.ratio(p.parse(bg), text).toFixed(2)) >= 4.5,\n    bg_text_contrast: Number(p.ratio(p.parse(bg), text).toFixed(2)),\n    stripe_not_white: p.dist(p.parse(stripe), [255, 255, 255]) > 6,\n    bg_not_black: p.dist(p.parse(bg), [0, 0, 0]) > 6,\n    stripe_on_theme_bg_ge_3: Number(p.bandRatio(stripe, themeBg).toFixed(2)) >= 3,\n    stripe: stripe,\n    bg: bg,\n    theme_bg: themeBg,\n  };\n})()",
+      "expect": {
+        "stripe_present": true,
+        "bg_present": true,
+        "band_contrast_ge_3": true,
+        "band_contrast": 3.05,
+        "bg_text_contrast_ge_4_5": true,
+        "bg_text_contrast": 4.5,
+        "stripe_not_white": true,
+        "bg_not_black": true,
+        "stripe_on_theme_bg_ge_3": true,
+        "stripe": "#1f1f1f",
+        "bg": "#8a8a8a",
+        "theme_bg": "#eef0f4"
+      }
+    },
+    {
+      "name": "layer-menu-open-again",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+    {
+      "name": "layer-menu-visible-again",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "layer-props-item-again",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "layer-props-dialog-again",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+    {
+      "name": "stored-stripe-source",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\n  const row = rows.find((r) => {\n    const scope = r.closest(\".ui-field\") || r.parentElement;\n    const caption = scope === null ? null : scope.querySelector(\"label\");\n    return ((caption === null ? \"\" : caption.textContent) || \"\").trim() === '{{text:layersFocusStripe}}';\n  });\n  return row === undefined ? null : (row.querySelector(\"input.ui-color-hex\") || {}).value;\n})()",
+      "expect": "#ffffff"
+    },
+    {
+      "name": "stored-bg-source",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\n  const row = rows.find((r) => {\n    const scope = r.closest(\".ui-field\") || r.parentElement;\n    const caption = scope === null ? null : scope.querySelector(\"label\");\n    return ((caption === null ? \"\" : caption.textContent) || \"\").trim() === '{{text:layersBackground}}';\n  });\n  return row === undefined ? null : (row.querySelector(\"input.ui-color-hex\") || {}).value;\n})()",
+      "expect": "#000000"
+    },
+    {
+      "name": "close-layer-props",
+      "key": "Escape"
+    },
+    {
+      "name": "layer-props-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "cloud-readable",
+      "timeout": 20000,
+      "waitFor": "document.querySelectorAll('.cloud').length >= 1"
+    },
+    {
+      "name": "cloud-colors",
+      "probe": "(() => { const p = window.__ac; const clouds = [...document.querySelectorAll('.cloud')].filter((el) => el.style.background !== ''); const values = clouds.map((el) => ({ fg: p.styleOf(el, 'color'), bg: p.styleOf(el, 'backgroundColor') })); const min = values.reduce((acc, v) => Math.min(acc, p.ratio(v.fg, v.bg)), Number.POSITIVE_INFINITY); return { colored_clouds: values.length, min_contrast_ge_4_5: min >= 4.5, min_contrast: Number((Number.isFinite(min) ? min : 0).toFixed(2)) }; })()",
+      "expect": {
+        "colored_clouds": 1,
+        "min_contrast_ge_4_5": true,
+        "min_contrast": 4.55
+      }
+    },
+    {
+      "name": "open-user-menu-dark",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible-dark",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-dark",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}');\n  if (row === undefined) throw new Error('settings menu item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "settings-dialog-dark",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-section-dark",
+      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n  if (nav === undefined) throw new Error('нет раздела «Оформление»');\n  nav.click();\n  return true;\n})()"
+    },
+    {
+      "name": "pick-dark-mode",
+      "probe": "(() => {\n  const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"dark\"]');\n  if (radio === null) throw new Error('mode radio not found');\n  radio.click();\n  return radio.checked;\n})()",
+      "expect": true
+    },
+    {
+      "name": "dark-mode-applied",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.mode === 'dark'"
+    },
+    {
+      "name": "close-settings-dark",
+      "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied-dark",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
+    },
+    {
+      "name": "settings-closed-dark",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "layer-adaptive-dark",
+      "probe": "(() => {\n  const p = window.__ac;\n  const stripe = p.prop('--layer-focus-stripe');\n  const bg = p.prop('--layer-bg');\n  const text = p.colour('--text');\n  const themeBg = p.prop('--bg');\n  return {\n    stripe_present: stripe !== '',\n    bg_present: bg !== '',\n    band_contrast_ge_3: Number(p.bandRatio(stripe, bg).toFixed(2)) >= 3,\n    band_contrast: Number(p.bandRatio(stripe, bg).toFixed(2)),\n    bg_text_contrast_ge_4_5: Number(p.ratio(p.parse(bg), text).toFixed(2)) >= 4.5,\n    bg_text_contrast: Number(p.ratio(p.parse(bg), text).toFixed(2)),\n    stripe_not_white: p.dist(p.parse(stripe), [255, 255, 255]) > 6,\n    bg_not_black: p.dist(p.parse(bg), [0, 0, 0]) > 6,\n    stripe_on_theme_bg_ge_3: Number(p.bandRatio(stripe, themeBg).toFixed(2)) >= 3,\n    stripe: stripe,\n    bg: bg,\n    theme_bg: themeBg,\n  };\n})()",
+      "expect": {
+        "stripe_present": true,
+        "bg_present": true,
+        "band_contrast_ge_3": true,
+        "band_contrast": 10.02,
+        "bg_text_contrast_ge_4_5": true,
+        "bg_text_contrast": 17.28,
+        "stripe_not_white": false,
+        "bg_not_black": false,
+        "stripe_on_theme_bg_ge_3": true,
+        "stripe": "#ffffff",
+        "bg": "#000000",
+        "theme_bg": "#0e1116"
+      }
+    },
+    {
+      "name": "derivatives-changed-with-mode",
+      "probe": "(() => { const p = window.__ac; return { mode: document.documentElement.dataset.mode, stripe: p.prop('--layer-focus-stripe'), bg: p.prop('--layer-bg') }; })()",
+      "expect": {
+        "mode": "dark",
+        "stripe": "#ffffff",
+        "bg": "#000000"
+      }
+    },
+    {
+      "name": "upload-light-wallpaper",
+      "eval": "(async () => { const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180; const ctx = canvas.getContext('2d'); const gradient = ctx.createLinearGradient(0, 0, 320, 180); gradient.addColorStop(0, '#ffffff'); gradient.addColorStop(1, '#e6e6e6'); ctx.fillStyle = gradient; ctx.fillRect(0, 0, 320, 180); const dataUrl = canvas.toDataURL('image/jpeg', 0.85); await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return true; })()"
+    },
+    {
+      "name": "reload-for-wallpaper",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-wallpaper",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-wall",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-wallpaper-on",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "install-helpers-wall",
+      "eval": "(() => {\n  const raw = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();\n  const parse = (value) => {\n    const v = raw(value);\n    if (v === '' || v === 'none') return null;\n    if (v.startsWith('#')) {\n      const hex = v.length === 4 ? v.slice(1).split('').map((c) => c + c).join('') : v.slice(1);\n      if (hex.length < 6) return null;\n      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/.exec(v);\n    if (cs !== null) return [1, 2, 3].map((i) => Math.round(Number(cs[i]) * 255));\n    const m = /^rgba?\\(([^)]+)\\)/.exec(v);\n    if (m === null) return null;\n    return m[1].split(\",\").map((x) => Number.parseFloat(x)).slice(0, 3).map((x) => Math.round(x));\n  };\n  const alphaOf = (value) => {\n    const m = /^rgba?\\(([^)]+)\\)$/.exec(raw(value));\n    if (m === null) return 1;\n    const parts = m[1].split(\",\").map((x) => x.trim());\n    return parts.length === 4 ? Number.parseFloat(parts[3]) : 1;\n  };\n  const lin = (x) => {\n    const v = x / 255;\n    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;\n  };\n  const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n  const ratio = (a, b) => {\n    if (a === null || b === null) return 0;\n    const x = lum(a);\n    const y = lum(b);\n    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);\n  };\n  const dist = (a, b) =>\n    a === null || b === null ? 0 : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);\n  const prop = (name) =>\n    getComputedStyle(document.documentElement).getPropertyValue(name).trim();\n  const colour = (name) => parse(prop(name));\n  const mix = (top, bottom, alpha) =>\n    top.map((c, i) => Math.round(alpha * c + (1 - alpha) * bottom[i]));\n  const bandRatio = (stripe, backdrop) => {\n    const s = typeof stripe === \"string\" ? parse(stripe) : stripe;\n    const b = typeof backdrop === \"string\" ? parse(backdrop) : backdrop;\n    if (s === null || b === null) return 0;\n    return ratio(mix(s, b, 0.7), b);\n  };\n  const styleOf = (el, name) => parse(getComputedStyle(el)[name]);\n  window.__ac = { parse, alphaOf, ratio, dist, prop, colour, mix, bandRatio, styleOf };\n  return Object.keys(window.__ac).length;\n})()"
+    },
+    {
+      "name": "wallpaper-band",
+      "probe": "(() => {\n  const p = window.__ac;\n  const base = p.parse(p.prop('--layer-bg'));\n  const tint = p.prop('--canvas-wallpaper-tint');\n  const alpha = p.alphaOf(tint);\n  const grayAt = (l) => {\n    const c = (v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);\n    const g = Math.round(Math.min(1, Math.max(0, c(l))) * 255);\n    return [g, g, g];\n  };\n  const under = grayAt(0.94);\n  const backdrop = p.mix(p.parse(tint) ?? base, under, alpha);\n  const stripe = p.prop('--layer-focus-stripe');\n  const band = p.bandRatio(stripe, backdrop);\n  return {\n    wallpaper_attr: document.documentElement.getAttribute('data-canvas-wallpaper'),\n    tint_alpha: Number(alpha.toFixed(2)),\n    backdrop: 'rgb(' + backdrop.join(', ') + ')',\n    stripe_present: stripe !== \"\",\n    band_on_image_ge_3: band >= 3,\n    band_on_image: Number(band.toFixed(2)),\n  };\n})()",
+      "expect": {
+        "wallpaper_attr": "on",
+        "tint_alpha": 0.24,
+        "backdrop": "rgb(188, 188, 188)",
+        "stripe_present": true,
+        "band_on_image_ge_3": true,
+        "band_on_image": 3.07
+      }
+    },
+    {
+      "name": "open-user-menu-light-repro",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    {
+      "name": "user-menu-visible-light-repro",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "open-settings-light-repro",
+      "eval": "(() => {\n  const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}');\n  if (row === undefined) throw new Error('settings menu item not found');\n  row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));\n  row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));\n  return true;\n})()"
+    },
+    {
+      "name": "settings-dialog-light-repro",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-section-light-repro",
+      "eval": "(() => {\n  const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:appearance}}');\n  if (nav === undefined) throw new Error('нет раздела «Оформление»');\n  nav.click();\n  return true;\n})()"
+    },
+    {
+      "name": "pick-light-mode-repro",
+      "probe": "(() => {\n  const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]');\n  if (radio === null) throw new Error('mode radio not found');\n  radio.click();\n  return radio.checked;\n})()",
+      "expect": true
+    },
+    {
+      "name": "light-mode-applied-repro",
+      "timeout": 10000,
+      "waitFor": "document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "close-settings-light-repro",
+      "key": "Escape"
+    },
+    {
+      "name": "apply-unapplied-light-repro",
+      "eval": "(() => {\n  const backdrops = document.querySelectorAll('.dialog-backdrop');\n  if (backdrops.length === 0) return 'no-prompt';\n  const top = backdrops[backdrops.length - 1];\n  const btn = Array.from(top.querySelectorAll('button')).find((b) => (b.textContent || '').trim() === '{{text:unsavedApply}}');\n  if (btn === undefined) return 'no-prompt';\n  btn.click();\n  return 'applied';\n})()"
+    },
+    {
+      "name": "settings-closed-light-repro",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "layer-menu-open-repro",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+    {
+      "name": "layer-menu-visible-repro",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+    {
+      "name": "layer-props-item-repro",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "layer-props-dialog-repro",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+    {
+      "name": "set-stripe-black",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\n  const row = rows.find((r) => {\n    const scope = r.closest(\".ui-field\") || r.parentElement;\n    const caption = scope === null ? null : scope.querySelector(\"label\");\n    return ((caption === null ? \"\" : caption.textContent) || \"\").trim() === '{{text:layersFocusStripe}}';\n  });\n  if (row === undefined) throw new Error('color row not found');\n  const input = row.querySelector(\"input.ui-color-hex\");\n  if (input === null) throw new Error(\"hex input not found\");\n  input.value = '#000000';\n  input.dispatchEvent(new Event('change', { bubbles: true }));\n  return input.value;\n})()",
+      "expect": "#000000"
+    },
+    {
+      "name": "set-bg-white",
+      "probe": "(() => {\n  const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row'));\n  const row = rows.find((r) => {\n    const scope = r.closest(\".ui-field\") || r.parentElement;\n    const caption = scope === null ? null : scope.querySelector(\"label\");\n    return ((caption === null ? \"\" : caption.textContent) || \"\").trim() === '{{text:layersBackground}}';\n  });\n  if (row === undefined) throw new Error('color row not found');\n  const input = row.querySelector(\"input.ui-color-hex\");\n  if (input === null) throw new Error(\"hex input not found\");\n  input.value = '#ffffff';\n  input.dispatchEvent(new Event('change', { bubbles: true }));\n  return input.value;\n})()",
+      "expect": "#ffffff"
+    },
+    {
+      "name": "save-layer-props-repro",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+    {
+      "name": "layer-props-saved-repro",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+    {
+      "name": "layer-applied-repro",
+      "timeout": 30000,
+      "waitFor": "window.__ac.prop('--layer-bg') !== ''"
+    },
+    {
+      "name": "upload-black-wallpaper",
+      "eval": "(async () => {\n  const canvas = document.createElement('canvas');\n  canvas.width = 320;\n  canvas.height = 180;\n  const ctx = canvas.getContext('2d');\n  ctx.fillStyle = 'rgb(0, 0, 0)';\n  ctx.fillRect(0, 0, 320, 180);\n  const dataUrl = canvas.toDataURL('image/jpeg', 0.95);\n  await window.etn.me.uploadWallpaper({\n    networkId: '{{networkId}}',\n    data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),\n    mime_type: 'image/jpeg',\n    meta: { width: 320, height: 180, avg_luminance: 0 },\n  });\n  return true;\n})()"
+    },
+    {
+      "name": "reload-for-black-wallpaper",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-black-wallpaper",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-black",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-wallpaper-on-black",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "install-helpers-black",
+      "eval": "(() => {\n  const raw = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();\n  const parse = (value) => {\n    const v = raw(value);\n    if (v === '' || v === 'none') return null;\n    if (v.startsWith('#')) {\n      const hex = v.length === 4 ? v.slice(1).split('').map((c) => c + c).join('') : v.slice(1);\n      if (hex.length < 6) return null;\n      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/.exec(v);\n    if (cs !== null) return [1, 2, 3].map((i) => Math.round(Number(cs[i]) * 255));\n    const m = /^rgba?\\(([^)]+)\\)/.exec(v);\n    if (m === null) return null;\n    return m[1].split(\",\").map((x) => Number.parseFloat(x)).slice(0, 3).map((x) => Math.round(x));\n  };\n  const alphaOf = (value) => {\n    const m = /^rgba?\\(([^)]+)\\)$/.exec(raw(value));\n    if (m === null) return 1;\n    const parts = m[1].split(\",\").map((x) => x.trim());\n    return parts.length === 4 ? Number.parseFloat(parts[3]) : 1;\n  };\n  const lin = (x) => {\n    const v = x / 255;\n    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;\n  };\n  const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n  const ratio = (a, b) => {\n    if (a === null || b === null) return 0;\n    const x = lum(a);\n    const y = lum(b);\n    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);\n  };\n  const dist = (a, b) =>\n    a === null || b === null ? 0 : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);\n  const prop = (name) =>\n    getComputedStyle(document.documentElement).getPropertyValue(name).trim();\n  const colour = (name) => parse(prop(name));\n  const mix = (top, bottom, alpha) =>\n    top.map((c, i) => Math.round(alpha * c + (1 - alpha) * bottom[i]));\n  const bandRatio = (stripe, backdrop) => {\n    const s = typeof stripe === \"string\" ? parse(stripe) : stripe;\n    const b = typeof backdrop === \"string\" ? parse(backdrop) : backdrop;\n    if (s === null || b === null) return 0;\n    return ratio(mix(s, b, 0.7), b);\n  };\n  const styleOf = (el, name) => parse(getComputedStyle(el)[name]);\n  window.__ac = { parse, alphaOf, ratio, dist, prop, colour, mix, bandRatio, styleOf };\n  return Object.keys(window.__ac).length;\n})()"
+    },
+    {
+      "name": "layer-applied-after-black",
+      "timeout": 30000,
+      "waitFor": "window.__ac.prop('--layer-bg') !== '' && window.__ac.prop('--layer-focus-stripe') !== ''"
+    },
+    {
+      "name": "black-image-band",
+      "probe": "(() => {\n  const p = window.__ac;\n  const base = p.parse(p.prop('--layer-bg'));\n  const tint = p.prop('--canvas-wallpaper-tint');\n  const alpha = p.alphaOf(tint);\n  const grayAt = (l) => {\n    const c = (v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);\n    const g = Math.round(Math.min(1, Math.max(0, c(l))) * 255);\n    return [g, g, g];\n  };\n  const under = grayAt(0);\n  const backdrop = p.mix(p.parse(tint) ?? base, under, alpha);\n  const stripe = p.prop('--layer-focus-stripe');\n  const band = p.bandRatio(stripe, backdrop);\n  return {\n    wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'),\n    tint_alpha: Number(alpha.toFixed(2)),\n    backdrop: 'rgb(' + backdrop.join(', ') + ')',\n    band_ge_3: band >= 3,\n    band: Number(band.toFixed(2)),\n  };\n})()",
+      "expect": {
+        "wallpaper": "on",
+        "tint_alpha": 0.24,
+        "backdrop": "rgb(61, 61, 61)",
+        "band_ge_3": true,
+        "band": 3.02
+      }
+    },
+    {
+      "name": "upload-grey-wallpaper",
+      "eval": "(async () => {\n  const canvas = document.createElement('canvas');\n  canvas.width = 320;\n  canvas.height = 180;\n  const ctx = canvas.getContext('2d');\n  ctx.fillStyle = 'rgb(59, 59, 59)';\n  ctx.fillRect(0, 0, 320, 180);\n  const dataUrl = canvas.toDataURL('image/jpeg', 0.95);\n  await window.etn.me.uploadWallpaper({\n    networkId: '{{networkId}}',\n    data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),\n    mime_type: 'image/jpeg',\n    meta: { width: 320, height: 180, avg_luminance: 0.04 },\n  });\n  return true;\n})()"
+    },
+    {
+      "name": "reload-for-grey-wallpaper",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-grey-wallpaper",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-grey",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-wallpaper-on-grey",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "install-helpers-grey",
+      "eval": "(() => {\n  const raw = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();\n  const parse = (value) => {\n    const v = raw(value);\n    if (v === '' || v === 'none') return null;\n    if (v.startsWith('#')) {\n      const hex = v.length === 4 ? v.slice(1).split('').map((c) => c + c).join('') : v.slice(1);\n      if (hex.length < 6) return null;\n      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)/.exec(v);\n    if (cs !== null) return [1, 2, 3].map((i) => Math.round(Number(cs[i]) * 255));\n    const m = /^rgba?\\(([^)]+)\\)/.exec(v);\n    if (m === null) return null;\n    return m[1].split(\",\").map((x) => Number.parseFloat(x)).slice(0, 3).map((x) => Math.round(x));\n  };\n  const alphaOf = (value) => {\n    const m = /^rgba?\\(([^)]+)\\)$/.exec(raw(value));\n    if (m === null) return 1;\n    const parts = m[1].split(\",\").map((x) => x.trim());\n    return parts.length === 4 ? Number.parseFloat(parts[3]) : 1;\n  };\n  const lin = (x) => {\n    const v = x / 255;\n    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;\n  };\n  const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);\n  const ratio = (a, b) => {\n    if (a === null || b === null) return 0;\n    const x = lum(a);\n    const y = lum(b);\n    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);\n  };\n  const dist = (a, b) =>\n    a === null || b === null ? 0 : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);\n  const prop = (name) =>\n    getComputedStyle(document.documentElement).getPropertyValue(name).trim();\n  const colour = (name) => parse(prop(name));\n  const mix = (top, bottom, alpha) =>\n    top.map((c, i) => Math.round(alpha * c + (1 - alpha) * bottom[i]));\n  const bandRatio = (stripe, backdrop) => {\n    const s = typeof stripe === \"string\" ? parse(stripe) : stripe;\n    const b = typeof backdrop === \"string\" ? parse(backdrop) : backdrop;\n    if (s === null || b === null) return 0;\n    return ratio(mix(s, b, 0.7), b);\n  };\n  const styleOf = (el, name) => parse(getComputedStyle(el)[name]);\n  window.__ac = { parse, alphaOf, ratio, dist, prop, colour, mix, bandRatio, styleOf };\n  return Object.keys(window.__ac).length;\n})()"
+    },
+    {
+      "name": "layer-applied-after-grey",
+      "timeout": 30000,
+      "waitFor": "window.__ac.prop('--layer-bg') !== '' && window.__ac.prop('--layer-focus-stripe') !== ''"
+    },
+    {
+      "name": "grey-image-band-boundary",
+      "probe": "(() => {\n  const p = window.__ac;\n  const base = p.parse(p.prop('--layer-bg'));\n  const tint = p.prop('--canvas-wallpaper-tint');\n  const alpha = p.alphaOf(tint);\n  const grayAt = (l) => {\n    const c = (v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);\n    const g = Math.round(Math.min(1, Math.max(0, c(l))) * 255);\n    return [g, g, g];\n  };\n  const under = grayAt(0.04);\n  const backdrop = p.mix(p.parse(tint) ?? base, under, alpha);\n  const stripe = p.prop('--layer-focus-stripe');\n  const band = p.bandRatio(stripe, backdrop);\n  return {\n    wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'),\n    tint_alpha: Number(alpha.toFixed(2)),\n    backdrop: 'rgb(' + backdrop.join(', ') + ')',\n    band_ge_3: band >= 3,\n    band: Number(band.toFixed(2)),\n  };\n})()",
+      "expect": {
+        "wallpaper": "on",
+        "tint_alpha": 0.24,
+        "backdrop": "rgb(104, 104, 104)",
+        "band_ge_3": true,
+        "band": 3.06
+      }
+    },
+    {
+      "name": "remove-wallpaper",
+      "eval": "window.etn.me.removeWallpaper('{{networkId}}')"
+    }
+  ]
+}

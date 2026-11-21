@@ -235,12 +235,36 @@ const CODE_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
   UPDATE_INSTALLER_FAILED: 'errors.code.UPDATE_INSTALLER_FAILED',
 };
 
+/**
+ * Человекочитаемые имена ролей сети (`type_roles`) — из словаря настроек, где
+ * эти же роли выбираются. Неизвестная роль (сеть новее клиента) показывается
+ * своим ключом как есть: врать пользователю про незнакомую роль хуже, чем
+ * назвать её технически.
+ */
+const TYPE_ROLE_LABELS: Readonly<Record<string, MessageKey>> = {
+  table_of_contents: 'settings.label.uzlovoyTypeRazdela',
+  instructions: 'settings.label.typeInstructionAgents',
+};
+
+/** Имя роли сети для текста ошибки (ошибка d4802371). */
+function typeRoleLabel(role: string): string {
+  const key = TYPE_ROLE_LABELS[role];
+  return key === undefined ? role : t(key);
+}
+
 function serverErrorText(like: ErrorLike | null): string | null {
   const code = typeof like?.code === 'string' ? like.code : null;
   if (code === null) return null;
   const details = like?.details;
   if (typeof details === 'object' && details !== null) {
-    const record = details as { reason?: unknown; issue?: unknown };
+    const record = details as { reason?: unknown; issue?: unknown; role?: unknown };
+    // Ошибка d4802371: отказ по роли сети (`details.role`) получает адресный
+    // текст — общий «проверьте введённые данные» не объясняет, что тип занят
+    // ролью и её надо снять в настройках сети. Остальные VALIDATION_ERROR
+    // идут прежним путём (code → details.reason/issue → общий текст).
+    if (code === 'VALIDATION_ERROR' && typeof record.role === 'string' && record.role !== '') {
+      return t('thoughtTypes.deleteRoleBlocked', typeRoleLabel(record.role));
+    }
     const token =
       typeof record.reason === 'string'
         ? record.reason
@@ -330,7 +354,7 @@ export interface FontFlags {
  * exactly like their colours do.
  */
 export function applyFontFlags(target: HTMLElement, flags: FontFlags): void {
-  target.style.fontWeight = flags.bold ? 'bold' : '';
+  target.style.fontWeight = flags.bold ? '600' : '';
   target.style.fontStyle = flags.italic ? 'italic' : '';
   target.style.textDecorationLine =
     flags.underline && flags.strike

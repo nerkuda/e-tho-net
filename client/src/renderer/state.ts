@@ -19,6 +19,8 @@ import {
   SELECTION_W_DEFAULT,
   USAGE_W_DEFAULT,
   type CurrentUser,
+  type UiModeName,
+  type UiThemeName,
   type FocusEdge,
   type FocusResponse,
   type Layer,
@@ -68,8 +70,19 @@ export type RtStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'o
  */
 export type RtStatusDetail = 'server-restart' | 'server-maintenance';
 
-/** UI theme (L5 `client_meta.theme`, L10). */
-export type Theme = 'light' | 'dark';
+/**
+ * Режим интерфейса (тёмный/светлый; L10). Выбор пользователя живёт в
+ * профиле (`ui_mode`, требование 219d030c), кэш офлайн-старта —
+ * `client_meta.ui_mode`.
+ */
+export type Theme = UiModeName;
+
+/**
+ * Имя темы интерфейса (набор значений токенов, L10; требование 7cc0cdad):
+ * совпадает с именем файла `lib/ui/themes/<тема>.css`. Реестр загрузки —
+ * `lib/theme.ts` (`THEME_NAMES`).
+ */
+export type UiTheme = UiThemeName;
 
 /** Shared renderer state snapshot. */
 export interface AppState {
@@ -155,8 +168,10 @@ export interface AppState {
   /** Visual qualifiers per network (de34b35b): e.g. `server-restart` while a
    *  planned restart is in progress. Absent key = plain status. */
   rtStatusDetailByNetwork: Record<string, RtStatusDetail>;
-  /** UI theme applied to the document root (L5 `client_meta.theme`, L10). */
+  /** Режим, применённый к корню документа (`data-mode`, L10). */
   theme: Theme;
+  /** Название применённой темы интерфейса (`data-theme`, L10). */
+  uiTheme: UiTheme;
   /** Last realtime event description for the status bar (auto-hides). */
   lastEvent: string | null;
   /** Editor target; `null` means "follow the focused thought". */
@@ -279,6 +294,7 @@ const initial: AppState = {
   rtStatusByNetwork: {},
   rtStatusDetailByNetwork: {},
   theme: 'light',
+  uiTheme: 'current',
   lastEvent: null,
   editorTarget: null,
   zoneSorts: {

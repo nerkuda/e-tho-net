@@ -35,6 +35,7 @@
 
 import type { Comment } from '@etn/shared';
 import { t } from '../lib/i18n.js';
+import { localDayOfInstant } from '../lib/dates.js';
 
 import { requireNetworkId } from '../app.js';
 import { invalidateQueries, queryKeys, signalOwnerActivity } from '../lib/live/index.js';
@@ -85,11 +86,7 @@ export function registerChronoTab(): void {
   registerTabContent('chrono', buildChronoTab);
   registerTabCount('chrono', async (ctx) => {
     try {
-      const comments = await etn.comments.list(
-        requireNetworkId(),
-        ctx.ownerType,
-        ctx.ownerId,
-      );
+      const comments = await etn.comments.list(requireNetworkId(), ctx.ownerType, ctx.ownerId);
       return comments.filter((c) => c.kind === 'chronological').length;
     } catch {
       return undefined;
@@ -107,12 +104,14 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
 
   const top = div('chrono-top');
   const toolbar = div('chrono-toolbar');
-  toolbar.append(uiButton({
-    label: t('addDialog.applyLabel.add'),
-    role: 'secondary',
-    size: 's',
-    onClick: () => void startNew(),
-  }));
+  toolbar.append(
+    uiButton({
+      label: t('addDialog.applyLabel.add'),
+      role: 'secondary',
+      size: 's',
+      onClick: () => void startNew(),
+    }),
+  );
   const tableWrap = div('admin-table-wrap chrono-table');
   top.append(toolbar, tableWrap);
 
@@ -419,8 +418,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
 
     /** Надпись заголовка в просмотре; пустая — «Пустая запись». */
     const titleLabel = (): string =>
-      derivedTitleLabel(titleValue === '' ? null : titleValue, bodyDraft) ||
-      t('diary.emptyTitle');
+      derivedTitleLabel(titleValue === '' ? null : titleValue, bodyDraft) || t('diary.emptyTitle');
 
     /**
      * Дорезолвить ID-формы wiki-ссылок в заголовке открытой записи и обновить
@@ -459,8 +457,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
             ...modifierChordVariants('Enter').map((chord) => ({
               command: 'chronoTitle.enter',
               chord,
-              run: (event: KeyboardEvent) =>
-                event.key === 'Enter' ? onTitleEnter(event) : false,
+              run: (event: KeyboardEvent) => (event.key === 'Enter' ? onTitleEnter(event) : false),
             })),
             {
               command: 'chronoTitle.cancel',
@@ -488,6 +485,13 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
       widget = createMarkdownField({
         md: bodyDraft,
         html: existing.body_html,
+        // Тихая подсказка задачи знает период записи (ошибка f720cfff): строка
+        // без своих дат живёт в периоде хроно-записи, а не «без срока».
+        taskHintContext: {
+          owner: 'chronological',
+          fromDay: localDayOfInstant(fromInstant),
+          toDay: localDayOfInstant(toInstant),
+        },
         // Каретка/выделение при входе в правку — в месте клика в просмотре
         // (требование bac754e4, задача 189da39e).
         sourceMapView: true,
@@ -566,9 +570,9 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
           fresh.version,
         );
         invalidateQueries(queryKeys.indicators(ctx.ownerId));
-      // Активность записи двигает updated_at владельца (ошибка 228df7a4): гасим
-      // ключи владельца тем же набором, что роутер на событиях comment.* (04344707).
-      signalOwnerActivity(ctx.ownerId);
+        // Активность записи двигает updated_at владельца (ошибка 228df7a4): гасим
+        // ключи владельца тем же набором, что роутер на событиях comment.* (04344707).
+        signalOwnerActivity(ctx.ownerId);
         await reload();
       } catch (err) {
         notice(t('chronoTab.notSucceededSave', errText(err)), 'error');
@@ -626,11 +630,7 @@ function buildChronoTab(ctx: EditorContext, lifecycle: TabPaneLifecycle): HTMLEl
 
   /** Deletes the given record (confirmation) and clears the editor area. */
   async function removeComment(comment: Comment): Promise<void> {
-    const ok = await confirmDialog(
-      t('diary.deleteTitle'),
-      t('diary.deleteQuestion'),
-      true,
-    );
+    const ok = await confirmDialog(t('diary.deleteTitle'), t('diary.deleteQuestion'), true);
     if (!ok) return;
     try {
       // Remove by id: the version is re-read to survive intermediate autosaves.

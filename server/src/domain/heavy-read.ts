@@ -68,6 +68,7 @@ import {
   listComments,
 } from './comment-service.js';
 import { createBodyExpander, createBodyPresenter } from './transclusion-service.js';
+import { listTasks, type TaskListOptions } from './task-service.js';
 import type { TokenIssue } from './thought-type-view-tokens.js';
 import type {
   Comment,
@@ -79,6 +80,7 @@ import type {
   ResolveResult,
   SearchResponse,
   SubgraphEdge,
+  TaskListPage,
   ThoughtRef,
 } from '@etn/shared';
 
@@ -415,4 +417,20 @@ export async function commentsPreviewBatchAsync(
     payload: { ownerType, ownerIds, previewChars, expandTransclusions },
   };
   return (await pool.run(task)) as CommentsPreview[];
+}
+
+/**
+ * Страница задач (GET /tasks, операция e6d65f51) через reader-пул: выборка
+ * идёт по индексам проекции, но на большой сети остаётся тяжёлой и не должна
+ * держать event loop главного потока.
+ */
+export async function listTasksAsync(
+  ndb: NetworkDb,
+  options: TaskListOptions,
+): Promise<TaskListPage> {
+  const pool = getReaderPool();
+  const context = contextFor(ndb, pool);
+  if (pool === null || context === null) return listTasks(ndb, options);
+  const task: ReaderTask = { context, op: 'tasks.list', payload: { options } };
+  return (await pool.run(task)) as TaskListPage;
 }

@@ -178,6 +178,8 @@ const OP_TITLE = 'record_title';
 const OP_BODY = 'record_body';
 const OP_AUTHOR = 'record_author';
 const OP_EDITOR = 'record_editor';
+/** «Есть задачи» в записи (уточнение 2026-11-19, пункт 8). */
+const OP_RECORD_TASKS = 'record_tasks';
 
 // ---------------------------------------------------------------------------
 // Дерево: сборка листьев и обход
@@ -1140,7 +1142,7 @@ function renderPanel(): void {
       registry: registryWithSides(),
       linkTypes: store.state.linkTypes,
       thoughtTypes: store.state.thoughtTypes,
-      contextual: [OP_TIME, OP_TARGETS, OP_BODY, OP_TITLE, OP_AUTHOR, OP_EDITOR],
+      contextual: [OP_TIME, OP_TARGETS, OP_BODY, OP_TITLE, OP_AUTHOR, OP_EDITOR, OP_RECORD_TASKS],
     },
     getState: () => filter,
     setSortKeys: () => {
@@ -1264,6 +1266,13 @@ let chronicleApplySeq = 0;
 /**
  * Global Ctrl+Enter shortcut for the diary view (hosted by the feed).
  * `onApply` вынесена параметром с дефолтом только ради наблюдаемости в тестах.
+ *
+ * Комбинация молчит, когда клавиша адресована правке:
+ *  - редактору записи ленты (`isFeedRecordEditorTarget`, ошибка f5809943);
+ *  - полю БЛОЧНОЙ правки строки панели задач «Дневника»: у него `Ctrl+Enter` —
+ *    сохранение блока, а его контекст лежит НИЖЕ `chronicle-apply` (`focusin`
+ *    контейнера приходит после `focus` поля). Без гарда комбинация уходила в
+ *    перезапрос ленты, правка не сохранялась (вердикт репроверки `7448ac21`).
  */
 export function wireChronicleApplyShortcut(
   container: HTMLElement,
@@ -1278,6 +1287,9 @@ export function wireChronicleApplyShortcut(
         chord: 'Ctrl+Enter',
         run: (event) => {
           if (event.defaultPrevented) return false;
+          // Редактор комментария (в том числе поле правки строки задачи) сам
+          // владеет `Ctrl+Enter` (0.16.1, задача cfb8cb72, пункт 1): глобальное
+          // «Применить» в нём молчит.
           if (isFeedRecordEditorTarget(event.target as HTMLElement | null)) return false;
           onApply();
           return true;

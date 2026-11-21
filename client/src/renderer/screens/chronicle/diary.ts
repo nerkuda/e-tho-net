@@ -19,13 +19,14 @@ import {
   addDays,
   addMonths,
   isPeriodToken,
+  localDayEnd,
+  localDayStart,
   monthEdge,
   pad2,
   resolveDateToken,
   todayLocal,
   weekStartOffset,
 } from '../../lib/dates.js';
-import { formatDateParts, getLang } from '../../lib/i18n.js';
 import { visibleRecordTargets } from '../../lib/record-targets.js';
 
 // Общие чистые примитивы дат живут в `lib/dates.ts` (перенос календаря в
@@ -33,7 +34,16 @@ import { visibleRecordTargets } from '../../lib/record-targets.js';
 // виджетом значения условия, ошибка 1b6c49fe). Реэкспорт сохраняет прежние точки
 // импорта у потребителей (`addDays`/`isoWeekNumber`/`todayLocal` и токенов —
 // `isPeriodToken`/`resolveDateToken` из этого модуля).
-export { addDays, isPeriodToken, isoWeekNumber, resolveDateToken, todayLocal } from '../../lib/dates.js';
+export {
+  addDays,
+  formatDayLabel,
+  isPeriodToken,
+  isoWeekNumber,
+  localDayEnd,
+  localDayStart,
+  resolveDateToken,
+  todayLocal,
+} from '../../lib/dates.js';
 
 /** Один день ленты: локальная дата `YYYY-MM-DD` и записи, видимые в этот день. */
 export interface DiaryDay {
@@ -277,8 +287,24 @@ export function clampPseudoDate(today: string, from: string, to: string): string
  * интервала — она «мозолит глаза» в каждом дне периода.
  */
 export function rowDays(row: ChronicleRow, from = '', to = ''): string[] {
-  let start = localDay(row.valid_from);
-  let end = row.valid_to !== null ? localDay(row.valid_to) : start;
+  return intervalDays(row.valid_from, row.valid_to, from, to);
+}
+
+/**
+ * Дни ЛОКАЛЬНОГО календаря, покрытые интервалом `[validFrom, validTo]` (UTC-
+ * инстансы; `validTo = null` — интервал одного момента), в пересечении с
+ * диапазоном `[from, to]` (границы включительные). Общий разбор для строки
+ * ленты (`rowDays`) и интервалов записей маркеров календаря (0.16.1, требование
+ * ab9d627b): день наблюдателя — один и тот же расчёт.
+ */
+export function intervalDays(
+  validFrom: string,
+  validTo: string | null,
+  from = '',
+  to = '',
+): string[] {
+  let start = localDay(validFrom);
+  let end = validTo !== null ? localDay(validTo) : start;
   if (start === '') return [];
   if (end === '') end = start;
   if (end < start) [start, end] = [end, start];
@@ -306,33 +332,10 @@ export function compareDays(a: string, b: string, order: SortOrder = 'asc'): num
 }
 
 /**
- * Заголовок группы дат ленты в локальной зоне наблюдателя: «Четверг, 24 сентября
- * 2026» в ru, «Thursday, September 24, 2026» в en, «2026年9月24日星期四» в zh
- * (0.10.1, итерация приёмки №8, п.5; локализация — задача e6374cd1).
- *
- * Собирается из ЧАСТЕЙ `Intl.DateTimeFormat`: полный формат с `year: 'numeric'`
- * дописывает языковой суффикс года («г.» в ru), а в заголовке год нужен без
- * него. Поэтому из частей отбрасываются хвостовые литералы после последней
- * даты; порядок дня/месяца/года и позиция дня недели остаются языковыми (в zh
- * день недели идёт после даты). Кеш форматтера — `formatDateParts`
- * (`lib/i18n.ts`), месяц приходит в нужном падеже.
+ * Заголовок группы дат ленты (`formatDayLabel`): реализация — в `lib/dates.ts`
+ * (0.16.1, задача `7446eb25`), здесь она реэкспортируется ради прежних
+ * потребителей.
  */
-export function formatDayLabel(day: string): string {
-  const parts = formatDateParts(new Date(`${day}T00:00:00`), {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-  if (parts.length === 0) return day;
-  while (parts.length > 1 && parts[parts.length - 1]?.type === 'literal') parts.pop();
-  const text = parts
-    .map((part) => part.value)
-    .join('')
-    .trim();
-  if (text === '') return day;
-  return text.charAt(0).toLocaleUpperCase(getLang()) + text.slice(1);
-}
 
 /**
  * Порядок записей ленты (требование c6ddc1ea, ревизия 2026-10-09, задача
@@ -342,11 +345,7 @@ export function formatDayLabel(day: string): string {
  * Та же модель, что у серверного `ORDER BY`, — клиентская локальная вставка не
  * расходится с порядком страницы.
  */
-export function compareRecords(
-  a: ChronicleRow,
-  b: ChronicleRow,
-  order: SortOrder = 'asc',
-): number {
+export function compareRecords(a: ChronicleRow, b: ChronicleRow, order: SortOrder = 'asc'): number {
   const dir = order === 'desc' ? -1 : 1;
   const byDate = a.valid_from === b.valid_from ? 0 : a.valid_from < b.valid_from ? -1 : 1;
   if (byDate !== 0) return byDate * dir;
@@ -458,21 +457,11 @@ export function dayPeriod(day: string): PeriodRange {
  */
 export const SEARCH_DEBOUNCE_MS = 300;
 
-/** Начало локального дня наблюдателя как полный UTC-инстанс. */
-export function localDayStart(day: string): string {
-  const m = BARE_DATE_RE.exec(day.trim());
-  if (m === null) return '';
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
-}
-
-/** Конец локального дня наблюдателя как полный UTC-инстанс (включительно). */
-export function localDayEnd(day: string): string {
-  const m = BARE_DATE_RE.exec(day.trim());
-  if (m === null) return '';
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
-  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
-}
+/**
+ * Границы локальных суток (`localDayStart`/`localDayEnd`): реализация — в
+ * `lib/dates.ts` (0.16.1, задача `7446eb25`), здесь реэкспорт ради прежних
+ * потребителей.
+ */
 
 /**
  * Период панели для перехода к записи (0.10.1, T7; элемент «Поиск в
@@ -482,10 +471,7 @@ export function localDayEnd(day: string): string {
  * не выпадает из UTC-суток, а лента показывает весь её день. `''` — дата не
  * разобралась.
  */
-export function recordPeriod(row: {
-  valid_from: string;
-  valid_to: string | null;
-}): PeriodRange {
+export function recordPeriod(row: { valid_from: string; valid_to: string | null }): PeriodRange {
   let from = localDay(row.valid_from);
   let to = row.valid_to !== null ? localDay(row.valid_to) : from;
   if (from === '') return { from: '', to: '' };
@@ -493,7 +479,6 @@ export function recordPeriod(row: {
   if (to < from) [from, to] = [to, from];
   return { from: localDayStart(from), to: localDayEnd(to) };
 }
-
 
 /**
  * Период недели (клик по номеру/строке недели): от ПЕРВОГО дня недели сети

@@ -28,8 +28,15 @@
   overflow: hidden;
   /* --layer-bg (ошибка f24fbef0): полотно «Публикаций» следует фону активного
    * слоя, как холст, «Дневник» и «События». Без правила хост был прозрачен и
-   * наследовал фон `body` — смена слоя не была видна. */
-  background: var(--layer-bg, var(--bg));
+   * наследовал фон `body` — смена слоя не была видна. Сверху — лёгкий тинт
+   * активной картинки карты (этап 2, задача 80324150): переменная пуста без
+   * картинки, слой прозрачен. */
+  background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
+    var(--layer-bg, var(--bg));
 }
 
 .pub-toolbar {
@@ -364,17 +371,16 @@
    активного слоя. При совпадении пунктир не рисуется контроллером
    (`library-nav.ts`), остаётся только сплошная. */
 .pub-current {
-  outline: 2px dashed var(--warn-strong);
+  /* Текущая строка клавиатурной навигации — пунктир токена темы `--cursor`
+     (тот же, что у курсора карты; не семантика предупреждения). */
+  outline: 2px dashed var(--cursor);
   outline-offset: -2px;
   border-radius: var(--radius-s);
 }
 
 .pub-open {
-  outline: 2px solid var(--layer-focus-stripe, var(--accent));
+  outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -2px;
-  /* Контрастный кант двойной рамки открытого — тот же токен, что у гало карты
-     (`.cloud.halo`) и блока документа (`.pub-doc-editor`); инсет-тень даёт
-     вторую полосу внутри строки, не вылезая за соседей (задача 3af98e31). */
   box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
   border-radius: var(--radius-s);
 }
@@ -579,7 +585,6 @@
   margin-left: auto;
 }
 
-
 /* --- Вкладки карточки: резюме, свойства текстов/доп. материалы, метаданные,
        состояние пересборки -------------------------------------------------- */
 
@@ -625,7 +630,6 @@
   gap: var(--space-2);
 }
 
-
 /* --- Рабочая область открытой публикации (0.11.1, задача 4f03b9d5) ------- */
 
 .pub-ws-host {
@@ -635,8 +639,14 @@
   display: flex;
   /* --layer-bg (задача 77cce0ba, п.1): полотно рабочей области чтения тоже
    * следует фону активного слоя — библиотека (.publications) правило имела, а
-   * область чтения была прозрачной и показывала фон body при смене слоя. */
-  background: var(--layer-bg, var(--bg));
+   * область чтения была прозрачной и показывала фон body при смене слоя.
+   * Тинт картинки (этап 2, 80324150) — тот же, первым слоем. */
+  background:
+    linear-gradient(
+      var(--wallpaper-screen-tint, transparent),
+      var(--wallpaper-screen-tint, transparent)
+    ),
+    var(--layer-bg, var(--bg));
 }
 
 .pub-ws {
@@ -842,16 +852,30 @@
   background: var(--surface-2);
 }
 
+/* Фокус-цвет — три роли: фон и кант берут сам фокус-цвет (цепочка слоя/темы),
+   а ЦВЕТ ТЕКСТА — контрастный кант темы `--focus-ring-contrast` (замечание 1
+   вердикта 136575c9). Причина: фокус-цвет перенесён 1:1 из полосы карты и как
+   текст даёт 1.9–4.3:1 на подложках части тем (current dark 2.92, nordic light
+   2.34, wasp light 3.38), а кант в каждой теме контрастен к фону — минимум
+   5.5:1 на всех подложках, включая мягкую заливку 18% фокуса. Поэтому фон
+   строки остаётся мягким фокусом, а текст читаем. */
 .pub-toc-line.pub-toc-current {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
+  color: var(--focus-ring-contrast);
 }
 
 /* Выбранная клавиатурой строка оглавления (общий компонент списка): ручка
-   ручного порядка видна всегда, не только на hover (задача d13fd645). */
+   ручного порядка видна всегда, не только на hover (задача d13fd645).
+   Фокус показывает полоса слева (цвет слоя/темы), текст — контрастный кант
+   темы: как цвет текста фокус-цвет нечитаем в части тем (см. выше). */
 .pub-toc-line.pub-toc-selected {
   background: var(--surface-2);
-  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
+  color: var(--focus-ring-contrast);
 }
 
 .pub-toc-line.pub-toc-selected .ui-drag-handle,
@@ -1058,11 +1082,11 @@
 .pub-doc-titlepage-cover .pub-doc-title,
 .pub-doc-titlepage-cover .pub-doc-subtitle,
 .pub-doc-titlepage-cover .pub-doc-meta {
-  color: #fff;
+  color: var(--overlay-fg);
   text-shadow:
-    0 1px 3px rgb(0 0 0 / 85%),
-    0 0 2px rgb(0 0 0 / 90%);
-  -webkit-text-stroke: 0.4px rgb(255 255 255 / 65%);
+    0 1px 3px color-mix(in srgb, var(--badge-bg) 85%, transparent),
+    0 0 2px color-mix(in srgb, var(--badge-bg) 90%, transparent);
+  -webkit-text-stroke: 0.4px color-mix(in srgb, var(--overlay-fg) 65%, transparent);
 }
 
 /* Автор/дата — последняя строка нижней половины, внизу СПРАВА, с отступами от
@@ -1134,18 +1158,22 @@
    `lib/ui/list.ts` поверх `nav-core.ts`) — пунктирная рамка, как курсор карты
    мыслей (`.cloud.kbd-cursor`, задача 77cce0ba, п.2). */
 .pub-doc-current {
-  outline: 2px dashed var(--warn-strong);
+  /* Текущий блок навигации тела документа — пунктир токена темы `--cursor`
+     (как курсор карты и текущая строка библиотеки). */
+  outline: 2px dashed var(--cursor);
   outline-offset: -2px;
   border-radius: var(--radius-s);
 }
 
 /* Мысль, открытая в редакторе, — сплошная рамка цвета фокуса, как гало облачка
-   на карте мыслей (`.cloud.halo` — `--layer-focus-stripe`; задача 77cce0ba,
-   п.2). Идёт после `.pub-doc-current`, поэтому у совпавшего блока выигрывает
+   на карте мыслей (там `.cloud.halo` берёт `--layer-focus-stripe`, а здесь
+   экранное кольцо — `--layer-focus-ring-screen`, адаптированное к
+   поверхности; задача 77cce0ba, п.2 и круг 3 задачи 6e171b39). Идёт после
+   `.pub-doc-current`, поэтому у совпавшего блока выигрывает
    сплошная рамка. Второй тонкий кант — общий токен двойной рамки открытого
    (`--focus-ring-contrast`, как у гало и `.pub-open`; задача 3af98e31). */
 .pub-doc-editor {
-  outline: 2px solid var(--layer-focus-stripe, var(--accent));
+  outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -2px;
   box-shadow: inset 0 0 0 4px var(--focus-ring-contrast);
   border-radius: var(--radius-s);

@@ -48,6 +48,7 @@ import { markCommentPreview } from '../lib/hover-preview.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { ELLIPSE_INSIDE } from '../lib/pure.js';
 import { holderNameByUserId as resolveLockHolderName } from '../lib/lock-cache.js';
+import { adaptCanvasAccent } from '../lib/adaptive-context.js';
 import { resolveLinkTypeVisual, resolveThoughtTypeVisual } from '../lib/type-tree.js';
 import { store } from '../state.js';
 import { findCloudAnywhere, getRef } from './canvas.js';
@@ -689,13 +690,16 @@ export function edgePointAt(
  */
 function endpointColor(thoughtId: string): string | null {
   const ref = getRef(thoughtId);
-  if (ref !== null) {
-    if (ref.bg_color !== null) return ref.bg_color;
+  if (ref === null) return null;
+  // Цвет линии — производный от подложки холста (0.16.1, требование
+  // 26d53c26): исходный цвет мысли/типа остаётся в данных, линия получает
+  // читаемый вариант. Повторные вызовы держит кэш производных.
+  const stored =
+    ref.bg_color ??
     // L21: the type bg colour resolves along the ancestor chain; an untyped
     // thought resolves the root type.
-    return resolveThoughtTypeVisual(store.state.thoughtTypes, ref.type_id).bg_color;
-  }
-  return null;
+    resolveThoughtTypeVisual(store.state.thoughtTypes, ref.type_id).bg_color;
+  return stored === null ? null : adaptCanvasAccent(stored);
 }
 
 /** `defs` element of the base overlay; rebuilt on every draw (L14). */
@@ -1002,7 +1006,7 @@ function drawTopLine(
     const text = document.createElementNS(SVG_NS, 'text');
     text.classList.add('link-label-text');
     text.setAttribute('fill', 'var(--warn, #c98a06)');
-    text.setAttribute('font-weight', '700');
+    text.setAttribute('font-weight', '600');
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + BADGE_TEXT_DY * zoom));
     text.setAttribute('dominant-baseline', 'middle');
@@ -1016,7 +1020,7 @@ function drawTopLine(
     const text = document.createElementNS(SVG_NS, 'text');
     text.classList.add('link-label-text');
     text.setAttribute('fill', 'var(--warn, #c98a06)');
-    text.setAttribute('font-weight', '700');
+    text.setAttribute('font-weight', '600');
     const offset = (from.y < to.y ? LABEL_OFFSET : -LABEL_OFFSET) * zoom;
     text.setAttribute('x', String(midX));
     text.setAttribute('y', String(midY + offset));

@@ -134,14 +134,14 @@
       "expect": true
     },
 
-    { "name": "switch-to-dark", "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()" },
+    { "name": "switch-to-dark", "eval": "(() => { document.documentElement.dataset.mode = 'dark'; return document.documentElement.dataset.mode; })()" },
     {
       "name": "dark-arrows-and-switch",
-      "probe": "(() => { const sw = document.querySelector('.st-filter .ft-row .fv-mode'); const seg = sw ? sw.querySelector('.ui-btn') : null; const cs = seg ? getComputedStyle(seg) : null; const row = document.querySelector('.st-filter .ft-row'); return JSON.stringify({ theme: document.documentElement.dataset.theme, modeCount: row ? row.querySelectorAll('.fv-mode').length : -1, switchFont: cs ? cs.fontSize : null, switchPadTop: cs ? cs.paddingTop : null, rowBg: getComputedStyle(row).backgroundColor }); })()"
+      "probe": "(() => { const sw = document.querySelector('.st-filter .ft-row .fv-mode'); const seg = sw ? sw.querySelector('.ui-btn') : null; const cs = seg ? getComputedStyle(seg) : null; const row = document.querySelector('.st-filter .ft-row'); return JSON.stringify({ mode: document.documentElement.dataset.mode, modeCount: row ? row.querySelectorAll('.fv-mode').length : -1, switchFont: cs ? cs.fontSize : null, switchPadTop: cs ? cs.paddingTop : null, rowBg: getComputedStyle(row).backgroundColor }); })()"
     },
     {
       "name": "dark-layout-intact",
-      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); if (!row) return false; const rm = row.querySelector('.ft-row__remove'); const rr = row.getBoundingClientRect(); const rmr = rm ? rm.getBoundingClientRect() : null; return document.documentElement.dataset.theme === 'dark' && row.querySelectorAll('.fv-mode').length === 1 && getComputedStyle(row).alignItems === 'flex-start' && !!rmr && (rmr.top - rr.top) <= 8 && (rr.right - rmr.right) <= 8; })()",
+      "probe": "(() => { const row = document.querySelector('.st-filter .ft-row'); if (!row) return false; const rm = row.querySelector('.ft-row__remove'); const rr = row.getBoundingClientRect(); const rmr = rm ? rm.getBoundingClientRect() : null; return document.documentElement.dataset.mode === 'dark' && row.querySelectorAll('.fv-mode').length === 1 && getComputedStyle(row).alignItems === 'flex-start' && !!rmr && (rmr.top - rr.top) <= 8 && (rr.right - rmr.right) <= 8; })()",
       "expect": true
     }
   ]

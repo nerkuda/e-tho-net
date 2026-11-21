@@ -164,6 +164,17 @@ export function markChronoPreview(
   markTrigger(trigger, 'chrono', ownerType, ownerId, title);
 }
 
+/**
+ * Marks the reminder indicator (⏰) of a cloud as a Ctrl-hover trigger: the
+ * popup lists every reminder of the subject (dates and repeats). Resolver
+ * lives in `lib/reminder-indicators.ts` — it owns the per-network reminder
+ * cache the popup is built from (same dependency direction as the neighbours
+ * resolver: `canvas.ts` imports both modules).
+ */
+export function markReminderPreview(trigger: HTMLElement, thoughtId: string, title: string): void {
+  markTrigger(trigger, 'reminder', 'thought', thoughtId, title);
+}
+
 /** Marks an element as a Ctrl-hover trigger for the attachments list (📎 indicator). */
 export function markAttachmentsPreview(
   trigger: HTMLElement,

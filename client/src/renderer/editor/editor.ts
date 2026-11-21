@@ -80,6 +80,7 @@ import { buildEntityCombo } from '../lib/entity-picker.js';
 import { etn } from '../lib/etn.js';
 import { svgIcon } from '../lib/ui/icon.js';
 import { showMenuAt, type MenuItem } from '../lib/menu.js';
+import { createReminderFlag } from './reminder-flag.js';
 import { notice } from '../lib/notice.js';
 import { logUiEvent } from '../lib/ui-log.js';
 import { resolveLinkTypeVisual, typeChainOf } from '../lib/type-tree.js';
@@ -122,8 +123,9 @@ import {
 import { patchFocusEdge, store } from '../state.js';
 import { groupSection, setCollapseChangeHandler, type GroupSpec } from './group.js';
 import { rowSplitter } from './splitter.js';
-import { setClampRoot } from './list-heights.js';
+import { applyTabGroupClamp, setClampRoot } from './list-heights.js';
 import { registerCommentSections } from './comments.js';
+import { registerEditorTasksSection } from './tasks-panel.js';
 import { registerAttachmentsTab } from './attachments.js';
 import { registerPropertiesGroup } from './properties.js';
 import { registerLinksTab } from './links-tab.js';
@@ -135,7 +137,13 @@ import {
   type StripElements,
 } from '../screens/tabs/tab-overflow.js';
 import { showIconDialog, type IconPickOutcome, type IconPickResult } from './icon-dialog.js';
-import { editMarkdownField, focusMarkdownFieldAt, focusMarkdownFieldSelection, type MdSourceSelection } from './markdown-field.js';
+import {
+  editMarkdownField,
+  focusMarkdownFieldAt,
+  focusMarkdownFieldSelection,
+  focusMarkdownFieldTaskLine,
+  type MdSourceSelection,
+} from './markdown-field.js';
 import { commentFocusStep } from './comment-focus.js';
 import { showLinkStyleDialog, showThoughtStyleDialog } from './style-dialog.js';
 import { showThoughtTypeEditor } from '../screens/type-manager.js';
@@ -232,7 +240,7 @@ const TABS_THOUGHT: EditorTabDef[] = [
   {
     id: 'main',
     get title() {
-      return t('comment.title.kommentariy');
+      return t('editor.title.main');
     },
     counted: false,
   },
@@ -290,7 +298,7 @@ const TABS_LINK: EditorTabDef[] = [
   {
     id: 'main',
     get title() {
-      return t('comment.title.kommentariy');
+      return t('editor.title.main');
     },
     counted: false,
   },
@@ -526,6 +534,16 @@ export function openRecordInEditor(thoughtId: string, commentId: string): void {
 }
 
 /**
+ * Показывает вкладку «Основное» каналом отображения, НЕ записывая предпочтение
+ * пользователя (0.16.1, замечание приёмки 710b68aa): «Открыть источник»
+ * постоянного комментария ведёт в карточку владельца — записи «Дневника» у
+ * такого комментария нет, и pending-запись там не нашлась бы.
+ */
+export function showEditorMainTab(): void {
+  displayTab('main');
+}
+
+/**
  * Общее тело {@link openThoughtInEditor} и программного входа
  * {@link openRecordInEditor}. `force` обходит ОБА молчаливых no-op повторного
  * открытия (фокус и уже открытая та же мысль); публичный
@@ -636,7 +654,69 @@ function openThoughtTarget(id: string, options: { force: boolean }): void {
  * unified visit history. Mirrors what {@link openThoughtInEditor} does for
  * the canvas, so every screen feeds the same "current thought" state.
  */
-export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
+/** Дополнительные действия при открытии мысли (задача 3054fe86). */
+export interface ThoughtEditorOpenOptions {
+  /**
+   * Вкладка, которую показать вместе с мыслью: клик по подписи свойства в
+   * «Связях дня» открывает «Свойства», а не вкладку прошлого просмотра.
+   */
+  tab?: EditorTabId;
+  /**
+   * Строка свойства, к которой прокрутить и которую выделить (вкладка
+   * «Свойства»). Показ завершает собственное перечитывание строк панели.
+   */
+  revealPropertyId?: string;
+}
+
+/** Отложенный программный переход на вкладку (задача 3054fe86). */
+let pendingEditorReveal: { ownerId: string; tab: EditorTabId } | null = null;
+
+/**
+ * Отложенный показ строки свойства (задача 3054fe86): его забирает таблица
+ * «Свойства» после отрисовки строк своего владельца. Запрос снимается ТОЛЬКО
+ * при показе строки: пока строки читаются, он должен пережить перечитывание.
+ */
+let pendingPropertyReveal: {
+  ownerType: 'thought' | 'link';
+  ownerId: string;
+  propertyId: string;
+} | null = null;
+
+/**
+ * Свойство, к строке которого нужно перейти у этого владельца (или null).
+ * Читает панель «Свойства» (client/src/renderer/editor/properties.ts).
+ */
+export function pendingPropertyRevealFor(
+  ownerType: 'thought' | 'link',
+  ownerId: string,
+): string | null {
+  const pending = pendingPropertyReveal;
+  if (pending === null || pending.ownerType !== ownerType || pending.ownerId !== ownerId) {
+    return null;
+  }
+  return pending.propertyId;
+}
+
+/** Снять запрос показа строки свойства — строка найдена и показана. */
+export function clearPendingPropertyReveal(): void {
+  pendingPropertyReveal = null;
+}
+
+export async function setThoughtEditorTarget(
+  thought: Thought,
+  options: ThoughtEditorOpenOptions = {},
+): Promise<void> {
+  if (options.tab !== undefined || options.revealPropertyId !== undefined) {
+    pendingEditorReveal = { ownerId: thought.id, tab: options.tab ?? 'properties' };
+    pendingPropertyReveal =
+      options.revealPropertyId !== undefined
+        ? { ownerType: 'thought', ownerId: thought.id, propertyId: options.revealPropertyId }
+        : null;
+  } else {
+    // Обычный заход в мысль снимает отложенный переход другого действия.
+    pendingEditorReveal = null;
+    pendingPropertyReveal = null;
+  }
   await noteThoughtWillOpen(thought.id);
   logUiEvent('ui.editor.opened', { id: thought.id, kind: 'thought' });
   store.update({
@@ -645,6 +725,15 @@ export async function setThoughtEditorTarget(thought: Thought): Promise<void> {
     structuresActiveThoughtId: thought.id,
     selectedLinkId: null,
   });
+  // Мысль уже показана: дешёвый гейт store-подписки в mountEditor пропустит
+  // render(), поэтому отложенный переход применяем здесь.
+  if (
+    liveRenderedKey !== null &&
+    liveRenderedKey.ownerId === thought.id &&
+    String(liveRenderedKey.version ?? '') === String(thought.version)
+  ) {
+    applyPendingEditorReveal(currentEditorContext());
+  }
 }
 
 /** Current editor context: a picked thought/link, else the focused thought. */
@@ -1022,6 +1111,8 @@ export function mountEditor(editorHost: HTMLElement): void {
     registrationsDone = true;
     registerPropertiesGroup();
     registerCommentSections();
+    // Панель «Задачи» — вторая зона вкладки «Основное» (0.16.1, задача 710b68aa).
+    registerEditorTasksSection();
     registerAttachmentsTab();
     registerLinksTab();
     registerGraphTab();
@@ -1199,30 +1290,43 @@ function buildTabPane(id: EditorTabId): HTMLElement {
       pane.append(wrap);
       return pane;
     }
-    const topSpecs = specs.slice(0, -1);
-    const bottomSpec = specs[specs.length - 1]!;
-    let top: HTMLElement | null = null;
-    for (const spec of topSpecs) {
-      top = groupSection(spec);
-      top.classList.add('tab-top');
-      pane.append(top);
-    }
-    if (top !== null) {
-      // Resizes the top group's scrollable table (`.prop-wrap`); inert when
-      // the group is collapsed (no body at all, §6.3). The drag is
-      // remembered as the table's fixed height (bug 6b757336, ee745368,
-      // list-heights.ts).
-      const topEl = top;
-      pane.append(
-        rowSplitter(
-          () => topEl.querySelector('.prop-wrap') ?? topEl.querySelector('.group-body'),
-          { min: 34, persistKey: 'props' },
-        ),
-      );
-    }
-    const bottom = div('main-bottom');
-    bottom.append(groupSection(bottomSpec));
-    pane.append(bottom);
+    // «Основное» мысли (0.16.1, элемент 6083ab57): две сворачиваемые зоны —
+    // комментарий и панель «Задачи» (`main.tasks`), между ними вертикальный
+    // сплиттер. Сплиттер и фиксированная высота действуют, ТОЛЬКО когда обе
+    // зоны раскрыты и панель непуста; единственная раскрытая зона занимает
+    // вкладку целиком. У связи сюда не попадаем: у неё одна секция
+    // (комментарий) и группы задач нет.
+    const root = div('main-tab');
+    const groups = specs.map((spec) => groupSection(spec));
+    const bodyOf = (group: HTMLElement): HTMLElement | null =>
+      group.querySelector(':scope > .group-body') as HTMLElement | null;
+    const clampKeys = specs.map((spec, index) =>
+      index === 0 ? 'main.comment' : `main.${spec.id}`,
+    );
+    const splitters: HTMLElement[] = [];
+    groups.forEach((group, index) => {
+      if (index > 0) {
+        const previous = groups[index - 1]!;
+        const splitter = rowSplitter(() => bodyOf(previous), {
+          min: 50,
+          persistKey: clampKeys[index - 1]!,
+        });
+        splitters.push(splitter);
+        root.append(splitter);
+      }
+      root.append(group);
+    });
+    const relayout = (): void => {
+      const allOpen = groups.every((group) => !group.hidden && bodyOf(group) !== null);
+      groups.forEach((group, index) => applyTabGroupClamp(group, clampKeys[index]!, allOpen));
+      for (const splitter of splitters) splitter.hidden = !allOpen;
+    };
+    for (const group of groups) group.addEventListener('etn:toggled', () => relayout());
+    // Пустая панель «Задачи» скрывает свою зону (событие из тела панели):
+    // комментарий остаётся один и занимает вкладку.
+    root.addEventListener('etn:zone-visibility', () => relayout());
+    relayout();
+    pane.append(root);
     return pane;
   }
   const builder = tabContentBuilders.get(id);
@@ -1282,6 +1386,23 @@ function activateEditorTab(id: EditorTabId): void {
   activeTab = id;
   displayTab(id);
   if (changed) persistActiveTab();
+}
+
+/**
+ * Применить отложенный программный переход (задача 3054fe86) ПОСЛЕ отрисовки
+ * вкладок нужного владельца: «Свойства» нельзя собирать под прежнюю сущность.
+ * Кэш вкладки сбрасывается, чтобы её перечитывание увидело запрос строки
+ * (pendingPropertyRevealFor) и прокрутило к ней. Сохранённое предпочтение
+ * вкладки не переписывается — это разовый переход.
+ */
+function applyPendingEditorReveal(ctx: EditorContext | null): void {
+  const pending = pendingEditorReveal;
+  if (pending === null) return;
+  if (ctx === null || ctx.ownerType !== 'thought' || ctx.ownerId !== pending.ownerId) return;
+  pendingEditorReveal = null;
+  if (pendingPropertyReveal !== null) invalidatePanes(['properties']);
+  activeTab = pending.tab;
+  displayTab(pending.tab);
 }
 
 /**
@@ -1783,7 +1904,12 @@ async function render(): Promise<void> {
     ctx === null
       ? 'null'
       : `${identitySignature}|${ctx.ownerId}|${ctx.thought?.version ?? ''}|${ctx.link?.version ?? ''}|${ctxTypeId(ctx) ?? ''}`;
-  if (fullSignature === lastSignature) return;
+  if (fullSignature === lastSignature) {
+    // Цель та же: дешёвый путь. Отложенный переход (задача 3054fe86) обязан
+    // примениться и здесь — например, повторный клик по тому же свойству.
+    applyPendingEditorReveal(ctx);
+    return;
+  }
 
   const prevCtx = renderCtx;
   const identitySame = identitySignature === lastIdentitySignature;
@@ -1850,6 +1976,7 @@ async function render(): Promise<void> {
   // can only belong to the CURRENT `scrollBox` — no DOM containment check.
   if (sameOwner && ctxLoaded(prevCtx) && ctxLoaded(ctx)) {
     patchHeader(ctx);
+    applyPendingEditorReveal(ctx);
     return;
   }
   // Another entity of the same kind, or the loading→loaded transition of the
@@ -1906,6 +2033,7 @@ function renderRetarget(ctx: EditorContext): void {
 
   refreshTabCounts(ctx);
   displayTab(shownTab);
+  applyPendingEditorReveal(ctx);
 
   // Different entity → different content: no scroll to preserve.
   scrollBox.scrollTop = 0;
@@ -2165,6 +2293,7 @@ function renderFull(ctx: EditorContext | null): void {
   // сущности (например «Хроника» у связи), уступает «Основному» — само
   // предпочтение в L4 не перезаписывается.
   displayInitialTab(tabs);
+  applyPendingEditorReveal(ctx);
 
   if (refocus !== null) restoreEditorFocus(refocus, scrollBox);
 }
@@ -2211,7 +2340,12 @@ function shownThoughtId(): string {
  * switches it into edit mode — CodeMirror mounts focused with the caret at
  * the end.
  */
-function focusEditorComment(thoughtId: string, findText?: string, selection?: MdSourceSelection): void {
+function focusEditorComment(
+  thoughtId: string,
+  findText?: string,
+  selection?: MdSourceSelection,
+  taskLine?: number,
+): void {
   const deadline = Date.now() + 8000;
   let activated = false;
   const tick = (): void => {
@@ -2251,7 +2385,11 @@ function focusEditorComment(thoughtId: string, findText?: string, selection?: Md
       // The comment group is the bottom section of the tab; when collapsed,
       // expand it (a click toggles — click only when persisted state says so).
       if (activated && store.state.collapsedGroups['permanent'] === true) {
-        scrollBox.querySelector<HTMLElement>('.main-bottom .group > .group-header')?.click();
+        scrollBox
+          .querySelector<HTMLElement>(
+            '.main-tab > .group[data-group-id="permanent"] > .group-header',
+          )
+          ?.click();
       }
       // Активация вкладки/группы могла пересобрать панель — даём тик и
       // перезапрашиваем поле уже у подтверждённой мысли.
@@ -2263,7 +2401,8 @@ function focusEditorComment(thoughtId: string, findText?: string, selection?: Md
     // выделяет переданный диапазон источника (двойной клик в ленте публикаций,
     // задача 59774016); с текстом — вход по вхождению (задача 189da39e); без
     // офсета — обычный вход в правку (каретка в конец).
-    if (selection !== undefined) focusMarkdownFieldSelection(field!, selection);
+    if (taskLine !== undefined) focusMarkdownFieldTaskLine(field!, taskLine);
+    else if (selection !== undefined) focusMarkdownFieldSelection(field!, selection);
     else if (findText !== undefined && findText !== '') focusMarkdownFieldAt(field!, findText);
     else editMarkdownField(field!);
   };
@@ -2284,6 +2423,18 @@ export function openThoughtCommentEditor(
 ): void {
   openThoughtInEditor(id);
   focusEditorComment(id, findText, selection);
+}
+
+/**
+ * «Открыть источник» задачи из ПОСТОЯННОГО комментария мысли (0.16.1, живая
+ * приёмка, пачка 3, пункт 1): открывает карточку владельца, вкладку «Основное»,
+ * переводит постоянный комментарий в правку и ставит каретку после маркера
+ * `- [ ] ` строки `lineNo` (номер строки `body_md`, с нуля). Маршрут ожидания
+ * поля/активации вкладки — общий с `openThoughtCommentEditor`.
+ */
+export function openThoughtCommentTaskLine(id: string, lineNo: number): void {
+  openThoughtInEditor(id);
+  focusEditorComment(id, undefined, undefined, lineNo);
 }
 
 // ---------------------------------------------------------------------------
@@ -2809,7 +2960,15 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
   });
   actionsBtn.type = 'button';
 
-  row.append(typeCombo.root, activeLabel, actionsBtn);
+  // Флаг напоминаний (0.16.1, элемент 24ad3735): человекочитаемый повтор рядом
+  // с отметкой «Актуально»; клик — меню действий по напоминаниям мысли.
+  const reminderFlag = createReminderFlag({
+    networkId: requireNetworkId(),
+    thoughtId: thought.id,
+    thoughtTitle: thought.title,
+  });
+
+  row.append(typeCombo.root, activeLabel, reminderFlag.root, actionsBtn);
   box.append(row);
 
   /**
@@ -2834,6 +2993,8 @@ function buildThoughtHeader(initial: Thought): HTMLElement {
     activeCheck.checked = next.active;
     activeCheck.disabled = next.is_protected && next.is_root;
     syncThoughtHeaderLock();
+    // Живая шапка переживает смену мысли — флаг переходит на новую цель.
+    reminderFlag.setTarget(next.id, next.title);
   };
   headerRetarget = (ctx): void => {
     if (ctx.ownerType === 'thought' && ctx.thought !== null) applyThought(ctx.thought);

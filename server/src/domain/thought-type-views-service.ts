@@ -817,6 +817,11 @@ export interface RunViewQueryOptions {
   /** Собирать статистику исполнения (требование 0f34a5ff) — только при
    *  включённом серверном журналировании. */
   collectStats?: boolean;
+  /**
+   * Показывать содержимое корзины (0.16.1, пачка 11, задача 173e8368): лист
+   * «Есть задачи» исполняется с настройкой запросившего, а не с дефолтом.
+   */
+  showTrash?: boolean;
   /** Профиль точки применения (требование 0095daad, ADR 0c02ab4f). Отбор типа —
    *  точка «мысли»; по умолчанию `thoughts`. Определяет видимость операндов и
    *  гранулярность времени. */
@@ -1292,6 +1297,7 @@ export async function executeViewDefinitionForThought(
     ...(options?.maxLimit !== undefined ? { maxLimit: options.maxLimit } : {}),
     ...(options?.tokenContext !== undefined ? { tokenContext: options.tokenContext } : {}),
     ...(options?.collectStats === true ? { collectStats: true } : {}),
+    ...(options?.showTrash !== undefined ? { showTrash: options.showTrash } : {}),
   });
   // Исключаем саму контекстную мысль из результата: «отбор относительно
   // мысли» показывает СОСЕДЕЙ, удовлетворяющих критериям, а не саму мысль.

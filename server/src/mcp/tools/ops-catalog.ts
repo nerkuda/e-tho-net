@@ -49,6 +49,7 @@ import {
   LayersMerge,
   LayersResetOverride,
   LayersUpdate,
+  LinksDelete,
   LinksRestore,
   LocksAcquire,
   LocksClear,
@@ -71,6 +72,12 @@ import {
   McpPublicationTrash,
   McpPublicationUpdate,
   McpPublicationUsage,
+  McpReminderCreate,
+  McpReminderDismiss,
+  McpReminderList,
+  McpReminderRemove,
+  McpReminderSnooze,
+  McpReminderUpdate,
   McpShelfAssign,
   McpShelfCreate,
   McpShelfDelete,
@@ -79,6 +86,12 @@ import {
   McpShelfRestore,
   McpShelfTrash,
   McpShelfUpdate,
+  McpTaskCancel,
+  McpTaskCancelAll,
+  McpTaskList,
+  McpTaskMove,
+  McpTaskMoveAll,
+  McpTaskToggle,
   MembersList,
   MetricsReads,
   MetricsTools,
@@ -766,10 +779,27 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     paramsContract: ThoughtsTrash,
   },
   {
+    action: 'links.delete',
+    tool: 'etn.links.delete',
+    group: 'links',
+    when: 'delete one edge by `link_id` — precise address of exactly one edge (for example one of several edges between the same pair of thoughts) with smart deletion by layers; the bulk ops `unlink_parents`/`unlink_children` remove edges of a named thought PAIR (structural ones included) and cannot address one specific edge',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'link_id', required: true, desc: 'link id' },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
+    errors:
+      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action), or the edge is held by a live layer and cannot be deleted from the base. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
+    paramsContract: LinksDelete,
+  },
+  {
     action: 'links.restore',
     tool: 'etn.links.restore',
     group: 'links',
-    when: 'restore a link from the basket (`trashed: false`) — the only operation of the `etn.links.*` family',
+    when: 'restore a link from the basket (`trashed: false`) — the counterpart of `links.delete` for an edge of the base/ancestor marked in a layer',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'link_id', required: true, desc: 'link id' },
@@ -801,17 +831,17 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'ontology.delete',
     tool: 'etn.ontology.delete',
     group: 'ontology',
-    when: 'delete one ontology entity (`thought_type` / `link_type` / `property` / `type_property` / `type_view`); without `force` a used element is rejected with counters',
+    when: 'delete one ontology entity (`thought_type` / `link_type` / `property` / `type_property` / `type_view`); without `force` a used element is rejected with counters, and a `thought_type` with child types is rejected as well',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'kind', required: true, desc: '`thought_type` | `link_type` | `property` | `type_property` | `type_view`' },
       { name: 'id', required: true, desc: 'entity id' },
-      { name: 'force', desc: 'cascade deletion of a used element' },
+      { name: 'force', desc: 'cascade deletion of a used element; for `thought_type` — together with the whole subtree of child types' },
     ],
     destructive: true,
     readOnly: false,
-    effects: 'with `force` — cascade by the rules (nulling `type_id` of thoughts / detaching links of the type — the edges are NOT deleted, they lose `type_id` and become structural, `affected_counts.links_becoming_structural` counts the live ones / `property_values` / bindings / cascade of type views); deleting a link property removes its paired link type the same way as REST `DELETE /properties/:id` (edges lose `type_id`, the live count is in `affected_counts.links_becoming_structural`); an element in `type_roles` is rejected even with `force`. In a working layer the deletion is layered: visible values and bindings get tombstones, base rows stay physically intact, so `affected_counts` are usage counters taken at call time (via `*_v`), not a report of the deletion effect. One write budget + one audit_log row.',
-    errors: '`VALIDATION_ERROR` (a used element without `force`, a role in `type_roles`), `NOT_FOUND`.',
+    effects: 'with `force` — cascade by the rules (`thought_type` deletes itself plus every descendant, children before the parent, and emits `thought-type.deleted` for each of them / nulling `type_id` of thoughts of every deleted type / detaching links of the type — the edges are NOT deleted, they lose `type_id` and become structural, `affected_counts.links_becoming_structural` counts the live ones / `property_values` / bindings / cascade of type views); deleting a link property removes its paired link type the same way as REST `DELETE /properties/:id` (edges lose `type_id`, the live count is in `affected_counts.links_becoming_structural`); an element in `type_roles` is rejected even with `force` (`thought_type`: any type of the subtree is checked); `affected_counts` of a thought type aggregate the whole subtree and tell its size (`children_count`, `cascade_types_count`). In a working layer the deletion is layered: visible values and bindings get tombstones, base rows stay physically intact, so `affected_counts` are usage counters taken at call time (via `*_v`), not a report of the deletion effect. One write budget + one audit_log row.',
+    errors: '`VALIDATION_ERROR` (a used element without `force`, a `thought_type` with child types without `force`, a role in `type_roles`), `NOT_FOUND`.',
     paramsContract: OntologyDelete,
   },
 
@@ -1050,6 +1080,358 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     errors:
       '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`. A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
     paramsContract: PropertiesRemove,
+  },
+
+  // ---- reminders (0.16.1, задача b47f1fd2; операции ae19b1bf/500d1b3d) -----
+  {
+    action: 'reminders.list',
+    tool: 'etn.reminders.list',
+    group: 'reminders',
+    when: "the caller's reminders on a period with repeats expanded into occurrences (`next_at`, snooze/dismiss included)",
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'from', desc: 'period start (ISO-8601 UTC; default - now)' },
+      { name: 'to', desc: 'period end (default `from + horizon_days`)' },
+      { name: 'horizon_days', desc: 'expansion ceiling in days (default 366, max 3660)' },
+      { name: 'subject_type', desc: '`thought` | `publication`' },
+      { name: 'subject_id', desc: 'only the reminders of this subject' },
+    ],
+    destructive: false,
+    readOnly: true,
+    effects:
+      'read-only, no writes. Returns `{ reminders[], from, to }`; each reminder carries `next_at`, `kind`, ' +
+      '`schedule`, `anchor_at`, `exceptions` and `subject_state`, plus `occurrences[]` ' +
+      "(`{ occurrence_at, status: active|snoozed, until }`) when a period is requested. Only the caller's own " +
+      'reminders; a subject marked for deletion or unavailable in the session layer is hidden, an inactive subject ' +
+      'is hidden unless the network setting `show_inactive` is on. `next_at` is advanced lazily from `anchor_at` ' +
+      'and never points into the past.',
+    errors:
+      '`VALIDATION_ERROR` - a bad instant, `to` earlier than `from`, `horizon_days` out of range.',
+    paramsContract: McpReminderList,
+  },
+  {
+    action: 'reminders.create',
+    tool: 'etn.reminders.create',
+    group: 'reminders',
+    when: 'create a personal reminder about a thought or a publication: once, every N days/months or a calendar rule',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'subject_type', required: true, desc: '`thought` | `publication`' },
+      { name: 'subject_id', required: true, desc: 'subject id' },
+      {
+        name: 'kind',
+        required: true,
+        desc: '`one` | `period` | `rule` (must match `schedule.type`)',
+      },
+      {
+        name: 'schedule',
+        required: true,
+        desc:
+          'closed repeat grammar (interval ranges and edge behavior - `etn.guide { topic: "reminders" }`): ' +
+          '`{type:"once"}`; `{type:"weekdays",days:[1..7],every_weeks?}`; ' +
+          '`{type:"every_days",every,skip_weekends?}`; ' +
+          '`{type:"weekday_of_month",weekday,nth:1..5|"last",every_months?}`; ' +
+          '`{type:"day_of_month",day,every_months}`; `{type:"yearly",month,day,every_years?}`; ' +
+          '`{type:"last_day_of_month",every_months}`',
+      },
+      {
+        name: 'anchor_at',
+        required: true,
+        desc: 'reference occurrence (ISO-8601 UTC; its time of day is inherited)',
+      },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'the server normalizes `anchor_at` to the first occurrence of the series, computes `next_at` and stores the ' +
+      "card; `reminders.changed` (audience=user) refreshes the owner's clients. Returns the reminder card.",
+    errors:
+      '`VALIDATION_ERROR` - invalid repeat grammar or `kind`/`schedule.type` mismatch (HTTP 400 on REST); ' +
+      '`NOT_FOUND` - subject missing or marked for deletion; `FORBIDDEN` - read-only key.',
+    paramsContract: McpReminderCreate,
+  },
+  {
+    action: 'reminders.update',
+    tool: 'etn.reminders.update',
+    group: 'reminders',
+    when: 'change the series of a reminder (kind / schedule / anchor); exceptions are reset and `next_at` is recomputed',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+      { name: 'kind', desc: 'new `kind` (must match the resulting `schedule.type`)' },
+      { name: 'schedule', desc: 'new repeat schedule (closed grammar - see the `reminders` topic)' },
+      { name: 'anchor_at', desc: 'new reference occurrence (ISO-8601 UTC)' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'kind, schedule and anchor are replaced together; the exceptions map is reset and `next_at` recomputed from ' +
+      'the new anchor; `reminders.changed`. Returns the updated card.',
+    errors:
+      '`VALIDATION_ERROR` - nothing to change, invalid grammar, `kind` mismatch; `NOT_FOUND` - the reminder is gone; ' +
+      "`FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderUpdate,
+  },
+  {
+    action: 'reminders.dismiss',
+    tool: 'etn.reminders.dismiss',
+    group: 'reminders',
+    when: 'hide the CURRENT occurrence of a reminder until the next one on the schedule (the series is untouched)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+      {
+        name: 'occurrence_at',
+        desc: 'the occurrence instant of the series (ISO-8601 UTC); omitted - the nearest active occurrence',
+      },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'writes `{kind:"dismiss"}` into `exceptions` at the occurrence moment (never touches `schedule`), recomputes ' +
+      '`next_at` and emits `reminders.changed` with `occurrence_at`. For `kind: one` this ends the single occurrence. ' +
+      'Returns the card; the dismissed moment does not hide an occurrence that starts at exactly the same instant ' +
+      '(strict comparison).',
+    errors:
+      '`VALIDATION_ERROR` - no active occurrence to process (HTTP 409 on REST); `NOT_FOUND` - the reminder is gone; ' +
+      "`FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderDismiss,
+  },
+  {
+    action: 'reminders.snooze',
+    tool: 'etn.reminders.snooze',
+    group: 'reminders',
+    when: 'defer the CURRENT occurrence of a reminder to `until` (only this occurrence; the series keeps its schedule)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+      {
+        name: 'until',
+        required: true,
+        desc: 'new showing moment (ISO-8601 UTC, must be in the future)',
+      },
+      {
+        name: 'occurrence_at',
+        desc: 'the occurrence instant of the series (ISO-8601 UTC); omitted - the nearest active occurrence',
+      },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'writes `{kind:"snooze", until}` into `exceptions` at the occurrence moment, recomputes `next_at` (it becomes ' +
+      'the nearest visible showing) and emits `reminders.changed` with `occurrence_at`. `schedule` is untouched.',
+    errors:
+      '`VALIDATION_ERROR` - `until` not in the future or no active occurrence (HTTP 409 on REST); `NOT_FOUND` - the ' +
+      "reminder is gone; `FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderSnooze,
+  },
+  {
+    action: 'reminders.remove',
+    tool: 'etn.reminders.remove',
+    group: 'reminders',
+    when: "delete one of the caller's reminders (the series disappears from lists and indicators)",
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'reminder_id', required: true, desc: 'reminder id' },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'marks the per-user row `removed` (it leaves every listing, indicator and badge) and emits ' +
+      '`reminders.changed` (`action: removed`). Returns `{ id }`.',
+    errors: "`NOT_FOUND` - the reminder is gone; `FORBIDDEN` - another user's reminder.",
+    paramsContract: McpReminderRemove,
+  },
+
+  // ---- tasks (0.16.1, задача f34066e1; операция 22f1ea95) ------------------
+  {
+    action: 'tasks.list',
+    tool: 'etn.tasks.list',
+    group: 'tasks',
+    when: 'the network tasks from the materialized projection: status/period scope, thought/comment filter, keyset page, COUNT by flag (overdue needs the client today)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      {
+        name: 'scope',
+        desc: '`open` | `done` | `overdue` | `undated` (default — all rows); `overdue`/`undated` are cross-section and ignore `from`/`to`',
+      },
+      { name: 'from', desc: 'period start — `YYYY-MM-DD` or a UTC instant (its UTC date is taken)' },
+      { name: 'to', desc: 'period end (same forms as `from`)' },
+      {
+        name: 'thought_id',
+        desc: 'only rows addressed to this thought — its `[[#uuid]]` ID reference in the row or the owner of a permanent comment (a thought, or either end of a link)',
+      },
+      { name: 'comment_id', desc: 'only rows sourced from this comment' },
+      {
+        name: 'today',
+        desc: "the client's day boundary (`YYYY-MM-DD` or a UTC instant); REQUIRED for `scope: overdue`",
+      },
+      { name: 'cursor', desc: 'keyset cursor of the next page (from the previous response)' },
+      { name: 'limit', desc: 'page size (1..200, default 50)' },
+      { name: 'count', desc: '`true` — also return `total` (a COUNT query)' },
+      {
+        name: 'include_nested',
+        desc: '`true` - also read the lines of nested checklists of a row (`parent_task`/`subtask`); default `false`',
+      },
+      {
+        name: 'show_trash',
+        desc: "`false` - hide the recycle bin content: rows of records owned by trashed entities and rows addressed to a trashed thought; omitted - the caller's `show_trash` preference (default `true`)",
+      },
+    ],
+    destructive: false,
+    readOnly: true,
+    effects:
+      'read-only, no writes. Response `{ items[], subjects[], cursor, total?, max_revision }` (parity with REST `GET /tasks`). ' +
+      'A row is addressed by `{ comment_id, line_no }` (line number of `body_md`, 0-based) and carries `text`, ' +
+      '`due`/`period_from`/`period_to` (`YYYY-MM-DD`), `auto_period` (the period comes from the record, not from ' +
+      'the line), `done`, `subject_thoughts`, `subject_state`, ' +
+      '`parent_task`/`subtask`, `revision`/`parsed_revision` and the source owner (`owner_type`/`owner_id`/`kind`). ' +
+      "`subjects[]` is the display canon (`ThoughtRef`: title, icon, colors, font style, `active`, " +
+      "`marked_for_deletion`) of the rows' subject thoughts, read from `thoughts_v` in one pass; a subject absent " +
+      'from it is unavailable. ' +
+      'Rows of permanent comments of entities marked for deletion are hidden; `show_trash: false` also hides ' +
+      'rows of records owned by trashed entities and rows addressed to a trashed thought. `max_revision` is the network ' +
+      'projection marker (the client compares it and shows "Refresh").',
+    errors:
+      '`VALIDATION_ERROR` - a bad date, an invalid keyset cursor; `BAD_REQUEST` - `scope: overdue` without `today` ' +
+      '(the server does not guess the client day).',
+    paramsContract: McpTaskList,
+  },
+  {
+    action: 'tasks.toggle',
+    tool: 'etn.tasks.toggle',
+    group: 'tasks',
+    when: 'close or reopen ONE task line: the checkbox `- [ ]` ↔ `- [x]` (`done` omitted — invert the current state)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'comment_id', required: true, desc: 'source comment of the line' },
+      { name: 'line_no', required: true, desc: 'line number of `body_md`, 0-based (the content line with the marker)' },
+      {
+        name: 'expected_revision',
+        required: true,
+        desc: 'the comment revision the caller saw; a mismatch - `VERSION_CONFLICT` (409)',
+      },
+      { name: 'done', desc: 'desired state; omitted — invert' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'rewrites the source `body_md` and writes ONE new comment revision (the task projection is re-created by the ' +
+      'comment write hook), emits `comment.updated` and returns `{ results[], revisions: [{ id, version }] }`. ' +
+      'A row-level failure does not abort the call: `results[].ok: false` with `not_a_task` (no task marker), ' +
+      '`line_not_found` or `comment_not_found`.',
+    errors:
+      '`VERSION_CONFLICT` - `expected_revision` differs from the current comment revision (HTTP 409); ' +
+      '`VALIDATION_ERROR`; `FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskToggle,
+  },
+  {
+    action: 'tasks.move',
+    tool: 'etn.tasks.move',
+    group: 'tasks',
+    when: 'shift ALL date links of ONE task line by days or months (the 31st falls back to the last day of the target month, the period is kept); a row of a chronological record without dates gets an explicit date link appended instead (auto period)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'comment_id', required: true, desc: 'source comment of the line' },
+      { name: 'line_no', required: true, desc: 'line number of `body_md`, 0-based' },
+      {
+        name: 'expected_revision',
+        required: true,
+        desc: 'the comment revision the caller saw; a mismatch - `VERSION_CONFLICT` (409)',
+      },
+      { name: 'days', desc: 'shift in days (exactly one of `days`/`months`, non-zero)' },
+      { name: 'months', desc: 'shift in months' },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'one new revision of the source comment, `comment.updated`, `{ results[], revisions: [{ id, version }] }`. ' +
+      'Only calendar date links `[[YYYY-MM-DD]]` move (inline code and non-date targets stay); a line without date ' +
+      'links gets `results[].ok: false, error: "undated"` — unless it is a row of a chronological record: its auto ' +
+      'period gives the anchor (the end of the record period) and an explicit `[[date]]` is appended, so the task ' +
+      'gets pinned.',
+    errors:
+      '`VALIDATION_ERROR` - both or neither of `days`/`months`, a zero/non-integer shift; `VERSION_CONFLICT` (409); ' +
+      '`FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskMove,
+  },
+  {
+    action: 'tasks.cancel',
+    tool: 'etn.tasks.cancel',
+    group: 'tasks',
+    when: 'turn ONE task line into a plain line (`- [ ] text` → `- text`; a checklist item) — the text stays, the marker goes',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      { name: 'comment_id', required: true, desc: 'source comment of the line' },
+      { name: 'line_no', required: true, desc: 'line number of `body_md`, 0-based' },
+      {
+        name: 'expected_revision',
+        required: true,
+        desc: 'the comment revision the caller saw; a mismatch - `VERSION_CONFLICT` (409)',
+      },
+    ],
+    destructive: false,
+    readOnly: false,
+    effects:
+      'one new revision of the source comment, `comment.updated`, `{ results[], revisions: [{ id, version }] }`. ' +
+      'A line without a task marker gives `results[].ok: false, error: "not_a_task"`.',
+    errors: '`VERSION_CONFLICT` (409); `VALIDATION_ERROR`; `FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskCancel,
+  },
+  {
+    action: 'tasks.cancelAll',
+    tool: 'etn.tasks.cancelAll',
+    group: 'tasks',
+    when: 'mass cancel: remove the task marker from EVERY open task matching the filter (their nested checklist subtasks go with them)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      {
+        name: 'filter',
+        required: true,
+        desc:
+          'row filter: `scope` (`open` | `overdue` | `undated` | `done`, default `open`), `from`/`to`, `thought_id`, ' +
+          '`comment_id`, `today` (required for `overdue`) — the same filter as the mass `PATCH /tasks`',
+      },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'destructive — `etn.ops` requires `confirm: true`. Closed (done) rows are history text and are not touched ' +
+      'unless `scope: done` is asked; each changed source comment gets one new revision and a `comment.updated` ' +
+      'event; response `{ results[], revisions: [{ id, version }] }` (per-row `ok`/`error`). Undo is the caller ' +
+      'saving the previous body (REST parity).',
+    errors:
+      '`VALIDATION_ERROR` - bad filter/date; `BAD_REQUEST` - `scope: overdue` without `today`; `FORBIDDEN` - ' +
+      'read-only key.',
+    paramsContract: McpTaskCancelAll,
+  },
+  {
+    action: 'tasks.moveAll',
+    tool: 'etn.tasks.moveAll',
+    group: 'tasks',
+    when: 'mass move: ONE shift applied to ALL date links of every open task matching the filter (rows without dates are skipped with `undated`)',
+    params: [
+      { name: 'network_id', required: true, desc: 'network' },
+      {
+        name: 'filter',
+        required: true,
+        desc:
+          'row filter: `scope` (default `open`), `from`/`to`, `thought_id`, `comment_id`, `today` (required for `overdue`)',
+      },
+      { name: 'days', desc: 'shift in days (exactly one of `days`/`months`, non-zero)' },
+      { name: 'months', desc: 'shift in months' },
+    ],
+    destructive: true,
+    readOnly: false,
+    effects:
+      'destructive — `etn.ops` requires `confirm: true`. One shift over all selected rows, one new revision per ' +
+      'changed source comment, `comment.updated`; response `{ results[], revisions: [{ id, version }] }` with ' +
+      'per-row `undated` for rows without date links (a row of a chronological record without dates gets a pinned ' +
+      'explicit date instead — its auto period gives the anchor).',
+    errors:
+      '`VALIDATION_ERROR` - both/neither shift, a bad filter; `BAD_REQUEST` - `scope: overdue` without `today`; ' +
+      '`FORBIDDEN` - read-only key.',
+    paramsContract: McpTaskMoveAll,
   },
 
   // ---- publications (0.11.1, задача 094653b6; карточки cab597a8/f236bb22/
@@ -1725,6 +2107,9 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '- `attachments` — `eq/ne/is_empty/not_empty/gt/gte/lt/lte/between/not_between` (numbers — the attachment count);',
       '- `chronology` — `eq/ne/is_empty/not_empty/gt/gte/lt/lte/between/not_between` (numbers — the entry count);',
       '- `comment` — `eq/ne/is_empty/not_empty` (boolean — present/absent);',
+      '- `tasks` — `eq/ne/is_empty/not_empty` (whether the thought has OPEN subject tasks — unchecked task rows of the projection whose subject link points at this thought; `is_empty`/`not_empty` — none/any, a value is not required; `eq`/`ne` — a boolean value; a row counts only while its source comment is visible in the current layer context);',
+      '- `reminders` — `eq/ne/is_empty/not_empty` (whether the REQUESTING user has an active reminder on the thought — per-user scope, the caller\'s reminders only; reminders removed by the owner do not count);',
+      '- `reminder_at` — `eq/ne/gt/gte/lt/lte/between/not_between` (the NEAREST `next_at` of the requesting user\'s active reminders on the thought; bounds — ISO-8601 strings or calendar tokens; equality with a "bare date" — its whole day; a reminder without occurrences (`next_at` is NULL) matches no comparison — the absence of a date is expressed by the `reminders` operand);',
       '- `active` — `eq/ne` (boolean);',
       '- `trashed` — `eq/ne` (boolean);',
       '- `keywords` — `matches` (the value is a mini-syntax string; `scope` — `title`/`synonyms`/`comment`/`diary`, an empty `scope` = the condition is disabled; `diary` — diary entries of the thought, 0.13.1; in `synonyms` a word without `*` also matches a word of a `*`-synonym on word boundaries, query words are independent);',
@@ -1814,6 +2199,7 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '- `record_body` — `eq/ne/contains/not_contains/matches` (the same operators as for the title);',
       '- `record_author` — `eq/ne/in/not_in`;',
       '- `record_editor` — `eq/ne/in/not_in`;',
+      '- `record_tasks` — `eq/ne/is_empty/not_empty` (the entry HAS task lines: `task_rows.is_task = 1` of its `body_md`; a nested checklist item is `is_task = 0` and does not count — `eq true`/`not_empty` = "has tasks", `eq false`/`is_empty` = "no tasks");',
       '- `targets` — `in/not_in/all_of/in_hierarchy/not_in_hierarchy/is_empty/not_empty` (a LIST of target thoughts or a sub-selection of THOUGHTS (the `thoughts` profile); `in_hierarchy`/`not_in_hierarchy` — the selected targets and their structural descendants; `is_empty`/`not_empty` — an explicit selection of entries without targets / with targets): an entry passes if it is attached to a target thought OR to a link whose end ∈ the set ("at least one target" — `in`; `all_of` — "all targets"; an entry without targets does not pass). The flat `link_scope != "both"` and `link_type_ids` are not expressible in AST — an explicit refusal (`VALIDATION_ERROR`), not a silent substitution with `both`.',
       '',
       '### Sorting',
@@ -2033,6 +2419,179 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
     topic: 'how_to_write_batch',
     when: 'step-by-step batch write instruction for `etn.thoughts.write`: sections, `ref`/`target_ref`, `on_duplicate`, limits, migration from the absorbed tools',
     body_md: writeBatchHowToText('<network_id>'),
+  },
+  {
+    // 0.16.1 (задача b47f1fd2): обзорная тема семейства `reminders.*`.
+    // Действия — в общем реестре, их `params`/эффекты/коды — по `topic`
+    // `reminders.<action>`; здесь — модель, грамматика, `next_at`, исключения и
+    // видимость, общие для всего семейства.
+    topic: 'reminders',
+    when: 'reminders overview: personal reminders on a thought/publication, the closed repeat grammar and `kind`, anchor normalization, lazy `next_at`, exceptions (snooze/dismiss), period expansion and subject visibility',
+    body_md: [
+      '# reminders — personal reminders',
+      '',
+      'A reminder is a personal (per-user) notification about a thought or a publication:',
+      'when to show it and how the repeat behaves. Rows live in the per-user `reminders` table of the',
+      'network database and are NOT branched by layers: the owner sees the same series in any layer',
+      'context, and the row is invisible to other users (another user reaches it — `FORBIDDEN`).',
+      'All 6 actions are available via `etn.ops` (`reminders.*`); the `params` shape, effects and',
+      'error codes of an action — `etn.guide { topic: "reminders.<action>" }`.',
+      '',
+      '## Repeat grammar (closed)',
+      '`schedule` is an object with a `type` and NO extra keys; an unknown type or a stray key is',
+      '`VALIDATION_ERROR` (HTTP 400 on REST). A series has no end (no `until`/`count`).',
+      '',
+      '| `schedule.type` | shape | `kind` |',
+      '|---|---|---|',
+      '| `once` | `{}` | `one` |',
+      '| `weekdays` | `{ days: [1..7], every_weeks: 1..520 }` (ISO, 1 = Mon; default `1` = every week) | `rule` |',
+      '| `every_days` | `{ every: 1..3650, skip_weekends: boolean }` (default `false`) | `period` |',
+      '| `weekday_of_month` | `{ weekday: 1..7, nth: 1..5 or "last", every_months: 1..120 }` (default `1`) | `rule` |',
+      '| `day_of_month` | `{ day: 1..31, every_months: 1..120 }` (required) | `period` |',
+      '| `yearly` | `{ month: 1..12, day: 1..31, every_years: 1..100 }` (default `1`; `day` must exist in the month) | `rule` |',
+      '| `last_day_of_month` | `{ every_months: 1..120 }` (required) | `period` |',
+      '',
+      'Interval fields are OPTIONAL and default to `1` (every week/month/year); a value outside',
+      'its range, or a key outside the row shape, is `VALIDATION_ERROR`.',
+      '',
+      '`kind` is a coarse view of the same series and MUST match `schedule.type` — a mismatch is',
+      '`VALIDATION_ERROR` (`details.field = "kind"`, HTTP 400 on REST).',
+      '',
+      '## Anchor and `next_at`',
+      '- `anchor_at` is a reference instant. The server NORMALIZES it to the FIRST occurrence of the',
+      '  series on or after the requested moment and stores that value. The time of day of the anchor',
+      '  is inherited by every occurrence of the series.',
+      '- Edges are SKIPPED, not clamped: `day_of_month` 31 fires only in a month that HAS a 31st (a',
+      '  short month is skipped - the series continues in the next suitable month); `yearly` 29.02',
+      '  fires only in leap years (non-leap years are skipped). An absent N-th weekday of a month',
+      '  (a 5th Thursday) skips that occurrence and the series continues. `last_day_of_month` is the',
+      '  explicit "last day" kind. `every_days` with `skip_weekends: true` moves a Sat/Sun occurrence',
+      '  to the next Monday (the time of day is kept). `once` keeps the anchor as given. A series that',
+      '  can never produce an occurrence is rejected at write time with `VALIDATION_ERROR` (HTTP 400,',
+      '  `details.issue = "no-occurrence"`).',
+      '- `next_at` is the moment of the nearest visible SHOWING (for a snoozed occurrence — its `until`)',
+      '  and never points into the past: it is recomputed lazily from `anchor_at` plus the exceptions on',
+      '  every read. Reads do NOT write to the database; `next_at` in the row is updated by writes only.',
+      '',
+      '## Occurrences and exceptions',
+      '- `exceptions` is a map "occurrence instant → `{kind:"snooze", until}` | `{kind:"dismiss"}`"',
+      '  stored in UTC. An exception addresses the OCCURRENCE instant, not the showing moment: snoozing',
+      '  an already deferred occurrence rewrites the same record.',
+      '- The comparison is STRICT: an occurrence is hidden only when `until` is strictly later than the',
+      '  occurrence instant; an occurrence that lands exactly on `until` stays visible.',
+      '- `reminders.snooze`/`reminders.dismiss` touch only the CURRENT occurrence — `schedule` and the',
+      '  series are untouched. `reminders.update` replaces the series (`kind`/`schedule`/`anchor_at`',
+      '  together), RESETS `exceptions` and recomputes `next_at`.',
+      '- `reminders.dismiss` of `kind: one` ends its single occurrence (`next_at: null`); the row stays',
+      '  `active`. `reminders.remove` is a soft delete: the row becomes `removed` and leaves every',
+      '  listing, indicator and badge.',
+      '',
+      '## Period expansion (`reminders.list`)',
+      '- `from` (default — now) and `to` (default — `from + horizon_days`) ask for an explicit period:',
+      '  each series is expanded into `occurrences[]` (`{ occurrence_at, status: active|snoozed, until }`),',
+      '  and a snoozed occurrence appears in the period that contains its `until`.',
+      '- `horizon_days` (default 366, max 3660) is a hard ceiling: the requested period is clipped to it,',
+      '  not rejected; the actual window is echoed in `from`/`to` of the answer.',
+      '- Without `from`/`to` there is no expansion and `occurrences` is absent; every reminder still',
+      '  carries the lazy `next_at`.',
+      '- The list holds the caller rows only, ordered by `next_at` (rows without occurrences — last).',
+      '',
+      '## Subject visibility',
+      '- A subject marked for deletion (or absent in the session layer — no live row in',
+      '  `thoughts_v`/`publications_v`) hides the reminder: it is not listed and never fires, but it is',
+      '  NOT deleted automatically. `reminders.create` on such a subject — `NOT_FOUND`.',
+      '- An inactive subject follows the network setting "show inactive": with the setting on the',
+      '  reminder is returned with `subject_state: "inactive"`, with it off the reminder is hidden.',
+      '',
+      '## Events',
+      'Every write emits `reminders.changed` (audience = `user`) with `action`',
+      '`created|updated|snoozed|dismissed|removed`; occurrence actions also carry `occurrence_at`.',
+      '',
+      '## In a thought card',
+      '`etn.thoughts.get` / `etn.thoughts.resolve` with `include_task_meta: true` add the',
+      "caller's reminders about the subject as `meta.reminders` (`total`, `shown`, `truncated`;",
+      'items `{ id, kind, next_at, subject_state }`) — at most 10, the full list is',
+      '`reminders.list`. The flag is OFF by default; visibility is the same — another user',
+      'never sees the row.',
+    ].join('\n'),
+  },
+  {
+    // 0.16.1 (задача f34066e1): обзорная тема семейства `tasks.*`. Действия —
+    // в общем реестре, их `params`/эффекты/коды — по `topic` `tasks.<action>`;
+    // здесь — модель строки, адресация, ревизия, даты и массовые команды.
+    topic: 'tasks',
+    when: 'tasks overview: a task is a checkbox line of a comment, row addressing (`comment_id`+`line_no`), `expected_revision`/409, date links and move, toggle/cancel and the mass actions, `meta.open_tasks` in a thought card',
+    body_md: [
+      '# tasks — tasks and checklists',
+      '',
+      'A task is a LINE of a comment `body_md` carrying a checkbox: `- [ ] text` (open) or',
+      '`- [x] text` (done). The text is the source of truth: rows of the projection',
+      '(`task_rows` / `task_row_dates` / `task_row_subjects`) are re-created by the comment',
+      'write hook. Dates are calendar links `[[YYYY-MM-DD[ HH:MM]]]`: the first is',
+      '`period_from`, the last is `due`; a link with an impossible date is not a task date.',
+      'All 6 actions are available via `etn.ops` (`tasks.*`); the `params` shape, effects and',
+      'error codes of an action — `etn.guide { topic: "tasks.<action>" }`.',
+      '',
+      '## Addressing',
+      '- `comment_id` + `line_no` — the line CONTAINING the marker; `line_no` is 0-based',
+      "  (`body_md.split('\\n')`). A row that is not a task gives",
+      '  `results[].ok: false, error: "not_a_task"`; there is no task id of its own.',
+      '- `expected_revision` — the comment revision the caller saw (`revision` of a',
+      '  `tasks.list` row, or `version` of `etn.comments.get`). REQUIRED for',
+      '  `tasks.toggle` / `tasks.move` / `tasks.cancel`: a mismatch is `VERSION_CONFLICT`',
+      '  (409) and NOTHING is written — re-read the row and retry. There is no',
+      '  last-write-wins on task lines.',
+      '',
+      '## Reading (`tasks.list`)',
+      '- `scope` selects the base: `open` (not done), `done`, `overdue` (open with `due`',
+      "  earlier than the client's `today`), `undated` (open without date links AND without a",
+      '  record period); default — all rows. `from`/`to` intersect the task period.',
+      '  `thought_id` keeps rows whose subject is this thought (`[[#uuid]]` ID links and the',
+      '  owner of a permanent comment); `comment_id` — rows sourced from one comment.',
+      '- `auto_period: true` — the row has no date links and takes the period of its',
+      '  chronological record (`valid_from..valid_to`, `due` = the end of that period). Such a',
+      '  row never lands in `undated`, and `undate` is not applicable to it: the period would',
+      '  be restored by re-parsing. `set_due` / `move` pin an explicit `[[date]]`.',
+      '- `overdue` / `undated` are CROSS-SECTION: they ignore `from`/`to`, and `overdue`',
+      "  REQUIRES `today` (the client's day boundary — the server never guesses the",
+      '  timezone). A period view plus the cross-section is two calls (or both scopes).',
+      '- Pagination is a keyset `cursor` (order `due` → `period_from` → id); `total` only',
+      '  with `count: true`. `max_revision` is the network projection marker: a different',
+      '  value means the projection moved and the page is worth re-reading.',
+      '- A row of a permanent comment of an entity marked for deletion is hidden;',
+      '  `subject_state: "inactive"` tells that the source owner or a subject is inactive.',
+      '',
+      '## Writing one line',
+      '- `tasks.toggle` — the checkbox only (`done` omitted inverts). `tasks.move` — one',
+      '  shift of ALL date links of the line (`days` XOR `months`; the 31st of a short',
+      '  month falls back to its last day, the period is kept). `tasks.cancel` —',
+      '  `- [ ] text` → `- text`: the line becomes a checklist item, the text stays.',
+      '- A row of a chronological record WITHOUT date links has an auto period: `move` counts',
+      '  from the end of the record period and APPENDS an explicit `[[date]]` — the task gets',
+      '  pinned. «Make undated» (`undate` of `PATCH /tasks`) is not exposed here and answers',
+      '  `BAD_REQUEST` for such rows.',
+      '- Each write returns one new revision per changed source comment',
+      '  (`revisions: [{ id, version }]`) and emits `comment.updated` with the full new',
+      '  `body_md`. Use the returned `version` as `expected_revision` of the next action.',
+      '',
+      '## Mass actions',
+      '- `tasks.cancelAll` / `tasks.moveAll` work over `filter` (same fields as',
+      '  `tasks.list`; `scope` defaults to `open`). Both are DESTRUCTIVE in `etn.ops`',
+      '  terms: `confirm: true` is required at the top level.',
+      '- Done rows are history text: they are not touched unless `scope: done` is asked.',
+      '  `cancelAll` also removes the marker from nested checklist subtasks of the selected',
+      '  tasks; `moveAll` skips rows without date links (`error: "undated"` per row).',
+      '- The answer is per-row `results[]` plus `revisions[]`: a failed row does not abort',
+      '  the command.',
+      '',
+      '## In a thought card',
+      '`etn.thoughts.get` / `etn.thoughts.resolve` with `include_task_meta: true` add',
+      '`meta.open_tasks` — open tasks where the thought is a subject (`total`, `shown`,',
+      '`truncated`, `items` with the row address, text and dates). The flag is OFF by',
+      'default (a card does not pay for tasks); the block is capped at 10 rows, the rest is',
+      'reached via `tasks.list { thought_id, scope: "open" }`. Filtering THOUGHTS by tasks',
+      '— the `tasks` / `tasks.overdue` leaves of `etn.thoughts.query`.',
+    ].join('\n'),
   },
   {
     topic: 'publications',

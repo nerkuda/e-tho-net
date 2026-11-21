@@ -59,7 +59,7 @@ export const en = {
   /** Кнопка «Сохранить»: записать изменения и закрыть редактор. */
   'dialog.unsaved.save': 'Save',
   /** Кнопка «Не сохранять»: закрыть без записи, изменения отбрасываются. */
-  'dialog.unsaved.discard': 'Don\'t save',
+  'dialog.unsaved.discard': "Don't save",
   /** Кнопка «Отменить закрытие»: ничего не делать, редактор остаётся открытым. */
   'dialog.unsaved.stay': 'Cancel closing',
 
@@ -128,7 +128,8 @@ export const en = {
   /** Пометка системной структурной строки «Родители»/«Потомки». */
   'propertyList.structuralMark': '🔒 (structural)',
   /** Подсказка системной структурной строки. */
-  'propertyList.structuralHint': 'System link property for untyped “Родители/Потомки” edges. It cannot be edited or deleted from this dialog.',
+  'propertyList.structuralHint':
+    'System link property for untyped “Родители/Потомки” edges. It cannot be edited or deleted from this dialog.',
 
   // -- Поле выбора свойства-связи (lib/entity-picker.ts) -------------------
   /** Пустое значение поля свойства-связи: подпись поля и пункт снятия выбора
@@ -170,9 +171,11 @@ export const en = {
   /** Заголовок диалога создания внетипового отбора мысли (имя мысли). */
   'filterEditor.dialogTitleCreateThought': 'Create a view of thought “%1”',
   /** Предупреждение в диалоге типового отбора: эффект на все мысли типа. */
-  'filterEditor.typeViewWarning': 'The view is shared across the network: all members will see it in all thoughts of this type.',
+  'filterEditor.typeViewWarning':
+    'The view is shared across the network: all members will see it in all thoughts of this type.',
   /** Предупреждение в диалоге внетипового отбора: виден всем, действует у мысли. */
-  'filterEditor.thoughtViewWarning': 'The view is visible to all network members (not personal) but applies only to this thought.',
+  'filterEditor.thoughtViewWarning':
+    'The view is visible to all network members (not personal) but applies only to this thought.',
   /** Подпись поля описания отбора. */
   'filterEditor.descriptionLabel': 'Description',
   /** Подсказка поля описания отбора. */
@@ -194,14 +197,17 @@ export const en = {
   /** Не удалось открыть диалог отбора (параметр — причина). */
   'filterEditor.openFailed': 'Failed to open the view dialog: %1',
   /** Диагностика: реестр свойств не прочитан, условия по свойствам могут ждать повтора. */
-  'filterEditor.registryPending': 'The network property registry has not been read — property conditions may not be displayed. Retrying the read.',
+  'filterEditor.registryPending':
+    'The network property registry has not been read — property conditions may not be displayed. Retrying the read.',
   /** Запрет сохранения: реестр не прочитан и перезапись потеряет условия по свойствам. */
-  'filterEditor.registryPendingSave': 'The network property registry has not been read: saving will overwrite the view without property conditions. Wait for the connection to recover or reopen the dialog.',
+  'filterEditor.registryPendingSave':
+    'The network property registry has not been read: saving will overwrite the view without property conditions. Wait for the connection to recover or reopen the dialog.',
   /**
    * Запрет сохранения: реестр прочитан, но правка шла без него — условия по
    * свойствам из сохранённого определения в форму не восстановлены (071acfc2).
    */
-  'filterEditor.conditionsLostSave': 'Property conditions were not restored after the registry read: an edit made before it will replace the view without those conditions. Close the dialog without saving and reopen the view.',
+  'filterEditor.conditionsLostSave':
+    'Property conditions were not restored after the registry read: an edit made before it will replace the view without those conditions. Close the dialog without saving and reopen the view.',
   /** Строка диагностики условия, которому оператор требует значение, а его нет. */
   'filterEditor.conditionWithoutValue': 'condition value is not set',
 
@@ -254,15 +260,19 @@ export const en = {
   /** Заголовок подтверждения переноса «вне типа → тип». */
   'strip.transferToTypeTitle': 'Move view to type views',
   /** Текст подтверждения переноса в тип (параметры — имя отбора, имя типа). */
-  'strip.transferToTypeConfirm': 'View “%1” will be shared by type “%2”: all thoughts of this type will see it.',
+  'strip.transferToTypeConfirm':
+    'View “%1” will be shared by type “%2”: all thoughts of this type will see it.',
   /** Заголовок подтверждения переноса «тип → вне». */
   'strip.transferToThoughtTitle': 'Remove view from type views',
   /** Текст подтверждения переноса на мысль (отбор, тип, мысль). */
-  'strip.transferToThoughtConfirm': 'View “%1” will disappear from all thoughts of type “%2” and become an out-of-type view of thought “%3”.',
+  'strip.transferToThoughtConfirm':
+    'View “%1” will disappear from all thoughts of type “%2” and become an out-of-type view of thought “%3”.',
   /** Дополнение для унаследованного отбора (параметр — тип-владелец). */
-  'strip.transferInheritedNote': 'The view is inherited from type “%1” — it will also disappear from all descendant types of “%1”.',
+  'strip.transferInheritedNote':
+    'The view is inherited from type “%1” — it will also disappear from all descendant types of “%1”.',
   /** Дополнение при занятом собственном дефолте получателя. */
-  'strip.transferDefaultNote': 'The recipient already has a default view — the moved view will keep no default mark.',
+  'strip.transferDefaultNote':
+    'The recipient already has a default view — the moved view will keep no default mark.',
   /** Тост: перенос выполнен. */
   'strip.transferDone': 'View moved.',
   /** Ошибка переноса отбора. */
@@ -270,7 +280,8 @@ export const en = {
   /** Заголовок подтверждения удаления отбора. */
   'strip.deleteTitle': 'Delete view',
   /** Удаление типового отбора (имя отбора, имя типа-владельца). */
-  'strip.deleteTypeConfirm': 'Delete view “%1” of type “%2”? It will disappear from all thoughts of this type. This action cannot be undone.',
+  'strip.deleteTypeConfirm':
+    'Delete view “%1” of type “%2”? It will disappear from all thoughts of this type. This action cannot be undone.',
   /** Удаление внетипового отбора (имя отбора, имя мысли-владельца). */
   'strip.deleteThoughtConfirm': 'Delete view “%1” of thought “%2”? This action cannot be undone.',
   /** Тост: отбор удалён. */
@@ -376,7 +387,8 @@ export const en = {
   /** Метка предопределённого набора в списке сохранённых отборов. */
   'savedFilters.predefined': 'predefined',
   /** Подсказка метки предопределённого набора. */
-  'savedFilters.predefinedHint': 'The set ships with the panel and is restored when the list is opened if deleted.',
+  'savedFilters.predefinedHint':
+    'The set ships with the panel and is restored when the list is opened if deleted.',
   /** Пункт выбора «текущий пользователь» (значение-токен $user) в поле автора. */
   'userSelect.currentUser': 'current user ($user)',
 
@@ -566,7 +578,8 @@ export const en = {
   /** Имя ссылки, когда мысль ещё не разрешена. */
   'comment.transclusion.untitled': 'Untitled',
   /** Частичный сбой записи блоков-источников: %1 — список «имя · раздел» (7399c9ec). */
-  'comment.transclusion.savePartial': 'Some edits were not saved: %1. Fix the marked blocks and retry saving',
+  'comment.transclusion.savePartial':
+    'Some edits were not saved: %1. Fix the marked blocks and retry saving',
   /** Сбой записи комментария (окружения): %1 — причина (7399c9ec). */
   'comment.save.failed': 'Failed to save the comment: %1',
   /** Сбой записи комментария без внятной причины (7399c9ec). */
@@ -620,7 +633,8 @@ export const en = {
   /** Заголовок диалога настройки сочетаний клавиш комментария. */
   'comment.hotkeys.title': 'Comment keyboard shortcuts',
   /** Подсказка в верхней части диалога настройки сочетаний. */
-  'comment.hotkeys.hint': 'Click a shortcut to assign a new one. Shortcuts are saved on the server and apply across all thought networks.',
+  'comment.hotkeys.hint':
+    'Click a shortcut to assign a new one. Shortcuts are saved on the server and apply across all thought networks.',
   /** Состояние перехвата: ждём нажатия сочетания. */
   'comment.hotkeys.capture': 'Press a shortcut…',
   /** Подсказка кнопки сброса сочетания команды. */
@@ -638,9 +652,11 @@ export const en = {
   /** Подсказка горизонтального разделителя, меняющего высоту области. */
   'splitter.resizeHint': 'Drag to change the height',
   /** Доступное имя горизонтального разделителя (стрелки + перетаскивание). */
-  'splitter.resizeAriaVertical': 'Splitter: use arrow keys or dragging to change the height, Enter to apply, Esc to cancel',
+  'splitter.resizeAriaVertical':
+    'Splitter: use arrow keys or dragging to change the height, Enter to apply, Esc to cancel',
   /** Доступное имя вертикального разделителя (стрелки + перетаскивание). */
-  'splitter.resizeAriaHorizontal': 'Splitter: use arrow keys or dragging to change the width, Enter to apply, Esc to cancel',
+  'splitter.resizeAriaHorizontal':
+    'Splitter: use arrow keys or dragging to change the width, Enter to apply, Esc to cancel',
 
   // -- Ошибки --------------------------------------------------------------
   /** Префикс строки ошибки операции: `<префикс>: <сообщение>`. */
@@ -669,14 +685,16 @@ export const en = {
    * противоположной есть (`details.reason === 'side-mismatch'`, ошибка
    * d9bc6012) — данные уже изменились.
    */
-  'errors.propertySideMismatch': 'no links on the selected side — the value has already been changed, refresh the card',
+  'errors.propertySideMismatch':
+    'no links on the selected side — the value has already been changed, refresh the card',
   /**
    * Запись свойства по имени: display-имя принадлежит нескольким разным
    * свойствам сети и выбрать одно не удалось даже по стороне
    * (`details.reason === 'property-ambiguous'`, ошибка d9bc6012). Серверный
    * текст для API/агентов не показываем; внутренних терминов здесь нет.
    */
-  'errors.propertyNameAmbiguous': 'property name is ambiguous — it is used by several network properties',
+  'errors.propertyNameAmbiguous':
+    'property name is ambiguous — it is used by several network properties',
   /**
    * Запись свойства-связи: значение не того типа, который допускает привязка
    * целевой стороны (`details.reason === 'target-type-mismatch'`, ошибка
@@ -691,6 +709,9 @@ export const en = {
    * an unknown code or reason falls back to the generic text.
    */
   'errors.code.VALIDATION_ERROR': 'check the entered data',
+  /** Refinement of `400 VALIDATION_ERROR` for an unreachable series (`details.issue`). */
+  'errors.code.VALIDATION_ERROR.no-occurrence':
+    'with this interval there will be no occurrences: the chosen date never exists in the months or years of this series - change the date or the step',
   'errors.code.BAD_REQUEST': 'the request cannot be completed',
   'errors.code.UNAUTHORIZED': 'sign-in is required',
   'errors.code.FORBIDDEN': 'not enough permissions for this action',
@@ -725,8 +746,7 @@ export const en = {
     'failed to download the update installer',
   'errors.code.UPDATE_INSTALLER_FAILED.installer-hash':
     'the downloaded installer failed the checksum verification',
-  'errors.code.UPDATE_INSTALLER_FAILED.installer-launch':
-    'the update installer did not start',
+  'errors.code.UPDATE_INSTALLER_FAILED.installer-launch': 'the update installer did not start',
   'errors.unknownCode': 'the action could not be completed',
 
   // -- Подключение к серверу (ошибка 390e9746) -----------------------------
@@ -741,7 +761,8 @@ export const en = {
   /** Причина: адрес сервера не разрешился (DNS). */
   'connect.reason.dns': 'address not found — check the host name',
   /** Причина: сеть или хост недоступны. */
-  'connect.reason.unreachable': 'the server is unreachable over the network — check your connection',
+  'connect.reason.unreachable':
+    'the server is unreachable over the network — check your connection',
   /** Причина: установленное соединение сброшено другой стороной. */
   'connect.reason.reset': 'connection reset by the server',
   /** Причина: сервер отклонил API-key. */
@@ -763,15 +784,18 @@ export const en = {
   /** Заголовок блокирующего диалога несовместимости. */
   'compatibility.dialog.title': 'Client and server versions are incompatible',
   /** Причина: сервер старше встроенного диапазона клиента. */
-  'compatibility.reason.serverOutdated': 'The server is older than the client — this server cannot be used.',
+  'compatibility.reason.serverOutdated':
+    'The server is older than the client — this server cannot be used.',
   /** Причина: клиент вне диапазона сервера (причина от сервера не пришла). */
-  'compatibility.reason.clientOutdated': 'The client does not match the server — this server cannot be used.',
+  'compatibility.reason.clientOutdated':
+    'The client does not match the server — this server cannot be used.',
   /** `426`, `details.reason = version-missing`: сервер не получил версию клиента. */
   'compatibility.reason.versionMissing': 'The server did not receive the client version.',
   /** `426`, `details.reason = version-invalid`: версия клиента не разобрана. */
   'compatibility.reason.versionInvalid': 'The server could not parse the client version sent.',
   /** `426`, `details.reason = version-out-of-range`: клиент вне диапазона сервера. */
-  'compatibility.reason.versionOutOfRange': 'The client version is outside the range allowed by the server.',
+  'compatibility.reason.versionOutOfRange':
+    'The client version is outside the range allowed by the server.',
   /** Строка версий: клиент, сервер, требуемый диапазон. */
   'compatibility.facts': 'Client %1, server %2, required %3',
   /** Неизвестная версия/диапазон в строке версий. */
@@ -789,7 +813,8 @@ export const en = {
   /** Страница релиза не открылась: `%1` — причина от системы. */
   'compatibility.openFailed': 'Failed to open the release page: %1',
   /** Нет страницы релиза (`download_url`) — открыть нечего. */
-  'compatibility.downloadUnavailable': 'The server did not provide a release page — download the client from the project website.',
+  'compatibility.downloadUnavailable':
+    'The server did not provide a release page — download the client from the project website.',
   /** Кнопка открытия страницы релиза клиента (без автозагрузки). */
   'compatibility.action.updateClient': 'Update client',
   /** Кнопка диалога обновления сервера — только администратору (ca26c59d). */
@@ -854,11 +879,14 @@ export const en = {
   /** Ожидание задания на сервере сразу после запуска (пока /progress пуст). */
   'serverUpdate.progress.waiting': 'Waiting for the update job on the server…',
   /** Идёт вызов apply: скачивание установщика и проверка SHA-256 (до 10 минут). */
-  'serverUpdate.progress.downloading': 'The server is downloading the installer and verifying SHA-256 — this may take up to 10 minutes…',
+  'serverUpdate.progress.downloading':
+    'The server is downloading the installer and verifying SHA-256 — this may take up to 10 minutes…',
   /** Связь прервана во время обновления — сервер останавливается установщиком. */
-  'serverUpdate.progress.disconnected': 'Connection to the server was interrupted — this is expected during an update. Waiting for the server to restart.',
+  'serverUpdate.progress.disconnected':
+    'Connection to the server was interrupted — this is expected during an update. Waiting for the server to restart.',
   /** После перезапуска сервер вернётся на новой версии. */
-  'serverUpdate.progress.reconnect': 'After the restart, the client will reconnect automatically and continue working on the new version.',
+  'serverUpdate.progress.reconnect':
+    'After the restart, the client will reconnect automatically and continue working on the new version.',
   /** Причина сбоя задания: `%1` — локализованный текст по `reason`. */
   'serverUpdate.failure.reason': 'Reason: %1',
   /** Журнал установщика: `%1` — путь. */
@@ -907,13 +935,16 @@ export const en = {
    * Честное описание последствий (элемент c9c96e5c): остановка сервера,
    * бэкап БД, 503/1012 у клиентов, автопереподключение.
    */
-  'serverUpdate.confirm.message': 'The server will be stopped, the database will be backed up, the installer will replace the program and start the new version. During the update, clients receive “server is updating” responses (503/1012) and reconnect automatically. Do not turn off the server computer until the update completes.',
+  'serverUpdate.confirm.message':
+    'The server will be stopped, the database will be backed up, the installer will replace the program and start the new version. During the update, clients receive “server is updating” responses (503/1012) and reconnect automatically. Do not turn off the server computer until the update completes.',
   /** Кнопка подтверждения обновления. */
   'serverUpdate.confirm.action': 'Update server',
   /** Пояснение к отказу установщика (`502`, `retryable: false`) — без автоповтора. */
-  'serverUpdate.installerFailedNote': 'The server keeps running on the current version. A retry is not offered — check the installer log.',
+  'serverUpdate.installerFailedNote':
+    'The server keeps running on the current version. A retry is not offered — check the installer log.',
   /** Docker: автообновление из клиента недоступно (инструкция — полем `instruction`). */
-  'serverUpdate.dockerNote': 'The server is deployed in Docker — client-side auto-update is unavailable.',
+  'serverUpdate.dockerNote':
+    'The server is deployed in Docker — client-side auto-update is unavailable.',
   /** Инструкция обновления от сервера (Docker). */
   'serverUpdate.instruction': 'Update instruction: %1',
   /** Кнопка копирования команды из инструкции обновления. */
@@ -940,7 +971,8 @@ export const en = {
    * Нейтральное состояние `unknown`: проверка не удалась. Это НЕ «обновлений
    * нет» — отсутствие ответа не равно отсутствию обновлений (DoD b57910b5).
    */
-  'updateBanner.unknown': 'Failed to check compatibility with the server — a new client version may be available. Work continues.',
+  'updateBanner.unknown':
+    'Failed to check compatibility with the server — a new client version may be available. Work continues.',
   /** Кнопка «Позже»: скрыть напоминание до следующего подключения/вердикта. */
   'updateBanner.dismiss': 'Later',
 
@@ -950,7 +982,8 @@ export const en = {
 
   // -- Панель «Свойства» (ошибка d720265c) ---------------------------------
   /** Отказ чтения значений: строки сохраняют прежние значения, отказ виден. */
-  'properties.valuesReadFailed': 'Failed to read property values — previous values are shown if they were loaded.',
+  'properties.valuesReadFailed':
+    'Failed to read property values — previous values are shown if they were loaded.',
   /** Значение строки не прочитано: прежних значений ещё нет. */
   'properties.valueUnreadable': 'could not be read',
 
@@ -984,7 +1017,53 @@ export const en = {
    * показан на исходном `ru`, сообщение объясняет почему. Подстановка — код
    * запрошенного языка.
    */
-  'settings.langUnavailable': 'The “%1” language catalog is unavailable in this build. The interface is shown in Russian.',
+  'settings.langUnavailable':
+    'The “%1” language catalog is unavailable in this build. The interface is shown in Russian.',
+
+  // -- Оформление: тема и режим (элемент edc921ab, задача 0e4a52cd) ---------
+  /** Заголовок раздела «Оформление» в разделе «Клиент». */
+  'settings.appearance': 'Appearance',
+  /** Подпись поля выбора набора значений токенов. */
+  'settings.uiTheme': 'Interface theme',
+  /** Подпись переключателя тёмного/светлого варианта темы. */
+  'settings.uiMode': 'Mode',
+  'settings.uiMode.dark': 'Dark',
+  'settings.uiMode.light': 'Light',
+  'settings.wallpaper': 'Map background image',
+  'settings.wallpaperUpload': 'Upload…',
+  'settings.wallpaperRemove': 'Remove image',
+  'settings.wallpaperPreviewAlt': 'Current map background image',
+  'settings.wallpaperHint': 'Each user can set their own image for each network.',
+  'settings.wallpaperHintNoNetwork': 'Open a network: the image is chosen for the current one.',
+  'settings.wallpaperErrorTooLargeSource':
+    'The file is larger than %1 MB — choose a smaller image.',
+  /** Потолок ИСХОДНОГО файла при системном выборе картинки (код из main). */
+  'settings.wallpaperErrorSourceLimit': 'The file is larger than %1 MB — limit.',
+  'settings.wallpaperErrorNotImage': 'The file could not be read as an image.',
+  'settings.wallpaperErrorTooLargeResult':
+    'After preparation the image is still larger than %1 MB — choose another one.',
+  'settings.wallpaperErrorFileSize':
+    'The server rejected the image: the file exceeds the 5 MB limit.',
+  'settings.wallpaperErrorServer': 'The server rejected the image: check the format and file size.',
+  'settings.wallpaperRestoreFailed': 'Could not restore the previous image.',
+  /** Выбор хранится в профиле пользователя (требование 219d030c). */
+  'settings.uiThemeHintAllDevices':
+    'Stored in your user profile and applied to all your clients on this server.',
+  /** Старый сервер не хранит выбор темы в профиле. */
+  'settings.uiThemeLocalOnly':
+    'The server does not store the interface theme in the profile: the choice applies to this client only.',
+  /** Запись на сервер не удалась — применено локально, повтор при подключении. */
+  'settings.uiThemeSyncDeferred':
+    'Could not save the choice on the server. It is applied on this client; synchronization will retry on the next connection.',
+  /** Сервер хранит неизвестную этой сборке тему: %1 — значение сервера. */
+  'settings.uiThemeUnknown':
+    'The server stores theme “%1”, which is not available in this client version. “Default” is applied; the server value is left unchanged.',
+  'settings.theme.current': 'Default',
+  'settings.theme.blueTopaz': 'Blue Topaz',
+  'settings.theme.catppuccin': 'Catppuccin',
+  'settings.theme.nordic': 'Nordic',
+  'settings.theme.retronotes': 'Retro Notes',
+  'settings.theme.wasp': 'Wasp',
 
   // -- «О программе» -------------------------------------------------------
   /** Заголовок раздела сторонних компонентов. */
@@ -992,7 +1071,13 @@ export const en = {
   /** Подпись ссылки на сайт библиотеки. */
   'about.website': 'Website',
   /** Пояснение, где лежит полный перечень с текстами лицензий. */
-  'about.thirdPartyHint': 'The full list with license texts is in the THIRD-PARTY-NOTICES.txt file.',
+  'about.thirdPartyHint':
+    'The full list with license texts is in the THIRD-PARTY-NOTICES.txt file.',
+  /** Дисклеймер к названиям тем интерфейса (задача 3cac16cc). */
+  'about.themesDisclaimer':
+    'Theme names are used descriptively; ETN is not affiliated with or endorsed by the theme authors. All rights belong to their respective owners.',
+  /** Пометка темы, собранной по палитре без связи с её авторами. */
+  'about.themeUnofficial': 'unofficial theme',
 
   // -- Дерево списков (lib/ui/tree.ts) -------------------------------------
   /** Пустое состояние дерева, когда видимых строк нет. */
@@ -1036,7 +1121,16 @@ export const en = {
   /** Подсказка кнопки удаления типа. */
   'thoughtTypes.delete': 'Delete type',
   /** Вопрос подтверждения удаления типа (подстановка — имя типа). */
-  'thoughtTypes.deleteConfirm': 'Delete type “%1”? Thoughts of this type will remain and become untyped; property values of this type will be deleted.',
+  'thoughtTypes.deleteConfirm':
+    'Delete type “%1”? Thoughts of this type will remain and become untyped; property values of this type will be deleted.',
+  /** Подтверждение удаления типа ВМЕСТЕ с поддеревом (ошибка d4802371):
+   *  `%1` — имя типа, `%2` — число дочерних типов (всё поддерево). */
+  'thoughtTypes.deleteConfirmWithChildren':
+    'Delete type “%1” together with its child types (%2)? Thoughts of these types will remain and become untyped; property values will be deleted.',
+  /** Отказ удаления, когда тип (или потомок поддерева) занят ролью сети
+   *  (ошибка d4802371): `%1` — человекочитаемое имя роли. */
+  'thoughtTypes.deleteRoleBlocked':
+    'The type is used by the network in the “%1” role; remove the role in the network settings first.',
 
   // -- Редактор типа мысли (screens/type-manager.ts) -----------------------
   /** Первая вкладка редактора типа: имя/родитель вынесены в шапку, здесь —
@@ -1057,7 +1151,8 @@ export const en = {
   /** Кнопка подключения свойства к типу. */
   'typeEditor.addProperty': 'Add property…',
   /** Подсказка кнопки подключения свойства. */
-  'typeEditor.addPropertyHint': 'Attach a property from the network property registry (a new one is created with the Create property button in the picker dialog)',
+  'typeEditor.addPropertyHint':
+    'Attach a property from the network property registry (a new one is created with the Create property button in the picker dialog)',
 
   // -- Дерево типов связей (screens/property-manager.ts) -------------------
   /** Заголовок диалога «Типы связей». */
@@ -1197,15 +1292,16 @@ export const en = {
   'diary.collapseAll': 'Collapse all',
   /** Команды контекстного меню группы дня: свернуть/развернуть записи дня (0.10.2). */
   'diary.collapseDayRecords': 'Collapse day entries',
+  'diary.dayLinksOwner': 'Open source',
   'diary.expandDayRecords': 'Expand day entries',
   /** Не удалось загрузить запись (подстановка — причина). */
   'diary.loadFailed': 'Failed to load the entry: %1',
-  /** Не удалось пересчитать счётчики календаря (подстановка — причина). */
-  'diary.countsFailed': 'Failed to recalculate calendar marks: %1',
   /** Не удалось сохранить запись (подстановка — причина). */
   'diary.saveFailed': 'Failed to save: %1',
   /** Не удалось создать запись (подстановка — причина). */
   'diary.createFailed': 'Failed to create the entry: %1',
+  /** Не удалось загрузить маркеры календаря месяца (подстановка — причина). */
+  'diary.markersFailed': 'Failed to load calendar markers: %1',
   /** Заголовок подтверждения удаления записи. */
   'diary.deleteTitle': 'Delete entry',
   /** Вопрос подтверждения удаления записи. */
@@ -1247,6 +1343,187 @@ export const en = {
   'recordSearch.untitled': 'Entry',
   /** Client render cap of record rows (0.15.4, задача 33ed043c): «N of M shown». */
   'records.more': '%1 of %2 shown',
+
+  // -- «Tasks and reminders» panel above the diary feed (0.16.1, 64f7976a) --
+  /** Panel title. */
+  'tasks.panelTitle': 'Tasks and reminders',
+  /** Undo the last bulk command. */
+  'tasks.undo': 'Undo',
+  'tasks.panelHeightHint': 'Panel height',
+  'tasks.panelHeightAria': 'Resize the tasks and reminders panel',
+  /** The only panel button: re-read all lists from entries. */
+  'tasks.refresh': 'Refresh',
+  /** Title of the period tasks group. */
+  'tasks.groupTitle': 'Tasks',
+  /** Completed rows section of the editor tasks panel. */
+  'tasks.doneGroup': 'Completed tasks',
+  /** Bulk commands of the editor panel: open rows of this thought. */
+  'tasks.cancelAllThought': 'Cancel all open of this thought',
+  'tasks.moveAllThought': 'Move all open of this thought to…',
+  /** Title of the period reminders group. */
+  'tasks.remindersGroupTitle': 'Reminders of the period',
+  /**
+   * Task group counters (open, done). Brackets are part of the string: the group
+   * header reads as “Tasks (n open · n done)” (spec E, review note).
+   */
+  'tasks.counters': '(%1 open · %2 done)',
+  /** Show completed tasks toggle. */
+  'tasks.showDone': 'Show completed',
+  /** Bulk commands for the whole period. */
+  'tasks.cancelAllPeriod': 'Cancel all open in the period',
+  'tasks.moveAllPeriod': 'Move all open in the period to…',
+  'tasks.undateAllPeriod': 'Make all in the period undated',
+  /** Bulk commands for cross-period sections. */
+  'tasks.cancelAllOverdue': 'Cancel all overdue',
+  'tasks.cancelAllUndated': 'Cancel all without a due date',
+  /** Bulk commands for one group. */
+  'tasks.cancelAllGroup': 'Cancel all open in this group',
+  'tasks.moveAllGroup': 'Move all open in this group to…',
+  'tasks.undateAllGroup': 'Make open in this group undated',
+  /** Bulk command of the thought editor panel. */
+  'tasks.undateAllThought': 'Make all open of this thought undated',
+  /** Date shift options. */
+  'tasks.shiftToday': 'today',
+  'tasks.shiftDay': 'the next day',
+  'tasks.shiftWeek': 'in a week',
+  'tasks.shiftMonth': 'in a month',
+  'tasks.moveDate': 'on a date…',
+  /** Task row commands. */
+  'tasks.openSource': 'Open source',
+  'tasks.moveRow': 'Move to…',
+  'tasks.undateRow': 'Make undated',
+  'tasks.cancelRow': 'Cancel task',
+  /** Reminder occurrence commands. */
+  'tasks.openSubject': 'Open subject',
+  'tasks.moreSubjects': 'More related thoughts: %1',
+  'tasks.subjectUnavailable': '(unavailable)',
+  'tasks.dismissReminder': 'Dismiss',
+  'tasks.snoozeReminder': 'Snooze…',
+  'tasks.snoozeToday': 'today',
+  'tasks.snoozeDateTime': 'date and time…',
+  'tasks.snoozeDateTimeTitle': 'Snooze reminder',
+  'tasks.createTask': 'Create a task for today',
+  'tasks.createdForToday': 'Task created for %1',
+  /** Menu button tooltips. */
+  'tasks.rowCommands': 'Row commands',
+  'tasks.groupCommands': 'Group commands',
+  'tasks.rowChildren': 'Nested lines',
+  'tasks.editLineAria': 'Edit task line (raw markdown)',
+  /** Accessible name of the block-edit field (task + its nested lines). */
+  'tasks.editBlockAria': 'Edit task block with nested lines (raw markdown)',
+  'tasks.pickDateTitle': 'Move to date',
+  /** Task section titles. */
+  'tasks.sectionMain': 'In this period',
+  'tasks.sectionOverdue': 'Overdue',
+  'tasks.sectionUndated': 'No due date',
+  /** "Urgent" section — flat list of dated rows (item 6). */
+  'tasks.sectionUrgent': 'Urgent',
+  /** Reminder section titles. */
+  'tasks.remindersOverdue': 'Overdue',
+  'tasks.remindersToday': 'Today',
+  'tasks.remindersPeriod': 'Period',
+  /** Groups without subject and without date. */
+  'tasks.groupNoThought': 'No thought',
+  'tasks.groupNoDate': 'No date',
+  /** Week range (start and end). */
+  'tasks.weekRange': 'week %1 — %2',
+  /** Snoozed occurrence badge. */
+  'tasks.badgeSnoozed': 'snoozed',
+  /** Reminder repeat labels. */
+  'tasks.repeatOnce': 'once',
+  'tasks.repeatWeekdays': 'on weekdays',
+  'tasks.repeatEveryDays': 'every %1 days',
+  'tasks.repeatWeekdayOfMonth': 'by weekday of the month',
+  'tasks.repeatDayOfMonth': 'day %1 every %2 months',
+  'tasks.repeatYearly': 'yearly on %1.%2',
+  'tasks.repeatLastDayOfMonth': 'last day of the month every %2 months',
+
+  // -- Reminder labels: flag, cloud tooltip and editor (173f1540) -------------
+  'reminder.once': 'once',
+  'reminder.onceAt': 'once on %1',
+  'reminder.weekdays': 'on %1',
+  'reminder.everyDay': 'every day',
+  'reminder.everyNDays': 'every %1 days',
+  'reminder.weekdayOfMonth': '%1 — occurrence %2 of the month',
+  'reminder.weekdayOfMonthLast': '%1 — last occurrence of the month',
+  'reminder.dayOfMonth': 'every %1st',
+  'reminder.dayOfMonthEvery': 'day %1 every %2 months',
+  'reminder.yearly': 'yearly on %1',
+  'reminder.yearlyEvery': 'yearly on %1 every %2 years',
+  'reminder.weekdaysEvery': 'every %1 weeks: %2',
+  'reminder.weekdayOfMonthEvery': '%1 — occurrence %2 every %3 months',
+  'reminder.weekdayOfMonthLastEvery': '%1 — last occurrence every %2 months',
+  'reminder.skipWeekendsSuffix': ' (weekdays only)',
+  'reminder.lastDayOfMonth': 'last day of the month',
+  'reminder.lastDayOfMonthEvery': 'last day of the month every %1 months',
+  'reminder.nextAt': 'next: %1',
+  'reminder.createTitle': 'New reminder',
+  'reminder.editTitle': 'Reminder schedule',
+  'reminder.command': 'Remind',
+  'reminder.cmdNotRemind': "don't remind",
+  'reminder.cmdOnce': 'once',
+  'reminder.cmdEveryDays': 'every day',
+  'reminder.cmdWeekdays': 'every week',
+  'reminder.cmdDayOfMonth': 'every month on the day',
+  'reminder.cmdWeekdayOfMonth': 'every month on the weekday',
+  'reminder.cmdYearly': 'every year on the date',
+  'reminder.anchorDate': 'Date',
+  'reminder.anchorTime': 'Time',
+  'reminder.startFrom': 'Starting from',
+  'reminder.everyDays': 'Every N days, N',
+  'reminder.everyWeeks': 'Every N weeks, N',
+  'reminder.dayField': 'Day of the month',
+  'reminder.dayLast': 'last day of the month',
+  'reminder.everyMonthsField': 'Every N months, N',
+  'reminder.everyYears': 'Every N years, N',
+  'reminder.skipWeekends': 'Skip weekends',
+  'reminder.weekdayField': 'Weekday',
+  'reminder.nthField': 'Occurrence in the month',
+  'reminder.nthLast': 'last',
+  'reminder.monthField': 'Month',
+  'reminder.dayNumberField': 'Day',
+  'reminder.preview': 'Next %1 reminders',
+  'reminder.previewEmpty': 'No occurrences yet',
+  'reminder.save': 'Save',
+  'reminder.cancel': 'Cancel',
+  'reminder.saveFailed': 'Could not save the reminder: %1',
+  'reminder.flagTitle': 'Reminders',
+  /** Flag with no reminders — ghost command to create the first one. */
+  'reminder.addFlag': 'Remind me…',
+  'reminder.create': 'Create reminder…',
+  'reminder.editSchedule': 'Change schedule…',
+  'reminder.dismissOccurrence': 'Dismiss this occurrence',
+  'reminder.snoozeOccurrence': 'Snooze…',
+  'reminder.remove': 'Delete reminder',
+  'reminder.actionFailed': 'Reminder action failed: %1',
+  'reminder.todayBadge': 'Reminders today and overdue: %1',
+  'reminder.groupDismiss': 'Dismiss all reminders of this group',
+  'reminder.groupDismissQuestion': 'Dismiss all occurrences of the reminders in group "%1"?',
+  'reminder.groupDismissDone': 'Occurrences dismissed: %1',
+  /** Bulk command confirmation. */
+  'tasks.bulkTitle': 'Bulk command',
+  'tasks.bulkCancelQuestion': 'Cancel tasks in lines: %1? The lines become plain text.',
+  'tasks.bulkMoveQuestion': 'Move the dates of lines: %1?',
+  'tasks.bulkUndateQuestion': 'Remove all dates from lines: %1? The tasks become undated.',
+  'tasks.bulkEmpty': 'The group has no open tasks.',
+  'tasks.bulkPartial': 'Some lines were not changed: %1.',
+  'tasks.bulkFailed': 'Bulk command failed: %1',
+  'tasks.undoFailed': 'Could not undo the command: %1',
+  /** Status line: the picked date matched the anchor — nothing to move. */
+  'tasks.moveNotNeeded': 'Nothing to move',
+  /** Task row operation errors. */
+  'tasks.errorLineNotFound': 'Line not found in the source entry.',
+  'tasks.errorNotATask': 'The line is no longer a task.',
+  'tasks.errorCommentNotFound': 'Source entry not found.',
+  'tasks.errorUndated': 'The line has no dates to move.',
+  'tasks.errorChronicleUndate':
+    'A task from a record takes the period of the record — its dates cannot be removed.',
+  'tasks.errorGeneric': 'The row operation failed.',
+  'tasks.errorToggle': 'Could not toggle the task: %1',
+  'tasks.errorEdit': 'Could not save the line: %1',
+  'tasks.errorRowCommand': 'Row command failed: %1',
+  'tasks.errorOpenSource': 'Could not open the source: %1',
+  'tasks.reminderActionFailed': 'Reminder action failed: %1',
 
   // -- Общее выделение -----------------------------------------------------
   /** Добавить мысль к выделению (меню чипов хроники). */
@@ -1310,13 +1587,16 @@ export const en = {
   /** Вопрос подтверждения закрытия: семантика диалога — «применить», не «сохранить». */
   'selection.properties.dirtyMessage': 'Apply changes?',
   /** Кнопка «Не применять»: закрыть форму, отбросив правки. */
-  'selection.properties.dirtyDiscard': 'Don\'t apply',
+  'selection.properties.dirtyDiscard': "Don't apply",
   /** Пустой план: выделенные мысли не прочитаны — применять не к кому. */
-  'selection.properties.nothingToApplyNoThoughts': 'Nothing to apply: selected thoughts were not read. Close and reopen the dialog.',
+  'selection.properties.nothingToApplyNoThoughts':
+    'Nothing to apply: selected thoughts were not read. Close and reopen the dialog.',
   /** Пустой план: ни одна строка не отмечена. */
-  'selection.properties.nothingToApplyNoRows': 'Nothing to apply: no row is checked. Check the property you need.',
+  'selection.properties.nothingToApplyNoRows':
+    'Nothing to apply: no row is checked. Check the property you need.',
   /** Пустой план: отмеченные строки пусты, очищать нечего (молчаливый no-op). */
-  'selection.properties.nothingToApplyEmpty': 'Nothing to apply: checked rows have no values and there is nothing to clear. Enter a value or uncheck the row.',
+  'selection.properties.nothingToApplyEmpty':
+    'Nothing to apply: checked rows have no values and there is nothing to clear. Enter a value or uncheck the row.',
   /** Отмеченные строки без значения, когда очищать нечего: их не применили. */
   'selection.properties.skippedCount': 'rows skipped: %1',
   /** Заголовок списка отмеченных строк без значения. */
@@ -1364,13 +1644,15 @@ export const en = {
   /** Дополнение к диалогу, если у вложения есть другие владельцы. */
   'attachments.remove.shared': 'The attachment has other owners — it will remain with them.',
   /** Запрет снятия (409): вложение — своя иконка/обложка объекта. */
-  'attachments.remove.iconBlocked': 'The attachment is used as the icon (or cover) of this object. Change or clear the icon first, then retry the removal.',
+  'attachments.remove.iconBlocked':
+    'The attachment is used as the icon (or cover) of this object. Change or clear the icon first, then retry the removal.',
   /** Ошибка снятия владения вложением. */
   'attachments.remove.failed': 'Failed to remove ownership',
   /** Ошибка добавления владельца вложению при выборе чужой картинки (0.12.1). */
   'attachments.owner.add.failed': 'Failed to add the attachment owner',
   /** Запрет снятия (409) в диалоге обложки: вложение — своя обложка. */
-  'publication.cover.removeOwnerBlocked': 'The attachment is the cover of this publication. Change or clear the cover first, then retry the removal.',
+  'publication.cover.removeOwnerBlocked':
+    'The attachment is the cover of this publication. Change or clear the cover first, then retry the removal.',
   /** Бейдж общего вложения: единственный владелец. */
   'attachments.owners.one': '1 owner',
   /** Бейдж общего вложения: 2–4 владельца. */
@@ -1384,9 +1666,11 @@ export const en = {
   /** Ошибка добавления владельца при переносе вложения в другую мысль. */
   'attachments.move.failed': 'Failed to move',
   /** Перенос: добавлено новому владельцу, но снять прежнее владение не удалось. */
-  'attachments.move.removeFailed': 'The attachment was added to the new thought, but the previous ownership could not be removed',
+  'attachments.move.removeFailed':
+    'The attachment was added to the new thought, but the previous ownership could not be removed',
   /** Перенос: 409 — вложение является иконкой (обложкой) текущего объекта. */
-  'attachments.move.iconBlocked': 'The attachment is the icon (or cover) of this object. It was added to the new thought but not removed from the current object. Change or clear the icon first, then retry the move.',
+  'attachments.move.iconBlocked':
+    'The attachment is the icon (or cover) of this object. It was added to the new thought but not removed from the current object. Change or clear the icon first, then retry the move.',
   /** Ошибка копирования вложения в другие мысли. */
   'attachments.copy.failed': 'Failed to copy',
   /** Итог копирования: ровно одна мысль. */
@@ -1473,6 +1757,10 @@ export const en = {
   'stats.row.links': 'Links',
   /** Строка «Публикации». */
   'stats.row.publications': 'Publications',
+  /** Строка «Задачи» (0.16.1). */
+  'stats.row.tasks': 'Tasks',
+  /** Строка «Напоминания» (0.16.1). */
+  'stats.row.reminders': 'Reminders',
   /** Строка «Полки». */
   'stats.row.shelves': 'Shelves',
   /** Строка «Слои». */
@@ -1506,7 +1794,8 @@ export const en = {
   /** Подпись кнопки сортировки. */
   'publications.sort': 'Sort',
   /** Подсказка сортировки: что именно сортируется (задача 55ee3c85). */
-  'publications.sort.hint': 'Sort publications within shelves; the order of shelves themselves is custom',
+  'publications.sort.hint':
+    'Sort publications within shelves; the order of shelves themselves is custom',
   'publications.sort.manual': 'Manual',
   'publications.sort.title': 'By title',
   'publications.sort.date': 'By assembly date',
@@ -1556,10 +1845,14 @@ export const en = {
   /** Диалог удаления публикации/полки (задача 00160da1). */
   'publications.delete.publicationTitle': 'Deleting publication “%1”',
   'publications.delete.shelfTitle': 'Deleting shelf “%1”',
-  'publications.delete.reasonProperties': 'Cannot delete permanently — the publication is used in properties (%1).',
-  'publications.delete.reasonBase': 'Cannot delete permanently — the publication exists in Base: in a layer it can only be moved to the basket.',
-  'publications.delete.reasonLayers': 'Cannot delete permanently — the publication is changed in layers: %1.',
-  'publications.delete.reasonShelfBase': 'Cannot delete permanently — the shelf exists in Base: in a layer it can only be moved to the basket.',
+  'publications.delete.reasonProperties':
+    'Cannot delete permanently — the publication is used in properties (%1).',
+  'publications.delete.reasonBase':
+    'Cannot delete permanently — the publication exists in Base: in a layer it can only be moved to the basket.',
+  'publications.delete.reasonLayers':
+    'Cannot delete permanently — the publication is changed in layers: %1.',
+  'publications.delete.reasonShelfBase':
+    'Cannot delete permanently — the shelf exists in Base: in a layer it can only be moved to the basket.',
   /** Мастер создания публикации. */
   'publications.wizard.title': 'New publication',
   'publications.wizard.meta': 'Title',
@@ -1571,7 +1864,8 @@ export const en = {
   'publications.wizard.fAuthor': 'Author',
   'publications.wizard.fShelf': 'Shelf',
   'publications.wizard.noShelf': 'No shelf',
-  'publications.wizard.fTextsHint': 'Comments of the thoughts in these properties form the section text. This step can be skipped.',
+  'publications.wizard.fTextsHint':
+    'Comments of the thoughts in these properties form the section text. This step can be skipped.',
   'publications.wizard.titleRequired': 'Enter a publication title.',
 
   // -- Публикации: рабочая область открытой публикации (0.11.1, задача 4f03b9d5) --
@@ -1625,7 +1919,8 @@ export const en = {
   'publications.ws.noTextSources': 'The publication has no text properties configured.',
   // Пустой отбор заголовков (задача 7cfaba7c, п.2): сервер отдаёт пустую сборку
   // с предупреждением — документ показывает это состояние, а не пустую страницу.
-  'publications.ws.emptyRecipe': 'The recipe has no conditions — add view conditions to the recipe.',
+  'publications.ws.emptyRecipe':
+    'The recipe has no conditions — add view conditions to the recipe.',
   'publications.ws.createMiss': 'The thought was created but did not match the publication view.',
   /** Ширина колонки текста документа — подсказка ползунка (ea1b5f14, п. 5). */
   'publications.ws.textWidth': 'Text width',
@@ -1638,10 +1933,12 @@ export const en = {
   'rowReorder.moveDown': 'Move down',
   // Демо-стенд компоненты row-reorder (временный, только по хэшу).
   'rowReorderDemo.title': 'row-reorder — component prototype',
-  'rowReorderDemo.hint': 'Drag a row by its name, use Alt+↑/↓ or the name context menu. Esc cancels dragging.',
+  'rowReorderDemo.hint':
+    'Drag a row by its name, use Alt+↑/↓ or the name context menu. Esc cancels dragging.',
   'rowReorderDemo.statusInitial': 'Order: initial.',
   'rowReorderDemo.status': 'Order: %1.',
-  'rowReorderDemo.foot': 'Demo stand: the order is stored only on the page, the server is not called.',
+  'rowReorderDemo.foot':
+    'Demo stand: the order is stored only on the page, the server is not called.',
   'rowReorderDemo.value': 'value %1',
   'rowReorderDemo.name.1': 'Alpha',
   'rowReorderDemo.name.2': 'Beta',
@@ -1689,11 +1986,14 @@ export const en = {
   'publication.field.subtitlePlaceholder': 'Subtitle',
   // Рецепт публикации: крупные группы с подсказками (задача b02ef1cf).
   'publication.recipe.group.select': 'SECTION SELECTION',
-  'publication.recipe.group.selectHint': 'Specify parent thoughts — their subtrees provide publication sections; other conditions refine the composition.',
+  'publication.recipe.group.selectHint':
+    'Specify parent thoughts — their subtrees provide publication sections; other conditions refine the composition.',
   'publication.recipe.group.texts': 'PROPERTIES WITH SECTION CONTENT',
-  'publication.recipe.group.textsHint': 'Specify which properties of the selected sections provide their texts.',
+  'publication.recipe.group.textsHint':
+    'Specify which properties of the selected sections provide their texts.',
   'publication.recipe.group.extras': 'ADDITIONAL MATERIALS',
-  'publication.recipe.group.extrasHint': 'Specify properties whose values should be included in the publication as additional materials.',
+  'publication.recipe.group.extrasHint':
+    'Specify properties whose values should be included in the publication as additional materials.',
   'publication.recipe.group.numbering': 'SECTION NUMBERING',
   // Диалог обложки публикации (задача b02ef1cf).
   'publication.cover.title': 'Cover',
@@ -1711,7 +2011,8 @@ export const en = {
   'publication.cover.ownerRemove': 'Remove owner',
   /** Подтверждение удаления последнего владельца (замечание Б2 b02ef1cf). */
   'publication.cover.removeLastOwner.title': 'Deleting attachment',
-  'publication.cover.removeLastOwner.body': 'If the last owner of the attachment is removed, the attachment will be deleted. Delete?',
+  'publication.cover.removeLastOwner.body':
+    'If the last owner of the attachment is removed, the attachment will be deleted. Delete?',
   /** Ошибка снятия владельца вложения. */
   'publication.cover.removeOwner': 'Remove owner',
   'publication.cover.setDone': 'The publication cover has been updated.',
@@ -1723,25 +2024,31 @@ export const en = {
   /** Placeholder автора: пустое авторство показывается создателем (c3e44cab). */
   'publication.field.authorPlaceholder': 'creator',
   /** Ошибка настройки рецепта: свойство и в текстах, и в доп. материалах. */
-  'publication.recipe.overlap': 'A property cannot be both a text source and an additional material.',
+  'publication.recipe.overlap':
+    'A property cannot be both a text source and an additional material.',
   /** Рецепт ждёт реестр свойств: чтение не удалось, повтор на восстановлении связи. */
-  'publication.recipe.registryPending': 'The network property registry has not been read — the recipe will appear once the connection recovers.',
+  'publication.recipe.registryPending':
+    'The network property registry has not been read — the recipe will appear once the connection recovers.',
   /** Действие публикации прервано: реестр свойств сети не прочитан. */
-  'publications.registryUnreadable': 'The network property registry has not been read — retry when the connection recovers.',
+  'publications.registryUnreadable':
+    'The network property registry has not been read — retry when the connection recovers.',
   /** Управление порядком публикации внутри полки (вкладка «Полки и статус»). */
   'publication.orderUp': 'Move up',
   'publication.orderDown': 'Move down',
   /** Рецепт заголовков: ключевые слова. */
   'publication.recipe.keywordsPlaceholder': 'Keywords…',
-  'publication.recipe.keywordsTooltip': 'Space-separated words, all required; * matches any characters; -word excludes. Example: report* -draft*',
+  'publication.recipe.keywordsTooltip':
+    'Space-separated words, all required; * matches any characters; -word excludes. Example: report* -draft*',
   'publication.recipe.types': 'Thought types',
   'publication.recipe.typesPlaceholder': 'Type name…',
-  'publication.recipe.parentsTooltip': 'Limit the view to thoughts that are children of the specified ones',
+  'publication.recipe.parentsTooltip':
+    'Limit the view to thoughts that are children of the specified ones',
   'publication.recipe.parentsTitle': 'Parent thoughts',
   'publication.recipe.pickThoughts': 'Select thoughts…',
   'publication.recipe.pickTypes': 'Select types…',
   'publication.field.summary': 'Summary',
-  'publication.summary.placeholder': 'Publication summary… (double-click to edit, Ctrl+Enter to save)',
+  'publication.summary.placeholder':
+    'Publication summary… (double-click to edit, Ctrl+Enter to save)',
   'publication.field.cover': 'Cover',
   'publication.field.assembly': 'Assembly date',
   'publication.field.numberingFrom': 'Number from level',
@@ -1877,7 +2184,8 @@ export const en = {
   /** Заголовок подтверждения «Очистить все свойства». */
   'usagePanel.properties.clearAllTitle': 'Clear all properties',
   /** Текст подтверждения необратимой очистки всех свойств. */
-  'usagePanel.properties.clearAllMessage': 'All references to this thought via properties will be removed. This action is irreversible and affects other thoughts.',
+  'usagePanel.properties.clearAllMessage':
+    'All references to this thought via properties will be removed. This action is irreversible and affects other thoughts.',
   /** Кнопка подтверждения очистки всех свойств. */
   'usagePanel.properties.clearAllConfirm': 'Clear',
   /** Тост после очистки всех свойств (подстановка — число ссылок). */
@@ -1891,7 +2199,8 @@ export const en = {
   /** Кнопка строки слоя: удалить слой. */
   'usagePanel.layers.delete': 'Delete layer',
   /** Причина, почему у строки «Основа» нет действия purge в рабочем слое. */
-  'usagePanel.layers.baseHint': 'The entity exists in Base: in a working layer it can only be marked for deletion; Delete permanently is available in Base.',
+  'usagePanel.layers.baseHint':
+    'The entity exists in Base: in a working layer it can only be marked for deletion; Delete permanently is available in Base.',
   /** Ссылка из диалога удаления: открыть панель использования. */
   'usagePanel.openLink': 'Open usage…',
   /** Подсказка кнопки/команды «Открыть использование…» в корзине. */
@@ -1909,9 +2218,11 @@ export const en = {
   // Предупреждение об осиротевших потомках — форма выбирается через `tp`
   // (`plurals.orphanedChildren` ниже): `%1` — число.
   /** Гонка с удерживающим слоем: purge не удалил строку. */
-  'usagePanel.purgeRace': 'The entity was not deleted: a layer holds it. The list has been reloaded.',
+  'usagePanel.purgeRace':
+    'The entity was not deleted: a layer holds it. The list has been reloaded.',
   /** Гонка: сущность восстановили из корзины до подтверждения удаления. */
-  'usagePanel.purgeAlreadyRestored': 'The entity has already been restored from the basket — deletion canceled.',
+  'usagePanel.purgeAlreadyRestored':
+    'The entity has already been restored from the basket — deletion canceled.',
 
   // -- Статус realtime-соединения (ошибка de34b35b) -------------------------
   // Подписи и тултипы — по таблице заказчика после проверки GUI: короткая
@@ -1960,15 +2271,22 @@ export const en = {
   'realtime.maintenance.noRetry': 'The server is updating, waiting for recovery',
 
   // -- Уведомления о связи и черновики (ошибка de34b35b) --------------------
-  'realtime.link.lostSuspect': 'Checking the connection to the server — changes are not sent, the edit is saved as a draft.',
-  'realtime.link.lostReconnecting': 'Reconnecting to the server — changes are not sent, the edit is saved as a draft.',
+  'realtime.link.lostSuspect':
+    'Checking the connection to the server — changes are not sent, the edit is saved as a draft.',
+  'realtime.link.lostReconnecting':
+    'Reconnecting to the server — changes are not sent, the edit is saved as a draft.',
   'realtime.link.lostOffline': 'Connection lost — edits are saved as drafts.',
-  'realtime.link.lost': 'No connection — the edit is saved as a draft and will be sent once the connection recovers.',
+  'realtime.link.lost':
+    'No connection — the edit is saved as a draft and will be sent once the connection recovers.',
   'realtime.link.recovered': 'Connection restored.',
-  'drafts.offline.suspect': 'Checking the connection… The edit is saved as a draft and will be sent once the connection recovers.',
-  'drafts.offline.reconnecting': 'Reconnecting… The edit is saved as a draft and will be sent once the connection recovers.',
-  'drafts.offline.offline': 'No connection to the server. The edit is saved as a draft and will be sent once the connection recovers.',
-  'drafts.offline.default': 'The edit is saved as a draft and will be sent once the connection recovers.',
+  'drafts.offline.suspect':
+    'Checking the connection… The edit is saved as a draft and will be sent once the connection recovers.',
+  'drafts.offline.reconnecting':
+    'Reconnecting… The edit is saved as a draft and will be sent once the connection recovers.',
+  'drafts.offline.offline':
+    'No connection to the server. The edit is saved as a draft and will be sent once the connection recovers.',
+  'drafts.offline.default':
+    'The edit is saved as a draft and will be sent once the connection recovers.',
   'drafts.retry.failed': 'The draft was not sent: %1',
   /**
    * Ретраибельный отказ сервера (4xx, кроме распознанных словарём в `errText`,
@@ -1986,7 +2304,8 @@ export const en = {
    * локально до закрытия клиента и удаляется при следующем запуске.
    * `%1` — счётчик, `%2` — слово «черновик» в нужной форме.
    */
-  'drafts.failed.unavailable': 'Not sent: %1 %2 — the entry is unavailable (deleted or in another layer).',
+  'drafts.failed.unavailable':
+    'Not sent: %1 %2 — the entry is unavailable (deleted or in another layer).',
   /**
    * Локальный дефект черновика (битый JSON-конверт/неизвестный тип, 351068ed
    * п.8): ретрай не поможет, строка терминальна (`failed`). Одно сообщение на
@@ -1999,7 +2318,8 @@ export const en = {
    * решение пользователя 2026-10-29). Показывается один раз, `%1` — счётчик,
    * `%2` — слово «черновик» в нужной форме.
    */
-  'drafts.startup.purged': 'Removed at startup: %1 %2 from the previous session — unsaved edits are not carried over to a new client run.',
+  'drafts.startup.purged':
+    'Removed at startup: %1 %2 from the previous session — unsaved edits are not carried over to a new client run.',
   /**
    * Одна попытка на конфликтный черновик — дальше он ждёт следующей правки.
    * Формулировка честная (5726744b, дополнено fb9d6058): слияния нет — upsert
@@ -2007,7 +2327,8 @@ export const en = {
    * новой версией; при перезапуске клиента черновик удаляется чисткой старта,
    * поэтому «до закрытия клиента» сказано явно.
    */
-  'drafts.conflict.kept': 'The draft was not sent: the entry was changed elsewhere. The draft text is kept locally until the client closes and will be replaced on the next edit of this field.',
+  'drafts.conflict.kept':
+    'The draft was not sent: the entry was changed elsewhere. The draft text is kept locally until the client closes and will be replaced on the next edit of this field.',
 
   // -- Каркас рабочего стола (screens/workspace.ts) -------------------------
   'workspace.netMenu.title': 'Thought network menu',
@@ -2025,7 +2346,8 @@ export const en = {
   'workspace.tab.close': 'Close tab',
   'workspace.tab.noAccess': 'No access to the network',
   'workspace.tab.noAccessWithId': 'No access to network %1',
-  'workspace.tab.inaccessible': 'The network opened in this tab is no longer available (you were removed from members or the network was deleted).',
+  'workspace.tab.inaccessible':
+    'The network opened in this tab is no longer available (you were removed from members or the network was deleted).',
 
   // ------------------------------------------------------------------------
   // Литералы экранов, панелей и меню (задача 3c9f23dc)
@@ -2048,7 +2370,8 @@ export const en = {
   'admin.label.create': 'Create',
   'admin.generaciyaKey': 'Key generation',
   'admin.limitMustBytPolozhitelnymCelymChislom': 'The limit must be a positive integer.',
-  'admin.keyPokazanOdinRazSohranitePeredayte': 'The key is shown only once. Save it and give it to the user — it will be unavailable after closing.',
+  'admin.keyPokazanOdinRazSohranitePeredayte':
+    'The key is shown only once. Save it and give it to the user — it will be unavailable after closing.',
   'admin.keySkopirovan': 'Key copied.',
   'admin.notSucceededCopyKey': 'Failed to copy the key.',
   'admin.title.apiKeyPokazanOdinRaz': 'API key (shown once)',
@@ -2071,9 +2394,11 @@ export const en = {
 
   // -- app ---------------------------------------------------------------
   'app.networkNotOpen': 'No network is open.',
-  'app.notSelectedThoughtKopirovaniyaSelectThought': 'No thought is selected for copying. Select a thought on the map or in structures.',
+  'app.notSelectedThoughtKopirovaniyaSelectThought':
+    'No thought is selected for copying. Select a thought on the map or in structures.',
   'app.skopirovano': 'Copied: “%1”',
-  'app.notSelectedThoughtPasteKlikniteThought': 'No thought is selected for pasting. Click a thought on the map or select one.',
+  'app.notSelectedThoughtPasteKlikniteThought':
+    'No thought is selected for pasting. Click a thought on the map or select one.',
   'app.notSucceededReadSistemnyyBufer': 'Failed to read the system clipboard: %1',
 
   // -- addDialog ---------------------------------------------------------
@@ -2088,16 +2413,21 @@ export const en = {
   'addDialog.label.typeThought': 'Thought type',
   'addDialog.label.typeLink': 'Link type',
   'addDialog.label.propertyLink': 'Link property',
-  'addDialog.enterAddListCtrlEnterApply': 'Enter adds to the list, Ctrl+Enter applies. In “several” mode, clicking a found thought adds it to the list.',
-  'addDialog.selectOnlySuschestvuyuschihThoughtsEnterKlik': 'Selection from existing thoughts only: Enter or a click on a found thought adds it to the list, Ctrl+Enter applies.',
-  'addDialog.searchIdetVsemVashimSetyamThought': 'Search runs across all your networks; thoughts of the current network are unavailable — select a thought from another network.',
+  'addDialog.enterAddListCtrlEnterApply':
+    'Enter adds to the list, Ctrl+Enter applies. In “several” mode, clicking a found thought adds it to the list.',
+  'addDialog.selectOnlySuschestvuyuschihThoughtsEnterKlik':
+    'Selection from existing thoughts only: Enter or a click on a found thought adds it to the list, Ctrl+Enter applies.',
+  'addDialog.searchIdetVsemVashimSetyamThought':
+    'Search runs across all your networks; thoughts of the current network are unavailable — select a thought from another network.',
   'addDialog.cannotSvyazatThoughtSamoySoboy': 'A thought cannot be linked to itself.',
   'addDialog.thoughtUkazannymIdOtsutstvuet': 'A thought with the specified ID does not exist.',
-  'addDialog.sovpadeniyNoCreateNovyhThoughtsOtklyucheno': 'No matches — creating new thoughts is disabled.',
+  'addDialog.sovpadeniyNoCreateNovyhThoughtsOtklyucheno':
+    'No matches — creating new thoughts is disabled.',
   'addDialog.etaThoughtAlreadyList': 'This thought is already in the list.',
   'addDialog.selected': 'Selected: %1',
   'addDialog.title.clearList': 'Clear list',
-  'addDialog.suschestvuyuschayaThoughtTypeThoughtNotMenyaetsya': 'Existing thought — the thought type does not change',
+  'addDialog.suschestvuyuschayaThoughtTypeThoughtNotMenyaetsya':
+    'Existing thought — the thought type does not change',
   'addDialog.willCreatedNovayaThought': 'A new thought will be created',
   'addDialog.title.deleteLine': 'Delete row',
   'addDialog.listThoughtsPust': 'The thought list is empty.',
@@ -2113,7 +2443,8 @@ export const en = {
   'canvas.youRedaktiruete': 'you are editing',
   'canvas.youRedaktirueteEtuThought': 'You are editing this thought.',
   'canvas.redaktiruet': '%1 is editing',
-  'canvas.thoughtChangedTekuschemLayerItsEdit': 'The thought is changed in the current layer — its edit will go to Base on merge',
+  'canvas.thoughtChangedTekuschemLayerItsEdit':
+    'The thought is changed in the current layer — its edit will go to Base on merge',
   'canvas.incomingLink': 'Incoming links: %1',
   'canvas.outgoingLink': 'Outgoing links: %1',
   'canvas.vliyayuschihThoughtsNoDvoynoyKlikAdd': 'No influencing thoughts. Double-click to add',
@@ -2121,7 +2452,8 @@ export const en = {
   'canvas.podchinennyhThoughtsNoDvoynoyKlikAdd': 'No child thoughts. Double-click to add',
   'canvas.notSucceededVypolnitViewTokenNot': 'Failed to run the view: the token was not resolved.',
   'canvas.prichinaNotUkazana': 'reason not specified',
-  'canvas.viewVernulEmptyRezultatTokenNot': 'The view returned an empty result: token “%1” was not resolved (%2).',
+  'canvas.viewVernulEmptyRezultatTokenNot':
+    'The view returned an empty result: token “%1” was not resolved (%2).',
   'canvas.hasIncomingLink': 'Has incoming links',
   'canvas.incomingLinksNo': 'No incoming links',
   'canvas.hasOutgoingLink': 'Has outgoing links',
@@ -2154,12 +2486,14 @@ export const en = {
   'contextMenu.exportSaved': 'Export saved: %1',
   'contextMenu.exportNotSucceeded': 'Export failed: %1',
   'contextMenu.importNotSucceeded': 'Import failed: %1',
-  'contextMenu.importCreatedObnovlenoNovyhLinksAttachments': 'Import %1: created %2, updated %3, new links %4, attachments %5.',
+  'contextMenu.importCreatedObnovlenoNovyhLinksAttachments':
+    'Import %1: created %2, updated %3, new links %4, attachments %5.',
   'contextMenu.editProperties': 'Edit properties',
   'contextMenu.editActive': 'Change active status',
   'contextMenu.invert': 'Invert',
   'contextMenu.linkInverted': 'Link inverted.',
-  'contextMenu.inObratnomNapravleniiTakayaLinkAlready': 'Such a link already exists in the opposite direction.',
+  'contextMenu.inObratnomNapravleniiTakayaLinkAlready':
+    'Such a link already exists in the opposite direction.',
   'contextMenu.invertLink': 'Invert link',
   'contextMenu.copyId': 'Copy ID',
   'contextMenu.idThoughtSkopirovan': 'Thought ID copied.',
@@ -2202,7 +2536,8 @@ export const en = {
   'contextMenu.fileNotSelected': 'no file selected',
 
   // -- dragCloud ---------------------------------------------------------
-  'dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy': 'Reordering works when the zone sort is “manual” (right-click a zone → order).',
+  'dragCloud.uporyadochivanieRabotaetSortirovkeZonyRuchnoyPravyy':
+    'Reordering works when the zone sort is “manual” (right-click a zone → order).',
   'dragCloud.createLink': 'Create link',
   'dragCloud.peremestitThought': 'Move thought',
   'dragCloud.peremestitPodchinenie': 'Move under parent',
@@ -2226,18 +2561,22 @@ export const en = {
   // -- attachments -------------------------------------------------------
   'attachments.b': ' · %1 B',
   'attachments.fileNotFoundUnavailablePath': 'File not found or unavailable at path: %1',
-  'attachments.fileGreaterMbLimitAttachments': 'The file is larger than %1 MB — the attachment limit.',
+  'attachments.fileGreaterMbLimitAttachments':
+    'The file is larger than %1 MB — the attachment limit.',
   'attachments.peretaschiteFilesLinkRefSyuda': 'Drag files or links here',
   'attachments.notSucceededAddAttachment': 'Failed to add the attachment.',
-  'attachments.peretaschenyNeraspoznannyeDannyePodderzhivayutsyaFilesH': 'Unrecognized data was dropped. Files and http(s) links are supported.',
+  'attachments.peretaschenyNeraspoznannyeDannyePodderzhivayutsyaFilesH':
+    'Unrecognized data was dropped. Files and http(s) links are supported.',
   'attachments.attachmentsNo': 'No attachments.',
   'attachments.notSucceededOpen': 'Failed to open: %1',
   'attachments.openPrilozheniiDefault': 'Open in the default app',
   'attachments.attachment': 'Attachment',
-  'attachments.forThisTypeAttachmentsPreviewUnavailable': 'Preview is unavailable for this attachment type.',
+  'attachments.forThisTypeAttachmentsPreviewUnavailable':
+    'Preview is unavailable for this attachment type.',
   'attachments.notTekstovoeAttachment': 'not a text attachment',
   'attachments.notSucceededReadFile': 'Failed to read the file',
-  'attachments.filePrevyshaetLimitProsmotraPokazanyPervye': 'The file exceeds the preview limit — the first 200,000 characters are shown, editing is disabled.',
+  'attachments.filePrevyshaetLimitProsmotraPokazanyPervye':
+    'The file exceeds the preview limit — the first 200,000 characters are shown, editing is disabled.',
   'attachments.iconThoughtObnovlena': 'Thought icon updated.',
   'attachments.notSucceededNaznachitIcon': 'Failed to set the icon: %1',
   'attachments.notSucceededReadFileAttachments': 'Failed to read the attachment file.',
@@ -2275,10 +2614,13 @@ export const en = {
   'deepLink.networkUnavailable': 'Network unavailable: %1',
   'deepLink.publicationDeletedUnavailable': 'The publication is deleted or unavailable: %1',
   'deepLink.thoughtDeletedUnavailable': 'The thought is deleted or unavailable: %1',
-  'deepLink.notMoguOpenNeaktualnuyuThoughtNeaktualnye': 'Cannot open an inactive thought — inactive thoughts are not displayed.',
+  'deepLink.notMoguOpenNeaktualnuyuThoughtNeaktualnye':
+    'Cannot open an inactive thought — inactive thoughts are not displayed.',
   'deepLink.notSucceededOpenThought': 'Failed to open the thought: %1',
 
   // -- editor ------------------------------------------------------------
+  'editor.title.main': 'Main',
+  'editor.title.tasks': 'Tasks',
   'editor.title.properties': 'Properties',
   'editor.title.attachments': 'Attachments',
   'editor.title.mentions': 'Mentions',
@@ -2288,16 +2630,27 @@ export const en = {
   'editor.title.thought': 'Thoughts',
   'editor.title.polozhenieEditor': 'Editor position',
   'editor.noSoderzhimogo': 'No content.',
-  'editor.thoughtTrashClickRestoreDelete': 'The thought is in the basket. Click to restore or delete',
+  'editor.thoughtTrashClickRestoreDelete':
+    'The thought is in the basket. Click to restore or delete',
   'editor.link': 'Link',
   'editor.thought': 'Thought',
   'editor.selectThoughtLink': 'Select a thought or link.',
+  // Тихая подсказка разбора строки задачи (элемент 8773d9df).
+  'editor.taskHint.task': 'task',
+  'editor.taskHint.done': 'task completed',
+  'editor.taskHint.checklist': 'checklist item',
+  'editor.taskHint.period': 'period %1–%2',
+  'editor.taskHint.due': 'due %1',
+  'editor.taskHint.recordPeriod': 'record period %1',
+  'editor.taskHint.undatedAllPeriods': 'no due date, the task is shown in all periods',
+  'editor.taskHint.appearsPeriod': 'will appear in “Tasks”',
   'editor.label.sprava': 'Right',
   'editor.label.sleva': 'Left',
   'editor.label.sverhu': 'Top',
   'editor.label.snizu': 'Bottom',
   'editor.label.hide': 'Hide',
-  'editor.thoughtChangedDrugimPolzovatelemDannyeObnovleny': '⚠ The thought was changed by another user — data updated.',
+  'editor.thoughtChangedDrugimPolzovatelemDannyeObnovleny':
+    '⚠ The thought was changed by another user — data updated.',
   'editor.linkChangedDrugimPolzovatelem': '⚠ The link was changed by another user.',
   'editor.vosstanovlenNesohranennyyChernovikTitle': 'An unsaved title draft has been restored.',
   'editor.title.cvetStil': 'Color and style',
@@ -2313,7 +2666,8 @@ export const en = {
 
   // -- graphTab ----------------------------------------------------------
   'graphTab.loadingGraph': 'Loading graph…',
-  'graphTab.graphUnavailableThoughtMoreZagruzhaetsya': 'The graph is unavailable — the thought is still loading.',
+  'graphTab.graphUnavailableThoughtMoreZagruzhaetsya':
+    'The graph is unavailable — the thought is still loading.',
   'graphTab.notSucceededLoadGraph': 'Failed to load the graph: %1',
   'graphTab.uThoughtNoPryamyhLinks': 'The thought has no direct links.',
 
@@ -2325,7 +2679,8 @@ export const en = {
   // -- linkValueRemoval --------------------------------------------------
   'linkValueRemoval.linkPomeschenyTrash': 'Links moved to the basket (%1).',
   'linkValueRemoval.linkPomeschenaTrash': 'Link moved to the basket.',
-  'linkValueRemoval.chastLinksZablokirovanaOstalasTrash': 'Some links are blocked and remain in the basket.',
+  'linkValueRemoval.chastLinksZablokirovanaOstalasTrash':
+    'Some links are blocked and remain in the basket.',
   'linkValueRemoval.notSucceededDeleteLinkSovsem': 'Failed to delete the link permanently: %1',
   'linkValueRemoval.linkDeleted': 'Links deleted (%1).',
   'linkValueRemoval.linkDeleted2': 'Link deleted.',
@@ -2333,7 +2688,8 @@ export const en = {
   // -- linksTab ----------------------------------------------------------
   'linksTab.title.linkRefThought': 'Links to the thought',
   'linksTab.title.mentionsTekstah': 'Mentions in texts',
-  'linksTab.koncyLinkNotFoundPossibleThought': 'Link endpoints not found — the thoughts may have been deleted.',
+  'linksTab.koncyLinkNotFoundPossibleThought':
+    'Link endpoints not found — the thoughts may have been deleted.',
   'linksTab.istochnik': 'Source',
   'linksTab.naznachenie': 'Target',
   'linksTab.searchSsylokThought': 'Search links to the thought…',
@@ -2343,10 +2699,12 @@ export const en = {
 
   // -- markdownField -----------------------------------------------------
   'markdownField.textKommentariya': 'Comment text',
-  'markdownField.notSucceededPasteLinkRefTextNot': 'Failed to insert the link: the text “%1” was not found in the source (changed by formatting).',
+  'markdownField.notSucceededPasteLinkRefTextNot':
+    'Failed to insert the link: the text “%1” was not found in the source (changed by formatting).',
   'markdownField.notSucceededSaveLinkRef': 'Failed to save the link: %1',
   'markdownField.pasteTextShablonaTypeThought': 'Paste the template text from the thought type',
-  'markdownField.notSucceededPasteImageFieldsNo': 'Failed to insert the image: the field has no owner.',
+  'markdownField.notSucceededPasteImageFieldsNo':
+    'Failed to insert the image: the field has no owner.',
   'markdownField.izobrazhenie': 'image',
 
   // -- mentions ----------------------------------------------------------
@@ -2363,33 +2721,42 @@ export const en = {
   'miniGraph.outgoing': 'outgoing',
   'miniGraph.incoming': 'incoming',
   'miniGraph.more': '%1: %2 more %3',
-  'miniGraph.inTrashMetkaTrashChipaVosstanovlenie': ', in basket: %1 (the chip\'s basket mark means restore via the basket)',
+  'miniGraph.inTrashMetkaTrashChipaVosstanovlenie':
+    ", in basket: %1 (the chip's basket mark means restore via the basket)",
   'miniGraph.zhivyhLinks': 'live links ',
   'miniGraph.polnyyListVkladke': '%1%2. The full list %3— is on the “%4” tab.',
   'miniGraph.neighbours': 'Neighbours: %1',
-  'miniGraph.allPryamyeNeighboursThoughtStrukturnyeParents': 'All direct neighbours of the thought: structural parents and children, plus typed links in both directions. The graph always shows all thought links — thought map filters do not affect it.',
+  'miniGraph.allPryamyeNeighboursThoughtStrukturnyeParents':
+    'All direct neighbours of the thought: structural parents and children, plus typed links in both directions. The graph always shows all thought links — thought map filters do not affect it.',
   'miniGraph.hiddenMassovyh': 'Bulk hidden: %1',
-  'miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber': 'When %1 or more links of the same type connect one neighbour (counting both sides), one line is drawn per side of the pair, and the rest are combined into a “+N” chip at that neighbour (the chip tooltip shows the type, side and number of hidden links). The counter sums the numbers on chips. They cannot be expanded on the graph; the full list is on the “%2” tab.',
+  'miniGraph.kogdaOdnimNeighbourSvyazanoMoreReber':
+    'When %1 or more links of the same type connect one neighbour (counting both sides), one line is drawn per side of the pair, and the rest are combined into a “+N” chip at that neighbour (the chip tooltip shows the type, side and number of hidden links). The counter sums the numbers on chips. They cannot be expanded on the graph; the full list is on the “%2” tab.',
   'miniGraph.moreNotPomestilos': 'Not fitted yet: %1',
-  'miniGraph.onGraphPokazanyPervyeNeighboursOstalnye': 'The graph shows the first %1 neighbours; the remaining %2 did not fit. The full list of neighbours and links is on the “%3” tab.',
-  'miniGraph.linkTrashClickToOpenTrash': 'Links in basket: %1 — click to open the basket and restore',
-  'miniGraph.kolesoZumLevayaKnopkaPustomuMestu': 'Wheel zooms, left button on empty space pans, nodes can be dragged. Hover a link to see its type and highlight. Ctrl+hover for preview.',
+  'miniGraph.onGraphPokazanyPervyeNeighboursOstalnye':
+    'The graph shows the first %1 neighbours; the remaining %2 did not fit. The full list of neighbours and links is on the “%3” tab.',
+  'miniGraph.linkTrashClickToOpenTrash':
+    'Links in basket: %1 — click to open the basket and restore',
+  'miniGraph.kolesoZumLevayaKnopkaPustomuMestu':
+    'Wheel zooms, left button on empty space pans, nodes can be dragged. Hover a link to see its type and highlight. Ctrl+hover for preview.',
   'miniGraph.openLabel.openEditor': 'Open in editor',
 
   // -- properties --------------------------------------------------------
-  'properties.propertyNotFoundSpravochnikeNetwork': 'The property was not found in the network property registry.',
+  'properties.propertyNotFoundSpravochnikeNetwork':
+    'The property was not found in the network property registry.',
   'properties.editProperty': 'Edit property',
   'properties.pomechennyhLinksThisPropertiesNo': 'There are no marked links of this property.',
   'properties.vosstanovlenoLinks': 'Links restored: %1.',
   'properties.linkRestored': 'Link restored.',
   'properties.propertyMovedTipovye': 'The property was moved to typed properties.',
   'properties.perenestiTipovyeProperties': 'Move to typed properties',
-  'properties.rowZerkalnayaPrivyazkaPropertiesZhivetDrugom': 'This row is mirrored: the property binding lives on another type — remove it there.',
+  'properties.rowZerkalnayaPrivyazkaPropertiesZhivetDrugom':
+    'This row is mirrored: the property binding lives on another type — remove it there.',
   'properties.privyazkaPropertiesNotFound': 'The property binding was not found.',
   'properties.propertyIsklyuchenoTypes': 'The property was excluded from types: %1.',
   'properties.propertyIsklyuchenoTipovyh': 'The property was excluded from typed properties.',
   'properties.isklyuchitTipovyhProperties': 'Exclude from typed properties',
-  'properties.propertiesNedostupnyNoPodhodyaschegoType': 'Properties are unavailable — there is no suitable type.',
+  'properties.propertiesNedostupnyNoPodhodyaschegoType':
+    'Properties are unavailable — there is no suitable type.',
   'properties.title.propertiesType': 'Type properties',
   'properties.title.addProperty': 'Add property',
   'properties.title.propertiesVneType': 'Out-of-type properties',
@@ -2397,11 +2764,16 @@ export const en = {
   'properties.label.createNovoe': 'Create new…',
   'properties.notSucceededSaveOrderProperties': 'Failed to save the property order: %1',
   'properties.noValuesVneType': 'No out-of-type values.',
-  'properties.propertyLinkNotConnectedTipuOwner': 'The link property is not attached to the owner type — values are edited here; attaching the property to the type will return them to the main table.',
-  'properties.typeLinkNotImeetPropertiesReestre': 'The link type has no property in the registry — the link appears as an out-of-type property; it can be deleted by the side display name.',
-  'properties.propertyGreaterNotConnectedTipuOwner': 'The property is no longer attached to the owner type — the value is kept for history only.',
-  'properties.propertyLinkNotConnectedTipuOwner2': 'The link property is not attached to the owner type — enter values here; attaching the property to the type will return them to the main table.',
-  'properties.propertyNotConnectedTipuOwnerEnter': 'The property is not attached to the owner type — enter the value here; attaching the property to the type will return it to the main table.',
+  'properties.propertyLinkNotConnectedTipuOwner':
+    'The link property is not attached to the owner type — values are edited here; attaching the property to the type will return them to the main table.',
+  'properties.typeLinkNotImeetPropertiesReestre':
+    'The link type has no property in the registry — the link appears as an out-of-type property; it can be deleted by the side display name.',
+  'properties.propertyGreaterNotConnectedTipuOwner':
+    'The property is no longer attached to the owner type — the value is kept for history only.',
+  'properties.propertyLinkNotConnectedTipuOwner2':
+    'The link property is not attached to the owner type — enter values here; attaching the property to the type will return them to the main table.',
+  'properties.propertyNotConnectedTipuOwnerEnter':
+    'The property is not attached to the owner type — enter the value here; attaching the property to the type will return it to the main table.',
   'properties.notSucceededDeleteValue': 'Failed to delete the value: %1',
   'properties.deleteValue': 'Delete value',
   'properties.uTypeNoProperties': 'The type has no properties.',
@@ -2410,7 +2782,8 @@ export const en = {
   'properties.title.openSistemnomObrabotchike': 'Open in the system handler',
   'properties.noNetwork': '(no network)',
   'properties.nerezolvleno': ' (unresolved)',
-  'properties.lastZhivoyRezolvOtkazalNetworkTarget': 'The last live resolution failed — the network or target was deleted. Click Refresh name in the main table.',
+  'properties.lastZhivoyRezolvOtkazalNetworkTarget':
+    'The last live resolution failed — the network or target was deleted. Click Refresh name in the main table.',
 
   // -- resourcePicker ----------------------------------------------------
   'resourcePicker.label.iconThoughts': 'Thought icons',
@@ -2440,9 +2813,12 @@ export const en = {
 
   // -- valueEditor -------------------------------------------------------
   'valueEditor.uprazdneno': 'deprecated',
-  'valueEditor.valuePublicationListStartEnterTitle': 'The value is a publication from the list: start typing a title and select a row',
-  'valueEditor.valueNotAddedSelectPublicationList': 'Value not added: select a publication from the list.',
-  'valueEditor.obnovlenieNameDostupnoOnlyPropertiesThoughts': 'Name refresh is available only for thought properties.',
+  'valueEditor.valuePublicationListStartEnterTitle':
+    'The value is a publication from the list: start typing a title and select a row',
+  'valueEditor.valueNotAddedSelectPublicationList':
+    'Value not added: select a publication from the list.',
+  'valueEditor.obnovlenieNameDostupnoOnlyPropertiesThoughts':
+    'Name refresh is available only for thought properties.',
   'valueEditor.snapshotyObnovleny': 'Snapshots updated.',
   'valueEditor.obnovlenoNerezolvleno': 'Updated %1 of %2; %3 unresolved.',
   'valueEditor.notSucceededObnovitName': 'Failed to refresh the name: %1',
@@ -2450,11 +2826,13 @@ export const en = {
   'valueEditor.label.deleteValues': 'Remove from value',
   'valueEditor.nerezolvleno': '%1 — %2 (unresolved)',
   'valueEditor.titleThoughtOtherNetwork': 'Thought title in another network…',
-  'valueEditor.valueThoughtListStartEnterTitle': 'The value is a thought from the list: start typing a title and select a row',
+  'valueEditor.valueThoughtListStartEnterTitle':
+    'The value is a thought from the list: start typing a title and select a row',
   'valueEditor.header.thoughtOtherNetworks': 'Thoughts from other networks',
   'valueEditor.valueNotAddedSelectThoughtList': 'Value not added: select a thought from the list.',
   'valueEditor.selectThoughtOtherNetwork': 'Select a thought from another network',
-  'valueEditor.thoughtOtherNetworkNotSelectedKross': 'No thought from another network is selected — a cross-network link to the same network is not allowed.',
+  'valueEditor.thoughtOtherNetworkNotSelectedKross':
+    'No thought from another network is selected — a cross-network link to the same network is not allowed.',
   'valueEditor.selectThoughtOtherNetwork2': 'Select a thought from another network…',
   'valueEditor.clearValue': 'Clear value',
   'valueEditor.moreOdnuThought': '+ another thought',
@@ -2471,29 +2849,53 @@ export const en = {
   'valueEditor.no': 'no',
   'valueEditor.label.deleteLinkThought': 'Unlink from the thought',
   'valueEditor.label.pomestitLinkTrash': 'Move link to basket',
-  'valueEditor.rebroVnetipovoyLinkDeleteLinkDostupno': '%1 — an out-of-type link edge; the link can be deleted from the context menu.',
-  'valueEditor.rebraThisTypeLinkNotRedaktiruyutsya': '%1 — edges of this link type are not edited via properties (the link type has no property in the registry).',
+  'valueEditor.rebroVnetipovoyLinkDeleteLinkDostupno':
+    '%1 — an out-of-type link edge; the link can be deleted from the context menu.',
+  'valueEditor.rebraThisTypeLinkNotRedaktiruyutsya':
+    '%1 — edges of this link type are not edited via properties (the link type has no property in the registry).',
   'valueEditor.title.selectCreateThought': 'Select or create thoughts',
   'valueEditor.notSucceededCreate': 'Failed to create “%1”: %2',
   'valueEditor.titleThoughtObyazatelno': 'Thought title… (required)',
   'valueEditor.titleThought': 'Thought title…',
 
   // -- wikiLink ----------------------------------------------------------
-  'wikiLink.notSucceededOpredelitParentNovoyThought': 'Failed to determine the parent for the new thought: %1',
+  'wikiLink.notSucceededOpredelitParentNovoyThought':
+    'Failed to determine the parent for the new thought: %1',
   'wikiLink.notSucceededObnovitLinkRef': 'Failed to update the link: %1',
-  'wikiLink.notSucceededFindThoughtPerevodaId': 'Failed to find the thought “%1” to convert to [[#<id>]].',
+  'wikiLink.notSucceededFindThoughtPerevodaId':
+    'Failed to find the thought “%1” to convert to [[#<id>]].',
   'wikiLink.obnovitFormatId': 'Update the format to [[#<id>]] (%1)',
-  'wikiLink.notSucceededOpredelitPoziciyuLinkRefDokumente': 'Failed to determine the link position in the document.',
+  'wikiLink.notSucceededOpredelitPoziciyuLinkRefDokumente':
+    'Failed to determine the link position in the document.',
   'wikiLink.label.openThought': 'Open thought',
   'wikiLink.firstOpenNetwork': 'Open a network first.',
   'wikiLink.pokazanyPervyeUtochniteName': 'The first %1 are shown, refine the name.',
   'wikiLink.foundNeskolkoThoughts': 'Several thoughts found: “%1”',
-  'wikiLink.networkUnavailableLinkRefThoughtOtherNetwork': 'Network unavailable: %1. A link to a thought in another network cannot be opened.',
+  'wikiLink.networkUnavailableLinkRefThoughtOtherNetwork':
+    'Network unavailable: %1. A link to a thought in another network cannot be opened.',
+  // Date chip menu (element c85ca40d) and date autocomplete (element f9da2100).
+  'wikiLink.dateMenu.openDay': 'Open day',
+  'wikiLink.dateMenu.changeDate': 'Change date…',
+  'wikiLink.dateMenu.moveTomorrow': 'Move to tomorrow',
+  'wikiLink.dateMenu.moveWeek': 'Move by a week',
+  'wikiLink.dateMenu.moveMonth': 'Move by a month',
+  'wikiLink.dateMenu.noSource': 'Could not determine the date source to edit.',
+  'wikiLink.dateMenu.stale': 'The record was changed in another window — refresh it and retry.',
+  'wikiLink.dateMenu.failed': 'Failed to change the date: %1',
+  'wikiLink.dateMenu.undated': 'The line has no dates to move.',
+  'wikiLink.dateMenu.notTask': 'The line is not a task — only the link can be moved.',
+  'wikiLink.dateSuggest.dates': 'Dates',
+  'wikiLink.dateSuggest.thoughts': 'Thoughts',
+  'wikiLink.dateSuggest.today': 'Today',
+  'wikiLink.dateSuggest.tomorrow': 'Tomorrow',
+  'wikiLink.dateSuggest.typed': 'Typed date',
+  'wikiLink.dateSuggest.formatHint': '%1 → ISO %2',
 
   // -- importExport ------------------------------------------------------
   'importExport.label.nameFile': 'File name',
   'importExport.vklyuchitTypesThoughtsLinks': 'Include thought and link types',
-  'importExport.vklyuchitAttachmentsFilesVnutriArchive': 'Include attachments (files inside the archive)',
+  'importExport.vklyuchitAttachmentsFilesVnutriArchive':
+    'Include attachments (files inside the archive)',
   'importExport.label.vklyuchitHronologicheskieKommentarii': 'Include chronological comments',
   'importExport.label.vklyuchitPodchinennyeThought': 'Include child thoughts',
   'importExport.glubinaPodchinennosti': 'Child depth (1..%1)',
@@ -2502,11 +2904,13 @@ export const en = {
   'importExport.title.exportEtnx': 'Export to .etnx',
   'importExport.label.eksportirovat': 'Export',
   'importExport.importirovatTypesThoughtsLinks': 'Import thought and link types',
-  'importExport.importirovatAttachmentsFilesVnutriArchive': 'Import attachments (files inside the archive)',
+  'importExport.importirovatAttachmentsFilesVnutriArchive':
+    'Import attachments (files inside the archive)',
   'importExport.label.importirovatHronologicheskieKommentarii': 'Import chronological comments',
   'importExport.label.fileArchive': 'Archive file',
   'importExport.chtoImportirovat': 'What to import',
-  'importExport.thoughtSovpadayuschimIdWillObnovlenySovpadeniyu': 'Thoughts with a matching id will be updated; matching by title will be reused (synonyms merged). Everything else will be created anew.',
+  'importExport.thoughtSovpadayuschimIdWillObnovlenySovpadeniyu':
+    'Thoughts with a matching id will be updated; matching by title will be reused (synonyms merged). Everything else will be created anew.',
   'importExport.title.importEtnx': 'Import from .etnx',
   'importExport.label.importirovat': 'Import',
 
@@ -2555,10 +2959,12 @@ export const en = {
   'entityPicker.createNovyy': 'Create new “%1”',
 
   // -- etnimg ------------------------------------------------------------
-  'etnimg.notSucceededOpenFileLinkRefVne': 'Failed to open the file: the link is outside the comment field — the attachment owner is unknown.',
+  'etnimg.notSucceededOpenFileLinkRefVne':
+    'Failed to open the file: the link is outside the comment field — the attachment owner is unknown.',
   'etnimg.notSucceededRazobratPathAttachment': 'Failed to parse the path in the attachment: %1',
   'etnimg.notSucceededOpenFileAttachments': 'Failed to open the attachment file: %1',
-  'etnimg.attachmentLinkRefNotFoundOwnerKommentariya': 'No attachment at this link was found for the comment owner.',
+  'etnimg.attachmentLinkRefNotFoundOwnerKommentariya':
+    'No attachment at this link was found for the comment owner.',
 
   // -- filter ------------------------------------------------------------
   'filter.label.contains': 'contains',
@@ -2586,6 +2992,9 @@ export const en = {
   'filter.attachments.hasAttachments': 'Has attachments',
   'filter.chronology.hasDnevnikovyeRecords': 'Has diary entries',
   'filter.comment.hasKommentariy': 'Has a comment',
+  'filter.tasks.hasTasks': 'Has tasks',
+  'filter.reminders.hasReminders': 'Has a reminder',
+  'filter.reminder_at.dateReminder': 'Reminder date',
   'filter.active.active': 'Active status',
   'filter.trashed.markedDelete': 'Marked for deletion',
   'filter.keywords.findSlova': 'Find words',
@@ -2600,6 +3009,7 @@ export const en = {
   'filter.record_body.textRecords': 'Entry text',
   'filter.record_author.avtorRecords': 'Entry author',
   'filter.record_editor.editorRecords': 'Entry editor',
+  'filter.record_tasks.hasTasks': 'Has tasks',
   'filter.occurred_at.timeEvents': 'Event time',
   'filter.action.typeActions': 'Action type',
   'filter.entity_type.vidSuschnosti': 'Entity kind',
@@ -2612,15 +3022,22 @@ export const en = {
   'filter.owner.owners': 'Owners',
   'filter.size.razmer': 'Size',
   'filter.valueNotTrebuetsya': 'value is not required',
-  'filter.groupNotObyazanaImetRovnoOdnogo': 'the “not” group must have exactly one child (currently %1)',
+  'filter.groupNotObyazanaImetRovnoOdnogo':
+    'the “not” group must have exactly one child (currently %1)',
   'filter.operandUnavailableProfile': 'operand “%1” is unavailable in profile “%2”',
-  'filter.operatorUnavailableOperandaProfile': 'operator “%1” is unavailable for operand “%2” in profile “%3”',
+  'filter.operatorUnavailableOperandaProfile':
+    'operator “%1” is unavailable for operand “%2” in profile “%3”',
   'filter.viewNotSootvetstvuetProfilyu': 'The view does not match profile “%1”: %2',
-  'filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy': 'the saved view definition cannot be read (unknown operand or operator) — conditions are not shown',
-  'filter.sohranennoeOpredelenieViewPovrezhdenoNotChitaetsya': 'the saved view definition is corrupted and cannot be read',
-  'filter.conditionPropertyNotRaspoznanoOtbrosheno': 'the property condition was not recognized and was dropped',
-  'filter.conditionPropertyOtbroshenoPropertiesGreaterNo': 'the condition on property “%1” was dropped: the property no longer exists in the network',
-  'filter.sortProsmotruEditorNotVyrazhaetsyaKey': 'the “by view” sort cannot be expressed in the editor — the key is not shown',
+  'filter.sohranennoeOpredelenieViewNotChitaetsyaNeizvestnyy':
+    'the saved view definition cannot be read (unknown operand or operator) — conditions are not shown',
+  'filter.sohranennoeOpredelenieViewPovrezhdenoNotChitaetsya':
+    'the saved view definition is corrupted and cannot be read',
+  'filter.conditionPropertyNotRaspoznanoOtbrosheno':
+    'the property condition was not recognized and was dropped',
+  'filter.conditionPropertyOtbroshenoPropertiesGreaterNo':
+    'the condition on property “%1” was dropped: the property no longer exists in the network',
+  'filter.sortProsmotruEditorNotVyrazhaetsyaKey':
+    'the “by view” sort cannot be expressed in the editor — the key is not shown',
   'filter.not_contains.notContains': 'does not contain',
   'filter.gte.greaterEqual': 'greater than or equal',
   'filter.lte.lessEqual': 'less than or equal',
@@ -2638,10 +3055,14 @@ export const en = {
   'filter.not_has.notImeetProperty': 'does not have property',
 
   // -- filterDiagnostics -------------------------------------------------
-  'filterDiagnostics.groupPustaDobavteConditionGroup': 'the group is empty — add a condition or a group',
-  'filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno': 'conditions require both “is set” and “is not set” — no thought will match',
-  'filterDiagnostics.nizhnyayaGranicaDiapazonaNotLessVerhney': 'the lower bound is not less than the upper bound — no thought will match',
-  'filterDiagnostics.editZamenitSohranennoeOpredelenie': '%1. Editing will replace the saved definition.',
+  'filterDiagnostics.groupPustaDobavteConditionGroup':
+    'the group is empty — add a condition or a group',
+  'filterDiagnostics.conditionsTrebuyutOdnovremennogoZapolnenoNotZapolneno':
+    'conditions require both “is set” and “is not set” — no thought will match',
+  'filterDiagnostics.nizhnyayaGranicaDiapazonaNotLessVerhney':
+    'the lower bound is not less than the upper bound — no thought will match',
+  'filterDiagnostics.editZamenitSohranennoeOpredelenie':
+    '%1. Editing will replace the saved definition.',
   'filterDiagnostics.value': 'value “%1”',
   'filterDiagnostics.deleted': '%1 deleted',
   /**
@@ -2656,8 +3077,10 @@ export const en = {
   'filterDiagnostics.server.unknown': 'the condition is no longer applicable',
   'filterDiagnostics.server.tokenUnknown': 'token “%1” could not be resolved',
   'filterDiagnostics.server.tokenTimeContext': 'token “%1” requires a thought context',
-  'filterDiagnostics.server.tokenIncompatible': 'the operation is incompatible with the condition value type',
-  'filterDiagnostics.server.tokenUnknownProperty': 'the property was not found in the network registry',
+  'filterDiagnostics.server.tokenIncompatible':
+    'the operation is incompatible with the condition value type',
+  'filterDiagnostics.server.tokenUnknownProperty':
+    'the property was not found in the network registry',
   'filterDiagnostics.server.tokenEmptyValue': 'the value cannot be parsed as a date',
   'filterDiagnostics.server.tokenUnresolved': 'condition “%1” could not be resolved',
 
@@ -2743,18 +3166,21 @@ export const en = {
   // -- filterSubquery ----------------------------------------------------
   'filterSubquery.withoutConditions': 'no conditions',
   'filterSubquery.not': 'NOT (%1)',
-  'filterSubquery.clickToOpenSelectionModalnomLayer': '%1\n\nclick to open the selection in a modal layer',
+  'filterSubquery.clickToOpenSelectionModalnomLayer':
+    '%1\n\nclick to open the selection in a modal layer',
   'filterSubquery.title.removeSelectionValues': 'Remove the selection from the value',
   'filterSubquery.selection': 'Selection',
   'filterSubquery.label.gotovo': 'Done',
   'filterSubquery.changePropertyRows': 'Change the row property?',
-  'filterSubquery.inRowSobranaPodSelectionSmene': 'The row contains a sub-selection — it will be reset when the property changes.',
+  'filterSubquery.inRowSobranaPodSelectionSmene':
+    'The row contains a sub-selection — it will be reset when the property changes.',
   'filterSubquery.label.list': 'List',
   'filterSubquery.title.perechislitValuesRow': 'List the values in the row',
   'filterSubquery.sobratPodSelectionModalnomLayer': 'Build a sub-selection in a modal layer',
   'filterSubquery.ariaLabel.vidValuesConditions': 'Condition value kind',
   'filterSubquery.changeVidValues': 'Change the value kind?',
-  'filterSubquery.inRowSobranaPodSelectionPerehode': 'The row contains a sub-selection — it will be reset when switching to the list.',
+  'filterSubquery.inRowSobranaPodSelectionPerehode':
+    'The row contains a sub-selection — it will be reset when switching to the list.',
 
   // -- filterTokens ------------------------------------------------------
   'filterTokens.thoughtKontekstView': 'view context thought',
@@ -2806,8 +3232,10 @@ export const en = {
   'filterTree.kornevuyuGroupPerenositCannot': 'The root group cannot be moved',
   'filterTree.ishodnoeConditionNotFound': 'Source condition not found',
   'filterTree.groupPriemnikNotFound': 'Target group not found',
-  'filterTree.groupCannotVlozhitSamuSebyaIts': 'A group cannot be nested into itself or its descendant',
-  'filterTree.fromGroupsNotCannotRemoveEdinstvennoe': 'The only condition cannot be removed from a NOT group',
+  'filterTree.groupCannotVlozhitSamuSebyaIts':
+    'A group cannot be nested into itself or its descendant',
+  'filterTree.fromGroupsNotCannotRemoveEdinstvennoe':
+    'The only condition cannot be removed from a NOT group',
   'filterTree.inGroupNotCanVlozhitOnly': 'Only one condition can be nested into a NOT group',
   'filterTree.moveNevozmozhen': 'Move is not possible',
   'filterTree.copyImpossible': 'Copy is not possible',
@@ -2842,7 +3270,8 @@ export const en = {
   'filterValue.type.type': 'type',
   'filterValue.string.line': 'string',
   'filterValue.date.date': 'date',
-  'filterValue.thisConditionNotPrinimaetItsValue': 'This condition does not accept %1: its value has a different kind',
+  'filterValue.thisConditionNotPrinimaetItsValue':
+    'This condition does not accept %1: its value has a different kind',
   'filterValue.parents': 'parents',
   'filterValue.children': 'children',
   'filterValue.attachments': 'attachments',
@@ -2872,7 +3301,8 @@ export const en = {
 
   // -- hoverPreview ------------------------------------------------------
   'hoverPreview.with': 'From %1 · To %2',
-  'hoverPreview.networkUnavailableKommentariyNotRead': 'Network unavailable — the comment cannot be read.',
+  'hoverPreview.networkUnavailableKommentariyNotRead':
+    'Network unavailable — the comment cannot be read.',
   'hoverPreview.thoughtUnavailableNetwork': 'The thought is unavailable in this network.',
   'hoverPreview.notSucceededReadKommentariiNetwork': 'Failed to read comments of this network.',
 
@@ -2882,7 +3312,8 @@ export const en = {
   // -- keymap ------------------------------------------------------------
 
   // -- layerResync -------------------------------------------------------
-  'layerResync.notSucceededFindKornevuyuThoughtNetwork': 'Failed to find the root thought of this network.',
+  'layerResync.notSucceededFindKornevuyuThoughtNetwork':
+    'Failed to find the root thought of this network.',
 
   // -- lockGuard ---------------------------------------------------------
   'lockGuard.notSucceededPostavitZahvat': 'Failed to set the lock: %1',
@@ -2943,6 +3374,17 @@ export const en = {
   'calendar.ariaLabel.year': 'Year',
   'calendar.title.month': 'Month',
   'calendar.week': 'Week %1: %2 — %3',
+  'calendar.marker.records': 'Records',
+  'calendar.marker.plans': 'Tasks and reminders',
+  'calendar.marker.facts': 'Date facts and date links',
+  'calendar.marker.overdue': 'Overdue tasks',
+  /** Day content popup (refinement 2026-11-19, item 7). */
+  'calendar.dayInfo.title': 'Day content %1',
+  'calendar.dayInfo.records': 'Entries',
+  'calendar.dayInfo.tasks': 'Tasks',
+  'calendar.dayInfo.reminders': 'Reminders',
+  'calendar.dayInfo.facts': 'Dates and facts',
+  'calendar.dayInfo.overdue': 'Overdue',
 
   // -- periodEditor ------------------------------------------------------
   'periodEditor.label.today1dZavtra': '$today+1d — tomorrow',
@@ -2963,11 +3405,14 @@ export const en = {
   'periodEditor.label.today7dWeekBack': '$today-7d — a week ago',
   'periodEditor.label.today30dViaMonth': '$today+30d — in a month',
   'periodEditor.label.today30dMonthBack': '$today-30d — a month ago',
-  'periodEditor.notTokenPeriodDostupnyTodayNow': '“%1” is not a period token: $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd and arithmetic ±Nd/±Nw/±Nmo/±Ny are available (legacy dotted spellings are accepted; $thought.* tokens require a thought context).',
+  'periodEditor.notTokenPeriodDostupnyTodayNow':
+    '“%1” is not a period token: $today/$now, $weekStart/$weekEnd, $monthStart/$monthEnd, $yearStart/$yearEnd and arithmetic ±Nd/±Nw/±Nmo/±Ny are available (legacy dotted spellings are accepted; $thought.* tokens require a thought context).',
   'periodEditor.by': 'to %1',
   'periodEditor.with': 'from %1',
-  'periodEditor.tokensDatesFieldOtklyuchenyEnterDate': 'Date tokens are disabled in this field — specify a date.',
-  'periodEditor.ozhidaetsyaGgggMmDdPolnyyIso': '“%1” — expected YYYY-MM-DD, a full ISO instant or a token ($today/$now, week/month/year boundaries ± arithmetic).',
+  'periodEditor.tokensDatesFieldOtklyuchenyEnterDate':
+    'Date tokens are disabled in this field — specify a date.',
+  'periodEditor.ozhidaetsyaGgggMmDdPolnyyIso':
+    '“%1” — expected YYYY-MM-DD, a full ISO instant or a token ($today/$now, week/month/year boundaries ± arithmetic).',
   'periodEditor.periodNotZadan': 'Period not set',
   'periodEditor.label.dateTime': 'Date and time',
   'periodEditor.label.diapazon': 'Range',
@@ -3007,8 +3452,10 @@ export const en = {
   'propertyList.unasledovano': 'inherited',
   'propertyList.connected': 'attached',
   'propertyList.link': 'link (%1 - %2)',
-  'propertyList.propertyAlreadyNasleduetsyaThisTipomPredka': 'The property is already inherited by this type from an ancestor',
-  'propertyList.thisNameStoronyPropertiesLinkAlready': 'This link-property side name is already attached — the other (reverse) name can be attached.',
+  'propertyList.propertyAlreadyNasleduetsyaThisTipomPredka':
+    'The property is already inherited by this type from an ancestor',
+  'propertyList.thisNameStoronyPropertiesLinkAlready':
+    'This link-property side name is already attached — the other (reverse) name can be attached.',
   'propertyList.propertyAlreadyConnectedEtomuTipu': 'The property is already attached to this type',
 
   // -- events ------------------------------------------------------------
@@ -3076,6 +3523,7 @@ export const en = {
   'events.publicationDeleted': 'publication deleted',
   'events.changedShelf': 'shelf changed',
   'events.shelfDeleted': 'shelf deleted',
+  'events.reminderChanged': 'reminder changed',
   'events.incomingLink': 'Incoming links',
   'events.outgoingLink': 'Outgoing links',
   'events.copy': '%1 (copy)',
@@ -3104,7 +3552,8 @@ export const en = {
   'suggest.poslednieValues': 'Recent values',
 
   // -- thoughtCloud ------------------------------------------------------
-  'thoughtCloud.thoughtNahoditsyaTrashClickDeleteRestore': 'The thought is in the basket. Click to delete/restore',
+  'thoughtCloud.thoughtNahoditsyaTrashClickDeleteRestore':
+    'The thought is in the basket. Click to delete/restore',
   'thoughtCloud.thoughtOtherNetwork': 'Thought from another network: %1',
   'thoughtCloud.removeValues': 'Remove from value',
 
@@ -3117,7 +3566,8 @@ export const en = {
 
   // -- pinned ------------------------------------------------------------
   'pinned.title.zakreplennyeThought': 'Pinned thoughts',
-  'pinned.pinCanNotMoreThoughtsFirst': 'No more than %1 thoughts can be pinned. First unpin extra thoughts from the pinned panel.',
+  'pinned.pinCanNotMoreThoughtsFirst':
+    'No more than %1 thoughts can be pinned. First unpin extra thoughts from the pinned panel.',
   'pinned.notSucceededEditZakreplennye': 'Failed to change pinned items: %1',
   'pinned.zakrepiteThought': 'pin a thought',
   'pinned.zakreplennyeSkryty': 'pinned hidden',
@@ -3125,11 +3575,12 @@ export const en = {
 
   // -- about -------------------------------------------------------------
   'about.inZaycevAkaNerkuda': '© 2026 V. Zaytsev (aka Nerkuda)',
-  'about.label.novoeVersion': 'What\'s new in the version',
+  'about.label.novoeVersion': "What's new in the version",
   'about.label.sobrannyeRelizy': 'Built releases',
   'about.label.textLicenzii': 'License text',
   'about.version': 'Version …',
-  'about.theEndlessThoughtNetworkSelfHosted': 'The Endless Thought Network — self-hosted thought graph',
+  'about.theEndlessThoughtNetworkSelfHosted':
+    'The Endless Thought Network — self-hosted thought graph',
   'about.licenziya': '%1 · License %2',
   'about.title.oProgramme': 'About',
   'about.version2': 'Version %1',
@@ -3139,10 +3590,13 @@ export const en = {
 
   // -- activity ----------------------------------------------------------
   'activity.label.views': 'Views…',
-  'activity.conditionPrezhnegoViewNotVyrazhaetsyaProfilem': 'A condition of the previous view cannot be expressed by the “Events” profile and was dropped: %1.',
-  'activity.forThisTypeLinkMoreNo': 'This link type has no property in the registry yet — editing is not possible.',
+  'activity.conditionPrezhnegoViewNotVyrazhaetsyaProfilem':
+    'A condition of the previous view cannot be expressed by the “Events” profile and was dropped: %1.',
+  'activity.forThisTypeLinkMoreNo':
+    'This link type has no property in the registry yet — editing is not possible.',
   'activity.openPropertyLink': 'Open link property',
-  'activity.suschnostDeletedUnavailableSnapshotLog': 'The entity is deleted or unavailable. Snapshot from the log:',
+  'activity.suschnostDeletedUnavailableSnapshotLog':
+    'The entity is deleted or unavailable. Snapshot from the log:',
   'activity.name.action': 'Action',
   'activity.name.title': 'Title',
   'activity.name.kogda': 'When',
@@ -3156,8 +3610,10 @@ export const en = {
   'activity.buttonLabel.obrezat': 'Truncate',
   'activity.allRecordsLogDatesWillZatronuty': 'All log records up to this date will be affected.',
   'activity.label.dateVklyuchitelno': 'Date (inclusive)',
-  'activity.operationNeobratimaRecordsWillDeletedWithout': 'The operation is irreversible — records will be deleted without the possibility of recovery.',
-  'activity.allRecordsLogAktivnostiVybrannoyDates': '%1 all activity log records up to the selected date? The action is irreversible.',
+  'activity.operationNeobratimaRecordsWillDeletedWithout':
+    'The operation is irreversible — records will be deleted without the possibility of recovery.',
+  'activity.allRecordsLogAktivnostiVybrannoyDates':
+    '%1 all activity log records up to the selected date? The action is irreversible.',
   'activity.label.typeThought': 'thought type',
   'activity.label.typeLink': 'link type',
   'activity.label.property': 'property',
@@ -3173,7 +3629,8 @@ export const en = {
   'chrono.record': 'Entry',
   'chrono.header.naydennyeRecords': 'Matching entries',
   'chrono.title.searchZapisyam': 'Search entries',
-  'chrono.slovaViaProbelAllObyazatelnyLyubye': 'Space-separated words, all required; * matches any characters; -word excludes. The condition searches an entry in two ways (OR): by the entry body and title, and by target thoughts in the selected areas. The “Matching entries” hint opens an entry by navigating (period from the entry, scrolling and highlighting).',
+  'chrono.slovaViaProbelAllObyazatelnyLyubye':
+    'Space-separated words, all required; * matches any characters; -word excludes. The condition searches an entry in two ways (OR): by the entry body and title, and by target thoughts in the selected areas. The “Matching entries” hint opens an entry by navigating (period from the entry, scrolling and highlighting).',
   'chrono.label.firstStarye': 'Oldest first',
   'chrono.label.firstNovye': 'Newest first',
   'chrono.ariaLabel.napravlenieSort': 'Sort direction',
@@ -3187,21 +3644,28 @@ export const en = {
   'layerMerge.base': 'Base',
   'layerMerge.thought': 'thought “%1”',
   'layerMerge.vybrannyhThoughtsIzmenennyhLayer': '%1 selected thoughts changed in the layer',
-  'layerMerge.editsLayerRazreshayutsyaOtnosheniyu': 'Edits of %1 in layer “%2” are resolved against “%3”.',
-  'layerMerge.notSucceededReadOtlichiyaThoughtVariant': 'Failed to read thought differences — the “Merge changes” option is unavailable.',
+  'layerMerge.editsLayerRazreshayutsyaOtnosheniyu':
+    'Edits of %1 in layer “%2” are resolved against “%3”.',
+  'layerMerge.notSucceededReadOtlichiyaThoughtVariant':
+    'Failed to read thought differences — the “Merge changes” option is unavailable.',
   'layerMerge.otkazatsyaChanges': 'Discard changes',
-  'layerMerge.allEditsLayerWillDeletedVernetsya': 'All edits in the layer will be deleted — version “%1” will return. This cannot be undone.',
+  'layerMerge.allEditsLayerWillDeletedVernetsya':
+    'All edits in the layer will be deleted — version “%1” will return. This cannot be undone.',
   'layerMerge.polnostyuPerepisatThoughtBase': 'Overwrite the thought in Base completely',
-  'layerMerge.versionLayerPerenositsyaCelikomChangesThis': 'The layer version is carried over entirely; changes of “%1” to these thoughts are overwritten.',
+  'layerMerge.versionLayerPerenositsyaCelikomChangesThis':
+    'The layer version is carried over entirely; changes of “%1” to these thoughts are overwritten.',
   'layerMerge.mergeChanges': 'Merge changes',
-  'layerMerge.postoyannyyKommentariyObedinyaetsyaBaseMarkeryKonflikto': 'The permanent comment is merged with Base (git-style conflict markers); links, properties and synonyms are taken from the layer.',
+  'layerMerge.postoyannyyKommentariyObedinyaetsyaBaseMarkeryKonflikto':
+    'The permanent comment is merged with Base (git-style conflict markers); links, properties and synonyms are taken from the layer.',
   'layerMerge.mergeThought': 'Merge the thought into “%1”?',
   'layerMerge.mergeVybrannyeThought': 'Merge the selected thoughts into “%1”?',
   'layerMerge.label.vypolnit': 'Execute',
   'layerMerge.otkazatsyaChanges2': 'Discard changes?',
-  'layerMerge.allEditsLayerWillDeletedBezvozvratno': 'All edits of %1 in the layer will be deleted irrevocably. Base will not change.',
+  'layerMerge.allEditsLayerWillDeletedBezvozvratno':
+    'All edits of %1 in the layer will be deleted irrevocably. Base will not change.',
   'layerMerge.changesDeletedLayer': 'Changes of %1 deleted from the layer.',
-  'layerMerge.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov': 'Thoughts merged: %1. The comment was merged, conflict blocks: %2.',
+  'layerMerge.mergedThoughtsKommentariyObedinenKonfliktnyhBlokov':
+    'Thoughts merged: %1. The comment was merged, conflict blocks: %2.',
   'layerMerge.merged': 'Merged into “%1”: %2.',
   'layerMerge.notSucceededRazreshitChanges': 'Failed to resolve changes',
 
@@ -3212,36 +3676,45 @@ export const en = {
   'layers.light': 'light',
   'layers.polosaFocus': 'Focus strip',
   'layers.fonHolsta': 'Canvas background',
-  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey': 'Colors for the %1 theme; the second variant is computed by inverting lightness.',
+  'layers.cvetaTemyVtoroyVariantVychislyaetsyaInversiey':
+    'Colors for the %1 theme; the second variant is fitted to the second theme backdrop.',
   'layers.notSucceededSaveLayer': 'Failed to save the layer',
   'layers.propertiesBase': 'Base properties',
   'layers.propertiesLayer2': 'Properties of layer “%1”',
   'layers.placeholder.naprimerEditsAvgusta': 'For example: August edits',
-  'layers.zachemLayerToSleduyuschiyAgentPonyal': 'Why this layer exists — so the next person (or agent) understands without asking',
+  'layers.zachemLayerToSleduyuschiyAgentPonyal':
+    'Why this layer exists — so the next person (or agent) understands without asking',
   'layers.placeholder.vetkaGitOptional': 'git branch (optional)',
-  'layers.editsOstanutsyaLayerBaseNotIzmenitsya': 'Edits will remain in the layer. Base will not change until you merge the layer.',
-  'layers.novyyLayerPoluchitSobstvennyeCvetaMap': 'The new layer will get its own map colors (focus strip and background) so it is visible; they can be changed in “Layer properties”.',
+  'layers.editsOstanutsyaLayerBaseNotIzmenitsya':
+    'Edits will remain in the layer. Base will not change until you merge the layer.',
+  'layers.novyyLayerPoluchitSobstvennyeCvetaMap':
+    'The new layer will get its own map colors (focus strip and background) so it is visible; they can be changed in “Layer properties”.',
   'layers.label.vetkaGit': 'Git branch',
   'layers.notSucceededCreateLayer': 'Failed to create the layer',
   'layers.title.novyyLayerChanges': 'New change layer',
-  'layers.layerWillDeletedVmesteDochernimiLayers': 'The layer will be deleted along with %1 child layers: %2.',
-  'layers.deleteLayerNotMenyaetBaseTenevye': 'Deleting a layer does not change Base: the layer\'s shadow edits will be lost, everything else stays as is.',
+  'layers.layerWillDeletedVmesteDochernimiLayers':
+    'The layer will be deleted along with %1 child layers: %2.',
+  'layers.deleteLayerNotMenyaetBaseTenevye':
+    "Deleting a layer does not change Base: the layer's shadow edits will be lost, everything else stays as is.",
   'layers.deleteLayer': 'Delete layer “%1”?',
   'layers.label.deleteLayer': 'Delete layer',
   'layers.notSucceededDeleteLayer': 'Failed to delete the layer',
-  'layers.allEditsLayerWillMovedKonflikte': 'All layer edits will be moved to “%1”. On a conflict (a row changed in Base after the layer was created) the merge will not run — you will see a list of differences.',
+  'layers.allEditsLayerWillMovedKonflikte':
+    'All layer edits will be moved to “%1”. On a conflict (a row changed in Base after the layer was created) the merge will not run — you will see a list of differences.',
   'layers.merge': 'Merge “%1” into “%2”?',
   'layers.label.merge': 'Merge',
   'layers.mergeRejected': 'Merge rejected',
   'layers.movedRows': 'Rows moved:',
   'layers.orderLinksChangedThoughtsSvernuto': 'Link order changed for %1 thoughts (collapsed).',
   'layers.linkIscheznuvshimKoncomPropuscheny': 'Links with a vanished end were skipped: %1.',
-  'layers.beforeSliyaniemCreatedRezervnyyLayerRuchnogo': 'A reserve layer was created before the merge for manual rollback.',
+  'layers.beforeSliyaniemCreatedRezervnyyLayerRuchnogo':
+    'A reserve layer was created before the merge for manual rollback.',
   'layers.rezervnyyLayerNotNeeded': 'The reserve layer was not needed.',
   'layers.title.layerMerged': 'Layer merged',
   'layers.loadingListOtlichiy': 'Loading the list of differences…',
   'layers.title.otlichiyNo': 'No differences',
-  'layers.layerNotMenyaetBaseSravnivatNechego': 'The layer does not change Base — there is nothing to compare.',
+  'layers.layerNotMenyaetBaseSravnivatNechego':
+    'The layer does not change Base — there is nothing to compare.',
   'layers.notSucceededLoadOtlichiya': 'Failed to load differences: %1',
   'layers.notSucceededDogruzitOtlichiya': 'Failed to load more differences: %1',
   'layers.label.povtorit': 'Retry',
@@ -3280,36 +3753,48 @@ export const en = {
   'networks.title.createMysleset': 'Create thought network',
 
   // -- onboarding --------------------------------------------------------
-  'onboarding.selfHostedGraphThoughtsPodklyuchitesSvoemu': 'Self-hosted thought graph. Connect to your ETN server to get started.',
+  'onboarding.selfHostedGraphThoughtsPodklyuchitesSvoemu':
+    'Self-hosted thought graph. Connect to your ETN server to get started.',
   'onboarding.sohranennyeServery': 'Saved servers',
   'onboarding.novoePodklyuchenie': 'New connection',
   'onboarding.moyServerOptional': 'My server (optional)',
   'onboarding.label.adresServer': 'Server address',
   'onboarding.label.podklyuchitsya': 'Connect',
-  'onboarding.deleteServerAktivnoePodklyuchenieWillRazorvano': 'Delete server “%1” (%2)? The active connection will be terminated, and local data (tabs, drafts, history) will be deleted. This action is irreversible.',
-  'onboarding.deleteServerLokalnyeDannyeThisProfilya': 'Delete server “%1” (%2)? Local data of this profile will be deleted. This action is irreversible.',
+  'onboarding.deleteServerAktivnoePodklyuchenieWillRazorvano':
+    'Delete server “%1” (%2)? The active connection will be terminated, and local data (tabs, drafts, history) will be deleted. This action is irreversible.',
+  'onboarding.deleteServerLokalnyeDannyeThisProfilya':
+    'Delete server “%1” (%2)? Local data of this profile will be deleted. This action is irreversible.',
   'onboarding.deleteSohranennyyServer': 'Delete saved server',
-  'onboarding.enterAdresServerNaprimerHttpLocalhost': 'Enter the server address, for example http://localhost:3000',
+  'onboarding.enterAdresServerNaprimerHttpLocalhost':
+    'Enter the server address, for example http://localhost:3000',
   'onboarding.enterApiKey': 'Enter the API key.',
 
   // -- propertyManager ---------------------------------------------------
   'propertyManager.connected': 'attached to %1 %2',
   'propertyManager.zapolneno': 'set in %1 %2',
   'propertyManager.deleteProperty': 'Delete property',
-  'propertyManager.propertyCannotDeleteFirstOtklyuchiteIts': 'Property “%1” cannot be deleted: %2. First detach it from all types and clear values in the “Out-of-type properties” group.',
-  'propertyManager.deletePropertyLink2etoActionIrreversible': 'Delete link property %1? %2This action is irreversible.',
-  'propertyManager.deletePropertyThisActionIrreversible': 'Delete property “%1”? This action is irreversible.',
-  'propertyManager.deletedStrukturnymiParentsChildren': 'Deleted. %1 %2 %3 structural “Родители/Потомки”.',
+  'propertyManager.propertyCannotDeleteFirstOtklyuchiteIts':
+    'Property “%1” cannot be deleted: %2. First detach it from all types and clear values in the “Out-of-type properties” group.',
+  'propertyManager.deletePropertyLink2etoActionIrreversible':
+    'Delete link property %1? %2This action is irreversible.',
+  'propertyManager.deletePropertyThisActionIrreversible':
+    'Delete property “%1”? This action is irreversible.',
+  'propertyManager.deletedStrukturnymiParentsChildren':
+    'Deleted. %1 %2 %3 structural “Родители/Потомки”.',
   'propertyManager.propertyDeleted': 'Property deleted.',
   'propertyManager.valueDefaultAllTypes': 'Default value for all types',
-  'propertyManager.valueDefaultIstochnikovLyubyhTypesCan': 'Default value for sources of any types. It can be overridden by values in the table rows above',
-  'propertyManager.valueDefaultNaznacheniyLyubyhTypesCan': 'Default value for targets of any types. It can be overridden by values in the table rows above',
-  'propertyManager.descriptionPropertiesOnoZnachitKakomFormate': 'Property description: what it means and what format the value has (a hint in the thought editor and for AI agents)',
+  'propertyManager.valueDefaultIstochnikovLyubyhTypesCan':
+    'Default value for sources of any types. It can be overridden by values in the table rows above',
+  'propertyManager.valueDefaultNaznacheniyLyubyhTypesCan':
+    'Default value for targets of any types. It can be overridden by values in the table rows above',
+  'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
+    'Property description: what it means and what format the value has (a hint in the thought editor and for AI agents)',
   'propertyManager.propertyTakimNameAlreadyHas': 'A property with this name already exists.',
   'propertyManager.label.vidValues': 'Value kind',
   'propertyManager.label.description': 'Description',
   'propertyManager.risovatLinkMapDefault': 'draw the link on the map by default',
-  'propertyManager.zapolnennayaLinkRefBlokiruetDeleteTargets': 'a filled link blocks deletion of the target',
+  'propertyManager.zapolnennayaLinkRefBlokiruetDeleteTargets':
+    'a filled link blocks deletion of the target',
   'propertyManager.skalyarnoeProperty': 'Scalar property',
   'propertyManager.titlePropertiesObyazatelno': 'Property title (required)',
   'propertyManager.label.nameProperties': 'Property name',
@@ -3326,22 +3811,27 @@ export const en = {
   'propertyManager.typesNaznacheniy': 'Target types',
   'propertyManager.typesThoughts': 'Thought types',
   'propertyManager.label.addType': 'Add type',
-  'propertyManager.addPrivyazkuPropertiesTipuThought': 'Add a property attachment to a thought type',
+  'propertyManager.addPrivyazkuPropertiesTipuThought':
+    'Add a property attachment to a thought type',
   'propertyManager.obyazatelnoe': 'Required',
   'propertyManager.noPrivyazokClickAddType': 'No attachments. Click Add type.',
   'propertyManager.title.otmetitAll': 'Check all',
   'propertyManager.metadataPoyavyatsyaAfterSave': 'Metadata will appear after saving.',
-  'propertyManager.changeKategoriyuSkalyarLinkCannotValues': 'The category (scalar ↔ link) cannot be changed: link values live as edges, not in the values table.',
+  'propertyManager.changeKategoriyuSkalyarLinkCannotValues':
+    'The category (scalar ↔ link) cannot be changed: link values live as edges, not in the values table.',
   'propertyManager.enterNamesObeihStoron': 'Specify names for both sides.',
   'propertyManager.titlePropertiesObyazatelno2': 'The property name is required.',
   'propertyManager.changeTypeValues': 'Change value type',
-  'propertyManager.changeTypeValuesPropertiesValuesAll': 'Change the value type of property “%1”? Values in all elements will be converted to the new type; incompatible ones will be cleared.',
+  'propertyManager.changeTypeValuesPropertiesValuesAll':
+    'Change the value type of property “%1”? Values in all elements will be converted to the new type; incompatible ones will be cleared.',
   'propertyManager.zhditeVypolnyaetsyaObrabotkaValues': 'Wait: values are being processed…',
-  'propertyManager.obrabotkaVypolnenaPreobrazovanoDeleted': 'Processing completed: converted %1, deleted %2.',
+  'propertyManager.obrabotkaVypolnenaPreobrazovanoDeleted':
+    'Processing completed: converted %1, deleted %2.',
   'propertyManager.obrabotkaVypolnena': 'Processing completed.',
   'propertyManager.novoeProperty': 'New property',
   'propertyManager.property': 'Property — “%1”',
-  'propertyManager.emptySozdaniiThoughtIspolzuetsyaObscheeValue': 'Empty — when a thought is created, the shared value of the attachment side is used.',
+  'propertyManager.emptySozdaniiThoughtIspolzuetsyaObscheeValue':
+    'Empty — when a thought is created, the shared value of the attachment side is used.',
   'propertyManager.variantyValuesOdnomuRow': 'Value options — one per line',
   'propertyManager.label.vybiratList': 'choose from list',
   'propertyManager.label.neskolkoValues': 'multiple values',
@@ -3355,14 +3845,17 @@ export const en = {
   'propertyManager.propertyNiChemuNotConnected': 'The property is not attached to anything.',
   'propertyManager.title.openType': 'Open type',
   'propertyManager.vsegoValuesTypeVneType': 'Total values in the type: %1. Out of type: %2.',
-  'propertyManager.forThisTypeLinkMoreNo': 'This link type has no property in the registry yet. A link type without a property is useless — create a property via “Add”.',
-  'propertyManager.stanutStrukturnymiParentsChildrenPoyavyatsyaIerarhii': '%1 %2 become structural “Родители/Потомки” and will appear in the thought hierarchy. ',
+  'propertyManager.forThisTypeLinkMoreNo':
+    'This link type has no property in the registry yet. A link type without a property is useless — create a property via “Add”.',
+  'propertyManager.stanutStrukturnymiParentsChildrenPoyavyatsyaIerarhii':
+    '%1 %2 become structural “Родители/Потомки” and will appear in the thought hierarchy. ',
   'propertyManager.stalo': 'became',
   'propertyManager.stali': 'became',
 
   // -- settingsLogs ------------------------------------------------------
   'settingsLogs.client': 'Client',
-  'settingsLogs.fileLogClientDiagnosticsToggleApply': 'Client file log for diagnostics. The toggle applies immediately; ERROR records are always written.',
+  'settingsLogs.fileLogClientDiagnosticsToggleApply':
+    'Client file log for diagnostics. The toggle applies immediately; ERROR records are always written.',
   'settingsLogs.label.loggingClient': 'Client logging',
   'settingsLogs.loggingClientEnabled': 'Client logging enabled.',
   'settingsLogs.loggingClientDisabled': 'Client logging disabled.',
@@ -3370,11 +3863,15 @@ export const en = {
   'settingsLogs.deleteAllFilesLogClient': 'Delete all client log files',
   'settingsLogs.currentFileLog': 'Current log file:',
   'settingsLogs.deleteLogsClient': 'Delete client logs?',
-  'settingsLogs.allFilesLogClientWillDeleted': 'All client log files will be deleted, and the current daily file will be cleared. This action is irreversible.',
-  'settingsLogs.deletedFilesCurrentFileUsechen': 'Files deleted: %1; the current file was truncated.',
+  'settingsLogs.allFilesLogClientWillDeleted':
+    'All client log files will be deleted, and the current daily file will be cleared. This action is irreversible.',
+  'settingsLogs.deletedFilesCurrentFileUsechen':
+    'Files deleted: %1; the current file was truncated.',
   'settingsLogs.server': 'Server',
-  'settingsLogs.upravlenieLogServerDostupnoAdminPodklyuchennom': 'Server log management is available to the administrator when a server is connected.',
-  'settingsLogs.fileLogServerDiagnosticsFlagZhivet': 'Server file log for diagnostics. The flag lives in server memory and resets on restart; the toggle applies immediately.',
+  'settingsLogs.upravlenieLogServerDostupnoAdminPodklyuchennom':
+    'Server log management is available to the administrator when a server is connected.',
+  'settingsLogs.fileLogServerDiagnosticsFlagZhivet':
+    'Server file log for diagnostics. The flag lives in server memory and resets on restart; the toggle applies immediately.',
   'settingsLogs.label.loggingServer': 'Server logging',
   'settingsLogs.loggingServerEnabled': 'Server logging enabled.',
   'settingsLogs.loggingServerDisabled': 'Server logging disabled.',
@@ -3387,9 +3884,11 @@ export const en = {
   'settingsLogs.filesLogSelectFileSkachivaniya': 'Log files (select a file to download):',
   'settingsLogs.saved': 'Saved: %1',
   'settingsLogs.deleteLogsServer': 'Delete server logs?',
-  'settingsLogs.allFilesLogServerWillDeleted': 'All server log files will be deleted, and the current daily file will be cleared. This action is irreversible.',
+  'settingsLogs.allFilesLogServerWillDeleted':
+    'All server log files will be deleted, and the current daily file will be cleared. This action is irreversible.',
   'settingsLogs.filesLogServerDeleted': 'Server log files deleted.',
-  'settingsLogs.noPravAdminUpravlenieLogServer': 'No administrator rights: server log management is available to the administrator only.',
+  'settingsLogs.noPravAdminUpravlenieLogServer':
+    'No administrator rights: server log management is available to the administrator only.',
   'settingsLogs.serverUnavailablePoprobuytePozzhe': 'Server unavailable, try again later.',
   'settingsLogs.notSucceededPoluchitStateLogServer': 'Failed to get the server log state: %1',
   'settingsLogs.b': '%1 B',
@@ -3403,10 +3902,14 @@ export const en = {
   'settings.when_to_use.kogdaUse': 'When to use',
   'settings.conventions.pravila': 'Rules',
   'settings.examples.examples': 'Examples',
-  'settings.naznachenieNetworkOdnomDvuhAbzacahUvidit': 'The purpose of the network in one or two paragraphs. Seen by both humans and AI agents when choosing a network.',
-  'settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse': 'When an agent should consult this network. For each use case — which other network fields to read.\n\nExample:\n- Coding → conventions, structure\n- Project retrospective → examples, conventions',
-  'settings.pravilaRecordsFormatHronologiyPometkaActive': 'Recording rules: chronology format, active flag, naming, references to types and templates.',
-  'settings.examplesHoroshihPlohihRecordsToAgent': 'Examples of good and bad entries — so the agent does not invent the form.',
+  'settings.naznachenieNetworkOdnomDvuhAbzacahUvidit':
+    'The purpose of the network in one or two paragraphs. Seen by both humans and AI agents when choosing a network.',
+  'settings.kogdaAgentuObraschatsyaNetworkKazhdogoUse':
+    'When an agent should consult this network. For each use case — which other network fields to read.\n\nExample:\n- Coding → conventions, structure\n- Project retrospective → examples, conventions',
+  'settings.pravilaRecordsFormatHronologiyPometkaActive':
+    'Recording rules: chronology format, active flag, naming, references to types and templates.',
+  'settings.examplesHoroshihPlohihRecordsToAgent':
+    'Examples of good and bad entries — so the agent does not invent the form.',
   'settings.label.ponedelnik': 'Monday',
   'settings.label.vtornik': 'Tuesday',
   'settings.label.sreda': 'Wednesday',
@@ -3420,32 +3923,38 @@ export const en = {
   'settings.profileUser': 'User profile',
   'settings.label.nameOtobrazheniya': 'Display name',
   'settings.label.login': 'Login',
-  'settings.nameOtobrazhaetsyaTulbareOtherMestahInterfeysa': 'The name is displayed in the toolbar and other parts of the interface. The login is set when the account is created.',
+  'settings.nameOtobrazhaetsyaTulbareOtherMestahInterfeysa':
+    'The name is displayed in the toolbar and other parts of the interface. The login is set when the account is created.',
   'settings.emptyLabel.notZadano': '— not set —',
   'settings.placeholder.typeThought': 'Thought type…',
   'settings.showNeaktualnyeThoughtLinkNetwork': 'Show inactive thoughts and links in this network',
   'settings.showSoderzhimoeTrashNetwork': 'Show basket contents in this network',
-  'settings.theseFieldsZadaetOwnerNetworkAdmin': 'These fields are set by the network owner or the server administrator; changes are saved for all members.',
-  'settings.theseFieldsZadaetOwnerNetworkAdmin2': 'These fields are set by the network owner or the server administrator. You can view them but cannot change them.',
+  'settings.theseFieldsZadaetOwnerNetworkAdmin':
+    'These fields are set by the network owner or the server administrator; changes are saved for all members.',
+  'settings.theseFieldsZadaetOwnerNetworkAdmin2':
+    'These fields are set by the network owner or the server administrator. You can view them but cannot change them.',
   'settings.settingsNetwork': 'Network settings',
   'settings.label.firstDenWeek': 'First day of week',
-  'settings.commonSettingAllCalendarVidzhetovNetwork': 'A common setting for all calendar widgets of the network and the $weekStart/$weekEnd calendar tokens. When a network is created, the value is taken from the server OS locale.',
-  'settings.samoopisanieNetworkLyudeyAiAgentsMarkdown': 'Self-description of the network for people and AI agents. Markdown: links, lists, images. In the “When to use” tab, list the scenarios this network suits.',
-  'settings.uzlovoyTypeRazdelaOpredelyaetStrukturuNetwork': 'The section root type defines the network structure (read via `etn.networks.structure`). All active thoughts of the selected type become sections. The type selected here cannot be deleted until the reference is removed.',
+  'settings.commonSettingAllCalendarVidzhetovNetwork':
+    'A common setting for all calendar widgets of the network and the $weekStart/$weekEnd calendar tokens. When a network is created, the value is taken from the server OS locale.',
+  'settings.samoopisanieNetworkLyudeyAiAgentsMarkdown':
+    'Self-description of the network for people and AI agents. Markdown: links, lists, images. In the “When to use” tab, list the scenarios this network suits.',
+  'settings.uzlovoyTypeRazdelaOpredelyaetStrukturuNetwork':
+    'The section root type defines the network structure (read via `etn.networks.structure`). All active thoughts of the selected type become sections. The type selected here cannot be deleted until the reference is removed.',
   'settings.label.uzlovoyTypeRazdela': 'Section root type',
-  'settings.typeInstructionAgentsZadaetKakieThought': 'The agent instruction type defines which thoughts are served by `etn.instructions` (ADR 717f04df). Without a selection, the showcase returns an empty list. The type selected here is protected from deletion just like the root type.',
+  'settings.typeInstructionAgentsZadaetKakieThought':
+    'The agent instruction type defines which thoughts are served by `etn.instructions` (ADR 717f04df). Without a selection, the showcase returns an empty list. The type selected here is protected from deletion just like the root type.',
   'settings.label.typeInstructionAgents': 'Agent instruction type',
   'settings.vidimost': 'Visibility',
-  'settings.commonSettingAllVashihKlientovNetwork': 'A common setting for all your clients in this network.',
-  'settings.label.light': 'Light',
-  'settings.label.dark': 'Dark',
-  'settings.tema': 'Theme',
-  'settings.applyAllEkranahAppliesOnlyClient': 'Applies to all screens. Affects this client only.',
+  'settings.commonSettingAllVashihKlientovNetwork':
+    'A common setting for all your clients in this network.',
   'settings.razmerOblachka': 'Bubble size',
   'settings.shirinaOblachkaPx': 'Bubble width, px (%1–%2)',
   'settings.otstupBetweenOblachkamiPx': 'Spacing between bubbles, px (%1–%2)',
   'settings.hranitsyaOnlyClient': 'Stored on this client only.',
   'settings.settingsSaved': 'Settings saved.',
+  'settings.unsaved.title': 'Unapplied changes',
+  'settings.unsaved.message': 'Changes have not been applied. Apply them before closing?',
 
   // -- structures --------------------------------------------------------
   'structures.komandyView': 'View commands',
@@ -3454,21 +3963,25 @@ export const en = {
   'structures.ubranoSelection': 'Removed from selection: %1.',
   'structures.selectedThoughtsVydeleniiNo': 'There are no selected thoughts in the selection.',
   'structures.podchinennyeThought': 'Child thoughts',
-  'structures.notSucceededCreateNovyhThoughtsOni': 'Failed to create %1 new thoughts — they were skipped.',
+  'structures.notSucceededCreateNovyhThoughtsOni':
+    'Failed to create %1 new thoughts — they were skipped.',
   'structures.createdNovyhThoughts': 'New thoughts created: %1.',
   'structures.confirmTitle.doEdinstvennymiParents': 'Make only parents',
-  'structures.uSelectedThoughtsWillDeletedAll': 'All incoming links of %1 selected thoughts will be deleted except links to the selected thoughts (%2). Continue?',
+  'structures.uSelectedThoughtsWillDeletedAll':
+    'All incoming links of %1 selected thoughts will be deleted except links to the selected thoughts (%2). Continue?',
   'structures.razorvat': 'Unlink',
   'structures.razorvatLinkParents': 'Unlink from parents',
   'structures.razorvatLinkPodchinennymi': 'Unlink from children',
-  'structures.uSelectedThoughtsWillDeletedLink': 'Links to the selected thoughts (%2) will be deleted for %1 selected thoughts. Continue?',
+  'structures.uSelectedThoughtsWillDeletedLink':
+    'Links to the selected thoughts (%2) will be deleted for %1 selected thoughts. Continue?',
   'structures.confirmTitle.deleteThought': 'Delete thoughts',
   'structures.deleteSelectedThoughts': 'Delete %1 selected thoughts?',
   'structures.notSucceededApplyThoughts': 'Failed to apply to %1 of %2 thoughts (%3).',
   'structures.primenenoThoughts': 'Applied to %1 thoughts.',
   'structures.notSucceededVypolnitKomandu': 'Failed to execute the command: %1',
   'structures.label.komandy': 'Commands ▾',
-  'structures.komandyNadVsemiThoughtsViewWithout': 'Commands over all thoughts of the view (ignoring pagination)',
+  'structures.komandyNadVsemiThoughtsViewWithout':
+    'Commands over all thoughts of the view (ignoring pagination)',
   'structures.name.sirotskieThoughtWithoutParents': 'Orphan thoughts (no parents)',
   'structures.name.createdWeek': 'Created this week',
   'structures.name.createdZaDney': 'Created in the last 30 days',
@@ -3484,7 +3997,8 @@ export const en = {
 
   // -- tabs --------------------------------------------------------------
   'tabs.openNetwork': 'Open network',
-  'tabs.selectNetworkSozdayteNovuyuCloseLyuboy': 'Select a network or create a new one. Close — any other tab.',
+  'tabs.selectNetworkSozdayteNovuyuCloseLyuboy':
+    'Select a network or create a new one. Close — any other tab.',
   'tabs.label.createNetwork': '+ Create network',
   'tabs.more': '%1 more',
   'tabs.aktivirovat': 'Activate',
@@ -3492,10 +4006,12 @@ export const en = {
   'tabs.networkUnavailable': 'Network unavailable',
 
   // -- thoughtTypes ------------------------------------------------------
-  'thoughtTypes.viewsPublikuyutKnopkiPolosyPodThought': 'Views are published by the buttons of the strip under the thought in focus',
+  'thoughtTypes.viewsPublikuyutKnopkiPolosyPodThought':
+    'Views are published by the buttons of the strip under the thought in focus',
   'thoughtTypes.label.view': '+ view',
   'thoughtTypes.title.createView': 'Create view',
-  'thoughtTypes.sohraniteTypeToDobavlyatViewsNovogo': 'Save the type to add views — a new type has no id yet.',
+  'thoughtTypes.sohraniteTypeToDobavlyatViewsNovogo':
+    'Save the type to add views — a new type has no id yet.',
   'thoughtTypes.viewsDostupnyOnlyBase': 'Views are available in Base only.',
   'thoughtTypes.uTypePokaNoViews': 'The type has no views yet.',
   'thoughtTypes.umloch': 'default',
@@ -3523,41 +4039,53 @@ export const en = {
   'typeManager.title.settingsType': 'Type settings',
   'typeManager.parentNasledovaniePropertiesStilya': 'Parent (property and style inheritance)',
   'typeManager.kornevoyTypeParentNotImeet': 'Root type — has no parent.',
-  'typeManager.kommentariyDescriptionTypePravilaPrimeneniya': 'Comment: type description, usage rules…',
-  'typeManager.idPoyavitsyaAfterFirstRecordsType': 'The id will appear after the type is saved for the first time.',
+  'typeManager.kommentariyDescriptionTypePravilaPrimeneniya':
+    'Comment: type description, usage rules…',
+  'typeManager.idPoyavitsyaAfterFirstRecordsType':
+    'The id will appear after the type is saved for the first time.',
   'typeManager.titleTypeObyazatelno2': 'The type name is required.',
   'typeManager.changeParentOtmenena': 'The parent change was canceled.',
   'typeManager.novyyTypeThought': 'New thought type',
   'typeManager.resetOverrideDescription': 'Reset description override',
   'typeManager.editNatureProperties': 'Edit property nature',
   'typeManager.otklyuchitProperty': 'Detach property',
-  'typeManager.otklyuchitPropertyTypeValuesOstanutsyaThoughts': 'Detach property “%1” from the type? Values will remain with thoughts and links and will be shown in the “Out-of-type properties” group.',
-  'typeManager.sohraniteTypeToDobavlyatPropertiesNovogo': 'Save the type to add properties — a new type has no id yet.',
-  'typeManager.propertiesPoyavyatsyaAfterSaveType': 'Properties will appear after the type is saved.',
+  'typeManager.otklyuchitPropertyTypeValuesOstanutsyaThoughts':
+    'Detach property “%1” from the type? Values will remain with thoughts and links and will be shown in the “Out-of-type properties” group.',
+  'typeManager.sohraniteTypeToDobavlyatPropertiesNovogo':
+    'Save the type to add properties — a new type has no id yet.',
+  'typeManager.propertiesPoyavyatsyaAfterSaveType':
+    'Properties will appear after the type is saved.',
   'typeManager.byDefault': 'By default',
-  'typeManager.zerkalnoePropertyLinkPorozhdenoPropertyDrugogo': 'Mirrored link property: generated by property “%1” of another type via the target type restriction. The link type and direction are not edited here.',
+  'typeManager.zerkalnoePropertyLinkPorozhdenoPropertyDrugogo':
+    'Mirrored link property: generated by property “%1” of another type via the target type restriction. The link type and direction are not edited here.',
   'typeManager.zerkalo': 'mirror · %1',
   'typeManager.label.description': 'description…',
   'typeManager.title.pereopredelitDescriptionProperties': 'Override the property description',
   'typeManager.label.reset': 'reset ◆',
   'typeManager.unasledovannyhPropertiesNo': 'No inherited properties.',
   'typeManager.storona': 'Side',
-  'typeManager.editNaturePropertiesNameTypeValues': 'Edit property nature (name, value type, description) — applies to all types at once',
-  'typeManager.unsetPrivyazkuPropertiesValuesNotDeleted': 'Detach the property attachment — values are not deleted',
+  'typeManager.editNaturePropertiesNameTypeValues':
+    'Edit property nature (name, value type, description) — applies to all types at once',
+  'typeManager.unsetPrivyazkuPropertiesValuesNotDeleted':
+    'Detach the property attachment — values are not deleted',
   'typeManager.uTypeNoSobstvennyhProperties': 'The type has no own properties.',
   'typeManager.istochnik': 'source',
   'typeManager.naznachenie': 'target',
   'typeManager.podklyuchitProperty': 'Attach property',
   'typeManager.label.createProperty': 'Create property',
-  'typeManager.propertyConnectedTipamPotomkamPodklyuchitIts': 'Property “%1” is attached to descendant types %2. If it is attached to type “%3”, the descendants\' own attachments of this property will be removed (they will inherit it from your type). Property values in thoughts and links will not change.',
+  'typeManager.propertyConnectedTipamPotomkamPodklyuchitIts':
+    "Property “%1” is attached to descendant types %2. If it is attached to type “%3”, the descendants' own attachments of this property will be removed (they will inherit it from your type). Property values in thoughts and links will not change.",
   'typeManager.target': 'target',
   'typeManager.targets': 'targets',
   'typeManager.celey': 'targets',
-  'typeManager.descriptionPropertiesThisTypeEmptyNasleduetsya': 'Property description for this type (empty — inherited from the parent)',
-  'typeManager.propertyNasleduetsyaTypeHereZadaetsyaDescription': 'Property “%1” is inherited from type “%2”. The description is set here for this type only (and its descendants until they override it themselves).',
+  'typeManager.descriptionPropertiesThisTypeEmptyNasleduetsya':
+    'Property description for this type (empty — inherited from the parent)',
+  'typeManager.propertyNasleduetsyaTypeHereZadaetsyaDescription':
+    'Property “%1” is inherited from type “%2”. The description is set here for this type only (and its descendants until they override it themselves).',
   'typeManager.descriptionProperties': 'Property description — “%1”',
   'typeManager.label.resetOverride': 'Reset override',
-  'typeManager.changeParentPovliyaetIzmenitsyaSostavNasleduemyh': 'Changing the parent will affect %1 %2: the set of inherited properties will change for %3 (attachments will appear or disappear), and default and description overrides may become dangling — values will be kept as “out-of-type” and shown read-only. Continue?',
+  'typeManager.changeParentPovliyaetIzmenitsyaSostavNasleduemyh':
+    'Changing the parent will affect %1 %2: the set of inherited properties will change for %3 (attachments will appear or disappear), and default and description overrides may become dangling — values will be kept as “out-of-type” and shown read-only. Continue?',
   'typeManager.changeParentTypeThought': 'Change thought type parent',
   'typeManager.nee': 'it',
   'typeManager.nih': 'them',
@@ -3576,11 +4104,13 @@ export const en = {
   'workspaceMenus.idUser': 'User ID',
   'workspaceMenus.title.membersNetwork': 'Network members',
   'workspaceMenus.unsetAllBlokirovki': 'Clear all locks',
-  'workspaceMenus.unsetAllBlokirovkiMemberActionIrreversible': 'Clear all locks of member “%1”? This action is irreversible.',
+  'workspaceMenus.unsetAllBlokirovkiMemberActionIrreversible':
+    'Clear all locks of member “%1”? This action is irreversible.',
   'workspaceMenus.unsetBlokirovok': 'Locks cleared: %1.',
   'workspaceMenus.notSucceededUnsetBlokirovki': 'Failed to clear locks: %1',
   'workspaceMenus.vyytiNetwork': 'Leave network',
-  'workspaceMenus.youPokineteNetworkPoteryaeteNeyAccess': 'You will leave the network and lose access to it.',
+  'workspaceMenus.youPokineteNetworkPoteryaeteNeyAccess':
+    'You will leave the network and lose access to it.',
 
   // -- search ------------------------------------------------------------
   'search.title.settingsSearch': 'Search settings',
@@ -3623,16 +4153,19 @@ export const en = {
   'selection.notSucceededCopy': 'Failed to copy: %1',
   'selection.typeLinkThoughtFocus': 'Link type to the thought in focus',
   'selection.doOnlyParent': 'Make the only parent',
-  'selection.uSelectionThoughtsWillDeletedAll': 'All incoming links of %1 selected thoughts will be deleted except the link to thought “%2”. Continue?',
+  'selection.uSelectionThoughtsWillDeletedAll':
+    'All incoming links of %1 selected thoughts will be deleted except the link to thought “%2”. Continue?',
   'selection.notSucceededChangeTypeLinkThoughts': 'Failed to change the link type for %1 thoughts.',
   'selection.settingsSelection': 'Selection settings',
   'selection.notSucceededApplyThoughts': 'Failed to apply to %1 thoughts.',
   'selection.gruppovayaOperation': 'Bulk operation',
-  'selection.firstSfokusiruyteThoughtOnaStanetParent': 'First focus a thought — it will become the parent of the imported graph.',
+  'selection.firstSfokusiruyteThoughtOnaStanetParent':
+    'First focus a thought — it will become the parent of the imported graph.',
 
   // -- trash -------------------------------------------------------------
   'trash.ispolzuetsyaPropertiesOtherThoughts': '%1 is used in properties of other thoughts',
-  'trash.suschestvuetBaseLayerItsCanOnly': '%1 exists in Base — in a layer it can only be marked for deletion',
+  'trash.suschestvuetBaseLayerItsCanOnly':
+    '%1 exists in Base — in a layer it can only be marked for deletion',
   'trash.changedLayers': '%1 is changed in layers: %2',
   'trash.deleteThought': 'Delete thought',
   'trash.cannotDeleteSovsem': 'Cannot delete permanently — %1.',
@@ -3642,11 +4175,13 @@ export const en = {
   'trash.thoughtPomeschenaTrash': 'The thought was moved to the basket.',
   'trash.deleteLink': 'Delete link',
   'trash.title.deleteLink': 'Deleting link',
-  'trash.linkNotDeletedTeperZablokirovanaUderzhivayuschiy': 'The link was not deleted: it is now blocked (holding layer).',
+  'trash.linkNotDeletedTeperZablokirovanaUderzhivayuschiy':
+    'The link was not deleted: it is now blocked (holding layer).',
   'trash.linkVozvraschenaTrash': 'The link was restored from the basket.',
   'trash.deleteVybrannogo': 'Delete selected',
   'trash.allRowsTrash': 'All rows — “To basket”',
-  'trash.nezablokirovannyeRowsDeleteZablokirovannyeTrash': 'Unblocked rows — “Delete”, blocked rows — “To basket”',
+  'trash.nezablokirovannyeRowsDeleteZablokirovannyeTrash':
+    'Unblocked rows — “Delete”, blocked rows — “To basket”',
   'trash.cannotDeleteSovsem2': 'Cannot delete permanently — %1',
   'trash.lishitsyaParent': '%1 %2 will lose their parent.',
   'trash.deleteVybrannogo2': 'Delete selected (%1)',
@@ -3657,7 +4192,8 @@ export const en = {
   'trash.vernutTekuschuyuLineTrash': 'Restore the current row from the basket',
   'trash.title.deleteTekuschuyuLineSovsem': 'Delete the current row permanently',
   'trash.label.deleteAllPossible': 'Delete everything possible',
-  'trash.fizicheskiDeleteAllNezablokirovannyeRowsTrash': 'Physically delete all unblocked basket rows',
+  'trash.fizicheskiDeleteAllNezablokirovannyeRowsTrash':
+    'Physically delete all unblocked basket rows',
   'trash.deletedOstalosZablokirovano': 'Deleted %1, still blocked %2.',
   'trash.clearTrash': 'Clear basket',
   'trash.thought': 'thought',
@@ -3698,5 +4234,10 @@ export const enPlurals = {
   'plurals.orphanedChildren': {
     one: 'Warning: %1 child will be left without parents.',
     other: 'Warning: %1 children will be left without parents.',
+  },
+  /** Reminder occurrences counter of the period reminders group. */
+  'plurals.reminderOccurrence': {
+    one: '%1 occurrence',
+    other: '%1 occurrences',
   },
 } satisfies PluralCatalog;

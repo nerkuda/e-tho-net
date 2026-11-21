@@ -93,7 +93,7 @@
  * предупреждение (причина видна в метке-подсказке чипа). */
 .cross-network-ref-chip--unresolved {
   opacity: 0.6;
-  border-color: #e53935;
+  border-color: var(--mark-danger);
 }
 /* Обёртка чип-поля с угловыми кнопками «…» (диалог) и «✕» (очистить) —
  * приёмка пользователя 0.8.1: кнопки компактные, в правом верхнем углу
@@ -346,7 +346,7 @@
   pointer-events: none;
   user-select: none;
   paint-order: stroke;
-  stroke: var(--surface, #fff);
+  stroke: var(--surface);
   stroke-width: 3px;
   stroke-linejoin: round;
 }
@@ -403,10 +403,11 @@
   border-color: var(--accent);
   border-width: 1.6px;
 }
-/* Hover на связи: связанные мысли — оранжевая рамка и поверх остальных
+/* Hover на связи: связанные мысли — янтарная рамка тона --warn (ближайший
+   токен палитры к прежнему оранжевому литералу #e8871e) и поверх остальных
    (узлы подняты append'ом в mini-graph.ts). */
 .mini-node.edge-hi .mini-node-cloud {
-  border-color: #e8871e;
+  border-color: var(--warn);
   border-width: 2px;
 }
 .mini-graph-mass-chip text {

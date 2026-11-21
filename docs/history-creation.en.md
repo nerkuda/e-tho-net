@@ -134,9 +134,9 @@ world" in which all project changes are made. When development is complete, the 
 is merged into the base at the same time as the project git branch is merged
 into the main one.
 
-To protect data in different layers, I introduced the "basket": before deleting thoughts or
+To protect data in different layers, I introduced the "trash": before deleting thoughts or
 links, their usage is checked, and if the deletion could break
-integrity, they are moved to the basket.
+integrity, they are moved to the trash.
 
 Developing ETN inside ETN became safer and simpler.
 
@@ -325,23 +325,32 @@ Since the product has reached functional maturity and can compete for its
 place with the competitors, I think it is time to bring it to people. But before that
 it needs a little preparation.
 
-**0.15 — Installer and automatic updates** *(since October 29)*
+**0.15 — Installer and automatic updates** *(October 29 — November 11)*
 
 For a person outside IT, a "server" is a scary beast: a black window in which you have to
-issue commands. And ETN needs both a server and a client. It should be easy
-for anyone to install the program and not scary to update. So
-I made a helper installer: you tick what you need — server,
-client or both — and the beast is tamed. On Linux — a script for installation with one
-command.
+issue commands. So that anyone could easily install the program and not be afraid to
+update, I made a helper installer: you tick what you need — server, client or both —
+and the beast is tamed. On Linux — a script that installs with one command.
+Plus automatic update checking in the client and translating the user interface into
+a couple more languages. And a few minor fixes.
 
-Also — automatic update checking with server version control, and the
-server can be updated right from the client. To test-drive the installer
-and the updater I deployed several virtual machines.
+**0.16 — Tasks, reminders and appearance themes** *(since November 12)*
 
-The trouble was with the virtual machines for testing the installer — my
-laptop, on which the main development is done, runs virtual machines with Windows and Linux
-with great difficulty and creaking and keeps crashing them. Debugging
-the installer took significantly more time than debugging the most complex features.
+Several users had already asked for the ability to change the appearance theme and to
+choose a background image. I added a few themes to try. The mechanism has to prove
+itself first; a theme editor will come later.
+
+But the main feature of the version is different: reminders and tasks. I really wanted
+to receive a reminder about an event or someone's birthday at the right time. Now I can
+also write tasks anywhere (thoughts, diary entries, links) and get them in a single list
+on the set date. There is no goal of turning ETN into yet another to-do app, but having
+one common list of your plans is useful.
+
+This tech project turned out to be difficult, because it was impossible to think through
+all the little details in advance. Individual parts had to be re-designed and reworked
+several times over; the LLMs and I got completely "carried away", and quite a few
+subscription limits went into it. And most likely this functionality will need polishing
+for a long time yet. But it is already comfortable to use.
 
 ---
 
@@ -360,7 +369,7 @@ where I am now, having traveled such a path. As of **November 2026**:
   I hope the LLMs' needs are 95 percent implemented.
 - *how much money have I spent on it?* — I have different LLMs at different prices,
   they are used in several projects, so I find it hard to name an exact amount.
-  Probably around $300 I have already spent. For 80% of the needed functionality.
+  Probably around $400 I have already spent. For 80% of the needed functionality.
   I will surely spend even more while I am into this.
 - *how much of my time have I spent on it?* — Almost every evening and every
   weekend since August 2026. But I do not consider it an "expense". Today
@@ -383,6 +392,7 @@ try it on an empty base, then you will understand how best to move your accumula
 
 Builds for Windows, macOS and Linux are on the releases page:
 <https://github.com/nerkuda/e-tho-net/releases>
+
 Download, install, create your first thought network — and go for it. Your thoughts
 stay with you: ETN is self-hosted, the base lives on your computer or server,
 not in someone else's cloud. You can work on your own, with friends or family.

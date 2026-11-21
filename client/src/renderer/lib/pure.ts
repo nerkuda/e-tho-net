@@ -46,6 +46,7 @@ import {
   type RealtimeEventType,
 } from '@etn/shared';
 
+import { mixColors, parseCssColor, relativeLuminance } from './css-color.js';
 import { t } from './i18n.js';
 
 // ---------------------------------------------------------------------------
@@ -146,27 +147,59 @@ export function cloudHeight(width: number, zoom = 1, lines = CLOUD_TITLE_LINES):
 /** Near-black readable text colour for {@link contrastText} (L12). */
 const CONTRAST_DARK = '#1f242d';
 
+/** Порог переключения «тёмный/светлый текст» по относительной яркости (L12). */
+const CONTRAST_LUMINANCE_THRESHOLD = 0.35;
+
+/** Порог контраста WCAG AA для крупного текста; счётчик крупный и полужирный. */
+export const ZONE_COUNT_CONTRAST_MIN = 7;
+
+/**
+ * Доля непрозрачности плашки счётчика зоны в основе: `color-mix(--surface 78%,
+ * transparent)` в `styles/canvas.css`. При активной картинке плашка становится
+ * непрозрачным `--surface`, поэтому константа действует только без картинки.
+ * Дублируется в CSS — сверяется сторожем `guard-canvas-overlay-layers`.
+ */
+export const ZONE_COUNT_PLATE_SURFACE_SHARE = 0.78;
+
 /**
  * Picks a readable text colour for an arbitrary user-picked cloud background
  * (08-ui-spec.md §2.2): white on dark backgrounds, near-black on light ones.
- * Relative luminance with sRGB linearisation (WCAG). Unparseable input falls
- * back to white (dark custom backgrounds are the more common case).
+ * Relative luminance with sRGB linearisation (WCAG). Цвет разбирается общим
+ * хелпером `lib/css-color.ts`, поэтому понимаются `#rgb`, `#rrggbb`,
+ * `rgb()/rgba()` и `hsl()/hsla()` (темы задают фон и в hsl-форме —
+ * blue-topaz light). Unparseable input falls back to white (dark custom
+ * backgrounds are the more common case).
  */
 export function contrastText(bg: string): string {
-  const hex = bg.trim().replace(/^#/, '');
-  const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
-  if (!/^[0-9a-fA-F]{6}$/.test(full)) {
-    return '#ffffff';
+  const rgb = parseCssColor(bg);
+  if (rgb === null) return '#ffffff';
+  const luminance = relativeLuminance(rgb[0], rgb[1], rgb[2]);
+  return luminance > CONTRAST_LUMINANCE_THRESHOLD ? CONTRAST_DARK : '#ffffff';
+}
+
+/**
+ * Цвет текста счётчика зоны (задача c8fa74ba; вердикт проверки 80324150, круг
+ * 2): считается от ФАКТИЧЕСКОГО фона плашки под цифрой, а не от фона темы —
+ * иначе на светлой теме (blue-topaz light, `--bg: hsla(204, 45%, 97%, 1)`)
+ * получался белый текст на белой плашке `--surface` (1.00 : 1).
+ *
+ *  • картинка активна (`data-canvas-wallpaper='on'`): плашка — непрозрачный
+ *    `--surface` (правило в `canvas.css`);
+ *  • картинки нет: плашка — `--surface` с альфой
+ *    {@link ZONE_COUNT_PLATE_SURFACE_SHARE} над фоном канвы `--bg`.
+ *
+ * Неразборчивый `--surface` — штатный fallback `contrastText` по фону темы.
+ */
+export function zoneCountTextColor(surface: string, themeBg: string, wallpaperOn: boolean): string {
+  const plate = parseCssColor(surface);
+  if (plate === null) return contrastText(themeBg);
+  let under = plate;
+  if (!wallpaperOn) {
+    const bg = parseCssColor(themeBg);
+    if (bg !== null) under = mixColors(plate, bg, ZONE_COUNT_PLATE_SURFACE_SHARE);
   }
-  const channel = (part: string): number => {
-    const c = Number.parseInt(part, 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  const luminance =
-    0.2126 * channel(full.slice(0, 2)) +
-    0.7152 * channel(full.slice(2, 4)) +
-    0.0722 * channel(full.slice(4, 6));
-  return luminance > 0.35 ? CONTRAST_DARK : '#ffffff';
+  const luminance = relativeLuminance(under[0], under[1], under[2]);
+  return luminance > CONTRAST_LUMINANCE_THRESHOLD ? CONTRAST_DARK : '#ffffff';
 }
 
 /** Effective cloud sizes applied by the renderer (zoom-multiplied, px-rounded). */
@@ -534,14 +567,6 @@ export function parseCanvasLayout(raw: string | null): ParsedCanvasLayout {
 /** Rounds a zoom value to 2 decimals (the step grid is 0.05). */
 function roundZoom(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-/** UI themes (L10, `client_meta.theme`). */
-export type ThemeName = 'light' | 'dark';
-
-/** Parses an L5 `theme` value; anything but `'dark'` falls back to light. */
-export function parseTheme(raw: string | null): ThemeName {
-  return raw === 'dark' ? 'dark' : 'light';
 }
 
 /** Parses an L4 `canvas_zoom` value, clipped to the zoom constants. */
@@ -990,6 +1015,8 @@ const EVENT_ACTIONS: Record<RealtimeEventType, string> = {
   get 'publication.purged'() { return t('events.publicationDeleted'); },
   get 'shelf.updated'() { return t('events.changedShelf'); },
   get 'shelf.deleted'() { return t('events.shelfDeleted'); },
+  // Напоминания (0.16.1, задача b47f1fd2) — строка статус-бара.
+  get 'reminders.changed'() { return t('events.reminderChanged'); },
 };
 
 /**
@@ -1306,6 +1333,23 @@ export function serializeFilterPanelState(state: FilterPanelState): string {
     width: state.width,
     height: state.height,
   });
+}
+
+/**
+ * Потолок высоты панели отбора в ВЕРХНЕМ положении: полотно минус резерв
+ * результатов. Резерв — не только видимые результаты экрана, а всё, что
+ * обязано остаться ниже панели (панель добавления, минимум панели задач, швы,
+ * минимум ленты) — на «Дневнике» его считает `tasks-panel-geometry.ts`
+ * (замечание Н1 репроверки `4b755c93` по задаче `cfb8cb72`).
+ *
+ * Чистая функция: каркас панели отбора спрашивает её и в `limitsOf()` (границы
+ * перетаскивания), и при подстановке CSS-переменной `--fp-results-min`, по
+ * которой CSS ограничивает панель до первого перетаскивания.
+ */
+export function filterPanelTopLimit(canvasHeight: number, resultsMinSize: number): number {
+  const canvas = Number.isFinite(canvasHeight) && canvasHeight > 0 ? canvasHeight : 0;
+  const reserve = Number.isFinite(resultsMinSize) && resultsMinSize > 0 ? resultsMinSize : 0;
+  return Math.max(0, canvas - reserve);
 }
 
 /** Ограничивает размер панели диапазоном перетаскивания (px). */

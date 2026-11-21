@@ -54,6 +54,7 @@ import {
   listComments,
 } from '../domain/comment-service.js';
 import { createBodyExpander, createBodyPresenter } from '../domain/transclusion-service.js';
+import { listTasks } from '../domain/task-service.js';
 import { NetworkDb, registerQueryFunctions } from './network-db.js';
 import { applyConnectionPragmas } from './pragmas.js';
 
@@ -253,6 +254,8 @@ function execute(task: ReaderTask): ReaderTaskResponse {
         ),
       };
     }
+    case 'tasks.list':
+      return { ok: true, result: listTasks(ndb, task.payload.options) };
     default: {
       // Исчерпывающий разбор: новый op обязан появиться выше и в контракте.
       const never: never = task;

@@ -57,6 +57,10 @@ const ALLOWED_DATE_INPUT_FILES = new Set([
   // Вне области «Дневника»: фильтр дат журнала активности и даты в админке.
   'admin/admin.ts',
   'screens/activity/activity.ts',
+  // Редактор напоминания (0.16.1, задача 173f1540): опорное ВРЕМЯ вхождения
+  // (`HH:MM`) — атрибут самого напоминания, а не период ленты «Дневника»
+  // (у напоминания своя грамматика повтора, lib/period-editor тут ни при чём).
+  'lib/reminder-editor.ts',
 ]);
 
 /** Точка входа контрола — не должна объявляться нигде, кроме модуля. */
@@ -118,6 +122,7 @@ describe('guard: даты периода задаёт только редакт�
       'editor/value-editor.ts',
       'lib/date-period-dialog.ts',
       'lib/period-editor.ts',
+      'lib/reminder-editor.ts',
       'screens/activity/activity.ts',
     ]);
   });
@@ -130,7 +135,7 @@ describe('guard: даты периода задаёт только редакт�
         path.join(dir, 'screens', 'fake', 'diary.ts'),
         [
           "import { fieldInput } from '../../lib/ui/field.js';",
-          'const fromInput = fieldInput({ type: \'date\' });',
+          "const fromInput = fieldInput({ type: 'date' });",
           "const toInput = document.createElement('input');",
           "toInput.type = 'datetime-local';",
           'export function buildPeriodEditor(): void {}',
@@ -140,8 +145,11 @@ describe('guard: даты периода задаёт только редакт�
       );
       const names = new Set(collectViolations(dir, RULES).map((v) => v.rule));
       assert.ok(names.has('no-second-period-editor'), 'вторая реализация обязана краснеть');
-      assert.ok(names.has('no-raw-period-date-input'), 'сырой input[type=datetime-local] обязан краснеть');
-      assert.ok(names.has('no-raw-period-date-field'), 'fieldInput({type:\'date\'}) обязан краснеть');
+      assert.ok(
+        names.has('no-raw-period-date-input'),
+        'сырой input[type=datetime-local] обязан краснеть',
+      );
+      assert.ok(names.has('no-raw-period-date-field'), "fieldInput({type:'date'}) обязан краснеть");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

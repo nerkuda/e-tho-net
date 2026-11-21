@@ -28,6 +28,7 @@ import {
 } from './db/paths.js';
 import { getOrCreateClientId } from './client-id.js';
 import { parseConnectArgs } from './connect-prefill.js';
+import { resolveWindowBackground } from './window-background.js';
 import { getClientLog, initClientLog, resolveLoggingFlag } from './log/client-log.js';
 import { decideNavigation, EXTERNAL_SCHEMES } from './navigation-policy.js';
 import { registerIpc, type IpcHandle } from './ipc/register.js';
@@ -44,6 +45,14 @@ import {
   saveWindowBounds,
   type WindowBounds,
 } from './window-bounds.js';
+import {
+  DISABLED_DICTIONARY_DOWNLOAD_URL,
+  SPELLCHECK_DICTIONARIES,
+  dictionariesSourceDir,
+  ensureSpellcheckDictionaries,
+  profileDictionariesDir,
+  resolveSpellcheckLanguages,
+} from './spellcheck-dictionaries.js';
 
 /**
  * Directory of the compiled main bundle (`out/main`): `import.meta.dirname`
@@ -193,11 +202,16 @@ if (process.defaultApp && process.argv.length >= 2) {
  */
 let localDb: LocalDb | null = null;
 
-/** Window background per theme; matches the `--bg` tokens in styles.css (L10). */
-const THEME_BG: Record<'light' | 'dark', string> = {
-  light: '#eef0f4',
-  dark: '#0e1116',
-};
+/**
+ * Фон окна до первого кадра — цвет `--bg` последней применённой темы (L5
+ * `client_meta.ui_window_bg`, ревизия задачи 0e4a52cd). Правило выбора —
+ * чистая функция {@link resolveWindowBackground}: кэш, иначе исторический
+ * `client_meta.theme` (режим), поэтому первый запуск после обновления не даёт
+ * белой вспышки у тёмного пользователя.
+ */
+function storedWindowBackground(db: LocalDb): string {
+  return resolveWindowBackground((key) => db.getMeta(key));
+}
 
 /**
  * Deep-link цели до подтверждения готовности renderer (ошибка d8b81425).
@@ -219,11 +233,6 @@ function dispatchOrBuffer(win: BrowserWindow | undefined, payload: DeepLinkPaylo
   if (deepLinks.offer(payload)) dispatchDeepLink(win, payload);
 }
 
-/** Reads the stored L5 theme, defaulting to light. */
-function storedTheme(db: LocalDb): 'light' | 'dark' {
-  return db.getMeta(CLIENT_META_KEY.THEME) === 'dark' ? 'dark' : 'light';
-}
-
 /**
  * Creates and configures the main application window.
  *
@@ -239,8 +248,11 @@ function storedTheme(db: LocalDb): 'light' | 'dark' {
  * is disabled because Electron's sandboxed loader cannot import the ESM preload
  * bundle; see the inline comment at the `sandbox` field below.
  */
-function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
+function createWindow(db: LocalDb): BrowserWindow {
   const bounds = sanitizeBounds(loadWindowBounds(db), screen.getAllDisplays());
+  // Фон до первого кадра — `--bg` применённой темы: кэш, иначе режим из
+  // исторического `client_meta.theme` (первый запуск после обновления).
+  const background = storedWindowBackground(db);
   const win = new BrowserWindow({
     x: bounds.x,
     y: bounds.y,
@@ -258,7 +270,7 @@ function createWindow(theme: 'light' | 'dark', db: LocalDb): BrowserWindow {
     icon: isDev ? path.join(mainDir, '../../build/icon.png') : undefined,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: THEME_BG[theme],
+    backgroundColor: background,
     webPreferences: {
       // electron-vite emits the preload bundle as `.mjs` (package "type":"module")
       // into `out/preload/`. Resolve it relative to `out/main/` at runtime so
@@ -444,7 +456,7 @@ function registerEtnimgProtocol(deps: EtnimgServeDeps): void {
 }
 
 /**
- * Нативные языки проверки орфографии (задача 1e373ac7).
+ * Нативные языки проверки орфографии (задачи 1e373ac7, 68402877).
  *
  * Electron на Windows/Linux использует Hunspell: набор доступных словарей
  * зависит от сборки, а язык по умолчанию — локаль ОС, в которой русского
@@ -455,13 +467,43 @@ function registerEtnimgProtocol(deps: EtnimgServeDeps): void {
  * этого старт приложения нельзя. Сама проверка включается атрибутом
  * `spellcheck="true"` на contentDOM редактора комментария
  * (client/src/renderer/editor/md-editor.ts).
+ *
+ * Словари едут в поставке (задача 68402877): перед включением языков они
+ * идемпотентно копируются из ресурсов в `<userData>/Dictionaries`, откуда их
+ * читает Chromium. Если файла с ожидаемым именем там нет, Chromium идёт за ним
+ * на redirector.gvt1.com — в рабочей сети TLS до этого хоста рвётся, и в
+ * консоли повторяются handshake-ошибки. Поэтому при недоступных ресурсах
+ * загрузчик отправляется в loopback-отказ, а языки не включаются вовсе.
  */
 function configureSpellCheckerLanguages(): void {
   try {
-    const available = session.defaultSession.availableSpellCheckerLanguages;
-    const wanted = ['ru', 'en-US'].filter((lang) => available.includes(lang));
+    const result = ensureSpellcheckDictionaries(
+      dictionariesSourceDir(app.getAppPath(), app.isPackaged, process.resourcesPath),
+      profileDictionariesDir(app.getPath('userData')),
+    );
+    for (const file of result.files) {
+      if (file.status === 'failed') {
+        console.warn(
+          `[ETN] spellcheck: dictionary ${file.fileName} not installed — ${file.error}`,
+        );
+      }
+    }
+    const allReady = SPELLCHECK_DICTIONARIES.every((dict) =>
+      result.readyLanguages.includes(dict.language),
+    );
+    if (!allReady) {
+      // Битая установка (нет ресурсов/нет места на диске): никаких сетевых
+      // загрузок — она и была причиной handshake-ошибок в консоли.
+      session.defaultSession.setSpellCheckerDictionaryDownloadURL(
+        DISABLED_DICTIONARY_DOWNLOAD_URL,
+      );
+    }
+    const wanted = resolveSpellcheckLanguages(
+      session.defaultSession.availableSpellCheckerLanguages,
+      result.readyLanguages,
+    );
     if (wanted.length === 0) {
-      console.warn('[ETN] spellcheck: no dictionary for ru/en-US, using system default');
+      console.warn('[ETN] spellcheck: bundled dictionaries unavailable, spellcheck disabled');
       return;
     }
     session.defaultSession.setSpellCheckerLanguages(wanted);
@@ -609,6 +651,9 @@ app
     // event/status broadcast to whichever window is front-most.
     ipc = registerIpc({
       localDb,
+      // Корень данных клиента: локальный кэш фоновой картинки карты живёт в
+      // `<userData>/wallpaper` и переживает перезапуск (задача 80324150).
+      userDataDir: app.getPath('userData'),
       clientId,
       // Версия клиента для заголовка `Client-Version` в каждом REST-запросе
       // (требование 339b507f): сервер отклоняет изменяющие запросы вне
@@ -631,15 +676,12 @@ app
     // `app.ready`, hence the subscription lives here.
     powerMonitor.on('resume', () => ipc.forceReconnectRealtime());
 
-    // Window background follows the stored theme so the very first paint
-    // already matches (the renderer applies data-theme on boot, L10).
-    const theme = storedTheme(localDb);
-
+    // Фон окна берётся из кэша применённой темы (`--bg`), поэтому первый кадр
+    // уже совпадает с ней (renderer ставит data-theme на boot, L10).
     // Языки нативной проверки орфографии (задача 1e373ac7) — до создания окна.
     configureSpellCheckerLanguages();
 
-    const win = createWindow(theme, localDb);
-
+    const win = createWindow(localDb);
     // Готовность renderer (ошибка d8b81425): холодный deep-link ждёт не
     // `did-finish-load` (он раньше подписки), а IPC-сигнал после установки
     // слушателя. Перезагрузка окна сбрасывает готовность — новый renderer
@@ -661,7 +703,7 @@ app
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0 && localDb !== null) {
-        createWindow(theme, localDb);
+        createWindow(localDb);
       }
     });
   })

@@ -1,0 +1,346 @@
+{
+  "name": "80324150-wallpaper",
+  "description": "Задача 80324150 «Фоновая картинка: клиент — настройки, метаданные, холст, кэш» (этап 1; элемент ef8112b0, требование e6d586d3, сценарии 88a8879d / 3fe62610 / 0ec86f0b). Стенд: язык сервера ru. Проверено: раздел «Оформление» — «Загрузить…» + мини-превью 16:9 + «Убрать картинку», кнопки футера не активны (картинка применяется сразу, вне draft-модели); загрузка через IPC `me.uploadWallpaper` (системный диалог выбора файла сценарию недоступен) → после перезагрузки страницы (штатный путь «картинка на всех устройствах») холст карты получает подложку: `data-canvas-wallpaper=on`, url картинки, тинт, background-attachment fixed / cover, точечной сетки НЕТ; серверная копия подтверждена шагом api; `me.removeWallpaper` возвращает сетку и прячет превью; повторная загрузка оставляет локальный кэш — второй прогон клиента с тем же профилем при погашенном сервере (см. отчёт) доказывает офлайн-старт из кэша. Пороги даунскейла и сведение альфы — юнит-тесты wallpaper-image.test.ts (не зависят от браузера). Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper.scenario.json --keep --out .tmp/80324150/out. Дополнительно (вердикт этапа 1): переключение темы на blue-topaz в светлом режиме и проба тинта — --bg темы в hsla-форме, тинт — rgba(244, 248, 251, α), полупрозрачный слой на холсте остаётся, сетки нет. Этап 2 (срез 2026-11-13): диапазон плотности 0.25–0.55; фон прочих экранов и возврат к --bg без картинки проверяет отдельный сценарий ui-probe.80324150-wallpaper-tint.scenario.json",
+  "timeout": 300000,
+  "texts": {
+    "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
+    "wallpaperUpload": { "ru": "Загрузить…", "en": "Upload…" },
+    "wallpaperRemove": { "ru": "Убрать картинку", "en": "Remove image" }
+  },
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": { "language": "ru" },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "workspace-ready",
+      "timeout": 25000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5"
+    },
+    {
+      "name": "canvas-visible",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.canvas') !== null"
+    },
+    {
+      "name": "before-upload-state",
+      "probe": "(() => { const bg = getComputedStyle(document.querySelector('.canvas')).backgroundImage; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_grid: bg.includes('radial-gradient'), has_image: bg.includes('data:image/'), image_var: getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim() }; })()",
+      "expect": { "attr": null, "has_grid": true, "has_image": false, "image_var": "" }
+    },
+
+    { "name": "open-user-menu", "click": "button[title^='Меню пользователя'], .top-right button" },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "wallpaper-block",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.settings-wallpaper') !== null"
+    },
+    {
+      "name": "wallpaper-field-label",
+      "probe": "Array.from(document.querySelectorAll('.settings-section .ui-field-label')).map((e) => (e.textContent || '').trim()).filter((s) => s === '{{text:wallpaperField}}')",
+      "expect": ["{{text:wallpaperField}}"]
+    },
+    {
+      "name": "wallpaper-block-empty",
+      "probe": "(() => { const block = document.querySelector('.settings-wallpaper'); const [upload, img, remove] = block.children; return { upload_label: (upload.textContent || '').trim(), preview_hidden: img.hidden === true, preview_src: img.getAttribute('src'), remove_label: (remove.textContent || '').trim(), remove_disabled: remove.disabled === true }; })()",
+      "expect": {
+        "upload_label": "{{text:wallpaperUpload}}",
+        "preview_hidden": true,
+        "preview_src": null,
+        "remove_label": "{{text:wallpaperRemove}}",
+        "remove_disabled": true
+      }
+    },
+
+    {
+      "name": "upload-wallpaper",
+      "eval": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 320, 180); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#e6e6e6'); ctx.fillStyle = g; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return true; })()"
+    },
+    {
+      "name": "uploaded-state",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { status: s.status, source: s.source, data_url_ok: (s.data_url || '').startsWith('data:image/jpeg;base64,'), size_ok: (s.file_size || 0) > 0, hash_ok: (s.content_hash || '').length === 64 }; })()",
+      "expect": {
+        "status": "ok",
+        "source": "server",
+        "data_url_ok": true,
+        "size_ok": true,
+        "hash_ok": true
+      }
+    },
+    {
+      "name": "wallpaper-on-server",
+      "api": {
+        "name": "wallpaper-on-server",
+        "method": "GET",
+        "path": "/users/me/wallpaper?network_id={{networkId}}",
+        "expression": "({ mime: data.mime_type, size_ok: data.file_size > 0, lum: data.meta.avg_luminance, width: data.meta.width, height: data.meta.height, url_has_network: typeof data.url === 'string' && data.url.includes('network_id={{networkId}}') })"
+      },
+      "expect": {
+        "mime": "image/jpeg",
+        "size_ok": true,
+        "lum": 0.94,
+        "width": 320,
+        "height": 180,
+        "url_has_network": true
+      }
+    },
+
+    {
+      "name": "reload-after-upload",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-upload",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-after-upload",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "after-upload-canvas",
+      "probe": "(() => { const canvas = document.querySelector('.canvas'); const style = getComputedStyle(canvas); const bg = style.backgroundImage; const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const alpha = Number((/,\\s*([\\d.]+)\\)$/.exec(tint) || [])[1]); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_image: bg.includes('data:image/jpeg;base64,'), has_grid: bg.includes('radial-gradient'), has_tint_layer: bg.includes('linear-gradient'), tint_present: tint.length > 0, alpha_in_range: Number.isFinite(alpha) && alpha >= 0.12 && alpha <= 0.3, attachment_fixed: style.backgroundAttachment.includes('fixed'), size_cover: style.backgroundSize.includes('cover') }; })()",
+      "expect": {
+        "attr": "on",
+        "has_image": true,
+        "has_grid": false,
+        "has_tint_layer": true,
+        "tint_present": true,
+        "alpha_in_range": true,
+        "attachment_fixed": true,
+        "size_cover": true
+      }
+    },
+
+    {
+      "name": "open-user-menu-2",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    { "name": "user-menu-visible-2", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-2",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog-2",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-section-2",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "pick-blue-topaz",
+      "probe": "(() => { const select = Array.from(document.querySelectorAll('.settings-section select')).find((element) => Array.from(element.options).some((option) => option.value === 'blue-topaz')); if (!select) throw new Error('нет селекта темы оформления'); select.value = 'blue-topaz'; select.dispatchEvent(new Event('change', { bubbles: true })); return select.value; })()",
+      "expect": "blue-topaz"
+    },
+    {
+      "name": "pick-light-mode",
+      "probe": "(() => { const radio = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]'); if (!radio) throw new Error('нет режима light'); radio.click(); return radio.checked; })()",
+      "expect": true
+    },
+    {
+      "name": "theme-blue-topaz-light-applied",
+      "timeout": 15000,
+      "waitFor": "document.documentElement.dataset.theme === 'blue-topaz' && document.documentElement.dataset.mode === 'light'"
+    },
+    {
+      "name": "blue-topaz-light-tint",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const bg = rootStyle.getPropertyValue('--bg').trim(); const alpha = Number((/,\\s*([\\d.]+)\\)$/.exec(tint) || [])[1]); const canvasBackground = getComputedStyle(document.querySelector('.canvas')).backgroundImage; return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, bg_is_hsl: bg.startsWith('hsla(') || bg.startsWith('hsl('), tint_present: tint.length > 0, tint_is_theme_bg: /^rgba\\(244, 248, 251, [\\d.]+\\)$/.test(tint), alpha_in_range: Number.isFinite(alpha) && alpha >= 0.12 && alpha <= 0.3, attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_tint_layer: canvasBackground.includes('linear-gradient'), has_grid: canvasBackground.includes('radial-gradient') }; })()",
+      "expect": {
+        "theme": "blue-topaz",
+        "mode": "light",
+        "bg_is_hsl": true,
+        "tint_present": true,
+        "tint_is_theme_bg": true,
+        "alpha_in_range": true,
+        "attr": "on",
+        "has_tint_layer": true,
+        "has_grid": false
+      }
+    },
+    {
+      "name": "preview-visible-after-reload",
+      "timeout": 15000,
+      "waitFor": "(() => { const img = document.querySelector('.settings-wallpaper-preview'); return img !== null && img.hidden === false && (img.getAttribute('src') || '').startsWith('data:image/jpeg;base64,'); })()"
+    },
+    {
+      "name": "after-upload-block",
+      "probe": "(() => { const block = document.querySelector('.settings-wallpaper'); const [upload, img, remove] = block.children; const buttons = Array.from(document.querySelectorAll('.settings-footer-buttons .ui-btn')); return { preview_visible: img.hidden === false, remove_enabled: remove.disabled === false, upload_enabled: upload.disabled === false, footer_disabled: buttons.map((b) => b.disabled === true) }; })()",
+      "expect": {
+        "preview_visible": true,
+        "remove_enabled": true,
+        "upload_enabled": true,
+        "footer_disabled": [false, false, false]
+      }
+    },
+
+    {
+      "name": "remove-wallpaper",
+      "eval": "window.etn.me.removeWallpaper('{{networkId}}')"
+    },
+    {
+      "name": "removed-state",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { status: s.status }; })()",
+      "expect": { "status": "none" }
+    },
+    {
+      "name": "reload-after-remove",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-remove",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-2",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-back-to-grid",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === null"
+    },
+    {
+      "name": "after-remove-state",
+      "probe": "(() => { const bg = getComputedStyle(document.querySelector('.canvas')).backgroundImage; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), has_grid: bg.includes('radial-gradient'), has_image: bg.includes('data:image/'), image_var: getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim() }; })()",
+      "expect": { "attr": null, "has_grid": true, "has_image": false, "image_var": "" }
+    },
+    {
+      "name": "open-user-menu-3",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    { "name": "user-menu-visible-3", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-3",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog-3",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-section-3",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "preview-hidden-after-remove",
+      "timeout": 15000,
+      "waitFor": "(() => { const img = document.querySelector('.settings-wallpaper-preview'); const remove = document.querySelectorAll('.settings-wallpaper')[0].children[2]; return img !== null && img.hidden === true && remove.disabled === true; })()"
+    },
+
+    {
+      "name": "reupload-for-cache",
+      "eval": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 320, 180); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#e6e6e6'); ctx.fillStyle = g; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return true; })()"
+    },
+    {
+      "name": "reload-for-cache",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-for-cache",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "wallpaper-from-cache-at-boot",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), state: s.status, source: s.source, image_var_nonempty: getComputedStyle(document.documentElement).getPropertyValue('--canvas-wallpaper-image').trim().length > 0 }; })()",
+      "expect": { "attr": "on", "state": "ok", "source": "server", "image_var_nonempty": true }
+    },
+    {
+      "name": "open-user-menu-rollback",
+      "click": "button[title^='Меню пользователя'], .top-right button"
+    },
+    { "name": "user-menu-visible-rollback", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings-rollback",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === 'Настройки'); if (!row) throw new Error('нет пункта «Настройки»'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog-rollback",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-appearance-rollback",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === 'Оформление'); if (!nav) throw new Error('нет раздела «Оформление»'); nav.click(); return true; })()"
+    },
+    {
+      "name": "appearance-ready-rollback",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.settings-wallpaper-preview') !== null"
+    },
+    {
+      "name": "capture-wallpaper-before",
+      "expect": "ok",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); window.__wpHashBefore = s.content_hash; return s.status; })()"
+    },
+    {
+      "name": "remove-wallpaper-rollback",
+      "eval": "(() => { const block = document.querySelector('.settings-wallpaper'); if (!block) throw new Error('нет блока картинки'); const remove = block.children[2]; if (!remove) throw new Error('нет кнопки удаления'); remove.click(); return true; })()"
+    },
+    {
+      "name": "preview-hidden-rollback",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.settings-wallpaper-preview').hidden === true"
+    },
+    {
+      "name": "buttons-dirty-rollback",
+      "probe": "Array.from(document.querySelectorAll('.settings-footer-buttons button')).map((b) => b.disabled)",
+      "expect": [false, false, false]
+    },
+    {
+      "name": "cancel-rollback",
+      "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[1]) throw new Error('нет кнопки «Отмена»'); buttons[1].click(); return true; })()"
+    },
+    {
+      "name": "wallpaper-restored-rollback",
+      "timeout": 20000,
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { dialog_closed: document.querySelector('.dialog-backdrop') === null, status: s.status, same_hash: s.content_hash === window.__wpHashBefore }; })()",
+      "expect": { "dialog_closed": true, "status": "ok", "same_hash": true }
+    }
+  ]
+}

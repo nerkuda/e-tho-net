@@ -31,6 +31,7 @@ import {
 import { showDialog } from './dialog.js';
 import { buildMonthCalendar } from './month-calendar.js';
 import {
+  addDays,
   isValidLocalDay,
   setPeriodFrom,
   setPeriodTimeFrom,
@@ -298,7 +299,7 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
     from,
     to,
     today,
-    weekNumbers: false,
+    weekNumbers: true,
     enableRangeDrag: allowPeriod,
     firstDayOfWeek: opts.firstDayOfWeek,
     onPickDay: (day) => {
@@ -310,6 +311,23 @@ export function buildDatePeriodDialog(opts: DatePeriodDialogOptions = {}): DateP
         from = next.from;
         to = next.to;
       }
+      syncCalendar();
+    },
+    // Клик по номеру недели (задача 3054fe86): семь суток от ПЕРВОГО дня
+    // недели сети — та же семантика, что у календаря «Дневника», поэтому
+    // значение сразу попадает в поля «с/по». В режиме одной даты периода нет —
+    // берём первый день недели.
+    onPickWeek: (firstDay) => {
+      if (!allowPeriod) {
+        from = firstDay;
+        to = firstDay;
+        syncCalendar();
+        return;
+      }
+      from = firstDay;
+      to = addDays(firstDay, 6);
+      mode = 'period';
+      modes?.setActive('period');
       syncCalendar();
     },
     onRangeChange: (nextFrom, nextTo) => {

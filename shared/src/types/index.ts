@@ -4,6 +4,7 @@
  */
 
 export * from './user.js';
+export * from './user-file.js';
 export * from './network.js';
 export * from './thought.js';
 export * from './link.js';
@@ -22,6 +23,10 @@ export * from './filter-ast.js';
 export * from './structure.js';
 export * from './chronicle.js';
 export * from './pin.js';
+export * from './reminder.js';
+export * from './task.js';
+export * from './day-links.js';
+export * from './calendar-markers.js';
 export * from './realtime.js';
 export * from './lock.js';
 export * from './activity.js';

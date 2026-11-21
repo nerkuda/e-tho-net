@@ -54,6 +54,7 @@ import {
   LayersMerge,
   LayersResetOverride,
   LayersUpdate,
+  LinksDelete,
   LinksRestore,
   LocksAcquire,
   LocksClear,
@@ -110,6 +111,10 @@ import { findPath } from '../../domain/graph-traversal.js';
 import { subgraphAsync, resolveThoughtRefsAsync } from '../../domain/heavy-read.js';
 import { getHomeThoughtId, getThoughtOrThrow, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
 import { getLink, updateLink } from '../../domain/link-service.js';
+import {
+  removeLinkTarget,
+  type LinkRemovalAction,
+} from '../../domain/link-target-removal.js';
 import { findMentions } from '../../domain/search-service.js';
 import { findBacklinks } from '../../domain/backlinks-service.js';
 import { deleteComment, getComment } from '../../domain/comment-service.js';
@@ -127,6 +132,7 @@ import {
 } from '../../domain/property-service.js';
 import { deleteOntologyEntity } from '../../domain/ontology-delete-service.js';
 import { getThoughtType } from '../../domain/thought-type-service.js';
+import { subtreeIds } from '../../domain/type-hierarchy.js';
 import { getLinkType } from '../../domain/link-type-service.js';
 import {
   getThoughtTypeView,
@@ -162,6 +168,8 @@ import type { McpRuntime } from '../context.js';
 import { executeMentionsScan } from './shared.js';
 import { mcpTokenContext } from './token-context.js';
 import { PUBLICATION_OPS_HANDLERS } from './publications.js';
+import { REMINDER_OPS_HANDLERS } from './reminders.js';
+import { TASK_OPS_HANDLERS } from './tasks.js';
 import { GUIDE_TOPICS, GUIDE_TOPICS_BY_NAME, GUIDE_TOPIC_NAMES, OPS_ACTIONS, OPS_ACTIONS_BY_NAME, OPS_ACTION_NAMES, isMutatingOpCall, type OpEntry } from './ops-catalog.js';
 
 /** Разложить `params` по схеме действия (уже провалидированы контрактом). */
@@ -177,6 +185,12 @@ export type OpHandler = (
 // ---------------------------------------------------------------------------
 // Обработчики действий
 // ---------------------------------------------------------------------------
+
+/** Итог `links.delete`: что стало с ребром (noop — ребра нет или оно уже в корзине). */
+interface LinkDeleteOutcome {
+  link_id: string;
+  action: LinkRemovalAction | 'noop';
+}
 
 const HANDLERS: Record<string, OpHandler> = {
   // ---- locks ---------------------------------------------------------------
@@ -1234,6 +1248,68 @@ const HANDLERS: Record<string, OpHandler> = {
       } satisfies McpMutationResult;
     });
   },
+  'links.delete': (rt, p, extra) => {
+    const a = p as unknown as z.infer<typeof LinksDelete.schema>;
+    return runWriteTool(rt, a.network_id, () => {
+      requireWritable(rt);
+      requireWriteBudget(rt);
+      const ndb = openMemberNetwork(rt, a.network_id);
+      const fx = mcpWriteFx(rt, a.network_id, extra.requestId);
+      const removal = runWrite<LinkDeleteOutcome>(ndb, fx, () => {
+        // Умное удаление (0.14.1, ADR a967d865) — та же процедура, что у удаления
+        // цели свойства-связи: основа и свежее ребро слоя физически
+        // (`link.deleted`); ребро основы/предка при работе в слое — корзина
+        // (`link.updated`), восстановление — `links.restore`.
+        const removed = removeLinkTarget(ndb, a.link_id, rt.deps.auth.userId);
+        const audit = {
+          action: 'etn.links.delete',
+          targetType: 'link',
+          targetId: a.link_id,
+          details: { action: removed?.action ?? 'noop' },
+        };
+        // Идемпотентность (ошибка 7df2b3d1): ребра нет или оно уже в корзине —
+        // no-op без события и без строки журнала.
+        if (removed === null) {
+          return { result: { link_id: a.link_id, action: 'noop' as const }, audit };
+        }
+        if (removed.action === 'deleted') {
+          return {
+            result: { link_id: removed.link_id, action: removed.action },
+            events: [{ type: 'link.deleted' as const, data: { id: removed.link_id } }],
+            activity: [{ kind: 'link' as const, action: 'deleted' as const, link: removed.link }],
+            audit,
+          };
+        }
+        // Корзина слоя: строка уже помечена — событие и журнал показывают
+        // итоговое состояние ребра, как у прочих пометок.
+        const marked = getLink(ndb, removed.link_id);
+        return {
+          result: { link_id: removed.link_id, action: removed.action },
+          ...(marked === null
+            ? {}
+            : {
+                events: [
+                  {
+                    type: 'link.updated' as const,
+                    data: {
+                      id: marked.id,
+                      changes: { marked_for_deletion: true },
+                      version: marked.version,
+                    },
+                  },
+                ],
+                activity: [{ kind: 'link' as const, action: 'trashed' as const, link: marked }],
+              }),
+          audit,
+        };
+      });
+      return {
+        link_id: removal.link_id,
+        action: removal.action,
+        request_id: String(extra.requestId),
+      };
+    });
+  },
 
   // ---- trash ---------------------------------------------------------------
   'trash.list': (rt, p) => {
@@ -1821,7 +1897,10 @@ const HANDLERS: Record<string, OpHandler> = {
         // ошибка 1242f78d). Отдельный `type_view` тоже читаем до удаления —
         // иначе событие несло `thought_type_id: ''` (ошибка 1242f78d, п. в).
         let snapshot: unknown = null;
-        let cascadedViews: ReturnType<typeof listOwnEffectiveTypeViews> = [];
+        /** id ВСЕХ типов, которые уносит удаление: с `force` — всё поддерево
+         *  (ошибка d4802371), поэтому события уходят на каждый тип, как в REST. */
+        let cascadedTypeIds: string[] = [];
+        const cascadedViews: ReturnType<typeof listOwnEffectiveTypeViews> = [];
         let removedView: ReturnType<typeof toEffectiveTypeView> | null = null;
         /** Парное свойство-связь удаляемого типа (ошибка 117a999a): снимок до
          *  удаления, чтобы отправить `property-registry.deleted`. */
@@ -1829,7 +1908,12 @@ const HANDLERS: Record<string, OpHandler> = {
         try {
           if (a.kind === 'thought_type') {
             snapshot = getThoughtType(ndb, a.id);
-            cascadedViews = listOwnEffectiveTypeViews(ndb, a.id);
+            // Поддерево (ошибка d4802371): с `force` тип уносится вместе со
+            // всеми потомками — снимки отборов снимаем с каждого типа.
+            cascadedTypeIds = subtreeIds(ndb, 'thought_types', a.id);
+            for (const typeId of cascadedTypeIds) {
+              cascadedViews.push(...listOwnEffectiveTypeViews(ndb, typeId));
+            }
           } else if (a.kind === 'link_type') {
             snapshot = getLinkType(ndb, a.id);
             removedLinkPropertyId = getLinkPropertyByLinkTypeId(ndb, a.id)?.id ?? null;
@@ -1849,7 +1933,11 @@ const HANDLERS: Record<string, OpHandler> = {
         const events: AnyWriteEvent[] = [];
         if (snapshot !== null && snapshot !== undefined) {
           if (a.kind === 'thought_type') {
-            events.push({ type: 'thought-type.deleted', data: { id: a.id } });
+            // Каскад поддерева (ошибка d4802371): событие на КАЖДЫЙ удалённый
+            // тип — запрошенный и всех потомков.
+            for (const typeId of cascadedTypeIds) {
+              events.push({ type: 'thought-type.deleted', data: { id: typeId } });
+            }
             // Каскад отборов (задача c1fa71d4): отдельное событие
             // `thought-type-view.deleted` на каждый удалённый отбор — с полной
             // карточкой-снапшотом (0.14.1, ошибки 69aa355c/1242f78d).
@@ -1918,6 +2006,14 @@ const HANDLERS: Record<string, OpHandler> = {
   // 25 операций публикаций и полок перенесены из собственных инструментов в
   // паттерн guide+ops; обработчики — в publications.ts (единый источник).
   ...PUBLICATION_OPS_HANDLERS,
+
+  // ---- reminders (0.16.1, задача b47f1fd2) ----------------------------------
+  // 6 операций напоминаний: обработчики — в reminders.ts (единый источник).
+  ...REMINDER_OPS_HANDLERS,
+
+  // ---- tasks (0.16.1, задача f34066e1) --------------------------------------
+  // 6 операций задач: обработчики — в tasks.ts (единый источник).
+  ...TASK_OPS_HANDLERS,
 };
 
 /** Проверка доступа к сети для read-действий (форwards на общий хелпер). */

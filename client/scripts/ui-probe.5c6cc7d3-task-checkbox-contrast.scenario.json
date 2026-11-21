@@ -1,6 +1,6 @@
 {
   "name": "5c6cc7d3-task-checkbox-contrast",
-  "description": "GUI-гейт ошибки 5c6cc7d3: чек-боксы task-списков в просмотре markdown видны в обеих темах, состояния отмечен/не отмечен различимы. Стенд сеет постоянный комментарий корневой мысли с полным набором обёрток (маркированный и нумерованный список, вложенность, пункт с абзацем, цитата, цитата внутри пункта) и дневниковую запись с task-списком (хост `.diary-body`, у него нет класса `.comment-view` — проверка правила «класс, а не случай»). DOM-проба считает контраст рамки/заливки против фактического фона (с учётом opacity; до фикса вендорский `input:disabled { opacity: .5 }` давал 1.25:1 в тёмной теме и 1.29:1 в светлой), растровые ассерты подтверждают, что цвета токенов действительно нарисованы. Тёмная тема — ключевой сценарий (блокер приёмки). Правка (live preview, `.cm-md-task-checkbox`) проверяется входом в режим редактирования. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.5c6cc7d3-task-checkbox-contrast.scenario.json",
+  "description": "GUI-гейт ошибки 5c6cc7d3: чек-боксы task-списков в просмотре markdown видны в обеих темах, состояния отмечен/не отмечен различимы. Стенд сеет постоянный комментарий корневой мысли с полным набором обёрток (маркированный и нумерованный список, вложенность, пункт с абзацем, цитата, цитата внутри пункта) и дневниковую запись с task-списком (хост `.diary-body`, у него нет класса `.comment-view` — проверка правила «класс, а не случай»). DOM-проба считает контраст рамки/заливки против фактического фона (с учётом opacity; до фикса вендорский `input:disabled { opacity: .5 }` давал 1.25:1 в тёмной теме и 1.29:1 в светлой), растровые ассерты подтверждают, что цвета токенов действительно нарисованы. Тёмная тема — ключевой сценарий (блокер приёмки). Правка (live preview, `.cm-md-task-checkbox`) проверяется входом в режим редактирования. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.5c6cc7d3-task-checkbox-contrast.scenario.json В тёмном режиме галочка отмеченного чекбокса — тёмные чернила --accent-fg (#0e1116), в светлом — белые (#ffffff); растры проверяют токен своего режима.",
   "timeout": 300000,
   "steps": [
     {
@@ -85,11 +85,11 @@
     },
     {
       "name": "set-dark",
-      "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()"
+      "eval": "(() => { document.documentElement.dataset.mode = 'dark'; return document.documentElement.dataset.mode; })()"
     },
     {
       "name": "theme-dark",
-      "probe": "document.documentElement.dataset.theme",
+      "probe": "document.documentElement.dataset.mode",
       "expect": "dark"
     },
     {
@@ -149,9 +149,9 @@
           },
           {
             "kind": "hasColor",
-            "color": "#ffffff",
-            "tolerance": 40,
-            "minPixels": 2
+            "color": "#0e1116",
+            "tolerance": 8,
+            "minPixels": 4
           }
         ],
         "evidence": false
@@ -201,9 +201,9 @@
           },
           {
             "kind": "hasColor",
-            "color": "#ffffff",
-            "tolerance": 40,
-            "minPixels": 2
+            "color": "#0e1116",
+            "tolerance": 8,
+            "minPixels": 4
           }
         ],
         "evidence": false
@@ -220,11 +220,11 @@
     },
     {
       "name": "set-light",
-      "eval": "(() => { document.documentElement.dataset.theme = 'light'; return document.documentElement.dataset.theme; })()"
+      "eval": "(() => { document.documentElement.dataset.mode = 'light'; return document.documentElement.dataset.mode; })()"
     },
     {
       "name": "theme-light",
-      "probe": "document.documentElement.dataset.theme",
+      "probe": "document.documentElement.dataset.mode",
       "expect": "light"
     },
     {
@@ -312,7 +312,7 @@
     },
     {
       "name": "set-dark-diary",
-      "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()"
+      "eval": "(() => { document.documentElement.dataset.mode = 'dark'; return document.documentElement.dataset.mode; })()"
     },
     {
       "name": "settle-diary",

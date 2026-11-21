@@ -104,6 +104,10 @@ describe('реестр профилей контекста (задача 7a798b1
       attachments: true,
       chronology: true,
       comment: true,
+      // Задачи и напоминания мысли (0.16.1, задача 4cfc6257).
+      tasks: true,
+      reminders: true,
+      reminder_at: true,
       targets: true,
       active: true,
       trashed: true,
@@ -118,6 +122,8 @@ describe('реестр профилей контекста (задача 7a798b1
       record_body: true,
       record_author: true,
       record_editor: true,
+      // «Есть задачи» в записи (уточнение 2026-11-19, п.8).
+      record_tasks: true,
       occurred_at: true,
       action: true,
       entity_type: true,

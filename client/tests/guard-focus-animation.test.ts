@@ -59,7 +59,12 @@ describe('guard: плавная смена фокуса — длительнос
 
   it('токены объявлены в :root и обнулены при prefers-reduced-motion', () => {
     const css = readRendererCss();
-    const rootEnd = css.indexOf("[data-theme='dark'] {");
+    // Корневые токены читаются из собранного CSS: блоки тем в Vite-ассете
+    // ЕСТЬ (`[data-theme='current']`, `[data-mode='light'|'dark']`), а вот
+    // старой однотемной формы `[data-theme='dark'] {` в нём не осталось
+    // (ADR de24adef). Прежний срез по этому маркеру молча терялся — ревизия
+    // задачи 2bf4b53e; граница теперь блок reduced-motion.
+    const rootEnd = css.indexOf('@media (prefers-reduced-motion: reduce)');
     const root = css.slice(0, rootEnd === -1 ? css.length : rootEnd);
     for (const token of TOKENS) {
       assert.match(root, new RegExp(`${token}\\s*:`), `${token} не объявлен в :root styles.css`);

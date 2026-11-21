@@ -28,6 +28,7 @@ import { describe, it } from 'node:test';
 
 import { listSourceFiles } from './guard-helpers.js';
 import { RENDERER_ROOT } from './renderer-css.js';
+import { THEME_MODES, declaredTokens as blockDeclaredTokens, themeBlockBody } from './theme-css.js';
 
 /** Токены, выставляемые из JS в рантайме (не объявляются в CSS). */
 const RUNTIME_TOKENS = new Set([
@@ -43,6 +44,14 @@ const RUNTIME_TOKENS = new Set([
   // lib/layer-colors.ts
   '--layer-bg',
   '--layer-focus-stripe',
+  // кольца фокуса экранов — производное от --surface, пишет тот же модуль
+  '--layer-focus-ring-screen',
+  // lib/cloud-frames.ts (через lib/layer-colors.ts) — рамки трёх состояний
+  // мысли: открытая/текущая/выделенная, производные от темы и полосы слоя
+  // (задача c6d74fd4).
+  '--frame-open',
+  '--frame-current',
+  '--frame-selected',
   // lib/ui/popover.ts
   '--ui-popover-arrow-left',
   // lib/ui/tree.ts
@@ -66,11 +75,35 @@ const RUNTIME_TOKENS = new Set([
   '--usage-dock-w',
   // screens/structures/structures.ts
   '--st-indent',
+  // lib/ui/task-panel.ts — высота панели «Задачи и напоминания» на «Дневнике»
+  // из `ui_state` (пункт B ТЗ 2026-11-17): число считает слайдер экрана, CSS
+  // только читает переменную.
+  '--task-panel-height',
+  // screens/chronicle/chronicle.ts — минимум места для ленты «Дневника» под
+  // панелью задач (замечание Н1 вердикта 84c71c37): значение берётся из
+  // `TASKS_PANEL_FEED_MIN` (`screens/chronicle/tasks-panel.ts`), чтобы потолок
+  // панели и минимум ленты не разъезжались.
+  '--tasks-panel-feed-min',
+  // lib/filter-panel-frame.ts — резерв результатов панели отбора в верхнем
+  // положении (замечание Н1 репроверки 4b755c93 по задаче cfb8cb72): «Дневник»
+  // подставляет фактический резерв колонки (панель добавления, минимум панели
+  // задач, швы, минимум ленты), остальные экраны — фолбэк 160px.
+  '--fp-results-min',
   // screens/publications/workspace.ts
   '--pub-doc-width',
+  // canvas/wallpaper.ts — подложка холста карты (0.16.1, задача 80324150):
+  // url картинки и rgba-тинт считаются в JS (метаданные светлоты), CSS их
+  // только читает.
+  '--canvas-wallpaper-image',
+  '--canvas-wallpaper-tint',
+  // canvas/wallpaper.ts — лёгкий тинт картинки на фоне прочих экранов
+  // (этап 2, 80324150): тот же rgba-расчёт, но слабее карты; CSS экранов
+  // подмешивает его первым слоем фона.
+  '--wallpaper-screen-tint',
 ]);
 
-const TOKENS_CSS = path.join(RENDERER_ROOT, 'styles', 'tokens.css');
+/** Файл значений темы по умолчанию: там живут цветовые токены (ADR de24adef). */
+const TOKENS_CSS = path.join(RENDERER_ROOT, 'lib', 'ui', 'themes', 'current.css');
 
 /** Блочные комментарии → пробелы (номера строк сохраняются). */
 function stripComments(css: string): string {
@@ -144,11 +177,16 @@ describe('guard: ссылки на CSS-токены рендерера', () => {
     }
   });
 
-  it('канонические токены приглушённого текста объявлены', () => {
-    const root = stripComments(fs.readFileSync(TOKENS_CSS, 'utf8'));
-    const missing = ['--text-dim', '--text-faint'].filter(
-      (t) => !new RegExp(`(^|[;{\\s])${t}\\s*:`).test(root),
-    );
+  it('канонические токены приглушённого текста объявлены в обоих режимах темы', () => {
+    const css = fs.readFileSync(TOKENS_CSS, 'utf8');
+    const missing: string[] = [];
+    for (const mode of THEME_MODES) {
+      const body = themeBlockBody(css, 'current', mode);
+      const tokens = body === null ? new Map() : blockDeclaredTokens(body);
+      for (const token of ['--text-dim', '--text-faint']) {
+        if (!tokens.has(token)) missing.push(`${token} [${mode}]`);
+      }
+    }
     if (missing.length > 0) {
       throw new Error(`Не объявлены токены приглушённого текста: ${missing.join(', ')}`);
     }

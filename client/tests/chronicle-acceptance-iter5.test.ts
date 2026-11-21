@@ -216,7 +216,7 @@ describe('приёмка №5, п.3: диалог «Дата/период»', ()
 
     const d10 = dayByDate(root, '2026-09-10')!;
     const d20 = dayByDate(root, '2026-09-20')!;
-    d10.emit('mousedown');
+    d10.emit('mousedown', { button: 0 });
     d20.emit('mousemove');
     d20.emit('mouseup');
 

@@ -15,6 +15,7 @@ import { describe, it } from 'node:test';
 import { EtnError, NOT_CONNECTED_ERROR_TEXT } from '@etn/shared';
 
 import { errText, isConnectionLostError, isServerUpdatingError } from '../src/renderer/lib/dom.js';
+import { t } from '../src/renderer/lib/i18n.js';
 
 const CONNECTION_LOST = 'нет соединения с сервером';
 const SERVER_UNAVAILABLE = 'сервер недоступен, попробуйте позже';
@@ -114,6 +115,24 @@ describe('errText: дружелюбные сообщения', () => {
       }),
     );
     assert.equal(text, 'версия клиента не подходит серверу — обновите клиент');
+    assertFriendly(text);
+  });
+
+  it('недостижимая серия напоминания — текст по details.issue, без серверного message', () => {
+    // Сервер объясняет причину агентам по-английски; пользователю нужен текст
+    // словаря по машиночитаемому `details.issue` (приёмка 173f1540).
+    const text = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'Reminder series has no occurrence: day 29 of month 2 is not a valid date in any year of the series (every 4 year(s)).',
+        { status: 400, field: 'schedule', issue: 'no-occurrence' },
+      ),
+    );
+    assert.equal(
+      text,
+      'с указанным интервалом вхождений не будет: выбранной даты не бывает в месяцах или годах этой серии — измените дату или шаг',
+    );
+    assert.doesNotMatch(text, /occurrence|series|schedule/i);
     assertFriendly(text);
   });
 
@@ -243,5 +262,42 @@ describe('errText: дружелюбные сообщения', () => {
     assert.equal(isServerUpdatingError(new EtnError('INTERNAL', 'down')), false);
     assert.equal(isServerUpdatingError({ code: 'NOT_FOUND' }), false);
     assert.equal(isServerUpdatingError(null), false);
+  });
+
+  it('422 по роли сети — адресный текст вместо общего «проверьте введённые данные» (d4802371)', () => {
+    // Удаление типа, чей потомок занят ролью сети: сервер кладёт `details.role`
+    // (REST и MCP), общий код давал невнятное «проверьте введённые данные».
+    const text = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'The type is used by the network in the "table_of_contents" role',
+        {
+          entity: 'thought_type',
+          id: '11111111-2222-4333-8444-555555555555',
+          role: 'table_of_contents',
+        },
+      ),
+    );
+    assert.equal(text, t('thoughtTypes.deleteRoleBlocked', t('settings.label.uzlovoyTypeRazdela')));
+    assert.match(text, /Узловой тип раздела/);
+    assert.doesNotMatch(text, /table_of_contents|VALIDATION_ERROR|Проверьте|проверьте/i);
+    assertFriendly(text);
+
+    // Незнакомая роль (сеть новее клиента) — её ключ как есть, без выдумок.
+    assert.equal(
+      errText({ code: 'VALIDATION_ERROR', details: { role: 'future_role' } }),
+      t('thoughtTypes.deleteRoleBlocked', 'future_role'),
+    );
+    assert.match(
+      errText({ code: 'VALIDATION_ERROR', details: { role: 'future_role' } }),
+      /future_role/,
+    );
+
+    // Остальные VALIDATION_ERROR идут прежним путём: общий словарный текст.
+    assert.equal(
+      errText({ code: 'VALIDATION_ERROR', details: { field: 'kind' } }),
+      'проверьте введённые данные',
+    );
+    assert.equal(errText(new EtnError('VALIDATION_ERROR', 'bad input')), 'проверьте введённые данные');
   });
 });

@@ -24,11 +24,23 @@
  * упорядоченный диапазон (`onRangeChange`). Сетка при старте перетаскивания НЕ
  * перестраивается (меняется только выделение классов) — иначе узел-цель
  * теряется и одиночный `click` по дню не доходит (приёмка №6, п.3).
+ * Перетаскивание начинается только на ячейке дня: номер недели его не
+ * запускает и диапазон не расширяет. Отпускание вне сетки и `Esc` отменяют
+ * жест и возвращают прежнее выделение (задача 3054fe86).
  *
  * **Что компонент НЕ делает.** Он не применяет период и не трогает данные: клик
  * по дню/неделе лишь сообщает хозяину выбранное (`onPickDay`/`onPickWeek`),
  * перетаскивание диапазона — через `onRangeChange`. Инвариант панели «поля
  * периода — единственный источник дат» остаётся на экране.
+ *
+ * **Маркеры дня (0.16.1, требование ab9d627b).** Индикация дня — маркеры-цвета
+ * в четырёх ФИКСИРОВАННЫХ местах слева от номера: записи (синий), задачи и
+ * напоминания (оранжевый), датовые факты и date-ссылки (зелёный), просрочка
+ * (красный). Цвета — только токены дизайн-системы (`--accent`/`--warn`/`--ok`/
+ * `--danger`, обе темы). Счётчиков в клетках нет: число-счётчик и точки-пороги
+ * 0.10.2 упразднены. Источник маркеров — опция `markers`; НЕ задана — режим
+ * `markers: off` (диалог «Дата/период» маркеров не показывает), включает его
+ * только панель отбора «Дневника».
  *
  * Чистая сетка месяца ({@link buildMonthWeeks}) и примитивы дат — `lib/dates.ts`
  * (перенесены из `screens/chronicle/diary.ts`, чтобы библиотека не зависела от
@@ -39,12 +51,14 @@
  */
 
 import { div, el, span } from './dom.js';
+import { CALENDAR_MARKER_ORDER, type CalendarMarkerKind } from '@etn/shared';
 import { buildMonthWeeks, firstOfMonth, todayLocal, type CalendarWeek } from './dates.js';
 import { defineKeyContext, pushKeyContext } from './keymap.js';
 import { modifierChordVariants } from './keymap-chords.js';
 import { uiButton } from './ui/button.js';
 import { fieldInput } from './ui/field.js';
 import { openPopover, type PopoverHandle } from './ui/popover.js';
+import { createDelayedOpen } from './preview-open-delay.js';
 import { t } from './i18n.js';
 
 export { buildMonthWeeks } from './dates.js';
@@ -120,6 +134,19 @@ const MAX_YEAR = 2200;
  */
 const MONTH_REOPEN_GUARD_MS = 400;
 
+/**
+ * Счётчики содержимого дня для попапа наведения (0.16.1, уточнение 2026-11-19,
+ * пункт 7). Задачи и напоминания делят маркер `plans`, но в пояснении дня
+ * считаются раздельно — пользователь видит, чего именно в дате сколько.
+ */
+export interface MonthCalendarDayCounts {
+  records: number;
+  tasks: number;
+  reminders: number;
+  facts: number;
+  overdue: number;
+}
+
 /** Опции сборки календаря месяца. */
 export interface MonthCalendarOptions {
   /** Начало выделенного периода (пусто — нет). */
@@ -128,8 +155,21 @@ export interface MonthCalendarOptions {
   to?: string;
   /** Сегодняшний локальный день (подсветка). */
   today?: string;
-  /** Сколько записей попало в день (0 — счётчик не рисуется). */
-  counts?: (day: string) => number;
+  /**
+   * Источник маркеров дня (0.16.1, требование ab9d627b). НЕ задан — маркеры
+   * ВЫКЛЮЧЕНЫ (`markers: off` по умолчанию): общий компонент показывает
+   * маркеры только у календаря панели отбора «Дневника», календарь диалога
+   * «Дата/период» рендерится без них.
+   */
+  markers?: (day: string) => readonly CalendarMarkerKind[];
+  /**
+   * Содержимое дня для ПОПАПА НАВЕДЕНИЯ (0.16.1, уточнение 2026-11-19, пункт 7):
+   * наведение на день с задержкой {@link CTRL_PREVIEW_OPEN_DELAY_MS} (ровно
+   * 0.5 с) показывает пояснение — цветные маркеры с количествами. `null` или
+   * не задано — попапа нет (диалог «Дата/период» остаётся прежним); включает
+   * его только календарь панели отбора «Дневника».
+   */
+  dayInfo?: (day: string) => MonthCalendarDayCounts | null;
   /** Клик по дню. */
   onPickDay?: (day: string) => void;
   /**
@@ -169,6 +209,12 @@ export interface MonthCalendarHandle {
   root: HTMLElement;
   /** Перерисовать выделение периода извне. */
   setSelection(from: string, to: string): void;
+  /**
+   * Перерисовать сетку, не меняя выделения и показанного месяца: источник
+   * маркеров — замыкание хозяина, поэтому новые данные маркеров появляются
+   * только после перерисовки (`refreshCalendarMarkers` экрана «Дневника»).
+   */
+  refresh(): void;
   /** Показать месяц по дате `YYYY-MM-DD`. */
   showDate(day: string): void;
   /** Показанный месяц. */
@@ -182,23 +228,35 @@ export interface MonthCalendarHandle {
 }
 
 /**
- * Индикатор записей дня (0.10.2, задача 41ed99ab, элемент 55b07702): число
- * чисел-счётчиков заменено 1–3 вертикальными точками. Пороги: записей нет —
- * 0 точек; ≤ 50 — 1 точка; 51…100 — 2 точки; > 100 — 3 точки. Точки живут
- * только там, где хозяин передал `counts` (панель «Дневника»); в диалоге
- * даты/периода счётчики не задаются — вид прежний.
+ * Подпись маркера для подсказки; текст берётся в момент рендера (словарь живой).
  */
-export function calendarDotCount(count: number): 0 | 1 | 2 | 3 {
-  if (count <= 0) return 0;
-  if (count <= 50) return 1;
-  if (count <= 100) return 2;
-  return 3;
+function markerTitle(kind: CalendarMarkerKind): string {
+  switch (kind) {
+    case 'records':
+      return t('calendar.marker.records');
+    case 'plans':
+      return t('calendar.marker.plans');
+    case 'facts':
+      return t('calendar.marker.facts');
+    case 'overdue':
+      return t('calendar.marker.overdue');
+  }
 }
 
-/** Столбик из `n` точек-индикаторов (слева от номера дня). */
-function buildDots(n: number): HTMLElement {
-  const box = el('span', 'cal-dots');
-  for (let i = 0; i < n; i++) box.append(el('span', 'cal-dot'));
+/**
+ * Столбик маркеров дня (слева от номера дня): четыре фиксированных места,
+ * присутствующие маркеры покрашены токенами дизайн-системы, отсутствующие не
+ * видны, но занимают своё место. Счётчиков в клетке нет (0.16.1: число-счётчик
+ * и точки-пороги 0.10.2 упразднены).
+ */
+function buildMarkers(present: ReadonlySet<CalendarMarkerKind>): HTMLElement {
+  const box = el('span', 'cal-markers');
+  for (const kind of CALENDAR_MARKER_ORDER) {
+    const marker = el('span', `cal-marker cal-marker--${kind}`);
+    if (present.has(kind)) marker.title = markerTitle(kind);
+    else marker.classList.add('is-off');
+    box.append(marker);
+  }
   return box;
 }
 
@@ -309,6 +367,16 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   let dragStart = '';
   /** Drag ушёл на другой день (тогда click подавляется). */
   let dragMoved = false;
+  /**
+   * Гасит ОДИН следующий click: после отмены drag (Esc, отпускание вне сетки)
+   * браузер всё равно присылает click по дню — он не должен выбрать день.
+   * Сбрасывается на новом mousedown и при первом click.
+   */
+  let swallowNextClick = false;
+  /** Выделение до начала drag — к нему возвращает отмена/отпускание вне сетки. */
+  let selectionBeforeDrag = { from, to };
+  /** Слушатели окна на время drag (снимаются при завершении — без утечек). */
+  let unbindWindowDrag: (() => void) | null = null;
   /** Кнопки дней текущей сетки (для обновления выделения без перестройки). */
   let dayCells: Array<{ day: string; el: HTMLElement }> = [];
 
@@ -318,6 +386,61 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   let monthPopover: PopoverHandle | null = null;
   /** Момент закрытия списка месяцев (защита от повторного открытия). */
   let monthPopoverClosedAt = 0;
+  /** Открытый попап содержимого дня (наведение, пункт 7 уточнения 2026-11-19). */
+  let dayInfoPopover: PopoverHandle | null = null;
+
+  /** Закрыть попап содержимого дня (перерисовка сетки/новый день/клик). */
+  function closeDayInfo(): void {
+    dayInfoPopover?.close();
+    dayInfoPopover = null;
+  }
+
+  /** Строка пояснения дня: маркер вида, подпись вида, количество. */
+  function dayInfoRow(kind: CalendarMarkerKind, label: string, count: number): HTMLElement {
+    const row = div('cal-day-info-row');
+    const dot = el('span', `cal-marker cal-marker--${kind}`);
+    if (count === 0) dot.classList.add('is-off');
+    row.append(dot, span(label, 'cal-day-info-label'), span(String(count), 'cal-day-info-count'));
+    return row;
+  }
+
+  /** Тело попапа: пять строк-пояснений (легенда + количества дня). */
+  function buildDayInfoBody(counts: MonthCalendarDayCounts): HTMLElement {
+    const body = div('cal-day-info');
+    body.append(
+      dayInfoRow('records', t('calendar.dayInfo.records'), counts.records),
+      dayInfoRow('plans', t('calendar.dayInfo.tasks'), counts.tasks),
+      dayInfoRow('plans', t('calendar.dayInfo.reminders'), counts.reminders),
+      dayInfoRow('facts', t('calendar.dayInfo.facts'), counts.facts),
+      dayInfoRow('overdue', t('calendar.dayInfo.overdue'), counts.overdue),
+    );
+    return body;
+  }
+
+  /**
+   * Отложенный показ попапа дня: задержка ЕДИНАЯ для предпросмотров
+   * ({@link createDelayedOpen}, ровно 500 мс — сторож
+   * `guard-ctrl-preview-open-delay`). Панель открывается общим компонентом
+   * `lib/ui/popover` под клеткой дня; содержимое считает хозяин в момент показа
+   * (`opts.dayInfo`), поэтому данные всегда свежие.
+   */
+  const dayInfoOpen = createDelayedOpen<{ day: string; element: HTMLElement }>((subject) => {
+    if (opts.dayInfo === undefined) return;
+    const counts = opts.dayInfo(subject.day);
+    if (counts === null) return;
+    closeDayInfo();
+    dayInfoPopover = openPopover({
+      anchor: { element: subject.element },
+      content: {
+        title: t('calendar.dayInfo.title', [subject.day]),
+        body: buildDayInfoBody(counts),
+      },
+      extraClass: 'cal-day-info-popover',
+      onClose: () => {
+        dayInfoPopover = null;
+      },
+    });
+  });
 
   function notifyMonth(): void {
     opts.onMonthChange?.(year, month);
@@ -479,13 +602,23 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   // (`showDialog` слушает Escape на `window` в capture-фазе). Capture-слушатель
   // регистрируется при сборке календаря — то есть раньше, чем диалог повесит
   // свой, — и при открытом поле года гасит нажатие до диалога (приёмка №6, п.5).
+  // Тот же слушатель отменяет активное перетаскивание диапазона (задача
+  // 3054fe86): второго локального перехвата клавиш не заводим (сторож
+  // `guard-keymap-single-point`), а Escape обязан не закрывать диалог.
   window.addEventListener(
     'keydown',
     (event) => {
-      if (!yearEditing || event.key !== 'Escape') return;
+      if (event.key !== 'Escape') return;
+      if (yearEditing) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancelYear();
+        return;
+      }
+      if (!dragging) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      cancelYear();
+      finishDrag(null);
     },
     true,
   );
@@ -519,7 +652,6 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     if (inPeriod(cell.day)) classes.push('is-selected');
     if (from !== '' && cell.day === from) classes.push('is-selected-from');
     if (to !== '' && cell.day === to) classes.push('is-selected-to');
-    const count = opts.counts?.(cell.day) ?? 0;
     const label = String(Number(cell.day.slice(8, 10)));
     const button = uiButton({
       label: '',
@@ -528,9 +660,11 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       title: cell.day,
       class: classes.join(' '),
       onClick: (event) => {
-        if (dragMoved) {
-          // Завершение перетаскивания: click уже обработан в mouseup.
+        if (dragMoved || swallowNextClick) {
+          // Завершение перетаскивания или отменённый drag: click уже обработан
+          // в mouseup / не должен выбирать день после отмены.
           dragMoved = false;
+          swallowNextClick = false;
           return;
         }
         opts.onPickDay?.(cell.day);
@@ -540,11 +674,28 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
         if ((event as MouseEvent).detail >= 2) opts.onPickDayActivate?.(cell.day);
       },
     });
-    // Индикатор записей — столбик 1–3 точек СЛЕВА от номера дня, по центру
-    // ячейки (0.10.2, задача 41ed99ab); фоновой подсветки `.has-records` больше
-    // нет — счётчик-число упразднён.
-    const dots = calendarDotCount(count);
-    if (dots > 0) button.append(buildDots(dots));
+    // Маркеры дня — столбик фиксированных мест СЛЕВА от номера дня (0.16.1,
+    // требование ab9d627b). Хозяин не передал источник (`markers: off`) —
+    // столбика нет вовсе: календарь диалога «Дата/период» остаётся прежним.
+    if (opts.markers !== undefined) {
+      button.append(buildMarkers(new Set(opts.markers(cell.day))));
+    }
+    // Попап содержимого дня (пункт 7 уточнения 2026-11-19; пачка 9, задача
+    // ef6d1aab): наведение с задержкой 0.5 с; уход курсора отменяет ещё не
+    // открывшийся попап и ЗАКРЫВАЕТ уже открытый — курсор покинул
+    // дату-источник, всплывашка гаснет. Клик по дню закрывает (день
+    // выбирается, пояснение больше не нужно).
+    if (opts.dayInfo !== undefined) {
+      button.addEventListener('mouseenter', () => {
+        dayInfoOpen.schedule({ day: cell.day, element: button });
+      });
+      button.addEventListener('mouseleave', () => {
+        dayInfoOpen.cancel();
+        closeDayInfo();
+      });
+      button.addEventListener('mousedown', () => dayInfoOpen.cancel());
+      button.addEventListener('click', () => closeDayInfo());
+    }
     button.append(span(label, 'cal-day-num'));
     if (dragEnabled) wireDrag(button, cell.day);
     return button;
@@ -554,14 +705,28 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
    * Перетаскивание диапазона: mousedown → движение → mouseup. Во время drag
    * сетка НЕ пересобирается — обновляются только классы выделения, поэтому
    * узел-цель остаётся на месте и одиночный `click` по дню срабатывает.
+   *
+   * Drag начинается ТОЛЬКО на ячейке дня: номер недели и заголовок календаря
+   * его не запускают, а движение над номером недели не расширяет диапазон
+   * (у номера недели нет обработчиков drag). Отпускание вне ячеек и `Esc`
+   * отменяют drag и возвращают прежнее выделение — «залипшего» диапазона и
+   * случайного применения периода не остаётся.
    */
   function wireDrag(button: HTMLElement, day: string): void {
-    button.addEventListener('mousedown', () => {
+    button.addEventListener('mousedown', (event) => {
+      // Только основная кнопка мыши: правый клик/средняя не начинают drag.
+      if ((event as MouseEvent).button !== 0) return;
+      // Сетка могла перерисоваться между нажатием и завершением предыдущего
+      // жеста — начинаем чистый drag.
+      unbindWindowDrag?.();
       dragging = true;
       dragMoved = false;
+      swallowNextClick = false;
       dragStart = day;
+      selectionBeforeDrag = { from, to };
       from = day;
       to = day;
+      bindWindowDrag();
       paintSelection();
     });
     button.addEventListener('mousemove', () => {
@@ -572,17 +737,53 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
       paintSelection();
     });
     button.addEventListener('mouseup', () => {
-      if (!dragging) return;
-      dragging = false;
-      const start = dragStart;
-      const end = day;
-      dragStart = '';
-      if (start === end) return; // обычный клик — дальше сработает onClick
-      from = minDay(start, end);
-      to = maxDay(start, end);
-      paintSelection();
-      opts.onRangeChange?.(from, to);
+      finishDrag(day);
     });
+  }
+
+  /** Завершить drag: `endDay = null` — отмена (Esc/отпускание вне сетки). */
+  function finishDrag(endDay: string | null): void {
+    if (!dragging) return;
+    dragging = false;
+    unbindWindowDrag?.();
+    unbindWindowDrag = null;
+    const start = dragStart;
+    dragStart = '';
+    if (endDay === null) {
+      // Отмена: возвращаем выделение, бывшее до нажатия, и гасим click,
+      // который браузер пришлёт после отпускания кнопки.
+      from = selectionBeforeDrag.from;
+      to = selectionBeforeDrag.to;
+      dragMoved = false;
+      swallowNextClick = true;
+      paintSelection();
+      return;
+    }
+    if (start === endDay) {
+      // Обычный клик — день выберет onClick; подавлять его не нужно.
+      dragMoved = false;
+      return;
+    }
+    from = minDay(start, endDay);
+    to = maxDay(start, endDay);
+    dragMoved = true;
+    swallowNextClick = false;
+    paintSelection();
+    opts.onRangeChange?.(from, to);
+  }
+
+  /**
+   * Слушатель окна живёт только пока идёт drag: отпускание кнопки вне
+   * календаря завершает жест отменой (иначе выделение осталось бы
+   * «залипшим»). `Esc` отменяет drag постоянным capture-слушателем календаря
+   * выше — второго перехвата клавиш не заводим.
+   */
+  function bindWindowDrag(): void {
+    const onMouseUp = (): void => finishDrag(null);
+    window.addEventListener('mouseup', onMouseUp);
+    unbindWindowDrag = () => {
+      window.removeEventListener('mouseup', onMouseUp);
+    };
   }
 
   function renderGrid(): void {
@@ -596,16 +797,21 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     for (const week of buildMonthWeeks(year, month, firstDayOfWeek)) {
       const row = div('cal-row');
       if (weekNumbers) {
-        row.append(
-          uiButton({
-            label: String(week.week),
-            role: 'ghost',
-            size: 's',
-            title: t('calendar.week', [week.week, week.days[0]!.day, week.days[6]!.day]),
-            class: 'cal-week',
-            onClick: () => opts.onPickWeek?.(week.days[0]!.day),
-          }),
-        );
+        const weekTitle = t('calendar.week', [week.week, week.days[0]!.day, week.days[6]!.day]);
+        const weekButton = uiButton({
+          label: String(week.week),
+          role: 'ghost',
+          size: 's',
+          title: weekTitle,
+          class: 'cal-week',
+          onClick: () => opts.onPickWeek?.(week.days[0]!.day),
+        });
+        // Номер недели — кнопка: Enter/Space работают нативно, а подпись для
+        // экранного диктора объясняет, что именно выделится (задача 3054fe86).
+        weekButton.setAttribute('aria-label', weekTitle);
+        // Перетаскивание диапазона начинается только на днях: у номера недели
+        // обработчиков drag нет, поэтому жест над ним неделю не выделяет.
+        row.append(weekButton);
       }
       for (const cell of week.days) {
         const button = buildDay(cell);
@@ -618,6 +824,11 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
   }
 
   function render(): void {
+    // Сетка пересобирается, и узел-якорь попапа дня исчезает: закрываем панель
+    // и снимаем неоткрывшееся ожидание — попап не должен указывать на
+    // удалённый узел.
+    dayInfoOpen.cancel();
+    closeDayInfo();
     renderHead();
     renderGrid();
   }
@@ -630,6 +841,9 @@ export function buildMonthCalendar(opts: MonthCalendarOptions): MonthCalendarHan
     setSelection: (nextFrom, nextTo) => {
       from = nextFrom;
       to = nextTo;
+      render();
+    },
+    refresh: () => {
       render();
     },
     showDate: (day) => {

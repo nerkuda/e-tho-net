@@ -33,6 +33,7 @@ import {
   traverseAsync,
 } from '../../domain/heavy-read.js';
 import { getThoughtMeta } from '../../domain/thought-meta.js';
+import { getThoughtDealsMeta } from '../../domain/thought-task-meta.js';
 import { recordReads } from '../../domain/read-metrics-service.js';
 import { linkTypeCatalog, thoughtTypeCatalog, toCardThoughtType, toCompactThought, withSanitizedIcon } from '../catalogs.js';
 import {
@@ -43,7 +44,14 @@ import {
 } from '../../domain/response-projection.js';
 import { getThoughtType, resolveThoughtTypeIdByName } from '../../domain/thought-type-service.js';
 import { getEffectiveViewsForThought } from '../../domain/thought-type-views-service.js';
-import { hasNetworkAccess, mcpLayerClientId, openMemberNetwork, runTool } from '../context.js';
+import {
+  hasNetworkAccess,
+  mcpLayerClientId,
+  openMemberNetwork,
+  runTool,
+  showInactiveFor,
+  showTrashFor,
+} from '../context.js';
 import { mcpTokenContext } from './token-context.js';
 import {
   fanOutFindDuplicates,
@@ -399,6 +407,8 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             // Токены AST разрешаются в контексте КАЖДОЙ сети (первый день
             // недели у сети свой) — паритет с REST (`tokenContextFor`).
             tokenContextFor: (nid) => mcpTokenContext(rt, nid),
+            // Настройка корзины — per-user и per-network: фабрика по сети.
+            showTrashFor: (nid) => showTrashFor(rt, nid),
           });
           // O10: count reads per network.
           for (const net of access.networks) {
@@ -509,6 +519,9 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
             tokenContext: mcpTokenContext(rt, args.network_id as string),
             // Профиль точки применения (требование 0095daad, ADR 0c02ab4f).
             profile: 'thoughts',
+            // Лист «Есть задачи» считает задачи по настройке корзины
+            // запросившего (0.16.1, пачка 11, задача 173e8368).
+            showTrash: showTrashFor(rt, args.network_id as string),
           },
         );
         // O10: count every hit in the structured query.
@@ -553,7 +566,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         '`meta.link_stats` — active link counters by `(link_type_id, direction)` with type names. ' +
         '`meta.views` — the effective views of the thought: type ones (`scope: "type"`), then out-of-type ' +
         '(`scope: "thought"`), `defined_on` — the owner; ' +
-        'executed via `etn.views.run`. `view: "compact"` (default) — without visual fields.',
+        'executed via `etn.views.run`. `view: "compact"` (default) — without visual fields. ' +
+        '`include_task_meta: true` adds `meta.open_tasks` (open tasks where the thought is a subject) and ' +
+        '`meta.reminders` (the caller\'s own reminders about the thought); OFF by default — a card does not pay ' +
+        'for tasks; the full lists are the `etn.ops` actions `tasks.list`/`reminders.list`.',
       inputSchema: ThoughtsGet.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.get'],
     },
@@ -585,6 +601,17 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // набор отборов для мысли по цепочке типов. Агент видит, какие
         // отборы доступны, и дёргает их по имени через `etn.views.run`.
         const meta = getThoughtMeta(ndb, args.thought_id, { fullPermanent: true });
+        // 0.16.1 (задача f34066e1, операция 22f1ea95): «Открытые дела» и
+        // напоминания запросившего — только по флагу. По умолчанию карточка их
+        // не несёт (бюджет ответа держит сторож guard-mcp-list-projection).
+        const deals =
+          args.include_task_meta === true
+            ? getThoughtDealsMeta(ndb, args.thought_id, {
+                userId: rt.deps.auth.userId,
+                showInactive: showInactiveFor(rt, args.network_id),
+                showTrash: showTrashFor(rt, args.network_id),
+              })
+            : null;
         const view: McpViewMode = args.view ?? 'compact';
         // Bug fix (docs/05-mcp-server.md §5.1e): a `data:` icon URL is dropped
         // in every view — see `sanitizeIcon`/`withSanitizedIcon` in
@@ -603,7 +630,12 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         // thought-level fields differ. `type`, `properties` and `meta` were
         // never affected by the O12 projection change.
         const projected = view === 'full' ? thought : toCompactThought(thought);
-        return { ...projected, type, properties: cardProperties, meta };
+        return {
+          ...projected,
+          type,
+          properties: cardProperties,
+          meta: deals === null ? meta : { ...meta, ...deals },
+        };
       }),
   );
 
@@ -627,7 +659,10 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
         'the effective view set for each thought (type + out-of-type with `scope`). ' +
         'The permanent comment — once, in full in `comment_preview`; ' +
         '`meta.permanent` is intentionally `null` (not a sign of absence; the full form — `etn.thoughts.get`). ' +
-        'Limit — 100 ids per call.',
+        'Limit — 100 ids per call. ' +
+        '`include_task_meta: true` adds `meta.open_tasks` and `meta.reminders` ' +
+        'to every card (the same blocks as `etn.thoughts.get`); OFF by default — a 100-card batch does not ' +
+        'silently grow with tasks.',
       inputSchema: ThoughtsResolve.schema,
       annotations: MCP_TOOL_ANNOTATIONS['etn.thoughts.resolve'],
     },
@@ -671,12 +706,29 @@ export function registerThoughtsReadTools(mcp: McpServer, rt: McpRuntime): void 
           view === 'full'
             ? itemsWithViews
             : projectThoughtRows(itemsWithViews);
+        // 0.16.1 (задача f34066e1, операция 22f1ea95): блоки «Открытые дела» и
+        // напоминания — на каждую карточку и только по флагу; по умолчанию
+        // пакет не раздувается задачами (бюджет держит guard-mcp-list-projection).
+        const withDeals =
+          args.include_task_meta === true
+            ? items.map((card) => ({
+                ...card,
+                meta: {
+                  ...card.meta,
+                  ...getThoughtDealsMeta(ndb, card.id, {
+                    userId: rt.deps.auth.userId,
+                    showInactive: showInactiveFor(rt, args.network_id),
+                    showTrash: showTrashFor(rt, args.network_id),
+                  }),
+                },
+              }))
+            : items;
         // Reference table: только типы, реально использованные в items.
         const thoughtTypes = thoughtTypeCatalog(
           ndb,
           sanitizedItems.map((c) => c.type_id),
         );
-        return { items, missing: result.missing, thought_types: thoughtTypes };
+        return { items: withDeals, missing: result.missing, thought_types: thoughtTypes };
       }),
   );
   mcp.registerTool(

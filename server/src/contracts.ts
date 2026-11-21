@@ -66,9 +66,15 @@ import {
   PUBLICATION_ACTIVE_FILTERS,
   PUBLICATION_EXPORT_FORMATS,
   PUBLICATION_SORTS,
+  REMINDER_KINDS,
+  REMINDER_MAX_HORIZON_DAYS,
+  REMINDER_SUBJECT_TYPES,
   REALTIME_DEFAULTS,
   SAVED_FILTER_VIEWS,
   SEARCH_SCOPES,
+  TASK_MASS_ACTIONS,
+  TASK_OPS,
+  TASK_SCOPES,
   TRAVERSAL_DEFAULTS,
   TYPES_LIST_SCOPES,
   TYPE_OWNER_TYPES,
@@ -100,6 +106,7 @@ import {
   summaryHasMarkdownHeadings,
 } from './domain/publication-validation.js';
 import { validateLayerColors } from './domain/layer-service.js';
+import { TASKS_MAX_LIMIT } from './domain/task-service.js';
 import type { TraversalBounds, TraverseDirection } from './domain/graph-traversal.js';
 import type {
   AstTokenContext,
@@ -108,6 +115,7 @@ import type {
   ThoughtQueryRequest,
 } from './domain/query-service.js';
 import type { NeighborOptions } from './domain/thought-service.js';
+import type { TaskListOptions } from './domain/task-service.js';
 
 // ---------------------------------------------------------------------------
 // Общие zod-куски (до вехи 8 — `mcp/tools/shared.ts`)
@@ -204,11 +212,12 @@ export const contractsByName = new Map<string, OperationContract>();
  * приходилось оборачивать вручную (`z.object({...}).strict()`), что легко
  * забыть — теперь гарантия идёт из контракта.
  *
- * REST-контракты (имя с префиксом `rest:`) НЕ делаются strict: они исторически
- * опираются на rest-карту как на единственный источник объявленных полей и
- * могут содержать поля вне общей схемы (например, `create_link` у мыслей или
- * `colors` у слоёв) — strict там дал бы ложные 422 на легитимные REST-вызовы.
- * Для REST строгость — отдельный заход, выходит за рамки этой задачи.
+ * REST-контракты (имя с префиксом `rest:`) НЕ делаются strict: их схема
+ * объединяется с rest-картой, где бывают поля вне общей схемы (например,
+ * `create_link` у мыслей или `colors` у слоёв) — strict на схеме дал бы ложные
+ * 422 на легитимные REST-вызовы. Строгость REST держит парсер: неизвестный
+ * ключ тела отвергает {@link assertKnownBodyFields} в {@link parseRest}
+ * (ошибка 244859b9) — с `details.fields`/`details.allowed`, как у тел мыслей.
  *
  * ZodEffects (схема с `.refine()`) не имеет метода `.strict()`, поэтому для
  * неё нужно заранее ставить `.strict()` ДО `.refine()` (см. `*Fields` ниже —
@@ -221,9 +230,7 @@ export function defineContract<S extends z.ZodObject>(
 ): OperationContract<S> {
   const isMcp = name.startsWith('etn.');
   const strictSchema =
-    isMcp && schema instanceof z.ZodObject
-      ? (schema.strict() as unknown as S)
-      : schema;
+    isMcp && schema instanceof z.ZodObject ? (schema.strict() as unknown as S) : schema;
   const contract: OperationContract<S> = { name, schema: strictSchema, rest };
   contractsByName.set(name, contract);
   return contract;
@@ -330,7 +337,11 @@ function restFieldIssueKey(key: string, issue: ZodIssueLike): string {
 
 /** Детали ошибки REST: `{ field }`, для enum — с `allowed`, для
  *  unrecognized_keys — `fields` + `allowed` (допустимые ключи). */
-function issueDetails(key: string, issue: ZodIssueLike, allowedKeys?: string[]): Record<string, unknown> {
+function issueDetails(
+  key: string,
+  issue: ZodIssueLike,
+  allowedKeys?: string[],
+): Record<string, unknown> {
   const details: Record<string, unknown> = { field: key };
   if (issue.code === 'invalid_value' && issue.values !== undefined) {
     details.allowed = issue.values;
@@ -372,10 +383,10 @@ export function messageForIssue(
   }
   if (issue.code === 'invalid_type') {
     if (isAbsentIn(input, issue.path)) {
-      return template(spec?.msg ?? "{key} is required.", keyVars);
+      return template(spec?.msg ?? '{key} is required.', keyVars);
     }
     const nulls = field !== undefined && field.safeParse(null).success;
-    const suffix = nulls ? " or null" : '';
+    const suffix = nulls ? ' or null' : '';
     switch (issue.expected) {
       case 'string':
         return template(spec?.msg ?? `{key} must be a string${suffix}.`, keyVars);
@@ -385,45 +396,45 @@ export function messageForIssue(
       case 'boolean':
         return template(spec?.msg ?? `{key} must be a boolean${suffix}.`, keyVars);
       case 'array':
-        return template(spec?.msg ?? "{key} must be an array of strings.", keyVars);
+        return template(spec?.msg ?? '{key} must be an array of strings.', keyVars);
       case 'object':
-        return template(spec?.msg ?? "{key} must be an object.", keyVars);
+        return template(spec?.msg ?? '{key} must be an object.', keyVars);
       default:
-        return template(spec?.msg ?? "Invalid {key}.", keyVars);
+        return template(spec?.msg ?? 'Invalid {key}.', keyVars);
     }
   }
   if (issue.code === 'too_small') {
     if (issue.origin === 'string') {
-      return template(spec?.msg ?? "{key} is required.", keyVars);
+      return template(spec?.msg ?? '{key} is required.', keyVars);
     }
     if (issue.origin === 'array') {
-      return template(spec?.msg ?? "{key} must be a non-empty array.", keyVars);
+      return template(spec?.msg ?? '{key} must be a non-empty array.', keyVars);
     }
-    return template(
-      spec?.msg ?? "{key} must be an integer not less than {min}.",
-      { ...vars, min: issue.minimum ?? 0 },
-    );
+    return template(spec?.msg ?? '{key} must be an integer not less than {min}.', {
+      ...vars,
+      min: issue.minimum ?? 0,
+    });
   }
   if (issue.code === 'too_big') {
     if (issue.origin === 'array') {
-      return template(
-        spec?.msg ?? "{key} must contain at most {max} items.",
-        { ...vars, max: issue.maximum ?? 0 },
-      );
+      return template(spec?.msg ?? '{key} must contain at most {max} items.', {
+        ...vars,
+        max: issue.maximum ?? 0,
+      });
     }
-    return template(
-      spec?.msg ?? "{key} must be an integer not greater than {max}.",
-      { ...vars, max: issue.maximum ?? 0 },
-    );
+    return template(spec?.msg ?? '{key} must be an integer not greater than {max}.', {
+      ...vars,
+      max: issue.maximum ?? 0,
+    });
   }
   if (issue.code === 'invalid_value') {
-    return template(spec?.msg ?? "Invalid {key}.", keyVars);
+    return template(spec?.msg ?? 'Invalid {key}.', keyVars);
   }
   if (issue.code === 'unrecognized_keys') {
     const keys = Array.isArray(issue.keys) ? issue.keys.map(String).join(', ') : '';
-    return template(spec?.msg ?? "Unknown fields: {keys}.", { ...keyVars, keys });
+    return template(spec?.msg ?? 'Unknown fields: {keys}.', { ...keyVars, keys });
   }
-  return template(spec?.msg ?? "Invalid {key}.", keyVars);
+  return template(spec?.msg ?? 'Invalid {key}.', keyVars);
 }
 
 /** `EtnError` канонической ошибки поля с деталями и requestId. */
@@ -443,7 +454,7 @@ function fieldError(
 /** Проверка, что тело запроса — JSON-объект (BAD_REQUEST, как раньше). */
 function bodyObject(body: unknown, requestId: string): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw new EtnError('BAD_REQUEST', "Request body must be a JSON object.", undefined, requestId);
+    throw new EtnError('BAD_REQUEST', 'Request body must be a JSON object.', undefined, requestId);
   }
   return body as Record<string, unknown>;
 }
@@ -461,8 +472,20 @@ export function parseRest<S extends z.ZodObject>(
   const requestId = req.id;
   const out: Record<string, unknown> = {};
   let body: Record<string, unknown> | undefined;
+  const restEntries = Object.entries(contract.rest) as [string, RestFieldSpec][];
+  const hasBodyFields = restEntries.some(([, spec]) => (spec.from?.kind ?? 'body') === 'body');
 
-  for (const [key, spec] of Object.entries(contract.rest) as [string, RestFieldSpec][]) {
+  // Тело читается заранее, если контракт объявляет в нём хотя бы одно поле:
+  // неизвестный ключ — каноническая 422 с `details.fields` (что пришло) и
+  // `details.allowed` (что допустимо), а не молчаливое отбрасывание (ошибка
+  // 244859b9, требование 40efde41). Механика общая для всех REST-тел — та же,
+  // что у тел мыслей после d9ba9e68, но без ручного вызова в каждом роуте.
+  if (hasBodyFields) {
+    body = bodyObject(req.body ?? {}, requestId);
+    assertKnownBodyFields(contract, body, requestId);
+  }
+
+  for (const [key, spec] of restEntries) {
     const from = spec.from ?? { kind: 'body' };
     let raw: unknown;
     if (from.kind === 'body') {
@@ -480,8 +503,7 @@ export function parseRest<S extends z.ZodObject>(
     const field: ZodType | undefined = shape[key] ?? spec.t;
     // Обязательность: явный `req` или поле ОБЩЕЙ схемы без optional().
     // Поля, заданные только в REST-карте (`t`), по умолчанию необязательны.
-    const schemaRequired =
-      field !== undefined && shape[key] !== undefined && !field.isOptional();
+    const schemaRequired = field !== undefined && shape[key] !== undefined && !field.isOptional();
 
     if (raw === undefined) {
       if (from.kind === 'query' && from.repeatable === true) {
@@ -490,12 +512,9 @@ export function parseRest<S extends z.ZodObject>(
       }
       const required = spec.req ?? schemaRequired;
       if (required) {
-        throw fieldError(
-          requestId,
-          key,
-          template(spec.msg ?? "{key} is required.", { key }),
-          { field: from.kind === 'header' ? (from.name ?? key) : key },
-        );
+        throw fieldError(requestId, key, template(spec.msg ?? '{key} is required.', { key }), {
+          field: from.kind === 'header' ? (from.name ?? key) : key,
+        });
       }
       continue;
     }
@@ -506,13 +525,14 @@ export function parseRest<S extends z.ZodObject>(
     } else if (from.kind === 'query') {
       const first = Array.isArray(raw) ? raw[0] : raw;
       if (from.coerce === 'int') {
-        const parsed = typeof first === 'string' && first !== '' ? Number.parseInt(first, 10) : Number.NaN;
+        const parsed =
+          typeof first === 'string' && first !== '' ? Number.parseInt(first, 10) : Number.NaN;
         const min = from.min ?? 0;
         if (!Number.isFinite(parsed) || parsed < min) {
           throw fieldError(
             requestId,
             key,
-            template(spec.msg ?? "{key} must be an integer not less than {min}.", { key, min }),
+            template(spec.msg ?? '{key} must be an integer not less than {min}.', { key, min }),
             { field: key },
           );
         }
@@ -524,7 +544,7 @@ export function parseRest<S extends z.ZodObject>(
           throw fieldError(
             requestId,
             key,
-            template(spec.msg ?? "Parameter {key} must be a boolean (true/false).", { key }),
+            template(spec.msg ?? 'Parameter {key} must be a boolean (true/false).', { key }),
             { field: key },
           );
         }
@@ -545,7 +565,7 @@ export function parseRest<S extends z.ZodObject>(
         throw fieldError(
           requestId,
           key,
-          template(spec.msg ?? "If-Match header must contain an integer version.", { key }),
+          template(spec.msg ?? 'If-Match header must contain an integer version.', { key }),
           { field: from.name ?? key },
         );
       }
@@ -566,7 +586,12 @@ export function parseRest<S extends z.ZodObject>(
         const nested = fieldKey !== key;
         const issueSpec = nested ? contract.rest[fieldKey] : spec;
         const issueField = nested ? undefined : field;
-        throw fieldError(requestId, fieldKey, messageForIssue(key, fieldKey, issueSpec, issueField, issue, value), issueDetails(fieldKey, issue));
+        throw fieldError(
+          requestId,
+          fieldKey,
+          messageForIssue(key, fieldKey, issueSpec, issueField, issue, value),
+          issueDetails(fieldKey, issue),
+        );
       }
       value = res.data;
     }
@@ -611,7 +636,12 @@ export function parseRest<S extends z.ZodObject>(
       ...Object.keys(contract.schema.shape),
       ...Object.keys(contract.rest),
     ].filter((k, i, arr) => arr.indexOf(k) === i);
-    throw fieldError(requestId, fieldKey, messageForIssue(fieldKey, fieldKey, spec, undefined, issue, merged), issueDetails(fieldKey, issue, allowedKeys));
+    throw fieldError(
+      requestId,
+      fieldKey,
+      messageForIssue(fieldKey, fieldKey, spec, undefined, issue, merged),
+      issueDetails(fieldKey, issue, allowedKeys),
+    );
   }
   // Возвращается `out`, а не `res.data`: схема отбрасывает неизвестные поля,
   // а в REST-карте бывают поля вне схемы (например, `colors` у слоёв).
@@ -694,14 +724,10 @@ export const LayersDiff = defineContract(
     },
   },
 );
-export const LayersDiffDoc = defineContract(
-  'etn.layers.diff_doc',
-  LayersDiffFields,
-  {
-    network_id: { from: { kind: 'param', name: 'networkId' } },
-    layer_id: { from: { kind: 'param', name: 'layerId' } },
-  },
-);
+export const LayersDiffDoc = defineContract('etn.layers.diff_doc', LayersDiffFields, {
+  network_id: { from: { kind: 'param', name: 'networkId' } },
+  layer_id: { from: { kind: 'param', name: 'layerId' } },
+});
 
 /**
  * По-мысленный текстовый дифф слоя против родителя (задача 52c776f1):
@@ -732,7 +758,7 @@ export const LayersCreate = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    title: { from: { kind: 'body' }, msg: "title is required." },
+    title: { from: { kind: 'body' }, msg: 'title is required.' },
     parent_id: { from: { kind: 'body' } },
     comment: { from: { kind: 'body' } },
     git_branch: { from: { kind: 'body' } },
@@ -758,7 +784,7 @@ export const LayersUpdate = defineContract(
     comment: { from: { kind: 'body' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: "If-Match header must contain an integer version.",
+      msg: 'If-Match header must contain an integer version.',
     },
     // REST-only: полная замена набора цветов (null → дефолт темы).
     colors: { from: { kind: 'body' }, parse: (raw) => validateLayerColors(raw) },
@@ -807,17 +833,17 @@ export const LayersMerge = defineContract(
       mode: z.enum(LAYER_THOUGHT_MERGE_MODES).optional(),
     })
     .refine((v) => v.mode === undefined || v.thought_id !== undefined, {
-      message: "merge mode is set only together with thought_id.",
+      message: 'merge mode is set only together with thought_id.',
       path: ['mode'],
     })
     .refine((v) => v.thought_id === undefined || v.tables === undefined, {
-      message: "thought_id and tables are mutually exclusive: either a thought or a set of rows.",
+      message: 'thought_id and tables are mutually exclusive: either a thought or a set of rows.',
       path: ['thought_id'],
     }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     layer_id: { from: { kind: 'param', name: 'layerId' } },
-    tables: { from: { kind: 'body' }, msg: "tables must be an object { table: [id, …] }." },
+    tables: { from: { kind: 'body' }, msg: 'tables must be an object { table: [id, …] }.' },
     thought_id: { from: { kind: 'body' } },
     mode: { from: { kind: 'body' } },
   },
@@ -880,7 +906,7 @@ export const LayersResetOverride = defineContract(
     tables: z.record(z.string(), z.array(z.string().min(1)).min(1)),
   }),
   {
-    tables: { from: { kind: 'body' }, msg: "tables must be an object { table: [id, …] }." },
+    tables: { from: { kind: 'body' }, msg: 'tables must be an object { table: [id, …] }.' },
   },
 );
 
@@ -927,9 +953,12 @@ const SearchFields = z
     network_id: NetworkId.optional().describe(
       'Single network. Provide either `network_id` or `network_ids` — one is required.',
     ),
-    network_ids: z.array(NetworkId).optional().describe(
-      'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
-    ),
+    network_ids: z
+      .array(NetworkId)
+      .optional()
+      .describe(
+        'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+      ),
     /**
      * AST-условие мыслевых настроек отбора (профиль `thoughts`): подкорень,
      * типы мыслей, «показывать неактуальные», «корзина» (требование b91336e7,
@@ -957,7 +986,9 @@ const SearchFields = z
   // `.strict()` (ошибка c245e7de, после ea4581c5): неизвестный ключ верхнего
   // уровня → VALIDATION_ERROR. До `.refine()` — порядок обязателен в zod 4.
   .strict()
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  .refine((v) => v.type_id === undefined || v.type === undefined, {
+    message: TYPE_ID_TYPE_CONFLICT,
+  })
   // Задача d5e8ddc1, требование b91336e7: `ast` XOR плоские МЫСЛЕВЫЕ параметры.
   // Корпусные (`query`, `scope`, `author_id`, `editor_id`) с `ast` допустимы.
   // `type_id === null` трактуется как «не указан» (nullable-форма MCP).
@@ -969,28 +1000,21 @@ const SearchFields = z
         v.show_inactive === undefined &&
         v.in_subtree_of === undefined),
     {
-      message:
-        `The ast field is incompatible with flat thought parameters (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
-          ', ',
-        )}): provide either ast or flat parameters.`,
+      message: `The ast field is incompatible with flat thought parameters (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+        ', ',
+      )}): provide either ast or flat parameters.`,
     },
   )
   // Задача eb1a3f43, требование c98d5d19: веерный режим — `network_ids`
   // рядом с `network_id`, но XOR: либо одна сеть, либо список. Парсер
   // repeatable создаёт `network_ids: []` при отсутствии параметра в query —
   // пустой массив трактуется как «не указан».
-  .refine(
-    (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
-    {
-      message: "Provide either network_id or network_ids, not both.",
-    },
-  )
-  .refine(
-    (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
-    {
-      message: "network_id or network_ids is required.",
-    },
-  );
+  .refine((v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0, {
+    message: 'Provide either network_id or network_ids, not both.',
+  })
+  .refine((v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0, {
+    message: 'network_id or network_ids is required.',
+  });
 export const ThoughtsSearch = defineContract('etn.thoughts.search', SearchFields, {});
 
 /** Допустимые поля одного условия отбора по свойству (контракт `etn.thoughts.query`). */
@@ -1016,14 +1040,7 @@ const QUERY_PROPERTY_VALUE = z.union([
  * Для сравнений допустимость проверяет {@link QUERY_PROPERTY_VALUE}.
  */
 const QUERY_PROPERTY_VALUE_SCHEMA = z
-  .union([
-    z.string(),
-    z.number(),
-    z.boolean(),
-    z.array(z.unknown()),
-    z.object({}),
-    z.null(),
-  ])
+  .union([z.string(), z.number(), z.boolean(), z.array(z.unknown()), z.object({}), z.null()])
   .describe('presence ignores it');
 
 const QueryPropertyFields = z
@@ -1063,7 +1080,8 @@ const QueryPropertyFields = z
   // Принцип «не игнорировать молча»: даже при валидном адресе лишнее поле
   // отвергается, а не теряется. Поля `key` контрактом не предусмотрено.
   .refine(
-    (v) => Object.keys(v).every((k) => (QUERY_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k)),
+    (v) =>
+      Object.keys(v).every((k) => (QUERY_PROPERTY_CONDITION_KEYS as readonly string[]).includes(k)),
     {
       error: (iss) => {
         const unknown = Object.keys((iss.input ?? {}) as Record<string, unknown>).filter(
@@ -1081,7 +1099,7 @@ const QueryPropertyFields = z
   // молча выпадало из отбора, расширяя его до всей сети — теперь это явная
   // `VALIDATION_ERROR`.
   .refine((v) => v.property_id !== undefined || v.property !== undefined, {
-    message: "Provide property_id or property in the property condition.",
+    message: 'Provide property_id or property in the property condition.',
   })
   // `contains` принимает ТОЛЬКО строку (ошибка 9420a34c): массив молча
   // stringify-ился (`String(['al','pha'])` → `"al,pha"`) и отбор давал пустой
@@ -1103,10 +1121,9 @@ const QueryPropertyFields = z
   // 40c76144): `is_empty`/`not_empty` решают по строке значения, `value` им
   // не нужен (переданное игнорируется). Без этого refine отсутствие значения
   // у сравнения давало бы ошибку позже и с менее понятным текстом.
-  .refine(
-    (v) => v.operator === 'is_empty' || v.operator === 'not_empty' || v.value !== undefined,
-    { message: "Provide the property condition value (except for is_empty/not_empty operators)." },
-  )
+  .refine((v) => v.operator === 'is_empty' || v.operator === 'not_empty' || v.value !== undefined, {
+    message: 'Provide the property condition value (except for is_empty/not_empty operators).',
+  })
   // Форма значения для сравнений — прежний контракт (скаляр или непустой
   // массив строк). Presence сюда не входит: `is_empty`/`not_empty` принимают
   // `value` любой формы (включая `null`/объект) и игнорируют его — паритет с
@@ -1117,8 +1134,7 @@ const QueryPropertyFields = z
       v.operator === 'not_empty' ||
       QUERY_PROPERTY_VALUE.safeParse(v.value).success,
     {
-      message:
-        "value must be a string, number, boolean or a non-empty array of strings.",
+      message: 'value must be a string, number, boolean or a non-empty array of strings.',
     },
   );
 /**
@@ -1157,9 +1173,12 @@ const QueryFields = z
     network_id: NetworkId.optional().describe(
       'Single network. Provide either `network_id` or `network_ids` — one is required.',
     ),
-    network_ids: z.array(NetworkId).optional().describe(
-      'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
-    ),
+    network_ids: z
+      .array(NetworkId)
+      .optional()
+      .describe(
+        'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+      ),
     ast: FilterAstBody.optional(),
     in_subtree_of: ThoughtId.optional(),
     max_depth: z.number().int().min(1).max(TRAVERSAL_DEFAULTS.MAX_DEPTH).optional(),
@@ -1187,39 +1206,43 @@ const QueryFields = z
   })
   // `.strict()` (ошибка c245e7de, после ea4581c5): до `.refine()`.
   .strict()
-  .refine((v) => v.type_id === undefined || v.type === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  .refine((v) => v.type_id === undefined || v.type === undefined, {
+    message: TYPE_ID_TYPE_CONFLICT,
+  })
   // Задача cb78315b (требование 91983c20): `ast` XOR старые критерии —
   // смешение молча теряло бы часть намерения. Страница (sort/order/limit/
   // offset/count/cursor) и фасадный `link_filter` (пред-сужение поверх AST,
   // задача c5381a2d) допустимы и с `ast`.
-  .refine(
-    (v) => v.ast === undefined || LEGACY_QUERY_CRITERIA.every((k) => v[k] === undefined),
-    {
-      message:
-        `The ast body is incompatible with legacy criteria (${LEGACY_QUERY_CRITERIA.join(', ')}): ` +
-        "provide either ast or flat criteria.",
-    },
-  )
+  .refine((v) => v.ast === undefined || LEGACY_QUERY_CRITERIA.every((k) => v[k] === undefined), {
+    message:
+      `The ast body is incompatible with legacy criteria (${LEGACY_QUERY_CRITERIA.join(', ')}): ` +
+      'provide either ast or flat criteria.',
+  })
   // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
   // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
   // query — пустой массив трактуется как «не указан».
-  .refine(
-    (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
-    {
-      message: "Provide either network_id or network_ids, not both.",
-    },
-  )
-  .refine(
-    (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
-    {
-      message: "network_id or network_ids is required.",
-    },
-  );
+  .refine((v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0, {
+    message: 'Provide either network_id or network_ids, not both.',
+  })
+  .refine((v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0, {
+    message: 'network_id or network_ids is required.',
+  });
 export const ThoughtsQuery = defineContract('etn.thoughts.query', QueryFields, {});
 
 export const ThoughtsGet = defineContract(
   'etn.thoughts.get',
-  z.object({ network_id: NetworkId, thought_id: ThoughtId, view: View }),
+  z.object({
+    network_id: NetworkId,
+    thought_id: ThoughtId,
+    view: View,
+    /**
+     * «Открытые дела» и напоминания запросившего о мысли (0.16.1, задача
+     * f34066e1, операция 22f1ea95). По умолчанию ВЫКЛ: карточка не платит за
+     * задачи, если агент их не спрашивал (бюджет — сторож
+     * `guard-mcp-list-projection`).
+     */
+    include_task_meta: z.boolean().optional(),
+  }),
   {},
 );
 
@@ -1229,6 +1252,12 @@ export const ThoughtsResolve = defineContract(
     network_id: NetworkId,
     thought_ids: z.array(ThoughtId).min(1).max(THOUGHT_RESOLVE_MAX_IDS),
     view: View,
+    /**
+     * Тот же блок «Открытые дела» + напоминания на каждую карточку (0.16.1,
+     * задача f34066e1, операция 22f1ea95). По умолчанию ВЫКЛ — пакет из 100
+     * карточек не должен молча раздуваться задачами.
+     */
+    include_task_meta: z.boolean().optional(),
   }),
   {},
 );
@@ -1304,9 +1333,12 @@ export const ThoughtsFindDuplicates = defineContract(
       network_id: NetworkId.optional().describe(
         'Single network. Provide either `network_id` or `network_ids` — one is required.',
       ),
-      network_ids: z.array(NetworkId).optional().describe(
-        'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
-      ),
+      network_ids: z
+        .array(NetworkId)
+        .optional()
+        .describe(
+          'Fan-out over networks. Provide either `network_ids` or `network_id` — one is required.',
+        ),
       title: z.string().min(1),
       synonyms: z.array(z.string().min(1)).optional(),
     })
@@ -1314,18 +1346,12 @@ export const ThoughtsFindDuplicates = defineContract(
     // Задача eb1a3f43, требование c98d5d19: XOR для network_id/network_ids.
     // Парсер repeatable создаёт `network_ids: []` при отсутствии параметра в
     // query — пустой массив трактуется как «не указан».
-    .refine(
-      (v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0,
-      {
-        message: "Provide either network_id or network_ids, not both.",
-      },
-    )
-    .refine(
-      (v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0,
-      {
-        message: "network_id or network_ids is required.",
-      },
-    ),
+    .refine((v) => v.network_id === undefined || (v.network_ids?.length ?? 0) === 0, {
+      message: 'Provide either network_id or network_ids, not both.',
+    })
+    .refine((v) => v.network_id !== undefined || (v.network_ids?.length ?? 0) > 0, {
+      message: 'network_id or network_ids is required.',
+    }),
   {},
 );
 
@@ -1358,7 +1384,9 @@ const BulkUpdateArgs = z
   // `.strict()` (ошибка ea4581c5): ключ, положенный не в тот уровень
   // (`parent_ids` в корне вызова вместо `args`), отвергается, а не молча теряется.
   .strict()
-  .refine((v) => v.type === undefined || v.type_id === undefined, { message: TYPE_ID_TYPE_CONFLICT })
+  .refine((v) => v.type === undefined || v.type_id === undefined, {
+    message: TYPE_ID_TYPE_CONFLICT,
+  })
   .refine((v) => v.link_type === undefined || v.link_type_id === undefined, {
     message: 'provide at most one of link_type_id or link_type',
   })
@@ -1387,6 +1415,12 @@ export const ThoughtsDelete = defineContract(
 export const ThoughtsTrash = defineContract(
   'etn.thoughts.trash',
   z.object({ network_id: NetworkId, thought_id: ThoughtId, trashed: z.boolean() }),
+  {},
+);
+
+export const LinksDelete = defineContract(
+  'etn.links.delete',
+  z.object({ network_id: NetworkId, link_id: LinkId }),
   {},
 );
 
@@ -1512,7 +1546,11 @@ export const CommentsUpdate = defineContract(
 const EditOpSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('append'), text: z.string().min(1) }),
   z.object({ op: z.literal('prepend'), text: z.string().min(1) }),
-  z.object({ op: z.literal('replace_section'), section: z.string().min(1), text: z.string().min(1) }),
+  z.object({
+    op: z.literal('replace_section'),
+    section: z.string().min(1),
+    text: z.string().min(1),
+  }),
   z.object({ op: z.literal('delete_section'), section: z.string().min(1) }),
 ]);
 const EditCommentFields = z
@@ -1532,7 +1570,11 @@ export const CommentsEdit = defineContract('etn.comments.edit', EditCommentField
 
 export const CommentsDelete = defineContract(
   'etn.comments.delete',
-  z.object({ network_id: NetworkId, comment_id: z.string().min(1), expected_version: ExpectedVersion }),
+  z.object({
+    network_id: NetworkId,
+    comment_id: z.string().min(1),
+    expected_version: ExpectedVersion,
+  }),
   {},
 );
 
@@ -1832,7 +1874,9 @@ export const ThoughtsCopySubtree = defineContract(
     target_network_id: NetworkId,
     root_thought_ids: z.array(ThoughtId).min(1).max(MCP_MAX_THOUGHTS_PER_WRITE),
     max_depth: z.number().int().min(0).max(20).optional(),
-    include: z.array(z.enum(['thought', 'links', 'properties', 'comments', 'attachments'])).optional(),
+    include: z
+      .array(z.enum(['thought', 'links', 'properties', 'comments', 'attachments']))
+      .optional(),
     duplicate_policy: z.enum(['fail', 'reuse', 'skip', 'create_always']).optional(),
     id_remap: z.boolean().optional(),
     target_parent_thought_id: ThoughtId.optional(),
@@ -1845,7 +1889,10 @@ const MentionsScanFields = z
     network_id: NetworkId,
     text: z.string().min(1).optional(),
     source: z
-      .object({ comment_id: z.string().min(1).optional(), thought_id: z.string().min(1).optional() })
+      .object({
+        comment_id: z.string().min(1).optional(),
+        thought_id: z.string().min(1).optional(),
+      })
       .optional(),
     case_sensitive: z.boolean().optional(),
     use_synonyms: z.boolean().optional(),
@@ -1861,7 +1908,11 @@ const MentionsScanFields = z
   .refine((v) => (v.text !== undefined) !== (v.source !== undefined), {
     message: 'provide exactly one of `text` or `source`',
   });
-export const ThoughtsMentionsScan = defineContract('etn.thoughts.mentions_scan', MentionsScanFields, {});
+export const ThoughtsMentionsScan = defineContract(
+  'etn.thoughts.mentions_scan',
+  MentionsScanFields,
+  {},
+);
 
 const ImportSourceSchema = z.union([
   z.object({ kind: z.literal('etnx_file'), path: z.string().min(1) }),
@@ -1937,7 +1988,7 @@ export const TypesGet = defineContract(
     // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
     .strict()
     .refine((v) => (v.id === undefined) !== (v.name === undefined), {
-      message: "Provide exactly one: id (type identifier) or name (type name).",
+      message: 'Provide exactly one: id (type identifier) or name (type name).',
     }),
   {},
 );
@@ -1959,7 +2010,7 @@ export const ViewsRun = defineContract(
     // `.strict()` до `.refine()` (сторож guard-mcp-contracts-strict).
     .strict()
     .refine((v) => (v.view_name === undefined) !== (v.ast === undefined), {
-      message: "Provide exactly one: view_name (saved view) or ast (filter body).",
+      message: 'Provide exactly one: view_name (saved view) or ast (filter body).',
     }),
   {},
 );
@@ -2113,13 +2164,13 @@ export const Instructions = defineContract(
     })
     .strict()
     .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
-      message: "instruction_id and keywords are mutually exclusive",
+      message: 'instruction_id and keywords are mutually exclusive',
     })
     .refine((v) => v.instruction_id === undefined || !instructionIdsPresent(v), {
-      message: "instruction_id and instruction_ids are mutually exclusive",
+      message: 'instruction_id and instruction_ids are mutually exclusive',
     })
     .refine((v) => !instructionIdsPresent(v) || v.keywords === undefined, {
-      message: "instruction_ids and keywords are mutually exclusive",
+      message: 'instruction_ids and keywords are mutually exclusive',
     })
     .refine(
       (v) =>
@@ -2127,7 +2178,7 @@ export const Instructions = defineContract(
         (v.keywords === undefined && v.instruction_id === undefined && !instructionIdsPresent(v)),
       {
         message:
-          "scope applies only to the list mode without keywords, instruction_id and instruction_ids",
+          'scope applies only to the list mode without keywords, instruction_id and instruction_ids',
       },
     )
     .refine(
@@ -2135,7 +2186,7 @@ export const Instructions = defineContract(
         (v.instruction_id === undefined && !instructionIdsPresent(v)) ||
         (v.limit === undefined && v.offset === undefined),
       {
-        message: "limit/offset apply only to list modes, not to instruction_id/instruction_ids",
+        message: 'limit/offset apply only to list modes, not to instruction_id/instruction_ids',
       },
     ),
   {},
@@ -2231,8 +2282,11 @@ export const LocksAcquire = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    entity_type: { from: { kind: 'body' }, msg: "{key} is required and must be a non-empty string." },
-    entity_id: { from: { kind: 'body' }, msg: "{key} is required and must be a non-empty string." },
+    entity_type: {
+      from: { kind: 'body' },
+      msg: '{key} is required and must be a non-empty string.',
+    },
+    entity_id: { from: { kind: 'body' }, msg: '{key} is required and must be a non-empty string.' },
   },
 );
 
@@ -2250,7 +2304,7 @@ export const LocksClear = defineContract(
   z.object({ network_id: NetworkId, user_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    user_id: { from: { kind: 'body' }, msg: "{key} is required and must be a non-empty string." },
+    user_id: { from: { kind: 'body' }, msg: '{key} is required and must be a non-empty string.' },
   },
 );
 
@@ -2267,7 +2321,12 @@ export const LocksList = defineContract(
       from: { kind: 'query' },
       parse: (raw: unknown, requestId: string) => {
         if (Array.isArray(raw) && raw.length > 1) {
-          throw new EtnError('VALIDATION_ERROR', "user_id and client_id take exactly one value.", { field: 'user_id|client_id' }, requestId);
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'user_id and client_id take exactly one value.',
+            { field: 'user_id|client_id' },
+            requestId,
+          );
         }
         return Array.isArray(raw) ? raw[0] : raw;
       },
@@ -2276,7 +2335,12 @@ export const LocksList = defineContract(
       from: { kind: 'query' },
       parse: (raw: unknown, requestId: string) => {
         if (Array.isArray(raw) && raw.length > 1) {
-          throw new EtnError('VALIDATION_ERROR', "user_id and client_id take exactly one value.", { field: 'user_id|client_id' }, requestId);
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'user_id and client_id take exactly one value.',
+            { field: 'user_id|client_id' },
+            requestId,
+          );
         }
         return Array.isArray(raw) ? raw[0] : raw;
       },
@@ -2284,8 +2348,16 @@ export const LocksList = defineContract(
   },
 );
 export const TrashList = defineContract('etn.trash.list', z.object({ network_id: NetworkId }), {});
-export const TrashPurge = defineContract('etn.trash.purge', z.object({ network_id: NetworkId }), {});
-export const MembersList = defineContract('etn.members.list', z.object({ network_id: NetworkId }), {});
+export const TrashPurge = defineContract(
+  'etn.trash.purge',
+  z.object({ network_id: NetworkId }),
+  {},
+);
+export const MembersList = defineContract(
+  'etn.members.list',
+  z.object({ network_id: NetworkId }),
+  {},
+);
 
 // ===========================================================================
 // Область: прогрессивное раскрытие — etn.guide + etn.ops (задача 86ef2ff4,
@@ -2330,7 +2402,12 @@ export const Ops = defineContract(
 
 const singleQueryValue = (raw: unknown, requestId: string): unknown => {
   if (Array.isArray(raw) && raw.length > 1) {
-    throw new EtnError('VALIDATION_ERROR', "user_id, entity_type and entity_id take exactly one value.", { field: 'user_id|entity_type|entity_id' }, requestId);
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'user_id, entity_type and entity_id take exactly one value.',
+      { field: 'user_id|entity_type|entity_id' },
+      requestId,
+    );
   }
   return Array.isArray(raw) ? raw[0] : raw;
 };
@@ -2364,13 +2441,67 @@ export const RestActivityList = defineContract(
   },
 );
 
+/**
+ * GET /networks/:id/chronicle/day-links — «связи дня» диапазона календарных
+ * дней (0.16.1, требование 1fb1047d).
+ */
+export const RestChronicleDayLinks = defineContract(
+  'rest:chronicle.day-links',
+  z.object({
+    network_id: NetworkId,
+    // Календарные дни клиента: сутки наблюдателя считает он (требование
+    // fcdcd75f), сервер только читает проекцию по INDEX(date).
+    from: z.string().min(1),
+    to: z.string().min(1).optional(),
+    /**
+     * Показывать содержимое корзины (0.16.1, пачка 11): не задано — per-user
+     * настройка `show_trash` (по умолчанию да).
+     */
+    show_trash: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    from: { from: { kind: 'query' }, parse: singleQueryValue },
+    to: { from: { kind: 'query' }, parse: singleQueryValue },
+    show_trash: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/**
+ * GET /networks/:id/chronicle/calendar-markers — маркеры дней календаря месяца
+ * (0.16.1, требование ab9d627b, задача d793fd69): записи, задачи/напоминания,
+ * датовые факты и date-ссылки, просрочка. Дни месяца и «сегодня» — клиента
+ * (требование fcdcd75f); сервер отдаёт индексные чтения проекций одним ответом.
+ */
+export const RestChronicleCalendarMarkers = defineContract(
+  'rest:chronicle.calendar-markers',
+  z.object({
+    network_id: NetworkId,
+    // Первый и последний день отображаемого месяца (локальные сутки клиента).
+    from: z.string().min(1),
+    to: z.string().min(1),
+    // «Сегодня» клиента — граница просрочки (due < today).
+    today: z.string().min(1),
+    /** Показывать содержимое корзины (пачка 11; не задано — per-user `show_trash`). */
+    show_trash: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    from: { from: { kind: 'query' }, parse: singleQueryValue },
+    to: { from: { kind: 'query' }, parse: singleQueryValue },
+    today: { from: { kind: 'query' }, parse: singleQueryValue },
+    show_trash: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
 /** POST /networks/:id/activity/rollup|truncate — { until_ms }. */
 const activityUntil = {
   network_id: { from: { kind: 'param', name: 'networkId' } },
   until_ms: {
     from: { kind: 'body' },
-    msg: "until_ms is required and must be a non-negative integer.",
-    check: (v: unknown) => (typeof v === 'number' && v < 0 ? "until_ms must be a non-negative integer." : null),
+    msg: 'until_ms is required and must be a non-negative integer.',
+    check: (v: unknown) =>
+      typeof v === 'number' && v < 0 ? 'until_ms must be a non-negative integer.' : null,
   },
 } as const;
 export const RestActivityRollup = defineContract(
@@ -2420,13 +2551,13 @@ export const RestInstructions = defineContract(
       offset: z.number().int().min(0).optional(),
     })
     .refine((v) => v.instruction_id === undefined || v.keywords === undefined, {
-      message: "instruction_id and keywords are mutually exclusive",
+      message: 'instruction_id and keywords are mutually exclusive',
     })
     .refine((v) => v.instruction_id === undefined || !instructionIdsPresent(v), {
-      message: "instruction_id and instruction_ids are mutually exclusive",
+      message: 'instruction_id and instruction_ids are mutually exclusive',
     })
     .refine((v) => !instructionIdsPresent(v) || v.keywords === undefined, {
-      message: "instruction_ids and keywords are mutually exclusive",
+      message: 'instruction_ids and keywords are mutually exclusive',
     })
     .refine(
       (v) =>
@@ -2434,7 +2565,7 @@ export const RestInstructions = defineContract(
         (v.keywords === undefined && v.instruction_id === undefined && !instructionIdsPresent(v)),
       {
         message:
-          "scope applies only to the list mode without keywords, instruction_id and instruction_ids",
+          'scope applies only to the list mode without keywords, instruction_id and instruction_ids',
       },
     )
     .refine(
@@ -2442,17 +2573,29 @@ export const RestInstructions = defineContract(
         (v.instruction_id === undefined && !instructionIdsPresent(v)) ||
         (v.limit === undefined && v.offset === undefined),
       {
-        message: "limit/offset apply only to list modes, not to instruction_id/instruction_ids",
+        message: 'limit/offset apply only to list modes, not to instruction_id/instruction_ids',
       },
     ),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    instruction_id: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined) },
+    instruction_id: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined),
+    },
     // `repeatable: true` — `?instruction_ids=a&instruction_ids=b`; при отсутствии
     // параметра парсер кладёт `[]`, который предикаты считают «не передан».
-    instruction_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
-    keywords: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined) },
-    scope: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined) },
+    instruction_ids: {
+      from: { kind: 'query', repeatable: true },
+      t: z.array(z.string().min(1)).optional(),
+    },
+    keywords: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined),
+    },
+    scope: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw !== '' ? raw : undefined),
+    },
     limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
     offset: { from: { kind: 'query', coerce: 'int', min: 0 } },
   },
@@ -2483,13 +2626,14 @@ export const RestPropertyPut = defineContract(
     owner_id: { from: { kind: 'param', name: 'id' } },
     key: {
       from: { kind: 'param' },
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "The property key must not be empty." : null),
+      check: (v: unknown) =>
+        typeof v === 'string' && v.trim() === '' ? 'The property key must not be empty.' : null,
     },
     value: {
       from: { kind: 'body' },
       t: PropertyValueSchema,
       req: true,
-      msg: "The value field is required.",
+      msg: 'The value field is required.',
     },
     side: { from: { kind: 'body' } },
   },
@@ -2525,16 +2669,15 @@ export const RestThoughtPropertiesOrder = defineContract(
   z.object({
     network_id: NetworkId,
     owner_id: z.string().min(1),
-    items: z
-      .array(
-        z
-          .object({
-            property_id: z.string().min(1),
-            side: z.enum(LINK_PROPERTY_SIDES).optional(),
-            position: z.number().min(0),
-          })
-          .strict(),
-      ),
+    items: z.array(
+      z
+        .object({
+          property_id: z.string().min(1),
+          side: z.enum(LINK_PROPERTY_SIDES).optional(),
+          position: z.number().min(0),
+        })
+        .strict(),
+    ),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -2562,26 +2705,20 @@ export const RestPropertyCrossResolve = defineContract(
 );
 
 /** GET /networks/:id/pins — список закрепов. */
-export const RestPinsGet = defineContract(
-  'rest:pins.get',
-  z.object({ network_id: NetworkId }),
-  { network_id: { from: { kind: 'param', name: 'networkId' } } },
-);
+export const RestPinsGet = defineContract('rest:pins.get', z.object({ network_id: NetworkId }), {
+  network_id: { from: { kind: 'param', name: 'networkId' } },
+});
 
 /** PUT /networks/:id/pins — замена списка (≤20 — домен). */
-export const RestPinsPut = defineContract(
-  'rest:pins.put',
-  z.object({ network_id: NetworkId }),
-  {
-    network_id: { from: { kind: 'param', name: 'networkId' } },
-    ordered_ids: {
-      from: { kind: 'body' },
-      t: z.array(z.string().min(1)),
-      req: true,
-      msg: "ordered_ids is required.",
-    },
+export const RestPinsPut = defineContract('rest:pins.put', z.object({ network_id: NetworkId }), {
+  network_id: { from: { kind: 'param', name: 'networkId' } },
+  ordered_ids: {
+    from: { kind: 'body' },
+    t: z.array(z.string().min(1)),
+    req: true,
+    msg: 'ordered_ids is required.',
   },
-);
+});
 
 /** GET /admin/audit — журнал аудита (админ). */
 export const RestAuditQuery = defineContract(
@@ -2596,17 +2733,35 @@ export const RestAuditQuery = defineContract(
     offset: z.number().int().min(0).optional(),
   }),
   {
-    actor: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined) },
-    network: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined) },
+    actor: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined),
+    },
+    network: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined),
+    },
     category: {
       from: { kind: 'query' },
       parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined),
-      msg: "Invalid category.",
+      msg: 'Invalid category.',
     },
-    from: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined) },
-    to: { from: { kind: 'query' }, parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined) },
-    limit: { from: { kind: 'query', coerce: 'int', min: 1 }, msg: "limit must be a positive integer." },
-    offset: { from: { kind: 'query', coerce: 'int', min: 0 }, msg: "offset must be a non-negative integer." },
+    from: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined),
+    },
+    to: {
+      from: { kind: 'query' },
+      parse: (raw) => (typeof raw === 'string' && raw.length > 0 ? raw : undefined),
+    },
+    limit: {
+      from: { kind: 'query', coerce: 'int', min: 1 },
+      msg: 'limit must be a positive integer.',
+    },
+    offset: {
+      from: { kind: 'query', coerce: 'int', min: 0 },
+      msg: 'offset must be a non-negative integer.',
+    },
   },
 );
 
@@ -2617,7 +2772,7 @@ export const RestAuditQuery = defineContract(
 const commentFieldsRest = {
   kind: {
     from: { kind: 'body' },
-    msg: "kind is required (permanent|chronological).",
+    msg: 'kind is required (permanent|chronological).',
   },
   // `body_md` больше не «обязателен и непуст» на уровне контракта (ошибка
   // 00115e7b): у хронологической записи содержание может держаться на
@@ -2683,12 +2838,12 @@ export const RestCommentCreateTargets = defineContract(
       // Явная обязательность даёт тот же 422 с `details.field=targets`, что и
       // `targets: []`; сообщение совпадает с веткой `parse`.
       req: true,
-      msg: "targets is required: an array of { owner_type, owner_id } (one or more).",
+      msg: 'targets is required: an array of { owner_type, owner_id } (one or more).',
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw) || raw.length === 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            "targets is required: an array of { owner_type, owner_id } (one or more).",
+            'targets is required: an array of { owner_type, owner_id } (one or more).',
             { field: 'targets' },
             requestId,
           );
@@ -2698,7 +2853,7 @@ export const RestCommentCreateTargets = defineContract(
           if (typeof item !== 'object' || item === null) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              "each targets item must be an object { owner_type, owner_id }.",
+              'each targets item must be an object { owner_type, owner_id }.',
               { field: 'targets' },
               requestId,
             );
@@ -2714,7 +2869,7 @@ export const RestCommentCreateTargets = defineContract(
           ) {
             throw new EtnError(
               'VALIDATION_ERROR',
-              "each targets item must be { owner_type: thought|link, owner_id: non-empty string }.",
+              'each targets item must be { owner_type: thought|link, owner_id: non-empty string }.',
               { field: 'targets' },
               requestId,
             );
@@ -2730,13 +2885,17 @@ export const RestCommentCreateTargets = defineContract(
 /** GET/DELETE /networks/:id/comments/:id — чтение/удаление. */
 export const RestCommentById = defineContract(
   'rest:comments.by-id',
-  z.object({ network_id: NetworkId, comment_id: z.string().min(1), expected_version: z.number().int().min(1).optional() }),
+  z.object({
+    network_id: NetworkId,
+    comment_id: z.string().min(1),
+    expected_version: z.number().int().min(1).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: "If-Match header must contain an integer version.",
+      msg: 'If-Match header must contain an integer version.',
     },
   },
 );
@@ -2759,7 +2918,7 @@ export const RestCommentUpdate = defineContract(
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: "If-Match header must contain an integer version.",
+      msg: 'If-Match header must contain an integer version.',
     },
     title: { from: { kind: 'body' } },
     body_md: { from: { kind: 'body' } },
@@ -2787,10 +2946,16 @@ export const RestCommentAddTarget = defineContract(
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: "If-Match header must contain an integer version.",
+      msg: 'If-Match header must contain an integer version.',
     },
-    owner_type: { from: { kind: 'body' }, msg: "owner_type (thought|link) and owner_id are required." },
-    owner_id: { from: { kind: 'body' }, msg: "owner_type (thought|link) and owner_id are required." },
+    owner_type: {
+      from: { kind: 'body' },
+      msg: 'owner_type (thought|link) and owner_id are required.',
+    },
+    owner_id: {
+      from: { kind: 'body' },
+      msg: 'owner_type (thought|link) and owner_id are required.',
+    },
   },
 );
 
@@ -2809,7 +2974,7 @@ export const RestCommentDetachTarget = defineContract(
     comment_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: "If-Match header must contain an integer version.",
+      msg: 'If-Match header must contain an integer version.',
     },
     owner_type: { from: { kind: 'param', name: 'ownerType' } },
     owner_id: { from: { kind: 'param', name: 'ownerId' } },
@@ -2823,7 +2988,7 @@ export const RestCommentDetachTarget = defineContract(
 /** Конечное число → Math.trunc (как optionalIntField прежнего роута). */
 const truncInt = (v: unknown): unknown => {
   if (typeof v !== 'number' || !Number.isFinite(v)) {
-    throw new EtnError('VALIDATION_ERROR', "value must be a number.", { field: 'file_size' });
+    throw new EtnError('VALIDATION_ERROR', 'value must be a number.', { field: 'file_size' });
   }
   return Math.trunc(v);
 };
@@ -2834,14 +2999,16 @@ const truncInt = (v: unknown): unknown => {
  * есть — там работает {@link truncInt}. Поле ошибки — имя query-параметра
  * (жалоба точно указывает, какой параметр некорректен).
  */
-const queryInt = (field: string) => (v: unknown): unknown => {
-  const first = Array.isArray(v) ? v[0] : v;
-  const n = typeof first === 'string' && first.trim() !== '' ? Number(first) : first;
-  if (typeof n !== 'number' || !Number.isFinite(n)) {
-    throw new EtnError('VALIDATION_ERROR', "value must be a number.", { field });
-  }
-  return Math.trunc(n);
-};
+const queryInt =
+  (field: string) =>
+  (v: unknown): unknown => {
+    const first = Array.isArray(v) ? v[0] : v;
+    const n = typeof first === 'string' && first.trim() !== '' ? Number(first) : first;
+    if (typeof n !== 'number' || !Number.isFinite(n)) {
+      throw new EtnError('VALIDATION_ERROR', 'value must be a number.', { field });
+    }
+    return Math.trunc(n);
+  };
 
 export const RestAttachmentListOwner = defineContract(
   'rest:attachments.list-owner',
@@ -2862,15 +3029,25 @@ export const RestAttachmentCreate = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_KINDS),
       req: true,
-      msg: "kind is required (url|file).",
+      msg: 'kind is required (url|file).',
     },
     url: { from: { kind: 'body' }, t: z.string().nullable() },
     file_path: { from: { kind: 'body' }, t: z.string().nullable() },
-    file_size: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: "file_size must be a number." },
+    file_size: {
+      from: { kind: 'body' },
+      t: z.number().int(),
+      parse: truncInt,
+      msg: 'file_size must be a number.',
+    },
     mime_type: { from: { kind: 'body' }, t: z.string().nullable() },
     title: { from: { kind: 'body' }, t: z.string().nullable() },
     description: { from: { kind: 'body' }, t: z.string().nullable() },
-    position: { from: { kind: 'body' }, t: z.number().int(), parse: truncInt, msg: "position must be a number." },
+    position: {
+      from: { kind: 'body' },
+      t: z.number().int(),
+      parse: truncInt,
+      msg: 'position must be a number.',
+    },
   },
 );
 
@@ -2880,8 +3057,18 @@ export const RestAttachmentFileCreate = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     owner_id: { from: { kind: 'param', name: 'id' } },
-    mime_type: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: "mime_type is required." },
-    data_base64: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: "data_base64 is required." },
+    mime_type: {
+      from: { kind: 'body' },
+      t: z.string().min(1),
+      req: true,
+      msg: 'mime_type is required.',
+    },
+    data_base64: {
+      from: { kind: 'body' },
+      t: z.string().min(1),
+      req: true,
+      msg: 'data_base64 is required.',
+    },
     title: { from: { kind: 'body' }, t: z.string().nullable() },
   },
 );
@@ -2898,12 +3085,30 @@ export const RestAttachmentSearch = defineContract(
     exclude_owner_type: {
       from: { kind: 'query' },
       t: z.enum(ATTACHMENT_OWNER_TYPES).optional(),
-      msg: "exclude_owner_type must be thought|link|publication.",
+      msg: 'exclude_owner_type must be thought|link|publication.',
     },
-    exclude_owner_id: { from: { kind: 'query' }, t: z.string().optional(), msg: "exclude_owner_id must be a string." },
-    kind: { from: { kind: 'query' }, t: z.enum(ATTACHMENT_KINDS).optional(), msg: "kind must be url|file." },
-    limit: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('limit'), msg: "limit must be a number." },
-    offset: { from: { kind: 'query' }, t: z.number().int().optional(), parse: queryInt('offset'), msg: "offset must be a number." },
+    exclude_owner_id: {
+      from: { kind: 'query' },
+      t: z.string().optional(),
+      msg: 'exclude_owner_id must be a string.',
+    },
+    kind: {
+      from: { kind: 'query' },
+      t: z.enum(ATTACHMENT_KINDS).optional(),
+      msg: 'kind must be url|file.',
+    },
+    limit: {
+      from: { kind: 'query' },
+      t: z.number().int().optional(),
+      parse: queryInt('limit'),
+      msg: 'limit must be a number.',
+    },
+    offset: {
+      from: { kind: 'query' },
+      t: z.number().int().optional(),
+      parse: queryInt('offset'),
+      msg: 'offset must be a number.',
+    },
   },
 );
 
@@ -2912,7 +3117,7 @@ export const RestAttachmentRaw = defineContract(
   z.object({ network_id: NetworkId }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    path: { from: { kind: 'query' }, t: z.string().min(1), req: true, msg: "path is required." },
+    path: { from: { kind: 'query' }, t: z.string().min(1), req: true, msg: 'path is required.' },
   },
 );
 
@@ -2926,19 +3131,24 @@ export const RestAttachmentCopy = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: "target_owner_type must be thought|link|publication.",
+      msg: 'target_owner_type must be thought|link|publication.',
     },
     target_owner_ids: {
       from: { kind: 'body' },
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', "target_owner_ids must be an array of strings.", { field: 'target_owner_ids' }, requestId);
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'target_owner_ids must be an array of strings.',
+            { field: 'target_owner_ids' },
+            requestId,
+          );
         }
         return raw.map((v) => {
           if (typeof v !== 'string' || v === '') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              "target_owner_ids contains a non-string or an empty string.",
+              'target_owner_ids contains a non-string or an empty string.',
               { field: 'target_owner_ids' },
               requestId,
             );
@@ -3007,7 +3217,7 @@ export const RestAttachmentOwnersAdd = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: "owner_type must be thought|link|publication.",
+      msg: 'owner_type must be thought|link|publication.',
     },
     owner_ids: {
       from: { kind: 'body' },
@@ -3015,7 +3225,7 @@ export const RestAttachmentOwnersAdd = defineContract(
         if (!Array.isArray(raw)) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            "owner_ids must be a non-empty array of strings.",
+            'owner_ids must be a non-empty array of strings.',
             { field: 'owner_ids' },
             requestId,
           );
@@ -3024,7 +3234,7 @@ export const RestAttachmentOwnersAdd = defineContract(
           if (typeof v !== 'string' || v === '') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              "owner_ids contains a non-string or an empty string.",
+              'owner_ids contains a non-string or an empty string.',
               { field: 'owner_ids' },
               requestId,
             );
@@ -3034,7 +3244,7 @@ export const RestAttachmentOwnersAdd = defineContract(
         if (ids.length === 0) {
           throw new EtnError(
             'VALIDATION_ERROR',
-            "owner_ids must be a non-empty array of strings.",
+            'owner_ids must be a non-empty array of strings.',
             { field: 'owner_ids' },
             requestId,
           );
@@ -3063,15 +3273,15 @@ export const RestAttachmentOwnerRemove = defineContract(
       from: { kind: 'body' },
       t: z.enum(ATTACHMENT_OWNER_TYPES),
       req: true,
-      msg: "owner_type must be thought|link|publication.",
+      msg: 'owner_type must be thought|link|publication.',
     },
     owner_id: {
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: "owner_id is required.",
+      msg: 'owner_id is required.',
     },
-    confirm: { from: { kind: 'body' }, t: z.boolean(), msg: "confirm must be a boolean." },
+    confirm: { from: { kind: 'body' }, t: z.boolean(), msg: 'confirm must be a boolean.' },
   },
 );
 
@@ -3081,7 +3291,12 @@ export const RestAttachmentContentPut = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     attachment_id: { from: { kind: 'param', name: 'id' } },
-    data_base64: { from: { kind: 'body' }, t: z.string().min(1), req: true, msg: "data_base64 is required." },
+    data_base64: {
+      from: { kind: 'body' },
+      t: z.string().min(1),
+      req: true,
+      msg: 'data_base64 is required.',
+    },
     mime_type: { from: { kind: 'body' }, t: z.string().optional() },
   },
 );
@@ -3100,8 +3315,11 @@ export const RestNetworkCreate = defineContract(
   {
     display_name: {
       from: { kind: 'body' },
-      msg: "display_name is required and must not be empty.",
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "display_name is required and must not be empty." : null),
+      msg: 'display_name is required and must not be empty.',
+      check: (v: unknown) =>
+        typeof v === 'string' && v.trim() === ''
+          ? 'display_name is required and must not be empty.'
+          : null,
     },
     description: {
       from: { kind: 'body' },
@@ -3124,7 +3342,7 @@ export const RestNetworkMemberAdd = defineContract(
   z.object({ network_id: NetworkId, user_id: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    user_id: { from: { kind: 'body' }, msg: "user_id is required." },
+    user_id: { from: { kind: 'body' }, msg: 'user_id is required.' },
   },
 );
 
@@ -3145,7 +3363,7 @@ export const RestNetworkMemberPatch = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     uid: { from: { kind: 'param' } },
-    role: { from: { kind: 'body' }, msg: "Only ownership transfer is supported (role: \"owner\")." },
+    role: { from: { kind: 'body' }, msg: 'Only ownership transfer is supported (role: "owner").' },
   },
 );
 
@@ -3169,6 +3387,52 @@ export const RestUserSettingKey = defineContract(
   z.object({ key: z.string().min(1) }),
   {
     key: { from: { kind: 'param' } },
+  },
+);
+
+/**
+ * PUT /users/me/wallpaper — JSON-ветка загрузки фоновой картинки (0.16.1,
+ * задача 8e007e63, операция 31ef478a). Стандарт 02c164ed: хендлер читает из
+ * `parseRest` только объявленные поля. Структуру `meta` проверяет домен
+ * (422 с details) — контракт объявляет лишь её наличие и JSON-форму;
+ * `mime_type` необязателен: при отсутствии тип берётся из магических байтов.
+ * Multipart-ветка читается потоком частей (как у вложений) — это не JSON-тело.
+ */
+export const RestUserWallpaperUpload = defineContract(
+  'rest:users.me.wallpaper.upload',
+  z.object({
+    data_base64: z.string(),
+    meta: z.unknown(),
+    mime_type: z.string().min(1).optional(),
+  }),
+  {
+    data_base64: { from: { kind: 'body' } },
+    meta: { from: { kind: 'body' }, t: z.unknown(), req: true, msg: 'meta is required.' },
+    mime_type: { from: { kind: 'body' } },
+  },
+);
+
+/** Формат идентификатора сети в query операции картинки (uuid). */
+const WALLPAPER_NETWORK_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Query-параметр ВСЕХ методов `/users/me/wallpaper*` (0.16.1, задача 5db41abf;
+ * ревизия операции 31ef478a 2026-11-13): картинка — своя на пару
+ * «пользователь × сеть», поэтому `network_id` обязателен и проверяется по
+ * формату uuid. Участие пользователя в сети проверяет сам роут (403).
+ */
+export const RestUserWallpaperQuery = defineContract(
+  'rest:users.me.wallpaper.query',
+  z.object({ network_id: NetworkId }),
+  {
+    network_id: {
+      from: { kind: 'query' },
+      msg: 'network_id is required.',
+      check: (value) =>
+        typeof value === 'string' && WALLPAPER_NETWORK_ID_RE.test(value)
+          ? null
+          : 'network_id must be a UUID.',
+    },
   },
 );
 
@@ -3205,19 +3469,35 @@ export const RestLinkGet = defineContract(
 
 export const RestLinkPatch = defineContract(
   'rest:links.patch',
-  z.object({ network_id: NetworkId, link_id: z.string().min(1), expected_version: z.number().int().min(1).optional() }),
+  z.object({
+    network_id: NetworkId,
+    link_id: z.string().min(1),
+    expected_version: z.number().int().min(1).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     link_id: { from: { kind: 'param', name: 'id' } },
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: "If-Match header must contain an integer version.",
+      msg: 'If-Match header must contain an integer version.',
     },
-    source_id: { from: { kind: 'body' }, t: z.string().optional(), msg: "source_id and target_id change together." },
-    target_id: { from: { kind: 'body' }, t: z.string().optional(), msg: "source_id and target_id change together." },
+    source_id: {
+      from: { kind: 'body' },
+      t: z.string().optional(),
+      msg: 'source_id and target_id change together.',
+    },
+    target_id: {
+      from: { kind: 'body' },
+      t: z.string().optional(),
+      msg: 'source_id and target_id change together.',
+    },
     type_id: { from: { kind: 'body' }, t: z.string().nullable().optional() },
     color: { from: { kind: 'body' }, t: z.string().nullable().optional() },
-    style: { from: { kind: 'body' }, t: z.enum(LINK_STYLES).nullable().optional(), msg: "Invalid link style." },
+    style: {
+      from: { kind: 'body' },
+      t: z.enum(LINK_STYLES).nullable().optional(),
+      msg: 'Invalid link style.',
+    },
     width: { from: { kind: 'body' }, t: z.number().int().nullable().optional() },
     active: { from: { kind: 'body' }, t: z.boolean().optional() },
     marked_for_deletion: { from: { kind: 'body' }, t: z.boolean().optional() },
@@ -3242,7 +3522,7 @@ export const RestLinkDeletionCheckBatch = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).min(1),
       req: true,
-      msg: "ids is required (a non-empty array of strings).",
+      msg: 'ids is required (a non-empty array of strings).',
     },
   },
 );
@@ -3256,7 +3536,8 @@ export const RestLinksByThought = defineContract(
     group: {
       from: { kind: 'query' },
       t: z.string().optional(),
-      check: (v: unknown) => (typeof v === 'string' && v !== 'type' ? "Only group=type is supported." : null),
+      check: (v: unknown) =>
+        typeof v === 'string' && v !== 'type' ? 'Only group=type is supported.' : null,
     },
     show_inactive: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
     show_trash: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
@@ -3273,7 +3554,7 @@ export const RestImportPreview = defineContract(
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: "The archive_b64 field is required and must be a non-empty string.",
+      msg: 'The archive_b64 field is required and must be a non-empty string.',
     },
   },
 );
@@ -3288,27 +3569,31 @@ export const RestImportCommit = defineContract(
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: "The archive_b64 field is required and must be a non-empty string.",
+      msg: 'The archive_b64 field is required and must be a non-empty string.',
     },
     parent_thought_id: {
       from: { kind: 'body' },
       t: z.string().min(1),
       req: true,
-      msg: "The parent_thought_id field is required and must be a UUID.",
+      msg: 'The parent_thought_id field is required and must be a UUID.',
     },
     etnx: {
       from: { kind: 'body' },
       parse: (raw: unknown) => {
         if (raw === undefined) return undefined;
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', "The etnx field must be an object.", { field: 'etnx' });
+          throw new EtnError('VALIDATION_ERROR', 'The etnx field must be an object.', {
+            field: 'etnx',
+          });
         }
         const obj = raw as Record<string, unknown>;
         const slices: Record<string, boolean> = {};
         for (const key of ['include_types', 'include_attachments', 'include_chronology'] as const) {
           if (obj[key] !== undefined) {
             if (typeof obj[key] !== 'boolean') {
-              throw new EtnError('VALIDATION_ERROR', `etnx.${key} must be a boolean.`, { field: `etnx.${key}` });
+              throw new EtnError('VALIDATION_ERROR', `etnx.${key} must be a boolean.`, {
+                field: `etnx.${key}`,
+              });
             }
             slices[key] = obj[key] as boolean;
           }
@@ -3368,10 +3653,9 @@ export const RestSearchQuery = defineContract(
           v.in === undefined &&
           v.from_thought_id === undefined),
       {
-        message:
-          `The ast field is incompatible with flat thought parameters (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
-            ', ',
-          )}): provide either ast or flat parameters.`,
+        message: `The ast field is incompatible with flat thought parameters (${SEARCH_AST_EXCLUSIVE_PARAMS.join(
+          ', ',
+        )}): provide either ast or flat parameters.`,
       },
     ),
   {
@@ -3390,29 +3674,39 @@ export const RestSearchQuery = defineContract(
         const first = Array.isArray(raw) ? raw[0] : raw;
         return typeof first === 'string' && first.trim() !== '' ? first : undefined;
       },
-      msg: "The q parameter is required and must not be empty.",
+      msg: 'The q parameter is required and must not be empty.',
     },
     scope: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown) =>
-        typeof v === 'string' && !['names', 'texts', 'links', 'chronology', 'all', 'thoughts'].includes(v)
-          ? "Invalid scope."
+        typeof v === 'string' &&
+        !['names', 'texts', 'links', 'chronology', 'all', 'thoughts'].includes(v)
+          ? 'Invalid scope.'
           : null,
     },
     in: {
       from: { kind: 'query' },
       t: z.string().optional(),
-      check: (v: unknown) => (typeof v === 'string' && v !== 'subtree' ? "in must equal \"subtree\"." : null),
+      check: (v: unknown) =>
+        typeof v === 'string' && v !== 'subtree' ? 'in must equal "subtree".' : null,
     },
     from_thought_id: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown, all: Record<string, unknown>) =>
-        v === undefined && all['in'] === 'subtree' ? "from_thought_id is required when in=subtree." : null,
+        v === undefined && all['in'] === 'subtree'
+          ? 'from_thought_id is required when in=subtree.'
+          : null,
     },
-    type_id: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
-    link_type_id: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
+    type_id: {
+      from: { kind: 'query', repeatable: true },
+      t: z.array(z.string().min(1)).optional(),
+    },
+    link_type_id: {
+      from: { kind: 'query', repeatable: true },
+      t: z.array(z.string().min(1)).optional(),
+    },
     show_inactive: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
     trashed: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
     author_id: { from: { kind: 'query' }, t: z.string().optional() },
@@ -3434,12 +3728,12 @@ export const RestMentionsScan = defineContract(
       from: { kind: 'body' },
       t: z.array(z.string()).min(1),
       req: true,
-      msg: "texts is required (an array of strings).",
+      msg: 'texts is required (an array of strings).',
       check: (v: unknown) => {
         const arr = v as string[];
-        if (arr.length > 50) return "texts must not contain more than 50 items.";
+        if (arr.length > 50) return 'texts must not contain more than 50 items.';
         const total = arr.reduce((sum, t) => sum + t.length, 0);
-        if (total > 20000) return "Total length of texts must not exceed 20000 characters.";
+        if (total > 20000) return 'Total length of texts must not exceed 20000 characters.';
         return null;
       },
     },
@@ -3456,88 +3750,109 @@ export const RestMentionsScan = defineContract(
  */
 export const RestThoughtDuplicates = defineContract(
   'rest:thoughts.duplicates',
-  z
-    .object({
-      // `network_id` из URL-path (`/networks/:networkId/thoughts/duplicates`)
-      // не валидируется zod-схемой: кросс-сетевой запрос всегда несёт и path,
-      // и `network_ids`. Роут читает networkId из path и дополняет веер.
-      network_ids: z.array(NetworkId).optional(),
-      title: z.string().min(1),
-      // Repeatable: ?synonyms=a&synonyms=b или ?synonyms=a,b — оба варианта
-      // принимаются (роут склеивает).
-      synonyms: z.array(z.string().min(1)).optional(),
-      type_ids: z.array(z.string().min(1)).optional(),
-      // Семантика сопоставления (ошибка 11f14a81): `dedupe` по умолчанию,
-      // `search` — живой поиск диалога/пикеров.
-      mode: z.enum(['dedupe', 'search']).optional(),
-    }),
+  z.object({
+    // `network_id` из URL-path (`/networks/:networkId/thoughts/duplicates`)
+    // не валидируется zod-схемой: кросс-сетевой запрос всегда несёт и path,
+    // и `network_ids`. Роут читает networkId из path и дополняет веер.
+    network_ids: z.array(NetworkId).optional(),
+    title: z.string().min(1),
+    // Repeatable: ?synonyms=a&synonyms=b или ?synonyms=a,b — оба варианта
+    // принимаются (роут склеивает).
+    synonyms: z.array(z.string().min(1)).optional(),
+    type_ids: z.array(z.string().min(1)).optional(),
+    // Семантика сопоставления (ошибка 11f14a81): `dedupe` по умолчанию,
+    // `search` — живой поиск диалога/пикеров.
+    mode: z.enum(['dedupe', 'search']).optional(),
+  }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     // `repeatable: true` парсера: при отсутствии параметра в строке запроса
     // парсер кладёт `[]`; `.min(1)` здесь ломает одиночную сеть. Длину
     // проверяет роут (`input.network_ids.length > 0`).
     network_ids: { from: { kind: 'query', repeatable: true }, t: z.array(NetworkId).optional() },
-    title: { from: { kind: 'query' }, req: true, msg: "title is required." },
-    synonyms: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
-    type_ids: { from: { kind: 'query', repeatable: true }, t: z.array(z.string().min(1)).optional() },
+    title: { from: { kind: 'query' }, req: true, msg: 'title is required.' },
+    synonyms: {
+      from: { kind: 'query', repeatable: true },
+      t: z.array(z.string().min(1)).optional(),
+    },
+    type_ids: {
+      from: { kind: 'query', repeatable: true },
+      t: z.array(z.string().min(1)).optional(),
+    },
     mode: { from: { kind: 'query' }, t: z.enum(['dedupe', 'search']).optional() },
   },
 );
 
-export const RestExport = defineContract(
-  'rest:export.start',
-  z.object({ network_id: NetworkId }),
-  {
-    network_id: { from: { kind: 'param', name: 'networkId' } },
-    thought_ids: {
-      from: { kind: 'body' },
-      t: z.array(z.string().min(1)).min(1),
-      req: true,
-      msg: "thought_ids is required (a non-empty array of strings).",
-    },
-    format: {
-      from: { kind: 'body' },
-      t: z.enum(EXPORT_FORMATS),
-      req: true,
-      msg: "Invalid format.",
-    },
-    etnx: {
-      from: { kind: 'body' },
-      parse: (raw: unknown, requestId: string) => {
-        if (raw === undefined) return undefined;
-        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', "The etnx field must be an object.", { field: 'etnx' }, requestId);
-        }
-        const obj = raw as Record<string, unknown>;
-        const opts: Record<string, unknown> = {};
-        for (const key of ['include_types', 'include_attachments', 'include_chronology', 'include_subtree'] as const) {
-          if (obj[key] !== undefined) {
-            if (typeof obj[key] !== 'boolean') {
-              throw new EtnError('VALIDATION_ERROR', `etnx.${key} must be a boolean.`, { field: `etnx.${key}` }, requestId);
-            }
-            opts[key] = obj[key] as boolean;
-          }
-        }
-        if (obj['subtree_depth'] !== undefined) {
-          if (typeof obj['subtree_depth'] !== 'number' || !Number.isInteger(obj['subtree_depth'])) {
-            throw new EtnError('VALIDATION_ERROR', "etnx.subtree_depth must be an integer.", { field: 'etnx.subtree_depth' }, requestId);
-          }
-          const depth = obj['subtree_depth'] as number;
-          if (depth < 1 || depth > ETNX_SUBTREE_DEPTH_MAX) {
+export const RestExport = defineContract('rest:export.start', z.object({ network_id: NetworkId }), {
+  network_id: { from: { kind: 'param', name: 'networkId' } },
+  thought_ids: {
+    from: { kind: 'body' },
+    t: z.array(z.string().min(1)).min(1),
+    req: true,
+    msg: 'thought_ids is required (a non-empty array of strings).',
+  },
+  format: {
+    from: { kind: 'body' },
+    t: z.enum(EXPORT_FORMATS),
+    req: true,
+    msg: 'Invalid format.',
+  },
+  etnx: {
+    from: { kind: 'body' },
+    parse: (raw: unknown, requestId: string) => {
+      if (raw === undefined) return undefined;
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        throw new EtnError(
+          'VALIDATION_ERROR',
+          'The etnx field must be an object.',
+          { field: 'etnx' },
+          requestId,
+        );
+      }
+      const obj = raw as Record<string, unknown>;
+      const opts: Record<string, unknown> = {};
+      for (const key of [
+        'include_types',
+        'include_attachments',
+        'include_chronology',
+        'include_subtree',
+      ] as const) {
+        if (obj[key] !== undefined) {
+          if (typeof obj[key] !== 'boolean') {
             throw new EtnError(
               'VALIDATION_ERROR',
-              `etnx.subtree_depth must be in the range 1..${ETNX_SUBTREE_DEPTH_MAX}.`,
-              { field: 'etnx.subtree_depth', min: 1, max: ETNX_SUBTREE_DEPTH_MAX },
+              `etnx.${key} must be a boolean.`,
+              { field: `etnx.${key}` },
               requestId,
             );
           }
-          opts.subtree_depth = depth;
+          opts[key] = obj[key] as boolean;
         }
-        return opts;
-      },
+      }
+      if (obj['subtree_depth'] !== undefined) {
+        if (typeof obj['subtree_depth'] !== 'number' || !Number.isInteger(obj['subtree_depth'])) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'etnx.subtree_depth must be an integer.',
+            { field: 'etnx.subtree_depth' },
+            requestId,
+          );
+        }
+        const depth = obj['subtree_depth'] as number;
+        if (depth < 1 || depth > ETNX_SUBTREE_DEPTH_MAX) {
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            `etnx.subtree_depth must be in the range 1..${ETNX_SUBTREE_DEPTH_MAX}.`,
+            { field: 'etnx.subtree_depth', min: 1, max: ETNX_SUBTREE_DEPTH_MAX },
+            requestId,
+          );
+        }
+        opts.subtree_depth = depth;
+      }
+      return opts;
     },
   },
-);
+});
 
 export const RestJobById = defineContract(
   'rest:jobs.by-id',
@@ -3570,6 +3885,12 @@ export function parseBody<S extends z.ZodObject>(
  * молчаливого отбрасывания (ошибка d9ba9e68, 0.15.4; та же диагностика, что у
  * требования 40efde41 для тел отбора).
  *
+ * Вызывается из {@link parseRest} для КАЖДОГО REST-тела, у которого контракт
+ * объявляет хотя бы одно поле (ошибка 244859b9): так строгость получают все
+ * роуты сразу — комментарии, вложения, batch-копирование и прочие, — а не
+ * только те, где вызов поставили руками. `allowed` строится по rest-карте,
+ * поэтому подсказка включает и REST-only поля (их нет в общей zod-схеме).
+ *
  * Проверяются только тела-объекты: тип тела (`null`/массив) отклонит
  * {@link parseRest} собственной ошибкой.
  */
@@ -3579,9 +3900,21 @@ export function assertKnownBodyFields(
   requestId: string,
 ): void {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return;
-  const allowed = Object.entries(contract.rest as Record<string, RestFieldSpec>)
-    .filter(([, spec]) => (spec.from ?? { kind: 'body' }).kind === 'body')
-    .map(([key, spec]) => (spec.from as { name?: string }).name ?? key);
+  const restSpecs = contract.rest as Record<string, RestFieldSpec>;
+  // Объявленные поля операции: у тела ключ берётся из `from.name` (если задан),
+  // у полей из пути/query/header — имя поля операции. Присланное в теле
+  // объявленное поле не «неизвестно»: значение всё равно берётся из своего
+  // источника (путь/заголовок), а лишний дубль в теле исторически принимался —
+  // так клиенты и присылают `network_id` вместе с `:networkId` в URL.
+  const declaredFields = Object.entries(restSpecs).flatMap(([key, spec]) => {
+    const from = spec.from ?? { kind: 'body' as const };
+    return from.kind === 'body' ? [from.name ?? key] : [key];
+  });
+  // Поля общей схемы, которых нет в rest-карте, REST тоже читает из тела —
+  // напрямую, доменным парсером по сырому body (например, плоские критерии и
+  // `ast` у `POST /thoughts/query`). Считать их неизвестными нельзя.
+  const schemaOnlyFields = Object.keys(contract.schema.shape).filter((key) => !(key in restSpecs));
+  const allowed = [...new Set([...declaredFields, ...schemaOnlyFields])];
   const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
     throw new EtnError(
@@ -3605,7 +3938,12 @@ export function assertImageIcon(icon: string | null | undefined, requestId?: str
   if (/^https?:\/\//i.test(icon)) return;
   const match = /^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/i.exec(icon);
   if (match === null) {
-    throw new EtnError('VALIDATION_ERROR', "icon must be a data:image URL or an http(s) URL.", { field: 'icon' }, requestId);
+    throw new EtnError(
+      'VALIDATION_ERROR',
+      'icon must be a data:image URL or an http(s) URL.',
+      { field: 'icon' },
+      requestId,
+    );
   }
   const b64 = match[1] ?? '';
   const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
@@ -3623,29 +3961,30 @@ export function assertImageIcon(icon: string | null | undefined, requestId?: str
 /** Тело POST /thoughts. */
 export const RestThoughtCreateBody = defineContract(
   'rest:thoughts.create-body',
-  z.object({
-    title: z.string().min(1),
-    synonyms: z.union([z.string(), z.array(z.string())]).optional(),
-    type_id: z.string().nullable().optional(),
-    icon: z.string().nullable().optional(),
-    icon_kind: z.enum(ICON_KINDS).optional(),
-    icon_color: z.string().nullable().optional(),
-    active: z.boolean().optional(),
-    fg_color: z.string().nullable().optional(),
-    bg_color: z.string().nullable().optional(),
-    font_bold: z.boolean().optional(),
-    font_italic: z.boolean().optional(),
-    font_underline: z.boolean().optional(),
-    font_strike: z.boolean().optional(),
-    // Родитель новой мысли (ошибка d9ba9e68, 0.15.4) — сокращённая запись
-    // ребра `create_link { direction: "parent" }`.
-    parent_id: z.string().min(1).optional(),
-  })
+  z
+    .object({
+      title: z.string().min(1),
+      synonyms: z.union([z.string(), z.array(z.string())]).optional(),
+      type_id: z.string().nullable().optional(),
+      icon: z.string().nullable().optional(),
+      icon_kind: z.enum(ICON_KINDS).optional(),
+      icon_color: z.string().nullable().optional(),
+      active: z.boolean().optional(),
+      fg_color: z.string().nullable().optional(),
+      bg_color: z.string().nullable().optional(),
+      font_bold: z.boolean().optional(),
+      font_italic: z.boolean().optional(),
+      font_underline: z.boolean().optional(),
+      font_strike: z.boolean().optional(),
+      // Родитель новой мысли (ошибка d9ba9e68, 0.15.4) — сокращённая запись
+      // ребра `create_link { direction: "parent" }`.
+      parent_id: z.string().min(1).optional(),
+    })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
     .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
-    title: { from: { kind: 'body' }, msg: "title is required and must not be empty." },
+    title: { from: { kind: 'body' }, msg: 'title is required and must not be empty.' },
     synonyms: { from: { kind: 'body' } },
     type_id: { from: { kind: 'body' } },
     icon: { from: { kind: 'body' } },
@@ -3664,14 +4003,19 @@ export const RestThoughtCreateBody = defineContract(
       parse: (raw: unknown, requestId: string) => {
         if (raw === undefined) return undefined;
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', "create_link must be an object.", { field: 'create_link' }, requestId);
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'create_link must be an object.',
+            { field: 'create_link' },
+            requestId,
+          );
         }
         const cl = raw as Record<string, unknown>;
         const direction = cl['direction'];
         if (direction !== 'parent' && direction !== 'child') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            "create_link.direction must be \"parent\" or \"child\".",
+            'create_link.direction must be "parent" or "child".',
             { field: 'create_link.direction' },
             requestId,
           );
@@ -3680,7 +4024,7 @@ export const RestThoughtCreateBody = defineContract(
         if (typeof targetThoughtId !== 'string' || targetThoughtId === '') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            "create_link.target_thought_id is required.",
+            'create_link.target_thought_id is required.',
             { field: 'create_link.target_thought_id' },
             requestId,
           );
@@ -3700,7 +4044,12 @@ export const RestThoughtCreateBody = defineContract(
       parse: (raw: unknown, requestId: string) => {
         if (raw === undefined) return undefined;
         if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', "comment must be an object.", { field: 'comment' }, requestId);
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'comment must be an object.',
+            { field: 'comment' },
+            requestId,
+          );
         }
         const c = raw as Record<string, unknown>;
         const bodyMd = c['body_md'];
@@ -3709,7 +4058,7 @@ export const RestThoughtCreateBody = defineContract(
         if (typeof bodyMd !== 'string') {
           throw new EtnError(
             'VALIDATION_ERROR',
-            "comment.body_md is required and must be a string.",
+            'comment.body_md is required and must be a string.',
             { field: 'comment.body_md' },
             requestId,
           );
@@ -3723,26 +4072,27 @@ export const RestThoughtCreateBody = defineContract(
 /** Тело PATCH /thoughts/:id. */
 export const RestThoughtUpdateBody = defineContract(
   'rest:thoughts.update-body',
-  z.object({
-    title: z.string().min(1).optional(),
-    synonyms: z.union([z.string(), z.array(z.string())]).optional(),
-    type_id: z.string().nullable().optional(),
-    icon: z.string().nullable().optional(),
-    icon_kind: z.enum(ICON_KINDS).optional(),
-    icon_color: z.string().nullable().optional(),
-    icon_attachment_id: z.string().nullable().optional(),
-    active: z.boolean().optional(),
-    marked_for_deletion: z.boolean().optional(),
-    fg_color: z.string().nullable().optional(),
-    bg_color: z.string().nullable().optional(),
-    font_bold: z.boolean().nullable().optional(),
-    font_italic: z.boolean().nullable().optional(),
-    font_underline: z.boolean().nullable().optional(),
-    font_strike: z.boolean().nullable().optional(),
-    // Перемещение в иерархии (ошибка d9ba9e68, 0.15.4): после правки у
-    // мысли ровно один структурный родитель — этот.
-    parent_id: z.string().min(1).optional(),
-  })
+  z
+    .object({
+      title: z.string().min(1).optional(),
+      synonyms: z.union([z.string(), z.array(z.string())]).optional(),
+      type_id: z.string().nullable().optional(),
+      icon: z.string().nullable().optional(),
+      icon_kind: z.enum(ICON_KINDS).optional(),
+      icon_color: z.string().nullable().optional(),
+      icon_attachment_id: z.string().nullable().optional(),
+      active: z.boolean().optional(),
+      marked_for_deletion: z.boolean().optional(),
+      fg_color: z.string().nullable().optional(),
+      bg_color: z.string().nullable().optional(),
+      font_bold: z.boolean().nullable().optional(),
+      font_italic: z.boolean().nullable().optional(),
+      font_underline: z.boolean().nullable().optional(),
+      font_strike: z.boolean().nullable().optional(),
+      // Перемещение в иерархии (ошибка d9ba9e68, 0.15.4): после правки у
+      // мысли ровно один структурный родитель — этот.
+      parent_id: z.string().min(1).optional(),
+    })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
     .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
@@ -3776,22 +4126,32 @@ export const RestThoughtCopyBody = defineContract(
   {
     source_network_id: {
       from: { kind: 'body' },
-      msg: "source_network_id is required and must not be empty.",
+      msg: 'source_network_id is required and must not be empty.',
     },
     parent_thought_id: {
       from: { kind: 'body' },
-      msg: "parent_thought_id is required and must not be empty.",
+      msg: 'parent_thought_id is required and must not be empty.',
     },
     thoughts: {
       from: { kind: 'body' },
       parse: (raw: unknown, requestId: string) => {
         if (!Array.isArray(raw) || raw.length === 0) {
-          throw new EtnError('VALIDATION_ERROR', "thoughts must be a non-empty array of thought snapshots.", { field: 'thoughts' }, requestId);
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'thoughts must be a non-empty array of thought snapshots.',
+            { field: 'thoughts' },
+            requestId,
+          );
         }
         const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         return raw.map((it, idx) => {
           if (typeof it !== 'object' || it === null || Array.isArray(it)) {
-            throw new EtnError('VALIDATION_ERROR', `thoughts[${idx}] must be an object.`, { field: `thoughts[${idx}]` }, requestId);
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              `thoughts[${idx}] must be an object.`,
+              { field: `thoughts[${idx}]` },
+              requestId,
+            );
           }
           const item = it as Record<string, unknown>;
           if (
@@ -3800,7 +4160,12 @@ export const RestThoughtCopyBody = defineContract(
             item['source_id'] !== '' &&
             (typeof item['source_id'] !== 'string' || !UUID_RE.test(item['source_id'] as string))
           ) {
-            throw new EtnError('VALIDATION_ERROR', `thoughts[${idx}].source_id must be a UUID string.`, { field: `thoughts[${idx}].source_id` }, requestId);
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              `thoughts[${idx}].source_id must be a UUID string.`,
+              { field: `thoughts[${idx}].source_id` },
+              requestId,
+            );
           }
           return item;
         });
@@ -3812,12 +4177,21 @@ export const RestThoughtCopyBody = defineContract(
       parse: (raw: unknown, requestId: string) => {
         if (raw === undefined) return undefined;
         if (!Array.isArray(raw)) {
-          throw new EtnError('VALIDATION_ERROR', "links must be an array.", { field: 'links' }, requestId);
+          throw new EtnError(
+            'VALIDATION_ERROR',
+            'links must be an array.',
+            { field: 'links' },
+            requestId,
+          );
         }
         return raw.map((it, idx) => {
           if (typeof it !== 'object' || it === null || Array.isArray(it)) {
-          
-            throw new EtnError('VALIDATION_ERROR', `links[${idx}] must be an object.`, { field: `links[${idx}]` }, requestId);
+            throw new EtnError(
+              'VALIDATION_ERROR',
+              `links[${idx}] must be an object.`,
+              { field: `links[${idx}]` },
+              requestId,
+            );
           }
           return it;
         });
@@ -3833,34 +4207,38 @@ export const RestIfMatch = defineContract(
   {
     expected_version: {
       from: { kind: 'header', name: 'If-Match', int: true },
-      msg: "If-Match header must contain an integer version.",
+      msg: 'If-Match header must contain an integer version.',
     },
   },
 );
 
-/** Тело focus-переопределения (show_inactive / show_trash). */
+/**
+ * Тело focus-переопределения (show_inactive / show_trash / link_filter).
+ *
+ * `link_filter` в общей схеме не описан и разбирается доменным
+ * `parseLinkTypeFilter` по сырому body (задача c965ad03); в rest-карту он
+ * внесён, чтобы строгость парсера (ошибка 244859b9) не считала легитимное поле
+ * неизвестным.
+ */
 export const RestFocusBody = defineContract(
   'rest:thoughts.focus-body',
   z.object({ show_inactive: z.boolean().optional(), show_trash: z.boolean().optional() }),
   {
     show_inactive: { from: { kind: 'body' } },
     show_trash: { from: { kind: 'body' } },
+    link_filter: { from: { kind: 'body' } },
   },
 );
 
 /** Тело { ids: string[] } для пакетных операций. */
-export const RestIdsBody = defineContract(
-  'rest:ids-body',
-  z.object({}),
-  {
-    ids: {
-      from: { kind: 'body' },
-      t: z.array(z.string().min(1)).min(1),
-      req: true,
-      msg: "ids is required (a non-empty array of strings).",
-    },
+export const RestIdsBody = defineContract('rest:ids-body', z.object({}), {
+  ids: {
+    from: { kind: 'body' },
+    t: z.array(z.string().min(1)).min(1),
+    req: true,
+    msg: 'ids is required (a non-empty array of strings).',
   },
-);
+});
 
 /** Query GET /networks/:id/thoughts/:id/neighbors (сообщения — прежние). */
 export const RestNeighborsQuery = defineContract(
@@ -3880,19 +4258,23 @@ export const RestNeighborsQuery = defineContract(
     network_id: { from: { kind: 'param', name: 'networkId' } },
     dir: {
       from: { kind: 'query' },
-      msg: "dir is required (parents|children|siblings).",
+      msg: 'dir is required (parents|children|siblings).',
     },
     sort: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown) =>
-        typeof v === 'string' && !(SORT_KINDS as readonly string[]).includes(v) ? "Invalid sort." : null,
+        typeof v === 'string' && !(SORT_KINDS as readonly string[]).includes(v)
+          ? 'Invalid sort.'
+          : null,
     },
     order: {
       from: { kind: 'query' },
       t: z.string().optional(),
       check: (v: unknown) =>
-        typeof v === 'string' && !(SORT_ORDERS as readonly string[]).includes(v) ? "Invalid order." : null,
+        typeof v === 'string' && !(SORT_ORDERS as readonly string[]).includes(v)
+          ? 'Invalid order.'
+          : null,
     },
     type_id: { from: { kind: 'query' }, t: z.string().optional() },
     show_inactive: { from: { kind: 'query', coerce: 'bool' }, t: z.boolean().optional() },
@@ -3903,26 +4285,22 @@ export const RestNeighborsQuery = defineContract(
 );
 
 /** Тело resolve (ids может быть пустым, но не больше `THOUGHT_RESOLVE_MAX_IDS`). */
-export const RestResolveIdsBody = defineContract(
-  'rest:thoughts.resolve-body',
-  z.object({}),
-  {
-    ids: {
-      from: { kind: 'body' },
-      t: z.array(z.string()).max(THOUGHT_RESOLVE_MAX_IDS),
-      req: true,
-      msg: `ids must be an array of strings (up to ${THOUGHT_RESOLVE_MAX_IDS} items).`,
-    },
+export const RestResolveIdsBody = defineContract('rest:thoughts.resolve-body', z.object({}), {
+  ids: {
+    from: { kind: 'body' },
+    t: z.array(z.string()).max(THOUGHT_RESOLVE_MAX_IDS),
+    req: true,
+    msg: `ids must be an array of strings (up to ${THOUGHT_RESOLVE_MAX_IDS} items).`,
   },
-);
+});
 
 export const RestFocusPrefsBody = defineContract(
   'rest:thoughts.focus-prefs-body',
   z.object({ dir: z.string().min(1), sort: z.string().min(1), order: z.string().min(1) }),
   {
-    dir: { from: { kind: 'body' }, msg: "dir, sort and order are required." },
-    sort: { from: { kind: 'body' }, msg: "dir, sort and order are required." },
-    order: { from: { kind: 'body' }, msg: "dir, sort and order are required." },
+    dir: { from: { kind: 'body' }, msg: 'dir, sort and order are required.' },
+    sort: { from: { kind: 'body' }, msg: 'dir, sort and order are required.' },
+    order: { from: { kind: 'body' }, msg: 'dir, sort and order are required.' },
   },
 );
 
@@ -3930,12 +4308,12 @@ export const RestFocusOrderBody = defineContract(
   'rest:thoughts.focus-order-body',
   z.object({ dir: z.string().min(1) }),
   {
-    dir: { from: { kind: 'body' }, msg: "dir and ordered_ids are required." },
+    dir: { from: { kind: 'body' }, msg: 'dir and ordered_ids are required.' },
     ordered_ids: {
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).min(1),
       req: true,
-      msg: "dir and ordered_ids are required.",
+      msg: 'dir and ordered_ids are required.',
     },
   },
 );
@@ -3964,7 +4342,7 @@ export const RestAdminMemberRole = defineContract(
   {
     id: { from: { kind: 'param' } },
     uid: { from: { kind: 'param' } },
-    role: { from: { kind: 'body' }, msg: "role must be owner or member." },
+    role: { from: { kind: 'body' }, msg: 'role must be owner or member.' },
   },
 );
 
@@ -3976,18 +4354,14 @@ export const RestForceQuery = defineContract(
 );
 
 /** { ordered_ids: string[] } — переупорядочивание привязок. */
-export const RestOrderedIdsBody = defineContract(
-  'rest:ordered-ids-body',
-  z.object({}),
-  {
-    ordered_ids: {
-      from: { kind: 'body' },
-      t: z.array(z.string()),
-      req: true,
-      msg: "ordered_ids is required (an array of strings).",
-    },
+export const RestOrderedIdsBody = defineContract('rest:ordered-ids-body', z.object({}), {
+  ordered_ids: {
+    from: { kind: 'body' },
+    t: z.array(z.string()),
+    req: true,
+    msg: 'ordered_ids is required (an array of strings).',
   },
-);
+});
 
 /** { description: string|null } — override описания привязки. */
 export const RestDescriptionOverrideBody = defineContract(
@@ -3996,7 +4370,7 @@ export const RestDescriptionOverrideBody = defineContract(
   {
     description: {
       from: { kind: 'body' },
-      msg: "description is required (text or null).",
+      msg: 'description is required (text or null).',
     },
   },
 );
@@ -4004,26 +4378,27 @@ export const RestDescriptionOverrideBody = defineContract(
 /** Тело POST /thought-types (сообщения — канон схемы, как у MCP ontology). */
 export const RestThoughtTypeCreateBody = defineContract(
   'rest:thought-types.create-body',
-  z.object({
-    name: z.string().min(1),
-    parent_id: z.string().nullable().optional(),
-    icon: z.string().nullable().optional(),
-    icon_kind: z.enum(ICON_KINDS).optional(),
-    icon_color: z.string().nullable().optional(),
-    fg_color: z.string().nullable().optional(),
-    bg_color: z.string().nullable().optional(),
-    font_bold: z.boolean().nullable().optional(),
-    font_italic: z.boolean().nullable().optional(),
-    font_underline: z.boolean().nullable().optional(),
-    font_strike: z.boolean().nullable().optional(),
-    description: z.string().nullable().optional(),
-    comment_template_md: z.string().nullable().optional(),
-  })
+  z
+    .object({
+      name: z.string().min(1),
+      parent_id: z.string().nullable().optional(),
+      icon: z.string().nullable().optional(),
+      icon_kind: z.enum(ICON_KINDS).optional(),
+      icon_color: z.string().nullable().optional(),
+      fg_color: z.string().nullable().optional(),
+      bg_color: z.string().nullable().optional(),
+      font_bold: z.boolean().nullable().optional(),
+      font_italic: z.boolean().nullable().optional(),
+      font_underline: z.boolean().nullable().optional(),
+      font_strike: z.boolean().nullable().optional(),
+      description: z.string().nullable().optional(),
+      comment_template_md: z.string().nullable().optional(),
+    })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
     .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
   {
-    name: { from: { kind: 'body' }, msg: "name is required and must not be empty." },
+    name: { from: { kind: 'body' }, msg: 'name is required and must not be empty.' },
     parent_id: {
       from: { kind: 'body' },
       parse: (raw: unknown) => (raw === '' ? null : raw),
@@ -4045,27 +4420,28 @@ export const RestThoughtTypeCreateBody = defineContract(
 /** Тело PATCH /thought-types/:id. */
 export const RestThoughtTypeUpdateBody = defineContract(
   'rest:thought-types.update-body',
-  z.object({
-    name: z.string().min(1).optional(),
-    parent_id: z.string().nullable().optional(),
-    icon: z.string().nullable().optional(),
-    icon_kind: z.enum(ICON_KINDS).optional(),
-    icon_color: z.string().nullable().optional(),
-    fg_color: z.string().nullable().optional(),
-    bg_color: z.string().nullable().optional(),
-    font_bold: z.boolean().nullable().optional(),
-    font_italic: z.boolean().nullable().optional(),
-    font_underline: z.boolean().nullable().optional(),
-    font_strike: z.boolean().nullable().optional(),
-    description: z.string().nullable().optional(),
-    comment_template_md: z.string().nullable().optional(),
-    // 0.8.2, задача 8ea1ab6a: флаг подтверждения смены parent_id. Первый
-    // PATCH с реальной сменой у используемого типа возвращает 422 с details
-    // { kind: 'reparent_impact', thoughts_count, requires_confirmation: true };
-    // повторный PATCH с `confirmed: true` выполняет правку. Без `parent_id`
-    // флаг игнорируется.
-    confirmed: z.boolean().optional(),
-  })
+  z
+    .object({
+      name: z.string().min(1).optional(),
+      parent_id: z.string().nullable().optional(),
+      icon: z.string().nullable().optional(),
+      icon_kind: z.enum(ICON_KINDS).optional(),
+      icon_color: z.string().nullable().optional(),
+      fg_color: z.string().nullable().optional(),
+      bg_color: z.string().nullable().optional(),
+      font_bold: z.boolean().nullable().optional(),
+      font_italic: z.boolean().nullable().optional(),
+      font_underline: z.boolean().nullable().optional(),
+      font_strike: z.boolean().nullable().optional(),
+      description: z.string().nullable().optional(),
+      comment_template_md: z.string().nullable().optional(),
+      // 0.8.2, задача 8ea1ab6a: флаг подтверждения смены parent_id. Первый
+      // PATCH с реальной сменой у используемого типа возвращает 422 с details
+      // { kind: 'reparent_impact', thoughts_count, requires_confirmation: true };
+      // повторный PATCH с `confirmed: true` выполняет правку. Без `parent_id`
+      // флаг игнорируется.
+      confirmed: z.boolean().optional(),
+    })
     // Вид иконки `icon`: имя обязано быть в каталоге Lucide (задача 610a440e).
     .refine(libraryIconValid, { message: LIBRARY_ICON_MESSAGE, path: ['icon'] })
     .refine(iconColorValid, { message: ICON_COLOR_MESSAGE, path: ['icon_color'] }),
@@ -4105,47 +4481,44 @@ export const RestLinkTypeUpdateBody = defineContract(
       from: { kind: 'body' },
       t: z.string().optional(),
       check: () =>
-        "PATCH /link-types/{id} does not change names — edit the link property (PATCH /networks/{nid}/properties/{id}).",
+        'PATCH /link-types/{id} does not change names — edit the link property (PATCH /networks/{nid}/properties/{id}).',
     },
     name_reverse: {
       from: { kind: 'body' },
       t: z.string().optional(),
       check: () =>
-        "PATCH /link-types/{id} does not change names — edit the link property (PATCH /networks/{nid}/properties/{id}).",
+        'PATCH /link-types/{id} does not change names — edit the link property (PATCH /networks/{nid}/properties/{id}).',
     },
   },
 );
 
 /** Тело POST …/types/:id/properties — двухформенная привязка (attach/create). */
-export const RestAttachBody = defineContract(
-  'rest:types.attach-body',
-  z.object({}),
-  {
-    required: { from: { kind: 'body' }, t: z.boolean().optional() },
-    position: {
-      from: { kind: 'body' },
-      t: z.number().int().optional(),
-      parse: (raw: unknown) => (typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : undefined),
-    },
-    side: {
-      from: { kind: 'body' },
-      t: z.enum(['source', 'target']).nullable().optional(),
-      msg: "side must be one of: source, target or null.",
-    },
-    property_id: {
-      from: { kind: 'body' },
-      t: z.string().optional(),
-      check: (v: unknown) =>
-        v !== undefined && (typeof v !== 'string' || v.trim() === '')
-          ? "property_id must be a non-empty string."
-          : null,
-    },
-    key: { from: { kind: 'body' }, t: z.string().optional() },
-    value_type: { from: { kind: 'body' }, t: z.enum(PROPERTY_VALUE_TYPES).optional() },
-    config: { from: { kind: 'body' }, t: z.unknown().optional() },
-    description: { from: { kind: 'body' }, t: z.string().nullable().optional() },
+export const RestAttachBody = defineContract('rest:types.attach-body', z.object({}), {
+  required: { from: { kind: 'body' }, t: z.boolean().optional() },
+  position: {
+    from: { kind: 'body' },
+    t: z.number().int().optional(),
+    parse: (raw: unknown) =>
+      typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : undefined,
   },
-);
+  side: {
+    from: { kind: 'body' },
+    t: z.enum(['source', 'target']).nullable().optional(),
+    msg: 'side must be one of: source, target or null.',
+  },
+  property_id: {
+    from: { kind: 'body' },
+    t: z.string().optional(),
+    check: (v: unknown) =>
+      v !== undefined && (typeof v !== 'string' || v.trim() === '')
+        ? 'property_id must be a non-empty string.'
+        : null,
+  },
+  key: { from: { kind: 'body' }, t: z.string().optional() },
+  value_type: { from: { kind: 'body' }, t: z.enum(PROPERTY_VALUE_TYPES).optional() },
+  config: { from: { kind: 'body' }, t: z.unknown().optional() },
+  description: { from: { kind: 'body' }, t: z.string().nullable().optional() },
+});
 
 /** Тело PATCH …/types/{id}/properties/{propertyId} — роль привязки в типе. */
 export const RestTypePropertyUpdateBody = defineContract(
@@ -4156,22 +4529,23 @@ export const RestTypePropertyUpdateBody = defineContract(
     position: {
       from: { kind: 'body' },
       t: z.number().int().optional(),
-      parse: (raw: unknown) => (typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : undefined),
+      parse: (raw: unknown) =>
+        typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : undefined,
     },
     side: {
       from: { kind: 'body' },
       t: z.enum(['source', 'target']).nullable().optional(),
-      msg: "side must be one of: source, target or null.",
+      msg: 'side must be one of: source, target or null.',
     },
     allowed_target_type_ids: {
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).nullable().optional(),
-      msg: "allowed_target_type_ids must be an array of ids or null.",
+      msg: 'allowed_target_type_ids must be an array of ids or null.',
     },
     allowed_source_type_ids: {
       from: { kind: 'body' },
       t: z.array(z.string().min(1)).nullable().optional(),
-      msg: "allowed_source_type_ids must be an array of ids or null.",
+      msg: 'allowed_source_type_ids must be an array of ids or null.',
     },
   },
 );
@@ -4189,9 +4563,9 @@ export const RestViewCreateBody = defineContract(
     })
     .strict(),
   {
-    name: { from: { kind: 'body' }, msg: "name is required and must not be empty." },
+    name: { from: { kind: 'body' }, msg: 'name is required and must not be empty.' },
     description: { from: { kind: 'body' } },
-    definition: { from: { kind: 'body' }, msg: "definition is required." },
+    definition: { from: { kind: 'body' }, msg: 'definition is required.' },
     position: { from: { kind: 'body' } },
     is_default: { from: { kind: 'body' } },
   },
@@ -4210,9 +4584,9 @@ export const RestViewUpdateBody = defineContract(
     })
     .strict(),
   {
-    name: { from: { kind: 'body' }, msg: "name must not be empty." },
+    name: { from: { kind: 'body' }, msg: 'name must not be empty.' },
     description: { from: { kind: 'body' } },
-    definition: { from: { kind: 'body' }, msg: "definition must not be empty." },
+    definition: { from: { kind: 'body' }, msg: 'definition must not be empty.' },
     position: { from: { kind: 'body' } },
     is_default: { from: { kind: 'body' } },
   },
@@ -4233,7 +4607,7 @@ export const RestViewMoveToThoughtBody = defineContract(
   {
     target_thought_id: {
       from: { kind: 'body' },
-      msg: "target_thought_id is required — the recipient thought id.",
+      msg: 'target_thought_id is required — the recipient thought id.',
     },
   },
 );
@@ -4255,8 +4629,8 @@ export const RestViewRunBody = defineContract(
     })
     .strict(),
   {
-    sort: { from: { kind: 'body' }, msg: "Invalid sort." },
-    order: { from: { kind: 'body' }, msg: "Invalid order." },
+    sort: { from: { kind: 'body' }, msg: 'Invalid sort.' },
+    order: { from: { kind: 'body' }, msg: 'Invalid order.' },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
   },
@@ -4282,9 +4656,9 @@ export const RestViewRunAstBody = defineContract(
     })
     .strict(),
   {
-    ast: { from: { kind: 'body' }, msg: "ast is required — an ad-hoc filter body." },
-    sort: { from: { kind: 'body' }, msg: "Invalid sort." },
-    order: { from: { kind: 'body' }, msg: "Invalid order." },
+    ast: { from: { kind: 'body' }, msg: 'ast is required — an ad-hoc filter body.' },
+    sort: { from: { kind: 'body' }, msg: 'Invalid sort.' },
+    order: { from: { kind: 'body' }, msg: 'Invalid order.' },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
   },
@@ -4306,7 +4680,7 @@ function parseRestLinkFilter(raw: unknown, requestId: string): LinkTypeFilterInp
   } catch {
     throw new EtnError(
       'VALIDATION_ERROR',
-      "link_filter must be a JSON object { type_ids?: string[], include_structural?: boolean }.",
+      'link_filter must be a JSON object { type_ids?: string[], include_structural?: boolean }.',
       { field: 'link_filter' },
       requestId,
     );
@@ -4329,7 +4703,7 @@ function parseRestAstQueryParam(raw: unknown, requestId: string): unknown {
   } catch {
     throw new EtnError(
       'VALIDATION_ERROR',
-      "ast must be a JSON filter body object (version + filter).",
+      'ast must be a JSON filter body object (version + filter).',
       { field: 'ast' },
       requestId,
     );
@@ -4351,7 +4725,7 @@ export const RestHierarchyQuery = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     thought_id: { from: { kind: 'param', name: 'id' } },
-    dir: { from: { kind: 'query' }, msg: "dir must be parents or children." },
+    dir: { from: { kind: 'query' }, msg: 'dir must be parents or children.' },
     show_inactive: { from: { kind: 'query', coerce: 'bool' } },
     show_trash: { from: { kind: 'query', coerce: 'bool' } },
     offset: {
@@ -4367,7 +4741,7 @@ export const RestHierarchyQuery = defineContract(
     link_filter: {
       from: { kind: 'query' },
       parse: parseRestLinkFilter,
-      msg: "link_filter must be a JSON object { type_ids?: string[], include_structural?: boolean }.",
+      msg: 'link_filter must be a JSON object { type_ids?: string[], include_structural?: boolean }.',
     },
   },
 );
@@ -4384,7 +4758,7 @@ export const RestEdgesBody = defineContract(
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    ids: { from: { kind: 'body' }, msg: "ids must be an array of strings." },
+    ids: { from: { kind: 'body' }, msg: 'ids must be an array of strings.' },
     show_inactive: { from: { kind: 'body' } },
     show_trash: { from: { kind: 'body' } },
     link_filter: { from: { kind: 'body' } },
@@ -4402,13 +4776,13 @@ export const RestSavedFilterCreateBody = defineContract(
     name: z.string().min(1),
   }),
   {
-    view: { from: { kind: 'body' }, msg: "Invalid view." },
-    name: { from: { kind: 'body' }, msg: "name is required." },
+    view: { from: { kind: 'body' }, msg: 'Invalid view.' },
+    name: { from: { kind: 'body' }, msg: 'name is required.' },
     definition: {
       from: { kind: 'body' },
       t: z.object({}).catchall(z.unknown()),
       req: true,
-      msg: "definition is required.",
+      msg: 'definition is required.',
     },
   },
 );
@@ -4421,9 +4795,13 @@ export const RestSavedFilterPatchBody = defineContract(
     name: z.string().min(1).optional(),
   }),
   {
-    view: { from: { kind: 'body' }, msg: "Invalid view." },
-    name: { from: { kind: 'body' }, msg: "name is required." },
-    definition: { from: { kind: 'body' }, t: z.object({}).catchall(z.unknown()), msg: "definition must be an object." },
+    view: { from: { kind: 'body' }, msg: 'Invalid view.' },
+    name: { from: { kind: 'body' }, msg: 'name is required.' },
+    definition: {
+      from: { kind: 'body' },
+      t: z.object({}).catchall(z.unknown()),
+      msg: 'definition must be an object.',
+    },
   },
 );
 
@@ -4434,7 +4812,7 @@ export const RestSavedFilterViewQuery = defineContract(
   {
     view: {
       from: { kind: 'query' },
-      msg: "Invalid view.",
+      msg: 'Invalid view.',
       parse: (raw: unknown) => (raw === undefined || raw === null || raw === '' ? undefined : raw),
     },
   },
@@ -4489,12 +4867,16 @@ export const RestStructureQueryBody = defineContract(
     })
     .strict(),
   {
-    sort: { from: { kind: 'body' }, msg: "Invalid sort." },
-    order: { from: { kind: 'body' }, msg: "Invalid order." },
+    sort: { from: { kind: 'body' }, msg: 'Invalid sort.' },
+    order: { from: { kind: 'body' }, msg: 'Invalid order.' },
     // REST-only поле (в общей схеме отсутствует): переопределение видимости
     // помеченных на удаление для `meta.directions` (ошибка 331ffb94) — тем же
     // путём, что `show_trash` у фокуса/иерархии/рёбер (задача 77923b49).
-    show_trash: { from: { kind: 'body' }, t: z.boolean().optional(), msg: "show_trash must be a boolean." },
+    show_trash: {
+      from: { kind: 'body' },
+      t: z.boolean().optional(),
+      msg: 'show_trash must be a boolean.',
+    },
     ids_only: { from: { kind: 'body' } },
     limit: { from: { kind: 'body' } },
     offset: { from: { kind: 'body' } },
@@ -4520,10 +4902,10 @@ export const RestPropertyCreateBody = defineContract(
     link_width: z.number().nullable().optional(),
   }),
   {
-    name: { from: { kind: 'body' }, msg: "name is required and must not be empty." },
+    name: { from: { kind: 'body' }, msg: 'name is required and must not be empty.' },
     value_type: {
       from: { kind: 'body' },
-      msg: "value_type is required and must be one of the supported values.",
+      msg: 'value_type is required and must be one of the supported values.',
       check: (v: unknown, all: Record<string, unknown>) => {
         const linkFields = [
           'name_forward',
@@ -4534,7 +4916,7 @@ export const RestPropertyCreateBody = defineContract(
           'link_width',
         ].some((k) => all[k] !== undefined);
         return linkFields && v !== 'link'
-          ? "name_forward/name_reverse/parent_link_type_id/link_color/link_style/link_width apply only to value_type=\"link\"."
+          ? 'name_forward/name_reverse/parent_link_type_id/link_color/link_style/link_width apply only to value_type="link".'
           : null;
       },
     },
@@ -4542,18 +4924,24 @@ export const RestPropertyCreateBody = defineContract(
     description: { from: { kind: 'body' } },
     name_forward: {
       from: { kind: 'body' },
-      msg: "name_forward must be a non-empty string.",
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "name_forward must be a non-empty string." : null),
+      msg: 'name_forward must be a non-empty string.',
+      check: (v: unknown) =>
+        typeof v === 'string' && v.trim() === ''
+          ? 'name_forward must be a non-empty string.'
+          : null,
     },
     name_reverse: {
       from: { kind: 'body' },
-      msg: "name_reverse must be a non-empty string.",
-      check: (v: unknown) => (typeof v === 'string' && v.trim() === '' ? "name_reverse must be a non-empty string." : null),
+      msg: 'name_reverse must be a non-empty string.',
+      check: (v: unknown) =>
+        typeof v === 'string' && v.trim() === ''
+          ? 'name_reverse must be a non-empty string.'
+          : null,
     },
     parent_link_type_id: { from: { kind: 'body' } },
     link_color: { from: { kind: 'body' } },
-    link_style: { from: { kind: 'body' }, msg: "Invalid link_style." },
-    link_width: { from: { kind: 'body' }, msg: "link_width must be a number or null." },
+    link_style: { from: { kind: 'body' }, msg: 'Invalid link_style.' },
+    link_width: { from: { kind: 'body' }, msg: 'link_width must be a number or null.' },
   },
 );
 
@@ -4572,18 +4960,18 @@ export const RestPropertyUpdateBody = defineContract(
     link_width: z.number().nullable().optional(),
   }),
   {
-    name: { from: { kind: 'body' }, msg: "name must be a non-empty string." },
+    name: { from: { kind: 'body' }, msg: 'name must be a non-empty string.' },
     value_type: {
       from: { kind: 'body' },
-      msg: "value_type must be one of the supported values.",
+      msg: 'value_type must be one of the supported values.',
     },
     config: { from: { kind: 'body' } },
     description: { from: { kind: 'body' } },
-    name_forward: { from: { kind: 'body' }, msg: "name_forward must be a non-empty string." },
-    name_reverse: { from: { kind: 'body' }, msg: "name_reverse must be a non-empty string." },
-    link_color: { from: { kind: 'body' }, msg: "link_color must be a string or null." },
-    link_style: { from: { kind: 'body' }, msg: "Invalid link_style." },
-    link_width: { from: { kind: 'body' }, msg: "link_width must be a number or null." },
+    name_forward: { from: { kind: 'body' }, msg: 'name_forward must be a non-empty string.' },
+    name_reverse: { from: { kind: 'body' }, msg: 'name_reverse must be a non-empty string.' },
+    link_color: { from: { kind: 'body' }, msg: 'link_color must be a string or null.' },
+    link_style: { from: { kind: 'body' }, msg: 'Invalid link_style.' },
+    link_width: { from: { kind: 'body' }, msg: 'link_width must be a number or null.' },
   },
 );
 
@@ -4632,6 +5020,7 @@ export type ReaderOp =
   | 'comments.presented'
   | 'comments.permanentPresented'
   | 'comments.previewBatch'
+  | 'tasks.list'
   | 'db.ping';
 
 /** Payload `thoughts.query` / `thoughts.queryIds`. */
@@ -4766,6 +5155,14 @@ export interface ReaderDbPingResult {
   schema_version: number;
 }
 
+/**
+ * Payload `tasks.list` — выборка задач из материализованной проекции
+ * (операция e6d65f51). Плоский объект: переживает structured clone до воркера.
+ */
+export interface ReaderTasksListPayload {
+  options: TaskListOptions;
+}
+
 /** Одна задача reader-пула (op + payload, общий контекст). */
 export type ReaderTask =
   | ({ context: ReaderTaskContext } & (
@@ -4783,6 +5180,7 @@ export type ReaderTask =
       | { op: 'comments.presented'; payload: ReaderCommentByIdPayload }
       | { op: 'comments.permanentPresented'; payload: ReaderPermanentCommentPayload }
       | { op: 'comments.previewBatch'; payload: ReaderCommentsPreviewPayload }
+      | { op: 'tasks.list'; payload: ReaderTasksListPayload }
     ))
   | { context: ReaderDbPingContext; op: 'db.ping'; payload: ReaderDbPingPayload };
 
@@ -4902,10 +5300,7 @@ export interface WriteCrossNetworkFacts {
  * задача b9c70dd8.
  */
 export type WriteOp =
-  | 'write.thoughts'
-  | 'write.thought'
-  | 'write.thought.batch'
-  | 'write.thought.copy';
+  'write.thoughts' | 'write.thought' | 'write.thought.batch' | 'write.thought.copy';
 
 /** Payload `write.thoughts` — тот же вход, что у `writeThoughts` в домене. */
 export interface WriteThoughtsPayload {
@@ -5069,7 +5464,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['summary_md'],
-      message: "the summary must not contain headings (markdown without headings)",
+      message: 'the summary must not contain headings (markdown without headings)',
       params: { code: 'summary_headings_forbidden' },
     });
   }
@@ -5077,7 +5472,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['cover_attachment_id'],
-      message: "only one cover source: an attachment or a URL",
+      message: 'only one cover source: an attachment or a URL',
       params: { code: 'cover_conflict' },
     });
   }
@@ -5086,7 +5481,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['text_sources'],
-      message: "text and \"additional materials\" properties overlap",
+      message: 'text and "additional materials" properties overlap',
       params: { code: 'recipe_overlap' },
     });
   }
@@ -5094,7 +5489,7 @@ function refinePublicationFields(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['numbering_from'],
-      message: "numbering_from must not be greater than numbering_to",
+      message: 'numbering_from must not be greater than numbering_to',
       params: { code: 'numbering_range' },
     });
   }
@@ -5135,13 +5530,7 @@ export type PublicationListFields = z.infer<typeof PublicationListFields>;
 /** Батч перестановок порядка (PUT /publications/{id}/order). */
 export const PublicationOrderFields = z
   .object({
-    items: z
-      .array(
-        z
-          .object({ node_key: z.string().min(1), position: z.number() })
-          .strict(),
-      )
-      .min(1),
+    items: z.array(z.object({ node_key: z.string().min(1), position: z.number() }).strict()).min(1),
   })
   .strict();
 export type PublicationOrderFields = z.infer<typeof PublicationOrderFields>;
@@ -5308,9 +5697,7 @@ export const RestPublicationOrder = defineContract(
   z.object({
     network_id: NetworkId,
     publication_id: z.string().min(1),
-    items: z
-      .array(z.object({ node_key: z.string().min(1), position: z.number() }).strict())
-      .min(1),
+    items: z.array(z.object({ node_key: z.string().min(1), position: z.number() }).strict()).min(1),
   }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
@@ -5330,7 +5717,7 @@ export const RestPublicationExclusionAdd = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    thought_id: { from: { kind: 'body' }, msg: "thought_id is required." },
+    thought_id: { from: { kind: 'body' }, msg: 'thought_id is required.' },
   },
 );
 
@@ -5345,7 +5732,11 @@ export const RestPublicationExclusionRemove = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    thought_id: { from: { kind: 'query' }, parse: singleQueryValue, msg: "thought_id is required." },
+    thought_id: {
+      from: { kind: 'query' },
+      parse: singleQueryValue,
+      msg: 'thought_id is required.',
+    },
   },
 );
 
@@ -5388,7 +5779,7 @@ export const RestPublicationExport = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    format: { from: { kind: 'body' }, msg: "Invalid format (expected md|html)." },
+    format: { from: { kind: 'body' }, msg: 'Invalid format (expected md|html).' },
     with_assets: { from: { kind: 'body' } },
   },
 );
@@ -5407,7 +5798,7 @@ export const RestPublicationExportBatch = defineContract(
     network_id: { from: { kind: 'param', name: 'networkId' } },
     ids: { from: { kind: 'body' } },
     active_only: { from: { kind: 'body' } },
-    format: { from: { kind: 'body' }, msg: "Invalid format (expected md|html)." },
+    format: { from: { kind: 'body' }, msg: 'Invalid format (expected md|html).' },
     with_assets: { from: { kind: 'body' } },
   },
 );
@@ -5446,7 +5837,7 @@ export const RestPublicationCandidateAccept = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     publication_id: { from: { kind: 'param', name: 'id' } },
-    thought_id: { from: { kind: 'body' }, msg: "thought_id is required." },
+    thought_id: { from: { kind: 'body' }, msg: 'thought_id is required.' },
   },
 );
 
@@ -5477,7 +5868,7 @@ export const RestShelfCreate = defineContract(
   z.object({ network_id: NetworkId, title: z.string().min(1) }),
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
-    title: { from: { kind: 'body' }, msg: "Shelf title is required." },
+    title: { from: { kind: 'body' }, msg: 'Shelf title is required.' },
   },
 );
 
@@ -5561,7 +5952,7 @@ export const RestShelfItemAdd = defineContract(
   {
     network_id: { from: { kind: 'param', name: 'networkId' } },
     shelf_id: { from: { kind: 'param', name: 'id' } },
-    publication_id: { from: { kind: 'body' }, msg: "publication_id is required." },
+    publication_id: { from: { kind: 'body' }, msg: 'publication_id is required.' },
     position: { from: { kind: 'body' } },
   },
 );
@@ -5580,7 +5971,7 @@ export const RestShelfItemRemove = defineContract(
     publication_id: {
       from: { kind: 'query' },
       parse: singleQueryValue,
-      msg: "publication_id is required.",
+      msg: 'publication_id is required.',
     },
   },
 );
@@ -5796,5 +6187,421 @@ export const McpShelfAssign = defineContract(
     position: z.number().optional(),
     assigned: z.boolean().optional(),
   }),
+  {},
+);
+
+// ---------------------------------------------------------------------------
+// Напоминания (0.16.1, задача b47f1fd2; операции ae19b1bf / 500d1b3d)
+// ---------------------------------------------------------------------------
+//
+// Напоминание — сервисная per-user сущность сети (`reminders`), НЕ мысль и НЕ
+// связь. Время сервера — только UTC-инстансы: «сегодня» и границы суток считает
+// клиент (требование fcdcd75f). Грамматика повтора закрыта (bbca8f7d): состав
+// ключей расписания и семантические диапазоны проверяет домен (400, операция
+// ae19b1bf), здесь — структура для `tools/list` и REST-карты.
+
+/** ISO-8601 инстанс (UTC) — единица времени напоминаний. */
+const ReminderInstant = z
+  .string()
+  .refine((value) => Number.isFinite(Date.parse(value)), 'must be an ISO-8601 instant.');
+
+/**
+ * Закрытая грамматика повтора: вид серии и её параметры.
+ *
+ * Схема принимает объект ЦЕЛИКОМ, не перечисляя виды: грамматику (состав
+ * ключей, диапазоны, неизвестный `type`) владеет домен (`validateSchedule`) и
+ * отвергает её `VALIDATION_ERROR` с HTTP 400, как требует операция ae19b1bf.
+ * Перечисление `z.discriminatedUnion` отвергало бы неизвестный `type` ошибкой
+ * zod (422) — «невалидная грамматика» получала бы два разных статуса.
+ */
+const ReminderScheduleSchema = z.looseObject({});
+
+/** POST /networks/:id/reminders — создать напоминание о мысли/публикации. */
+export const RestReminderCreate = defineContract(
+  'rest:reminders.create',
+  z.object({
+    network_id: NetworkId,
+    subject_type: z.enum(REMINDER_SUBJECT_TYPES),
+    subject_id: z.string().min(1),
+    kind: z.enum(REMINDER_KINDS),
+    schedule: ReminderScheduleSchema,
+    anchor_at: ReminderInstant,
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    subject_type: { from: { kind: 'body' }, req: true, msg: 'subject_type is required.' },
+    subject_id: { from: { kind: 'body' }, req: true, msg: 'subject_id is required.' },
+    kind: { from: { kind: 'body' }, req: true, msg: 'kind is required (one|period|rule).' },
+    schedule: { from: { kind: 'body' }, req: true, msg: 'schedule is required.' },
+    anchor_at: { from: { kind: 'body' }, req: true, msg: 'anchor_at is required.' },
+  },
+);
+
+/** GET /networks/:id/reminders — список владельца с раскрытием повторов. */
+export const RestReminderList = defineContract(
+  'rest:reminders.list',
+  z.object({
+    network_id: NetworkId,
+    from: ReminderInstant.optional(),
+    to: ReminderInstant.optional(),
+    horizon_days: z.number().int().min(1).max(REMINDER_MAX_HORIZON_DAYS).optional(),
+    subject_type: z.enum(REMINDER_SUBJECT_TYPES).optional(),
+    subject_id: z.string().min(1).optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    from: { from: { kind: 'query' }, parse: singleQueryValue },
+    to: { from: { kind: 'query' }, parse: singleQueryValue },
+    horizon_days: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    subject_type: { from: { kind: 'query' }, parse: singleQueryValue },
+    subject_id: { from: { kind: 'query' }, parse: singleQueryValue },
+  },
+);
+
+/** PATCH /networks/:id/reminders/{id} — изменить kind/schedule/anchor серии. */
+export const RestReminderUpdate = defineContract(
+  'rest:reminders.update',
+  z.object({
+    network_id: NetworkId,
+    reminder_id: z.string().min(1),
+    kind: z.enum(REMINDER_KINDS).optional(),
+    schedule: ReminderScheduleSchema.optional(),
+    anchor_at: ReminderInstant.optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+    kind: { from: { kind: 'body' } },
+    schedule: { from: { kind: 'body' } },
+    anchor_at: { from: { kind: 'body' } },
+  },
+);
+
+/** DELETE /networks/:id/reminders/{id} — удалить напоминание владельца. */
+export const RestReminderDelete = defineContract(
+  'rest:reminders.delete',
+  z.object({ network_id: NetworkId, reminder_id: z.string().min(1) }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+  },
+);
+
+/** POST /networks/:id/reminders/{id}/snooze — отложить текущее вхождение. */
+export const RestReminderSnooze = defineContract(
+  'rest:reminders.snooze',
+  z.object({
+    network_id: NetworkId,
+    reminder_id: z.string().min(1),
+    until: ReminderInstant,
+    /**
+     * Адрес КОНКРЕТНОГО вхождения серии (UTC-инстанс). Панель показывает
+     * несколько вхождений одного напоминания и передаёт показанное; без поля
+     * сервер берёт ближайшее необработанное вхождение (не раньше текущих
+     * UTC-суток) — см. операцию 500d1b3d.
+     */
+    occurrence_at: ReminderInstant.optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+    until: { from: { kind: 'body' }, req: true, msg: 'until is required.' },
+    occurrence_at: { from: { kind: 'body' } },
+  },
+);
+
+/** POST /networks/:id/reminders/{id}/dismiss — убрать текущее вхождение. */
+export const RestReminderDismiss = defineContract(
+  'rest:reminders.dismiss',
+  z.object({
+    network_id: NetworkId,
+    reminder_id: z.string().min(1),
+    /** Адрес конкретного вхождения серии (см. RestReminderSnooze). */
+    occurrence_at: ReminderInstant.optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    reminder_id: { from: { kind: 'param', name: 'id' } },
+    occurrence_at: { from: { kind: 'body' } },
+  },
+);
+
+// MCP-двойники (операция 22f1ea95): действия `reminders.*` исполнителя etn.ops
+// повторяют REST-контракты, собственных MCP-инструментов не появляется.
+
+/** MCP `etn.reminders.create` = REST `POST /reminders`. */
+export const McpReminderCreate = defineContract(
+  'etn.reminders.create',
+  RestReminderCreate.schema,
+  RestReminderCreate.rest,
+);
+
+/** MCP `etn.reminders.list` = REST `GET /reminders`. */
+export const McpReminderList = defineContract(
+  'etn.reminders.list',
+  RestReminderList.schema,
+  RestReminderList.rest,
+);
+
+/** MCP `etn.reminders.update` = REST `PATCH /reminders/{id}`. */
+export const McpReminderUpdate = defineContract(
+  'etn.reminders.update',
+  RestReminderUpdate.schema,
+  RestReminderUpdate.rest,
+);
+
+/** MCP `etn.reminders.remove` = REST `DELETE /reminders/{id}`. */
+export const McpReminderRemove = defineContract(
+  'etn.reminders.remove',
+  RestReminderDelete.schema,
+  RestReminderDelete.rest,
+);
+
+/** MCP `etn.reminders.snooze` = REST `POST /reminders/{id}/snooze`. */
+export const McpReminderSnooze = defineContract(
+  'etn.reminders.snooze',
+  RestReminderSnooze.schema,
+  RestReminderSnooze.rest,
+);
+
+/** MCP `etn.reminders.dismiss` = REST `POST /reminders/{id}/dismiss`. */
+export const McpReminderDismiss = defineContract(
+  'etn.reminders.dismiss',
+  RestReminderDismiss.schema,
+  RestReminderDismiss.rest,
+);
+
+// ---------------------------------------------------------------------------
+// Задачи (0.16.1, задача 632eca85): операции e6d65f51 / de4cee18
+// ---------------------------------------------------------------------------
+//
+// Задача — строка `- [ ]` в body_md комментария; текст — источник истины,
+// проекция `task_rows` пере-создаётся хук записи. Собственных MCP-контрактов у
+// 0.16.1 нет: действия `tasks.*` исполнителя etn.ops — задача 11 версии.
+
+/**
+ * Одна операция PATCH /tasks над строкой задачи.
+ *
+ * `line_no` — номер строки body_md С НУЛЯ (операция de4cee18), строка
+ * содержимого пункта: там стоит маркер. `date` — цель операции `set_due`
+ * (ошибка 3f9ea2ee): срок строки встаёт на выбранную дату, строка без дат
+ * получает новую date-ссылку (календарный день `YYYY-MM-DD`).
+ */
+const TaskOpSchema = z.object({
+  comment_id: z.string().min(1),
+  line_no: z.number().int().min(0),
+  action: z.enum(TASK_OPS),
+  done: z.boolean().optional(),
+  days: z.number().int().optional(),
+  months: z.number().int().optional(),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  expected_revision: z.number().int().min(1).optional(),
+});
+
+/**
+ * GET /networks/:networkId/tasks — выборка задач из материализованной проекции
+ * (операция e6d65f51): scope + период + thought_id/comment_id + keyset + count.
+ */
+export const RestTaskList = defineContract(
+  'rest:tasks.list',
+  z.object({
+    network_id: NetworkId,
+    scope: z.enum(TASK_SCOPES).optional(),
+    from: z.string().min(1).optional(),
+    to: z.string().min(1).optional(),
+    thought_id: ThoughtId.optional(),
+    comment_id: z.string().min(1).optional(),
+    today: z.string().min(1).optional(),
+    cursor: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(TASKS_MAX_LIMIT).optional(),
+    count: z.boolean().optional(),
+    /** Дополнить страницу вложенными не-задачными строками её задач (ТЗ F). */
+    include_nested: z.boolean().optional(),
+    /**
+     * Показывать содержимое корзины (0.16.1, пачка 11): `false` — строки
+     * записей помеченных сущностей и строки, адресованные помеченной мысли, не
+     * отдаются. Не задано — per-user настройка `show_trash` (по умолчанию да).
+     */
+    show_trash: z.boolean().optional(),
+  }),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    scope: { from: { kind: 'query' }, parse: singleQueryValue },
+    from: { from: { kind: 'query' }, parse: singleQueryValue },
+    to: { from: { kind: 'query' }, parse: singleQueryValue },
+    thought_id: { from: { kind: 'query' }, parse: singleQueryValue },
+    comment_id: { from: { kind: 'query' }, parse: singleQueryValue },
+    today: { from: { kind: 'query' }, parse: singleQueryValue },
+    cursor: { from: { kind: 'query' }, parse: singleQueryValue },
+    limit: { from: { kind: 'query', coerce: 'int', min: 1 } },
+    count: { from: { kind: 'query', coerce: 'bool' } },
+    include_nested: { from: { kind: 'query', coerce: 'bool' } },
+    show_trash: { from: { kind: 'query', coerce: 'bool' } },
+  },
+);
+
+/**
+ * PATCH /networks/:networkId/tasks — правка строк задач (операция de4cee18):
+ * либо `ops` (toggle/move/cancel), либо массовая команда `action`
+ * (cancel-all/move-all) по фильтру.
+ */
+export const RestTaskPatch = defineContract(
+  'rest:tasks.patch',
+  z
+    .object({
+      network_id: NetworkId,
+      ops: z.array(TaskOpSchema).min(1).optional(),
+      action: z.enum(TASK_MASS_ACTIONS).optional(),
+      filter: z
+        .object({
+          scope: z.enum(TASK_SCOPES).optional(),
+          from: z.string().min(1).optional(),
+          to: z.string().min(1).optional(),
+          thought_id: ThoughtId.optional(),
+          comment_id: z.string().min(1).optional(),
+          today: z.string().min(1).optional(),
+        })
+        .optional(),
+      days: z.number().int().optional(),
+      months: z.number().int().optional(),
+    })
+    .refine((v) => (v.ops === undefined) !== (v.action === undefined), {
+      message: 'provide either ops or action.',
+      path: ['ops'],
+    })
+    .refine((v) => v.action === undefined || v.filter !== undefined, {
+      message: 'a mass action requires filter.',
+      path: ['filter'],
+    })
+    .refine((v) => v.action !== 'move-all' || (v.days === undefined) !== (v.months === undefined), {
+      message: 'move-all requires exactly one of days or months.',
+      path: ['days'],
+    })
+    .refine((v) => v.action !== 'cancel-all' || (v.days === undefined && v.months === undefined), {
+      message: 'cancel-all does not take a shift.',
+      path: ['days'],
+    })
+    .refine((v) => v.action !== 'undate-all' || (v.days === undefined && v.months === undefined), {
+      message: 'undate-all does not take a shift.',
+      path: ['days'],
+    })
+    .refine(
+      (v) =>
+        (v.ops ?? []).every((op) =>
+          op.action === 'set_due'
+            ? op.date !== undefined && op.days === undefined && op.months === undefined
+            : op.date === undefined,
+        ),
+      {
+        message: 'set_due takes date (without days/months); other ops do not take date.',
+        path: ['ops'],
+      },
+    ),
+  {
+    network_id: { from: { kind: 'param', name: 'networkId' } },
+    ops: { from: { kind: 'body' } },
+    action: { from: { kind: 'body' } },
+    filter: { from: { kind: 'body' } },
+    days: { from: { kind: 'body' } },
+    months: { from: { kind: 'body' } },
+  },
+);
+
+// MCP-двойники (операция 22f1ea95): действия `tasks.*` исполнителя etn.ops
+// повторяют REST-контракты (GET/PATCH /tasks), собственных MCP-инструментов не
+// появляется. Одно действие REST-батча — одно действие `etn.ops`: адресация
+// строки `comment_id` + `line_no` и `expected_revision` у одиночных правок
+// совпадают с PATCH /tasks, массовые команды — с массовыми того же PATCH.
+
+/** MCP `etn.tasks.list` = REST `GET /tasks` (фильтры, keyset-курсор, COUNT по флагу). */
+export const McpTaskList = defineContract('etn.tasks.list', RestTaskList.schema, RestTaskList.rest);
+
+/**
+ * Адрес строки задачи для одиночных действий (PATCH /tasks): `line_no` — номер
+ * строки `body_md` С НУЛЯ, `expected_revision` — ревизия комментария, которую
+ * видел агент. Расхождение ревизии — `VERSION_CONFLICT` (409), а не тихая
+ * правка чужой версии текста.
+ */
+const TaskLineActionFields = {
+  network_id: NetworkId,
+  comment_id: z.string().min(1),
+  line_no: z.number().int().min(0),
+  expected_revision: z.number().int().min(1),
+};
+
+/** MCP `etn.tasks.toggle` — чекбокс строки (`done` не задан — инверсия). */
+export const McpTaskToggle = defineContract(
+  'etn.tasks.toggle',
+  z.object({
+    ...TaskLineActionFields,
+    done: z.boolean().optional(),
+  }),
+  {},
+);
+
+/** MCP `etn.tasks.move` — единый сдвиг ВСЕХ date-ссылок строки (дни XOR месяцы). */
+export const McpTaskMove = defineContract(
+  'etn.tasks.move',
+  z
+    .object({
+      ...TaskLineActionFields,
+      days: z.number().int().optional(),
+      months: z.number().int().optional(),
+    })
+    .refine((v) => (v.days === undefined) !== (v.months === undefined), {
+      message: 'move requires exactly one of days or months.',
+      path: ['days'],
+    }),
+  {},
+);
+
+/** MCP `etn.tasks.cancel` — снять маркер задачи (`- [ ] текст` → `- текст`). */
+export const McpTaskCancel = defineContract(
+  'etn.tasks.cancel',
+  z.object({ ...TaskLineActionFields }),
+  {},
+);
+
+/** Фильтр массовой команды tasks.* — тот же, что у PATCH /tasks (`filter`). */
+const TaskMassFilterSchema = z.object({
+  scope: z.enum(TASK_SCOPES).optional(),
+  from: z.string().min(1).optional(),
+  to: z.string().min(1).optional(),
+  thought_id: ThoughtId.optional(),
+  comment_id: z.string().min(1).optional(),
+  today: z.string().min(1).optional(),
+});
+
+/**
+ * MCP `etn.tasks.cancelAll` — массовая отмена задач по фильтру. Деструктивное
+ * действие реестра: `etn.ops` требует `confirm: true` (образец массовых
+ * PATCH /tasks; undo и подтверждение на стороне клиента).
+ */
+export const McpTaskCancelAll = defineContract(
+  'etn.tasks.cancelAll',
+  z.object({
+    network_id: NetworkId,
+    filter: TaskMassFilterSchema,
+  }),
+  {},
+);
+
+/** MCP `etn.tasks.moveAll` — массовый перенос задач по фильтру (дни XOR месяцы). */
+export const McpTaskMoveAll = defineContract(
+  'etn.tasks.moveAll',
+  z
+    .object({
+      network_id: NetworkId,
+      filter: TaskMassFilterSchema,
+      days: z.number().int().optional(),
+      months: z.number().int().optional(),
+    })
+    .refine((v) => (v.days === undefined) !== (v.months === undefined), {
+      message: 'moveAll requires exactly one of days or months.',
+      path: ['days'],
+    }),
   {},
 );

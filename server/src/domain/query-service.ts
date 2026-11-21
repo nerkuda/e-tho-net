@@ -39,6 +39,7 @@
  */
 
 import {
+  BASE_LAYER_ID,
   EtnError,
   FILTER_AST_VERSION,
   FILTER_LINK_EDGE_STATES,
@@ -95,7 +96,9 @@ import {
   listEffectiveTypeProperties,
   resolveConditionPropertyRef,
 } from './property-service.js';
+import { reminderNextAtBySubject } from './reminder-service.js';
 import { nameTrigramMatch } from './search-service.js';
+import { taskRowVisibilitySql } from './task-visibility.js';
 import { REF_COLUMNS, rowToThoughtRef } from './thought-service.js';
 import { expandTypeIdsToSubtree, linkTypeFilterClause, listTypeNodes } from './type-hierarchy.js';
 import { resolveGlobalDateTokens, scanStringForTokens, type TokenIssue } from './thought-type-view-tokens.js';
@@ -2236,11 +2239,30 @@ export interface AstExecContextOptions {
    * (`POST /thoughts/query`, требование b363cad1) опцию не ставит.
    */
   keywordCommentIncludesLinkComments?: boolean;
+  /**
+   * Показывать содержимое корзины (0.16.1, пачка 11, задача 173e8368). Лист
+   * «Есть задачи» считает живые задачи так же, как панель «Задачи»: при `false`
+   * задачи, адресованные помеченной мысли, и записи помеченных владельцев не
+   * дают мысли признака «есть задачи». По умолчанию `true` (настройка
+   * запросившего резолвится фасадом — REST/MCP).
+   */
+  showTrash?: boolean;
 }
 
 /** Опции исполнения AST-листьев: контекст токенов и коллектор неразрешимых. */
 interface AstExecOptions extends AstExecContextOptions {
   ctx?: AstTokenContext;
+  /**
+   * Пользователь, от имени которого исполняется отбор (запросивший). Нужен
+   * per-user условиям (0.16.1, задача 4cfc6257): «Есть напоминание»/«Дата
+   * напоминания» читают напоминания ЗАПРОСИВШЕГО, а не всех участников сети.
+   * Значение берётся из аргумента `userId` точки (`queryThoughts`/
+   * `buildThoughtIdSelect`) — он есть у любого входа, в отличие от
+   * `ctx.userId` (контекст токенов передают не все встраивающие вызовы).
+   * Пустая строка — «пользователь неизвестен»: напоминаний у такого владельца
+   * нет, условие даёт ложь (а не молча расширяет выборку).
+   */
+  requesterId?: string;
   unresolved?: TokenIssue[];
   /**
    * Кэш поддерева «в иерархии» в пределах одного исполнения запроса
@@ -2526,6 +2548,18 @@ function filterAstLeafClause(
         path,
         requestId,
       );
+
+    // Задачи и напоминания мысли (0.16.1, задача 4cfc6257, требование daf152d8).
+    case 'tasks':
+      return boolPresenceClause(tasksLeafExistsSql(astOpts?.showTrash !== false), leaf, path, requestId, [
+        BASE_LAYER_ID,
+      ]);
+    case 'reminders':
+      return boolPresenceClause(REMINDERS_LEAF_EXISTS_SQL, leaf, path, requestId, [
+        astRequesterId(astOpts),
+      ]);
+    case 'reminder_at':
+      return reminderAtLeafClause(ndb, leaf, path, requestId, astOpts);
 
     case 'active':
       return boolColumnClause('t.active', leaf, path, requestId);
@@ -2875,8 +2909,18 @@ function boolColumnClause(column: string, leaf: FilterAstLeaf, path: string, req
   return { sql: `${column} = ${want ? 1 : 0}`, params: [] };
 }
 
-/** Наличие/отсутствие коллекции (вложения, дневниковые записи, комментарий). */
-function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+/**
+ * Наличие/отсутствие коллекции (вложения, дневниковые записи, комментарий,
+ * задачи, напоминания). `existsParams` — параметры подзапроса существования
+ * (у задач — основа для видимости строки проекции, у напоминаний — владелец).
+ */
+function boolPresenceClause(
+  existsSql: string,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  existsParams: readonly unknown[] = [],
+): Clause {
   let want: boolean;
   if (leaf.operator === 'not_empty') want = true;
   else if (leaf.operator === 'is_empty') want = false;
@@ -2885,7 +2929,92 @@ function boolPresenceClause(existsSql: string, leaf: FilterAstLeaf, path: string
   } else {
     astUnsupported(`Operator "${leaf.operator}" for a presence predicate`, path, requestId);
   }
-  return want ? { sql: existsSql, params: [] } : { sql: `NOT (${existsSql})`, params: [] };
+  return want
+    ? { sql: existsSql, params: [...existsParams] }
+    : { sql: `NOT (${existsSql})`, params: [...existsParams] };
+}
+
+/**
+ * Пользователь-запросивший для per-user условий (0.16.1, задача 4cfc6257).
+ * Приоритет — `requesterId` точки (есть у любого входа отбора); `ctx.userId`
+ * (контекст токенов) — запасной источник для встраивающих вызовов, которые
+ * передают только его. Пустая строка — «неизвестен»: напоминаний нет.
+ */
+function astRequesterId(astOpts: AstExecOptions | undefined): string {
+  return astOpts?.requesterId ?? astOpts?.ctx?.userId ?? '';
+}
+
+/**
+ * Подзапрос существования НЕЗАКРЫТОЙ субъектной задачи мысли (0.16.1, задача
+ * 4cfc6257): строка проекции `task_rows` (`is_task = 1`, `done = 0`), у которой
+ * мысль — субъект (`task_row_subjects`), а комментарий-источник ВИДИМ в текущем
+ * контексте слоя. Видимость строки проекции — тот же единый предикат, что у
+ * панели «Задачи», «Связей дня» и маркеров календаря (`task-visibility.ts`):
+ * строка живёт вместе с редакцией своего комментария, `layer_id = NULL` — основа,
+ * иначе слой победившей редакции; постоянные комментарии помеченных владельцев
+ * не дают задач нигде, а при выключенной настройке корзины скрываются и прочие
+ * записи помеченных владельцев и строки, адресованные помеченной мысли (пачка 11,
+ * задача 173e8368).
+ */
+function tasksLeafExistsSql(showTrash: boolean): string {
+  return `EXISTS (
+  SELECT 1 FROM task_row_subjects s
+    JOIN task_rows tr
+      ON tr.comment_id = s.comment_id
+     AND tr.line_no = s.line_no
+     AND COALESCE(tr.layer_id, '') = COALESCE(s.layer_id, '')
+    JOIN comments_v v
+      ON v.id = tr.comment_id
+     AND ((tr.layer_id IS NULL AND v.layer_id = ?) OR tr.layer_id = v.layer_id)
+   WHERE s.thought_id = t.id AND tr.is_task = 1 AND tr.done = 0
+     AND ${taskRowVisibilitySql('tr', 'v', showTrash)})`;
+}
+
+/**
+ * Подзапрос существования АКТИВНОГО напоминания ЗАПРОСИВШЕГО на мысль
+ * (0.16.1, задача 4cfc6257): per-user область — `user_id` владельца, а не все
+ * напоминания сети. `removed` (удалённые владельцем) не считаются; субъект в
+ * корзине не даёт напоминания — как `listReminders` (замечание приёмки).
+ */
+const REMINDERS_LEAF_EXISTS_SQL = `EXISTS (
+  SELECT 1 FROM reminders r
+   WHERE r.user_id = ? AND r.state = 'active'
+     AND r.subject_type = 'thought' AND r.subject_id = t.id
+     AND t.marked_for_deletion = 0)`;
+
+/**
+ * Лист «Дата напоминания» (0.16.1, задача 4cfc6257): сравнение БЛИЖАЙШЕГО
+ * `next_at` активных напоминаний запросившего с границей/периодом. `next_at`
+ * берётся ЛЕНИВО тем же движком повторов, что у панели/индикатора
+ * (`reminderNextAtBySubject` → `computeNextAt`): колонка БД обновляется только
+ * на записях и к дате чтения устаревает (доработка по приёмке). Семантика дат —
+ * общая с датами создания/изменения (равенство «голой даты» = её сутки,
+ * включительная верхняя граница разворачивается до конца суток UTC, токены
+ * `$today`… раскрыты резолвером до сравнения). Субъект в корзине не участвует —
+ * как `listReminders`. `next_at` = NULL (нет вхождений) не проходит ни одно
+ * сравнение — «нет значения» выражает отдельное условие «Есть напоминание».
+ */
+function reminderAtLeafClause(
+  ndb: NetworkDb,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+  astOpts?: AstExecOptions,
+): Clause {
+  // Валидация оператора/границ — до дешёвого выхода «напоминаний нет».
+  const date = dateLeafClause('x.column2', leaf, path, requestId);
+  // Субъекты-кандидаты — только напоминания запросившего; расчёт `next_at`
+  // один раз на условие, не N+1 по всей сети.
+  const rows = [
+    ...reminderNextAtBySubject(ndb, astRequesterId(astOpts), astOpts?.ctx?.nowMs ?? Date.now()),
+  ];
+  if (rows.length === 0) return AST_FALSE;
+  const values = rows.map(() => '(?, ?)').join(', ');
+  return {
+    sql: `t.id IN (
+      SELECT x.column1 FROM (VALUES ${values}) AS x WHERE ${date.sql})`,
+    params: [...rows.flatMap(([id, nextAt]) => [id, nextAt]), ...date.params],
+  };
 }
 
 /**
@@ -2971,8 +3100,18 @@ function expandInclusiveDateUpper(value: string): string {
   return normaliseInstant(value, 'date', 'end') ?? value;
 }
 
-/** Лист по дате создания/изменения: равно/не равно, сравнения и «между» (границы включительны). */
-function dateLeafClause(column: string, leaf: FilterAstLeaf, path: string, requestId?: string): Clause {
+/**
+ * Лист по датовому скалярному выражению (дата создания/изменения): равно/не
+ * равно, сравнения и «между» (границы включительны). Напоминания используют ту
+ * же функцию над вычисленным в JS значением `next_at` (см.
+ * {@link reminderAtLeafClause}).
+ */
+function dateLeafClause(
+  column: string,
+  leaf: FilterAstLeaf,
+  path: string,
+  requestId?: string,
+): Clause {
   const one = (op: string, value: unknown): Clause => {
     if (typeof value !== 'string' || value.trim() === '') {
       throw new EtnError('VALIDATION_ERROR', "Date bound must be a non-empty ISO-8601 string.", { field: path }, requestId);
@@ -4012,10 +4151,12 @@ function buildQuery(
   const unresolved: TokenIssue[] = [];
   // Кэш поддеревьев «в иерархии» живёт в пределах одного исполнения запроса.
   const astOpts: AstExecOptions = { unresolved, hierarchyCache: new Map(), subqueryBudget: { ids: 0 } };
+  astOpts.requesterId = userId;
   if (tokenContext !== undefined) astOpts.ctx = tokenContext;
   if (astContext?.keywordCommentIncludesLinkComments === true) {
     astOpts.keywordCommentIncludesLinkComments = true;
   }
+  if (astContext?.showTrash === false) astOpts.showTrash = false;
   if (collectStats === true) {
     astOpts.stats = { conditions: 0, nodes_walked: 0, hierarchy_calls: 0, limits_hit: new Set() };
   }
@@ -4069,7 +4210,19 @@ export function queryThoughts(
 ): ThoughtQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
   const startedAt = opts.collectStats === true ? performance.now() : 0;
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
+  const built = buildQuery(
+    ndb,
+    userId,
+    req,
+    emptyFilterMode,
+    undefined,
+    opts.tokenContext,
+    opts.collectStats === true,
+    opts.profile,
+    // Видимость корзины в листе «Есть задачи» — та же настройка, что у панели
+    // «Задачи» (пачка 11, задача 173e8368).
+    opts.showTrash === false ? { showTrash: false } : undefined,
+  );
   // Неразрешимый токен AST — пустой результат с пояснением, а не молчаливая
   // потеря условия (требование b7fdab20).
   if (built.unresolved.length > 0) {
@@ -4191,7 +4344,19 @@ export function queryThoughtIds(
 ): ThoughtIdsQueryResult {
   const emptyFilterMode = opts.emptyFilterMode ?? 'all';
   const startedAt = opts.collectStats === true ? performance.now() : 0;
-  const built = buildQuery(ndb, userId, req, emptyFilterMode, undefined, opts.tokenContext, opts.collectStats === true, opts.profile);
+  const built = buildQuery(
+    ndb,
+    userId,
+    req,
+    emptyFilterMode,
+    undefined,
+    opts.tokenContext,
+    opts.collectStats === true,
+    opts.profile,
+    // Видимость корзины в листе «Есть задачи» — та же настройка, что у панели
+    // «Задачи» (пачка 11, задача 173e8368).
+    opts.showTrash === false ? { showTrash: false } : undefined,
+  );
   if (built.unresolved.length > 0) {
     return {
       ids: [],

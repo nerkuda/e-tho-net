@@ -99,11 +99,13 @@ async function fetchIndicatorCounts(id: string): Promise<IndicatorInfo> {
  */
 function applyIndicators(id: string, info: IndicatorInfo): void {
   for (const cloud of document.querySelectorAll<HTMLElement>(`.cloud[data-id="${id}"]`)) {
-    const cells = cloud.querySelectorAll<HTMLElement>('.cloud-ind .ind');
-    const perm = cells[0];
-    const chrono = cells[1];
-    const att = cells[2];
-    if (perm === undefined || chrono === undefined || att === undefined) continue;
+    // Ячейки адресуются по СМЫСЛОВЫМ классам, а не по порядку: в ряду облачка
+    // есть ещё индикатор напоминаний (⏰, `lib/reminder-indicators.ts`), и
+    // позиционный разбор патчил бы его вместо 📝 (0.16.1, задача 173f1540).
+    const perm = cloud.querySelector<HTMLElement>('.cloud-ind .ind-comment');
+    const chrono = cloud.querySelector<HTMLElement>('.cloud-ind .ind-chrono');
+    const att = cloud.querySelector<HTMLElement>('.cloud-ind .ind-att');
+    if (perm === null || chrono === null || att === null) continue;
     if (info.permanent) {
       perm.textContent = '📝';
       perm.classList.remove('dim');

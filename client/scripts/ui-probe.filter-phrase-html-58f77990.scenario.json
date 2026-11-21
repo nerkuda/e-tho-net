@@ -81,7 +81,7 @@
     },
     {
       "name": "operators-three-distinct-colors",
-      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; const and = color('ff-ph-op--and'); const or = color('ff-ph-op--or'); const not = color('ff-ph-op--not'); const base = getComputedStyle(t).color; return JSON.stringify({ theme: document.documentElement.dataset.theme ?? 'light', and: and, or: or, not: not, base: base, distinct: new Set([and, or, not]).size }); })()"
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; const and = color('ff-ph-op--and'); const or = color('ff-ph-op--or'); const not = color('ff-ph-op--not'); const base = getComputedStyle(t).color; return JSON.stringify({ mode: document.documentElement.dataset.mode ?? 'light', and: and, or: or, not: not, base: base, distinct: new Set([and, or, not]).size }); })()"
     },
     {
       "name": "operators-tree-distinct-and-not-base",
@@ -140,8 +140,8 @@
       "expect": true
     },
 
-    { "name": "switch-dark", "eval": "(() => { document.documentElement.dataset.theme = 'dark'; return document.documentElement.dataset.theme; })()" },
-    { "name": "dark-applied", "timeout": 5000, "waitFor": "document.documentElement.dataset.theme === 'dark'" },
+    { "name": "switch-dark", "eval": "(() => { document.documentElement.dataset.mode = 'dark'; return document.documentElement.dataset.mode; })()" },
+    { "name": "dark-applied", "timeout": 5000, "waitFor": "document.documentElement.dataset.mode === 'dark'" },
     {
       "name": "colors-are-theme-tokens-dark",
       "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const host = t.parentElement; const resolve = (token) => { const probe = document.createElement('span'); probe.style.color = 'var(' + token + ')'; host.appendChild(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; }; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; const and = color('ff-ph-op--and'); const or = color('ff-ph-op--or'); const not = color('ff-ph-op--not'); const t2 = color('ff-ph-paren--t2'); const t3 = color('ff-ph-paren--t3'); return and === resolve('--accent') && or === resolve('--selection') && not === resolve('--danger') && t2 === resolve('--selection') && t3 === resolve('--warn-strong') && new Set([and, or, not, t2, t3]).size >= 4; })()",
@@ -149,9 +149,9 @@
     },
     {
       "name": "dark-colors-report",
-      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; return JSON.stringify({ theme: document.documentElement.dataset.theme ?? 'light', and: color('ff-ph-op--and'), or: color('ff-ph-op--or'), not: color('ff-ph-op--not'), t2: color('ff-ph-paren--t2'), t3: color('ff-ph-paren--t3') }); })()"
+      "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); if (!t) return 'no-phrase'; const color = (c) => { const e = t.querySelector('.' + c); return e ? getComputedStyle(e).color : null; }; return JSON.stringify({ mode: document.documentElement.dataset.mode ?? 'light', and: color('ff-ph-op--and'), or: color('ff-ph-op--or'), not: color('ff-ph-op--not'), t2: color('ff-ph-paren--t2'), t3: color('ff-ph-paren--t3') }); })()"
     },
-    { "name": "restore-light", "eval": "(() => { document.documentElement.dataset.theme = 'light'; return document.documentElement.dataset.theme; })()" },
+    { "name": "restore-light", "eval": "(() => { document.documentElement.dataset.mode = 'light'; return document.documentElement.dataset.mode; })()" },
     {
       "name": "phrase-still-rendered-after-theme",
       "probe": "(() => { const t = document.querySelector('.st-filter .ff-preview__text'); return t !== null && t.querySelectorAll('.ff-ph-op').length === 3; })()",

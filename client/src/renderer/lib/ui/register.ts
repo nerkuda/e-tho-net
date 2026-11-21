@@ -25,7 +25,20 @@
 // `styles/themes/default.css` и цветовые палитры.
 import '@awesome.me/webawesome/dist/styles/webawesome.css';
 
-// Карта маппинга токенов ETN → `--wa-*` (светлая и тёмная темы).
+// Файлы значений тем (ADR de24adef): по блоку на режим, селекция —
+// `data-theme`/`data-mode` на корне документа. Импорт НЕ через `@import` в
+// `styles.css`: манифест стилей остаётся прежним, а файлы тем едут в бандл
+// фасодов (прецедент — `button.css`/`field.css`). `current` объявляет дефолт
+// на `:root`, поэтому первый кадр не мигает чужими цветами.
+import './themes/current.css';
+import './themes/blue-topaz.css';
+import './themes/catppuccin.css';
+import './themes/nordic.css';
+import './themes/retronotes.css';
+import './themes/wasp.css';
+
+// Карта маппинга токенов ETN → `--wa-*` (одна на все темы: темы меняют
+// значения ETN-токенов, маппинг не трогают).
 import './tokens.css';
 
 // Стили словаря кнопок (`.ui-btn*`) — роли, плотности и состояния
@@ -100,6 +113,10 @@ import './slider.css';
 // e514768f).
 import './empty-state.css';
 
+// Панель «Задачи и напоминания» над лентой «Дневника» (0.16.1, задача
+// 64f7976a): вид групп, секций и строк, команды при наведении и подсветка
+// «Обновить» (`.ui-task-*`).
+import './task-panel.css';
 
 // Компоненты этапа 1: кнопки, поля, переключатели, вкладки, тосты,
 // тултипы, деревья, аккордеоны, сплиттеры. Каждый модуль регистрирует
@@ -153,4 +170,3 @@ import './vaadin-tokens.css';
     host.Vaadin.developmentModeCallback['vaadin-usage-statistics'] = () => undefined;
   }
 }
-

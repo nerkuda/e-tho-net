@@ -110,7 +110,7 @@
 }
 
 .ui-tree-row--current {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%, transparent);
 }
 
 /* Корневой тип иерархии — отделён и подчёркнут (бывший `.type-tree-root > td`). */

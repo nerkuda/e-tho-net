@@ -1,0 +1,208 @@
+/*
+ * Тема «retronotes» — значения из официального референса sr-campelo/retronotes
+ * (`theme.css`, режимы `retro-lm-parchments` и `retro-dm-midnight-journal`).
+ * Шрифты референса (рукописные и антиквы) НЕ переносятся, easing/анимации —
+ * действующие ETN (ADR de24adef).
+ *
+ * Палитра: пергамент `base-00…#base-40` (тёплая бумага #f9f6ee…#c6a95d),
+ * латунный акцент `base-50` #ba9942 (accent референса
+ * `hsl(43.5 47.6% 49.4%)`), чернила `main-ink` #2c241c, кожаный переплёт
+ * `leather-color` #632335 и «чернильный» синий `color-blue` #225973. Тёмный
+ * режим — «Midnight Journal»: почти чёрная бумага `base-00` #0c0c0c, тёплый
+ * светлый ink #f9f6ee, латунь `color-yellow` #c29938, розовый `color-pink`
+ * #d4849a и циан `color-cyan` #4caddd.
+ *
+ * Характер темы — бумага и переплёт: тёплые тени от чернил, малые радиусы
+ * (лист бумаги, а не пластиковая карточка), латунные канты вместо серых.
+ *
+ * Файл значений СУЩЕСТВУЮЩИХ токенов (ADR de24adef): только объявления
+ * переменных, ни одного класса. Селекция — `data-theme='retronotes'` +
+ * `data-mode` на корне документа. Состав набора токенов обязан совпадать с
+ * остальными темами (сторож `guard-ui-theme-tokens`).
+ */
+
+[data-theme='retronotes'][data-mode='light'] {
+  color-scheme: light;
+
+  /* palette — «Parchments» референса, светлый режим */
+  --bg: #f4eee0; /* base-05 — тёплый фон рабочей области */
+  --surface: #f9f6ee; /* base-00 — страница-пергамент (основной фон редактора референса) */
+  --surface-2: #efe7d1; /* base-10 */
+  --bg-hover: #efe7d1; /* base-10 */
+  --bg-active: #e5d7b4; /* base-20 */
+  --border: #e5d7b4; /* base-20 */
+  --border-strong: #c6a95d; /* base-40 — латунный кант */
+  --text: #2c241c; /* main-ink — чернила */
+  --text-dim: #5f5140; /* производный: main-ink, смешанный с пергаментом */
+  --text-faint: #8a7a63; /* производный: приглушённые чернила на base-00 */
+  --accent: #ba9942; /* base-50 = accent референса (hsl(43.5 47.6% 49.4%)) */
+  --accent-strong: #a8872f; /* производный: base-50 на шаг темнее (hover) */
+  --accent-pressed: #94762a; /* производный: base-50 на два шага темнее (нажатие) */
+  --accent-soft: #efe3c4; /* производный: латунная примесь accent на пергаменте */
+  /* Надпись на латуни — самые тёмные чернила base-100: #ba9942/#29220e = 5.81:1. */
+  --accent-fg: #29220e;
+  --selection-bg: rgba(186, 153, 66, 0.35); /* accent референса с альфой */
+  /* Рамка выделенных: кожаный переплёт leather-color #632335 — 9.96:1 к фону. */
+  --selection: #632335;
+  /* Пунктир текущего: «чернильный» синий color-blue #225973 — 6.61:1 к фону,
+     отличим и от латунного акцента, и от кожаной рамки выделения. */
+  --cursor: #225973;
+  --cal-weekend: #b43c3c; /* color-red */
+  --cal-marker-records: #3f7fb5; /* производный: синий вне латунного акцента */
+  --danger: #b43c3c; /* color-red */
+  --danger-soft: #f3e2df; /* производный: color-red на пергаменте */
+  --ok: #719461; /* color-green */
+  --ok-soft: #e9edde; /* производный: color-green на пергаменте */
+  --warn: #db8134; /* color-orange */
+  --warn-strong: #a85f1e; /* производный: color-orange, затемнён для мелкого текста */
+  --warn-soft: #f7e9d8; /* производный: color-orange на пергаменте */
+  --warn-glow: rgba(219, 129, 52, 0.35); /* color-orange с альфой */
+  --mark-bg: #f7dfa0; /* производный: color-yellow #f2ba44 на пергаменте */
+  --link-default: #a2947b; /* производный: приглушённые чернила (контур связи) */
+  --ft-tone-1: #f0e8d8; /* производный: тёплый тон пергамента */
+  --ft-tone-2: #e9ecdc; /* производный: color-green, ослабленный на бумаге */
+  --ft-tone-3: #f6e9d9; /* производный: color-orange, ослабленный на бумаге */
+  --ft-tone-4: #eee7ec; /* производный: color-purple, ослабленный на бумаге */
+  --ellipse-fill: #d8c48f; /* производный: латунь, разбавленная пергаментом */
+  --ellipse-fill-border: #9d8137; /* base-60 */
+  --backdrop: rgba(41, 34, 14, 0.35); /* base-100 с альфой */
+  --canvas-dot: rgba(41, 34, 14, 0.16); /* base-100 с альфой — сетка карты */
+  --focus-accent: #9d8137; /* base-60 — полоса фокуса на пергаменте */
+  /* Кант открытого: самые тёмные чернила base-100 — читается на бумаге и
+     отделяет латунную полосу слоя от карты. */
+  --focus-ring-contrast: #29220e;
+  --md-html-comment: #8a7a63; /* производный: приглушённые чернила */
+  --mark-danger: #b43c3c; /* color-red */
+  --mark-network: #225973; /* color-blue */
+  --mark-layer: #775cb0; /* color-purple */
+  --mark-warn: #f2ba44; /* color-yellow */
+  --mark-lock-own: #53b3b8; /* color-cyan */
+  --badge-bg: #29220e; /* base-100 */
+  --badge-fg: #f9f6ee; /* base-00 */
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — цвета палитры референса; тона, недостаточные для мелкого
+     текста на пергаменте, заменены производными затемнёнными. */
+  --hljs-comment: #8a7a63; /* производный: приглушённые чернила */
+  --hljs-keyword: #b43c3c; /* color-red */
+  --hljs-string: #719461; /* color-green */
+  --hljs-number: #8b2e38; /* secondary-ink */
+  --hljs-literal: #8b2e38; /* secondary-ink */
+  --hljs-title: #775cb0; /* color-purple */
+  --hljs-builtin: #a85f1e; /* производный: color-orange, затемнён */
+  --hljs-attr: #9d8137; /* base-60 */
+  --hljs-type: #225973; /* color-blue */
+  --hljs-tag: #762a3f; /* leather-color-alt */
+  --hljs-meta: #80692d; /* base-70 */
+  --hljs-symbol: #775cb0; /* color-purple */
+  --hljs-section: #225973; /* color-blue */
+  --hljs-addition: #719461; /* color-green */
+  --hljs-deletion: #b43c3c; /* color-red */
+
+  /* Тени — тёплые, от чернил: бумага даёт мягкое пятно, а не холодный серый. */
+  --shadow-c: rgba(41, 34, 14, 0.18); /* base-100 с альфой */
+  --shadow-sm-c: rgba(41, 34, 14, 0.09); /* base-100 с альфой */
+  --shadow-xs-c: rgba(41, 34, 14, 0.16); /* base-100 с альфой */
+  --shadow: 0 6px 22px var(--shadow-c);
+  --shadow-sm: 0 1px 3px var(--shadow-sm-c);
+  --shadow-hover: 0 2px 8px var(--shadow-c);
+  --shadow-focus: 0 2px 8px rgba(186, 153, 66, 0.14); /* латунное свечение, умеренное */
+
+  /* Радиусы — лист бумаги: почти прямые углы (характер референса). */
+  --radius-s: 3px;
+  --radius-m: 6px;
+  --radius-l: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+}
+
+[data-theme='retronotes'][data-mode='dark'] {
+  color-scheme: dark;
+
+  /* palette — «Midnight Journal» референса, тёмный режим */
+  --bg: #0c0c0c; /* base-00 */
+  --surface: #161616; /* base-05 */
+  --surface-2: #202020; /* base-10 */
+  --bg-hover: #202020; /* base-10 */
+  --bg-active: #333333; /* base-20 */
+  --border: #333333; /* base-20 */
+  --border-strong: #474747; /* base-30 */
+  --text: #f9f6ee; /* main-ink — светлая тёплая бумага */
+  --text-dim: #c4bbae; /* производный: main-ink, приглушённый к тёмной бумаге */
+  --text-faint: #959595; /* base-70 */
+  --accent: #c29938; /* color-yellow — латунь тёмного режима */
+  --accent-strong: #d2ac4f; /* производный: color-yellow светлее (hover) */
+  --accent-pressed: #a8812b; /* производный: color-yellow темнее (нажатие) */
+  --accent-soft: #33291a; /* производный: латунная примесь accent на base-05 */
+  /* Надпись на латуни — тёмная бумага base-05: #c29938/#161616 = 6.81:1. */
+  --accent-fg: #161616;
+  --selection-bg: rgba(194, 153, 56, 0.4); /* color-yellow с альфой */
+  /* Рамка выделенных — розовый color-pink #d4849a: 7.05:1 к фону, отличим от
+     латуни акцента и от циана курсора. */
+  --selection: #d4849a;
+  /* Пунктир текущего — циан color-cyan #4caddd: 7.76:1 к фону. */
+  --cursor: #4caddd;
+  --cal-weekend: #d4849a; /* color-pink */
+  --cal-marker-records: #6fb3e0; /* производный: синий вне латунного акцента */
+  --danger: #d97878; /* color-red */
+  --danger-soft: #3a2323; /* производный: color-red на base-05 */
+  --ok: #64ad4b; /* color-green */
+  --ok-soft: #22301c; /* производный: color-green на base-05 */
+  --warn: #e8893a; /* color-orange */
+  --warn-strong: #f0a76a; /* производный: color-orange светлее для мелкого текста */
+  --warn-soft: #3a2a1c; /* производный: color-orange на base-05 */
+  --warn-glow: rgba(232, 137, 58, 0.3); /* color-orange с альфой */
+  --mark-bg: rgba(194, 153, 56, 0.3); /* color-yellow с альфой */
+  --link-default: #6e6e6e; /* base-50 */
+  --ft-tone-1: #24201b; /* производный: тёплая примесь на base-05 */
+  --ft-tone-2: #1e241c; /* производный: color-green, ослабленный */
+  --ft-tone-3: #2a241b; /* производный: color-orange, ослабленный */
+  --ft-tone-4: #262029; /* производный: color-purple, ослабленный */
+  --ellipse-fill: #4a3f28; /* производный: латунь, приглушённая на base-05 */
+  --ellipse-fill-border: #c29938; /* color-yellow */
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --canvas-dot: rgba(249, 246, 238, 0.07); /* main-ink с альфой */
+  --focus-accent: #a8812b; /* производный: color-yellow темнее — полоса фокуса */
+  /* Кант открытого: светлая бумага main-ink — контрастный кант на тёмной карте. */
+  --focus-ring-contrast: #f9f6ee;
+  --md-html-comment: #828282; /* base-60 */
+  --mark-danger: #d97878; /* color-red */
+  --mark-network: #6aa0c8; /* color-blue */
+  --mark-layer: #a888d4; /* color-purple */
+  --mark-warn: #c29938; /* color-yellow */
+  --mark-lock-own: #4caddd; /* color-cyan */
+  --badge-bg: #f9f6ee; /* main-ink */
+  --badge-fg: #161616; /* base-05 */
+  --overlay-fg: #ffffff;
+
+  /* Подсветка кода — цвета тёмной палитры референса. */
+  --hljs-comment: #828282; /* base-60 */
+  --hljs-keyword: #d97878; /* color-red */
+  --hljs-string: #64ad4b; /* color-green */
+  --hljs-number: #a888d4; /* color-purple */
+  --hljs-literal: #a888d4; /* color-purple */
+  --hljs-title: #4caddd; /* color-cyan */
+  --hljs-builtin: #e8893a; /* color-orange */
+  --hljs-attr: #c29938; /* color-yellow */
+  --hljs-type: #4caddd; /* color-cyan */
+  --hljs-tag: #d97878; /* color-red */
+  --hljs-meta: #6aa0c8; /* color-blue */
+  --hljs-symbol: #a888d4; /* color-purple */
+  --hljs-section: #4caddd; /* color-cyan */
+  --hljs-addition: #64ad4b; /* color-green */
+  --hljs-deletion: #d97878; /* color-red */
+
+  --shadow-c: rgba(0, 0, 0, 0.6);
+  --shadow-sm-c: rgba(0, 0, 0, 0.4);
+  --shadow-xs-c: rgba(0, 0, 0, 0.25);
+  --shadow: 0 6px 22px var(--shadow-c);
+  --shadow-sm: 0 1px 3px var(--shadow-sm-c);
+  --shadow-hover: 0 3px 12px var(--shadow-c);
+  --shadow-focus: 0 2px 10px rgba(194, 153, 56, 0.16); /* латунное свечение, умеренное */
+
+  --radius-s: 3px;
+  --radius-m: 6px;
+  --radius-l: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+}

@@ -1,0 +1,765 @@
+{
+  "name": "80324150-wallpaper-tint",
+  "description": "Задача 80324150 «Фоновая картинка: клиент», ЭТАП 2 (срез заказчика 2026-11-13; элемент ef8112b0, требование e6d586d3, сценарий 3fe62610). Проверено на живом стенде: 1) без картинки фон экранов «Дневник», «События», «Публикации» и сетки «Структур» НЕ тонирован (переменная --wallpaper-screen-tint пуста, градиентный слой прозрачен); 2) после загрузки светлой картинки (avg_luminance 0.94) плотность тинта карты в диапазоне 0.12–0.30, тинт экранов в 0.072–0.18, слабее карты ровно в 0.6 раза (WALLPAPER_SCREEN_TINT_FACTOR), и каждый из 4 экранов реально получает слой linear-gradient этого цвета (структуры сохраняют точечную сетку); 3) после загрузки тёмной картинки (0.05) инварианты те же (тинт экранов слабее карты); 4) после «Убрать картинку» переменная снята, градиентные слои экранов прозрачны — возврат к фону темы/слоя; 5) доработка круга 2 по замечаниям заказчика: счётчик зоны лежит поверх всех слоёв (z=12) с непрозрачной тематической плашкой, подпись пустой зоны — выше сетки (z=2) с контуром цвета фона, полоса фокуса — плотность 0.7 (на 30 % прозрачнее) при fade 73px (честный ÷2 видимой протяжённости: ядро 67px + 2×73 = 213px вместо прежних 427px). Для счётчика сценарий засеивает трёх детей фокусной мысли через API. 6) блокер круга 2 закрыт пробой: клиент переключается в blue-topaz light с активной картинкой и перезагружается, затем проверяется счётчик зоны — плашка непрозрачная и равна --surface темы, текст тёмный, контраст ≥ 7 : 1 (прежний расчёт по --bg давал белый текст на белой плашке 1.00 : 1). Юнит-инвариант 12 блоков (6 тем × 2 режима) — сторож guard-canvas-overlay-layers.test.ts. 7) круг 3 среза (надписи не читались): подписи канвы (.zone-empty и .canvas-empty, включая вложенные состояния загрузки/ошибки) на картинке получают непрозрачную плашку --surface и текст --text; без картинки вид тематический (проба baseline-labels-plain: плашки и контура нет, цвет --text-faint). Пробы проверяют непрозрачность плашки, её совпадение с --surface темы, отсутствие text-shadow и контраст текста ≥ 7 : 1; в blue-topaz light с картинкой контраст подписи 19.3 : 1. Контраст --text/--surface в 12 блоках — сторож guard-canvas-overlay-layers.test.ts. Раздел «Оформление» проверяется через словарь ожиданий (ru/en), поиск UI — без русских литералов (сторож c73bcb60). Плотность ниже 0.12 и различимость картинки — юнит-тесты wallpaper-image.test.ts, сторожа guard-wallpaper-tint.test.ts и guard-canvas-overlay-layers.test.ts. «Слой слабее основы» живьём не проверяется: на стенде нет сети с собственными цветами слоя (initLayerTheme стирает ручной --layer-bg при каждом изменении стора) — покрыто юнит-тестом canvas-wallpaper.test.ts. Запуск: npm run build && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.80324150-wallpaper-tint.scenario.json --server-language ru --keep --out .tmp/80324150/out-stage2 8) круг 6 (блокер проверки fef9350f, смена цвета фона слоя без смены id): обои выключены, создан и выбран слой с собственными цветами — счётчики зон считаются от --layer-bg (плашка 78 % --surface над фоном слоя); затем в «Свойствах слоя» меняется «Фон холста» при том же id — inline-цвет каждого .zone-count пересчитан от нового фона, контраст ≥ 7 : 1.",
+  "timeout": 300000,
+  "texts": {
+    "wallpaperField": { "ru": "Фоновая картинка карты", "en": "Map background image" },
+    "userMenuTitle": { "ru": "Меню пользователя", "en": "User menu" },
+    "userMenuSettings": { "ru": "Настройки", "en": "Settings" },
+    "settingsAppearanceSection": { "ru": "Оформление", "en": "Appearance" },
+    "layerMenuBase": { "ru": "Основа", "en": "Base" },
+    "layerCreate": { "ru": "Создать новый слой…", "en": "Create new layer…" },
+    "layerProps": { "ru": "Свойства слоя…", "en": "Layer properties…" },
+    "layerCreatePlaceholder": { "ru": "Например: Правки августа", "en": "e.g. August edits" },
+    "layersCanvasBg": { "ru": "Фон холста", "en": "Canvas background" },
+    "probeLayerTitle": { "ru": "Проба фона слоя", "en": "Layer background probe" }
+  },
+  "steps": [
+    {
+      "name": "server-language-ru",
+      "api": {
+        "name": "server-language-ru",
+        "method": "PUT",
+        "path": "/admin/settings/language",
+        "body": { "language": "ru" },
+        "expression": "data.language"
+      },
+      "expect": "ru"
+    },
+    {
+      "name": "seed-child-1",
+      "api": {
+        "name": "seed-child-1",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Проба счётчика 1", "parent_id": "{{thoughtId}}" },
+        "expression": "data.title"
+      },
+      "expect": "Проба счётчика 1"
+    },
+    {
+      "name": "seed-child-2",
+      "api": {
+        "name": "seed-child-2",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Проба счётчика 2", "parent_id": "{{thoughtId}}" },
+        "expression": "data.title"
+      },
+      "expect": "Проба счётчика 2"
+    },
+    {
+      "name": "seed-child-3",
+      "api": {
+        "name": "seed-child-3",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Проба счётчика 3", "parent_id": "{{thoughtId}}" },
+        "expression": "data.title"
+      },
+      "expect": "Проба счётчика 3"
+    },
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "workspace-ready",
+      "timeout": 30000,
+      "waitFor": "document.querySelectorAll('button.view-tab').length >= 5 && document.querySelector('.canvas') !== null"
+    },
+
+    {
+      "name": "baseline-labels-plain",
+      "probe": "(() => { const empty = document.querySelector('.zone-empty'); if (empty === null) return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), empty_present: false }; const s = getComputedStyle(empty); const probe = document.createElement('div'); probe.style.color = 'var(--text-faint)'; document.body.append(probe); const faint = getComputedStyle(probe).color; probe.remove(); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), empty_present: true, plate_none: s.backgroundColor === 'rgba(0, 0, 0, 0)' || s.backgroundColor === 'transparent', shadow_none: s.textShadow === 'none', color_is_faint: s.color === faint }; })()",
+      "expect": {
+        "attr": null,
+        "empty_present": true,
+        "plate_none": true,
+        "shadow_none": true,
+        "color_is_faint": true
+      }
+    },
+    {
+      "name": "baseline-screens-not-tinted",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); return element === null ? { selector, present: false } : { selector, present: true, alpha: alphaOf(getComputedStyle(element).backgroundImage) }; }); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), screen_var: screenTint, screens_missing: screens.filter((s) => s.present === false).map((s) => s.selector), screens_alpha: screens.map((s) => s.alpha) }; })()",
+      "expect": {
+        "attr": null,
+        "screen_var": "",
+        "screens_missing": [],
+        "screens_alpha": [0, 0, 0, 0]
+      }
+    },
+
+    {
+      "name": "upload-light",
+      "probe": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 320, 180); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#e6e6e6'); ctx.fillStyle = g; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); const state = await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.94 } }); return { status: state.status, source: state.source }; })()",
+      "expect": { "status": "ok", "source": "server" }
+    },
+    {
+      "name": "reload-after-light",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-light",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-light",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-light-on",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "tint-light",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const mapAlpha = alphaOf(tint); const screenAlpha = alphaOf(screenTint); const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); if (element === null) return { selector, present: false }; const image = getComputedStyle(element).backgroundImage; return { selector, present: true, has_linear: image.includes('linear-gradient'), alpha: alphaOf(image) }; }); const structuresImage = getComputedStyle(document.querySelector('.st-results')).backgroundImage; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), tint_present: tint.length > 0, screen_present: screenTint.length > 0, map_in_range: Number.isFinite(mapAlpha) && mapAlpha >= 0.12 && mapAlpha <= 0.3, screen_in_range: Number.isFinite(screenAlpha) && screenAlpha >= 0.07 && screenAlpha <= 0.18, screen_weaker: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && screenAlpha < mapAlpha, screen_factor_ok: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && Math.abs(screenAlpha - mapAlpha * 0.6) < 0.011, screens_missing: screens.filter((s) => s.present === false).map((s) => s.selector), screens_tinted: screens.every((s) => s.present === true && s.has_linear === true && Math.abs((s.alpha ?? 0) - (screenAlpha ?? 0)) < 0.001), structures_grid: structuresImage.includes('radial-gradient') }; })()",
+      "expect": {
+        "attr": "on",
+        "tint_present": true,
+        "screen_present": true,
+        "map_in_range": true,
+        "screen_in_range": true,
+        "screen_weaker": true,
+        "screen_factor_ok": true,
+        "screens_missing": [],
+        "screens_tinted": true,
+        "structures_grid": true
+      }
+    },
+
+    {
+      "name": "counter-visible",
+      "timeout": 20000,
+      "waitFor": "document.querySelector('.zone-count:not(.hidden)') !== null"
+    },
+    {
+      "name": "overlays-and-band",
+      "probe": "(() => { const canvas = document.querySelector('.canvas'); const bandStyle = getComputedStyle(canvas, '::before'); const parse = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const counter = counters[0] ?? null; const counterStyle = counter === null ? null : getComputedStyle(counter); const counterBg = counterStyle === null ? null : parse(counterStyle.backgroundColor); const counterFg = counterStyle === null ? null : parse(counterStyle.color); const empty = [...document.querySelectorAll('.zone-empty')].find((el) => !el.classList.contains('hidden')) ?? null; const emptyStyle = empty === null ? null : getComputedStyle(empty); const emptyPlate = emptyStyle === null ? null : parse(emptyStyle.backgroundColor); const emptyFg = emptyStyle === null ? null : parse(emptyStyle.color); const over = (top, bottom) => top === null ? null : top.rgb.map((c, i) => top.alpha * c + (1 - top.alpha) * bottom[i]); const blendText = (fg, bg) => fg === null ? null : fg.rgb.map((c, i) => fg.alpha * c + (1 - fg.alpha) * bg[i]); const contrastOn = (bottom) => { const p = over(emptyPlate, bottom); const f = blendText(emptyFg, p); return p === null || f === null ? 0 : ratio(f, p); }; const emptyMinContrast = emptyPlate === null || emptyFg === null ? 0 : Number(Math.min(contrastOn([0, 0, 0]), contrastOn([255, 255, 255])).toFixed(2)); const fade = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-fade').trim(); const bandTopPx = Number.parseFloat(getComputedStyle(canvas).getPropertyValue('--focus-band-top')); const bandBottomPx = Number.parseFloat(getComputedStyle(canvas).getPropertyValue('--focus-band-bottom')); const bandFadePx = Number.parseFloat(fade); const bandCore = Math.round(bandBottomPx - bandTopPx); const bandExtent = Math.round(bandCore + 2 * bandFadePx); const bandHalfOk = Number.isFinite(bandCore) && Math.abs(bandExtent * 2 - 427) <= 4; const opacity = getComputedStyle(document.documentElement).getPropertyValue('--focus-band-opacity').trim(); return { counters_visible: counters.length > 0, all_counters_on_top: counters.length > 0 && counters.every((el) => getComputedStyle(el).zIndex === '12'), all_counters_opaque: counters.length > 0 && counters.every((el) => { const bg = parse(getComputedStyle(el).backgroundColor); return bg !== null && bg.alpha === 1; }), all_counters_contrast_ok: counters.length > 0 && counters.every((el) => { const s = getComputedStyle(el); const bg = parse(s.backgroundColor); const fg = parse(s.color); return bg !== null && fg !== null && ratio(fg.rgb, bg.rgb) >= 7; }), empty_present: empty !== null, empty_z: emptyStyle === null ? null : emptyStyle.zIndex, empty_plate_alpha: emptyPlate === null ? 0 : Number(emptyPlate.alpha.toFixed(2)), empty_text_alpha: emptyFg === null ? 0 : Number(emptyFg.alpha.toFixed(2)), empty_contrast_ok: emptyMinContrast >= 4.5, empty_no_shadow: emptyStyle !== null && (emptyStyle.textShadow === 'none' || emptyStyle.textShadow === ''), empty_min_contrast: emptyMinContrast, band_opacity: bandStyle.opacity, band_fade_token: fade, band_opacity_token: opacity, band_has_gradient: bandStyle.backgroundImage.includes('linear-gradient'), band_anchored: getComputedStyle(canvas).getPropertyValue('--focus-band-top').trim() !== '' && getComputedStyle(canvas).getPropertyValue('--focus-band-bottom').trim() !== '', band_core_px: bandCore, band_extent_px: bandExtent, band_half_ok: bandHalfOk }; })()",
+      "expect": {
+        "counters_visible": true,
+        "all_counters_on_top": true,
+        "all_counters_opaque": true,
+        "all_counters_contrast_ok": true,
+        "empty_present": true,
+        "empty_z": "2",
+        "empty_plate_alpha": 0.85,
+        "empty_text_alpha": 0.92,
+        "empty_contrast_ok": true,
+        "empty_no_shadow": true,
+        "empty_min_contrast": 9.01,
+        "band_opacity": "0.7",
+        "band_fade_token": "73px",
+        "band_opacity_token": "0.7",
+        "band_has_gradient": true,
+        "band_anchored": true,
+        "band_core_px": 67,
+        "band_extent_px": 213,
+        "band_half_ok": true
+      }
+    },
+    {
+      "name": "open-user-menu",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+    { "name": "user-menu-visible", "waitFor": "document.querySelector('.menu-item') !== null" },
+    {
+      "name": "open-settings",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}'); if (row === undefined) throw new Error('settings menu item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+    {
+      "name": "settings-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+    {
+      "name": "open-client-section",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsAppearanceSection}}'); if (nav === undefined) throw new Error('appearance section not found'); nav.click(); return true; })()"
+    },
+    {
+      "name": "wallpaper-block",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.settings-wallpaper') !== null"
+    },
+    {
+      "name": "wallpaper-field-label",
+      "probe": "Array.from(document.querySelectorAll('.settings-section .ui-field-label')).map((e) => (e.textContent || '').trim()).filter((s) => s === '{{text:wallpaperField}}')",
+      "expect": ["{{text:wallpaperField}}"]
+    },
+      {
+        "name": "pick-dark-mode-current",
+        "expect": true,
+        "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"dark\"]'); if (r === null) throw new Error('dark mode radio not found'); r.click(); return r.checked; })()"
+      },
+
+      {
+        "name": "counter-mode-dark-live",
+        "probe": "(() => { const parseRgba = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(String(value).trim()); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const parseAny = (value) => { const v = String(value).trim().toLowerCase(); if (!v.startsWith('#')) return parseRgba(v); const hex = v.slice(1); const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex; return { rgb: [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)), alpha: 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const facts = counters.map((el) => { const st = getComputedStyle(el); const plate = parseRgba(st.backgroundColor); const fg = parseRgba(st.color); return { plate, fg, contrast: plate === null || fg === null ? 0 : ratio(fg.rgb, plate.rgb) }; }); const labels = [...document.querySelectorAll('.zone-empty')].filter((el) => !el.classList.contains('hidden')); const labelStyle = labels.length === 0 ? null : getComputedStyle(labels[0]); const labelPlate = labelStyle === null ? null : parseRgba(labelStyle.backgroundColor); const labelFg = labelStyle === null ? null : parseRgba(labelStyle.color); const over = (top, bottom) => top.rgb.map((c, i) => top.alpha * c + (1 - top.alpha) * bottom[i]); const blend = (fg, bg) => fg.rgb.map((c, i) => fg.alpha * c + (1 - fg.alpha) * bg[i]); const labelOn = (bottom) => { if (labelPlate === null || labelFg === null) return 0; const p = over(labelPlate, bottom); return ratio(blend(labelFg, p), p); }; const labelMin = labelPlate === null || labelFg === null ? 0 : Number(Math.min(labelOn([0, 0, 0]), labelOn([255, 255, 255])).toFixed(2)); const minContrast = facts.length === 0 ? 0 : Number(Math.min(...facts.map((f) => f.contrast)).toFixed(2)); return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'), counter_present: counters.length > 0, counter_all_opaque: facts.length > 0 && facts.every((f) => f.plate !== null && f.plate.alpha === 1), counter_all_white: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '255,255,255'), counter_all_dark: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '31,36,45'), counter_min_contrast: minContrast, counter_contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7), label_alpha_ok: labelPlate !== null && labelFg !== null && Math.abs(labelPlate.alpha - 0.85) < 0.02 && Math.abs(labelFg.alpha - 0.92) < 0.02, label_min_contrast: labelMin, label_contrast_ok: labelMin >= 4.5, }; })()",
+        "expect": {
+          "theme": "current",
+          "mode": "dark",
+          "wallpaper": "on",
+          "counter_present": true,
+          "counter_all_opaque": true,
+          "counter_all_white": true,
+          "counter_all_dark": false,
+          "counter_min_contrast": 17.28,
+          "counter_contrast_ok": true,
+          "label_alpha_ok": true,
+          "label_min_contrast": 7.87,
+          "label_contrast_ok": true
+        }
+      },
+
+      {
+        "name": "pick-light-mode-current",
+        "expect": true,
+        "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]'); if (r === null) throw new Error('light mode radio not found'); r.click(); return r.checked; })()"
+      },
+
+      {
+        "name": "counter-mode-light-live",
+        "probe": "(() => { const parseRgba = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(String(value).trim()); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const parseAny = (value) => { const v = String(value).trim().toLowerCase(); if (!v.startsWith('#')) return parseRgba(v); const hex = v.slice(1); const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex; return { rgb: [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)), alpha: 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const facts = counters.map((el) => { const st = getComputedStyle(el); const plate = parseRgba(st.backgroundColor); const fg = parseRgba(st.color); return { plate, fg, contrast: plate === null || fg === null ? 0 : ratio(fg.rgb, plate.rgb) }; }); const labels = [...document.querySelectorAll('.zone-empty')].filter((el) => !el.classList.contains('hidden')); const labelStyle = labels.length === 0 ? null : getComputedStyle(labels[0]); const labelPlate = labelStyle === null ? null : parseRgba(labelStyle.backgroundColor); const labelFg = labelStyle === null ? null : parseRgba(labelStyle.color); const over = (top, bottom) => top.rgb.map((c, i) => top.alpha * c + (1 - top.alpha) * bottom[i]); const blend = (fg, bg) => fg.rgb.map((c, i) => fg.alpha * c + (1 - fg.alpha) * bg[i]); const labelOn = (bottom) => { if (labelPlate === null || labelFg === null) return 0; const p = over(labelPlate, bottom); return ratio(blend(labelFg, p), p); }; const labelMin = labelPlate === null || labelFg === null ? 0 : Number(Math.min(labelOn([0, 0, 0]), labelOn([255, 255, 255])).toFixed(2)); const minContrast = facts.length === 0 ? 0 : Number(Math.min(...facts.map((f) => f.contrast)).toFixed(2)); return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'), counter_present: counters.length > 0, counter_all_opaque: facts.length > 0 && facts.every((f) => f.plate !== null && f.plate.alpha === 1), counter_all_white: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '255,255,255'), counter_all_dark: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '31,36,45'), counter_min_contrast: minContrast, counter_contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7), label_alpha_ok: labelPlate !== null && labelFg !== null && Math.abs(labelPlate.alpha - 0.85) < 0.02 && Math.abs(labelFg.alpha - 0.92) < 0.02, label_min_contrast: labelMin, label_contrast_ok: labelMin >= 4.5, }; })()",
+        "expect": {
+          "theme": "current",
+          "mode": "light",
+          "wallpaper": "on",
+          "counter_present": true,
+          "counter_all_opaque": true,
+          "counter_all_white": false,
+          "counter_all_dark": true,
+          "counter_min_contrast": 15.57,
+          "counter_contrast_ok": true,
+          "label_alpha_ok": true,
+          "label_min_contrast": 9.01,
+          "label_contrast_ok": true
+        }
+      },
+
+      {
+        "name": "pick-blue-topaz",
+        "expect": "blue-topaz",
+        "probe": "(() => { const s = Array.from(document.querySelectorAll('.settings-section select')).find((x) => Array.from(x.options).some((o) => o.value === 'blue-topaz')); if (s === undefined) throw new Error('theme select not found'); s.value = 'blue-topaz'; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()"
+      },
+      {
+        "name": "pick-light-mode",
+        "expect": true,
+        "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]'); if (r === null) throw new Error('light mode radio not found'); r.click(); return r.checked; })()"
+      },
+      {
+        "name": "blue-topaz-light-applied",
+        "timeout": 10000,
+        "waitFor": "document.documentElement.dataset.theme === 'blue-topaz' && document.documentElement.dataset.mode === 'light'"
+      },
+      {
+        "name": "apply-theme-mode",
+        "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[0]) throw new Error('нет кнопки «Применить»'); buttons[0].click(); return true; })()"
+      },
+      {
+        "name": "apply-theme-mode-settled",
+        "timeout": 15000,
+        "waitFor": "document.querySelectorAll('.settings-footer-buttons button')[0].disabled === true"
+      },
+    { "name": "close-settings", "key": "Escape" },
+    {
+      "name": "settings-closed",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+      {
+        "name": "reload-blue-topaz",
+        "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+      },
+      {
+        "name": "app-ready-blue-topaz",
+        "timeout": 60000,
+        "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+      },
+      {
+        "name": "ensure-network-open-blue-topaz",
+        "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+      },
+      {
+        "name": "canvas-blue-topaz-on",
+        "timeout": 25000,
+        "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on' && document.documentElement.dataset.theme === 'blue-topaz' && document.documentElement.dataset.mode === 'light'"
+      },
+      {
+        "name": "counter-visible-blue-topaz",
+        "timeout": 20000,
+        "waitFor": "document.querySelector('.zone-count:not(.hidden)') !== null"
+      },
+      {
+        "name": "counter-blue-topaz-light",
+        "probe": "(() => { const parseRgba = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(value.trim()); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const parseAny = (value) => { const v = value.trim().toLowerCase(); if (!v.startsWith('#')) return parseRgba(v); const hex = v.slice(1); const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex; return { rgb: [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)), alpha: 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const root = getComputedStyle(document.documentElement); const surfaceToken = root.getPropertyValue('--surface').trim(); const bgToken = root.getPropertyValue('--bg').trim(); const surface = parseAny(surfaceToken); const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const facts = counters.map((el) => { const s = getComputedStyle(el); const plate = parseRgba(s.backgroundColor); const fg = parseRgba(s.color); return { z: s.zIndex, plate, fg, contrast: plate === null || fg === null ? 0 : ratio(fg.rgb, plate.rgb) }; }); const labels = [...document.querySelectorAll('.zone-empty')].filter((el) => !el.classList.contains('hidden')); const labelStyle = labels.length === 0 ? null : getComputedStyle(labels[0]); const labelPlate = labelStyle === null ? null : parseRgba(labelStyle.backgroundColor); const labelFg = labelStyle === null ? null : parseRgba(labelStyle.color); const overL = (top, bottom) => top.rgb.map((c, i) => top.alpha * c + (1 - top.alpha) * bottom[i]); const blendL = (fg, bg) => fg.rgb.map((c, i) => fg.alpha * c + (1 - fg.alpha) * bg[i]); const labelOn = (bottom) => { if (labelPlate === null || labelFg === null) return 0; const p = overL(labelPlate, bottom); return ratio(blendL(labelFg, p), p); }; const labelMin = labelPlate === null || labelFg === null ? 0 : Number(Math.min(labelOn([0, 0, 0]), labelOn([255, 255, 255])).toFixed(2)); const samePlate = (plate) => plate !== null && surface !== null && plate.rgb.join(',') === surface.rgb.join(','); return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'), bg_is_hsl: bgToken.toLowerCase().startsWith('hsl'), surface_token: surfaceToken, has_counters: counters.length > 0, all_on_top: facts.length > 0 && facts.every((f) => f.z === '12'), all_opaque: facts.length > 0 && facts.every((f) => f.plate !== null && f.plate.alpha === 1), all_plate_is_surface: facts.length > 0 && facts.every((f) => samePlate(f.plate)), all_dark_text: facts.length > 0 && facts.every((f) => f.fg !== null && f.plate !== null && lum(f.fg.rgb) < lum(f.plate.rgb)), label_present: labels.length > 0, label_plate_alpha: labelPlate === null ? 0 : Number(labelPlate.alpha.toFixed(2)), label_text_alpha: labelFg === null ? 0 : Number(labelFg.alpha.toFixed(2)), label_contrast_ok: labelMin >= 4.5, label_no_shadow: labelStyle === null || labelStyle.textShadow === 'none', label_min_contrast: labelMin, min_contrast: facts.length === 0 ? 0 : Number(Math.min(...facts.map((f) => f.contrast)).toFixed(2)), contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7) }; })()",
+        "expect": {
+          "theme": "blue-topaz",
+          "mode": "light",
+          "wallpaper": "on",
+          "bg_is_hsl": true,
+          "surface_token": "#ffffff",
+          "has_counters": true,
+          "all_on_top": true,
+          "all_opaque": true,
+          "all_plate_is_surface": true,
+          "all_dark_text": true,
+          "label_present": true,
+          "label_plate_alpha": 0.85,
+          "label_text_alpha": 0.92,
+          "label_contrast_ok": true,
+          "label_no_shadow": true,
+          "label_min_contrast": 11.75,
+          "min_contrast": 15.57,
+          "contrast_ok": true
+        }
+      },
+
+    {
+      "name": "open-user-menu-bt",
+      "click": "button[title^='{{text:userMenuTitle}}'], .top-right button"
+    },
+
+    {
+      "name": "user-menu-visible-bt",
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+
+    {
+      "name": "open-settings-bt",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:userMenuSettings}}'); if (row === undefined) throw new Error('settings menu item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+
+    {
+      "name": "settings-dialog-bt",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop .settings-nav-item') !== null"
+    },
+
+    {
+      "name": "open-client-section-bt",
+      "eval": "(() => { const nav = Array.from(document.querySelectorAll('.settings-nav-item')).find((e) => (e.textContent || '').trim() === '{{text:settingsAppearanceSection}}'); if (nav === undefined) throw new Error('appearance section not found'); nav.click(); return true; })()"
+    },
+
+    {
+      "name": "pick-dark-mode-bt",
+      "expect": true,
+      "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"dark\"]'); if (r === null) throw new Error('dark mode radio not found'); r.click(); return r.checked; })()"
+    },
+
+    {
+      "name": "counter-blue-topaz-dark-live",
+      "probe": "(() => { const parseRgba = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(String(value).trim()); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const parseAny = (value) => { const v = String(value).trim().toLowerCase(); if (!v.startsWith('#')) return parseRgba(v); const hex = v.slice(1); const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex; return { rgb: [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)), alpha: 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const facts = counters.map((el) => { const st = getComputedStyle(el); const plate = parseRgba(st.backgroundColor); const fg = parseRgba(st.color); return { plate, fg, contrast: plate === null || fg === null ? 0 : ratio(fg.rgb, plate.rgb) }; }); const labels = [...document.querySelectorAll('.zone-empty')].filter((el) => !el.classList.contains('hidden')); const labelStyle = labels.length === 0 ? null : getComputedStyle(labels[0]); const labelPlate = labelStyle === null ? null : parseRgba(labelStyle.backgroundColor); const labelFg = labelStyle === null ? null : parseRgba(labelStyle.color); const over = (top, bottom) => top.rgb.map((c, i) => top.alpha * c + (1 - top.alpha) * bottom[i]); const blend = (fg, bg) => fg.rgb.map((c, i) => fg.alpha * c + (1 - fg.alpha) * bg[i]); const labelOn = (bottom) => { if (labelPlate === null || labelFg === null) return 0; const p = over(labelPlate, bottom); return ratio(blend(labelFg, p), p); }; const labelMin = labelPlate === null || labelFg === null ? 0 : Number(Math.min(labelOn([0, 0, 0]), labelOn([255, 255, 255])).toFixed(2)); const minContrast = facts.length === 0 ? 0 : Number(Math.min(...facts.map((f) => f.contrast)).toFixed(2)); return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'), counter_present: counters.length > 0, counter_all_opaque: facts.length > 0 && facts.every((f) => f.plate !== null && f.plate.alpha === 1), counter_all_white: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '255,255,255'), counter_all_dark: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '31,36,45'), counter_min_contrast: minContrast, counter_contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7), label_alpha_ok: labelPlate !== null && labelFg !== null && Math.abs(labelPlate.alpha - 0.85) < 0.02 && Math.abs(labelFg.alpha - 0.92) < 0.02, label_min_contrast: labelMin, label_contrast_ok: labelMin >= 4.5, }; })()",
+      "expect": {
+        "theme": "blue-topaz",
+        "mode": "dark",
+        "wallpaper": "on",
+        "counter_present": true,
+        "counter_all_opaque": true,
+        "counter_all_white": true,
+        "counter_all_dark": false,
+        "counter_min_contrast": 16.29,
+        "counter_contrast_ok": true,
+        "label_alpha_ok": true,
+        "label_min_contrast": 5.3,
+        "label_contrast_ok": true
+      }
+    },
+
+    {
+      "name": "pick-light-mode-bt",
+      "expect": true,
+      "probe": "(() => { const r = document.querySelector('input[name=\"settings-ui-mode\"][value=\"light\"]'); if (r === null) throw new Error('light mode radio not found'); r.click(); return r.checked; })()"
+    },
+
+    {
+      "name": "counter-blue-topaz-light-live",
+      "probe": "(() => { const parseRgba = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(String(value).trim()); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 }; }; const parseAny = (value) => { const v = String(value).trim().toLowerCase(); if (!v.startsWith('#')) return parseRgba(v); const hex = v.slice(1); const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex; return { rgb: [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)), alpha: 1 }; }; const lum = (rgb) => { const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }; const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }; const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden')); const facts = counters.map((el) => { const st = getComputedStyle(el); const plate = parseRgba(st.backgroundColor); const fg = parseRgba(st.color); return { plate, fg, contrast: plate === null || fg === null ? 0 : ratio(fg.rgb, plate.rgb) }; }); const labels = [...document.querySelectorAll('.zone-empty')].filter((el) => !el.classList.contains('hidden')); const labelStyle = labels.length === 0 ? null : getComputedStyle(labels[0]); const labelPlate = labelStyle === null ? null : parseRgba(labelStyle.backgroundColor); const labelFg = labelStyle === null ? null : parseRgba(labelStyle.color); const over = (top, bottom) => top.rgb.map((c, i) => top.alpha * c + (1 - top.alpha) * bottom[i]); const blend = (fg, bg) => fg.rgb.map((c, i) => fg.alpha * c + (1 - fg.alpha) * bg[i]); const labelOn = (bottom) => { if (labelPlate === null || labelFg === null) return 0; const p = over(labelPlate, bottom); return ratio(blend(labelFg, p), p); }; const labelMin = labelPlate === null || labelFg === null ? 0 : Number(Math.min(labelOn([0, 0, 0]), labelOn([255, 255, 255])).toFixed(2)); const minContrast = facts.length === 0 ? 0 : Number(Math.min(...facts.map((f) => f.contrast)).toFixed(2)); return { theme: document.documentElement.dataset.theme, mode: document.documentElement.dataset.mode, wallpaper: document.documentElement.getAttribute('data-canvas-wallpaper'), counter_present: counters.length > 0, counter_all_opaque: facts.length > 0 && facts.every((f) => f.plate !== null && f.plate.alpha === 1), counter_all_white: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '255,255,255'), counter_all_dark: facts.length > 0 && facts.every((f) => f.fg !== null && f.fg.rgb.join(',') === '31,36,45'), counter_min_contrast: minContrast, counter_contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7), label_alpha_ok: labelPlate !== null && labelFg !== null && Math.abs(labelPlate.alpha - 0.85) < 0.02 && Math.abs(labelFg.alpha - 0.92) < 0.02, label_min_contrast: labelMin, label_contrast_ok: labelMin >= 4.5, }; })()",
+      "expect": {
+        "theme": "blue-topaz",
+        "mode": "light",
+        "wallpaper": "on",
+        "counter_present": true,
+        "counter_all_opaque": true,
+        "counter_all_white": false,
+        "counter_all_dark": true,
+        "counter_min_contrast": 15.57,
+        "counter_contrast_ok": true,
+        "label_alpha_ok": true,
+        "label_min_contrast": 11.75,
+        "label_contrast_ok": true
+      }
+    },
+
+      {
+        "name": "apply-theme-mode-bt",
+        "eval": "(() => { const buttons = document.querySelectorAll('.settings-footer-buttons button'); if (!buttons[0]) throw new Error('нет кнопки «Применить»'); buttons[0].click(); return true; })()"
+      },
+      {
+        "name": "apply-theme-mode-bt-settled",
+        "timeout": 15000,
+        "waitFor": "document.querySelectorAll('.settings-footer-buttons button')[0].disabled === true"
+      },
+    {
+      "name": "close-settings-bt",
+      "key": "Escape"
+    },
+
+    {
+      "name": "settings-closed-bt",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+
+    {
+      "name": "upload-dark",
+      "probe": "(async () => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const ctx = c.getContext('2d'); ctx.fillStyle = '#141414'; ctx.fillRect(0, 0, 320, 180); const dataUrl = c.toDataURL('image/jpeg', 0.85); const state = await window.etn.me.uploadWallpaper({ networkId: '{{networkId}}', data_base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mime_type: 'image/jpeg', meta: { width: 320, height: 180, avg_luminance: 0.05 } }); return { status: state.status, source: state.source }; })()",
+      "expect": { "status": "ok", "source": "server" }
+    },
+    {
+      "name": "reload-after-dark",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-dark",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-dark",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-dark-on",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === 'on'"
+    },
+    {
+      "name": "tint-dark",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const tint = rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const mapAlpha = alphaOf(tint); const screenAlpha = alphaOf(screenTint); const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); if (element === null) return { selector, present: false }; const image = getComputedStyle(element).backgroundImage; return { selector, present: true, has_linear: image.includes('linear-gradient'), alpha: alphaOf(image) }; }); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), map_in_range: Number.isFinite(mapAlpha) && mapAlpha >= 0.12 && mapAlpha <= 0.3, screen_in_range: Number.isFinite(screenAlpha) && screenAlpha >= 0.07 && screenAlpha <= 0.18, screen_weaker: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && screenAlpha < mapAlpha, screen_factor_ok: Number.isFinite(mapAlpha) && Number.isFinite(screenAlpha) && Math.abs(screenAlpha - mapAlpha * 0.6) < 0.011, screens_tinted: screens.every((s) => s.present === true && s.has_linear === true && Math.abs((s.alpha ?? 0) - (screenAlpha ?? 0)) < 0.001) }; })()",
+      "expect": {
+        "attr": "on",
+        "map_in_range": true,
+        "screen_in_range": true,
+        "screen_weaker": true,
+        "screen_factor_ok": true,
+        "screens_tinted": true
+      }
+    },
+
+    {
+      "name": "remove-wallpaper",
+      "eval": "window.etn.me.removeWallpaper('{{networkId}}')"
+    },
+    {
+      "name": "reload-after-remove",
+      "eval": "(() => { window.__probeReload = 'pending'; setTimeout(() => location.reload(), 0); return true; })()"
+    },
+    {
+      "name": "app-ready-after-remove",
+      "timeout": 60000,
+      "waitFor": "window.__probeReload === undefined && window.etn?.me !== undefined && document.readyState === 'complete' && document.querySelector('#app > .workspace, #app > .screen') !== null"
+    },
+    {
+      "name": "ensure-network-open-removed",
+      "eval": "(() => { const item = document.querySelector('.networks-list .network-item'); if (item) item.click(); return true; })()"
+    },
+    {
+      "name": "canvas-back-to-grid",
+      "timeout": 25000,
+      "waitFor": "document.querySelector('.canvas') !== null && document.documentElement.getAttribute('data-canvas-wallpaper') === null"
+    },
+    {
+      "name": "labels-back-to-theme",
+      "probe": "(() => { const empty = document.querySelector('.zone-empty'); if (empty === null) return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), empty_present: false }; const s = getComputedStyle(empty); const probe = document.createElement('div'); probe.style.color = 'var(--text-faint)'; document.body.append(probe); const faint = getComputedStyle(probe).color; probe.remove(); return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), empty_present: true, plate_none: s.backgroundColor === 'rgba(0, 0, 0, 0)' || s.backgroundColor === 'transparent', shadow_none: s.textShadow === 'none', color_is_faint: s.color === faint }; })()",
+      "expect": {
+        "attr": null,
+        "empty_present": true,
+        "plate_none": true,
+        "shadow_none": true,
+        "color_is_faint": true
+      }
+    },
+    {
+      "name": "after-remove-screens-back-to-theme",
+      "probe": "(() => { const rootStyle = getComputedStyle(document.documentElement); const screenTint = rootStyle.getPropertyValue('--wallpaper-screen-tint').trim(); const alphaOf = (value) => { const raw = String(value).trim().toLowerCase(); const c = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw); if (c !== null) { const a = c[4] === undefined ? 1 : (c[4].endsWith('%') ? Number.parseFloat(c[4]) / 100 : Number(c[4])); return { rgb: [1, 2, 3].map((i) => Number(c[i]) * 255), alpha: a }; } const m = /rgba?\\(([^)]+)\\)/.exec(value); if (m === null) return null; const parts = m[1].split(',').map((part) => Number(part)); return parts.length === 4 ? parts[3] : 1; }; const screens = ['.chronicle', '.activity', '.publications', '.st-results'].map((selector) => { const element = document.querySelector(selector); if (element === null) return { selector, present: false }; const image = getComputedStyle(element).backgroundImage; return { selector, present: true, has_linear: image.includes('linear-gradient'), alpha: alphaOf(image) }; }); const structuresImage = getComputedStyle(document.querySelector('.st-results')).backgroundImage; return { attr: document.documentElement.getAttribute('data-canvas-wallpaper'), screen_var: screenTint, tint_var: rootStyle.getPropertyValue('--canvas-wallpaper-tint').trim(), screens_alpha: screens.map((s) => s.alpha), screens_transparent: screens.every((s) => s.present === true && Math.abs(s.alpha ?? 0) < 0.001), structures_grid: structuresImage.includes('radial-gradient') }; })()",
+      "expect": {
+        "attr": null,
+        "screen_var": "",
+        "tint_var": "",
+        "screens_alpha": [0, 0, 0, 0],
+        "screens_transparent": true,
+        "structures_grid": true
+      }
+    },
+    {
+      "name": "state-none",
+      "probe": "(async () => { const s = await window.etn.me.getWallpaper('{{networkId}}'); return { status: s.status }; })()",
+      "expect": { "status": "none" }
+    },
+
+    {
+      "name": "layer-menu-open",
+      "click": "button[title=\"{{text:layerMenuBase}}\"], button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+
+    {
+      "name": "layer-menu-visible",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+
+    {
+      "name": "layer-create-item",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerCreate}}'); if (row === undefined) throw new Error('create-layer item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+
+    {
+      "name": "layer-create-dialog",
+      "timeout": 15000,
+      "waitFor": "document.querySelector('.dialog-backdrop input[placeholder=\"{{text:layerCreatePlaceholder}}\"]') !== null"
+    },
+
+    {
+      "name": "fill-layer-title",
+      "click": "input[placeholder=\"{{text:layerCreatePlaceholder}}\"]"
+    },
+
+    {
+      "name": "layer-title-typed",
+      "text": "Проба фона слоя"
+    },
+
+    {
+      "name": "layer-title-value",
+      "probe": "document.querySelector('.dialog-backdrop input[placeholder=\"{{text:layerCreatePlaceholder}}\"]').value",
+      "expect": "Проба фона слоя"
+    },
+
+    {
+      "name": "create-layer",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+
+    {
+      "name": "layer-created",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null && document.querySelector('.canvas') !== null"
+    },
+
+    {
+      "name": "layer-bg-applied",
+      "timeout": 30000,
+      "waitFor": "getComputedStyle(document.documentElement).getPropertyValue('--layer-bg').trim() !== ''"
+    },
+
+    {
+      "name": "layer-id-before",
+      "probe": "(async () => {\n  const list = await window.etn.layers.list('{{networkId}}');\n  const current = list.find((l) => l.current === true) ?? null;\n  return current === null ? null : current.id;\n})()"
+    },
+
+    {
+      "name": "counter-layer-bg-branch",
+      "probe": "(() => { const parseCss = (value) => {\n    const raw = String(value).trim().toLowerCase();\n    if (raw.startsWith('#')) {\n      const hex = raw.length === 4 ? raw.slice(1).split('').map((c) => c + c).join('') : raw.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(raw);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(raw);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const expectedText = (surfaceRgb, bgRgb, wallpaperOn) => {\n    const under = wallpaperOn ? surfaceRgb : surfaceRgb.map((c, i) => SHARE * c + (1 - SHARE) * bgRgb[i]);\n    return lum(under) > 0.35 ? '#1f242d' : '#ffffff';\n  };\n  const root = getComputedStyle(document.documentElement);\n  const surface = parseCss(root.getPropertyValue('--surface').trim());\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const bg = parseCss(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const expected = surface === null || bg === null ? null : expectedText(surface.rgb, bg.rgb, wallpaper);\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = parseCss(st.backgroundColor);\n    const fg = parseCss(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(getComputedStyle(el).color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  return {\n    wallpaper_off: wallpaper === false,\n    layer_bg: layerBgText.toLowerCase(),\n    layer_bg_own: layerBgText !== '' && layerBgText !== themeBgText,\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => { const actual = parseCss(f.color); const want = parseCss(expected); return actual !== null && want !== null && actual.rgb.every((v, i) => Math.abs(v - want.rgb[i]) < 1); }),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "layer_bg": "#ded8ec",
+        "layer_bg_own": true,
+        "expected_text": "#1f242d",
+        "counter_present": true,
+        "all_expected_text": true,
+        "all_plate_share": true,
+        "min_contrast": 14.54,
+        "contrast_ok": true
+      }
+    },
+
+    {
+      "name": "discriminator-surface",
+      "eval": "(() => { document.documentElement.style.setProperty('--surface', '#aaaaaa'); return getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(); })()"
+    },
+
+    {
+      "name": "discriminator-surface-value",
+      "probe": "getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()",
+      "expect": "#aaaaaa"
+    },
+
+    {
+      "name": "layer-menu-open-props-dark",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+
+    {
+      "name": "layer-menu-visible-props-dark",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+
+    {
+      "name": "layer-props-item-dark",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+
+    {
+      "name": "layer-props-dialog-dark",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+
+    {
+      "name": "set-layer-bg-dark",
+      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); if (row === undefined) throw new Error('canvas background row not found'); const hex = row.querySelector('input.ui-color-hex'); if (hex === null) throw new Error('hex input not found'); hex.value = '#101010'; hex.dispatchEvent(new Event('change', { bubbles: true })); return hex.value; })()"
+    },
+
+    {
+      "name": "layer-bg-hex-dark",
+      "probe": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); return row === undefined ? null : (row.querySelector('input.ui-color-hex') || {}).value; })()",
+      "expect": "#101010"
+    },
+
+    {
+      "name": "save-layer-props-dark",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+
+    {
+      "name": "layer-props-saved-dark",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+
+    {
+      "name": "layer-bg-applied-dark",
+      "timeout": 30000,
+      "waitFor": "(() => { const v = getComputedStyle(document.documentElement).getPropertyValue('--layer-bg').trim().toLowerCase(); return v !== '' && v !== '#101010' && v !== 'rgb(16, 16, 16)'; })()"
+    },
+
+    {
+      "name": "counter-layer-bg-dark",
+      "probe": "(() => {\n  const raw = (value) => {\n    const text = String(value).trim().toLowerCase();\n    if (text.startsWith('#')) {\n      const hex = text.length === 4 ? text.slice(1).split('').map((c) => c + c).join('') : text.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(text);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(text);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const root = getComputedStyle(document.documentElement);\n  const surfaceText = root.getPropertyValue('--surface').trim();\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const surface = raw(surfaceText);\n  const bg = raw(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const under = surface === null || bg === null ? null : (wallpaper ? surface.rgb : surface.rgb.map((c, i) => Math.round(SHARE * c + (1 - SHARE) * bg.rgb[i])));\n  const expected = under === null ? null : (lum(under) > 0.35 ? '#1f242d' : '#ffffff');\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = raw(st.backgroundColor);\n    const fg = raw(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(st.color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  const same = (actual, want) => {\n    const a = raw(actual);\n    const w = raw(want);\n    return a !== null && w !== null && a.rgb.every((v, i) => Math.abs(v - w.rgb[i]) < 1);\n  };\n  return {\n    wallpaper_off: wallpaper === false,\n    surface: surfaceText.toLowerCase(),\n    layer_bg: layerBgText.toLowerCase(),\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => same(f.color, expected)),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 4.5),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "surface": "#aaaaaa",
+        "layer_bg": "#7b7b7b",
+        "expected_text": "#1f242d",
+        "counter_present": true,
+        "all_expected_text": true,
+        "all_plate_share": true,
+        "min_contrast": 5.93,
+        "contrast_ok": true
+      }
+    },
+
+    {
+      "name": "layer-menu-open-props-light",
+      "click": "button[title=\"{{text:probeLayerTitle}}\"]"
+    },
+
+    {
+      "name": "layer-menu-visible-props-light",
+      "timeout": 10000,
+      "waitFor": "document.querySelector('.menu-item') !== null"
+    },
+
+    {
+      "name": "layer-props-item-light",
+      "eval": "(() => { const row = Array.from(document.querySelectorAll('.menu-item')).find((e) => (e.textContent || '').trim() === '{{text:layerProps}}'); if (row === undefined) throw new Error('layer properties item not found'); row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true; })()"
+    },
+
+    {
+      "name": "layer-props-dialog-light",
+      "timeout": 15000,
+      "waitFor": "document.querySelectorAll('.dialog-backdrop .layer-color-row').length >= 2"
+    },
+
+    {
+      "name": "set-layer-bg-light",
+      "eval": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); if (row === undefined) throw new Error('canvas background row not found'); const hex = row.querySelector('input.ui-color-hex'); if (hex === null) throw new Error('hex input not found'); hex.value = '#ffffff'; hex.dispatchEvent(new Event('change', { bubbles: true })); return hex.value; })()"
+    },
+
+    {
+      "name": "layer-bg-hex-light",
+      "probe": "(() => { const rows = Array.from(document.querySelectorAll('.dialog-backdrop .layer-color-row')); const row = rows.find((r) => { const scope = r.closest('.ui-field') || r.parentElement; const label = scope === null ? null : scope.querySelector('label'); return ((label === null ? '' : label.textContent) || '').trim() === '{{text:layersCanvasBg}}'; }); return row === undefined ? null : (row.querySelector('input.ui-color-hex') || {}).value; })()",
+      "expect": "#ffffff"
+    },
+
+    {
+      "name": "save-layer-props-light",
+      "click": ".dialog-backdrop .ui-btn--primary"
+    },
+
+    {
+      "name": "layer-props-saved-light",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.dialog-backdrop') === null"
+    },
+
+    {
+      "name": "layer-bg-applied-light",
+      "timeout": 30000,
+      "waitFor": "(() => { const v = getComputedStyle(document.documentElement).getPropertyValue('--layer-bg').trim().toLowerCase(); return v === '#ffffff' || v === 'rgb(255, 255, 255)'; })()"
+    },
+
+    {
+      "name": "counter-layer-bg-light",
+      "probe": "(() => {\n  const raw = (value) => {\n    const text = String(value).trim().toLowerCase();\n    if (text.startsWith('#')) {\n      const hex = text.length === 4 ? text.slice(1).split('').map((c) => c + c).join('') : text.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(text);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(text);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const root = getComputedStyle(document.documentElement);\n  const surfaceText = root.getPropertyValue('--surface').trim();\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const surface = raw(surfaceText);\n  const bg = raw(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const under = surface === null || bg === null ? null : (wallpaper ? surface.rgb : surface.rgb.map((c, i) => SHARE * c + (1 - SHARE) * bg.rgb[i]));\n  const expected = under === null ? null : (lum(under) > 0.35 ? '#1f242d' : '#ffffff');\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = raw(st.backgroundColor);\n    const fg = raw(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(st.color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  const same = (actual, want) => {\n    const a = raw(actual);\n    const w = raw(want);\n    return a !== null && w !== null && a.rgb.every((v, i) => Math.abs(v - w.rgb[i]) < 1);\n  };\n  return {\n    wallpaper_off: wallpaper === false,\n    surface: surfaceText.toLowerCase(),\n    layer_bg: layerBgText.toLowerCase(),\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => same(f.color, expected)),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "surface": "#aaaaaa",
+        "layer_bg": "#ffffff",
+        "expected_text": "#1f242d",
+        "counter_present": true,
+        "all_expected_text": true,
+        "all_plate_share": true,
+        "min_contrast": 8.26,
+        "contrast_ok": true
+      }
+    },
+
+    {
+      "name": "layer-id-after",
+      "probe": "(async () => {\n  const list = await window.etn.layers.list('{{networkId}}');\n  const current = list.find((l) => l.current === true) ?? null;\n  return current === null ? null : current.id;\n})()",
+      "expectFrom": "layer-id-before"
+    },
+
+    {
+      "name": "discriminator-restore-surface",
+      "eval": "(() => { document.documentElement.style.removeProperty('--surface'); return getComputedStyle(document.documentElement).getPropertyValue('--surface').trim().toLowerCase(); })()"
+    },
+
+    {
+      "name": "discriminator-surface-restored",
+      "probe": "getComputedStyle(document.documentElement).getPropertyValue('--surface').trim()",
+      "expect": "#ffffff"
+    },
+
+    {
+      "name": "counter-layer-bg-restored",
+      "probe": "(() => {\n  const raw = (value) => {\n    const text = String(value).trim().toLowerCase();\n    if (text.startsWith('#')) {\n      const hex = text.length === 4 ? text.slice(1).split('').map((c) => c + c).join('') : text.slice(1);\n      return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)), alpha: 1 };\n    }\n    const cs = /^color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+%?))?\\)$/.exec(text);\n    if (cs !== null) {\n      const a = cs[4] === undefined ? 1 : (cs[4].endsWith('%') ? Number.parseFloat(cs[4]) / 100 : Number(cs[4]));\n      return { rgb: [Number(cs[1]), Number(cs[2]), Number(cs[3])].map((c) => c * 255), alpha: a };\n    }\n    const m = /rgba?\\(([^)]+)\\)/.exec(text);\n    if (m === null) return null;\n    const parts = m[1].split(',').map((part) => Number(part));\n    return { rgb: parts.slice(0, 3), alpha: parts.length === 4 ? parts[3] : 1 };\n  };\n  const lum = (rgb) => {\n    const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };\n    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);\n  };\n  const ratio = (a, b) => { const x = lum(a); const y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };\n  const SHARE = 0.78;\n  const root = getComputedStyle(document.documentElement);\n  const surfaceText = root.getPropertyValue('--surface').trim();\n  const layerBgText = root.getPropertyValue('--layer-bg').trim();\n  const themeBgText = root.getPropertyValue('--bg').trim();\n  const surface = raw(surfaceText);\n  const bg = raw(layerBgText !== '' ? layerBgText : themeBgText);\n  const wallpaper = document.documentElement.getAttribute('data-canvas-wallpaper') === 'on';\n  const under = surface === null || bg === null ? null : (wallpaper ? surface.rgb : surface.rgb.map((c, i) => SHARE * c + (1 - SHARE) * bg.rgb[i]));\n  const expected = under === null ? null : (lum(under) > 0.35 ? '#1f242d' : '#ffffff');\n  const counters = [...document.querySelectorAll('.zone-count')].filter((el) => !el.classList.contains('hidden'));\n  const facts = counters.map((el) => {\n    const st = getComputedStyle(el);\n    const plate = raw(st.backgroundColor);\n    const fg = raw(st.color);\n    const composed = plate === null || bg === null ? null : plate.rgb.map((c, i) => plate.alpha * c + (1 - plate.alpha) * bg.rgb[i]);\n    return {\n      color: String(st.color || '').toLowerCase(),\n      plate_alpha: plate === null ? 0 : Number(plate.alpha.toFixed(2)),\n      contrast: composed === null || fg === null ? 0 : Number(ratio(fg.rgb, composed).toFixed(2)),\n    };\n  });\n  const same = (actual, want) => {\n    const a = raw(actual);\n    const w = raw(want);\n    return a !== null && w !== null && a.rgb.every((v, i) => Math.abs(v - w.rgb[i]) < 1);\n  };\n  return {\n    wallpaper_off: wallpaper === false,\n    surface: surfaceText.toLowerCase(),\n    layer_bg: layerBgText.toLowerCase(),\n    expected_text: expected,\n    counter_present: counters.length > 0,\n    all_expected_text: expected !== null && facts.length > 0 && facts.every((f) => same(f.color, expected)),\n    all_plate_share: facts.length > 0 && facts.every((f) => Math.abs(f.plate_alpha - SHARE) < 0.02),\n    min_contrast: facts.length === 0 ? 0 : Math.min(...facts.map((f) => f.contrast)),\n    contrast_ok: facts.length > 0 && facts.every((f) => f.contrast >= 7),\n  };\n})()",
+      "expect": {
+        "wallpaper_off": true,
+        "surface": "#ffffff",
+        "layer_bg": "#ffffff",
+        "expected_text": "#1f242d",
+        "counter_present": true,
+        "all_expected_text": true,
+        "all_plate_share": true,
+        "min_contrast": 15.57,
+        "contrast_ok": true
+      }
+    }
+  ]
+}

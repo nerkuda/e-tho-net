@@ -1,95 +1,29 @@
 /*
- * ETN client stylesheet (phase H; light + dark themes, L10).
+ * ETN client stylesheet — нетематические токены оформления.
  *
- * CSS variables in :root are the single source of truth for colors/sizes
- * (08-ui-spec.md §13); the dark theme swaps the variable block only via the
- * [data-theme='dark'] selector on the document root. No hex colours outside
- * these two blocks — components reference tokens. Cloud geometry defaults
- * (--cloud-width/--cloud-gap/--cloud-font) are overridden at runtime from L4
- * ui_state by the canvas module.
+ * Тематические значения (цвета, тени, радиусы) живут в файлах тем
+ * `lib/ui/themes/{current,blue-topaz,catppuccin,nordic,retronotes,wasp}.css` (ADR de24adef):
+ * тема выбирается атрибутом `data-theme`, режим — `data-mode` на корне
+ * документа, и смена темы меняет только блок переменных файла темы. Прямые
+ * цвета (hex/rgb/rgba/hsl) в этом каталоге и в правилах компонентов запрещены
+ * сторожем `guard-ui-theme-tokens.test.ts`.
+ *
+ * Здесь остаются: шкалы типографики/отступов и геометрия (требование
+ * 0dddd939 — они неизменны во всех темах), длительности и easing, размеры
+ * хрома, группа пользовательских токенов `--user-*` (требование e2895c24) и
+ * псевдонимы тематических токенов (`var(--…)` без литералов).
+ *
+ * Карты маппинга на переменные вендоров (`--wa-*`, тема Lumo Vaadin) —
+ * `lib/ui/tokens.css`/`vaadin-tokens.css`; здесь только ETN-токены. Геометрия
+ * облачка (`--cloud-*`) переопределяется в рантайме из L4 ui_state модулем
+ * холста.
  */
 
 :root {
-  color-scheme: light;
-
-  /* palette */
-  --bg: #eef0f4;
-  --surface: #ffffff;
-  --surface-2: #f6f7f9;
-  /* Hover/active backgrounds for chrome controls (menu items, list rows). */
-  --bg-hover: #e3e6ec;
-  --bg-active: #d8dde5;
-  /* Фон строки заголовков колонок списков/таблиц/деревьев: отличается от
-     строк данных и надписей, обе темы — через --surface-2 (требование
-     11ddd910, ошибка 96b62874). */
+  /* Псевдоним поверхности: фон строки заголовков колонок списков/таблиц/
+     деревьев отличается от строк данных и надписей (требование 11ddd910,
+     ошибка 96b62874). Значение — токен темы. */
   --table-header-bg: var(--surface-2);
-  --border: #d7dbe3;
-  --border-strong: #b9c1cf;
-  --text: #20242d;
-  --text-dim: #5c6675;
-  --text-faint: #8a93a3;
-  --accent: #2f6fed;
-  /* Hover tone for accent-filled controls (primary buttons, focus ellipse). */
-  --accent-strong: #245cc9;
-  /* Нажатие акцентной заливки (primary-кнопка). */
-  --accent-pressed: #1d4aa8;
-  --accent-soft: #e4ecfd;
-  /* Текст и иконки НА акцентной заливке (primary-кнопка, активная вкладка).
-     От темы не зависит: акцент обеих тем — насыщенный синий, на нём читается
-     светлый текст. */
-  --accent-fg: #ffffff;
-  /* Фон текстового выделения (::selection и .cm-selectionBackground) —
-     акцент с альфой: текст выделенного фрагмента сохраняет свой цвет
-     (обычный, код, ссылки) и остаётся контрастным. Оба режима markdown-поля
-     — просмотр и редактор — красятся одной переменной (06b18f19). */
-  --selection-bg: rgba(47, 111, 237, 0.4);
-  /* Selection outline of clouds picked into the selection panel — teal, so it
-   * never reads as the editor halo (§5, L22 review). */
-  --selection: #0f8f86;
-  /* Заголовок группы выходного дня (сб/вс) ленты «Дневника» (0.10.2, задача
-    41ed99ab): розовый вместо серого --text-dim. Праздники сверх сб/вс не
-    учитываются. Обе темы определяют токен явно. */
-  --cal-weekend: #d6478a;
-  --danger: #d64545;
-  --danger-soft: #fdeaea;
-  --ok: #2f9e44;
-  --ok-soft: #e6f4ea;
-  --warn: #c98a06;
-  --warn-strong: #9a6b00;
-  --warn-soft: #fdf0dc;
-  --warn-glow: rgba(201, 138, 6, 0.35);
-  /* Search/mention highlight (<mark>). */
-  --mark-bg: #ffe08a;
-  /* Default (untyped) link line colour; also read by links.ts. */
-  --link-default: #9aa3b2;
-  /* Тоны тонированной вложенности дерева условий (0.13.1, требование
-     5ef1bce1): цикл из четырёх различимых тонов поверхности. Соседние уровни
-     вложенности не совпадают по тону, пятый уровень снова первый. Значения —
-     производные поверхности/семантических мягких фонов, чтобы тон читался в
-     обеих темах и не спорил с цветом текста. */
-  --ft-tone-1: #f3f6fd;
-  --ft-tone-2: #f2f8f3;
-  --ft-tone-3: #fbf6ec;
-  --ft-tone-4: #f6f3fb;
-  /* Filled link-direction ellipse of a non-focus cloud. */
-  --ellipse-fill: #9dbcf2;
-  --ellipse-fill-border: #5b87d9;
-  --backdrop: rgba(24, 32, 48, 0.35);
-  /* Canvas dot-grid colour (L10). */
-  --canvas-dot: rgba(24, 32, 48, 0.14);
-  /* Focus band (L12): colour of the horizontal stripe across the focus row
-     and the fade distance towards the canvas top/bottom edges. */
-  --focus-band-color: #1e62be;
-  --focus-band-fade: 180px;
-  /* Шкала теней: цвета-основы (--shadow-c — крупная, --shadow-sm-c — мелкая),
-     из которых собираются готовые токены. Тёмная тема переопределяет основы
-     и усиленные тени ниже. */
-  --shadow-c: rgba(24, 32, 48, 0.16);
-  --shadow-sm-c: rgba(24, 32, 48, 0.08);
-  --shadow: 0 8px 28px var(--shadow-c);
-  --shadow-sm: 0 1px 4px var(--shadow-sm-c);
-  --shadow-hover: 0 2px 10px var(--shadow-c);
-  --shadow-focus: 0 4px 18px rgba(47, 111, 237, 0.18);
 
   /* Анимация появления/раскрытия блока трансклюзии (0.12.1, ТП2, задача
      a2b68d72): сворачивание в ссылку и разворачивание в блок анимированы.
@@ -99,9 +33,9 @@
 
   /* --- Дизайн-токены 0.9.1: шкалы оформления (требование 0dddd939) ------------
      Единый язык размеров для словаря `lib/ui` и переведённых модулей. Компоненты
-     ссылаются только на эти токены: числовые `px`/`em`/`rem` и прямые hex-цвета
-     в правилах `lib/ui` запрещены (сторож `guard-ui-tokens.test.ts`). Шкалы от
-     темы не зависят — тему меняют цветовые токены в `[data-theme='dark']`. */
+     ссылаются только на эти токены: числовые `px`/`em`/`rem` и прямые цвета
+     в правилах `lib/ui` запрещены (сторож `guard-ui-tokens.test.ts`). Шкалы не
+     зависят от темы — тему меняют значения цветов/радиусов/теней в файлах тем. */
 
   /* Шкала размеров шрифта. */
   --font-size-3xs: 10px;
@@ -113,6 +47,9 @@
   --font-size-xl: 18px;
   --font-size-2xl: 20px;
   --font-size-3xl: 24px; /* крупный заголовок-титул публикации (ea1b5f14, п. 7) */
+  /* Полшага шкалы размеров шрифта: «чуть крупнее соседнего шага» без нового
+   * числа в правиле компоненты (пункт E ТЗ 2026-11-17, сторож guard-ui-tokens). */
+  --font-size-step-half: 0.5px;
 
   /* Шкала насыщенности шрифта. */
   --font-weight-normal: 400;
@@ -140,13 +77,8 @@
      не ложится на шаг шкалы отступов, но это устойчивый размер плотности ETN. */
   --control-pad-y: 5px;
 
-  /* Шкала радиусов. */
-  --radius-s: 6px; /* мелкие элементы: чипы, svg-свотчи */
-  --radius-m: 8px; /* обычные контролы и панели */
-  --radius-l: 10px; /* крупные панели */
-  --radius-xl: 14px; /* карточки-облака (L11) */
-  --radius-pill: 999px; /* метки-«пилюли» (бейджи) */
-  /* Семантические псевдонимы шкалы — исторические имена `styles.css`. */
+  /* Семантические псевдонимы шкалы радиусов (сама шкала — в файле темы,
+     требование 0dddd939): исторические имена `styles.css`. */
   --radius-sm: var(--radius-m);
   --radius: var(--radius-l);
   --radius-cloud: var(--radius-xl);
@@ -154,15 +86,21 @@
   /* Толщина линий и смещения. */
   --border-thick: 2px;
   --focus-ring-width: 2px;
-  /* Контрастный кант двойной рамки открытого в редакторе элемента (задача
-     3af98e31): внутренняя полоса рамки — цвет фокуса активного слоя
-     (`--layer-focus-stripe`), внешний тонкий кант — этот токен. Без канта
-     рамка цвета фокуса сливается с фоном фокуса того же цвета. Кант светлый в
-     обеих темах: цвет фокуса задаётся слоем и в основе/пресетах тёмный или
-     средний, поэтому контрастен именно светлый кант. Единый механизм для гало
-     карты/«Структур» (`.cloud.halo`), библиотеки (`.pub-open`) и документа
-     публикации (`.pub-doc-editor`). */
-  --focus-ring-contrast: #ffffff;
+  /* Дальность затухания полосы фокуса к верхнему/нижнему краю холста; цвет
+     полосы — фокус-токен темы `--focus-accent` (на КАРТЕ в слое — runtime
+     `--layer-focus-stripe`, а кольца фокуса ЭКРАНОВ берут отдельное
+     производное `--layer-focus-ring-screen`, адаптированное к `--surface`;
+     требование c19cbb81, круг 3 задачи 6e171b39). Доработка среза 2026-11-13
+     (задача 80324150), круг 2: доведено до ЧЕСТНОГО ÷2. Видимая протяжённость
+     полосы = ядро (высота строки фокуса, на живом стенде 67px) + 2 × fade:
+     было 67 + 2×180 = 427px, стало 67 + 2×73 = 213px (½ от 427). Первый заход
+     с fade 90px дал лишь −42 % (247px) — уменьшалось только затухание. */
+  --focus-band-fade: 73px;
+  /* Плотность полосы фокуса: доработка среза 2026-11-13 — на 30 % прозрачнее
+     (было 1). Полоса остаётся заметной: расстояние цвета полосы к подложке при
+     максимальном тинте картинки Δ ≥ 40 в sRGB (сторож
+     guard-canvas-overlay-layers), но фон не забивает. */
+  --focus-band-opacity: 0.7;
   --underline-offset: 2px;
   --letter-spacing-wide: 2px;
 
@@ -292,27 +230,13 @@
   --cloud-gap: var(--space-6);
   --cloud-font: var(--font-size-s);
 
-  /* highlight.js palette (M4): токены подсветки fenced-кода в просмотре */
-  --hljs-comment: #6e7781;
-  --hljs-keyword: #cf222e;
-  --hljs-string: #0a3069;
-  --hljs-number: #0550ae;
-  --hljs-literal: #0550ae;
-  --hljs-title: #8250df;
-  --hljs-builtin: #953800;
-  --hljs-attr: #953800;
-  --hljs-type: #116329;
-  --hljs-tag: #116329;
-  --hljs-meta: #0550ae;
-  --hljs-symbol: #8250df;
-  --hljs-section: #0550ae;
-  --hljs-addition: #1a7f37;
-  --hljs-deletion: #82071e;
-
   /* базовый размер шрифта markdown-полей; меняется Ctrl+колесом (M9) */
   --md-font-size: var(--font-size-s);
-  /* моноширинный шрифт кода — один и для просмотра, и для редактора */
-  --md-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  /* моноширинный шрифт кода — один и для просмотра, и для редактора.
+     Первым идёт JetBrains Mono из бандла клиента (ADR 7f1f924f, `styles/fonts.css`),
+     дальше — системные моноширинные стеки как фолбэк: на системе без
+     установленного JetBrains Mono вид тот же самый, потому что файл едет в поставке. */
+  --md-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
   /* Единый источник внутриблочной типографики markdown-комментария: просмотр
      (`.comment-view`), документ публикации и живое редактирование CodeMirror
      берут размеры отсюда (парные правила `styles/editor.css`, тема
@@ -320,7 +244,7 @@
      защищают от проза-стилей Web Awesome (`@layer wa-native`), которые иначе
      протекают в `.comment-view` (blockquote/strong/заголовки). */
   --md-line-height: 1.55;
-  --md-strong-weight: 700;
+  --md-strong-weight: 600;
   /* Метрики цитаты: отступ слева, толщина рамки, вертикальный зазор. */
   --md-quote-indent: 10px;
   --md-quote-border-width: 3px;
@@ -346,10 +270,6 @@
      уровни не «накапливают» лишнее расхождение между режимами (ошибка
      ad6e62ef). Формат — как у `padding`: верх право низ лево. */
   --md-transclusion-pad: 4px 6px 4px 8px;
-  /* HTML-комментарий `<!-- … -->` в правке (ТЗ4 «Дневник без псевдослота»):
-     приглушённый серый, не участвует в содержании. Отдельный токен на обе
-     темы — серость задаётся здесь, а не хардкодом в правиле редактора. */
-  --md-html-comment: #8a93a3;
 
   /* --- Группа пользовательских токенов (`--user-*`, требование e2895c24) ------
      Аспекты оформления, которые планируется отдать пользователю в настройках:
@@ -357,13 +277,15 @@
      переопределяются подстановкой на корне документа — без правки компонентов,
      поэтому компоненты `lib/ui` берут эти аспекты из `--user-*`, а не из
      литералов (сторож `guard-ui-user-tokens.test.ts`). Сам функционал настроек
-     оформления — отдельный будущий тех.проект; здесь только архитектура.
-     Значение по умолчанию ссылается на базовый токен темы, чтобы обе темы
-     работали без дублирования. */
+     оформления — тех.проект «Темы интерфейса клиента» (2122be30).
+     Значение по умолчанию ссылается на токен темы, чтобы все темы работали без
+     дублирования. */
 
-  /* Шрифты интерфейса и кода. */
-  --user-font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    sans-serif;
+  /* Шрифты интерфейса и кода. Интерфейс — Inter из бандла клиента
+     (`styles/fonts.css`, ADR 7f1f924f), фолбэк — прежний системный стек:
+     вид не зависит от установленных в ОС шрифтов. */
+  --user-font-ui:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --user-font-mono: var(--md-mono);
   --user-font-size: var(--font-size-s);
 
@@ -372,90 +294,18 @@
   --user-canvas-image: none;
   --user-canvas-dot: var(--canvas-dot);
 
-  /* Стили текста комментариев. */
-  --user-comment-font-size: var(--font-size-s);
-  --user-comment-line-height: var(--line-height-normal);
-  --user-comment-bg: var(--surface);
+  /* Стили текста комментариев. Размер и интерлиньяж по умолчанию идут за
+     масштабом markdown (Ctrl+колесо, M9: `--md-font-size`/`--md-line-height`),
+     фон — прозрачный: комментарий наследует поверхность, на которой лежит
+     (своей заливки у него сейчас нет). */
+  --user-comment-font-size: var(--md-font-size);
+  --user-comment-line-height: var(--md-line-height);
+  --user-comment-bg: transparent;
   --user-comment-color: var(--text);
   --user-comment-link: var(--accent);
 
   font-family: var(--user-font-ui);
-  font-size: var(--font-size-s);
-}
-
-/* Dark theme (L10, 08-ui-spec.md §13): swap tokens only. */
-[data-theme='dark'] {
-  color-scheme: dark;
-
-  --bg: #0e1116;
-  --surface: #161b23;
-  --surface-2: #1f2630;
-  --bg-hover: #1f2630;
-  --bg-active: #2a3340;
-  --border: #29303d;
-  --border-strong: #3a4353;
-  --text: #e6e9f0;
-  --text-dim: #9aa3b5;
-  --text-faint: #67707f;
-  --accent: #5b8cff;
-  --accent-strong: #7ba1ff;
-  --accent-pressed: #4d7fe8;
-  --accent-soft: #22304d;
-  /* Тоны вложенности дерева условий — тёмная тема (см. `:root`): те же четыре
-     позиции цикла, но приглушённые поверхности, чтобы рамка группы читалась на
-     фоне панели. */
-  --ft-tone-1: #1a2130;
-  --ft-tone-2: #17241f;
-  --ft-tone-3: #262019;
-  --ft-tone-4: #211c2b;
-  /* Контрастный кант рамки открытого (см. :root): в тёмной теме чуть мягче
-     чистого белого — читается на тёмном фоне, но не слепит. */
-  --focus-ring-contrast: #e6e9f0;
-  /* Фон текстового выделения (06b18f19): акцент #5b8cff с альфой — на тёмных
-     фонах поля и блоков кода смесь достаточно светлая и заметная, светлый
-     текст и подсветка кода остаются контрастными. */
-  --selection-bg: rgba(91, 140, 255, 0.5);
-  /* Selection outline of clouds picked into the selection panel — teal. */
-  --selection: #2fbfae;
-  /* Заголовок группы выходного дня — розовый в тёмной теме (0.10.2). */
-  --cal-weekend: #ff8fc0;
-  --danger: #e06a6a;
-  --danger-soft: #3a2226;
-  --ok: #4cb763;
-  --ok-soft: #17281c;
-  --warn: #d9a13c;
-  --warn-strong: #e8b45a;
-  --warn-soft: #322712;
-  --warn-glow: rgba(217, 161, 60, 0.35);
-  --mark-bg: rgba(250, 204, 21, 0.28);
-  /* HTML-комментарий в правке — серый на тёмном фоне (см. :root). */
-  --md-html-comment: #7c8798;
-  --link-default: #6b7587;
-  --ellipse-fill: #2f4a7d;
-  --ellipse-fill-border: #4a6db3;
-  --backdrop: rgba(0, 0, 0, 0.5);
-  --canvas-dot: rgba(255, 255, 255, 0.07);
-  --shadow-c: rgba(0, 0, 0, 0.55);
-  --shadow-sm-c: rgba(0, 0, 0, 0.35);
-  --shadow-hover: 0 4px 16px var(--shadow-c);
-  --shadow-focus: 0 4px 24px rgba(91, 140, 255, 0.28);
-
-  /* highlight.js palette (M4) */
-  --hljs-comment: #8b949e;
-  --hljs-keyword: #ff7b72;
-  --hljs-string: #a5d6ff;
-  --hljs-number: #79c0ff;
-  --hljs-literal: #79c0ff;
-  --hljs-title: #d2a8ff;
-  --hljs-builtin: #ffa657;
-  --hljs-attr: #ffa657;
-  --hljs-type: #7ee787;
-  --hljs-tag: #7ee787;
-  --hljs-meta: #79c0ff;
-  --hljs-symbol: #d2a8ff;
-  --hljs-section: #79c0ff;
-  --hljs-addition: #3fb950;
-  --hljs-deletion: #f85149;
+  font-size: var(--user-font-size);
 }
 
 /* Отключение микроанимаций состояний при reduce-motion (Технические принципы
@@ -531,4 +381,3 @@ textarea {
   font: inherit;
   color: inherit;
 }
-

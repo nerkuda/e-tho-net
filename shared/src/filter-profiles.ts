@@ -197,6 +197,9 @@ const CHRONICLE_OPERATOR_SETS: Record<string, readonly FilterAstOperator[]> = {
   record_body: ['eq', 'ne', 'contains', 'not_contains', 'matches'],
   record_author: ['eq', 'ne', 'in', 'not_in'],
   record_editor: ['eq', 'ne', 'in', 'not_in'],
+  // «Есть задачи» (0.16.1, уточнение 2026-11-19, пункт 8): предикат наличия
+  // строк-задач в записи — булево значение (`eq`/`ne`) и «пусто/не пусто».
+  record_tasks: ['eq', 'ne', 'is_empty', 'not_empty'],
 };
 
 /** Операторы по операнду профиля «события» (требование 1765e659). */
@@ -245,6 +248,11 @@ const THOUGHT_OPERANDS: readonly FilterAstEntityKind[] = [
   'attachments',
   'chronology',
   'comment',
+  // Задачи и напоминания мысли (0.16.1, задача 4cfc6257, требование daf152d8):
+  // наличие незакрытых субъектных задач, наличие/дата напоминаний ЗАПРОСИВШЕГО.
+  'tasks',
+  'reminders',
+  'reminder_at',
   'active',
   'trashed',
   'keywords',
@@ -479,6 +487,16 @@ const THOUGHT_OPERATOR_SETS: Readonly<Record<string, readonly FilterAstOperator[
   attachments: ['eq', 'ne', 'is_empty', 'not_empty', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   chronology: ['eq', 'ne', 'is_empty', 'not_empty', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   comment: ['eq', 'ne', 'is_empty', 'not_empty'],
+  // «Есть задачи»/«Есть напоминание» — предикаты наличия (да/нет), как у
+  // «Есть комментарий»: значение не требуется, `eq`/`ne` — boolean
+  // (требование daf152d8, задача 4cfc6257). Количества у этих операндов нет:
+  // редактор показывает вид «(да) (нет)», оператор перезаписывает сам виджет.
+  tasks: ['eq', 'ne', 'is_empty', 'not_empty'],
+  reminders: ['eq', 'ne', 'is_empty', 'not_empty'],
+  // «Дата напоминания» — датовый операнд (ближайшее `next_at` напоминаний
+  // запросившего): сравнения, «между» и равно/не равно, как у дат
+  // создания/изменения (границы — ISO-8601 и календарные токены).
+  reminder_at: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between'],
   active: ['eq', 'ne'],
   trashed: ['eq', 'ne'],
   keywords: ['matches'],
@@ -547,6 +565,8 @@ export const FILTER_PROFILES: Readonly<Record<FilterProfileId, FilterProfile>> =
       'record_body',
       'record_author',
       'record_editor',
+      // «Есть задачи» в записи (уточнение 2026-11-19, п.8).
+      'record_tasks',
     ],
     operand_operators: CHRONICLE_OPERATOR_SETS,
     // «Найти слова» у текстовых операндов записи — только для внутреннего

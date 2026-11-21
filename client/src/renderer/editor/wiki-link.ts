@@ -10,17 +10,29 @@
  * time — names may change after the HTML is cached).
  */
 
-import { autocompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
+import {
+  autocompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionSource,
+} from '@codemirror/autocomplete';
 import type { Extension } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import type { MarkdownExtension } from '@lezer/markdown';
 
-import { WIKI_LINK_CLASS, WIKI_LINK_TARGET_ATTR, WIKI_LINK_ID_ATTR, WIKI_LINK_NETWORK_ATTR } from '@etn/markdown';
+import {
+  WIKI_LINK_CLASS,
+  WIKI_LINK_DATE_ATTR,
+  WIKI_LINK_TARGET_ATTR,
+  WIKI_LINK_ID_ATTR,
+  WIKI_LINK_NETWORK_ATTR,
+} from '@etn/markdown';
 import type { Thought } from '@etn/shared';
 
 import type { DuplicateHit } from '../../main/ipc/contract.js';
 import { focusFromUi, openNetwork, requireNetworkId } from '../app.js';
+import { todayLocal } from '../lib/dates.js';
 import { div, el, errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { otherHolder } from '../lib/lock-cache.js';
@@ -30,11 +42,17 @@ import { createThoughtCloud } from '../lib/thought-cloud.js';
 import { openPopover, type PopoverAnchor } from '../lib/ui/popover.js';
 import { openStructuresThought } from '../screens/structures/structures.js';
 import { openPublicationInWorkspace, setActiveView } from '../screens/active-view.js';
-import { openChronicleThought } from '../screens/chronicle/chronicle.js';
+import { openChronicleDay, openChronicleThought } from '../screens/chronicle/chronicle.js';
 import { findTabForNetwork } from '../screens/tabs/tab-state.js';
 import { store } from '../state.js';
+import { dateSuggestOptions, isDatePrefix, withThoughtsSection } from './date-suggest.js';
 import { markdownInlineExt } from './markdown-inline-ext.js';
-import { MD_WIDGET_CLASS, setLegacyWikiLinkClickHandler } from './md-live.js';
+import {
+  clickDateChip,
+  MD_WIDGET_CLASS,
+  setDateChipClickHandler,
+  setLegacyWikiLinkClickHandler,
+} from './md-live.js';
 import {
   legacyCandidateWindow,
   LEGACY_CANDIDATE_LIMIT,
@@ -56,7 +74,9 @@ export const TRANSCLUSION_MIN_PREFIX = 3;
  * Позиция открывающих скобок и набранный префикс; `transclusion` — перед
  * `[[` стоит восклицательный знак (ссылка трансклюзии, элемент интерфейса
  * 7a479549). Возвращает также `transclusion`, только когда он истинен, —
- * форма ответа прежняя для обычных wiki-ссылок.
+ * форма ответа прежняя для обычных wiki-ссылок. Пустой префикс — валидное
+ * состояние датного режима: сразу после `[[` дропдаун показывает «Даты»
+ * (сегодня/завтра) и «Мысли» (ADR ef097fad, решение приёмки 0.16.1).
  */
 export function wikiPrefixAt(
   before: string,
@@ -64,7 +84,7 @@ export function wikiPrefixAt(
   const open = before.lastIndexOf('[[');
   if (open === -1) return null;
   const rest = before.slice(open + 2);
-  if (rest === '' || !WIKI_PREFIX_RE.test(rest)) return null;
+  if (!WIKI_PREFIX_RE.test(rest)) return null;
   if (open > 0 && before[open - 1] === '!') return { open, prefix: rest, transclusion: true };
   return { open, prefix: rest };
 }
@@ -106,6 +126,11 @@ const COMPLETION_TTL_MS = 10_000;
 
 /** Loads prefix matches over titles + synonyms from the server search. */
 async function loadCompletions(networkId: string, prefix: string): Promise<Completion[]> {
+  // Пустой префикс (`[[` только что набрано) — это НЕ поиск: серверный запрос
+  // по пустой строке вернул бы 20 произвольных имён, и список не был бы
+  // подсказкой. Дропдаун для пустого префикса не открывается вовсе (хвост
+  // задачи 5 задачи 173f1540).
+  if (prefix === '') return [];
   try {
     const res = await etn.thoughts.search(networkId, { q: prefix, scope: 'names', limit: 20 });
     return res.by_names.map((hit) => ({
@@ -120,6 +145,27 @@ async function loadCompletions(networkId: string, prefix: string): Promise<Compl
   }
 }
 
+/**
+ * Открытие дня по умолчанию для date-чипа — единый вход `openChronicleDay`.
+ * Модульная переменная (а не параметр по умолчанию с прямой ссылкой): тест
+ * подменяет её швом и проверяет СВЯЗКУ «обработчик, который ставит
+ * инициализация → открытие дня», а не только факт регистрации обработчика.
+ */
+let defaultDayOpener: (day: string) => Promise<void> = openChronicleDay;
+
+/**
+ * Тестовый шов: прямой вызов загрузчика подсказок без CM6-контекста и подмена
+ * единого входа «Дневника» для поведенческой проверки связки date-чипа. В
+ * рантайме не используется.
+ */
+export const wikiLinkInternals = {
+  loadCompletions,
+  /** Подменить открытие дня по умолчанию; `null` — вернуть `openChronicleDay`. */
+  setDefaultDayOpener(open: ((day: string) => Promise<void>) | null): void {
+    defaultDayOpener = open ?? openChronicleDay;
+  },
+};
+
 function wikiLinkCompletions(): CompletionSource {
   // Кэш ПО-ИНСТАНСНЫЙ: своё замыкание на каждый вызов `wikiLinkCompletions()`,
   // а вызов — один на редактор (в `wikiLinkAutocompletion()`). Два инстанса
@@ -127,13 +173,19 @@ function wikiLinkCompletions(): CompletionSource {
   // результаты поиска независимо и не видят чужих записей.
   const cache = new Map<string, { expires: number; options: Completion[] }>();
   return async (context) => {
-    const line = context.state.doc.lineAt(context.pos);
-    const before = line.text.slice(0, context.pos - line.from);
-    const hit = wikiPrefixAt(before);
-    if (hit === null) return null;
+    const at = completionPrefix(context);
+    if (at === null) return null;
+    const { hit, from } = at;
+    // Пустой префикс — подсказок нет (ни мыслей, ни дат).
+    if (hit.prefix === '') return null;
     // Трансклюзия: список мыслей открывается не раньше трёх символов имени
     // (элемент интерфейса 7a479549); обычная wiki-ссылка — с первого.
     if (hit.transclusion === true && hit.prefix.length < TRANSCLUSION_MIN_PREFIX) return null;
+
+    // Единый дропдаун (ADR ef097fad): в датном режиме секцию «Даты» сверху
+    // отдаёт отдельный источник `dateCompletions`; здесь мысли лишь получают
+    // свою секцию НИЖЕ, иначе CM6 поставил бы их выше дат.
+    const datesShown = hit.transclusion !== true && isDatePrefix(hit.prefix);
 
     let cached = cache.get(hit.prefix);
     if (cached === undefined || cached.expires < Date.now()) {
@@ -143,7 +195,8 @@ function wikiLinkCompletions(): CompletionSource {
       };
       cache.set(hit.prefix, cached);
     }
-    if (cached.options.length === 0) return null;
+    const options = withThoughtsSection(cached.options, datesShown);
+    if (options.length === 0) return null;
     // Без `validFor`: источник должен вызываться заново на каждый новый
     // символ префикса (кэш по префиксу выше это и обеспечивает). Широкий
     // `validFor` (WIKI_PREFIX_RE совпадает с любым продолжением) заставлял
@@ -151,19 +204,50 @@ function wikiLinkCompletions(): CompletionSource {
     // перезапрашивая сервер, — поэтому `[[новиков` не находил ничего, если
     // при односимвольном префиксе мысль не попала в первые 20
     // (ошибка 6bba224b-9899-4f7e-a37c-ff2067ac0a6c).
-    return {
-      from: line.from + hit.open + 2,
-      options: cached.options,
-    };
+    return { from, options };
   };
+}
+
+/** Позиция `[[` и набранный префикс для текущего контекста автокомплита. */
+function completionPrefix(
+  context: CompletionContext,
+): { hit: { open: number; prefix: string; transclusion?: true }; from: number } | null {
+  const line = context.state.doc.lineAt(context.pos);
+  const before = line.text.slice(0, context.pos - line.from);
+  const hit = wikiPrefixAt(before);
+  if (hit === null) return null;
+  return { hit, from: line.from + hit.open + 2 };
+}
+
+/**
+ * Источник секции «Даты» (0.16.1, элемент f9da2100, ADR ef097fad). Кандидатов
+ * отбирает правило `date-suggest` по набранному префиксу, поэтому результат
+ * помечен `filter: false`: метки «Сегодня · 14.11.2026» не содержат ни дефиса,
+ * ни ISO-цифр, и штатный FuzzyMatcher CM6 отбросил бы ВСЕ пункты дат на вводе
+ * `2026-11-02` (проверено прогоном реального FuzzyMatcher). `validFor` вместе
+ * с `filter: false` несовместим по контракту CM6 и запрещён сторожем
+ * `guard-wiki-link-validfor`.
+ */
+const dateCompletions: CompletionSource = (context) => {
+  const at = completionPrefix(context);
+  if (at === null || at.hit.transclusion === true) return null;
+  if (!isDatePrefix(at.hit.prefix)) return null;
+  const options = dateSuggestOptions(at.hit.prefix, todayLocal());
+  if (options.length === 0) return null;
+  return { from: at.from, options, filter: false };
+};
+
+/** Все источники дропдауна `[[`: «Даты», «Мысли» и разделы трансклюзии. */
+export function wikiLinkCompletionSources(): CompletionSource[] {
+  // Один автокомплит на wiki-ссылки и трансклюзии (ADR 8c41387c):
+  // подсказки мыслей и дат — здесь, разделов источника — в transclusion.ts.
+  return [dateCompletions, wikiLinkCompletions(), transclusionSectionCompletions()];
 }
 
 /** Autocomplete extension: opens on `[[` + typed prefix, inserts `имя]]`. */
 export function wikiLinkAutocompletion(): Extension {
   return autocompletion({
-    // Один автокомплит на wiki-ссылки и трансклюзии (ADR 8c41387c):
-    // подсказки мыслей — здесь, разделов источника — в transclusion.ts.
-    override: [wikiLinkCompletions(), transclusionSectionCompletions()],
+    override: wikiLinkCompletionSources(),
     activateOnTyping: true,
   });
 }
@@ -254,7 +338,11 @@ function convertLegacyLinkInBuffer(
 }
 
 /** Открыть уже разрешённую мысль по правилам текущего вида. */
-async function openResolvedThought(networkId: string, thoughtId: string, name: string): Promise<void> {
+async function openResolvedThought(
+  networkId: string,
+  thoughtId: string,
+  name: string,
+): Promise<void> {
   let thought: Thought;
   try {
     thought = await etn.thoughts.get(networkId, thoughtId);
@@ -407,7 +495,9 @@ export function openCandidatePopover(
     body.append(group);
   }
   if (truncated) {
-    body.append(el('p', 'muted', t('wikiLink.pokazanyPervyeUtochniteName', LEGACY_CANDIDATE_LIMIT)));
+    body.append(
+      el('p', 'muted', t('wikiLink.pokazanyPervyeUtochniteName', LEGACY_CANDIDATE_LIMIT)),
+    );
   }
   handle = openPopover({
     anchor,
@@ -441,13 +531,11 @@ export async function openWikiIdTarget(targetNetworkId: string, thoughtId: strin
   if (targetNetworkId !== currentNetworkId) {
     const existingTabId = findTabForNetwork(store.state.tabs, targetNetworkId)?.tab_id;
     try {
-      if (existingTabId !== undefined) await etn.tabs.activate(existingTabId).catch(() => undefined);
+      if (existingTabId !== undefined)
+        await etn.tabs.activate(existingTabId).catch(() => undefined);
       await openNetwork(targetNetworkId, existingTabId);
     } catch (err) {
-      notice(
-        t('wikiLink.networkUnavailableLinkRefThoughtOtherNetwork', errText(err)),
-        'error',
-      );
+      notice(t('wikiLink.networkUnavailableLinkRefThoughtOtherNetwork', errText(err)), 'error');
       return;
     }
     setActiveView('map');
@@ -505,6 +593,32 @@ export function shouldNavigateWikiLink(link: WikiLinkClickTarget): boolean {
   return !(link.closest('.cm-editor') !== null && link.classList.contains(MD_WIDGET_CLASS));
 }
 
+/**
+ * Открыть день в «Дневнике» из date-чипа (0.16.1, требование 31fe2cc9).
+ * Обработчик по умолчанию для единого входа `clickDateChip` (`md-live.ts`):
+ * его вызывают и чип редактора (`mousedown`-ветка), и чип просмотра
+ * (делегированный `click`). `open` — шов для проверки связки без живого
+ * «Дневника» (по умолчанию — единый вход `openChronicleDay`).
+ */
+export function openDayFromChip(
+  date: string,
+  open: (day: string) => Promise<void> = defaultDayOpener,
+): void {
+  void open(date).catch((error) => {
+    notice(t('mentions.notSucceededOpen', [date, errText(error)]), 'error');
+  });
+}
+
+/**
+ * Тестовый шов: снять признак «навигация подключена» (`initWikiLinkNavigation`
+ * идемпотентен). Нужен поведенческой проверке связки «клик по чипу → день»:
+ * она обязана увидеть обработчик, который ставит САМА инициализация, а не
+ * читать исходник регуляркой. В рантайме не вызывается.
+ */
+export function resetWikiLinkNavigationForTests(): void {
+  navigationWired = false;
+}
+
 /** Installs the delegated view-mode click handler (call once from main.ts). */
 export function initWikiLinkNavigation(): void {
   if (navigationWired) return;
@@ -528,11 +642,27 @@ export function initWikiLinkNavigation(): void {
     });
   });
 
+  // Date-чип в редакторе (0.16.1, требование 31fe2cc9): левый клик открывает
+  // день в «Дневнике». Перехват на `mousedown` — по той же причине, что и у
+  // легаси-ссылки: к моменту `click` виджет уже снят декорациями.
+  setDateChipClickHandler(openDayFromChip);
+
   document.addEventListener('click', (event) => {
     const target = event.target as Element | null;
     const link = target?.closest?.(`.${WIKI_LINK_CLASS}`);
     if (!(link instanceof HTMLElement)) return;
     if (!shouldNavigateWikiLink(link)) return;
+
+    // Date-чип (0.16.1, требование 31fe2cc9): клик открывает день в
+    // «Дневнике». Проверяется ДО имени мысли — date-ссылка приоритетнее мысли
+    // с таким именем (ADR fa50de55), а data-wiki-target у чипа нет вовсе.
+    // Идём через общий вход `clickDateChip` (тот же обработчик дня, что у
+    // mousedown в редакторе) — так клик в просмотре и в правке не расходятся.
+    const date = link.getAttribute(WIKI_LINK_DATE_ATTR);
+    if (date !== null && date !== '') {
+      clickDateChip(date);
+      return;
+    }
 
     // Pub-ссылка (0.11.1, задача 3275fd8d, требование 7f583ef9): резолвер
     // пометил серверную legacy-форму атрибутом `data-wiki-pub` — открываем

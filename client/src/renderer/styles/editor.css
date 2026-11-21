@@ -28,7 +28,7 @@
 }
 
 .editor-title {
-  font-weight: 700;
+  font-weight: 600;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -44,7 +44,7 @@
   display: inline-flex;
   align-items: center;
   margin-right: 4px;
-  color: #e53935;
+  color: var(--mark-danger);
   background: none;
   border: 0;
   padding: 0;
@@ -160,7 +160,7 @@
 
 .editor-tab.active {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
@@ -221,41 +221,79 @@
   font-size: 12px;
 }
 
-/* --- Tab «Комментарий» (L7, §6.3.1): table sections on top, the view/edit
-   section fills the rest of the tab; the splitter redistributes. ---------- */
-
-/* Top areas never grow or shrink on their own — only the splitter sizes them
-   (max-height of the scrollable table inside). */
-.tab-top {
-  flex: 0 0 auto;
+/* The comment grows with its area; the group body provides the scroll. */
+.chrono-editor .comment-view,
+.attachment-view-frame .comment-view {
+  max-height: none;
+  overflow-y: visible;
 }
 
-.main-bottom {
+/* --- Tab «Основное» (0.16.1, задача 710b68aa): две сворачиваемые зоны —
+   комментарий и панель «Задачи», между ними вертикальный сплиттер. Раскладка
+   повторяет `.links-tab`: развёрнутая группа (с телом) делит высоту вкладки,
+   свёрнутая схлопывается до заголовка; пустая панель скрыта атрибутом
+   `hidden` (событие `etn:zone-visibility` из тела панели). ---------------- */
+
+.main-tab {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.main-bottom > .group {
-  flex: 1 1 auto;
+.main-tab > .group {
+  flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.main-bottom > .group > .group-body {
+.main-tab > .group:has(> .group-body) {
+  flex-grow: 1;
+}
+
+.main-tab > .group > .group-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
 
-/* The comment grows with its area; the group body provides the scroll. */
-.main-bottom .comment-view,
-.chrono-editor .comment-view,
-.attachment-view-frame .comment-view {
+/* Пустая зона (панель «Задачи» без строк) не показывается и не держит место. */
+.main-tab > .group[hidden] {
+  display: none;
+}
+
+/* Комментарий растягивается по своей зоне; прокрутку даёт тело группы. */
+.main-tab .comment-view {
   max-height: none;
   overflow-y: visible;
+}
+
+/* Корень оболочки комментария здесь НЕ второй скролл-контейнер (ошибка
+   76691a17): прокручивается тело группы выше, и sticky-тулбар должен цепляться
+   за него. С `overflow: auto` (модификатор `--scroll`) корень создавал
+   неподвижный scrollport, и панель уезжала вместе с текстом. */
+.main-tab .ui-comment--scroll {
+  overflow: visible;
+}
+
+/* Зона комментария — flex-колонка на всю высоту зоны (ошибка 051ff84b):
+   телом группы она была блоком, и fill-цепочка оболочки (`--fill` →
+   `__body` → `.md-field` → `.md-field-area`) не растягивалась — поле брало
+   минимальные пять строк, а футер правки (`Отмена`/`Сохранить`) вставал сразу
+   под текстом, оставляя под собой пустое место до низа зоны. Прокрутка живёт
+   ВНУТРИ поля (`.md-field-scroll` в правке, `.md-field-view` в просмотре),
+   поэтому тело зоны само не прокручивается: иначе получилось бы два скроллпорта
+   и футер снова уехал бы в поток содержимого. */
+.main-tab > .group > .group-body:has(> .ui-comment) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Панель «Задачи» внутри группы: тело группы — единственный скролл-контейнер. */
+.main-tab .ui-task-panel.is-headless {
+  overflow: visible;
 }
 
 /* --- Tab «Вложения» (L7, 08-ui-spec.md §6.5) ------------------------------- */
@@ -485,7 +523,11 @@
 }
 
 .table-list tr.selected td {
-  background: var(--accent-soft);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 /* --- Properties table: headerless, five rows by default (L7, §6.3.1) ------- */
@@ -524,7 +566,7 @@
 /* Thought id in the header row: pinned right, click copies it. */
 .thought-id-label {
   margin-left: auto;
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-family: var(--md-mono);
   font-size: 11px;
   color: var(--text-faint);
   background: none;
@@ -618,17 +660,21 @@
 }
 
 @keyframes editor-icon-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .editor-icon-loading svg { animation: none; }
+  .editor-icon-loading svg {
+    animation: none;
+  }
 }
 
 .editor-title-input {
   flex: 1 1 auto;
   font-size: 1.5em;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.25;
   resize: none;
   overflow: hidden;
@@ -866,15 +912,23 @@
    без поиска. */
 .emoji-cell-current,
 .icon-library-cell-current {
-  background: var(--accent-soft);
-  outline: 2px solid var(--accent);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
+  outline: 2px solid var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
   outline-offset: -2px;
 }
 
 .icon-preview-current {
   border-style: solid;
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .icon-source-row {
@@ -1003,10 +1057,11 @@
 .comment-view {
   max-height: 420px;
   overflow-y: auto;
-  /* Размер через переменную: Ctrl+колесо (M9) масштабирует и виджеты
-     редактора, у которых тот же класс. */
-  font-size: var(--md-font-size);
-  line-height: var(--md-line-height);
+  /* Размер и интерлиньяж — пользовательские токены комментария с фолбэком на
+     масштаб markdown (Ctrl+колесо, M9): пока настройки не заданы, вид тот же,
+     а объявленный токен работает (сторож guard-ui-user-tokens). */
+  font-size: var(--user-comment-font-size, var(--md-font-size));
+  line-height: var(--user-comment-line-height, var(--md-line-height));
   overflow-wrap: break-word;
 }
 
@@ -1081,7 +1136,7 @@
    подчёркивания (появляется на hover). */
 .comment-view a,
 .comment-view a:visited {
-  color: var(--accent);
+  color: var(--user-comment-link, var(--accent));
   text-decoration: none;
 }
 
@@ -1135,7 +1190,7 @@
 .cm-editor .cm-line.cm-md-h5,
 .comment-view h6,
 .cm-editor .cm-line.cm-md-h6 {
-  font-weight: 700;
+  font-weight: 600;
   line-height: var(--md-line-height);
   /* Семейство/перенос — как у текста редактора, а не заголовочный шрифт и
      `text-wrap: balance` проза-стилей Web Awesome (`@layer wa-native`): иначе
@@ -1148,17 +1203,35 @@
 /* Зазор заголовка — своя шкала по уровням (в `em` от кегля заголовка, как
    браузерные поля UA), отдельная от базового межблочного `--md-block-gap`. */
 .comment-view h1,
-.cm-editor .cm-line.cm-md-h1 { font-size: 2em;    --md-heading-gap: 0.67em; }
+.cm-editor .cm-line.cm-md-h1 {
+  font-size: 2em;
+  --md-heading-gap: 0.67em;
+}
 .comment-view h2,
-.cm-editor .cm-line.cm-md-h2 { font-size: 1.5em;  --md-heading-gap: 0.83em; }
+.cm-editor .cm-line.cm-md-h2 {
+  font-size: 1.5em;
+  --md-heading-gap: 0.83em;
+}
 .comment-view h3,
-.cm-editor .cm-line.cm-md-h3 { font-size: 1.17em; --md-heading-gap: 1em; }
+.cm-editor .cm-line.cm-md-h3 {
+  font-size: 1.17em;
+  --md-heading-gap: 1em;
+}
 .comment-view h4,
-.cm-editor .cm-line.cm-md-h4 { font-size: 1em;    --md-heading-gap: 1.33em; }
+.cm-editor .cm-line.cm-md-h4 {
+  font-size: 1em;
+  --md-heading-gap: 1.33em;
+}
 .comment-view h5,
-.cm-editor .cm-line.cm-md-h5 { font-size: 0.83em; --md-heading-gap: 1.67em; }
+.cm-editor .cm-line.cm-md-h5 {
+  font-size: 0.83em;
+  --md-heading-gap: 1.67em;
+}
 .comment-view h6,
-.cm-editor .cm-line.cm-md-h6 { font-size: 0.67em; --md-heading-gap: 2.33em; }
+.cm-editor .cm-line.cm-md-h6 {
+  font-size: 0.67em;
+  --md-heading-gap: 2.33em;
+}
 
 /* Применение отступа: просмотр — внешние поля (как UA у h1–h6), редактор —
    внутренние отступы строки (см. шапку блока). */
@@ -1267,9 +1340,13 @@
    (`.pub-doc.comment-view`), попап предпросмотра и ленту «Дневника» (у неё
    собственный хост `.diary-body` вместо `.comment-view`). Вложенные списки и
    смешанные пункты (список в цитате, цитата в пункте) получают те же классы от
-   рендерера. */
-ul.contains-task-list,
-ol.contains-task-list,
+   рендерера.
+
+   Маркер снимается ТОЛЬКО у пункта-задачи (пачка 8, задача 92c4ecf5): правила
+   на `ul`/`ol.contains-task-list` гасили маркеры у ВСЕХ пунктов списка, и
+   обычный пункт смешанного списка («- [ ] задача» + «- просто пункт») оставался
+   без буллета. Маркер — свойство пункта, а не списка; отступ под маркер у
+   `ul`/`ol` не меняется, поэтому текст пунктов не сдвигается. */
 li.task-list-item {
   list-style: none;
 }
@@ -1304,6 +1381,29 @@ input.task-list-item-checkbox:checked,
   color: var(--accent-fg);
 }
 
+/* Чекбокс задачи в режиме ПРОСМОТРА кликабелен (0.16.1, задача cfb8cb72,
+   пункт 8): класс ставит `editor/task-checkbox-toggle.ts`, снимая `disabled`.
+   Курсор и подсветка при наведении показывают, что отметка — действие, а не
+   индикатор; размер и цвета остаются прежними (правило выше). */
+input.task-list-item-checkbox.ui-task-checkbox-live {
+  cursor: pointer;
+}
+
+input.task-list-item-checkbox.ui-task-checkbox-live:hover {
+  border-color: var(--accent);
+}
+
+/* Просроченная задача в ПРОСМОТРЕ комментария/записи — красным (0.16.1,
+   пачка 7): там, где задача фактически записана. Класс `is-overdue` ставит
+   `editor/task-lines-view.ts` по готовому DOM (последний date-чип строки =
+   срок); у строки панели то же имя и токен темы (`task-panel.css`). Селектор
+   без класса-хоста: правило живёт там же, где вид чекбокса, и покрывает все
+   места просмотра markdown (`.comment-view`, `.diary-body`, блок панели). */
+li.task-list-item.is-overdue,
+li.task-list-item.is-overdue .wiki-link-date {
+  color: var(--danger);
+}
+
 /* ТП1: выделение `==…==` (`<mark>`) — тем же фоном, что подсветка поиска,
    а не жёлтым по умолчанию Web Awesome (`@layer wa-native`). Класс
    `cm-md-mark` в правке ставит `editor/md-live.ts`. */
@@ -1327,7 +1427,6 @@ input.task-list-item-checkbox:checked,
 .cm-editor .cm-line .cm-md-html-comment {
   color: var(--md-html-comment);
 }
-
 
 .comment-view blockquote,
 .cm-editor .cm-line.cm-md-quote-line {
@@ -1385,6 +1484,43 @@ input.task-list-item-checkbox:checked,
   text-decoration: underline;
 }
 
+/* Date-чип [[YYYY-MM-DD|время]] (0.16.1, элемент f9da2100): ссылка на ДЕНЬ, а
+   не на мысль, поэтому выглядит чипом, а не подчёркнутой ссылкой. Поверхность
+   и скругление — те же токены, что у чипов `lib/ui` (`chip-list.css`); фон
+   отделяет дату от мысль-ссылок. Точная визуальная доводка — на стенде
+   приёмки (DoD задачи 9ec9d72a). */
+.wiki-link.wiki-link-date {
+  display: inline-block;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong, var(--accent));
+  white-space: nowrap;
+}
+
+.wiki-link.wiki-link-date:hover {
+  text-decoration: none;
+  background: var(--bg-hover);
+}
+
+/* В редакторе date-чип — виджет `.md-widget`, у которого вертикальный паддинг
+   блока; чипу он не нужен, иначе строка с датой выше соседних. */
+.cm-editor .cm-line .md-widget.wiki-link-date {
+  padding-block: 0;
+}
+
+/* Тихая подсказка строки задачи в фокусе (0.16.1, элемент 8773d9df): блок под
+   строкой. Не интерактивна — виджет отдаёт события строке (`ignoreEvent`),
+   поэтому `pointer-events: none` лишь страхует выделение мышью. */
+.cm-md-task-hint {
+  padding: var(--space-1) 0 var(--space-1) var(--space-6);
+  color: var(--text-dim);
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-snug);
+  pointer-events: none;
+  user-select: none;
+}
+
 /* ID-based wiki-link token (фаза R, R6): в edit-mode `#<id>` заменяется на
    спан с актуальным именем мысли. Цветом показываем «это единый объект»,
    атомарность обеспечивается Decoration.mark({ atomic: true }) — Backspace /
@@ -1437,7 +1573,7 @@ input.task-list-item-checkbox:checked,
 .cm-editor .cm-transclusion-block {
   position: relative;
   border-left: 2px solid var(--border-strong, var(--border));
-  background: var(--surface, rgba(127, 127, 127, 0.06));
+  background: var(--surface);
   border-radius: 3px;
   padding: var(--md-transclusion-pad);
   /* Содержимое блока — готовый HTML единого рендерера (`transclusion.ts`,
@@ -1809,7 +1945,7 @@ input.task-list-item-checkbox:checked,
 }
 
 .comment-view .hljs-strong {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /* Markdown view/edit field (08-ui-spec.md §6.4): height follows the content
@@ -1877,6 +2013,19 @@ input.task-list-item-checkbox:checked,
   padding-bottom: var(--space-1);
   margin-bottom: var(--space-1);
   border-bottom: 1px solid var(--border);
+}
+
+/* Меню правки остаётся доступным при любой длине текста (ошибка 76691a17,
+   0.16.1): панель липнет к верхней кромке прокручиваемой области зоны
+   комментария, текст уезжает под неё. Фон обязателен — под панелью проплывает
+   текст. В ограниченном по высоте поле прокручивается только `.md-field-scroll`
+   (тулбар и так стоит вне его) — sticky там не срабатывает и ничего не меняет,
+   сворачивание зон и сплиттер не затрагиваются: панель остаётся в потоке. */
+.ui-comment .md-field-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
 }
 
 .md-field-toolbar__spacer {
@@ -2034,7 +2183,11 @@ input.task-list-item-checkbox:checked,
 }
 
 .table-list tr.current td {
-  background: var(--accent-soft);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .attachment-item {
@@ -2056,7 +2209,11 @@ input.task-list-item-checkbox:checked,
 /* Текущая (выделенная клавиатурой) строка списка вложений — тем же токеном,
    что строки `.ui-table`/форм-гридов. */
 .attachment-item.selected {
-  background: var(--accent-soft);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .attachment-item .att-title {
@@ -2119,7 +2276,11 @@ input.task-list-item-checkbox:checked,
 /* Текущая строка результатов поиска (клавиатура общего списка, 6452ea94). */
 .att-search-result-current,
 .att-search-result-current:hover {
-  background: var(--accent-soft);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 /* Attachment rows open the context menu on right-click (08-ui-spec §6.5). */
@@ -2292,7 +2453,7 @@ input.task-list-item-checkbox:checked,
   text-align: left;
   white-space: pre-wrap;
   overflow-wrap: break-word;
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--md-mono);
   font-size: 12px;
   line-height: 1.45;
   background: var(--surface-2);
@@ -2512,7 +2673,7 @@ input.task-list-item-checkbox:checked,
 
 /* Начертание мысли — тот же набор классов, что у облачка холста. */
 .prop-ref-cloud.font-bold .prc-title {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .prop-ref-cloud.font-italic .prc-title {
@@ -2655,7 +2816,13 @@ input.task-list-item-checkbox:checked,
 
 .cm-md-collapse-gutter .cm-gutterElement {
   display: flex;
-  align-items: center;
+  /* Индикатор — по ВЕРХНЕМУ краю строки-якоря (пачка 8, задача 92c4ecf5):
+     элемент гаттера получает высоту всей перенесённой строки, и `center`
+     уводил треугольник к её середине. Просмотр ставит маркер по верхнему краю
+     якоря (`comment-collapse.ts`, `relayout`: `top` от `getBoundingClientRect`);
+     здесь то же выравнивание без вычислений. Короткая строка не меняется:
+     элемент по высоте равен одной строке. */
+  align-items: flex-start;
   justify-content: center;
 }
 
@@ -2663,8 +2830,6 @@ input.task-list-item-checkbox:checked,
   background: transparent;
   border-right: 0;
 }
-
-
 
 /* --- Общий компонент выбора вложения (editor/attachment-picker.ts, задача
        0f6c3e39): закреплённый сверху поиск, прокручиваемый внутри список и
@@ -2743,7 +2908,11 @@ input.task-list-item-checkbox:checked,
 }
 
 .att-pick-item-current {
-  background: var(--accent-soft);
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .att-pick-item-title {
@@ -2785,12 +2954,85 @@ input.task-list-item-checkbox:checked,
 }
 
 .att-pick-preview-current {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--layer-focus-ring-screen, var(--focus-accent, var(--accent)));
+  background: color-mix(
+    in srgb,
+    var(--layer-focus-stripe, var(--focus-accent, var(--accent))) 18%,
+    transparent
+  );
 }
 
 .att-pick-preview-img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+/* ----- напоминания (0.16.1, задача 173f1540) ------------------------------ */
+
+/* Флаг напоминаний в шапке мысли: текстовая ghost-кнопка ряда «Актуально».
+   Длинная подпись усекается, полный повтор несёт тултип. */
+.editor-reminder-flag {
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+}
+
+/* Редактор напоминания (элемент 58cca4f7): секции формы друг под другом. */
+.reminder-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/*
+ * Опорные дата и время напоминания стоят В КОЛОНКУ: `.ui-field` — контейнерный
+ * запрос (`container-type: inline-size`), в строковом flex его ширина
+ * считается нулевой — поля сжимались до нескольких пикселей и подписи
+ * наезжали друг на друга (ошибка 3ff85ede). Отступ снизу у полей нулевой:
+ * зазор даёт сама колонка.
+ */
+.reminder-anchor-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.reminder-anchor-row .ui-field {
+  margin-bottom: 0;
+}
+
+.reminder-params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.reminder-weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* Preview первых вхождений — тот же список, что в Ctrl-подсказке облачка. */
+.reminder-preview-title {
+  color: var(--text-faint);
+  font-size: var(--font-size-s);
+}
+
+.reminder-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.reminder-preview-row {
+  font-size: var(--font-size-s);
+  color: var(--text);
+}
+
+.reminder-preview-empty {
+  color: var(--text-faint);
 }

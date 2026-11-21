@@ -167,6 +167,8 @@ function buildApi(): EtnBridgeApi {
     },
     chronicle: {
       query: (networkId, request) => invoke('chronicle.query', networkId, request),
+      dayLinks: (networkId, query) => invoke('chronicle.dayLinks', networkId, query),
+      calendarMarkers: (networkId, query) => invoke('chronicle.calendarMarkers', networkId, query),
     },
     chronicleFilters: {
       list: (networkId) => invoke('chronicleFilters.list', networkId),
@@ -229,7 +231,8 @@ function buildApi(): EtnBridgeApi {
       exportPdf: (networkId, id) => invoke('publications.exportPdf', networkId, id),
       listShelves: (networkId) => invoke('publications.listShelves', networkId),
       createShelf: (networkId, input) => invoke('publications.createShelf', networkId, input),
-      updateShelf: (networkId, id, input) => invoke('publications.updateShelf', networkId, id, input),
+      updateShelf: (networkId, id, input) =>
+        invoke('publications.updateShelf', networkId, id, input),
       trashShelf: (networkId, id) => invoke('publications.trashShelf', networkId, id),
       restoreShelf: (networkId, id) => invoke('publications.restoreShelf', networkId, id),
       purgeShelf: (networkId, id) => invoke('publications.purgeShelf', networkId, id),
@@ -270,7 +273,14 @@ function buildApi(): EtnBridgeApi {
       setPropertyDefaultOverride: (networkId, ownerType, typeId, propertyId, value) =>
         invoke('types.setPropertyDefaultOverride', networkId, ownerType, typeId, propertyId, value),
       setPropertyDescriptionOverride: (networkId, ownerType, typeId, propertyId, description) =>
-        invoke('types.setPropertyDescriptionOverride', networkId, ownerType, typeId, propertyId, description),
+        invoke(
+          'types.setPropertyDescriptionOverride',
+          networkId,
+          ownerType,
+          typeId,
+          propertyId,
+          description,
+        ),
     },
     thoughtTypeViews: {
       list: (networkId, thoughtTypeId, opts) =>
@@ -282,7 +292,11 @@ function buildApi(): EtnBridgeApi {
       remove: (networkId, thoughtTypeId, viewId, expectedVersion) =>
         invoke('thoughtTypeViews.remove', networkId, thoughtTypeId, viewId, expectedVersion),
       run: (networkId, thoughtId, viewName, opts, requestId) =>
-        invokeCancellable('thoughtTypeViews.run', [networkId, thoughtId, viewName, opts], requestId),
+        invokeCancellable(
+          'thoughtTypeViews.run',
+          [networkId, thoughtId, viewName, opts],
+          requestId,
+        ),
       moveToThought: (networkId, thoughtTypeId, viewId, targetThoughtId) =>
         invoke('thoughtTypeViews.moveToThought', networkId, thoughtTypeId, viewId, targetThoughtId),
     },
@@ -342,6 +356,20 @@ function buildApi(): EtnBridgeApi {
       removeTarget: (networkId, id, ownerType, ownerId, expectedVersion) =>
         invoke('comments.removeTarget', networkId, id, ownerType, ownerId, expectedVersion),
     },
+    tasks: {
+      list: (networkId, query) => invoke('tasks.list', networkId, query),
+      patch: (networkId, input) => invoke('tasks.patch', networkId, input),
+    },
+    reminders: {
+      list: (networkId, query) => invoke('reminders.list', networkId, query),
+      create: (networkId, input) => invoke('reminders.create', networkId, input),
+      update: (networkId, id, input) => invoke('reminders.update', networkId, id, input),
+      snooze: (networkId, id, until, occurrenceAt) =>
+        invoke('reminders.snooze', networkId, id, until, occurrenceAt),
+      dismiss: (networkId, id, occurrenceAt) =>
+        invoke('reminders.dismiss', networkId, id, occurrenceAt),
+      remove: (networkId, id) => invoke('reminders.remove', networkId, id),
+    },
     attachments: {
       list: (networkId, ownerType, ownerId) =>
         invoke('attachments.list', networkId, ownerType, ownerId),
@@ -388,6 +416,9 @@ function buildApi(): EtnBridgeApi {
       getSettings: () => invoke('me.getSettings'),
       setSetting: (key, value) => invoke('me.setSetting', key, value),
       getLanguageSettings: () => invoke('me.getLanguageSettings'),
+      getWallpaper: (networkId) => invoke('me.getWallpaper', networkId),
+      uploadWallpaper: (input) => invoke('me.uploadWallpaper', input),
+      removeWallpaper: (networkId) => invoke('me.removeWallpaper', networkId),
     },
     locks: {
       acquire: (networkId, entityType, entityId) =>
@@ -507,7 +538,8 @@ function buildApi(): EtnBridgeApi {
       set: (key, value) => invoke('meta.set', key, value),
     },
     history: {
-      list: (profileId, networkId, tabId, limit) => invoke('history.list', profileId, networkId, tabId, limit),
+      list: (profileId, networkId, tabId, limit) =>
+        invoke('history.list', profileId, networkId, tabId, limit),
       push: (profileId, networkId, tabId, thoughtId) =>
         invoke('history.push', profileId, networkId, tabId, thoughtId),
       rotate: (oldId, newId, tabId) => invoke('history.rotate', oldId, newId, tabId),
@@ -542,6 +574,9 @@ function buildApi(): EtnBridgeApi {
     },
     system: {
       appInfo: () => invoke('system.appInfo'),
+      // Фон окна под применённую тему (ревизия задачи 0e4a52cd): renderer
+      // вычисляет `--bg` темы и просит main перекрасить фон без перезапуска.
+      setWindowBackground: (color: string) => invoke('system.setWindowBackground', color),
       // Язык системного окружения для первого запуска (задача e6374cd1).
       preferredLanguage: () => invoke('system.preferredLanguage'),
       readClipboard: () => invoke('system.readClipboard'),
@@ -571,7 +606,7 @@ function buildApi(): EtnBridgeApi {
         },
       ) => invoke('system.importEtnx', networkId, parentThoughtId, filePath, slices),
       pickArchiveFile: () => invoke('system.pickArchiveFile'),
-      pickImage: () => invoke('system.pickImage'),
+      pickImage: (options) => invoke('system.pickImage', options),
       pickFile: () => invoke('system.pickFile'),
       openPath: (filePath: string) => invoke('system.openPath', filePath),
       openAttachmentFile: (filePath: string) => invoke('system.openAttachment', filePath),

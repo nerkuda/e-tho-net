@@ -15,6 +15,7 @@
  * разделения). Новые правила добавляй в профильный модуль, а не в конец
  * манифеста.
  */
+@import './styles/fonts.css';
 @import './styles/tokens.css';
 @import './styles/base.css';
 @import './styles/screens/onboarding-networks.css';
