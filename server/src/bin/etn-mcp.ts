@@ -45,8 +45,13 @@ const PASSTHROUGH_COMMANDS = new Set([
   '-h',
 ]);
 
-/** Признак ошибки загрузки нативного модуля better-sqlite3. */
-function isNativeLoadFailure(err: unknown): boolean {
+/**
+ * Признак ошибки загрузки нативного модуля better-sqlite3.
+ *
+ * Экспортируется для теста: вызывающая точка обёртки должна ловить именно эту
+ * ошибку и печатать текст про платформу, а не сырой стек.
+ */
+export function isNativeLoadFailure(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const code = (err as NodeJS.ErrnoException).code;
   if (code === 'ERR_DLOPEN_FAILED') return true;
@@ -62,13 +67,18 @@ function isNativeLoadFailure(err: unknown): boolean {
  *
  * @param argv - `process.argv` (или подмена в тестах).
  * @param env - окружение (подмена в тестах).
+ * @param packageDirOverride - корень пакета/бандла (тестовый шов: позволяет
+ *   подложить маркер целевой платформы, не трогая реальный каталог пакета).
  * @returns код выхода CLI.
  */
 export async function runEtnMcp(
   argv: readonly string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
+  packageDirOverride?: string,
 ): Promise<number> {
-  const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const packageDir =
+    packageDirOverride ??
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
   let host: string;
   try {

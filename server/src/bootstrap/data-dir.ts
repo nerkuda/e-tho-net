@@ -90,6 +90,8 @@ export interface OwnershipMarker {
 export type OwnershipState =
   | { state: 'absent' }
   | { state: 'own'; marker: OwnershipMarker }
+  /** Наш `kind`, но маркер принадлежит другому серверу (ADR d17c3a29 п. 6). */
+  | { state: 'mismatch'; serverName: string }
   | { state: 'invalid'; reason: string };
 
 /** Откуда взят ключ MCP-сессии. */
@@ -167,6 +169,9 @@ function removeOwnTempFiles(dataDir: string): void {
  * Невалидный JSON, чужой `kind` или отсутствие обязательных полей — состояние
  * `invalid`: вызывающая сторона трактует его как «маркера нет» (ADR aa9507e6
  * п. 6) и не перезаписывает файл до решения.
+ *
+ * Валидный маркер с чужим `server_name` — отдельное состояние `mismatch`:
+ * это отказ (ADR d17c3a29 п. 6), а не «маркера нет»; чужое имя не затирается.
  */
 export function readOwnership(dataDir: string): OwnershipState {
   const file = path.join(dataDir, MCP_DIRNAME, MCP_OWNERSHIP_FILENAME);
@@ -187,6 +192,9 @@ export function readOwnership(dataDir: string): OwnershipState {
   if (typeof marker.server_name !== 'string' || marker.server_name.trim() === '') {
     return { state: 'invalid', reason: 'server_name is missing' };
   }
+  if (marker.server_name.trim() !== MCP_REGISTRY_NAME) {
+    return { state: 'mismatch', serverName: marker.server_name };
+  }
   if (typeof marker.version !== 'string' || marker.version.trim() === '') {
     return { state: 'invalid', reason: 'version is missing' };
   }
@@ -201,8 +209,14 @@ export function readOwnership(dataDir: string): OwnershipState {
   };
 }
 
-/** Чужое содержимое подкаталога `mcp/` (пустой список — зона наша). */
-function foreignMcpEntries(mcpDir: string): string[] {
+/**
+ * Чужое содержимое подкаталога `mcp/`.
+ *
+ * `own` — маркер наш: тогда `mcp/key` тоже допустим (немаркерный ключ — след
+ * прерванной инициализации, его перезапишет инициализация). Без нашего маркера
+ * любой файл, кроме `ownership.json`, чужой (ADR aa9507e6 п. 6).
+ */
+function foreignMcpEntries(mcpDir: string, own: boolean): string[] {
   let entries: string[];
   try {
     entries = readdirSync(mcpDir);
@@ -212,17 +226,20 @@ function foreignMcpEntries(mcpDir: string): string[] {
   const foreign: string[] = [];
   for (const name of entries) {
     if (name === MCP_OWNERSHIP_FILENAME) continue;
+    if (own && name === MCP_KEY_FILENAME) continue;
     foreign.push(`mcp/${name}`);
   }
   return foreign;
 }
 
 /**
- * Чужое содержимое каталога данных в состоянии «не инициализирован, маркера
- * нет». Допустимы только `_system.db` со служебными файлами, `mcp/` без
- * посторонних файлов и наши остаточные temp-файлы.
+ * Чужое содержимое каталога данных в состоянии «не инициализирован».
+ *
+ * Допустимы только `_system.db` со служебными файлами, `mcp/` (с нашим
+ * маркером — вместе с `mcp/key`) и наши остаточные temp-файлы. `own` —
+ * маркер наш: это прерванная инициализация, свой ключ чужаком не считается.
  */
-function foreignRootEntries(dataDir: string): string[] {
+function foreignRootEntries(dataDir: string, own: boolean): string[] {
   let entries: string[];
   try {
     entries = readdirSync(dataDir);
@@ -232,7 +249,7 @@ function foreignRootEntries(dataDir: string): string[] {
   const foreign: string[] = [];
   for (const name of entries) {
     if (name === MCP_DIRNAME) {
-      foreign.push(...foreignMcpEntries(path.join(dataDir, name)));
+      foreign.push(...foreignMcpEntries(path.join(dataDir, name), own));
       continue;
     }
     if (name === SYSTEM_DB_FILENAME) continue;
@@ -420,10 +437,16 @@ function isTransientRace(err: unknown): boolean {
  * Один проход; при гонке параллельного запуска выбрасывает ошибку SQLite, а
  * {@link bootstrapDataDir} повторяет проход (см. {@link isTransientRace}).
  */
-function initializeDataDir(dataDir: string, version: string, log: Logger): BootstrapResult {
+function initializeDataDir(
+  dataDir: string,
+  version: string,
+  log: Logger,
+  ownership: OwnershipState,
+): BootstrapResult {
   assertWritable(dataDir);
   removeOwnTempFiles(dataDir);
-  const foreign = foreignRootEntries(dataDir);
+  // Наш маркер + свой mcp/key — прерванная инициализация: каталог свой, key не чужой.
+  const foreign = foreignRootEntries(dataDir, ownership.state === 'own');
   if (foreign.length > 0) {
     throw new BootstrapError(
       `The ETN data directory ${dataDir} is not empty and does not belong to etn-mcp; ` +
@@ -431,7 +454,7 @@ function initializeDataDir(dataDir: string, version: string, log: Logger): Boots
         'with "etn init".',
     );
   }
-  if (readOwnership(dataDir).state !== 'own') {
+  if (ownership.state !== 'own') {
     writeOwnership(dataDir, version);
   }
 
@@ -505,6 +528,17 @@ function bootstrapOnce(
   const envKey = normalize(env.ETN_API_KEY);
   const trusted = explicit ?? envKey;
 
+  // Чужой маркер — отказ на любом пути, включая присоединение по ключу
+  // (ADR d17c3a29 п. 6): маркер объявляет, чей это каталог.
+  const ownership = readOwnership(dataDir);
+  if (ownership.state === 'mismatch') {
+    throw new BootstrapError(
+      `The ETN data directory ${dataDir} is owned by another server: the ownership marker ` +
+        `declares ${JSON.stringify(ownership.serverName)}, while this package is ` +
+        `${JSON.stringify(MCP_REGISTRY_NAME)}. etn-mcp does not modify a directory it does not own.`,
+    );
+  }
+
   const firstUser = probeFirstUser(dataDir);
   if (firstUser.state === 'unreadable') {
     throw new BootstrapError(
@@ -528,7 +562,6 @@ function bootstrapOnce(
   }
 
   if (firstUser.state === 'initialized') {
-    const ownership = readOwnership(dataDir);
     if (ownership.state !== 'own') {
       const reason =
         ownership.state === 'invalid'
@@ -548,5 +581,5 @@ function bootstrapOnce(
   }
 
   // Каталог не инициализирован: маркер — до БД, затем администратор и ключ.
-  return initializeDataDir(dataDir, version, log);
+  return initializeDataDir(dataDir, version, log, ownership);
 }
