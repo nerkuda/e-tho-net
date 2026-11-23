@@ -179,7 +179,16 @@ async function main() {
     if (!/^etn_[0-9a-f]{32}$/.test(key)) fail('файл mcp/key не содержит валидный ключ');
     const markerBody = JSON.parse(readFileSync(marker, 'utf8'));
     if (markerBody.kind !== 'etn-mcp') fail(`чужой kind маркера: ${markerBody.kind}`);
-    console.log(`  каталог данных: ${dataDir}; маркер и mcp/key (0600) на месте`);
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(keyFile).mode & 0o777;
+      if (mode !== 0o600) {
+        fail(`права mcp/key ${mode.toString(8)}, ожидалось 600`);
+      }
+    }
+    console.log(
+      `  каталог данных: ${dataDir}; маркер и mcp/key на месте ` +
+        (process.platform === 'win32' ? '(режим — ACL пользователя)' : '(0600)'),
+    );
 
     await client.close();
 

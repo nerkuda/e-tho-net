@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+import { isNativeLoadFailure, runEtnMcp } from '../src/bin/etn-mcp.js';
 import {
   assertBundleTarget,
   assertSupportedHost,
@@ -108,6 +109,49 @@ describe('стражи платформы etn-mcp', () => {
           err.message,
         ),
     );
+  });
+
+  it('isNativeLoadFailure распознаёт ошибку нативной загрузки', () => {
+    const dlopen = Object.assign(new Error('dlopen failed'), { code: 'ERR_DLOPEN_FAILED' });
+    assert.equal(isNativeLoadFailure(dlopen), true);
+    assert.equal(
+      isNativeLoadFailure(
+        new Error(
+          'Cannot open C:\\pkg\\better_sqlite3.node: not a valid Win32 application',
+        ),
+      ),
+      true,
+    );
+    assert.equal(isNativeLoadFailure(new Error('database is locked')), false);
+    assert.equal(isNativeLoadFailure('ERR_DLOPEN_FAILED'), false);
+  });
+
+  it('обёртка отказывает до загрузки сервера при чужой целевой платформе бандла', async () => {
+    const dir = tempDir('etn-bin-target-');
+    const hostTarget = targetId(process.platform, process.arch);
+    const foreignTarget = hostTarget === 'darwin-arm64' ? 'linux-x64' : 'darwin-arm64';
+    try {
+      fs.writeFileSync(
+        path.join(dir, BUNDLE_TARGET_FILENAME),
+        JSON.stringify({ target: foreignTarget }),
+      );
+      const messages: string[] = [];
+      const originalError = console.error;
+      console.error = (...args: unknown[]) => {
+        messages.push(args.map((arg) => String(arg)).join(' '));
+      };
+      let code = -1;
+      try {
+        code = await runEtnMcp([process.execPath, 'etn-mcp'], {}, dir);
+      } finally {
+        console.error = originalError;
+      }
+      assert.equal(code, 1);
+      assert.match(messages.join('\n'), /built for .* but the current host is/);
+      assert.equal(fs.existsSync(path.join(dir, 'mcp')), false, 'до сервера дело не дошло');
+    } finally {
+      removeDir(dir);
+    }
   });
 
   it('маркер бандла: нет файла — npm-пакет; свой маркер читается', () => {

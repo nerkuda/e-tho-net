@@ -179,4 +179,37 @@ describe('guard: маркеры MCP-пакета etn-mcp', () => {
       `mcp-publisher validate server.json: ${result.stdout ?? ''}${result.stderr ?? ''}`,
     );
   });
+
+  it('маркер владения пишется до открытия системной БД', () => {
+    const source = readText(path.join(SERVER_ROOT, 'src', 'bootstrap', 'data-dir.ts'));
+    const start = source.indexOf('function initializeDataDir');
+    assert.ok(start > -1, 'нет initializeDataDir');
+    const writeAt = source.indexOf('writeOwnership(dataDir, version)', start);
+    const openAt = source.indexOf('SystemDb.open(dataDir, log)', start);
+    assert.ok(writeAt > start, 'writeOwnership обязан вызываться в initializeDataDir');
+    assert.ok(openAt > start, 'SystemDb.open обязан вызываться в initializeDataDir');
+    assert.ok(
+      writeAt < openAt,
+      'маркер владения обязан писаться ДО открытия БД (ADR aa9507e6 п. 3)',
+    );
+  });
+
+  it('ключ mcp/key пишется с режимом 0600', () => {
+    const source = readText(path.join(SERVER_ROOT, 'src', 'bootstrap', 'data-dir.ts'));
+    assert.match(source, /const KEY_FILE_MODE = 0o600;/);
+    const start = source.indexOf('function writeMcpKey');
+    assert.ok(start > -1, 'нет writeMcpKey');
+    assert.match(
+      source.slice(start, start + 400),
+      /KEY_FILE_MODE/,
+      'writeMcpKey обязан передавать режим ключа в запись',
+    );
+  });
+
+  it('обёртка вызывает стражи платформы и перехват нативной загрузки', () => {
+    const source = readText(path.join(SERVER_ROOT, 'src', 'bin', 'etn-mcp.ts'));
+    assert.match(source, /host = assertSupportedHost\(\);/);
+    assert.match(source, /assertBundleTarget\(\s*readBundleTarget\(packageDir\),\s*host,?\s*\)/s);
+    assert.match(source, /if \(isNativeLoadFailure\(err\)\) \{/);
+  });
 });

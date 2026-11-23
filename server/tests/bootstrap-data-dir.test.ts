@@ -121,6 +121,9 @@ describe('bootstrapDataDir (пакет etn-mcp)', { skip: !nativeAvailable() }, 
 
       const keyFile = path.join(dataDir, MCP_DIRNAME, MCP_KEY_FILENAME);
       assert.equal(fs.readFileSync(keyFile, 'utf8').trim(), result.apiKey);
+      if (process.platform !== 'win32') {
+        assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600, 'mcp/key должен быть 0600');
+      }
       assert.deepEqual(SystemDb.checkFirstUser(dataDir), { state: 'initialized' });
       assert.equal(authWorks(dataDir, result.apiKey), true);
 
@@ -241,6 +244,153 @@ describe('bootstrapDataDir (пакет etn-mcp)', { skip: !nativeAvailable() }, 
       const result = bootstrapDataDir({ dataDir, env: {} });
       assert.equal(result.source, 'created');
       assert.equal(fs.existsSync(leftover), false, 'остаток удалён');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('свой маркер и mcp/key без БД: инициализация заново, ключ перезаписан', () => {
+    const dataDir = tempDir('etn-mcp-boot-');
+    try {
+      const first = bootstrapDataDir({ dataDir, env: {} });
+      assert.equal(first.source, 'created');
+      for (const name of [
+        SYSTEM_DB_FILENAME,
+        `${SYSTEM_DB_FILENAME}-wal`,
+        `${SYSTEM_DB_FILENAME}-shm`,
+      ]) {
+        fs.rmSync(path.join(dataDir, name), { force: true });
+      }
+      assert.deepEqual(SystemDb.checkFirstUser(dataDir), {
+        state: 'not-initialized',
+        reason: 'no-db',
+      });
+      assert.equal(readOwnership(dataDir).state, 'own', 'маркер и ключ остались нашими');
+
+      const second = bootstrapDataDir({ dataDir, env: {} });
+      assert.equal(second.source, 'created');
+      assert.notEqual(second.apiKey, first.apiKey, 'ключ перезаписан новым');
+      const keyFile = path.join(dataDir, MCP_DIRNAME, MCP_KEY_FILENAME);
+      assert.equal(fs.readFileSync(keyFile, 'utf8').trim(), second.apiKey);
+      assert.equal(authWorks(dataDir, second.apiKey), true);
+      assert.equal(readOwnership(dataDir).state, 'own');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('свой маркер и mcp/key при пустой _system.db без users: инициализация заново', () => {
+    const dataDir = tempDir('etn-mcp-boot-');
+    try {
+      const first = bootstrapDataDir({ dataDir, env: {} });
+      assert.equal(first.source, 'created');
+      fs.rmSync(path.join(dataDir, SYSTEM_DB_FILENAME), { force: true });
+      const empty = new DatabaseConstructor(path.join(dataDir, SYSTEM_DB_FILENAME));
+      empty.close();
+      assert.deepEqual(SystemDb.checkFirstUser(dataDir), {
+        state: 'not-initialized',
+        reason: 'no-users-table',
+      });
+
+      const second = bootstrapDataDir({ dataDir, env: {} });
+      assert.equal(second.source, 'created');
+      assert.deepEqual(SystemDb.checkFirstUser(dataDir), { state: 'initialized' });
+      assert.equal(authWorks(dataDir, second.apiKey), true);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('маркер пишется до открытия системной БД (прерывание после маркера)', (t) => {
+    if (process.platform !== 'win32' && process.getuid?.() === 0) {
+      t.skip('root игнорирует права файла');
+      return;
+    }
+    const dataDir = tempDir('etn-mcp-order-');
+    const dbFile = path.join(dataDir, SYSTEM_DB_FILENAME);
+    try {
+      // Пустая БД без users доходит до инициализации; read-only файл валит
+      // SystemDb.open (WAL/запись). Маркер обязан быть уже на диске.
+      fs.writeFileSync(dbFile, '');
+      fs.chmodSync(dbFile, 0o444);
+      const script =
+        `import(${JSON.stringify(DATA_DIR_MODULE)}).then(async (m) => {\n` +
+        `  const fs = await import('node:fs');\n` +
+        '  let failed = false;\n' +
+        `  try { m.bootstrapDataDir({ dataDir: ${JSON.stringify(dataDir)}, env: {} }); } catch { failed = true; }\n` +
+        `  const marker = fs.existsSync(${JSON.stringify(markerFile(dataDir))});\n` +
+        '  process.stdout.write(JSON.stringify({ failed, marker }));\n' +
+        '}).catch((e) => { console.error(e); process.exit(1); });';
+      const run = spawnSync(process.execPath, ['--import', 'tsx', '--eval', script], {
+        cwd: SERVER_ROOT,
+        env: { ...process.env, ETN_DATA_DIR: '', ETN_API_KEY: '' },
+        encoding: 'utf8',
+      });
+      assert.equal(run.status, 0, run.stderr);
+      const state = JSON.parse(run.stdout) as { failed: boolean; marker: boolean };
+      assert.equal(state.failed, true, 'открытие read-only БД обязано упасть');
+      assert.equal(state.marker, true, 'маркер владения записан ДО открытия БД');
+    } finally {
+      fs.chmodSync(dbFile, 0o666);
+      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
+  it('маркер с чужим server_name при администраторе: отказ без перевыпуска ключа', () => {
+    const dataDir = tempDir('etn-mcp-boot-');
+    try {
+      initAdmin(dataDir);
+      fs.mkdirSync(path.join(dataDir, MCP_DIRNAME), { recursive: true });
+      const foreignMarker = JSON.stringify({
+        kind: MCP_OWNERSHIP_KIND,
+        server_name: 'io.github.attacker/other-server',
+        version: '0.16.2',
+      });
+      fs.writeFileSync(markerFile(dataDir), foreignMarker);
+      assert.equal(readOwnership(dataDir).state, 'mismatch');
+      assert.throws(() => bootstrapDataDir({ dataDir, env: {} }), /owned by another server/);
+      assert.equal(fs.readFileSync(markerFile(dataDir), 'utf8'), foreignMarker);
+      assert.equal(fs.existsSync(path.join(dataDir, MCP_DIRNAME, MCP_KEY_FILENAME)), false);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('маркер с чужим server_name без администратора: отказ, маркер не перезаписан', () => {
+    const dataDir = tempDir('etn-mcp-boot-');
+    try {
+      fs.mkdirSync(path.join(dataDir, MCP_DIRNAME), { recursive: true });
+      const foreignMarker = JSON.stringify({
+        kind: MCP_OWNERSHIP_KIND,
+        server_name: 'io.github.attacker/other-server',
+        version: '0.16.2',
+      });
+      fs.writeFileSync(markerFile(dataDir), foreignMarker);
+      assert.throws(() => bootstrapDataDir({ dataDir, env: {} }), /owned by another server/);
+      assert.equal(fs.readFileSync(markerFile(dataDir), 'utf8'), foreignMarker);
+      assert.equal(fs.existsSync(path.join(dataDir, SYSTEM_DB_FILENAME)), false);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('маркер с чужим server_name не пускает и по ETN_API_KEY', () => {
+    const dataDir = tempDir('etn-mcp-boot-');
+    try {
+      const key = initAdmin(dataDir);
+      fs.mkdirSync(path.join(dataDir, MCP_DIRNAME), { recursive: true });
+      fs.writeFileSync(
+        markerFile(dataDir),
+        JSON.stringify({
+          kind: MCP_OWNERSHIP_KIND,
+          server_name: 'io.github.attacker/other-server',
+          version: '0.16.2',
+        }),
+      );
+      assert.throws(
+        () => bootstrapDataDir({ dataDir, env: { ETN_API_KEY: key } }),
+        /owned by another server/,
+      );
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
