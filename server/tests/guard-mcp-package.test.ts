@@ -181,13 +181,13 @@ describe('guard: маркеры MCP-пакета etn-mcp', () => {
     assert.equal(committed.version, rootVersion);
   });
 
-  it('server.json: запись npm и запись канонического MCPB-бандла', () => {
+  it('server.json: записи npm, канонического MCPB-бандла и OCI-образа', () => {
     const committed = readJson(path.join(REPO_ROOT, 'server.json'));
     const packages = committed.packages as Array<Record<string, unknown>>;
     assert.deepEqual(
       packages.map((item) => item.registryType),
-      ['npm', 'mcpb'],
-      'packages: npm-пакет, затем канонический MCPB-бандл win32-x64',
+      ['npm', 'mcpb', 'oci'],
+      'packages: npm-пакет, канонический MCPB-бандл win32-x64, затем OCI-образ etn-mcp',
     );
 
     const npmEntry = packages[0] as Record<string, unknown>;
@@ -212,6 +212,15 @@ describe('guard: маркеры MCP-пакета etn-mcp', () => {
     assert.equal(mcpbEntry.version, rootVersion);
     assert.deepEqual(mcpbEntry.transport, { type: 'stdio' });
     assert.match(String(mcpbEntry.fileSha256), /^[a-f0-9]{64}$/);
+
+    // OCI-образ etn-mcp в Docker Hub (задача 3db76d75): идентификатор —
+    // docker.io/<namespace>/etn-mcp:v<версия>, namespace — владелец реестрового
+    // имени, второго литерала нет.
+    const ociEntry = packages[2] as Record<string, unknown>;
+    assert.equal(ociEntry.identifier, `docker.io/nerkuda/etn-mcp:v${rootVersion}`);
+    assert.equal(ociEntry.version, rootVersion);
+    assert.deepEqual(ociEntry.transport, { type: 'stdio' });
+    assert.equal(ociEntry.registryType, 'oci');
 
     const built = path.join(
       REPO_ROOT,
