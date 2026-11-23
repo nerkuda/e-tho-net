@@ -184,58 +184,99 @@ describe('стражи платформы etn-mcp', () => {
     );
   });
 
-  it('мусорный better_sqlite3.node: дружелюбный текст вместо сырой ошибки загрузки', () => {
+  it('битый аддон настоящего better-sqlite3: единый текст, bootstrap не начат', () => {
     const root = tempDir('etn-bin-native-');
-    const tree = path.join(root, 'bundle');
+    const bundle = path.join(root, 'bundle');
+    const modules = path.join(bundle, 'node_modules');
+    /** Настоящий пакет из node_modules (server, затем корень) — не fake-заглушка. */
+    const realModule = (name: string): string => {
+      for (const base of [
+        path.join(SERVER_ROOT, 'node_modules'),
+        path.join(SERVER_ROOT, '..', 'node_modules'),
+      ]) {
+        const candidate = path.join(base, ...name.split('/'));
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      throw new Error(`нет ${name} в node_modules`);
+    };
     try {
-      // Нативный модуль ищется от файла обёртки, поэтому подменить его можно
-      // только рядом с её копией: копируем вход и его собственные импорты
-      // (до `../cli.js` при падении предзагрузки дело не доходит).
+      // Нативный аддон ищется от файла обёртки, поэтому проверяем на копии
+      // входа и его собственных импортов (до `../cli.js` дело не доходит).
       for (const relative of [
         'src/bin/etn-mcp.ts',
         'src/bin/platform.ts',
         'src/bootstrap/personal-dir.ts',
       ]) {
-        const dest = path.join(tree, ...relative.split('/'));
+        const dest = path.join(bundle, ...relative.split('/'));
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.copyFileSync(path.join(SERVER_ROOT, ...relative.split('/')), dest);
       }
-      const sqlite = path.join(tree, 'node_modules', 'better-sqlite3');
+
+      // Копия НАСТОЯЩЕГО пакета: package.json и lib/ берутся из node_modules,
+      // испорчен только аддон. `better-sqlite3` грузит его в конструкторе
+      // `Database`, поэтому импорт модуля сам по себе ничего не проверяет.
+      const sqlite = path.join(modules, 'better-sqlite3');
       fs.mkdirSync(path.join(sqlite, 'build', 'Release'), { recursive: true });
-      fs.writeFileSync(
+      fs.copyFileSync(
+        path.join(realModule('better-sqlite3'), 'package.json'),
         path.join(sqlite, 'package.json'),
-        `${JSON.stringify({ name: 'better-sqlite3', version: '11.1.2', main: 'index.js' })}\n`,
       );
-      fs.writeFileSync(
-        path.join(sqlite, 'index.js'),
-        "module.exports = require('./build/Release/better_sqlite3.node');\n",
-      );
+      fs.cpSync(path.join(realModule('better-sqlite3'), 'lib'), path.join(sqlite, 'lib'), {
+        recursive: true,
+      });
       fs.writeFileSync(path.join(sqlite, 'build', 'Release', 'better_sqlite3.node'), 'not native');
+      for (const dependency of ['bindings', 'file-uri-to-path']) {
+        fs.cpSync(realModule(dependency), path.join(modules, ...dependency.split('/')), {
+          recursive: true,
+        });
+      }
 
-      const env = cleanEnv(path.join(root, 'home'));
-      const run = spawnSync(
+      // Предпосылка теста: пакет ленивый — импорт проходит, конструктор падает.
+      // Если better-sqlite3 начнёт грузить аддон жадно, эта проверка сообщит
+      // об этом раньше, чем тест снова станет «зелёным на fake-поведении».
+      const lazy = spawnSync(
         process.execPath,
-        ['--import', 'tsx', path.join(tree, 'src', 'bin', 'etn-mcp.ts')],
-        { cwd: SERVER_ROOT, env, encoding: 'utf8', timeout: 60_000 },
+        [
+          '-e',
+          `const Database = require(${JSON.stringify(sqlite)});` +
+            `try { new Database(':memory:'); console.log('LOADED'); }` +
+            ` catch (err) { console.log('imported'); console.log('code=' + err.code); }`,
+        ],
+        { encoding: 'utf8', timeout: 60_000 },
       );
+      assert.match(
+        lazy.stdout ?? '',
+        /imported/,
+        `настоящий пакет обязан импортироваться с битым аддоном: ${lazy.stdout ?? ''}${lazy.stderr ?? ''}`,
+      );
+      assert.match(lazy.stdout ?? '', /code=ERR_DLOPEN_FAILED/);
 
-      // Тот же текст, что и у стража целевой платформы бандла (DoD 2: обе
-      // защиты дают понятное сообщение, а не стек `require`).
       const expected = nativeLoadErrorMessage(targetId(process.platform, process.arch));
-      assert.equal(run.status, 1, `ожидался код 1, stderr: ${run.stderr ?? ''}`);
-      assert.ok(
-        (run.stderr ?? '').includes(expected),
-        `нет дружелюбного текста в stderr: ${run.stderr ?? ''}`,
-      );
-      assert.doesNotMatch(
-        run.stderr ?? '',
-        /not a valid Win32 application|invalid ELF header|ERR_DLOPEN_FAILED/,
-        'сырая ошибка загрузки нативного модуля не должна попадать в stderr',
-      );
+      const home = path.join(root, 'home');
+      // И режим `mcp` (подстановка), и `--help`: проверка нативной сборки идёт
+      // до bootstrap, поэтому битый бандл не печатает ни справку, ни сырой стек.
+      for (const args of [[], ['--help']]) {
+        const run = spawnSync(
+          process.execPath,
+          ['--import', 'tsx', path.join(bundle, 'src', 'bin', 'etn-mcp.ts'), ...args],
+          { cwd: SERVER_ROOT, env: cleanEnv(home), encoding: 'utf8', timeout: 60_000 },
+        );
+        const mode = args.join(' ') === '' ? 'mcp' : args.join(' ');
+        assert.equal(run.status, 1, `${mode}: ожидался код 1, stderr: ${run.stderr ?? ''}`);
+        assert.ok(
+          (run.stderr ?? '').includes(expected),
+          `${mode}: нет дружелюбного текста в stderr: ${run.stderr ?? ''}`,
+        );
+        assert.doesNotMatch(
+          run.stderr ?? '',
+          /not a valid Win32 application|invalid ELF header|ERR_DLOPEN_FAILED/,
+          `${mode}: сырая ошибка загрузки нативного модуля не должна попадать в stderr`,
+        );
+      }
       assert.equal(
-        fs.existsSync(path.join(env.HOME ?? '', 'AppData', 'Local', 'etn-mcp')),
+        fs.existsSync(path.join(home, 'AppData', 'Local', 'etn-mcp')),
         false,
-        'до bootstrap каталога данных дело не дошло',
+        'bootstrap каталога данных не должен начаться при битом аддоне',
       );
     } finally {
       removeDir(root);
