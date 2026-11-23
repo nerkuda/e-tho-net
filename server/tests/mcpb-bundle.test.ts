@@ -286,3 +286,93 @@ describe('сборщик MCPB: дерево бандла и архив', () => {
     );
   });
 });
+
+/**
+ * Блокер Б1 вердикта d1feff33: `tsc` не чистит `outDir`, поэтому остатки
+ * удалённых модулей уезжали в поставку, а `fileSha256` в `server.json`
+ * переставал совпадать с бандлом из чистого checkout. Защита живёт в общем
+ * стейджинге — её получают и npm-пакет, и MCPB, и tar.gz.
+ */
+interface StagingLib {
+  assertDistMatchesSources(repoRoot: string): void;
+}
+
+const staging = (await import(
+  pathToFileURL(path.join(SERVER_ROOT, 'scripts', 'lib', 'server-staging.mjs')).href
+)) as StagingLib;
+
+describe('сборка: чистый dist и сверка server.json в конвейере', () => {
+  it('dist без исходника в src — ошибка сборки, компилируемый dist проходит', () => {
+    const root = tempDir('etn-dist-check-');
+    try {
+      const repo = path.join(root, 'repo');
+      writeFile(repo, 'server/src/ok.ts', 'export const ok = 1;\n');
+      writeFile(repo, 'server/dist/ok.js', 'export const ok = 1;\n');
+      writeFile(repo, 'server/dist/ok.d.ts', 'export declare const ok: number;\n');
+      assert.doesNotThrow(() => staging.assertDistMatchesSources(repo));
+
+      writeFile(repo, 'server/dist/orphan.js', 'export const stale = 1;\n');
+      assert.throws(
+        () => staging.assertDistMatchesSources(repo),
+        /остались файлы без исходника в server\/src \(1\): dist\/orphan\.js/,
+      );
+
+      // .d.ts и .map — спутники: сами по себе осиротевшими не считаются.
+      fs.rmSync(path.join(repo, 'server', 'dist', 'orphan.js'));
+      writeFile(repo, 'server/dist/orphan.d.ts', 'export declare const stale: number;\n');
+      writeFile(repo, 'server/dist/orphan.js.map', '{}');
+      assert.doesNotThrow(() => staging.assertDistMatchesSources(repo));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it('проверка dist встроена в общий стейджинг, а им пользуются все сборщики', () => {
+    const lib = fs.readFileSync(
+      path.join(SERVER_ROOT, 'scripts', 'lib', 'server-staging.mjs'),
+      'utf8',
+    );
+    const artifacts = lib.slice(lib.indexOf('export function assertBuildArtifacts'));
+    assert.match(
+      artifacts,
+      /assertDistMatchesSources\(repoRoot\);/,
+      'assertBuildArtifacts обязан проверять dist: иначе мусор снова уедет в поставку',
+    );
+    for (const builder of ['build-mcpb.mjs', 'build-npm-package.mjs', 'build-server-tarball.mjs']) {
+      const source = fs.readFileSync(path.join(SERVER_ROOT, 'scripts', builder), 'utf8');
+      assert.match(
+        source,
+        /assertBuildArtifacts\(/,
+        `${builder} обязан идти через общий стейджинг с проверкой dist`,
+      );
+    }
+  });
+
+  it('release.yml сверяет server.json с собранным каноническим бандлом', () => {
+    const text = fs.readFileSync(
+      path.join(SERVER_ROOT, '..', '.github', 'workflows', 'release.yml'),
+      'utf8',
+    );
+    const publish = text.slice(text.indexOf('\n  publish:'));
+    assert.match(
+      publish,
+      /sha256sum "artifacts\/etn-mcp-\$\{VERSION\}-win32-x64\.mcpb"/,
+      'конвейер обязан брать хеш канонического бандла из этого же прогона',
+    );
+    assert.match(
+      publish,
+      /generate-server-json\.mjs --mcpb-sha256 "\$\{sha\}"/,
+      'server.json пересобирается с хешем собранного бандла',
+    );
+    assert.match(
+      publish,
+      /git diff --exit-code -- server\.json/,
+      'расхождение server.json с бандлом обязано ронять публикацию',
+    );
+    assert.match(
+      text,
+      /macos-13[\s\S]{0,600}arch -x86_64/,
+      'у метки macos-13 остаётся записанный план замены через Rosetta',
+    );
+  });
+});

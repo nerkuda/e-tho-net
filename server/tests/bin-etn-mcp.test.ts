@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-import { isNativeLoadFailure, runEtnMcp } from '../src/bin/etn-mcp.js';
+import { isNativeLoadFailure, nativeLoadErrorMessage, runEtnMcp } from '../src/bin/etn-mcp.js';
 import {
   assertBundleTarget,
   assertSupportedHost,
@@ -116,9 +116,7 @@ describe('стражи платформы etn-mcp', () => {
     assert.equal(isNativeLoadFailure(dlopen), true);
     assert.equal(
       isNativeLoadFailure(
-        new Error(
-          'Cannot open C:\\pkg\\better_sqlite3.node: not a valid Win32 application',
-        ),
+        new Error('Cannot open C:\\pkg\\better_sqlite3.node: not a valid Win32 application'),
       ),
       true,
     );
@@ -184,6 +182,64 @@ describe('стражи платформы etn-mcp', () => {
         err instanceof PlatformError &&
         /built for darwin-arm64, but the current host is win32-x64/.test(err.message),
     );
+  });
+
+  it('мусорный better_sqlite3.node: дружелюбный текст вместо сырой ошибки загрузки', () => {
+    const root = tempDir('etn-bin-native-');
+    const tree = path.join(root, 'bundle');
+    try {
+      // Нативный модуль ищется от файла обёртки, поэтому подменить его можно
+      // только рядом с её копией: копируем вход и его собственные импорты
+      // (до `../cli.js` при падении предзагрузки дело не доходит).
+      for (const relative of [
+        'src/bin/etn-mcp.ts',
+        'src/bin/platform.ts',
+        'src/bootstrap/personal-dir.ts',
+      ]) {
+        const dest = path.join(tree, ...relative.split('/'));
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(path.join(SERVER_ROOT, ...relative.split('/')), dest);
+      }
+      const sqlite = path.join(tree, 'node_modules', 'better-sqlite3');
+      fs.mkdirSync(path.join(sqlite, 'build', 'Release'), { recursive: true });
+      fs.writeFileSync(
+        path.join(sqlite, 'package.json'),
+        `${JSON.stringify({ name: 'better-sqlite3', version: '11.1.2', main: 'index.js' })}\n`,
+      );
+      fs.writeFileSync(
+        path.join(sqlite, 'index.js'),
+        "module.exports = require('./build/Release/better_sqlite3.node');\n",
+      );
+      fs.writeFileSync(path.join(sqlite, 'build', 'Release', 'better_sqlite3.node'), 'not native');
+
+      const env = cleanEnv(path.join(root, 'home'));
+      const run = spawnSync(
+        process.execPath,
+        ['--import', 'tsx', path.join(tree, 'src', 'bin', 'etn-mcp.ts')],
+        { cwd: SERVER_ROOT, env, encoding: 'utf8', timeout: 60_000 },
+      );
+
+      // Тот же текст, что и у стража целевой платформы бандла (DoD 2: обе
+      // защиты дают понятное сообщение, а не стек `require`).
+      const expected = nativeLoadErrorMessage(targetId(process.platform, process.arch));
+      assert.equal(run.status, 1, `ожидался код 1, stderr: ${run.stderr ?? ''}`);
+      assert.ok(
+        (run.stderr ?? '').includes(expected),
+        `нет дружелюбного текста в stderr: ${run.stderr ?? ''}`,
+      );
+      assert.doesNotMatch(
+        run.stderr ?? '',
+        /not a valid Win32 application|invalid ELF header|ERR_DLOPEN_FAILED/,
+        'сырая ошибка загрузки нативного модуля не должна попадать в stderr',
+      );
+      assert.equal(
+        fs.existsSync(path.join(env.HOME ?? '', 'AppData', 'Local', 'etn-mcp')),
+        false,
+        'до bootstrap каталога данных дело не дошло',
+      );
+    } finally {
+      removeDir(root);
+    }
   });
 });
 
