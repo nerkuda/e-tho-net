@@ -1,0 +1,87 @@
+{
+  "name": "39d78d2a-reminder-badge-foreign-comment",
+  "description": "Ошибка 39d78d2a, отрицательная фаза: бейдж «сегодня» (бейдж Навигации видов) не пересчитывает напоминания на ЧУЖОЕ для него событие comment.updated. Ловушка: фикстура --scenario-seed ui-probe.39d78d2a-reminder-badge-seed.mjs заводит напоминание владельца о HOME с вхождением час назад (бейдж смонтирован со счётчиком 1) и постоянный комментарий мысли-стенда (не субъект напоминания). Шаги: (1) бейдж показывает 1; (2) напоминание удаляется через REST, а его событие reminders.changed ПОДАВЛЕНО флагом --mute-ws-event reminders.changed — на сервере строк нет, а бейдж об этом не знает и обязан остаться на 1 (проверка невакуумности mute: если подавление не сработало, бейдж скроется на этом шаге, и прогон красный); (3) правка постороннего комментария через REST даёт сети настоящее событие comment.updated, доставку подтверждает запись приёмника window.etn.realtime.onEvent; (4) бейдж обязан остаться на 1 — на дофиксовой сборке он пересчитывал напоминания на любой comment.updated и скрывался (счёт 0), на исправленной не пересчитывает. Запросы GET …/reminders за прогон дополнительно ограничены serverLog.atMost: на исправленной сборке их 6 (монтирование бейджа, кэш индикаторов облачков, панель «Задачи», флаг напоминаний редактора и GET-проверка самого сценария), на дофиксовой — 7 (лишнее чтение бейджа сразу после правки комментария, видно в логе сервера). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.39d78d2a-reminder-badge-foreign-comment.scenario.json --scenario-seed client/scripts/ui-probe.39d78d2a-reminder-badge-seed.mjs --mute-ws-event reminders.changed",
+  "timeout": 180000,
+  "serverLog": {
+    "atMost": [
+      {
+        "pattern": "\"method\":\"GET\",\"url\":\"[^\"]*/networks/[^\"]*/reminders[^\"]*\",\"status\":200",
+        "max": 6
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "badge-counted-mount",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.textContent === '1'; })()",
+      "timeout": 30000
+    },
+    {
+      "name": "install-recorder",
+      "eval": "(() => { window.__rv = []; window.etn.realtime.onEvent((event) => { window.__rv.push(String(event && event.type)); }); })()"
+    },
+    {
+      "name": "delete-seeded-reminder",
+      "api": {
+        "name": "deleteSeededReminder",
+        "method": "DELETE",
+        "path": "/networks/{{networkId}}/reminders/{{reminderId}}"
+      }
+    },
+    {
+      "name": "server-owner-list-empty",
+      "api": {
+        "name": "ownerList",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/reminders",
+        "expression": "data.reminders.filter((row) => row.state === 'active').length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "mute-holds-badge",
+      "probe": "(async () => { const badge = () => document.querySelector('.view-tab-badge'); const t0 = Date.now(); while (Date.now() - t0 < 700) { const b = badge(); if (b === null || b.textContent !== '1') return 'changed:' + (b === null ? 'no-badge' : b.textContent); await new Promise((resolve) => setTimeout(resolve, 25)); } return 'stale:1'; })()",
+      "expect": "stale:1"
+    },
+    {
+      "name": "no-reminders-event-delivered",
+      "probe": "window.__rv.filter((type) => type === 'reminders.changed').length",
+      "expect": 0
+    },
+    {
+      "name": "update-unrelated-comment",
+      "api": {
+        "name": "patchUnrelatedComment",
+        "method": "PATCH",
+        "path": "/networks/{{networkId}}/comments/{{commentId}}",
+        "body": { "body_md": "Правка постороннего комментария (стенд 39d78d2a)" },
+        "expression": "data.id"
+      },
+      "expect": "{{commentId}}"
+    },
+    {
+      "name": "comment-event-delivered",
+      "waitFor": "window.__rv.includes('comment.updated')",
+      "timeout": 15000
+    },
+    {
+      "name": "badge-not-recomputed",
+      "probe": "(async () => { const badge = () => document.querySelector('.view-tab-badge'); const t0 = Date.now(); while (Date.now() - t0 < 900) { const b = badge(); if (b === null || b.textContent !== '1') return 'changed:' + (b === null ? 'no-badge' : b.textContent); await new Promise((resolve) => setTimeout(resolve, 25)); } return 'still:1'; })()",
+      "expect": "still:1"
+    }
+  ]
+}

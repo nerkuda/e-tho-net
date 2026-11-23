@@ -1,0 +1,62 @@
+{
+  "name": "39d78d2a-reminder-badge-reminder-event",
+  "description": "Ошибка 39d78d2a, положительная фаза: события, которые ДЕЙСТВИТЕЛЬНО меняют напоминания владельца, бейдж пересчитывает. Фикстура --scenario-seed ui-probe.39d78d2a-reminder-badge-seed.mjs запускается с --scenario-seed-arg --no-reminder: напоминаний в сети нет, бейдж смонтирован скрытым (счёт 0). Сценарий заводит напоминание о HOME с вхождением час назад шагом api (REST POST /reminders) — сервер публикует персональное reminders.changed; приёмник window.etn.realtime.onEvent подтверждает доставку, а бейдж обязан показать 1. Этим доказывается, что фильтр релевантности не сломал нужную ветку (на дофиксовой сборке прогон тоже зелёный). Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.39d78d2a-reminder-badge-reminder-event.scenario.json --scenario-seed client/scripts/ui-probe.39d78d2a-reminder-badge-seed.mjs --scenario-seed-arg --no-reminder",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "badge-hidden-mount",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === true && b.textContent === ''; })()",
+      "timeout": 30000
+    },
+    {
+      "name": "install-recorder",
+      "eval": "(() => { window.__rv = []; window.etn.realtime.onEvent((event) => { window.__rv.push(String(event && event.type)); }); })()"
+    },
+    {
+      "name": "create-reminder",
+      "api": {
+        "name": "createReminder",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/reminders",
+        "body": {
+          "subject_type": "thought",
+          "subject_id": "{{homeId}}",
+          "kind": "one",
+          "schedule": { "type": "once" },
+          "anchor_at": "{{anchorAt}}"
+        },
+        "expression": "data.state"
+      },
+      "expect": "active"
+    },
+    {
+      "name": "reminders-event-delivered",
+      "waitFor": "window.__rv.includes('reminders.changed')",
+      "timeout": 15000
+    },
+    {
+      "name": "badge-counted-event",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === false && b.textContent === '1'; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "badge-visible",
+      "probe": "(() => { const b = document.querySelector('.view-tab-badge'); return b === null ? 'no-badge' : b.hidden + ':' + b.textContent; })()",
+      "expect": "false:1"
+    }
+  ]
+}

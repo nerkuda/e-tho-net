@@ -5,7 +5,11 @@
  * Индикатор: одна ячейка ⏰ на все напоминания субъекта, первая в ряду; её
  * состояние берётся из кэша списка владельца. Бейдж: число «сегодня +
  * просрочено» по тому же списку, ноль — скрыт, клик — переход на сегодня,
- * `reminders.changed` и `comment.updated` — пересчёт.
+ * пересчёт — ТОЛЬКО по `reminders.changed` (персональное событие владельца).
+ * `comment.*` набор строк владельца не меняет: напоминание адресует
+ * мысль/публикацию (`reminder-service.ts`, видимость — `active`/
+ * `marked_for_deletion` субъекта), текст комментария в счёт не входит
+ * (ошибка 39d78d2a).
  */
 
 import assert from 'node:assert/strict';
@@ -95,7 +99,7 @@ function remindersChanged(networkId = NET): AnyRealtimeEvent {
   } as unknown as AnyRealtimeEvent;
 }
 
-/** Событие `comment.updated` — активность владельца (DoD 173f1540). */
+/** Событие `comment.updated` — правка «самого релевантного на вид» вида. */
 function commentUpdated(networkId = NET): AnyRealtimeEvent {
   return {
     type: 'comment.updated',
@@ -237,7 +241,7 @@ describe('бейдж «сегодня» на закладке «Дневник»
     assert.ok(calls.length >= 1, 'окно запроса передано списку');
   });
 
-  it('правка комментария освежает счётчик (DoD: reminders.changed, comment.updated)', async () => {
+  it('правка комментария счётчик не пересчитывает (ошибка 39d78d2a)', async () => {
     let loads = 0;
     (globalThis as any).window.etn = {
       reminders: {
@@ -253,9 +257,35 @@ describe('бейдж «сегодня» на закладке «Дневник»
     });
     await flush();
     const before = loads;
+    // «Самая релевантная на вид» правка: СВОЙ постоянный комментарий и
+    // `changes.body_md`. Счёт бейджа идёт по строкам `reminders` (субъект —
+    // мысль/публикация), текст комментария в него не входит — пересчёт был
+    // вхолостую на каждое событие каждого участника сети.
     routeRealtimeEvent(commentUpdated());
     await flush();
-    assert.equal(loads, before + 1, 'comment.updated перечитывает список владельца');
+    assert.equal(loads, before, 'comment.updated не перечитывает список владельца');
+    teardown();
+  });
+
+  it('reminders.changed пересчитывает счётчик (персональное событие владельца)', async () => {
+    let loads = 0;
+    (globalThis as any).window.etn = {
+      reminders: {
+        list: async () => {
+          loads += 1;
+          return listResult([]);
+        },
+      },
+    };
+    const button = new ShimElement('button');
+    const teardown = mountReminderTodayBadge(button as unknown as HTMLElement, {
+      openToday: () => undefined,
+    });
+    await flush();
+    const before = loads;
+    routeRealtimeEvent(remindersChanged());
+    await flush();
+    assert.equal(loads, before + 1, 'reminders.changed перечитывает список владельца');
     teardown();
   });
 
