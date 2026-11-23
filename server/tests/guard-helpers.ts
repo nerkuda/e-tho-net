@@ -56,9 +56,19 @@ export interface GuardRule {
    * попадают разрешённые места (сам общий модуль, легаси-файлы на время
    * переноса) и допустимые формы конструкции (например, `import type`).
    * `content` — содержимое файла целиком: нужно контекстным исключениям,
-   * которые проверяют охватывающий код, а не номер строки.
+   * которые проверяют охватывающий код, а не номер строки. Всегда сырое:
+   * комментарии не вырезаются, даже если правило просит
+   * {@link GuardRule.stripComments}.
    */
   allow?: (relPath: string, line: string, lineNo: number, content: string) => boolean;
+  /**
+   * Сканировать файл без комментариев ({@link stripSourceComments}): строка,
+   * где запрещённая конструкция лишь упомянута в пояснении, нарушением не
+   * считается. Номера строк сохраняются — вырезанный текст заменяется
+   * пробелами. Строковые литералы остаются: правило про SQL в строках
+   * продолжает работать. По умолчанию комментарии сканируются как код.
+   */
+  stripComments?: boolean;
 }
 
 /** Настройки сканирования. */
@@ -116,6 +126,64 @@ export function listSourceFiles(root: string, options: GuardScanOptions = {}): s
   return result.sort();
 }
 
+/**
+ * Вырезает комментарии, сохраняя переводы строк (номера строк не съезжают).
+ * Строковые литералы не трогаются: `https://` внутри строки — не комментарий,
+ * а SQL в строке остаётся виден правилу. Шаблонные литералы обрабатываются
+ * как строки; `//` внутри `${}` комментарием не считается — в разбираемых
+ * файлах такого нет.
+ */
+export function stripSourceComments(source: string): string {
+  let out = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i]!;
+    const next = source[i + 1];
+    if (ch === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      out += '  ';
+      i += 2;
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+        out += source[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      if (i < source.length) {
+        out += '  ';
+        i += 2;
+      }
+      continue;
+    }
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < source.length) {
+        const c = source[i]!;
+        out += c;
+        i += 1;
+        if (c === '\\') {
+          if (i < source.length) {
+            out += source[i];
+            i += 1;
+          }
+          continue;
+        }
+        if (c === quote) break;
+      }
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /** Прогоняет правила по дереву и собирает нарушения. */
 export function collectViolations(
   root: string,
@@ -135,10 +203,13 @@ export function collectViolations(
     const content = fs.readFileSync(file, 'utf8');
     for (const rule of rules) {
       if (rule.include && !rule.include(rel)) continue;
+      // Комментарии вырезаются только по запросу правила; `allow` всегда
+      // получает сырой текст — контекстные исключения смотрят на пояснения.
+      const scanned = rule.stripComments ? stripSourceComments(content) : content;
       if (rule.pattern) {
         // Без флагов g/y — test() по строке не запоминает позицию.
         const re = new RegExp(rule.pattern.source, rule.pattern.flags.replace(/[gy]/g, ''));
-        const lines = content.split('\n');
+        const lines = scanned.split('\n');
         lines.forEach((line, i) => {
           if (!re.test(line)) return;
           if (rule.allow && rule.allow(rel, line, i + 1, content)) return;
@@ -147,12 +218,12 @@ export function collectViolations(
       }
       if (rule.filePattern) {
         const re = new RegExp(rule.filePattern.source, `g${rule.filePattern.flags.replace(/[gy]/g, '')}`);
-        for (const match of content.matchAll(re)) {
+        for (const match of scanned.matchAll(re)) {
           const index = match.index ?? 0;
-          const lineNo = content.slice(0, index).split('\n').length;
-          const lineStart = content.lastIndexOf('\n', index) + 1;
-          const lineEndRaw = content.indexOf('\n', index);
-          const line = content.slice(lineStart, lineEndRaw === -1 ? content.length : lineEndRaw);
+          const lineNo = scanned.slice(0, index).split('\n').length;
+          const lineStart = scanned.lastIndexOf('\n', index) + 1;
+          const lineEndRaw = scanned.indexOf('\n', index);
+          const line = scanned.slice(lineStart, lineEndRaw === -1 ? scanned.length : lineEndRaw);
           if (rule.allow && rule.allow(rel, line, lineNo, content)) continue;
           push({ rule: rule.name, file: rel, line: lineNo, text: line.trim() });
         }
