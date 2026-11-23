@@ -429,8 +429,10 @@ export const zh = {
   'serverUpdate.progress.reconnect': '重启后客户端将自动重新连接，并在新版本上继续工作。',
   'serverUpdate.failure.reason': '原因：%1',
   'serverUpdate.failure.journal': '安装程序日志：%1',
-  'serverUpdate.failure.installerExit': '安装程序以代码 %1 退出；回滚由安装程序完成',
-  'serverUpdate.failure.installerExitNoCode': '安装程序异常退出；回滚由安装程序完成',
+  'serverUpdate.failure.installerExit':
+    '安装程序以代码 %1 退出；仅当失败发生在替换文件之后才会回滚——详情见安装程序日志',
+  'serverUpdate.failure.installerExitNoCode':
+    '安装程序异常退出；仅当失败发生在替换文件之后才会回滚——详情见安装程序日志',
   'serverUpdate.failure.installerPrecondition':
     '安装程序需要手动模式——请手动执行更新并查看安装程序日志',
   'serverUpdate.failure.installerTimeout':

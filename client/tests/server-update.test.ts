@@ -176,7 +176,8 @@ describe('server-update: снимок кеша и доступность обн�
 describe('server-update: итог задания и пути', () => {
   it('клиент 0.15.2 + задание без reason: общий текст, английский error не показан', () => {
     const serverText =
-      'The installer exited with code 10; the rollback was performed by the installer, ' +
+            'The installer exited with code 10; files are restored from this run\'s snapshot ' +
+      'only if the failure happened after replacement (the installer log tells which), ' +
       'log: C:\\ProgramData\\ETN\\logs\\install-20261029.log';
     // Сервер 0.15.1 поля `reason` не присылает вовсе (в JSON его нет) —
     // проверяем и `null`, и отсутствующее поле.
@@ -216,7 +217,8 @@ describe('server-update: итог задания и пути', () => {
 
   it('failed с reason: причина локализована, английский error не показывается', () => {
     const serverText =
-      'The installer exited with code 10; the rollback was performed by the installer, ' +
+            'The installer exited with code 10; files are restored from this run\'s snapshot ' +
+      'only if the failure happened after replacement (the installer log tells which), ' +
       'log: C:\\logs\\install-1.log';
     const cases: Array<[UpdateJob['reason'], string]> = [
       ['installer-target', 'сервер не принял целевую версию'],

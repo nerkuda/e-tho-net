@@ -360,13 +360,19 @@ function toUpdateJob(row: UpdateJobRow): UpdateJob {
   };
 }
 
-/** Текст итога по ненулевому коду установщика. */
+/**
+ * Текст итога по ненулевому коду установщика. Код не говорит, был ли откат:
+ * сбой до замены файлов (например, бэкап) оставляет файлы как были, сбой после
+ * замены установщик откатывает из снимка этого запуска. Поэтому текст не
+ * утверждает откат, а отсылает за итогом в журнал.
+ */
 function describeFailureExit(result: InstallerRunResult): string {
   const journal =
     result.logPath === null ? "installer log not found" : `log: ${result.logPath}`;
   return (
     `The installer exited with code ${String(result.code)}; ` +
-    `the rollback was performed by the installer, ${journal}`
+    "files are restored from this run's snapshot only if the failure happened after replacement " +
+    `(the installer log tells which), ${journal}`
   );
 }
 

@@ -891,12 +891,16 @@ export const en = {
   'serverUpdate.failure.reason': 'Reason: %1',
   /** Журнал установщика: `%1` — путь. */
   'serverUpdate.failure.journal': 'Installer log: %1',
-  /** The installer exited with a non-zero code: `%1` — exit code. */
+  /**
+   * Установщик завершился ненулевым кодом: `%1` — код возврата. Откат
+   * выполняется только при сбое после замены файлов, поэтому текст не
+   * утверждает его, а отсылает за итогом в журнал.
+   */
   'serverUpdate.failure.installerExit':
-    'the installer exited with code %1; the rollback was performed by the installer',
+    'the installer exited with code %1; the rollback runs only if the failure happened after files were replaced - the installer log has the outcome',
   /** The installer exited without an exit code (signal/abnormal termination). */
   'serverUpdate.failure.installerExitNoCode':
-    'the installer terminated abnormally; the rollback was performed by the installer',
+    'the installer terminated abnormally; the rollback runs only if the failure happened after files were replaced - the installer log has the outcome',
   /** Exit code 20: the installer requires manual mode. */
   'serverUpdate.failure.installerPrecondition':
     'the installer requires manual mode — run the update manually and check the installer log',
