@@ -4,7 +4,8 @@
  * Subscribes to `etn.realtime.*` and funnels events into the store:
  *  - status → `rtStatus` (🟢/🟡/🔴 indicator, H19 offline blocking);
  *  - events → narrowed via {@link isRealtimeEvent}, described for the status
- *    bar, then routed through the data layer (`routeRealtimeEvent`) and the
+ *    bar (**only for the ACTIVE network**, ошибка eb6f5794), then routed
+ *    through the data layer (`routeRealtimeEvent`) and the
  *    single derived-effects bridge (`effects.onEventApplied`);
  *  - `resume.stale` → full re-focus request;
  *  - derived effects: `focus-lost` (focused thought deleted) and
@@ -240,6 +241,8 @@ export function initRealtime(): void {
     const networkId = store.state.networkId;
     if (networkId !== lastNetworkId) {
       lastNetworkId = networkId;
+      // Текст события прежней сети не висит на новой вкладке (eb6f5794).
+      clearEventText();
       const next = getRtStatus(store.state);
       if (next !== store.state.rtStatus) store.update({ rtStatus: next });
       // A stale event for this network arrived while it was inactive — the
@@ -320,8 +323,16 @@ export function initRealtime(): void {
   etn.realtime.onEvent((raw: unknown) => {
     if (!isRealtimeEvent(raw)) return;
     const evt = raw;
-    store.update({ lastEvent: describeEvent(evt) });
-    scheduleEventHide();
+    // Статусная строка показывает события ТОЛЬКО активной сети (ошибка
+    // eb6f5794): пул realtime держит сокет каждой открытой вкладки, поэтому
+    // сюда приходят события всех сетей соединения — в тексте статусной строки
+    // чужое событие читалось бы как событие своей вкладки. Фильтр касается
+    // только текста: маркер «*», роутер данных и мост производных эффектов
+    // ниже получают событие любой сети, как и раньше.
+    if (evt.network_id === store.state.networkId) {
+      store.update({ lastEvent: describeEvent(evt) });
+      scheduleEventHide();
+    }
 
     // Q4: mark every tab whose network received this event with a dirty
     // marker «*». The active tab also gets the marker (cleared on activation).
@@ -347,6 +358,15 @@ export function initRealtime(): void {
     routeRealtimeEvent(evt, { networkId: store.state.networkId });
     effects.onEventApplied(evt);
   });
+}
+
+/** Гасит текст события статусной строки сразу (смена активной сети). */
+function clearEventText(): void {
+  if (hideTimer !== null) {
+    window.clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+  if (store.state.lastEvent !== null) store.update({ lastEvent: null });
 }
 
 /** Hides the status-bar event text after the TTL. */
