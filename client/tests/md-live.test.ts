@@ -21,6 +21,7 @@ import {
   type TaskHintContext,
 } from '../src/renderer/editor/md-live.js';
 import { t } from '../src/renderer/lib/i18n.js';
+import { mdRenderCacheInternals } from '../src/renderer/editor/md-render-cache.js';
 import { ShimElement } from './dom-shim.js';
 import { createParsedState } from './editor-parse.js';
 import { wikiLinkLanguage } from '../src/renderer/editor/wiki-link.js';
@@ -1068,4 +1069,32 @@ test('HtmlWidget: печать НИЖЕ блока и движение каре�
   a.forEach((widget, index) => {
     assert.equal(widget.eq(b[index]!), true, `#${index}: движение каретки — виджеты равны`);
   });
+});
+
+test('блоки: неизменённые разбираются из кеша при сдвиге правкой выше (83785f1e)', () => {
+  mdRenderCacheInternals.reset();
+  const first = htmlWidgets(buildState(HTML_DOC, HTML_DOC.length));
+  assert.equal(first.length, 3, 'fence, таблица и картинка найдены');
+  const afterFirst = mdRenderCacheInternals.stats();
+  assert.equal(afterFirst.parses, 3, 'каждый блок разобран ровно один раз при первой сборке');
+
+  // Правка ВЫШЕ блоков: исходники не изменились, сдвинулись только смещения.
+  const shiftedDoc = `${TYPED_ABOVE}${HTML_DOC}`;
+  const shifted = htmlWidgets(buildState(shiftedDoc, shiftedDoc.length));
+  assert.equal(shifted.length, 3, 'состав блоков тот же');
+  const afterShift = mdRenderCacheInternals.stats();
+  assert.equal(afterShift.parses, afterFirst.parses, 'сдвиг не разбирает блоки заново');
+  assert.ok(afterShift.hits >= 3, 'HTML каждого блока взят из кеша');
+  assert.deepEqual(
+    shifted.map((widget) => widget.html),
+    first.map((widget) => widget.html),
+    'HTML блоков не изменился',
+  );
+
+  // Правка ВНУТРИ блока: у него другой исходник — заново разобран только он.
+  const editedDoc = HTML_DOC.replace('A-->B', 'A-->C');
+  const edited = htmlWidgets(buildState(editedDoc, editedDoc.length));
+  const afterEdit = mdRenderCacheInternals.stats();
+  assert.equal(afterEdit.parses, afterFirst.parses + 1, 'изменённый блок разобран заново');
+  assert.notEqual(edited[0]!.html, first[0]!.html, 'HTML изменённого блока описывает правку');
 });

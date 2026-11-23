@@ -10,13 +10,17 @@
  *
  * Декорации выдаёт StateField (block-декорации, пересекающие переносы строк,
  * из ViewPlugin запрещены); клики по виджетам обрабатывает domEventHandlers.
+ *
+ * Разбор HTML блоков-виджетов идёт через кеш `md-render-cache.ts` (ошибка
+ * 83785f1e): `buildDecorations` пересобирается на каждую транзакцию, а исходник
+ * неактивного блока при правке в другом месте не меняется — без кеша
+ * markdown-it разбирал его заново на каждый введённый символ.
  */
 
 import { syntaxTree } from '@codemirror/language';
 import { EditorState, Facet, StateField, type Range, type SelectionRange } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 
-import { renderMarkdown } from '@etn/markdown';
 import {
   TASK_MARKER_PATTERN,
   WIKI_LINK_CLASS,
@@ -33,6 +37,7 @@ import { t } from '../lib/i18n.js';
 import { choiceControl } from '../lib/ui/choice-row.js';
 import { isCollapsedHiddenAt, setCollapseEffect } from './comment-collapse.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
+import { cachedRenderMarkdown } from './md-render-cache.js';
 
 /** Корневой класс всех виджетов live preview. */
 export const MD_WIDGET_CLASS = 'md-widget';
@@ -766,7 +771,7 @@ function buildDecorations(state: EditorState): DecorationSet {
               value: Decoration.replace({
                 // Блок занимает несколько строк — обязателен block: true.
                 block: true,
-                widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
+                widget: new HtmlWidget(from, to, cachedRenderMarkdown(state.sliceDoc(from, to))),
               }),
             });
             return false;
@@ -779,7 +784,7 @@ function buildDecorations(state: EditorState): DecorationSet {
               from,
               to,
               value: Decoration.replace({
-                widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
+                widget: new HtmlWidget(from, to, cachedRenderMarkdown(state.sliceDoc(from, to))),
               }),
             });
             return false;
@@ -794,7 +799,7 @@ function buildDecorations(state: EditorState): DecorationSet {
               value: Decoration.replace({
                 // Таблица занимает несколько строк — обязателен block: true.
                 block: true,
-                widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
+                widget: new HtmlWidget(from, to, cachedRenderMarkdown(state.sliceDoc(from, to))),
               }),
             });
             return false;

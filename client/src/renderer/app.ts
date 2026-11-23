@@ -1024,6 +1024,14 @@ export async function boot(): Promise<void> {
   if (import.meta.env.MODE === 'test') {
     const { registerTestLocale } = await import('./lib/locales/test.js');
     registerTestLocale();
+    // Счётчик разбора markdown для GUI-стенда (ошибка 83785f1e): гейт «ввод
+    // текста не переразбирает неизменённые блоки» читает `parses`/`hits` кеша из
+    // страницы — рендерер не отдаёт модульные экспорты наружу, а мерить разбор
+    // по DOM нельзя. Тестовая сборка и есть место таких швов (`--mode test`),
+    // в production-сборке ветка вырезана статически.
+    const { mdRenderCacheInternals } = await import('./editor/md-render-cache.js');
+    (window as unknown as { __etnMdRenderCache?: unknown }).__etnMdRenderCache =
+      mdRenderCacheInternals;
   }
   await initLang();
   // Layer colour indication (0.6.4 §2.2a): one store subscription writing
