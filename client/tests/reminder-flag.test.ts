@@ -108,6 +108,20 @@ function remindersChanged(networkId = NET, seq = 3): AnyRealtimeEvent {
   } as unknown as AnyRealtimeEvent;
 }
 
+/** Событие `thought.updated` с полями видимости субъекта напоминания. */
+function thoughtUpdated(changes: Record<string, unknown>): AnyRealtimeEvent {
+  return {
+    type: 'thought.updated',
+    seq: 4,
+    ts: new Date().toISOString(),
+    actor: { user_id: 'u1', client_id: 'c1' },
+    audience: 'network',
+    network_id: NET,
+    data: { id: 't1', changes, version: 2 },
+    layer_id: '00000000-0000-0000-0000-000000000000',
+  } as unknown as AnyRealtimeEvent;
+}
+
 /** Дождаться промисов запросов и отрисовки. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
@@ -640,6 +654,32 @@ describe('флаг напоминаний — события', () => {
     routeRealtimeEvent(remindersChanged('00000000-0000-4000-8000-0000000000ff', 7));
     await flush();
     assert.equal(calls.list.length, before, 'чужое событие не перечитывает список');
+  });
+
+  it('смена видимости субъекта перечитывает подпись шапки (ошибка 71cb791e)', async () => {
+    let current = listResult([reminder()]);
+    installBridge(() => current);
+    const flag = createReminderFlag({
+      networkId: NET,
+      thoughtId: 't1',
+      thoughtTitle: 'Мысль',
+      openEditor: async () => null,
+    });
+    await flush();
+    assert.equal(flag.root.textContent, reminderLabel(reminder()));
+
+    // Помещение субъекта в корзину: сервер перестаёт отдавать строку
+    // (listReminders), события `reminders.changed` нет — сигнал штатный.
+    current = listResult([]);
+    const before = calls.list.length;
+    routeRealtimeEvent(thoughtUpdated({ marked_for_deletion: true }));
+    await flush();
+    assert.equal(calls.list.length, before + 1, 'список владельца перечитан');
+    assert.equal(
+      flag.root.textContent,
+      t('reminder.addFlag'),
+      'подпись вернулась к пустому состоянию — строк больше нет',
+    );
   });
 });
 

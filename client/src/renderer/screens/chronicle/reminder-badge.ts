@@ -9,14 +9,17 @@
  *
  * Обновление: первая загрузка при монтировании рабочего пространства, каждое
  * событие `reminders.changed` (напоминания персональны — событие приходит только
- * владельцу, ADR 03e429ed) и смена активной сети; волна событий коалесится в
- * один запрос. `comment.*` в счёт не входит: напоминание адресует мысль или
- * публикацию (`reminders.subject_type`), а видимость строки — `active`/
- * `marked_for_deletion` субъекта (`domain/reminder-service.ts`), поэтому ни
- * правка, ни удаление комментария набор строк владельца не меняют — подписка
- * на `comment.updated` давала сетевой запрос вхолостую на каждое событие
- * каждого участника сети (ошибка 39d78d2a). Ноль — бейдж скрыт. Клик —
- * «Дневник» на сегодня (единый переход `openChronicleDay`, второго пути нет).
+ * владельцу, ADR 03e429ed), каждая смена видимости субъекта — корзина,
+ * `active`, настройка `show_inactive` (общий классификатор
+ * `lib/live/reminder-events.ts`, ошибка 71cb791e) — и смена активной сети;
+ * волна событий коалесится в один запрос. `comment.*` в счёт не входит:
+ * напоминание адресует мысль или публикацию (`reminders.subject_type`), а
+ * видимость строки — `active`/`marked_for_deletion` субъекта
+ * (`domain/reminder-service.ts`), поэтому ни правка, ни удаление комментария
+ * набор строк владельца не меняют — подписка на `comment.updated` давала
+ * сетевой запрос вхолостую на каждое событие каждого участника сети (ошибка
+ * 39d78d2a). Ноль — бейдж скрыт. Клик — «Дневник» на сегодня (единый переход
+ * `openChronicleDay`, второго пути нет).
  *
  * Сам бейдж — фасад `lib/ui/badge.ts`; модуль владеет только счётом, окном
  * запроса и подпиской.
@@ -26,6 +29,7 @@ import { store } from '../../state.js';
 import { etn } from '../../lib/etn.js';
 import { t } from '../../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../../lib/live/event-router.js';
+import { isReminderSubjectVisibilityEvent } from '../../lib/live/reminder-events.js';
 import { badge, setBadgeText } from '../../lib/ui/badge.js';
 import {
   REMINDERS_OVERDUE_DAYS,
@@ -125,11 +129,13 @@ export function mountReminderTodayBadge(
   node.addEventListener('click', onClick);
 
   const unsubscribeEvents = onRoutedRealtimeEvent((event) => {
-    // Только `reminders.changed` — сам набор строк владельца. `comment.*` набор
-    // не меняет: строки считаются по субъекту-мысли/публикации, а не по тексту
+    // `reminders.changed` — сам набор строк владельца. Видимость субъекта
+    // (корзина, `active`, `show_inactive`) меняет его БЕЗ этого события — её
+    // опознаёт общий классификатор (ошибка 71cb791e). `comment.*` набор не
+    // меняет: строки считаются по субъекту-мысли/публикации, а не по тексту
     // комментария (ошибка 39d78d2a), поэтому подписка на них — запрос вхолостую.
-    if (event.type !== 'reminders.changed') return;
     if (event.network_id !== store.state.networkId) return;
+    if (event.type !== 'reminders.changed' && !isReminderSubjectVisibilityEvent(event)) return;
     refresh();
   });
   // Смена активной сети (вкладки) — другой список владельца: пересчитать.

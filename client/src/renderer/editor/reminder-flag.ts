@@ -49,6 +49,7 @@ import { errText } from '../lib/dom.js';
 import { etn } from '../lib/etn.js';
 import { t } from '../lib/i18n.js';
 import { onRoutedRealtimeEvent } from '../lib/live/index.js';
+import { isReminderSubjectVisibilityEvent } from '../lib/live/reminder-events.js';
 import { notice } from '../lib/notice.js';
 import { uiButton } from '../lib/ui/button.js';
 import { store } from '../state.js';
@@ -106,16 +107,18 @@ const liveFlags = new Set<LiveFlag>();
 let flagsSubscription: (() => void) | null = null;
 
 /**
- * Зарегистрировать флаг в ЕДИНОЙ подписке на `reminders.changed`: второй
- * клиент/панель меняет напоминания — шапка обновляет подпись без перезагрузки
- * редактора. Подписка одна на модуль: пересборка шапки создаёт новый флаг, а
- * старый узел отваливается и выпадает из реестра по `isConnected`.
+ * Зарегистрировать флаг в ЕДИНОЙ подписке на `reminders.changed` и смену
+ * видимости субъекта: второй клиент/панель меняет напоминания, корзина или
+ * `active` субъекта убирают строку из списка владельца (ошибка 71cb791e) —
+ * шапка обновляет подпись без перезагрузки редактора. Подписка одна на модуль:
+ * пересборка шапки создаёт новый флаг, а старый узел отваливается и выпадает из
+ * реестра по `isConnected`.
  */
 function watchFlag(flag: LiveFlag): void {
   liveFlags.add(flag);
   if (flagsSubscription !== null) return;
   flagsSubscription = onRoutedRealtimeEvent((event) => {
-    if (event.type !== 'reminders.changed') return;
+    if (event.type !== 'reminders.changed' && !isReminderSubjectVisibilityEvent(event)) return;
     for (const entry of [...liveFlags]) {
       if (entry.root.isConnected === false) {
         liveFlags.delete(entry);
@@ -136,7 +139,8 @@ export function resetReminderFlagsForTests(): void {
 
 /**
  * Создать флаг напоминаний. `refresh()` вызывается при сборке шапки, смене
- * мысли (`headerRetarget`), после каждой команды меню и по `reminders.changed`.
+ * мысли (`headerRetarget`), после каждой команды меню, по `reminders.changed`
+ * и по смене видимости субъекта (ошибка 71cb791e).
  */
 export function createReminderFlag(options: ReminderFlagOptions): ReminderFlagHandle {
   // Кнопка — фасад словаря `lib/ui/button.ts` (ghost): флаг выглядит как

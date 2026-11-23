@@ -75,6 +75,7 @@ import { etn } from '../etn.js';
 import { formatDate, t } from '../i18n.js';
 import { onRoutedRealtimeEvent } from '../live/event-router.js';
 import { isThoughtVisualEvent } from '../live/thought-visual-events.js';
+import { isReminderSubjectVisibilityEvent } from '../live/reminder-events.js';
 import { isTrashVisibilityEvent } from '../live/trash-events.js';
 import { MENU_SEPARATOR, menuAction, menuSubmenu, type MenuItem } from '../menu.js';
 import { notice } from '../notice.js';
@@ -2169,6 +2170,16 @@ export function mountTaskList(host: HTMLElement, options: TaskListOptions): Task
         missingSubjects.add(event.data.id);
         renderView();
       }
+      scheduleSilentReload();
+      return;
+    }
+    // Смена видимости субъекта напоминания (ошибка 71cb791e): неактуальность
+    // (`active`), корзина публикации и настройка «показывать неактуальные»
+    // меняют состав напоминаний владельца БЕЗ `reminders.changed`. Ветка стоит
+    // ДО визуала: субъект напоминания может не входить в строки панели, и
+    // проверка `subjectData` пропустила бы событие. Без напоминаний событие
+    // панель не касается (39d78d2a — лишних запросов не добавляем).
+    if (withReminders && isReminderSubjectVisibilityEvent(event)) {
       scheduleSilentReload();
       return;
     }

@@ -1,0 +1,176 @@
+{
+  "name": "71cb791e-reminder-counters-subject-visibility",
+  "description": "Ошибка 71cb791e: счётчики напоминаний устаревают при смене видимости субъекта. Фикстура --scenario-seed ui-probe.39d78d2a-reminder-badge-seed.mjs --scenario-seed-arg --no-reminder: сеть с HOME, напоминаний нет, бейдж смонтирован скрытым. Сценарий заводит напоминание о мысли стенда (REST POST /reminders → персональное reminders.changed → бейдж 1), затем меняет видимость субъекта штатными действиями: корзина (POST /thoughts/batch op=trash), возврат (PATCH marked_for_deletion=false), неактуальность (PATCH active=false), включение/выключение настройки «показывать неактуальные» (PUT /preferences/show_inactive). GET /reminders после каждой смены подтверждает, что СЕРВЕР уже фильтрует строки (гейт не вакуумный), а бейдж обязан показать то же число: до фикса он остаётся с прежним счётом. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.71cb791e-reminder-counters-subject-visibility.scenario.json --scenario-seed client/scripts/ui-probe.39d78d2a-reminder-badge-seed.mjs --scenario-seed-arg --no-reminder --server-language ru",
+  "timeout": 240000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "badge-hidden-mount",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === true && b.textContent === ''; })()",
+      "timeout": 30000
+    },
+    {
+      "name": "create-reminder",
+      "api": {
+        "name": "createReminder",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/reminders",
+        "body": {
+          "subject_type": "thought",
+          "subject_id": "{{thoughtId}}",
+          "kind": "one",
+          "schedule": { "type": "once" },
+          "anchor_at": "{{anchorAt}}"
+        },
+        "expression": "data.state"
+      },
+      "expect": "active"
+    },
+    {
+      "name": "badge-counted",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === false && b.textContent === '1'; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "reminders-before-trash",
+      "api": {
+        "name": "remindersBeforeTrash",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/reminders",
+        "expression": "data.reminders.length"
+      },
+      "expect": 1
+    },
+    {
+      "name": "trash-subject",
+      "api": {
+        "name": "trashSubject",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/batch",
+        "body": { "ids": ["{{thoughtId}}"], "op": "trash" },
+        "expression": "data.affected"
+      },
+      "expect": 1
+    },
+    {
+      "name": "reminders-after-trash",
+      "api": {
+        "name": "remindersAfterTrash",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/reminders",
+        "expression": "data.reminders.length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "badge-after-trash",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === true && b.textContent === ''; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "restore-subject",
+      "api": {
+        "name": "restoreSubject",
+        "method": "PATCH",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}",
+        "body": { "marked_for_deletion": false },
+        "expression": "data.marked_for_deletion"
+      },
+      "expect": false
+    },
+    {
+      "name": "badge-after-restore",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === false && b.textContent === '1'; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "subject-inactive",
+      "api": {
+        "name": "subjectInactive",
+        "method": "PATCH",
+        "path": "/networks/{{networkId}}/thoughts/{{thoughtId}}",
+        "body": { "active": false },
+        "expression": "data.active"
+      },
+      "expect": false
+    },
+    {
+      "name": "reminders-after-inactive",
+      "api": {
+        "name": "remindersAfterInactive",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/reminders",
+        "expression": "data.reminders.length"
+      },
+      "expect": 0
+    },
+    {
+      "name": "badge-after-inactive",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === true && b.textContent === ''; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "show-inactive-on",
+      "api": {
+        "name": "showInactiveOn",
+        "method": "PUT",
+        "path": "/networks/{{networkId}}/preferences/show_inactive",
+        "body": { "value": true },
+        "expression": "data.value"
+      },
+      "expect": true
+    },
+    {
+      "name": "reminders-show-inactive",
+      "api": {
+        "name": "remindersShowInactive",
+        "method": "GET",
+        "path": "/networks/{{networkId}}/reminders",
+        "expression": "data.reminders.length"
+      },
+      "expect": 1
+    },
+    {
+      "name": "badge-show-inactive",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === false && b.textContent === '1'; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "show-inactive-off",
+      "api": {
+        "name": "showInactiveOff",
+        "method": "PUT",
+        "path": "/networks/{{networkId}}/preferences/show_inactive",
+        "body": { "value": false },
+        "expression": "data.value"
+      },
+      "expect": false
+    },
+    {
+      "name": "badge-show-inactive-off",
+      "waitFor": "(() => { const b = document.querySelector('.view-tab-badge'); return b !== null && b.hidden === true && b.textContent === ''; })()",
+      "timeout": 15000
+    },
+    {
+      "name": "final-state",
+      "probe": {
+        "name": "finalBadge",
+        "expression": "(() => { const b = document.querySelector('.view-tab-badge'); return b === null ? 'no-badge' : b.hidden + ':' + b.textContent; })()"
+      },
+      "expect": "true:"
+    }
+  ]
+}
