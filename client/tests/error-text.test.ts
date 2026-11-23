@@ -300,4 +300,53 @@ describe('errText: дружелюбные сообщения', () => {
     );
     assert.equal(errText(new EtnError('VALIDATION_ERROR', 'bad input')), 'проверьте введённые данные');
   });
+
+  it('422 ограничений свойства: причина по details.field и details.fields (ошибка 0033ea14)', () => {
+    // DoD 3: диалог записи свойства обязан назвать поле/правило, а не отдавать
+    // общий «проверьте введённые данные». Идентификаторы типов не показываем.
+    const missingTargetType = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'thought type 11111111-1111-4111-8111-111111111111 not found',
+        { field: 'config.allowed_target_type_ids', id: '11111111-1111-4111-8111-111111111111' },
+      ),
+    );
+    assert.equal(
+      missingTargetType,
+      'ограничение «Типы назначений» ссылается на несуществующий тип — выберите типы заново',
+    );
+    assert.doesNotMatch(missingTargetType, /[0-9a-f]{8}-[0-9a-f]{4}/i);
+    assertFriendly(missingTargetType);
+
+    const missingSourceType = errText(
+      new EtnError('VALIDATION_ERROR', 'thought type X not found', {
+        field: 'config.allowed_source_type_ids',
+        id: 'X',
+      }),
+    );
+    assert.equal(
+      missingSourceType,
+      'ограничение «Типы источников» ссылается на несуществующий тип — выберите типы заново',
+    );
+    assertFriendly(missingSourceType);
+
+    const missingLinkType = errText(
+      new EtnError('VALIDATION_ERROR', 'link type missing', { field: 'config.link_type_id' }),
+    );
+    assert.equal(missingLinkType, 'тип связи свойства не найден — выберите тип связи заново');
+    assertFriendly(missingLinkType);
+
+    // Неизвестные поля тела запроса: конкретный список, без серверного
+    // английского сообщения (именно этот случай давал «Unknown fields: mode»
+    // при сохранении ограничений свойства-связи).
+    const unknownFields = errText(
+      new EtnError('VALIDATION_ERROR', 'Unknown fields: mode. Allowed: property_id, side.', {
+        fields: ['mode'],
+        allowed: ['property_id', 'side'],
+      }),
+    );
+    assert.equal(unknownFields, 'сервер не понимает эти поля: mode');
+    assert.doesNotMatch(unknownFields, /Unknown|Allowed/);
+    assertFriendly(unknownFields);
+  });
 });
