@@ -79,7 +79,7 @@ import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './l
 import { listThoughtHoldingLayers } from './holding-layers.js';
 import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
 import {
-  removeLinkTarget,
+  removeLinkTargets,
   type LinkRemoval,
   type LinkRemovalAction,
 } from './link-target-removal.js';
@@ -1313,9 +1313,9 @@ function setLinkPropertyTargets(
   for (const [targetId, link] of existing) {
     if (wanted.has(targetId)) continue;
     // Умное удаление цели (0.14.1, ADR a967d865): основа — физически, слой —
-    // корзина для ребра из основы/предков и физически для свежесозданного.
-    const removal = removeLinkTarget(ndb, link.id, actorUserId);
-    if (removal !== null) removals.push(removal);
+    // корзина для ребра из основы/предков и физически для свежесозданного;
+    // живой дубль тройки снимается целиком (ошибка 374c9776).
+    removals.push(...removeLinkTargets(ndb, link.id, actorUserId));
   }
 
   const result: string[] = [];
@@ -1387,8 +1387,8 @@ export function setLinkPropertySourcesForTarget(
     const removals: LinkRemoval[] = [];
     for (const [sourceId, link] of existing) {
       if (wanted.has(sourceId)) continue;
-      const removal = removeLinkTarget(ndb, link.id, actorUserId);
-      if (removal !== null) removals.push(removal);
+      // Дубль тройки снимается целиком той же процедурой (ошибка 374c9776).
+      removals.push(...removeLinkTargets(ndb, link.id, actorUserId));
     }
     const result: string[] = [];
     const createdLinkIds: string[] = [];
@@ -1492,7 +1492,8 @@ function addLinkPropertyTarget(
 /**
  * Убрать одну цель из набора свойства-связи (операция `remove`): применяет
  * единое умное удаление (ADR a967d865 — основа физически, слой по
- * происхождению ребра). Отсутствующее/уже помеченное ребро — no-op.
+ * происхождению ребра; живой дубль тройки снимается целиком, ошибка
+ * 374c9776). Отсутствующее/уже помеченное ребро — no-op (пустой список).
  */
 function removeLinkPropertyTarget(
   ndb: NetworkDb,
@@ -1501,7 +1502,7 @@ function removeLinkPropertyTarget(
   targetId: string,
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): LinkRemoval | null {
+): LinkRemoval[] {
   const cfg = prop.config ?? {};
   const linkTypeId = linkPropertyLinkTypeId(cfg);
   // Направление — из display-имени (748b80fd), иначе сторона привязки
@@ -1510,8 +1511,8 @@ function removeLinkPropertyTarget(
     nameDirection ??
     linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
-  if (existing === undefined) return null;
-  return removeLinkTarget(ndb, existing.id, actorUserId);
+  if (existing === undefined) return [];
+  return removeLinkTargets(ndb, existing.id, actorUserId);
 }
 
 // ===========================================================================
@@ -4890,8 +4891,9 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
       .all(...params) as Array<{ id: string }>;
     for (const link of links) {
       // Единое умное удаление (ADR a967d865): основа — физически, слой —
-      // корзина для ребра из основы/предков.
-      if (removeLinkTarget(ndb, link.id, 'system') !== null) cleared += 1;
+      // корзина для ребра из основы/предков; дубль тройки снимается целиком
+      // (ошибка 374c9776), поэтому счёт — по снятым строкам.
+      cleared += removeLinkTargets(ndb, link.id, 'system').length;
     }
   }
   return cleared;
@@ -5689,6 +5691,10 @@ export function addLinkPropertyValue(
  * сторон симметричного типа. Без `side` направление ищется по живому ребру к
  * конкретной цели (owner→target однозначно задаёт направление) — до 0.14.1
  * `properties.remove` работал именно так.
+ *
+ * `removals` — все снятые строки: живой дубль тройки в разных слоях снимается
+ * целиком (ошибка 374c9776), и фасады публикуют событие по каждой строке;
+ * `link_id`/`action`/`link` описывают запрошенную строку (она идёт первой).
  */
 export function removeLinkPropertyValue(
   ndb: NetworkDb,
@@ -5698,7 +5704,12 @@ export function removeLinkPropertyValue(
   targetId: string,
   actorUserId: string,
   side: LinkPropertySide | null = null,
-): { link_id: string | null; action: LinkRemovalAction | null; link: Link | null } {
+): {
+  link_id: string | null;
+  action: LinkRemovalAction | null;
+  link: Link | null;
+  removals: LinkRemoval[];
+} {
   if (ownerType !== 'thought') {
     throw new EtnError('VALIDATION_ERROR', "link properties are filled on thoughts only", {
       owner_type: ownerType,
@@ -5742,10 +5753,12 @@ export function removeLinkPropertyValue(
           { field: 'side', key, target: targetId, allowed: LINK_PROPERTY_SIDES },
         );
       }
-      if (!outLive && !inLive) return { link_id: null, action: null, link: null };
+      if (!outLive && !inLive) {
+        return { link_id: null, action: null, link: null, removals: [] };
+      }
       direction = outLive ? 'out' : 'in';
     }
-    const removal = removeLinkPropertyTarget(
+    const removals = removeLinkPropertyTarget(
       ndb,
       ownerId,
       prop,
@@ -5753,11 +5766,13 @@ export function removeLinkPropertyValue(
       actorUserId,
       direction,
     );
-    if (removal !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
+    if (removals.length > 0) touchOwner(ndb, ownerType, ownerId, actorUserId);
+    const primary = removals[0] ?? null;
     return {
-      link_id: removal?.link_id ?? null,
-      action: removal?.action ?? null,
-      link: removal?.link ?? null,
+      link_id: primary?.link_id ?? null,
+      action: primary?.action ?? null,
+      link: primary?.link ?? null,
+      removals,
     };
   });
 }

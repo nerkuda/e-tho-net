@@ -14,7 +14,7 @@
  *     строки ребра целы в обоих слоях;
  *   * положительный контроль: после слияния B→A (тень снята) удаление
  *     проходит физически;
- *   * процедура единая — блокирует и прямой вызов `removeLinkTarget`
+ *   * процедура единая — блокирует и прямой вызов `removeLinkTargets`
  *     (ядро MCP `links.delete`), и `properties.remove`.
  *
  * Skipped when the `better-sqlite3` native binding is unavailable.
@@ -28,7 +28,7 @@ import DatabaseConstructor from 'better-sqlite3';
 
 import { createInMemoryNetworkDb, type NetworkDb } from '../src/db/network-db.js';
 import { getLink, updateLink } from '../src/domain/link-service.js';
-import { removeLinkTarget } from '../src/domain/link-target-removal.js';
+import { removeLinkTargets } from '../src/domain/link-target-removal.js';
 import { mergeLayer } from '../src/domain/merge-service.js';
 import {
   createNetworkProperty,
@@ -168,11 +168,11 @@ describe(
       }
     });
 
-    it('прямой вызов removeLinkTarget (ядро MCP links.delete) из A тоже даёт 422', () => {
+    it('прямой вызов removeLinkTargets (ядро MCP links.delete) из A тоже даёт 422', () => {
       const ndb = createInMemoryNetworkDb();
       try {
         const s = seedHeldLink(ndb);
-        assert.throws(() => removeLinkTarget(ndb, s.linkId, USER), isHeldByB);
+        assert.throws(() => removeLinkTargets(ndb, s.linkId, USER), isHeldByB);
         assert.equal(rawLinkRow(ndb, s.linkId, LAYER_A)?.deleted, 0);
         assert.equal(rawLinkRow(ndb, s.linkId, LAYER_B)?.deleted, 0);
       } finally {
