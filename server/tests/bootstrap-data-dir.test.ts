@@ -9,7 +9,10 @@
  *   * чужой непустой каталог, повреждённый маркер и read-only каталог → отказ;
  *   * база от прерванной инициализации (`no-users-table`) и остаточный temp
  *     не мешают повторному запуску;
- *   * два параллельных запуска на пустом каталоге оба получают рабочий ключ.
+ *   * два параллельных запуска на пустом каталоге оба получают рабочий ключ;
+ *   * окна гонки «победитель записал маркер после первого чтения проигравшего»
+ *     воспроизводятся детерминированно (шов `SystemDb.checkFirstUser`) и не
+ *     дают ложного отказа «not owned» / «not empty … mcp/key».
  */
 
 import assert from 'node:assert/strict';
@@ -530,6 +533,76 @@ describe('bootstrapDataDir (пакет etn-mcp)', { skip: !nativeAvailable() }, 
       assert.throws(() => bootstrapDataDir({ dataDir, env: {} }), /not available/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Детерминированное окно гонки двух первых запусков: «победитель»
+   * вклинивается между первым чтением маркера проигравшим и его пробой первого
+   * администратора. Шов — статическая проба `SystemDb.checkFirstUser`: её
+   * вызывает и bootstrap, и тест, поэтому подмена видна обеим сторонам.
+   *
+   * Проверяется замечание реверификации 21f4bac7: снимок маркера, прочитанный
+   * до пробы, не годится для ветки «уже инициализировано».
+   */
+  it('гонка: маркер и администратор появились между чтением маркера и пробой — берётся mcp/key', () => {
+    const dataDir = tempDir('etn-mcp-race-');
+    const original = SystemDb.checkFirstUser;
+    let winnerKey: string | null = null;
+    let injected = false;
+    SystemDb.checkFirstUser = (dir: string) => {
+      if (!injected && path.resolve(dir) === path.resolve(dataDir)) {
+        injected = true;
+        // Победитель проходит целиком: маркер → БД + администратор → mcp/key.
+        winnerKey = bootstrapDataDir({ dataDir, env: {} }).apiKey;
+      }
+      return original.call(SystemDb, dir);
+    };
+    try {
+      const loser = bootstrapDataDir({ dataDir, env: {} });
+      assert.equal(injected, true, 'победитель обязан вклиниться до пробы проигравшего');
+      assert.ok(winnerKey !== null);
+      assert.equal(loser.source, 'file', 'ключ победителя берётся из mcp/key');
+      assert.equal(loser.apiKey, winnerKey);
+      assert.equal(authWorks(dataDir, loser.apiKey), true);
+      assert.equal(readOwnership(dataDir).state, 'own');
+    } finally {
+      SystemDb.checkFirstUser = original;
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Второе окно той же гонки: проба проигравшего успела прочитать БД до
+   * коммита победителя (`no-db`), а классификация каталога идёт уже после его
+   * `mcp/key`. Снимок «маркера нет» превращал собственный ключ победителя в
+   * чужой файл (`not empty … found: mcp/key`).
+   */
+  it('гонка: проба проигравшего прочитала БД до коммита победителя — mcp/key не чужой', () => {
+    const dataDir = tempDir('etn-mcp-race-');
+    const original = SystemDb.checkFirstUser;
+    let winnerKey: string | null = null;
+    let injected = false;
+    SystemDb.checkFirstUser = (dir: string) => {
+      if (!injected && path.resolve(dir) === path.resolve(dataDir)) {
+        injected = true;
+        // Победитель успел целиком; проба проигравшего увидела состояние до
+        // его коммита — ровно тот снимок, который она прочитала бы раньше.
+        winnerKey = bootstrapDataDir({ dataDir, env: {} }).apiKey;
+        return { state: 'not-initialized', reason: 'no-db' };
+      }
+      return original.call(SystemDb, dir);
+    };
+    try {
+      const loser = bootstrapDataDir({ dataDir, env: {} });
+      assert.equal(injected, true, 'победитель обязан вклиниться до пробы проигравшего');
+      assert.ok(winnerKey !== null);
+      assert.equal(loser.source, 'file', 'ключ победителя берётся из mcp/key');
+      assert.equal(loser.apiKey, winnerKey);
+      assert.equal(authWorks(dataDir, loser.apiKey), true);
+    } finally {
+      SystemDb.checkFirstUser = original;
+      fs.rmSync(dataDir, { recursive: true, force: true });
     }
   });
 

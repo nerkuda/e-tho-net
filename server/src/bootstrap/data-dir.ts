@@ -210,6 +210,20 @@ export function readOwnership(dataDir: string): OwnershipState {
 }
 
 /**
+ * Отказ на маркер чужого сервера (ADR d17c3a29 п. 6): маркер объявляет, чей
+ * это каталог, поэтому его нельзя перезаписать ни на одном пути — включая
+ * присоединение по доверенному ключу.
+ */
+function refuseForeignMarker(dataDir: string, ownership: OwnershipState): void {
+  if (ownership.state !== 'mismatch') return;
+  throw new BootstrapError(
+    `The ETN data directory ${dataDir} is owned by another server: the ownership marker ` +
+      `declares ${JSON.stringify(ownership.serverName)}, while this package is ` +
+      `${JSON.stringify(MCP_REGISTRY_NAME)}. etn-mcp does not modify a directory it does not own.`,
+  );
+}
+
+/**
  * Чужое содержимое подкаталога `mcp/`.
  *
  * `own` — маркер наш: тогда `mcp/key` тоже допустим (немаркерный ключ — след
@@ -432,21 +446,43 @@ function isTransientRace(err: unknown): boolean {
 }
 
 /**
+ * Классифицировать неинициализированный каталог: маркер и чужое содержимое.
+ *
+ * Маркер читается на момент листинга, а не берётся из снимка, прочитанного до
+ * пробы первого администратора: параллельный первый запуск пишет маркер **до**
+ * БД, поэтому к моменту, когда виден его `mcp/key`, маркер уже на диске. Если
+ * листинг со снимком «маркера нет» всё-таки нашёл файлы, маркер перечитывается
+ * один раз — иначе собственный ключ победителя выглядел бы чужим
+ * (`not empty … found: mcp/key`, замечание реверификации 21f4bac7). Повторное
+ * чтение стоит только на пути отказа: у своего маркера `mcp/key` не чужак
+ * (прерванная инициализация, ADR aa9507e6 п. 6).
+ */
+function classifyNotInitialized(dataDir: string): {
+  ownership: OwnershipState;
+  foreign: string[];
+} {
+  const ownership = readOwnership(dataDir);
+  refuseForeignMarker(dataDir, ownership);
+  const foreign = foreignRootEntries(dataDir, ownership.state === 'own');
+  if (foreign.length === 0 || ownership.state === 'own') return { ownership, foreign };
+  const reread = readOwnership(dataDir);
+  refuseForeignMarker(dataDir, reread);
+  return { ownership: reread, foreign: foreignRootEntries(dataDir, reread.state === 'own') };
+}
+
+/**
  * Инициализировать неинициализированный каталог: маркер, администратор, ключ.
  *
  * Один проход; при гонке параллельного запуска выбрасывает ошибку SQLite, а
  * {@link bootstrapDataDir} повторяет проход (см. {@link isTransientRace}).
  */
-function initializeDataDir(
-  dataDir: string,
-  version: string,
-  log: Logger,
-  ownership: OwnershipState,
-): BootstrapResult {
+function initializeDataDir(dataDir: string, version: string, log: Logger): BootstrapResult {
   assertWritable(dataDir);
   removeOwnTempFiles(dataDir);
-  // Наш маркер + свой mcp/key — прерванная инициализация: каталог свой, key не чужой.
-  const foreign = foreignRootEntries(dataDir, ownership.state === 'own');
+  // Классификация — по маркеру на момент листинга, а не по снимку до пробы:
+  // победитель гонки пишет маркер до БД, поэтому его `mcp/key` уже виден, когда
+  // снимок ещё говорит «маркера нет» (замечание реверификации 21f4bac7).
+  const { ownership, foreign } = classifyNotInitialized(dataDir);
   if (foreign.length > 0) {
     throw new BootstrapError(
       `The ETN data directory ${dataDir} is not empty and does not belong to etn-mcp; ` +
@@ -530,14 +566,7 @@ function bootstrapOnce(
 
   // Чужой маркер — отказ на любом пути, включая присоединение по ключу
   // (ADR d17c3a29 п. 6): маркер объявляет, чей это каталог.
-  const ownership = readOwnership(dataDir);
-  if (ownership.state === 'mismatch') {
-    throw new BootstrapError(
-      `The ETN data directory ${dataDir} is owned by another server: the ownership marker ` +
-        `declares ${JSON.stringify(ownership.serverName)}, while this package is ` +
-        `${JSON.stringify(MCP_REGISTRY_NAME)}. etn-mcp does not modify a directory it does not own.`,
-    );
-  }
+  refuseForeignMarker(dataDir, readOwnership(dataDir));
 
   const firstUser = probeFirstUser(dataDir);
   if (firstUser.state === 'unreadable') {
@@ -562,6 +591,12 @@ function bootstrapOnce(
   }
 
   if (firstUser.state === 'initialized') {
+    // Классификация — по маркеру, прочитанному ПОСЛЕ пробы: параллельный первый
+    // запуск мог создать администратора и записать маркер между первым чтением
+    // и пробой, и тогда снимок «маркера нет» дал бы ложный отказ «not owned»
+    // (замечание реверификации 21f4bac7).
+    const ownership = readOwnership(dataDir);
+    refuseForeignMarker(dataDir, ownership);
     if (ownership.state !== 'own') {
       const reason =
         ownership.state === 'invalid'
@@ -581,5 +616,5 @@ function bootstrapOnce(
   }
 
   // Каталог не инициализирован: маркер — до БД, затем администратор и ключ.
-  return initializeDataDir(dataDir, version, log, ownership);
+  return initializeDataDir(dataDir, version, log);
 }
