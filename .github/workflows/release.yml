@@ -43,12 +43,12 @@
 # каналом переводит релиз в другой канал — ассеты перезаписываются, а не
 # дублируются.
 #
-# Docker-образ сервера — обязательная часть релиза (задача ae122f1d): джоба
+# Docker-образы — обязательная часть релиза (задачи ae122f1d, 3db76d75): джоба
 # `docker-image` вызывает переиспользуемый `.github/workflows/docker-image.yml`
-# и публикует `ghcr.io/<repo>/etn-server:<tag>`. `publish` зависит от неё,
-# поэтому релиз без образа не выпускается. Образ для уже вышедшего тега
-# доопубликовывается ручным запуском `docker-image.yml` (workflow_dispatch),
-# без пересборки остальных ассетов.
+# и публикует `etn-server` и `etn-mcp` в GHCR и Docker Hub. `publish` зависит
+# от неё, поэтому релиз без образов не выпускается. Образы для уже вышедшего
+# тега доопубликовываются ручным запуском `docker-image.yml`
+# (workflow_dispatch), без пересборки остальных ассетов.
 #
 # macOS DMG в поставку версии не входит (границы компонента f4c02ddd).
 
@@ -336,9 +336,9 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # Docker-образ сервера — обязательный артефакт релиза: `publish` ждёт эту
-  # джобу. Права задаются здесь, потому что reusable workflow может только
-  # сузить набор, переданный вызывающей джобой.
+  # Docker-образы (HTTP-сервер и MCP) — обязательная часть релиза: `publish`
+  # ждёт эту джобу. Права задаются здесь, потому что reusable workflow может
+  # только сузить набор, переданный вызывающей джобой.
   docker-image:
     # Версия/тег проверяются джобой version: при её падении образ не должен
     # уехать в GHCR сиротой для релиза, который не выйдет.
@@ -354,6 +354,9 @@ jobs:
       # tag падал бы (ошибка dd38a306). github.sha — тот же коммит, на который
       # publish ставит target_commitish.
       source_ref: ${{ github.sha }}
+    # Токен Docker Hub (DOCKERHUB_USERNAME/DOCKERHUB_TOKEN) — секреты
+    # владельца namespace: reusable workflow получает их явно.
+    secrets: inherit
 
   publish:
     needs: [version, windows-installer, linux-client, linux-server, mcpb-bundles, docker-image]

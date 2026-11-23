@@ -1,28 +1,44 @@
-# Сборка и публикация Docker-образа сервера в GHCR (задача ae122f1d, 0.15.2).
+# Сборка и публикация Docker-образов ETN в GHCR и Docker Hub (задачи ae122f1d,
+# 3db76d75; ADR d17c3a29).
 #
-# Образ — обязательная часть релиза: release.yml вызывает этот workflow
+# Два образа из одного `server/Dockerfile`:
+#   * `etn-server` (цель `server`) — HTTP/REST/WS сервер, как и раньше;
+#   * `etn-mcp` (цель `mcp`) — тот же рантайм с MCP stdio на входе; единственный
+#     образ с реестровой меткой `io.modelcontextprotocol.server.name`.
+# Оба публикуются в `ghcr.io/<repo>/...` и `docker.io/nerkuda/...` (namespace
+# Docker Hub выводится из реестрового имени), мультиарх linux/amd64+linux/arm64,
+# тег — только версия, `latest` не публикуется.
+#
+# Образы — обязательная часть релиза: release.yml вызывает этот workflow
 # джобой `docker-image`, а джоба `publish` зависит от неё и без успешной
-# публикации образа не выпускает релиз.
+# публикации не выпускает релиз.
 #
 # Workflow переиспользуемый (`workflow_call`) и запускается вручную
 # (`workflow_dispatch`) — так можно доопубликовать образ для уже вышедшего
-# тега, не пересобирая остальные ассеты. Вход `tag` — тег образа.
+# тега, не пересобирая остальные ассеты. Вход `tag` — тег образов.
 #
 # Источник кода — явный вход (ошибка dd38a306). `release.yml` передаёт
 # `source_ref: github.sha` — коммит релиза: при prerelease через
 # `workflow_dispatch` тега в этот момент ещё нет, его создаёт джоба
-# `publish` (и создаёт на `target_commitish: github.sha`, так что образ и
+# `publish` (и создаёт на `target_commitish: github.sha`, так что образы и
 # тег указывают на один коммит). Ручной запуск (`workflow_dispatch`) вход
 # `source_ref` не передаёт, и checkout идёт по `inputs.tag` —
-# доопубликование образа уже вышедшего тега. Различать эти случаи по
+# доопубликование образов уже вышедшего тега. Различать эти случаи по
 # `github.event_name` нельзя: внутри reusable workflow это событие
 # ВЫЗЫВАЮЩЕГО workflow (`workflow_dispatch`/`push`), а не `workflow_call`.
-# Тег `latest` намеренно не ставится: образ адресуется только версией.
+#
+# Идентичность и метки образов не задаются здесь литералами: шаг «Docker
+# metadata» (`server/scripts/docker-metadata.mjs`) читает реестровое имя из
+# `server/src/mcp/server.ts`, версию — из корневого `package.json`, лицензию —
+# из `LICENSE`, и отдаёт build-args. Расхождение — красная сборка (сторож
+# `server/tests/guard-release-docker.test.ts`).
 #
 # Права: `contents: read` — чтение репозитория для checkout; `packages: write` —
 # пуш в GHCR от имени `github.actor` с `GITHUB_TOKEN` (вызывающая джоба
 # обязана передать те же права, иначе reusable workflow получит урезанный
-# набор).
+# набор). Docker Hub — токен владельца namespace: `DOCKERHUB_USERNAME` /
+# `DOCKERHUB_TOKEN` передаются вызывающей джобой через `secrets: inherit`
+# (release.yml) или используются из секретов репозитория при ручном запуске.
 
 name: docker-image
 
@@ -34,9 +50,9 @@ on:
         required: true
         type: string
       source_ref:
-        # Коммит кода образа (релиз передаёт github.sha). Пусто — checkout
+        # Коммит кода образов (релиз передаёт github.sha). Пусто — checkout
         # идёт по tag: ручной workflow_dispatch этот вход не передаёт.
-        description: 'Коммит/ref кода для образа; пусто — берётся tag'
+        description: 'Коммит/ref кода для образов; пусто — берётся tag'
         required: false
         type: string
         default: ''
@@ -60,14 +76,57 @@ jobs:
           # release передаёт source_ref = github.sha (тег создаст publish);
           # ручной dispatch source_ref не передаёт — checkout по tag.
           ref: ${{ inputs.source_ref || inputs.tag }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Docker metadata from the single source
+        id: meta
+        run: >-
+          node server/scripts/docker-metadata.mjs
+          --revision "${{ inputs.source_ref || github.sha }}"
+          --github-output "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push etn-server
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: server/Dockerfile
+          target: server
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}/etn-server:${{ inputs.tag }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ steps.meta.outputs.revision }}
+            SOURCE_URL=${{ steps.meta.outputs.source_url }}
+            LICENSE=${{ steps.meta.outputs.license }}
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ steps.meta.outputs.server_image }}:${{ inputs.tag }}
+            docker.io/${{ steps.meta.outputs.dockerhub_namespace }}/${{ steps.meta.outputs.server_image }}:${{ inputs.tag }}
+      - name: Build and push etn-mcp
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: server/Dockerfile
+          target: mcp
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ steps.meta.outputs.revision }}
+            SOURCE_URL=${{ steps.meta.outputs.source_url }}
+            LICENSE=${{ steps.meta.outputs.license }}
+            MCP_REGISTRY_NAME=${{ steps.meta.outputs.registry_name }}
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ steps.meta.outputs.mcp_image }}:${{ inputs.tag }}
+            docker.io/${{ steps.meta.outputs.dockerhub_namespace }}/${{ steps.meta.outputs.mcp_image }}:${{ inputs.tag }}
