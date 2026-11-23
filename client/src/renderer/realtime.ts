@@ -217,7 +217,10 @@ export function initRealtime(): void {
 
   // Обслуживание сервера (задача 479e37ed): единое состояние на подключение.
   // Кадр `maintenance` и `503 SERVER_UPDATING` приходят из main одним каналом;
-  // `active: false` — восстановление подтверждено (`GET /me` / открытие сокета).
+  // `active: false` — main подтвердил восстановление: либо сокет прожил
+  // `maintenanceStableMs` (10 с), либо успешный `GET /me` показал смену версии
+  // процесса. Ни открытие сокета, ни сам по себе `/me` доказательством не
+  // являются (сервер в обслуживании принимает сокет и закрывает его кодом 1012).
   etn.realtime.onMaintenance((payload) => {
     const obj = payload as { active?: unknown; retry_after?: unknown; target_version?: unknown };
     applyServerMaintenance({
