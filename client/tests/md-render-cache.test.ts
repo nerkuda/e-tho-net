@@ -114,6 +114,70 @@ describe('кеш разбора markdown (83785f1e)', () => {
     assert.equal(stats.hits, 0);
   });
 
+  it('суммарный потолок исходников: старейшая запись вытесняется, кеш не течёт', () => {
+    // Поштучно каждая запись проходит (60 000 < потолка), а сумма пяти — нет:
+    // без проверки `cacheChars` в `store` кеш молча перерос бы потолок.
+    const chunk = 60_000;
+    const big = { maxLength: MD_RENDER_CACHE_MAX_CHARS * 4 };
+    const sources = [0, 1, 2, 3, 4].map((index) => 'a'.repeat(chunk - 1) + String(index));
+    for (const source of sources) cachedRenderMarkdown(source, big);
+
+    let stats = mdRenderCacheInternals.stats();
+    const perEntryCeiling = Math.floor(MD_RENDER_CACHE_MAX_CHARS / chunk);
+    assert.equal(
+      stats.entries,
+      perEntryCeiling,
+      'записей столько, сколько помещается в суммарный потолок',
+    );
+    assert.equal(stats.chars, perEntryCeiling * chunk, 'учтённый вес не выше потолка');
+    assert.ok(stats.chars <= MD_RENDER_CACHE_MAX_CHARS, 'суммарный потолок держится');
+    assert.equal(stats.parses, sources.length, 'каждый исходник разобран один раз');
+
+    // Самая старая запись вытеснена — возврат к ней требует нового разбора.
+    cachedRenderMarkdown(sources[0]!, big);
+    stats = mdRenderCacheInternals.stats();
+    assert.equal(stats.parses, sources.length + 1, 'вытесненный исходник разобран заново');
+    assert.equal(stats.entries, perEntryCeiling, 'потолок записей держится и по сумме');
+    assert.equal(stats.chars, perEntryCeiling * chunk, 'вес стабилен после вытеснения');
+  });
+
+  it('maxLength входит в ключ: закешированный длинный исходник не отдаётся под короткий лимит', () => {
+    const source = 'a'.repeat(100);
+    const cached = cachedRenderMarkdown(source, { maxLength: 1000 });
+    assert.ok(cached.length > 0, 'длинный лимит отрендерил исходник');
+    // Тот же исходник под лимитом 10 обязан отказать, а не отдать HTML из кеша
+    // чужого ключа (проверка, что `maxLength` участвует в ключе).
+    assert.throws(
+      () => cachedRenderMarkdown(source, { maxLength: 10 }),
+      /source exceeds 10 characters/,
+      'короткий лимит отвергает исходник, а не берёт чужую запись',
+    );
+    const stats = mdRenderCacheInternals.stats();
+    assert.equal(stats.entries, 1, 'ошибка не кешируется — запись только от длинного лимита');
+    assert.equal(stats.hits, 0, 'под коротким лимитом попадания в кеш не было');
+  });
+
+  it('transclusion.labels входит в ключ: те же маркеры дают HTML с другими подписями', () => {
+    // Маркер ошибки трансклюзии: HTML различается ТОЛЬКО подписями из опций.
+    const source = '<!-- etn:transclusion missing source=s1 section=sec -->';
+    const first = cachedRenderMarkdown(source, {
+      transclusion: { labels: { noSource: 'нет источника A', noSection: 'нет раздела A', skipped: 'пропуск A' } },
+    });
+    const second = cachedRenderMarkdown(source, {
+      transclusion: { labels: { noSource: 'нет источника B', noSection: 'нет раздела B', skipped: 'пропуск B' } },
+    });
+    assert.ok(first.includes('нет источника A'), first);
+    assert.ok(second.includes('нет источника B'), second);
+    assert.notEqual(second, first, 'подписи из опций дают свой HTML, а не запись чужого ключа');
+    const stats = mdRenderCacheInternals.stats();
+    assert.equal(stats.parses, 2, 'разные подписи — разные записи');
+    assert.equal(stats.entries, 2);
+    assert.equal(cachedRenderMarkdown(source, {
+      transclusion: { labels: { noSource: 'нет источника A', noSection: 'нет раздела A', skipped: 'пропуск A' } },
+    }), first, 'повтор с теми же подписями — попадание в свою запись');
+    assert.equal(mdRenderCacheInternals.stats().hits, 1);
+  });
+
   it('reset очищает кеш и счётчики', () => {
     cachedRenderMarkdown(TABLE);
     cachedRenderMarkdown(TABLE);
