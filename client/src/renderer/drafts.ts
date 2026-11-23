@@ -7,6 +7,10 @@
  * - on successful send the draft is deleted;
  * - while the realtime connection is down the UI blocks saves (the edit stays
  *   a draft, the status bar shows 🔴);
+ * - `idle` и `connecting` — это ОТСУТСТВИЕ сессии сети, а не обрыв связи:
+ *   закрытие последней вкладки сети отпускает её сокет (`idle`), открытие
+ *   вкладки заново — `connecting`. Сообщений о потере связи по ним нет
+ *   (ошибка 3fa5f9ba): пользователь закрывает вкладку при живом сервере;
  * - on a REAL (re)connect, pending drafts are re-sent automatically (idempotent
  *   `Client-Request-Id` machinery on the server prevents double-applies). The
  *   first `connected` of a session counts too: it flushes drafts typed in THIS
@@ -98,6 +102,18 @@ function linkLossMessage(status: RtStatus): string {
   }
 }
 
+/**
+ * Статус означает РЕАЛЬНУЮ потерю связи (ошибка 3fa5f9ba). `idle` — сеть не
+ * открыта ни в одной вкладке (main освободил сокет при закрытии последней),
+ * `connecting` — сокет ещё только открывается: это отсутствие сессии, а не
+ * обрыв. Сообщать о потере связи по ним нельзя: закрытие вкладки мыслесети при
+ * живом сервере давало ложное «Нет соединения — правка сохранена как
+ * черновик…».
+ */
+function isLinkLoss(status: RtStatus): boolean {
+  return status === 'reconnecting' || status === 'offline';
+}
+
 /** Initializes the offline detection + retry loop. Called once at boot. */
 export function initDrafts(): void {
   if (initialized) return;
@@ -161,11 +177,12 @@ export function initDrafts(): void {
       // Проба живости только отправлена — потери связи ещё нет, и на входе в
       // `suspect` пользователю НЕ сообщаем ничего (fb9d6058 п.4). Сообщение
       // появится, только если проба не подтвердит живость (ветка ниже).
-    } else if (!connected && (lastConnected || prevActive === 'suspect')) {
+    } else if (isLinkLoss(status) && (lastConnected || prevActive === 'suspect')) {
       // Реальный обрыв (connected → reconnecting/offline) либо проба, не
       // подтвердившая живость за свой дедлайн (suspect → reconnecting/offline).
       // Текст «Проверяем связь» — именно подтверждённое подозрение; вход в
-      // `suspect` молчит.
+      // `suspect` молчит. `idle`/`connecting` сюда не попадают: закрытие
+      // вкладки сети отпускает сокет, но связи не теряет (ошибка 3fa5f9ba).
       notice(linkLossMessage(prevActive === 'suspect' ? 'suspect' : status), 'warning');
     }
     if (connected) hadConnection = true;
