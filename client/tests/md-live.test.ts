@@ -971,6 +971,11 @@ function widgetWhere(
   from: number;
   to: number;
   marker?: string;
+  label?: string;
+  target?: string;
+  checked?: boolean;
+  date?: string;
+  time?: string | null;
   eq(other: unknown): boolean;
   toDOM(): ShimElement;
   updateDOM(dom: ShimElement, view: unknown): boolean;
@@ -982,6 +987,11 @@ function widgetWhere(
         from: number;
         to: number;
         marker?: string;
+  label?: string;
+  target?: string;
+  checked?: boolean;
+  date?: string;
+  time?: string | null;
         eq(other: unknown): boolean;
         toDOM(): ShimElement;
         updateDOM(dom: ShimElement, view: unknown): boolean;
@@ -1047,10 +1057,115 @@ test('ListMarkerWidget: смена маркера обновляет текст 
   assert.equal(before.eq(after), false, 'смена нумерации отличает маркеры');
   const box = before.toDOM();
   assert.equal(box.textContent, '1.');
-  const mutations = watchWidgetMutations(box);
   assert.equal(after.updateDOM(box, {}), true, 'DOM обновлён на месте');
-  assert.equal(box.textContent, '2.', 'текст маркера актуален');
-  assert.equal(mutations(), 0, 'DOM не пересобран');
+  // Единственное доказательство «на месте» — текст на ПРЕЖНЕМ узле: счётчик
+  // childList-мутаций здесь ничего не доказывает, сеттер `textContent` в
+  // tests/dom-shim.ts пишет в `nodes` напрямую, минуя патченные методы
+  // (замечание верификатора к 65bd3e81).
+  assert.equal(box.textContent, '2.', 'текст маркера актуален на прежнем узле');
+});
+
+test('WikiLinkWidget: смена подписи или цели требует пересборки DOM (65bd3e81)', () => {
+  installDocumentShim();
+  const linkOf = (doc: string): ReturnType<typeof widgetWhere> =>
+    widgetWhere(buildState(doc, doc.length), (w) => 'target' in w);
+
+  // Исходники одной длины: смещения у всех вариантов совпадают, поэтому `eq`
+  // и `updateDOM` различают именно содержимое (проверка не вакуумна).
+  const base = linkOf('[[Цель|алиас A]] x');
+  assert.equal(base.label, 'алиас A');
+  assert.equal(base.target, 'Цель');
+
+  // Подпись поменялась, цель — нет.
+  const relabeled = linkOf('[[Цель|алиас B]] x');
+  assert.equal(relabeled.from, base.from, 'смещения те же — различается только подпись');
+  assert.equal(relabeled.target, 'Цель', 'цель не изменилась');
+  assert.equal(base.eq(relabeled), false, 'смена подписи отличает виджеты');
+  const labelBox = base.toDOM();
+  assert.equal(labelBox.textContent, 'алиас A');
+  assert.equal(relabeled.updateDOM(labelBox, {}), false, 'смена подписи требует пересборки DOM');
+  assert.equal(relabeled.toDOM().textContent, 'алиас B', 'новый узел несёт новую подпись');
+
+  // Цель поменялась, подпись — нет.
+  const retargeted = linkOf('[[Идея|алиас A]] x');
+  assert.equal(retargeted.from, base.from, 'смещения те же — различается только цель');
+  assert.equal(retargeted.label, 'алиас A', 'подпись не изменилась');
+  assert.equal(base.eq(retargeted), false, 'смена цели отличает виджеты');
+  const targetBox = base.toDOM();
+  assert.equal(targetBox.dataset.wikiTarget, 'Цель');
+  assert.equal(retargeted.updateDOM(targetBox, {}), false, 'смена цели требует пересборки DOM');
+  assert.equal(
+    retargeted.toDOM().dataset.wikiTarget,
+    'Идея',
+    'новый узел несёт новую цель (иначе устаревший data-wiki-target увёл бы клик в старую мысль)',
+  );
+
+  // Обратная сторона контракта: прежнее содержимое по-прежнему обновляется
+  // на месте (иначе «всегда false» тихо убил бы фикс 65bd3e81).
+  assert.equal(base.updateDOM(labelBox, {}), true, 'неизменное содержимое — обновление на месте');
+});
+
+test('TaskCheckboxWidget: смена checked требует пересборки DOM (65bd3e81)', () => {
+  installDocumentShim();
+  const checkboxOf = (doc: string): ReturnType<typeof widgetWhere> =>
+    widgetWhere(buildState(doc, doc.length), (w) => 'checked' in w);
+
+  const unchecked = checkboxOf('- [ ] дело\n\nпара');
+  const checked = checkboxOf('- [x] дело\n\nпара');
+  assert.equal(unchecked.checked, false);
+  assert.equal(checked.checked, true);
+  assert.equal(unchecked.from, checked.from, 'смещения те же — различается только состояние');
+  assert.equal(unchecked.eq(checked), false, 'смена состояния отличает виджеты');
+
+  const box = unchecked.toDOM();
+  assert.equal(box.checked, false, 'узел построен из «не отмечено»');
+  assert.equal(checked.updateDOM(box, {}), false, 'смена checked требует пересборки DOM');
+  assert.equal(checked.toDOM().checked, true, 'новый узел отмечен');
+
+  // Обратная сторона контракта: то же состояние обновляется на месте.
+  assert.equal(unchecked.updateDOM(box, {}), true, 'прежнее состояние — обновление на месте');
+});
+
+test('WikiDateWidget: сдвиг обновляет на месте, смена даты и времени — пересборка (65bd3e81)', () => {
+  installDocumentShim();
+  const dateOf = (doc: string): ReturnType<typeof widgetWhere> =>
+    widgetWhere(buildState(doc, doc.length), (w) => 'date' in w);
+
+  // Сдвиг выше — тот же класс, что у остальных лёгких виджетов: смещения в
+  // `eq` есть, содержимое прежнее.
+  const base = dateOf('[[2026-11-02]] x');
+  const shifted = dateOf(`${TYPED_ABOVE}[[2026-11-02]] x`);
+  assert.equal(shifted.from, base.from + TYPED_ABOVE.length, 'смещение сдвинуто');
+  assert.equal(base.eq(shifted), false, 'сдвиг отличает виджеты');
+  const box = base.toDOM();
+  assert.equal(shifted.updateDOM(box, {}), true, 'сдвиг обновляет DOM на месте');
+  assert.equal(box.dataset.mdFrom, String(shifted.from), 'data-md-from актуален');
+  assert.equal(box.dataset.mdTo, String(shifted.to), 'data-md-to актуален');
+
+  // Смена даты: исходники одной длины, подпись тоже меняется.
+  const newDate = dateOf('[[2026-11-03]] x');
+  assert.equal(newDate.from, base.from, 'смещения те же — различается только дата');
+  assert.equal(newDate.date, '2026-11-03');
+  assert.equal(base.eq(newDate), false, 'смена даты отличает виджеты');
+  assert.equal(newDate.updateDOM(box, {}), false, 'смена даты требует пересборки DOM');
+  assert.equal(newDate.toDOM().getAttribute('data-wiki-date'), '2026-11-03', 'новый чип с новой датой');
+
+  // Смена времени при той же дате.
+  const withTime = dateOf('[[2026-11-02 14:30]] x');
+  const timeChanged = dateOf('[[2026-11-02 15:30]] x');
+  assert.equal(timeChanged.time, '15:30');
+  assert.equal(withTime.eq(timeChanged), false, 'смена времени отличает виджеты');
+  const timeBox = withTime.toDOM();
+  assert.equal(timeBox.getAttribute('data-wiki-time'), '14:30');
+  assert.equal(timeChanged.updateDOM(timeBox, {}), false, 'смена времени требует пересборки DOM');
+  assert.equal(
+    timeChanged.toDOM().getAttribute('data-wiki-time'),
+    '15:30',
+    'новый чип с новым временем',
+  );
+
+  // Обратная сторона: тот же чип обновляется на месте.
+  assert.equal(withTime.updateDOM(timeBox, {}), true, 'неизменное содержимое — обновление на месте');
 });
 
 test('HtmlWidget в цитате внутри списка: сдвиг выше не пересобирает таблицу (4df5e284)', () => {
