@@ -1262,7 +1262,8 @@ const HANDLERS: Record<string, OpHandler> = {
         // (`link.updated`), восстановление — `links.restore`. Физическое удаление
         // строки слоя под живой тенью дочернего слоя — 422 `blocking.layers`
         // (0.16.2, ошибка 97b64a69); живой дубль тройки в разных слоях снимается
-        // целиком (0.16.2, ошибка 374c9776) — событие по каждой строке.
+        // целиком (0.16.2, ошибка 374c9776) — событие по каждой строке, а строки,
+        // уже лежащие в корзине, живыми не считаются и повторно не помечаются.
         const removals = removeLinkTargets(ndb, a.link_id, rt.deps.auth.userId);
         const [removed] = removals;
         const audit = {

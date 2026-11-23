@@ -758,7 +758,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     ],
     destructive: false,
     readOnly: false,
-    effects: 'marks the usage edges for deletion; returns `{ cleared }`.',
+    effects: 'marks the usage edges for deletion: a live duplicate triple is removed as a whole and still counts as ONE cleared reference; returns `{ cleared }`.',
     errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
     paramsContract: ThoughtsUsageClear,
   },
@@ -782,7 +782,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'links.delete',
     tool: 'etn.links.delete',
     group: 'links',
-    when: 'delete one edge by `link_id` — precise address of exactly one edge (for example one of several edges between the same pair of thoughts) with smart deletion by layers; the bulk ops `unlink_parents`/`unlink_children` remove edges of a named thought PAIR (structural ones included) and cannot address one specific edge',
+    when: 'delete one edge (or its whole live duplicate triple) by `link_id` with smart deletion by layers: the address names one edge, and if the same triple is alive in several layers, the duplicate is removed as a whole; the bulk ops `unlink_parents`/`unlink_children` remove edges of a named thought PAIR (structural ones included) and cannot address one specific edge',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'link_id', required: true, desc: 'link id' },
@@ -790,9 +790,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: true,
     readOnly: false,
     effects:
-      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. A physical deletion happens only when no other layer holds a live shadow of the edge — a child-layer edit of a layer-created edge keeps it from being deleted (0.16.2, bug 97b64a69). The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. A physical deletion happens only when no other layer holds a live shadow of the edge — a child-layer edit of a layer-created edge keeps it from being deleted (0.16.2, bug 97b64a69). A live duplicate triple (the same triple alive in several layers, bug 374c9776) is removed as a whole — the fresh layer row physically, the base/ancestor row to the layer basket — with one event and one journal row per row removed; rows already in the basket are not alive — they are neither counted nor re-marked. The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent, the action of the requested row first).',
     errors:
-      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action), or the edge is held by a live shadow in a layer (base context — any working layer; a layer — its child layers) and cannot be deleted physically; the holders are listed in `details.blocking.layers`. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
+      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action); the edge is held by a live shadow in a layer (base context — any working layer; a layer — its child layers) and cannot be deleted physically, the holders are in `details.blocking.layers`; a duplicate triple cannot be collapsed inside one layer (live rows in several layers above, or the triple slot in the current layer taken by a basket row), the rows are in `details.links` (bug 374c9776). A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
     paramsContract: LinksDelete,
   },
   {
