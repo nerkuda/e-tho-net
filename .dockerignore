@@ -1,0 +1,45 @@
+# Контекст сборки Docker-образов ETN (задача 3db76d75).
+#
+# Dockerfile копирует только манифесты workspace, исходники shared/markdown/server
+# и tsconfig.base.json; всё остальное — вне образа. Список держит контекст
+# маленьким и не даёт случайно утащить в образ данные, секреты или артефакты.
+
+.git
+.github
+.vscode
+.idea
+
+# Зависимости и сборка (ставятся/собираются внутри образа)
+node_modules
+**/node_modules
+dist
+**/dist
+out
+**/out
+release
+.tmp
+
+# Клиент в образе не нужен — только его манифест (workspaces).
+client/*
+!client/package.json
+
+# Данные, секреты и артефакты поставки
+etn_data
+data
+var
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+*.mcpb
+*.tgz
+
+# Документация и тесты не нужны для сборки рантайма
+docs
+server/tests
+server/scripts
+AGENTS.md
+CHANGELOG.md
+README*.md
+LICENSE

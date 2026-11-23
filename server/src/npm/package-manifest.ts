@@ -16,6 +16,7 @@
  * живёт отдельно и здесь не участвует.
  */
 
+import { buildOciRegistryPackage } from '../docker/registry.js';
 import { buildMcpbRegistryPackage, githubSlugFromRegistryName } from '../mcpb/manifest.js';
 import { MCP_REGISTRY_NAME } from '../mcp/server.js';
 
@@ -98,10 +99,11 @@ export function buildNpmPackageManifest(input: NpmPackageManifestInput): Record<
 /**
  * Собрать `server.json` для официального реестра MCP.
  *
- * Две записи `packages[]` — npm-пакет и MCPB-бандл канонического `win32-x64`
- * (ADR d17c3a29 п. 5, задача d1feff33): остальные платформы — ассеты релиза и
- * `SHA256SUMS`, их записи появятся, когда каталог научится выбирать бандл по
- * платформе (открытый вопрос c823f1df).
+ * Три записи `packages[]` — npm-пакет, MCPB-бандл канонического `win32-x64`
+ * (ADR d17c3a29 п. 5, задача d1feff33) и OCI-образ `etn-mcp` в Docker Hub
+ * (задача 3db76d75): остальные платформы — ассеты релиза и `SHA256SUMS`, их
+ * записи появятся, когда каталог научится выбирать бандл по платформе
+ * (открытый вопрос c823f1df).
  *
  * Публикация в реестр — задача c823f1df; здесь только артефакт и метаданные.
  *
@@ -143,6 +145,7 @@ export function buildServerJson(input: ServerJsonInput): Record<string, unknown>
         repository: githubSlugFromRegistryName(MCP_REGISTRY_NAME),
         fileSha256: input.mcpbSha256,
       }),
+      buildOciRegistryPackage(input.version),
     ],
   };
 }

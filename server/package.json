@@ -16,6 +16,7 @@
     "package:npm": "node scripts/build-npm-package.mjs",
     "package:mcpb": "node scripts/build-mcpb.mjs",
     "package:tarball": "node scripts/build-server-tarball.mjs",
+    "docker:build": "node scripts/build-docker-image.mjs",
     "generate:server-json": "node scripts/generate-server-json.mjs",
     "verify:npm-package": "node scripts/verify-npm-package.mjs"
   },
