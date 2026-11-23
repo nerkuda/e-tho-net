@@ -556,7 +556,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     readOnly: false,
     effects:
       'applies the layer changes to the parent; on a conflict — reject entirely (except a thought merge: `base_version` mismatches on its rows are cleared — the chosen "layer version wins" variant); creates a reserve layer.',
-    errors: '`VALIDATION_ERROR` (`conflicts`/`missing_closure`), `NOT_FOUND`.',
+    errors:
+      '`VALIDATION_ERROR` (`conflicts` — including `reason: "base_row_missing"` for a layer shadow based on a row the parent no longer has; `missing_closure`), `NOT_FOUND`.',
     paramsContract: LayersMerge,
   },
   {
@@ -582,7 +583,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.conflicts',
     tool: 'etn.layers.conflicts',
     group: 'layers',
-    when: 'upcoming merge conflicts of the layer: rows whose base_version lags behind the base (read-only preview)',
+    when:
+      'upcoming merge conflicts of the layer: rows whose base_version lags behind the base or whose base row the base no longer has (read-only preview)',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'layer_id', required: true, desc: 'layer' },
@@ -599,7 +601,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.reset_override',
     tool: 'etn.layers.reset_override',
     group: 'layers',
-    when: 'reset the overlap of selected layer rows: rebind base_version to the current base so the merge passes',
+    when:
+      'reset the overlap of selected layer rows: rebind base_version to the current base so the merge passes; for a row based on a base row that no longer exists this is the explicit way to re-create it (the row becomes a new insert)',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'layer_id', required: true, desc: 'layer' },
