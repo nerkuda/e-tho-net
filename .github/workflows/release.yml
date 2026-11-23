@@ -279,6 +279,11 @@ jobs:
   # на целевой ОС — отсюда матрица. win32-x64 — канонический бандл: только он
   # попадает в `server.json` (каталог реестра пока не выбирает файл по
   # платформе, вопрос c823f1df), остальные платформы — ассеты релиза.
+  # `macos-13` (образ x64) — как есть, пока GitHub держит метку в эксплуатации:
+  # бандл обязан собираться на целевой архитектуре. После снятия метки —
+  # `macos-14` + `arch -x86_64` (Rosetta) с обязательным smoke уже на x64-бандле;
+  # без Rosetta артефакт получится не под ту архитектуру, и клиент откажется
+  # его запускать (маркер цели). Проверять на PR.
   mcpb-bundles:
     needs: version
     strategy:
@@ -404,6 +409,30 @@ jobs:
           done
           echo "OK: SHA256SUMS"
           cat SHA256SUMS
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm install
+      - run: npm run build:shared
+      - run: npm -w @etn/server run build
+      - name: Verify server.json matches the canonical MCPB bundle
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Запись `mcpb` в server.json обязана указывать хеш канонического
+          # бандла из этого же прогона: иначе проверка целостности у клиента
+          # провалится (блокер Б1 задачи d1feff33). Генератор идемпотентен —
+          # без изменений `git diff` пуст.
+          sha="$(sha256sum "artifacts/etn-mcp-${VERSION}-win32-x64.mcpb" | cut -d' ' -f1)"
+          node server/scripts/generate-server-json.mjs --mcpb-sha256 "${sha}"
+          if ! git diff --exit-code -- server.json; then
+            echo "::error::server.json не совпадает с собранным каноническим бандлом win32-x64"
+            git diff -- server.json | head -50
+            exit 1
+          fi
+          echo "OK: server.json совпадает с бандлом (${sha})"
       - name: Prepare release notes
         id: notes
         env:
