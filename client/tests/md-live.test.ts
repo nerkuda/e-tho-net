@@ -967,28 +967,37 @@ test('HtmlWidget: смена содержимого при живом видже
 function widgetWhere(
   state: EditorState,
   match: (widget: Record<string, unknown>) => boolean,
-): { from: number; to: number; eq(other: unknown): boolean; toDOM(): ShimElement } {
+): {
+  from: number;
+  to: number;
+  marker?: string;
+  eq(other: unknown): boolean;
+  toDOM(): ShimElement;
+  updateDOM(dom: ShimElement, view: unknown): boolean;
+} {
   for (const it = state.field(livePreview).iter(); it.value !== null; it.next()) {
     const widget = (it.value as unknown as { spec?: { widget?: unknown } }).spec?.widget;
     if (widget !== undefined && match(widget as Record<string, unknown>)) {
       return widget as {
         from: number;
         to: number;
+        marker?: string;
         eq(other: unknown): boolean;
         toDOM(): ShimElement;
+        updateDOM(dom: ShimElement, view: unknown): boolean;
       };
     }
   }
   assert.fail('виджет не найден');
 }
 
-test('остальные виджеты: сдвиг их пересоздаёт, но DOM без удерживаемого состояния — смещения свежие (4df5e284)', () => {
+test('лёгкие виджеты: сдвиг обновляет DOM на месте, а не пересоздаёт (4df5e284, 65bd3e81)', () => {
   installDocumentShim();
-  // Класс, а не случай: у этих виджетов `eq` тоже различает смещения, поэтому
-  // сдвиг выше их пересоздаёт — это допустимо ТОЛЬКО потому, что в DOM нет
-  // удерживаемого состояния (mermaid/async), а `data-md-from/to` берутся из
-  // нового инстанса. Тест фиксирует границу класса, чтобы «пересоздание»
-  // нельзя было молча распространить на HTML-виджет с состоянием.
+  // Класс, а не случай (ошибка 65bd3e81): у этих виджетов `eq` различает
+  // смещения, и до фикса сдвиг выше блока пересоздавал DOM. Удерживаемого
+  // состояния у них нет, но пересоздание всё равно лишнее: `updateDOM`
+  // обновляет `data-md-from/to` (по ним `mdWidgetMouseDown` уводит каретку) и
+  // оставляет узлы прежними — как у `HtmlWidget` (4df5e284).
   const cases: Array<{
     name: string;
     doc: string;
@@ -1002,6 +1011,7 @@ test('остальные виджеты: сдвиг их пересоздаёт,
       match: (w) => !('html' in w) && !('target' in w) && !('marker' in w) && !('checked' in w),
     },
     { name: 'WikiLinkWidget', doc: '[[Мысль]] x\n\nпара', match: (w) => w.target === 'Мысль' },
+    { name: 'TaskCheckboxWidget', doc: '- [ ] дело\n\nпара', match: (w) => 'checked' in w },
   ];
   for (const item of cases) {
     const before = widgetWhere(buildState(item.doc, item.doc.length), item.match);
@@ -1012,19 +1022,35 @@ test('остальные виджеты: сдвиг их пересоздаёт,
       before.from + TYPED_ABOVE.length,
       `${item.name}: смещение сдвинуто на длину печати`,
     );
-    assert.equal(before.eq(shifted), false, `${item.name}: сдвиг отличает виджеты`);
-    const box = shifted.toDOM();
-    assert.equal(
-      box.dataset.mdFrom,
-      String(shifted.from),
-      `${item.name}: data-md-from посчитан из нового инстанса`,
-    );
-    assert.equal(
-      box.dataset.mdTo,
-      String(shifted.to),
-      `${item.name}: data-md-to посчитан из нового`,
-    );
+    assert.equal(before.eq(shifted), false, `${item.name}: сдвиг отличает виджеты (триггер updateDOM)`);
+    const box = before.toDOM();
+    const mutations = watchWidgetMutations(box);
+    assert.equal(shifted.updateDOM(box, {}), true, `${item.name}: DOM обновлён на месте`);
+    assert.equal(box.dataset.mdFrom, String(shifted.from), `${item.name}: data-md-from актуален`);
+    assert.equal(box.dataset.mdTo, String(shifted.to), `${item.name}: data-md-to актуален`);
+    assert.equal(mutations(), 0, `${item.name}: DOM не пересобран`);
   }
+});
+
+test('ListMarkerWidget: смена маркера обновляет текст на месте (65bd3e81)', () => {
+  installDocumentShim();
+  const markerOf = (doc: string): ReturnType<typeof widgetWhere> =>
+    widgetWhere(buildState(doc, doc.length), (w) => 'marker' in w);
+  const before = markerOf('1. пункт\n\nпара');
+  const after = markerOf('2. пункт\n\nпара');
+  assert.equal(after.marker, '2.', 'маркер прочитан из исходника');
+  // Смещения в `eq` маркера не входят (в виджете их нет): сдвиг выше DOM не
+  // трогает вовсе, а смена нумерации в исходнике обязана обновить текст на
+  // месте, а не пересоздавать узел.
+  const shifted = markerOf(`${TYPED_ABOVE}1. пункт\n\nпара`);
+  assert.equal(before.eq(shifted), true, 'сдвиг выше маркер не отличает');
+  assert.equal(before.eq(after), false, 'смена нумерации отличает маркеры');
+  const box = before.toDOM();
+  assert.equal(box.textContent, '1.');
+  const mutations = watchWidgetMutations(box);
+  assert.equal(after.updateDOM(box, {}), true, 'DOM обновлён на месте');
+  assert.equal(box.textContent, '2.', 'текст маркера актуален');
+  assert.equal(mutations(), 0, 'DOM не пересобран');
 });
 
 test('HtmlWidget в цитате внутри списка: сдвиг выше не пересобирает таблицу (4df5e284)', () => {

@@ -158,6 +158,11 @@ class HtmlWidget extends WidgetType {
    * Пересборка содержимого — только при смене `html` (см. {@link renderedHtml});
    * `renderMermaidBlocks` вызывается лишь на этом пути, чтобы диаграмма не
    * гасла и не перерисовывалась на каждый символ (ошибка `4df5e284`).
+   *
+   * Тот же приём обязателен и лёгким виджетам ниже (`WikiLinkWidget`,
+   * `WikiDateWidget`, `HrWidget`, `TaskCheckboxWidget`, `ListMarkerWidget`,
+   * ошибка `65bd3e81`): их `eq` различает смещения, поэтому без `updateDOM`
+   * любой ввод текста выше блока пересоздавал DOM.
    */
   override updateDOM(dom: HTMLElement): boolean {
     dom.dataset.mdFrom = String(this.from);
@@ -215,6 +220,18 @@ class WikiLinkWidget extends WidgetType {
     return span;
   }
 
+  /**
+   * Сдвиг правкой выше меняет только смещения — узел остаётся (ошибка
+   * 65bd3e81). `data-md-from/to` пишутся всегда: `mdWidgetMouseDown` читает
+   * смещения из DOM, протухшие атрибуты увели бы каретку в старый диапазон.
+   * Смена подписи или цели — повод пересобрать DOM.
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return dom.textContent === this.label && dom.dataset.wikiTarget === this.target;
+  }
+
   override ignoreEvent(): boolean {
     return false;
   }
@@ -256,6 +273,20 @@ class WikiDateWidget extends WidgetType {
     return span;
   }
 
+  /**
+   * Тот же класс, что у остальных лёгких виджетов (ошибка 65bd3e81): сдвиг
+   * обновляет смещения на месте; смена даты, времени или подписи — пересборка.
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return (
+      dom.textContent === this.label &&
+      dom.getAttribute(WIKI_LINK_DATE_ATTR) === this.date &&
+      (dom.getAttribute(WIKI_LINK_TIME_ATTR) ?? null) === this.time
+    );
+  }
+
   override ignoreEvent(): boolean {
     return false;
   }
@@ -287,6 +318,13 @@ class HrWidget extends WidgetType {
     line.className = 'md-hr-line';
     box.append(line);
     return box;
+  }
+
+  /** Линейка неизменна: сдвиг только обновляет смещения (ошибка 65bd3e81). */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return true;
   }
 
   override ignoreEvent(): boolean {
@@ -323,6 +361,17 @@ class TaskCheckboxWidget extends WidgetType {
     return input;
   }
 
+  /**
+   * Сдвиг обновляет смещения на месте (ошибка 65bd3e81). Смена состояния
+   * (`checked`) — пересборка: живой контрол пересоздаётся из нового значения,
+   * а не правится втихую.
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return (dom as HTMLInputElement).checked === this.checked;
+  }
+
   override ignoreEvent(): boolean {
     return false;
   }
@@ -348,6 +397,16 @@ class ListMarkerWidget extends WidgetType {
     span.className = 'cm-md-list-marker';
     span.textContent = this.marker;
     return span;
+  }
+
+  /**
+   * Смещений виджет не несёт (в `eq` только маркер), поэтому сдвиг выше его
+   * не трогает вовсе. `updateDOM` нужен смене нумерации в исходнике: текст
+   * маркера обновляется на прежнем узле (ошибка 65bd3e81).
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.textContent = this.marker;
+    return true;
   }
 
   override ignoreEvent(): boolean {
