@@ -708,6 +708,21 @@ export const en = {
    * (`details.reason`/`details.issue`) use `errors.code.<code>.<token>` keys;
    * an unknown code or reason falls back to the generic text.
    */
+  /**
+   * Precise reasons for a failed property write (ошибка 0033ea14, DoD 3):
+   * the server names the field in `details.field`, the dialog says what is
+   * wrong. Ids are not shown — only the field and the user's next step.
+   */
+  'errors.propertyAllowedTargetTypeMissing':
+    'the "Target types" restriction points to a type that no longer exists — pick the types again',
+  'errors.propertyAllowedSourceTypeMissing':
+    'the "Source types" restriction points to a type that no longer exists — pick the types again',
+  'errors.propertyLinkTypeMissing':
+    'the property link type was not found — choose the link type again',
+  'errors.propertyDefaultTargetInvalid':
+    'the default value for targets is invalid — check the selected thoughts',
+  /** Strict request-body check: the server lists unknown fields (`details.fields`). */
+  'errors.propertyUnknownFields': 'the server does not accept these request fields: %1',
   'errors.code.VALIDATION_ERROR': 'check the entered data',
   /** Refinement of `400 VALIDATION_ERROR` for an unreachable series (`details.issue`). */
   'errors.code.VALIDATION_ERROR.no-occurrence':
@@ -3793,6 +3808,9 @@ export const en = {
     'Default value for targets of any types. It can be overridden by values in the table rows above',
   'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
     'Property description: what it means and what format the value has (a hint in the thought editor and for AI agents)',
+  /** Rolling back a just-created property when its bindings fail (0033ea14). */
+  'propertyManager.createRollbackFailed':
+    'the type restrictions were not saved, and the created property could not be rolled back — delete it in the property list. Reason: %1',
   'propertyManager.propertyTakimNameAlreadyHas': 'A property with this name already exists.',
   'propertyManager.label.vidValues': 'Value kind',
   'propertyManager.label.description': 'Description',

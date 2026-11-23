@@ -338,6 +338,11 @@ export const zh = {
   'errors.propertySideMismatch': '所选一侧没有链接——值已被更改，请刷新卡片',
   'errors.propertyNameAmbiguous': '属性名称不明确——网络中有多个属性使用该名称',
   'errors.propertyTargetType': '值的类型不符合属性允许的类型',
+  'errors.propertyAllowedTargetTypeMissing': '「目标类型」限制指向已不存在的类型——请重新选择类型',
+  'errors.propertyAllowedSourceTypeMissing': '「源类型」限制指向已不存在的类型——请重新选择类型',
+  'errors.propertyLinkTypeMissing': '未找到属性的关系类型——请重新选择关系类型',
+  'errors.propertyDefaultTargetInvalid': '目标侧的默认值不正确——请检查所选的念头',
+  'errors.propertyUnknownFields': '服务器不接受这些请求字段:%1',
   'errors.code.VALIDATION_ERROR': '请检查输入的数据',
   'errors.code.VALIDATION_ERROR.no-occurrence':
     '按此间隔不会产生任何提醒：所选日期在该序列的月份或年份中不存在——请更改日期或步长',
@@ -2486,6 +2491,8 @@ export const zh = {
     '任意类型目标的默认值。可被上方表格行中的值覆盖',
   'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
     '属性描述：其含义及值格式（用于想法编辑器和 AI 代理的提示）',
+  'propertyManager.createRollbackFailed':
+    '无法保存类型限制，也无法回滚已创建的属性——请在属性列表中删除它。原因:%1',
   'propertyManager.propertyTakimNameAlreadyHas': '已存在同名属性。',
   'propertyManager.label.vidValues': '值类型',
   'propertyManager.label.description': '描述',

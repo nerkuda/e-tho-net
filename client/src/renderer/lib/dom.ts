@@ -205,6 +205,8 @@ export function errText(err: unknown): string {
   if (RAW_NETWORK_ERROR_RE.test(message)) return t('errors.serverUnavailable');
   const sideText = propertySideErrorText(like);
   if (sideText !== null) return sideText;
+  const fieldText = propertyFieldErrorText(like);
+  if (fieldText !== null) return fieldText;
   const serverText = serverErrorText(like);
   if (serverText !== null) return serverText;
   return message;
@@ -317,6 +319,45 @@ function propertySideErrorText(like: ErrorLike | null): string | null {
   return reason === PROPERTY_SIDE_ERROR_REASON.mismatch
     ? t('errors.propertySideMismatch')
     : t('errors.propertySideRequired');
+}
+
+/**
+ * Поля записи свойства, которые сервер называет в `details.field`
+ * (`VALIDATION_ERROR`): у каждого — свой пользовательский текст. Ошибка
+ * 0033ea14: диалог показывал общий «проверьте введённые данные» и не давал
+ * понять, какое ограничение не принято. Идентификаторы типов не выводим —
+ * они ничего не говорят пользователю (см. `error-text.test.ts`).
+ */
+const PROPERTY_FIELD_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
+  'config.allowed_target_type_ids': 'errors.propertyAllowedTargetTypeMissing',
+  'config.allowed_source_type_ids': 'errors.propertyAllowedSourceTypeMissing',
+  'config.link_type_id': 'errors.propertyLinkTypeMissing',
+  'config.default_value_target': 'errors.propertyDefaultTargetInvalid',
+};
+
+/**
+ * Причина отказа записи свойства по `details.field` и `details.fields`
+ * (ошибка 0033ea14, DoD 3). Неизвестные серверу поля тела — тоже конкретная
+ * причина: перечисляем их, а не отдаём общий текст кода. `null` — причина
+ * не про поля свойства: работает обычная цепочка `errText`.
+ */
+function propertyFieldErrorText(like: ErrorLike | null): string | null {
+  if (like?.code !== 'VALIDATION_ERROR') return null;
+  const details = like.details;
+  if (typeof details !== 'object' || details === null) return null;
+  const record = details as { field?: unknown; fields?: unknown };
+  if (typeof record.field === 'string') {
+    const key = PROPERTY_FIELD_ERROR_KEYS[record.field];
+    if (key !== undefined) return t(key);
+  }
+  if (
+    Array.isArray(record.fields) &&
+    record.fields.length > 0 &&
+    record.fields.every((field): field is string => typeof field === 'string')
+  ) {
+    return t('errors.propertyUnknownFields', record.fields.join(', '));
+  }
+  return null;
 }
 
 /** Formats an ISO date as a short date of the current UI language. */

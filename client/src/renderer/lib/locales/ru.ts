@@ -711,6 +711,20 @@ export const ru = {
    * (`details.reason`/`details.issue`) адресуются ключами
    * `errors.code.<код>.<токен>`; неизвестный код или причина — общий текст.
    */
+  /**
+   * Точечные причины отказа записи свойства (ошибка 0033ea14, DoD 3): сервер
+   * называет поле в `details.field`, диалог показывает, что именно не так.
+   * Идентификаторы не выводим — только поле и действие пользователя.
+   */
+  'errors.propertyAllowedTargetTypeMissing':
+    'ограничение «Типы назначений» ссылается на несуществующий тип — выберите типы заново',
+  'errors.propertyAllowedSourceTypeMissing':
+    'ограничение «Типы источников» ссылается на несуществующий тип — выберите типы заново',
+  'errors.propertyLinkTypeMissing': 'тип связи свойства не найден — выберите тип связи заново',
+  'errors.propertyDefaultTargetInvalid':
+    'значение по умолчанию для назначений задано неверно — проверьте выбранные мысли',
+  /** Строгая проверка тела запроса: сервер перечисляет неизвестные поля (`details.fields`). */
+  'errors.propertyUnknownFields': 'сервер не понимает эти поля: %1',
   'errors.code.VALIDATION_ERROR': 'проверьте введённые данные',
   /** Уточнение `400 VALIDATION_ERROR` недостижимой серии (`details.issue`). */
   'errors.code.VALIDATION_ERROR.no-occurrence':
@@ -3832,6 +3846,9 @@ export const ru = {
     'Значение по умолчанию для назначений любых типов. Может быть переопределено значениями в строках таблицы выше',
   'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
     'Описание свойства: что оно значит и в каком формате значение (подсказка в редакторе мысли и для AI-агентов)',
+  /** Откат создания свойства при отказе записи привязок (ошибка 0033ea14). */
+  'propertyManager.createRollbackFailed':
+    'не удалось сохранить ограничения типов, и откатить созданное свойство не получилось — удалите его в списке свойств. Причина: %1',
   'propertyManager.propertyTakimNameAlreadyHas': 'Свойство с таким именем уже есть.',
   'propertyManager.label.vidValues': 'Вид значения',
   'propertyManager.label.description': 'Описание',
