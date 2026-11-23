@@ -26,6 +26,15 @@ const ENV_LEVEL = process.env.ETN_LOG_LEVEL?.trim() || DEFAULT_LEVEL;
 export const logger: Logger = pino({ level: ENV_LEVEL });
 
 /**
+ * Logger for **stderr** (fd 2). Обязателен в stdio-MCP: stdout занят
+ * MCP-кадрами, поэтому миграции и служебные сообщения bootstrap не имеют
+ * права туда попадать (задача 760402ba).
+ */
+export function createStderrLogger(level: string = ENV_LEVEL): Logger {
+  return pino({ level }, pino.destination(2));
+}
+
+/**
  * Build a fresh logger with an explicit level. Use for scoped contexts where the
  * ambient {@link logger} level is inappropriate.
  *

@@ -32,6 +32,17 @@ import { registerTools } from './tools.js';
 /** Server identity announced in `initialize` (05 §9). */
 export const MCP_SERVER_NAME = 'etn-mcp-server';
 
+/**
+ * Registry identity of the server (ADR d17c3a29, задача 760402ba).
+ *
+ * Used only where the official MCP Registry checks ownership: `mcpName` in the
+ * published `package.json`, `name` in `server.json`, and the OCI label of the
+ * stdio image. It never replaces {@link MCP_SERVER_NAME}: the handshake
+ * (`initialize` -> `serverInfo`) keeps the old name, so `mcp-stdio.test.ts` and
+ * 05 §9 stay unchanged.
+ */
+export const MCP_REGISTRY_NAME = 'io.github.nerkuda/e-tho-net';
+
 /** Usage guidance advertised to the client alongside the capability list. */
 const MCP_INSTRUCTIONS =
   'ETN graph-of-thoughts MCP server. The agent acts as the user whose API key ' +
