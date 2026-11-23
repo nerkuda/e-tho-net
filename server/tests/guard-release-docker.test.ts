@@ -244,9 +244,7 @@ function withValue(step: readonly string[], key: string): string | null {
  * `<основной> || <запасной>`. Пробелы внутри выражения не значимы.
  * `null` — выражение не такой формы.
  */
-function parseRefFallback(
-  ref: string,
-): { primary: string; fallback: string } | null {
+function parseRefFallback(ref: string): { primary: string; fallback: string } | null {
   const compact = ref.replace(/\s+/g, '');
   const body = /^\$\{\{(.+)\}\}$/.exec(compact)?.[1];
   if (!body) return null;
@@ -495,7 +493,9 @@ describe('guard: Docker-образ сервера — обязательная �
     const withBlock = findBlock(job, 'with', 4);
     assert.ok(
       withBlock !== null &&
-        withBlock.some((line) => /^\s*tag:\s*\$\{\{\s*inputs\.tag\s*\|\|\s*github\.ref_name\s*\}\}\s*$/.test(line)),
+        withBlock.some((line) =>
+          /^\s*tag:\s*\$\{\{\s*inputs\.tag\s*\|\|\s*github\.ref_name\s*\}\}\s*$/.test(line),
+        ),
       `${RELEASE_WORKFLOW}: docker-image не передаёт тег релиза ` +
         '(with: tag: ${{ inputs.tag || github.ref_name }}) — ' +
         'ручной запуск и пуш тега собирали бы разные образы.',
@@ -552,16 +552,18 @@ describe('guard: Docker-образ сервера — обязательная �
  *
  * Контракт:
  *   * в джобе `publish` ровно один шаг `actions/download-artifact`, и у него
- *     `pattern: release-*` — только артефакты трёх сборочных джоб;
- *   * `path: artifacts` и `merge-multiple: true` на месте — три файла лежат
- *     в одном каталоге, по которому считается `SHA256SUMS`;
+ *     `pattern: release-*` — только артефакты сборочных джоб;
+ *   * `path: artifacts` и `merge-multiple: true` на месте — все файлы лягут
+ *     в один каталог, по которому считается `SHA256SUMS`;
  *   * имена всех `actions/upload-artifact` в workflow начинаются с `release-`
  *     и читаются только из `with.name` (display name шага — не имя артефакта);
- *   * upload-шагов ровно три, их имена — точный контракт: `release-windows`,
- *     `release-linux-client`, `release-linux-server`. Четвёртый артефакт или
- *     переименование любого из трёх — красный прогон: `publish` скачивает
- *     `release-*`, и лишний/пропавший файл меняет состав релиза;
- *   * md-контракт в шапке файла: перечислены пять ожидаемых ассетов релиза
+ *   * upload-шагов ровно четыре: три фиксированных — `release-windows`,
+ *     `release-linux-client`, `release-linux-server` — и матричный
+ *     `release-mcpb-${{ matrix.target }}` (upload-artifact v4 не разрешает
+ *     грузить в артефакт одного имени из разных джоб matrix). Переименование
+ *     любого или лишний артефакт — красный прогон: `publish` скачивает
+ *     `release-*`, и состав релиза меняется молча;
+ *   * md-контракт в шапке файла: перечислены шесть ожидаемых ассетов релиза
  *     и зафиксировано, что `.dockerbuild` ассетом не является.
  *
  * Сторож статический, как и остальные проверки этого файла: YAML читается
@@ -692,9 +694,10 @@ describe('guard: публикация релиза — только релизн
         `${RELEASE_WORKFLOW}: у upload-artifact в джобе ${entry.job} нет name — ` +
           'безымянный артефакт не попадёт под pattern: release-* и выпадет из релиза.',
       );
+      // Матричный артефакт несёт выражение: `release-mcpb-${{ matrix.target }}`.
       assert.match(
         entry.name,
-        /^release-[a-z0-9-]+$/,
+        /^release-[a-z0-9-]*(?:\$?\{\{[^}]+\}\})?$/,
         `${RELEASE_WORKFLOW}: артефакт «${entry.name}» (джоба ${entry.job}) не начинается ` +
           'с release-. publish качает только release-*, поэтому переименование ' +
           'артефакта молча исключит его из релиза.',
@@ -711,17 +714,17 @@ describe('guard: публикация релиза — только релизн
     }
   });
 
-  it(`${RELEASE_WORKFLOW}: ровно три upload-artifact с контрактными именами`, () => {
+  it(`${RELEASE_WORKFLOW}: ровно четыре upload-artifact с контрактными именами`, () => {
     const text = stripComments(readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер'));
     const uploaded = uploadedArtifacts(text);
 
-    // Контракт состава: ровно три сборочные джобы и ровно три артефакта.
-    // Четвёртый upload попадает под pattern: release-* и уезжает в релиз
+    // Контракт состава: три фиксированных артефакта и матрица MCPB-бандлов.
+    // Лишний upload попадает под pattern: release-* и уезжает в релиз
     // лишним файлом; пропавший — оставляет релиз без ассета.
     assert.equal(
       uploaded.length,
-      3,
-      `${RELEASE_WORKFLOW}: ожидается ровно три шага actions/upload-artifact, ` +
+      4,
+      `${RELEASE_WORKFLOW}: ожидается ровно четыре шага actions/upload-artifact, ` +
         `найдено ${uploaded.length}: ` +
         `${uploaded.map((entry) => `${entry.name ?? '<без name>'} (${entry.job})`).join(', ') || 'ни одного'}.`,
     );
@@ -729,22 +732,35 @@ describe('guard: публикация релиза — только релизн
     const names = uploaded.map((entry) => entry.name ?? '').sort();
     assert.deepEqual(
       names,
-      ['release-linux-client', 'release-linux-server', 'release-windows'],
+      [
+        'release-linux-client',
+        'release-linux-server',
+        'release-mcpb-${{ matrix.target }}',
+        'release-windows',
+      ],
       `${RELEASE_WORKFLOW}: имена артефактов — «${names.join(', ')}», ожидается точный ` +
-        'набор: release-windows, release-linux-client, release-linux-server. Имена — ' +
-        'контракт релиза (SHA256SUMS, install.sh, update-checker).',
+        'набор: release-windows, release-linux-client, release-linux-server, ' +
+        'release-mcpb-${{ matrix.target }}. Имена — контракт релиза (SHA256SUMS, ' +
+        'install.sh, update-checker).',
     );
   });
 
-  it(`${RELEASE_WORKFLOW}: md-контракт — пять ассетов релиза, .dockerbuild не ассет`, () => {
+  it(`${RELEASE_WORKFLOW}: md-контракт — шесть ассетов релиза, .dockerbuild не ассет`, () => {
     const text = readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер');
     const header = headerComments(text);
-    assert.ok(header.length > 0, `${RELEASE_WORKFLOW}: нет шапки-комментария с контрактом ассетов.`);
+    assert.ok(
+      header.length > 0,
+      `${RELEASE_WORKFLOW}: нет шапки-комментария с контрактом ассетов.`,
+    );
 
     const assets: { label: string; pattern: RegExp }[] = [
       { label: 'ETN-Setup-<version>.exe', pattern: /ETN-Setup-[^\s]+\.exe/ },
-      { label: 'ETN-Client-<version>-linux-x64.tar.gz', pattern: /ETN-Client-[^\s]+-linux-x64\.tar\.gz/ },
+      {
+        label: 'ETN-Client-<version>-linux-x64.tar.gz',
+        pattern: /ETN-Client-[^\s]+-linux-x64\.tar\.gz/,
+      },
       { label: 'etn-server-<version>.tar.gz', pattern: /etn-server-[^\s]+\.tar\.gz/ },
+      { label: 'etn-mcp-<version>-<platform>-<arch>.mcpb', pattern: /etn-mcp-[^\s]+\.mcpb/ },
       { label: 'SHA256SUMS', pattern: /\bSHA256SUMS\b/ },
       { label: 'install.sh', pattern: /\binstall\.sh\b/ },
     ];
@@ -753,7 +769,7 @@ describe('guard: публикация релиза — только релизн
         header,
         asset.pattern,
         `${RELEASE_WORKFLOW}: в шапке-контракте нет ассета ${asset.label}. В релизе ` +
-          'ровно пять ожидаемых ассетов; шапка — md-контракт, по которому сверяются ' +
+          'ровно шесть ожидаемых ассетов; шапка — md-контракт, по которому сверяются ' +
           'workflow, install.sh, тело релиза и update-checker.',
       );
     }

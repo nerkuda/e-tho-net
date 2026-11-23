@@ -18,12 +18,31 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { MCP_REGISTRY_NAME, MCP_SERVER_NAME } from '../src/mcp/server.js';
+import {
+  buildBundleTargetMarker,
+  buildMcpbManifest,
+  githubSlugFromRegistryName,
+  MCPB_AUTHOR,
+  MCPB_BUNDLE_TARGET_FILENAME,
+  MCPB_BUNDLE_TARGET_KIND,
+  MCPB_CANONICAL_TARGET,
+  MCPB_DISPLAY_NAME,
+  MCPB_ENTRY_POINT,
+  MCPB_EXTENSION,
+  MCPB_MANIFEST_VERSION,
+  MCPB_NODE_RUNTIME,
+  MCPB_TARGETS,
+  mcpbAssetName,
+  mcpbReleaseUrl,
+  parseMcpbTarget,
+} from '../src/mcpb/manifest.js';
 import {
   buildNpmPackageManifest,
   buildServerJson,
@@ -146,7 +165,13 @@ describe('guard: маркеры MCP-пакета etn-mcp', () => {
     const file = path.join(REPO_ROOT, 'server.json');
     assert.ok(fs.existsSync(file), 'server.json коммитится в корень репозитория');
     const committed = readJson(file);
-    const generated = buildServerJson({ version: rootVersion });
+    const packages = committed.packages as Array<Record<string, unknown>>;
+    const mcpbEntry = packages.find((item) => item.registryType === 'mcpb');
+    assert.ok(mcpbEntry !== undefined, 'в packages обязана быть запись MCPB (задача d1feff33)');
+    const generated = buildServerJson({
+      version: rootVersion,
+      mcpbSha256: String(mcpbEntry.fileSha256),
+    });
     assert.deepEqual(
       committed,
       generated,
@@ -154,13 +179,145 @@ describe('guard: маркеры MCP-пакета etn-mcp', () => {
     );
     assert.equal(committed.name, MCP_REGISTRY_NAME);
     assert.equal(committed.version, rootVersion);
+  });
+
+  it('server.json: запись npm и запись канонического MCPB-бандла', () => {
+    const committed = readJson(path.join(REPO_ROOT, 'server.json'));
     const packages = committed.packages as Array<Record<string, unknown>>;
-    assert.equal(packages.length, 1, 'у npm-задачи ровно одна запись packages — npm');
+    assert.deepEqual(
+      packages.map((item) => item.registryType),
+      ['npm', 'mcpb'],
+      'packages: npm-пакет, затем канонический MCPB-бандл win32-x64',
+    );
+
     const npmEntry = packages[0] as Record<string, unknown>;
-    assert.equal(npmEntry.registryType, 'npm');
     assert.equal(npmEntry.identifier, NPM_PACKAGE_NAME);
     assert.equal(npmEntry.version, rootVersion);
     assert.deepEqual(npmEntry.transport, { type: 'stdio' });
+
+    const slug = githubSlugFromRegistryName(MCP_REGISTRY_NAME);
+    assert.equal(slug, 'nerkuda/e-tho-net', 'GitHub-slug выводится из имени реестра');
+
+    const mcpbEntry = packages[1] as Record<string, unknown>;
+    assert.equal(
+      mcpbEntry.identifier,
+      mcpbReleaseUrl(rootVersion, MCPB_CANONICAL_TARGET, slug),
+      'идентификатор — URL релиза канонического бандла win32-x64',
+    );
+    assert.equal(
+      String(mcpbEntry.identifier),
+      `https://github.com/nerkuda/e-tho-net/releases/download/v${rootVersion}/` +
+        `etn-mcp-${rootVersion}-win32-x64.mcpb`,
+    );
+    assert.equal(mcpbEntry.version, rootVersion);
+    assert.deepEqual(mcpbEntry.transport, { type: 'stdio' });
+    assert.match(String(mcpbEntry.fileSha256), /^[a-f0-9]{64}$/);
+
+    const built = path.join(
+      REPO_ROOT,
+      'release',
+      `etn-mcp-${rootVersion}-win32-x64${MCPB_EXTENSION}`,
+    );
+    if (fs.existsSync(built)) {
+      const actual = createHash('sha256').update(fs.readFileSync(built)).digest('hex');
+      assert.equal(
+        mcpbEntry.fileSha256,
+        actual,
+        'fileSha256 обязан совпадать с собранным каноническим бандлом',
+      );
+    }
+  });
+
+  it('манифест MCPB: идентичность, точка входа, user_config и платформы', () => {
+    const manifest = buildMcpbManifest({ version: rootVersion, target: MCPB_CANONICAL_TARGET });
+    assert.equal(manifest.manifest_version, MCPB_MANIFEST_VERSION);
+    assert.equal(MCPB_MANIFEST_VERSION, '0.3');
+    assert.equal(manifest.name, MCP_SERVER_NAME, 'имя манифеста — имя рукопожатия');
+    assert.equal(manifest.display_name, MCPB_DISPLAY_NAME);
+    assert.equal(manifest.version, rootVersion);
+    assert.deepEqual(manifest.author, { ...MCPB_AUTHOR });
+
+    const server = manifest.server as Record<string, unknown>;
+    assert.equal(server.type, 'node');
+    assert.equal(server.entry_point, MCPB_ENTRY_POINT);
+    assert.equal(
+      MCPB_ENTRY_POINT,
+      NPM_BIN_PATH,
+      'entry_point бандла и bin пакета — один и тот же файл обёртки',
+    );
+    const config = server.mcp_config as Record<string, unknown>;
+    assert.equal(config.command, 'node');
+    assert.deepEqual(config.args, [['${__dirname}', NPM_BIN_PATH].join('/')]);
+    assert.deepEqual(config.env, {
+      ETN_DATA_DIR: '${user_config.data_dir}',
+      ETN_API_KEY: '${user_config.api_key}',
+    });
+
+    const compatibility = manifest.compatibility as Record<string, unknown>;
+    assert.deepEqual(compatibility.platforms, ['win32']);
+    assert.deepEqual(compatibility.runtimes, { node: MCPB_NODE_RUNTIME });
+    assert.equal(MCPB_NODE_RUNTIME, '>=22.2.0');
+    assert.equal(manifest.tools_generated, true);
+
+    const userConfig = manifest.user_config as Record<string, Record<string, unknown>>;
+    assert.equal(userConfig.data_dir?.type, 'directory');
+    assert.equal(userConfig.data_dir?.required, false);
+    assert.equal(userConfig.api_key?.type, 'string');
+    assert.equal(userConfig.api_key?.sensitive, true);
+    assert.equal(userConfig.api_key?.required, false);
+  });
+
+  it('манифест MCPB: любая цель матрицы даёт свою ОС, чужая цель отвергается', () => {
+    for (const target of MCPB_TARGETS) {
+      const manifest = buildMcpbManifest({ version: rootVersion, target });
+      const compatibility = manifest.compatibility as Record<string, unknown>;
+      assert.deepEqual(compatibility.platforms, [target.split('-')[0]]);
+    }
+    assert.deepEqual(
+      [...MCPB_TARGETS],
+      ['win32-x64', 'darwin-x64', 'darwin-arm64', 'linux-x64'],
+      'матрица бандлов — четыре цели из решения задачи',
+    );
+    assert.ok((MCPB_TARGETS as readonly string[]).includes(MCPB_CANONICAL_TARGET));
+    assert.throws(() => parseMcpbTarget('win32-arm64'), /unsupported MCPB target/);
+    assert.throws(
+      () => buildMcpbManifest({ version: rootVersion, target: 'sunos-x64' }),
+      /unsupported MCPB target/,
+    );
+  });
+
+  it('маркер целевой платформы бандла собирается из той же цели', () => {
+    const marker = buildBundleTargetMarker({ version: rootVersion, target: 'darwin-arm64' });
+    assert.equal(marker.kind, MCPB_BUNDLE_TARGET_KIND);
+    assert.equal(marker.version, rootVersion);
+    assert.equal(marker.platform, 'darwin');
+    assert.equal(marker.arch, 'arm64');
+    assert.equal(marker.target, 'darwin-arm64');
+    assert.equal(
+      MCPB_BUNDLE_TARGET_FILENAME,
+      'etn-mcp-target.json',
+      'маркер читает bin/platform.ts по этому имени',
+    );
+    const lib = readText(path.join(SERVER_ROOT, 'scripts', 'lib', 'mcpb-bundle.mjs'));
+    assert.ok(
+      lib.includes(`export const MCPB_BUNDLE_TARGET_KIND = '${MCPB_BUNDLE_TARGET_KIND}';`),
+      'идентификатор маркера в сборщике обязан совпадать с src/mcpb/manifest.ts',
+    );
+  });
+
+  it('имена артефактов несут версию, платформу и архитектуру', () => {
+    for (const target of MCPB_TARGETS) {
+      assert.equal(mcpbAssetName(rootVersion, target), `etn-mcp-${rootVersion}-${target}.mcpb`);
+    }
+    assert.throws(() => mcpbAssetName(rootVersion, 'win32-arm64'), /unsupported MCPB target/);
+    assert.match(mcpbAssetName(rootVersion, MCPB_CANONICAL_TARGET), /-win32-x64\.mcpb$/);
+  });
+
+  it('генератор server.json не принимает fileSha256 не в нижнем регистре', () => {
+    assert.throws(
+      () => buildServerJson({ version: rootVersion, mcpbSha256: 'A'.repeat(64) }),
+      /fileSha256 must be a lowercase SHA-256 hex string/,
+    );
   });
 
   it('официальный mcp-publisher принимает server.json (если бинарник в PATH)', (t) => {
