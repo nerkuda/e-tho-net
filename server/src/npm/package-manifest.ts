@@ -16,6 +16,7 @@
  * живёт отдельно и здесь не участвует.
  */
 
+import { buildMcpbRegistryPackage, githubSlugFromRegistryName } from '../mcpb/manifest.js';
 import { MCP_REGISTRY_NAME } from '../mcp/server.js';
 
 /** Имя публикуемого npm-пакета. */
@@ -53,6 +54,15 @@ export interface NpmPackageManifestInput {
 export interface ServerJsonInput {
   /** Версия ETN (корневой `package.json`). */
   version: string;
+  /**
+   * SHA-256 канонического (`win32-x64`) MCPB-бандла этой версии.
+   *
+   * Хеш считается по собранному артефакту и меняется от сборки к сборке,
+   * поэтому не вычисляется генератором: его передаёт конвейер релиза
+   * (`--mcpb-sha256`), а без значения генератор сохраняет хеш из текущего
+   * `server.json` (тот же бандл — тот же хеш).
+   */
+  mcpbSha256: string;
 }
 
 /**
@@ -86,9 +96,16 @@ export function buildNpmPackageManifest(input: NpmPackageManifestInput): Record<
 }
 
 /**
- * Собрать `server.json` для официального реестра MCP (запись npm).
+ * Собрать `server.json` для официального реестра MCP.
+ *
+ * Две записи `packages[]` — npm-пакет и MCPB-бандл канонического `win32-x64`
+ * (ADR d17c3a29 п. 5, задача d1feff33): остальные платформы — ассеты релиза и
+ * `SHA256SUMS`, их записи появятся, когда каталог научится выбирать бандл по
+ * платформе (открытый вопрос c823f1df).
  *
  * Публикация в реестр — задача c823f1df; здесь только артефакт и метаданные.
+ *
+ * @throws {Error} когда `mcpbSha256` не является SHA-256 в нижнем регистре.
  */
 export function buildServerJson(input: ServerJsonInput): Record<string, unknown> {
   return {
@@ -121,6 +138,11 @@ export function buildServerJson(input: ServerJsonInput): Record<string, unknown>
           },
         ],
       },
+      buildMcpbRegistryPackage({
+        version: input.version,
+        repository: githubSlugFromRegistryName(MCP_REGISTRY_NAME),
+        fileSha256: input.mcpbSha256,
+      }),
     ],
   };
 }

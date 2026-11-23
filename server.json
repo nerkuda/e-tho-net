@@ -27,6 +27,15 @@
           "isSecret": true
         }
       ]
+    },
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/nerkuda/e-tho-net/releases/download/v0.16.2/etn-mcp-0.16.2-win32-x64.mcpb",
+      "version": "0.16.2",
+      "fileSha256": "7885933783db16f6b000f00f01fe18548bdc695f38f78d773ea6ab704a5569fe",
+      "transport": {
+        "type": "stdio"
+      }
     }
   ]
 }
