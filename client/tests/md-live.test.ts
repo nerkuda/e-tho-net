@@ -1168,6 +1168,30 @@ test('WikiDateWidget: сдвиг обновляет на месте, смена 
   assert.equal(withTime.updateDOM(timeBox, {}), true, 'неизменное содержимое — обновление на месте');
 });
 
+test('WikiDateWidget: смена только подписи требует пересборки DOM (65bd3e81)', () => {
+  installDocumentShim();
+  const dateOf = (doc: string): ReturnType<typeof widgetWhere> =>
+    widgetWhere(buildState(doc, doc.length), (w) => 'date' in w);
+
+  // Алиас date-ссылки: `[[2026-11-02|A]]` — та же дата, другая подпись.
+  // Дата и время не меняются, смещения совпадают: `eq`/`updateDOM` различают
+  // именно подпись (проверка не вакуумна, замечание верификатора к 65bd3e81).
+  const base = dateOf('[[2026-11-02|A]] x');
+  const relabeled = dateOf('[[2026-11-02|B]] x');
+  assert.equal(base.label, 'A');
+  assert.equal(relabeled.label, 'B');
+  assert.equal(base.date, relabeled.date, 'дата та же');
+  assert.equal(base.time, null);
+  assert.equal(relabeled.time, null);
+  assert.equal(base.from, relabeled.from, 'смещения те же — различается только подпись');
+  assert.equal(base.eq(relabeled), false, 'смена подписи отличает виджеты');
+
+  const box = base.toDOM();
+  assert.equal(box.textContent, 'A');
+  assert.equal(relabeled.updateDOM(box, {}), false, 'смена подписи требует пересборки DOM');
+  assert.equal(relabeled.toDOM().textContent, 'B', 'новый узел несёт новую подпись');
+});
+
 test('HtmlWidget в цитате внутри списка: сдвиг выше не пересобирает таблицу (4df5e284)', () => {
   installDocumentShim();
   // Урок 49ebba76: блок в цитате ВНУТРИ списка — своя обёртка разметки, и класс
