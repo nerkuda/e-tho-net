@@ -32,7 +32,7 @@
       "registryType": "mcpb",
       "identifier": "https://github.com/nerkuda/e-tho-net/releases/download/v0.16.2/etn-mcp-0.16.2-win32-x64.mcpb",
       "version": "0.16.2",
-      "fileSha256": "452671fdc7c623220c8120d3646f0ad02378264d3439c635b0722609eeddef9d",
+      "fileSha256": "16abc3d1c507a6d7f14f69e032129ad60d2985facaa6903c508d7c33a58c452a",
       "transport": {
         "type": "stdio"
       }

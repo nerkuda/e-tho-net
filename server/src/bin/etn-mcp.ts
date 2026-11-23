@@ -78,20 +78,30 @@ export function nativeLoadErrorMessage(host: string): string {
   );
 }
 
+/** Конструктор `better-sqlite3`: минимальная форма для проверки загрузки аддона. */
+type NativeDatabaseConstructor = new (filename: string) => { close(): void };
+
 /**
- * Загрузить нативный модуль заранее.
+ * Загрузить нативную сборку заранее — открыть и закрыть БД в памяти.
  *
- * `better-sqlite3` грузится лениво — внутри `main()` при bootstrap каталога
- * данных, а `main()` печатает ошибку сам (сырым текстом). Поэтому модуль
- * загружается здесь, до `main()`: это единственная точка, где перехват
- * `ERR_DLOPEN_FAILED` гарантированно срабатывает.
+ * `better-sqlite3` ленив: `import` подключает только JS-обёртку, а аддон
+ * `better_sqlite3.node` грузится в конструкторе `Database`
+ * (`lib/database.js`: `require('bindings')('better_sqlite3.node')`). Поэтому
+ * проверка нативной загрузки — это `new Database(':memory:')`, а не импорт
+ * модуля: импорт проходит и с битым аддоном. Делается до `main()` — там
+ * ошибку ловит и печатает сырым текстом сам CLI, а каталог данных уже создан.
  *
  * @returns `false`, если ошибка распознана и уже напечатана.
- * @throws неперехваченная ошибка загрузки, если она не про нативный модуль.
+ * @throws неперехваченная ошибка, если она не про нативный модуль.
  */
-async function preloadNativeModule(host: string): Promise<boolean> {
+async function preloadNativeAddon(host: string): Promise<boolean> {
   try {
-    await import('better-sqlite3');
+    const loaded = (await import('better-sqlite3')) as unknown as {
+      default?: NativeDatabaseConstructor;
+    };
+    const Database = (loaded.default ?? loaded) as unknown as NativeDatabaseConstructor;
+    const probe = new Database(':memory:');
+    probe.close();
     return true;
   } catch (err) {
     if (!isNativeLoadFailure(err)) throw err;
@@ -141,9 +151,9 @@ export async function runEtnMcp(
     first === undefined || !PASSTHROUGH_COMMANDS.has(first) ? ['mcp', ...tokens] : [...tokens];
   const cliArgv = [argv[0] ?? process.execPath, 'etn-mcp', ...cliTokens];
 
-  // Нативная сборка проверяется до main(): внутри main() модуль грузится
-  // лениво, и его ошибку печатает сам CLI сырым текстом.
-  if (!(await preloadNativeModule(host))) return 1;
+  // Нативная сборка проверяется до main(): внутри main() аддон грузится при
+  // bootstrap каталога данных, и его ошибку печатает сам CLI сырым текстом.
+  if (!(await preloadNativeAddon(host))) return 1;
 
   let main: (options: { argv?: string[]; env?: NodeJS.ProcessEnv }) => Promise<number>;
   try {
