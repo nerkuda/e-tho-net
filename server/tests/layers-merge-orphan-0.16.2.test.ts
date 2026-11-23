@@ -196,6 +196,12 @@ describe(
           () => mergeLayer(ndb, LAYER_EDITED, undefined, USER),
           rejectsWithOrphan(orphanConflict('links', s.linkId, 1)),
         );
+        // Частичное слияние идёт тем же путём (collectMergedRows + Phase A):
+        // выбор отбора не обходит правило.
+        assert.throws(
+          () => mergeLayer(ndb, LAYER_EDITED, { links: [s.linkId] }, USER),
+          rejectsWithOrphan(orphanConflict('links', s.linkId, 1)),
+        );
 
         ndb.useLayer(BASE_LAYER_ID);
         assert.equal(getLink(ndb, s.linkId), null, 'ребро не воскресло в основе');
