@@ -1061,7 +1061,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'properties.remove',
     tool: 'etn.properties.remove',
     group: 'properties',
-    when: 'remove one target from a link property: a live edge is deleted by the "base/layer" rule, an already marked one — no-op',
+    when: 'remove one target from a link property: a live edge is deleted by the "base/layer" rule (422 when a live child-layer shadow holds it), an already marked one — no-op',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'owner_type', required: true, desc: '`thought` | `link`' },
@@ -1076,9 +1076,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: false,
     effects:
-      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`). An already marked edge — no-op without an event. Returns `{ link_id }` (idempotent).',
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`). Physical deletion of a layer row is refused while a live child-layer shadow holds it — 422 with `details.blocking.layers` (0.16.2, error 97b64a69). A live triple duplicated across layers (0.16.2, error 374c9776) is removed as a whole — the fresh layer row physically, the base/ancestor row to the layer basket — with one event per row. An already marked edge — no-op without an event. Returns `{ link_id }` (idempotent).',
     errors:
-      '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`. A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
+      '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`; a physical deletion held by a live child-layer shadow (`details.blocking.layers`); a duplicate triple that cannot be collapsed inside one layer (`details.links` — merge or discard the extra layer). A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
     paramsContract: PropertiesRemove,
   },
 

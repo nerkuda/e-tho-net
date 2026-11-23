@@ -1259,7 +1259,10 @@ const HANDLERS: Record<string, OpHandler> = {
         // Умное удаление (0.14.1, ADR a967d865) — та же процедура, что у удаления
         // цели свойства-связи: основа и свежее ребро слоя физически
         // (`link.deleted`); ребро основы/предка при работе в слое — корзина
-        // (`link.updated`), восстановление — `links.restore`.
+        // (`link.updated`), восстановление — `links.restore`. Физическое удаление
+        // строки слоя под живой тенью дочернего слоя — 422 `blocking.layers`
+        // (0.16.2, ошибка 97b64a69); живой дубль тройки в разных слоях снимается
+        // целиком (0.16.2, ошибка 374c9776) — событие по каждой строке.
         const removals = removeLinkTargets(ndb, a.link_id, rt.deps.auth.userId);
         const [removed] = removals;
         const audit = {
