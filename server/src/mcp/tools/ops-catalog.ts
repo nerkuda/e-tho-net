@@ -661,7 +661,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'thoughts.backlinks',
     tool: 'etn.thoughts.backlinks',
     group: 'thoughts',
-    when: 'explicit ID references `[[#<id>]]` to the thought in comment texts',
+    when:
+      'explicit ID references to the thought in comment texts: `[[#<id>]]`, `[[n:<net>#<id>]]` and' +
+      ' the transclusion of its comment (`!` prefix, optional section anchor — the same' +
+      ' reference; error 0afd8419)',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'thought_id', required: true, desc: 'thought' },

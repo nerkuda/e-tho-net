@@ -1,8 +1,10 @@
 /**
  * Backlinks service (task R3, docs/03-server-api.md §13a,
  * docs/12-wiki-id-refs.md §6.1): find comments whose `body_md` carries an
- * explicit ID-based wiki-link to a given thought (`[[#<id>]]` or
- * `[[n:<net>#<id>]]`) or publication (`[[#pub:<id>]]`, 0.11.1, задача f37b468d,
+ * explicit ID-based wiki-link to a given thought (`[[#<id>]]`,
+ * `[[n:<net>#<id>]]` and the transclusion of its comment (`!` prefix, optional
+ * `#Раздел` anchor — the same reference, ошибка 0afd8419) or publication
+ * (`[[#pub:<id>]]`, 0.11.1, задача f37b468d,
  * требование 7f583ef9). Runtime regex over `body_md` (no separate index — task
  * R3 decision). One hit per `(owner_type, owner_id)` — только для ПОСТОЯННЫХ
  * комментариев; дневниковая запись даёт отдельную строку-запись с периодом и
@@ -11,6 +13,7 @@
  * their own, so no exclusion is needed there.
  */
 
+import { parseTransclusions } from '@etn/markdown';
 import { EtnError, type BacklinkHit, type MentionHit, type RecordHit } from '@etn/shared';
 import type { NetworkDb } from '../db/network-db.js';
 import { resolveChronicleTargets } from './comment-targets.js';
@@ -75,6 +78,16 @@ interface ScanOptions {
  * term (so the snippet is centered on it), or null if no match.
  */
 function findMatchingId(body: string, targetIdLowercased: string, m: BacklinkMatchers): string | null {
+  // Трансклюзия (`!` + `[[#<id>]]`, с якорем раздела `#Раздел`) — такая же
+  // ссылка на мысль-источник (ошибка 0afd8419): якорь раздела не совпадает с плоскими
+  // шаблонами ниже. Разбор ведёт единственный парсер пакета
+  // (`parseTransclusions`) — сканер не расходится с рендерером в том, что
+  // считать ссылкой (код-блоки, экранирование).
+  if (m.id) {
+    for (const ref of parseTransclusions(body)) {
+      if (ref.sourceId === targetIdLowercased) return ref.sourceId;
+    }
+  }
   const patterns: Array<{ re: RegExp; group: number }> = [];
   if (m.id) patterns.push({ re: RE_ID, group: 1 });
   if (m.cross) patterns.push({ re: RE_CROSS, group: 2 });
@@ -216,8 +229,8 @@ function scanBacklinkOwners(
  * @returns Union {@link BacklinkHit} (0.15.4, требование 012b2dc6, ADR
  *   db88d819): одна владельческая строка `MentionHit` на `(owner_type,
  *   owner_id)` постоянного комментария + строки-записи `RecordHit`
- *   дневниковых записей, чей текст несёт `[[#<id>]]` или
- *   `[[n:<net>#<id>]]` на эту мысль. Комментарии самой целевой мысли
+ *   дневниковых записей, чей текст несёт `[[#<id>]]`, трансклюзию (`!` +
+ *   `[[#<id>#Раздел]]`) или `[[n:<net>#<id>]]` на эту мысль. Комментарии самой целевой мысли
  *   исключены. Публикационные ссылки (`[[#pub:…]]`) ссылками на мысль не
  *   считаются и игнорируются.
  * @throws `EtnError('NOT_FOUND')` if the target thought does not exist.

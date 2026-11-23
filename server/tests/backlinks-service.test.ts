@@ -150,6 +150,83 @@ describe('findBacklinks (R3)', { skip }, () => {
     }
   });
 
+  it('находит трансклюзию с якорем раздела ![[#<id>#Раздел]] (ошибка 0afd8419)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Цель');
+      const owner = seedThought(ndb, 'Заметка');
+      seedThoughtComment(ndb, owner, `Вступление.\n\n![[#${target}#Раздел]]\n\nКонец.`);
+
+      const hits = findBacklinks(ndb, target);
+      assert.equal(hits.length, 1, 'трансклюзия — такая же ссылка на мысль-источник');
+      assert.equal(hits[0]!.owner_id, owner);
+      assert.ok(hits[0]!.snippet.includes('<mark>'), 'snippet выделяет id источника');
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('обе формы трансклюзии в одном комментарии — один хит на мысль', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Цель');
+      const owner = seedThought(ndb, 'Заметка');
+      // Обе допустимые формы (ТП2, ADR 8c41387c) ссылаются на ОДНУ мысль.
+      seedThoughtComment(
+        ndb,
+        owner,
+        `Сначала ![[#${target}]], потом ![[#${target}#Раздел]], ещё раз ![[#${target}#Раздел]].`,
+      );
+      const hits = findBacklinks(ndb, target);
+      assert.equal(hits.length, 1);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('трансклюзия в код-блоке ссылкой не считается — паритет с рендерером', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Цель');
+      const owner = seedThought(ndb, 'Заметка');
+      // `parseTransclusions` не видит ссылок в фенсах и код-спанах, значит
+      // рендерер их не разворачивает — источником ссылки они не становятся.
+      seedThoughtComment(ndb, owner, `Пример записи:\n\n\`\`\`\n![[#${target}#Раздел]]\n\`\`\`\n`);
+      const hits = findBacklinks(ndb, target);
+      assert.equal(hits.length, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('экранированная трансклюзия \\![[…]] ссылкой не считается — паритет с рендерером', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Цель');
+      const owner = seedThought(ndb, 'Заметка');
+      seedThoughtComment(ndb, owner, `литерал \\![[#${target}#Раздел]]`);
+      const hits = findBacklinks(ndb, target);
+      assert.equal(hits.length, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
+  it('ссылка с якорем раздела без `!` — не трансклюзия, а legacy-имя (паритет с рендерером)', () => {
+    const ndb = createInMemoryNetworkDb();
+    try {
+      const target = seedThought(ndb, 'Цель');
+      const owner = seedThought(ndb, 'Заметка');
+      // Рендерер разбирает `[[#<id>]]` только как UUID; с хвостом `#Раздел`
+      // это legacy-ссылка по имени — ссылкой на мысль не становится.
+      seedThoughtComment(ndb, owner, `см. [[#${target}#Раздел]]`);
+      const hits = findBacklinks(ndb, target);
+      assert.equal(hits.length, 0);
+    } finally {
+      ndb.close();
+    }
+  });
+
   it('находит [[n:<net>#<id>]] — кросс-сеть (по target id)', () => {
     const ndb = createInMemoryNetworkDb();
     try {
