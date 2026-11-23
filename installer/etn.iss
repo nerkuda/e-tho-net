@@ -704,7 +704,15 @@ Source: "{#NodePayload}\*"; DestDir: "{app}\node"; Flags: ignoreversion recurses
 #endif
 
 #ifdef HaveServicePayload
-Source: "{#ServicePayload}\*"; DestDir: "{app}\service"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallServerPayload
+; --- Служба: файлы WinSW и шаблон принадлежат поставке и заменяются всегда,
+; --- КРОМЕ etn-service.xml — конфигурации службы, которую правит пользователь
+; --- (ошибка 6c2fc89e, например ETN_MCP_ENABLED). Решение принимает
+; --- DecideServiceConfigPolicy в ssInstall: файл, отличный от шаблона, при
+; --- обновлении не перезатирается. Шаблон для сравнения извлекается в {tmp}
+; --- (dontcopy) — из него считается ожидаемое содержимое.
+Source: "{#ServicePayload}\*"; Excludes: "etn-service.xml"; DestDir: "{app}\service"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: InstallServerPayload
+Source: "{#ServicePayload}\etn-service.xml"; DestName: "etn-service.default.xml"; Flags: dontcopy noencryption
+Source: "{#ServicePayload}\etn-service.xml"; DestName: "etn-service.xml"; DestDir: "{app}\service"; Flags: ignoreversion; Check: ServiceConfigFileWanted
 #endif
 
 ; --- Клиент (поставка 98ad5eec). «Для всех» ставится в {app}\client
@@ -1080,6 +1088,12 @@ var
   { Правило брандмауэра существовало до удаления программы (ставится в
     CurUninstallStepChanged). }
   GUninstallFirewallRule: Boolean;
+  { etn-service.xml отличается от поставляемого шаблона: файл пользовательский
+    и при обновлении не перезатирается (ошибка 6c2fc89e). Решение принимает
+    DecideServiceConfigPolicy; флаг GServiceConfigDecisionMade — от повторного
+    решения после того, как снимок отката перенёс каталог service. }
+  GServiceConfigPreserved: Boolean;
+  GServiceConfigDecisionMade: Boolean;
 
 { ---------------------------------------------------------------------------
   Вспомогательные функции: строки, время, коды.
@@ -5717,19 +5731,134 @@ begin
   Result := True;
 end;
 
+{ Подстановка значений установщика в текст шаблона службы. Одна функция на
+  запись конфигурации и на сравнение «файл = дефолт»: иначе ожидаемое
+  содержимое разошлось бы с тем, что установщик пишет, и любой обновлённый
+  шаблон считался бы правкой пользователя. Replaced — число подстановок (для
+  журнала). }
+function ApplyServicePlaceholders(const Text: String; var Replaced: Integer): String;
+begin
+  Result := Text;
+  Replaced := 0;
+  Replaced := Replaced + StringChangeEx(Result, '{{DATA_DIR}}', XmlEscape(GDataDir), True);
+  Replaced := Replaced + StringChangeEx(Result, '{{PORT}}', XmlEscape(GServerPort), True);
+  Replaced := Replaced + StringChangeEx(Result, '{{HOST}}', XmlEscape(GServerHost), True);
+end;
+
+{ Решение «заменять ли etn-service.xml» (ошибка 6c2fc89e). Конфигурация службы
+  принадлежит не только поставке: в ней включают MCP (ETN_MCP_ENABLED) и другие
+  параметры WinSW, а прежний установщик перезатирал их шаблоном при каждом
+  обновлении. Правило: файл заменяется, только когда он ДОКАЗАННО дефолтный —
+  совпадает с шаблоном из payload после подстановки текущих значений. Отличается
+  — он пользовательский и остаётся как есть.
+
+  Сравнение с подставленными значениями, а не с шаблоном как есть: порт, хост и
+  каталог данных при обновлении фиксированы install.json (GParamsLocked), поэтому
+  различие содержимого может быть только правкой пользователя. Смену самого
+  шаблона между версиями (миграция настроек) правило не покрывает: файл,
+  отличающийся от нового шаблона, сохраняется — это осознанная граница.
+
+  Вызывается в ssInstall ДО PrepareServerUpdate: снимок отката ПЕРЕНОСИТ каталог
+  service, и после него прежнего файла в каталоге программы уже нет. Шаблон
+  для сравнения извлекается во временный каталог из записи dontcopy.
+
+  Не удалось извлечь шаблон или прочитать файл — сохраняем: «не доказано, что
+  правок нет» означает «не перезатирать». }
+function DecideServiceConfigPolicy: Boolean;
+var
+  Path, TemplatePath, TemplateText: String;
+  TemplateRaw, InstalledRaw: AnsiString;
+  Replaced: Integer;
+begin
+  Result := True;
+  GServiceConfigPreserved := False;
+  GServiceConfigDecisionMade := True;
+#ifdef HaveServicePayload
+  if not GServerSelected then Exit;
+  Path := ServiceDir + '\service\etn-service.xml';
+  if not FileExists(Path) then
+  begin
+    LogLine('INFO', 'etn-service.xml: файла нет — будет поставлен шаблон службы');
+    Exit;
+  end;
+  TemplatePath := ExpandConstant('{tmp}') + '\etn-service.default.xml';
+  DeleteFile(TemplatePath);
+  ExtractTemporaryFile('etn-service.default.xml');
+  if (not LoadStringFromFile(TemplatePath, TemplateRaw)) or
+     (not LoadStringFromFile(Path, InstalledRaw)) then
+  begin
+    GServiceConfigPreserved := True;
+    LogLine('WARN', 'etn-service.xml: сравнить с шаблоном не удалось — файл ' +
+      'оставлен без изменений: ' + Path);
+    Exit;
+  end;
+  TemplateText := ApplyServicePlaceholders(Utf8Decode(TemplateRaw), Replaced);
+  if Utf8Decode(InstalledRaw) = TemplateText then
+  begin
+    LogLine('INFO', 'etn-service.xml: файл совпадает с шаблоном — будет обновлён');
+    Exit;
+  end;
+  GServiceConfigPreserved := True;
+  LogLine('INFO', 'etn-service.xml: файл изменён пользователем — при обновлении ' +
+    'не перезатирается: ' + Path);
+#endif
+end;
+
+{ Запись [Files] конфигурации службы: шаблон ставится вместе с файлами сервера и
+  только когда правок пользователя нет (ошибка 6c2fc89e). Решение уже принято в
+  ssInstall; повторный вызов — страховка от иной очерёдности событий Inno. }
+function ServiceConfigFileWanted: Boolean;
+begin
+  if not InstallServerPayload then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if not GServiceConfigDecisionMade then DecideServiceConfigPolicy;
+  Result := not GServiceConfigPreserved;
+end;
+
 { Подстановка значений в шаблон службы: service\etn-service.xml каталога
   программы. Файл читается и пишется как байты UTF-8 (Utf8Decode/Utf8Encode) —
   кириллица в шаблоне не портится независимо от системной кодовой страницы.
   Пока в файле остаются плейсхолдеры, службу регистрировать нельзя
-  (ADR db60302a). }
+  (ADR db60302a).
+
+  Пользовательский файл (GServiceConfigPreserved, ошибка 6c2fc89e) не
+  переписывается: байты не перекодируются (файл мог быть сохранён в другой
+  кодировке), а сам файл после переноса каталога в снимок отката возвращается
+  оттуда — байт в байт. }
 function InstallServiceConfig: Boolean;
 var
-  Path, Text: String;
+  Path, Text, SnapshotPath: String;
   Raw: AnsiString;
   Replaced: Integer;
 begin
   Result := False;
   Path := ServiceDir + '\service\etn-service.xml';
+  if GServiceConfigPreserved then
+  begin
+    if not FileExists(Path) then
+    begin
+      SnapshotPath := '';
+      if GLastRollbackDir <> '' then
+        SnapshotPath := GLastRollbackDir + '\service\etn-service.xml';
+      if (SnapshotPath = '') or (not FileExists(SnapshotPath)) or
+         (not FileCopy(SnapshotPath, Path, False)) then
+      begin
+        LogLine('ERROR', 'etn-service.xml: пользовательская конфигурация не найдена ' +
+          'ни в {app}\service, ни в снимке отката: ' + Path);
+        Exit;
+      end;
+      LogLine('INFO', 'etn-service.xml: пользовательская конфигурация возвращена ' +
+        'из снимка отката: ' + Path);
+    end
+    else
+      LogLine('INFO', 'etn-service.xml: пользовательская конфигурация сохранена — ' +
+        'подстановка не требуется: ' + Path);
+    Result := True;
+    Exit;
+  end;
   if not FileExists(Path) then
   begin
     LogLine('ERROR', 'Нет шаблона службы: ' + Path + ' — служба не настроена');
@@ -5740,11 +5869,7 @@ begin
     LogLine('ERROR', 'Не удалось прочитать шаблон службы: ' + Path);
     Exit;
   end;
-  Text := Utf8Decode(Raw);
-  Replaced := 0;
-  Replaced := Replaced + StringChangeEx(Text, '{{DATA_DIR}}', XmlEscape(GDataDir), True);
-  Replaced := Replaced + StringChangeEx(Text, '{{PORT}}', XmlEscape(GServerPort), True);
-  Replaced := Replaced + StringChangeEx(Text, '{{HOST}}', XmlEscape(GServerHost), True);
+  Text := ApplyServicePlaceholders(Utf8Decode(Raw), Replaced);
   if Pos('{{', Text) > 0 then
   begin
     LogLine('ERROR', 'В шаблоне службы остались неподставленные плейсхолдеры: ' + Path);
@@ -7055,6 +7180,8 @@ begin
   GDeferredLog := '';
   GParamsLocked := False;
   GUninstallFirewallRule := False;
+  GServiceConfigPreserved := False;
+  GServiceConfigDecisionMade := False;
   GFirewallWarning := False;
   GProductVersion := '{#MyAppVersion}';
   GDataDir := ExpandConstant('{#DataDir}');
@@ -7605,6 +7732,10 @@ begin
       перехода и снова появляется на этапах после копирования. }
     if GWorkAllowed and (GExitCode = EXIT_OK) then
     begin
+      { Политика etn-service.xml (ошибка 6c2fc89e): решение о замене принимается
+        до PrepareServerUpdate — снимок отката переносит каталог service, и
+        прежнего файла в каталоге программы после него уже нет. }
+      DecideServiceConfigPolicy;
       { Запущенный клиент закрывается до первого изменённого файла: мягко,
         с ожиданием, принудительно только после таймаута. Неудача — код 20,
         файлы не заменяются (в silent-прогоне без предупреждения). }

@@ -30,6 +30,8 @@
  *   * legacy NSIS-деинсталлятор получает `/S` и `_?=` (грабли 25343551);
  *   * служба управляется `etn-service.exe stop|status|install|uninstall`,
  *     `sc query` в `.iss` нет;
+ *   * `etn-service.xml` — пользовательская конфигурация: при обновлении файл,
+ *     отличный от поставляемого шаблона, НЕ перезатирается (ошибка 6c2fc89e);
  *   * SQLite-логики в Pascal нет: архивы и `integrity_check` — в CLI
  *     `etn-db-tool.mjs` (`server/dist/db/db-backup.js`);
  *   * тестовых сборок нет: в `etn.iss` нет `/TEST*` и `#ifdef TestMode`,
@@ -79,6 +81,21 @@ function codeSection(text: string): string {
   const lines = text.split('\n');
   const start = lines.findIndex((line) => line.trim() === '[Code]');
   assert.ok(start >= 0, `${ISS}: нет секции [Code].`);
+
+  const body: string[] = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    if (/^\s*\[[A-Za-z][A-Za-z0-9]*\]\s*$/.test(line)) break;
+    body.push(line);
+  }
+  return body.join('\n');
+}
+
+/** Секция `[Files]`: строки после заголовка и до следующей секции. */
+function filesSection(text: string): string {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line.trim() === '[Files]');
+  assert.ok(start >= 0, `${ISS}: нет секции [Files].`);
 
   const body: string[] = [];
   for (let i = start + 1; i < lines.length; i += 1) {
@@ -585,6 +602,125 @@ describe('guard: исходник установщика — высокоцен�
     assert.ok(
       removeStop >= 0 && removeUninstall > removeStop,
       `${ISS}: снятие службы — stop с ожиданием, затем uninstall (34f8e315).`,
+    );
+  });
+
+  it(`${ISS}: etn-service.xml — правки пользователя переживают обновление (6c2fc89e)`, () => {
+    const text = readIss();
+    const code = stripPascalComments(codeSection(text));
+    const serviceLines = filesSection(text)
+      .split('\n')
+      .filter((line) => /^\s*Source:/i.test(line) && line.includes('{#ServicePayload}'));
+
+    // --- Файлы службы: каталог копируется целиком, КРОМЕ конфигурации службы.
+    const wildcard = serviceLines.find((line) => line.includes('{#ServicePayload}\\*'));
+    assert.ok(wildcard, `${ISS}: нет записи payload каталога service (service\\*).`);
+    assert.match(
+      wildcard!,
+      /Excludes:\s*"[^"]*etn-service\.xml/i,
+      `${ISS}: каталог service обязан исключать etn-service.xml (Excludes) — иначе Inno ` +
+        'перезаписывает пользовательскую конфигурацию при каждом обновлении (6c2fc89e).',
+    );
+
+    // --- Конфигурация ставится отдельной записью с проверкой.
+    const configEntry = serviceLines.find(
+      (line) =>
+        /DestDir:\s*"\{app\}\\service"/i.test(line) &&
+        /DestName:\s*"etn-service\.xml"/i.test(line),
+    );
+    assert.ok(configEntry, `${ISS}: нет отдельной записи etn-service.xml в {app}\\service.`);
+    assert.match(
+      configEntry!,
+      /Check:\s*ServiceConfigFileWanted\b/,
+      `${ISS}: запись etn-service.xml обязана иметь Check: ServiceConfigFileWanted — без него ` +
+        'пользовательский файл перезатирается (6c2fc89e).',
+    );
+
+    // --- Шаблон для сравнения доступен коду, но в {app} не копируется.
+    const templateEntry = serviceLines.find((line) =>
+      /DestName:\s*"etn-service\.default\.xml"/i.test(line),
+    );
+    assert.ok(
+      templateEntry && /Flags:[^;]*\bdontcopy\b/i.test(templateEntry),
+      `${ISS}: шаблон службы для сравнения извлекается в {tmp} записью dontcopy ` +
+        '(etn-service.default.xml) — из него считается ожидаемое содержимое.',
+    );
+    assert.doesNotMatch(
+      templateEntry!,
+      /DestDir:/i,
+      `${ISS}: шаблон для сравнения не копируется в каталог программы (только {tmp}).`,
+    );
+
+    // --- Решение принимается по содержимому, а не по наличию файла.
+    const decide = functionBody(code, 'DecideServiceConfigPolicy');
+    assert.notEqual(decide, '', `${ISS}: нет функции DecideServiceConfigPolicy (6c2fc89e).`);
+    assert.match(
+      decide,
+      /ExtractTemporaryFile\('etn-service\.default\.xml'\)/,
+      `${ISS}: решение сравнивает установленный файл с шаблоном из payload ` +
+        '(ExtractTemporaryFile).',
+    );
+    assert.match(
+      decide,
+      /LoadStringFromFile\(\s*Path\b/,
+      `${ISS}: решение читает установленный etn-service.xml (LoadStringFromFile).`,
+    );
+    assert.match(
+      decide,
+      /ApplyServicePlaceholders\(/,
+      `${ISS}: ожидаемое содержимое — шаблон после подстановки значений ` +
+        '(ApplyServicePlaceholders), иначе сравнение разойдётся с тем, что пишет установщик.',
+    );
+    assert.match(
+      decide,
+      /GServiceConfigPreserved\s*:=\s*True/,
+      `${ISS}: при отличии от шаблона файл помечается пользовательским ` +
+        '(GServiceConfigPreserved := True).',
+    );
+
+    // --- Решение ДО снимка отката: снимок ПЕРЕНОСИТ каталог service, и после
+    // --- него прежнего файла в {app}\\service уже нет.
+    const step = functionBody(code, 'CurStepChanged');
+    const decideCall = indexOfIn(step, 'DecideServiceConfigPolicy');
+    const prepareCall = indexOfIn(step, 'PrepareServerUpdate(');
+    assert.ok(
+      decideCall >= 0 && prepareCall > decideCall,
+      `${ISS}: DecideServiceConfigPolicy вызывается в ssInstall ДО PrepareServerUpdate: ` +
+        'снимок отката переносит каталог service (6c2fc89e).',
+    );
+
+    // --- Пользовательский файл не переписывается и возвращается из снимка.
+    const install = functionBody(code, 'InstallServiceConfig');
+    const preservedAt = indexOfIn(install, 'GServiceConfigPreserved');
+    const saveAt = indexOfIn(install, 'SaveStringToFile');
+    assert.ok(
+      preservedAt >= 0 && saveAt > preservedAt,
+      `${ISS}: InstallServiceConfig обязан выйти до SaveStringToFile, если конфигурация ` +
+        'пользовательская (GServiceConfigPreserved): иначе байты файла перекодируются.',
+    );
+    assert.match(
+      install,
+      /FileCopy\(/,
+      `${ISS}: каталог service перенесён в снимок отката — пользовательский ` +
+        'etn-service.xml возвращается оттуда (FileCopy из GLastRollbackDir).',
+    );
+    assert.match(
+      install,
+      /ApplyServicePlaceholders\(/,
+      `${ISS}: InstallServiceConfig подставляет значения общей функцией ` +
+        'ApplyServicePlaceholders (одна логика для записи и сравнения).',
+    );
+
+    const wanted = functionBody(code, 'ServiceConfigFileWanted');
+    assert.match(
+      wanted,
+      /InstallServerPayload/,
+      `${ISS}: ServiceConfigFileWanted учитывает InstallServerPayload (компонент сервера).`,
+    );
+    assert.match(
+      wanted,
+      /not\s+GServiceConfigPreserved/,
+      `${ISS}: ServiceConfigFileWanted ставит шаблон только когда правок пользователя нет.`,
     );
   });
 
