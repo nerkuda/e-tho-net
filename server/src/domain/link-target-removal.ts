@@ -22,9 +22,11 @@
  *     физически, строка основы/предка уходит в корзину слоя. Снять только одну
  *     строку нельзя: вторая осталась бы видимой, а тень поверх живой строки
  *     слоя упирается в уникальный индекс тройки (миграция 029) — сырой
- *     `UNIQUE constraint failed`. Неразрешимый дубль (две строки выше текущего
- *     слоя: две живые тени одной тройки в слой не помещаются) — 422
- *     `VALIDATION_ERROR` с перечнем строк;
+ *     `UNIQUE constraint failed`. Корзинные строки живыми не считаются: уже
+ *     снятое значение не участвует в разборе дубля и не помечается повторно.
+ *     Неразрешимый дубль (две живые строки выше текущего слоя: две живые тени
+ *     одной тройки в слой не помещаются) — 422 `VALIDATION_ERROR` с перечнем
+ *     строк;
  *   * уже помеченное ребро — no-op без события.
  *
  * Мысль-цель не удаляется и не помечается. Слияние слоя не меняется: это
@@ -111,10 +113,16 @@ function throwIfLinkHeld(ndb: NetworkDb, linkId: string): void {
 }
 
 /**
- * Живые (не удалённые) строки одной тройки `source -> target` одного типа,
- * видимые в текущем контексте слоя. Больше одной строки — дубль тройки в
- * разных слоях (ошибка 374c9776): `links_v` схлопывает строки по логическому
- * `id`, а не по тройке, а уникальность тройки держится ВНУТРИ слоя (029).
+ * ЖИВЫЕ строки одной тройки `source -> target` одного типа, видимые в текущем
+ * контексте слоя. Больше одной строки — дубль тройки в разных слоях (ошибка
+ * 374c9776): `links_v` схлопывает строки по логическому `id`, а не по тройке, а
+ * уникальность тройки держится ВНУТРИ слоя (029).
+ *
+ * Корзинные строки (`marked_for_deletion = 1`) в список НЕ входят: это уже
+ * снятые значения, и в разборе живого дубля они не участвуют (доработка
+ * верификации 374c9776: корзинная строка выше давала ложный 422 и помечалась
+ * повторно). Слот тройки в слое корзинная строка при этом занимает — см.
+ * {@link findTripleSlotRow}.
  */
 function listTripleRows(ndb: NetworkDb, row: VisibleLinkRow): VisibleLinkRow[] {
   const typeClause = row.type_id === null ? 'type_id IS NULL' : 'type_id = ?';
@@ -123,13 +131,61 @@ function listTripleRows(ndb: NetworkDb, row: VisibleLinkRow): VisibleLinkRow[] {
     .prepare(
       `SELECT * FROM links_v
         WHERE source_id = ? AND target_id = ? AND ${typeClause}
+          AND marked_for_deletion = 0
         ORDER BY id`,
     )
     .all(...params) as VisibleLinkRow[];
 }
 
 /**
- * 422 на неразрешимый дубль тройки: двум строкам основы/предков нужны две
+ * Строка, занимающая слот тройки в конкретном слое (любая видимая: живая или
+ * корзинная — уникальный индекс 029 держит тройку и за помеченными строками).
+ * Нужна перед материализацией живой тени: если слот занят, тень не вставить.
+ */
+function findTripleSlotRow(
+  ndb: NetworkDb,
+  row: VisibleLinkRow,
+  layerId: string,
+): VisibleLinkRow | undefined {
+  const typeClause = row.type_id === null ? 'type_id IS NULL' : 'type_id = ?';
+  const params = [
+    row.source_id,
+    row.target_id,
+    ...(row.type_id === null ? [] : [row.type_id]),
+    layerId,
+  ];
+  return ndb
+    .prepare(
+      `SELECT * FROM links_v
+        WHERE source_id = ? AND target_id = ? AND ${typeClause} AND layer_id = ?
+        LIMIT 1`,
+    )
+    .get(...params) as VisibleLinkRow | undefined;
+}
+
+/**
+ * 422 на занятый слот тройки в текущем слое: тройку держит собственная
+ * корзинная строка слоя, и живую тень строки выше вставить некуда. Разрешается
+ * очисткой корзины этого слоя. Сырой сбой SQLite здесь недопустим (ошибка
+ * 374c9776).
+ */
+function throwTripleSlotTaken(row: VisibleLinkRow, slotRow: VisibleLinkRow): never {
+  throw new EtnError(
+    'VALIDATION_ERROR',
+    'duplicate edges: the triple is already taken in the current layer by a basket row - empty the basket of this layer first',
+    {
+      entity: 'link',
+      id: row.id,
+      source_id: row.source_id,
+      target_id: row.target_id,
+      type_id: row.type_id,
+      links: [row, slotRow].map((r) => ({ id: r.id, layer_id: r.layer_id })),
+    },
+  );
+}
+
+/**
+ * 422 на неразрешимый дубль тройки: двум ЖИВЫМ строкам основы/предков нужны две
  * живые тени одной тройки, а слой держит не больше одной (уникальный индекс
  * миграции 029). Чинится слиянием или отбрасыванием лишнего слоя; сырой сбой
  * SQLite здесь недопустим (ошибка 374c9776).
@@ -189,23 +245,18 @@ export function removeLinkTargets(
   // Слой. Живая тройка `source -> target` может быть видна несколькими
   // строками — своя свежая строка слоя и строка основы/предка (ошибка
   // 374c9776): уникальность тройки держится внутри слоя, а `links_v` выбирает
-  // строку по логическому `id`, а не по тройке.
-  const tripleRows = listTripleRows(ndb, row);
-  const ownRow = tripleRows.find((r) => r.layer_id === ndb.layerId);
+  // строку по логическому `id`, а не по тройке. Корзинные строки сюда не
+  // попадают — они уже сняты и в разборе дубля не участвуют.
+  const liveRows = listTripleRows(ndb, row);
+  const ownRow = liveRows.find((r) => r.layer_id === ndb.layerId);
   // Своя строка слоя, созданная здесь и нигде выше, — её можно снести физически.
-  const ownIsFresh =
-    ownRow !== undefined && ownRow.base_version === 0 && ownRow.marked_for_deletion === 0;
+  const ownIsFresh = ownRow !== undefined && ownRow.base_version === 0;
   // Строки основы/предков: каждая требует своей живой тени в текущем слое.
-  const aboveRows = tripleRows.filter((r) => r.layer_id !== ndb.layerId);
+  const aboveRows = liveRows.filter((r) => r.layer_id !== ndb.layerId);
 
   // Две живые тени одной тройки в слой не помещаются (029): дубль в двух слоях
   // выше текущего неразрешим — 422 вместо сырого сбоя SQLite.
-  if (aboveRows.length > 1) throwDuplicateTriple(tripleRows);
-  if (aboveRows.length === 1 && ownRow !== undefined && !ownIsFresh) {
-    // Своя строка слоя — уже материализованная тень ДРУГОЙ строки той же
-    // тройки: слот под тень строки выше освободить нечем.
-    throwDuplicateTriple(tripleRows);
-  }
+  if (aboveRows.length > 1) throwDuplicateTriple(liveRows);
 
   const removals: LinkRemoval[] = [];
   // Ребро создано в текущем слое и выше его нет — физически удаляем строку
@@ -229,6 +280,14 @@ export function removeLinkTargets(
       : aboveRows.length === 0 && !ownIsFresh && ownRow !== undefined
         ? [ownRow]
         : [];
+  // Живую тень можно вставить, только если слот тройки в текущем слое свободен:
+  // собственная корзинная строка слоя тройку всё ещё держит (029).
+  if (toTrash.length > 0) {
+    const slotRow = findTripleSlotRow(ndb, row, ndb.layerId);
+    if (slotRow !== undefined && slotRow.id !== toTrash[0]?.id) {
+      throwTripleSlotTaken(row, slotRow);
+    }
+  }
   for (const anc of toTrash) {
     materializeShadow(ndb, 'links', anc.id);
     const nowMs = Date.now();

@@ -4853,8 +4853,10 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
 /**
  * Mark every blocking link-property edge to `thoughtId` for deletion
  * (0.8.1, dbf1e4aa) — «Очистить использование» (03-server-api.md §9.2).
- * Returns how many references were cleared. Плечо `thought_ref`-значений
- * исчезло вместе с видом значения (миграция 040) — все ссылки рёбра.
+ * Returns how many references were cleared — по ЛОГИЧЕСКИМ ссылкам: живой дубль
+ * тройки снимается целиком (ошибка 374c9776), но считается одной ссылкой, а не
+ * двумя строками. Плечо `thought_ref`-значений исчезло вместе с видом значения
+ * (миграция 040) — все ссылки рёбра.
  */
 export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
   let cleared = 0;
@@ -4891,9 +4893,10 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
       .all(...params) as Array<{ id: string }>;
     for (const link of links) {
       // Единое умное удаление (ADR a967d865): основа — физически, слой —
-      // корзина для ребра из основы/предков; дубль тройки снимается целиком
-      // (ошибка 374c9776), поэтому счёт — по снятым строкам.
-      cleared += removeLinkTargets(ndb, link.id, 'system').length;
+      // корзина для ребра из основы/предков. Живой дубль тройки снимается
+      // целиком (ошибка 374c9776), но счёт — по логическим ссылкам: вторая
+      // строка того же ребра ничего не добавляет, это одна снятая ссылка.
+      if (removeLinkTargets(ndb, link.id, 'system').length > 0) cleared += 1;
     }
   }
   return cleared;
