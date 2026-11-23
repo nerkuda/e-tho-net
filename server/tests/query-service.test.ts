@@ -576,8 +576,9 @@ describe('query service (N1)', { skip: !nativeAvailable() }, () => {
     const target = seedThought(ndb, 'Выполнено');
     seedPropertyValue(ndb, target, boolDef, 'bool', true);
 
-    // `bool` does not allow `gt`/`contains` (only `eq`/`ne` per the
-    // value_type operator map).
+    // `bool` does not allow `gt`/`contains`: the value_type operator map
+    // gives it `eq`/`ne` plus the presence pair `is_empty`/`not_empty`
+    // (task 2dd47944; `false` is a value).
     assert.throws(
       () => run(ndb, { properties: [{ property_id: boolDef, operator: 'gt', value: 0 }] }),
       (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
