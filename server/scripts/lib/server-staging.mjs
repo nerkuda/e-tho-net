@@ -80,6 +80,47 @@ export function fail(message) {
 }
 
 /**
+ * Проверить, что в `server/dist` нет файлов без исходника в `server/src`.
+ *
+ * `tsc` не чистит `outDir`: удалённый из `src` модуль остаётся в `dist` навсегда,
+ * если каталог не пересобрать с нуля. Такой «сток» уезжает в поставку (npm-tarball,
+ * MCPB-бандл) мусорным кодом, а архив перестаёт быть воспроизводимым (задача
+ * d1feff33: 36 файлов удалённых макетов попали в бандл и сломали `fileSha256`
+ * в `server.json`). Проверка детерминированная: `.js` без одноимённого `.ts` —
+ * ошибка сборки, а не предупреждение.
+ *
+ * @param {string} repoRoot - корень репозитория.
+ * @throws {Error} со списком осиротевших файлов.
+ */
+export function assertDistMatchesSources(repoRoot) {
+  const distDir = path.join(repoRoot, 'server', 'dist');
+  const srcDir = path.join(repoRoot, 'server', 'src');
+  const orphans = [];
+  const walk = (dir, relative) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const next = relative === '' ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(path.join(dir, entry.name), next);
+        continue;
+      }
+      // Проверяем только то, что печатает tsc из .ts: .d.ts и .map — спутники.
+      if (!entry.name.endsWith('.js') || entry.name.endsWith('.d.ts')) continue;
+      const source = path.join(srcDir, `${next.slice(0, -'.js'.length)}.ts`);
+      if (!existsSync(source)) orphans.push(`dist/${next}`);
+    }
+  };
+  walk(distDir, '');
+  if (orphans.length === 0) return;
+  orphans.sort();
+  fail(
+    `в server/dist остались файлы без исходника в server/src (${orphans.length}): ` +
+      `${orphans.slice(0, 10).join(', ')}${orphans.length > 10 ? ', …' : ''}. ` +
+      'Сборка устарела — удалите server/dist и пересоберите: ' +
+      'npm run build:shared && npm -w @etn/server run build.',
+  );
+}
+
+/**
  * Проверить, что сборка всех участников выполнена.
  *
  * @param {string} repoRoot - корень репозитория.
@@ -103,6 +144,9 @@ export function assertBuildArtifacts(repoRoot, options = {}) {
       );
     }
   }
+  // Тот же общий стейджинг собирает tar.gz, npm-пакет и MCPB: проверка
+  // «в dist нет остатков удалённых модулей» защищает все три артефакта.
+  assertDistMatchesSources(repoRoot);
   return artifacts.length;
 }
 

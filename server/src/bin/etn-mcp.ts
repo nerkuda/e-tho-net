@@ -63,6 +63,44 @@ export function isNativeLoadFailure(err: unknown): boolean {
 }
 
 /**
+ * Понятный английский текст о неподходящей нативной сборке.
+ *
+ * Один текст на обе защиты DoD 2: сверку целевой платформы бандла (маркер) и
+ * страховочный перехват `ERR_DLOPEN_FAILED` — пользователь не должен видеть
+ * сырой `… is not a valid Win32 application` из `require`.
+ */
+export function nativeLoadErrorMessage(host: string): string {
+  return (
+    `The native SQLite module (better-sqlite3) could not be loaded on ${host}: ` +
+    'this build does not match the current platform or architecture. ' +
+    'Use the artifact built for your platform (the platform and architecture are part of ' +
+    'the file name).'
+  );
+}
+
+/**
+ * Загрузить нативный модуль заранее.
+ *
+ * `better-sqlite3` грузится лениво — внутри `main()` при bootstrap каталога
+ * данных, а `main()` печатает ошибку сам (сырым текстом). Поэтому модуль
+ * загружается здесь, до `main()`: это единственная точка, где перехват
+ * `ERR_DLOPEN_FAILED` гарантированно срабатывает.
+ *
+ * @returns `false`, если ошибка распознана и уже напечатана.
+ * @throws неперехваченная ошибка загрузки, если она не про нативный модуль.
+ */
+async function preloadNativeModule(host: string): Promise<boolean> {
+  try {
+    await import('better-sqlite3');
+    return true;
+  } catch (err) {
+    if (!isNativeLoadFailure(err)) throw err;
+    console.error(nativeLoadErrorMessage(host));
+    return false;
+  }
+}
+
+/**
  * Запустить CLI в текущем процессе.
  *
  * @param argv - `process.argv` (или подмена в тестах).
@@ -77,8 +115,7 @@ export async function runEtnMcp(
   packageDirOverride?: string,
 ): Promise<number> {
   const packageDir =
-    packageDirOverride ??
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+    packageDirOverride ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
   let host: string;
   try {
@@ -104,22 +141,32 @@ export async function runEtnMcp(
     first === undefined || !PASSTHROUGH_COMMANDS.has(first) ? ['mcp', ...tokens] : [...tokens];
   const cliArgv = [argv[0] ?? process.execPath, 'etn-mcp', ...cliTokens];
 
+  // Нативная сборка проверяется до main(): внутри main() модуль грузится
+  // лениво, и его ошибку печатает сам CLI сырым текстом.
+  if (!(await preloadNativeModule(host))) return 1;
+
   let main: (options: { argv?: string[]; env?: NodeJS.ProcessEnv }) => Promise<number>;
   try {
     ({ main } = await import('../cli.js'));
   } catch (err) {
     if (isNativeLoadFailure(err)) {
-      console.error(
-        `The native SQLite module (better-sqlite3) could not be loaded on ${host}. ` +
-          'The prebuilt binary does not match this host; reinstall etn-mcp on this machine ' +
-          '(npm rebuild better-sqlite3) or use the artifact built for this platform.',
-      );
+      console.error(nativeLoadErrorMessage(host));
       return 1;
     }
     throw err;
   }
 
-  return main({ argv: cliArgv, env: effectiveEnv });
+  try {
+    return await main({ argv: cliArgv, env: effectiveEnv });
+  } catch (err) {
+    // Страховка на случай, если нативный модуль догрузился позже и упал иначе,
+    // чем при предзагрузке: тот же понятный текст вместо сырого стека.
+    if (isNativeLoadFailure(err)) {
+      console.error(nativeLoadErrorMessage(host));
+      return 1;
+    }
+    throw err;
+  }
 }
 
 /** Запуск как bin-файл (npm создаёт шим на этот файл). */
