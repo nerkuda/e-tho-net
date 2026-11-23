@@ -4494,6 +4494,17 @@ export const RestLinkTypeUpdateBody = defineContract(
 
 /** Тело POST …/types/:id/properties — двухформенная привязка (attach/create). */
 export const RestAttachBody = defineContract('rest:types.attach-body', z.object({}), {
+  // Явный селектор формы (ошибка 0033ea14): `@etn/shared` типизирует тело
+  // как размеченное объединение `AttachPropertyInput` с полем `mode`, и
+  // клиент шлёт его на проводе. Сервер выводит форму из состава полей, но
+  // обязан принимать объявленное поле и сверять его с формой — иначе
+  // строгая проверка неизвестных полей (0.15.4) роняет всё подключение
+  // свойства-связи с `422 Unknown fields: mode`.
+  mode: {
+    from: { kind: 'body' },
+    t: z.enum(['attach', 'create']).optional(),
+    msg: 'mode must be one of: attach, create.',
+  },
   required: { from: { kind: 'body' }, t: z.boolean().optional() },
   position: {
     from: { kind: 'body' },
