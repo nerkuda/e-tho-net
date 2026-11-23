@@ -77,7 +77,11 @@ import { propertyValueId } from '../db/property-value-id.js';
 import { reorderOutsideTypeProperties } from './property-order.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
-import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
+import {
+  findLinkTripleRow,
+  materializeLiveLinkShadow,
+  restoreLinkRow,
+} from './link-live-triple.js';
 import {
   removeLinkTargets,
   type LinkRemoval,
@@ -1412,7 +1416,9 @@ function setLinkPosition(
   position: number,
   actorUserId: string,
 ): void {
-  materializeShadow(ndb, 'links', linkId);
+  // Живой дубль тройки в слое делает вставку тени невозможной — внятная 422
+  // `duplicate edges` вместо сырого сбоя SQLite (ошибка a9615f9b).
+  materializeLiveLinkShadow(ndb, linkId);
   ndb
     .prepare(
       `UPDATE links SET position = ?, updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
@@ -4814,7 +4820,9 @@ function listBlockingLinkProperties(ndb: NetworkDb): LinkPropertyEdge[] {
  * edges with `blocks_target_deletion = true` (0.8.1, dbf1e4aa; до — через
  * `thought_ref`-значения, упразднены миграцией 040). Backs the "использование
  * в свойствах" blocking arm of the S13 deletion check. The check must see
- * live edges of every layer; tombstones do not block.
+ * live edges of every layer; tombstones do not block. Счёт — по ЛОГИЧЕСКИМ
+ * ссылкам: живой дубль тройки в разных слоях (ошибка 374c9776) — одна ссылка,
+ * как и в `clearThoughtRefUsages`.
  */
 export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
   let total = 0;
@@ -4834,14 +4842,17 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
     .get(thoughtId, refLikePattern(thoughtId)) as { c: number };
   total += legacy.c;
   // Свойства-связи с blocks_target_deletion: блокирует цель (противоположный
-  // конец от владельца). Считаем рёбра, где мысль — цель ссылки.
+  // конец от владельца). Считаем ЛОГИЧЕСКИЕ ссылки: живой дубль тройки в разных
+  // слоях (374c9776) — одна ссылка, а не две строки (иначе счётчик расходился с
+  // `clearThoughtRefUsages` и с контрактом `blocking.properties`).
   for (const bp of listBlockingLinkProperties(ndb)) {
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
+    const refCol = bp.direction === 'out' ? 'source_id' : 'target_id';
     const typeClause = bp.link_type_id === null ? 'type_id IS NULL' : 'type_id = ?';
     const params = bp.link_type_id === null ? [thoughtId] : [thoughtId, bp.link_type_id];
     const lrow = ndb
       .prepare(
-        `SELECT COUNT(*) AS c FROM links_v l -- layers:physical-read
+        `SELECT COUNT(DISTINCT l.${refCol}) AS c FROM links_v l -- layers:physical-read
           WHERE l.${ownerCol} = ? AND ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0`,
       )
       .get(...params) as { c: number };

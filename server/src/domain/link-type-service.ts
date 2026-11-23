@@ -29,6 +29,7 @@ import {
 
 import type { NetworkDb } from '../db/network-db.js';
 import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
+import { materializeLiveLinkShadow } from './link-live-triple.js';
 import {
   assertParentValid,
   computeReparentImpact,
@@ -534,13 +535,21 @@ function tombstoneLinkTypeSubtree(ndb: NetworkDb, typeId: string): void {
     materializeTombstone(ndb, 'type_property_overrides', overrideId);
   }
   for (const defId of defIds) materializeTombstone(ndb, 'type_properties', defId);
-  const linkIds = (
-    ndb.prepare('SELECT id FROM links_v WHERE type_id = ?').all(typeId) as { id: string }[]
-  ).map((r) => r.id);
+  const linkRows = ndb.prepare('SELECT id, layer_id FROM links_v WHERE type_id = ?').all(typeId) as {
+    id: string;
+    layer_id: string;
+  }[];
+  // Сначала строки САМОГО слоя: их `type_id = NULL` освобождает типизированный
+  // слот тройки (029). Иначе материализация тени строки выше упирается в этот
+  // слот — сырой сбой SQLite (ошибка a9615f9b), причём зависящий от порядка
+  // строк в view.
+  linkRows.sort((a, b) => Number(a.layer_id !== ndb.layerId) - Number(b.layer_id !== ndb.layerId));
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
-  for (const linkId of linkIds) {
-    materializeShadow(ndb, 'links', linkId);
+  for (const { id: linkId } of linkRows) {
+    // Страховка: непредвиденный держатель слота — внятная 422 `duplicate edges`
+    // вместо сырого сбоя SQLite (ошибка a9615f9b).
+    materializeLiveLinkShadow(ndb, linkId);
     ndb
       .prepare(
         'UPDATE links SET type_id = NULL, version = version + 1, updated_at = ?, updated_by = ?, updated_at_ms = ? WHERE id = ? AND layer_id = ?',

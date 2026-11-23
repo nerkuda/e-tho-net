@@ -97,28 +97,37 @@ function buildCounters(ndb: NetworkDb, thoughtId: string): {
     thoughtId,
     `%"${thoughtId.replace(/[\\%_]/g, (ch) => `\\${ch}`)}"%`,
   );
-  const linkUsageCount = count(
-    `links_v l JOIN (
-       SELECT DISTINCT property_id, link_type_id, direction FROM (
-         SELECT p.id AS property_id,
-                json_extract(p.config, '$.link_type_id') AS link_type_id,
-                CASE WHEN tp.side = 'source' THEN 'out'
-                     WHEN tp.side = 'target' THEN 'in'
-                     ELSE COALESCE(json_extract(p.config, '$.direction'), 'out') END AS direction
-           FROM properties_v p
-           LEFT JOIN (SELECT DISTINCT property_id, side FROM type_properties_v) tp
-             ON tp.property_id = p.id
-          WHERE p.value_type = 'link' AND p.config IS NOT NULL
-            AND json_extract(p.config, '$.blocks_target_deletion') = 1
-       )
-     ) b
-        ON ((b.link_type_id IS NULL AND l.type_id IS NULL) OR l.type_id = b.link_type_id)
-     WHERE l.active = 1 AND l.marked_for_deletion = 0
-       AND ((b.direction = 'out' AND l.target_id = ?)
-         OR (b.direction = 'in' AND l.source_id = ?))`,
-    thoughtId,
-    thoughtId,
-  );
+  // ЛОГИЧЕСКИЕ ссылки, а не строки: живой дубль тройки в разных слоях (ошибка
+  // 374c9776) — одна ссылка. Счёт по паре (привязка, противоположный конец) —
+  // зеркалит суммирование countThoughtRefUsages по привязкам.
+  const linkUsageCount = (
+    ndb
+      .prepare(
+        `SELECT COUNT(*) AS c FROM (
+           SELECT DISTINCT b.property_id, b.direction,
+                  CASE WHEN b.direction = 'out' THEN l.source_id ELSE l.target_id END AS ref_id
+             FROM links_v l JOIN (
+               SELECT DISTINCT property_id, link_type_id, direction FROM (
+                 SELECT p.id AS property_id,
+                        json_extract(p.config, '$.link_type_id') AS link_type_id,
+                        CASE WHEN tp.side = 'source' THEN 'out'
+                             WHEN tp.side = 'target' THEN 'in'
+                             ELSE COALESCE(json_extract(p.config, '$.direction'), 'out') END AS direction
+                   FROM properties_v p
+                   LEFT JOIN (SELECT DISTINCT property_id, side FROM type_properties_v) tp
+                     ON tp.property_id = p.id
+                  WHERE p.value_type = 'link' AND p.config IS NOT NULL
+                    AND json_extract(p.config, '$.blocks_target_deletion') = 1
+               )
+             ) b
+                ON ((b.link_type_id IS NULL AND l.type_id IS NULL) OR l.type_id = b.link_type_id)
+            WHERE l.active = 1 AND l.marked_for_deletion = 0
+              AND ((b.direction = 'out' AND l.target_id = ?)
+                OR (b.direction = 'in' AND l.source_id = ?))
+         )`,
+      )
+      .get(thoughtId, thoughtId) as { c: number }
+  ).c;
   return {
     parents_count,
     children_count,
