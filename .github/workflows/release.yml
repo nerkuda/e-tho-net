@@ -6,11 +6,15 @@
 #   ETN-Setup-<version>.exe               — установщик Windows (Inno Setup, installer/build.ps1);
 #   ETN-Client-<version>-linux-x64.tar.gz — распакованный клиент Linux (electron-builder --dir);
 #   etn-server-<version>.tar.gz           — серверная поставка Linux (server/scripts/build-server-tarball.mjs);
-#   SHA256SUMS                            — SHA-256 всех трёх бинарных ассетов;
+#   etn-mcp-<version>-win32-x64.mcpb      — MCPB-бандл MCP-сервера, по файлу на цель матрицы
+#                                           (win32-x64 канонический для реестра; ещё darwin-x64,
+#                                           darwin-arm64, linux-x64) — server/scripts/build-mcpb.mjs;
+#   SHA256SUMS                            — SHA-256 всех бинарных ассетов (включая каждый .mcpb);
 #   install.sh                            — установщик Linux-клиента (не хешируется: это скрипт).
 #
 # Состав публикации фиксирован: `publish` скачивает только артефакты `release-*`
-# (release-windows, release-linux-client, release-linux-server). Служебный
+# (release-windows, release-linux-client, release-linux-server, release-mcpb-*).
+# Служебный
 # `.dockerbuild` от docker/build-push-action — не ассет релиза и в релиз не
 # попадает (ошибка 054b0a66).
 #
@@ -269,6 +273,64 @@ jobs:
           path: dist/etn-server-*.tar.gz
           if-no-files-found: error
 
+  # MCPB-бандлы MCP-сервера (задача d1feff33): `.mcpb` — zip с `manifest.json`
+  # формата MCPB 0.3 и полным серверным рантаймом из общего стейджинга.
+  # better-sqlite3 нативный и universal-бандла нет, поэтому артефакт собирается
+  # на целевой ОС — отсюда матрица. win32-x64 — канонический бандл: только он
+  # попадает в `server.json` (каталог реестра пока не выбирает файл по
+  # платформе, вопрос c823f1df), остальные платформы — ассеты релиза.
+  mcpb-bundles:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+          - os: macos-13
+            target: darwin-x64
+          - os: macos-14
+            target: darwin-arm64
+          - os: ubuntu-latest
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm install
+      - run: npm run build:shared
+      - run: npm -w @etn/server run build
+      - name: Build and smoke-test MCPB bundle
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Скрипт проверяет совпадение цели с хостом, собирает бандл, пишет
+          # manifest.json и маркер цели, прогоняет MCP-рукопожатие на дереве и
+          # на распакованном архиве (то, что сделает клиент).
+          node server/scripts/build-mcpb.mjs --platform "${TARGET}" --out dist
+          shopt -s nullglob
+          assets=(dist/*.mcpb)
+          if [ "${#assets[@]}" -ne 1 ] || [ ! -s "${assets[0]}" ]; then
+            echo "::error::ожидался один непустой .mcpb в dist"
+            ls -la dist || true
+            exit 1
+          fi
+          echo "OK: ${assets[0]}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-mcpb-${{ matrix.target }}
+          # В этой джобе dist содержит только собранный бандл.
+          path: dist/*
+          if-no-files-found: error
+
   # Docker-образ сервера — обязательный артефакт релиза: `publish` ждёт эту
   # джобу. Права задаются здесь, потому что reusable workflow может только
   # сузить набор, переданный вызывающей джобой.
@@ -289,7 +351,7 @@ jobs:
       source_ref: ${{ github.sha }}
 
   publish:
-    needs: [version, windows-installer, linux-client, linux-server, docker-image]
+    needs: [version, windows-installer, linux-client, linux-server, mcpb-bundles, docker-image]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -315,6 +377,10 @@ jobs:
             "ETN-Setup-${VERSION}.exe"
             "etn-server-${VERSION}.tar.gz"
             "ETN-Client-${VERSION}-linux-x64.tar.gz"
+            "etn-mcp-${VERSION}-win32-x64.mcpb"
+            "etn-mcp-${VERSION}-darwin-x64.mcpb"
+            "etn-mcp-${VERSION}-darwin-arm64.mcpb"
+            "etn-mcp-${VERSION}-linux-x64.mcpb"
           )
           for name in "${expected[@]}"; do
             if [ ! -s "${name}" ]; then
