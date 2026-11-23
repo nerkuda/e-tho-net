@@ -546,8 +546,9 @@ type ThoughtRefRow = Parameters<typeof rowToThoughtRef>[0];
 /**
  * Операторы, допустимые для каждого `value_type` свойства (объединение
  * наборов REST §6.10 и MCP §4.1). `is_empty`/`not_empty` тестируют наличие
- * значения и запрещены для `bool` — там тот же смысл несут `eq true`/
- * `eq false`. Свойство-связь (`link`) хранит значение в рёбрах (links_v),
+ * значения: у `bool` `false` — значение, а не «пусто» (задача 2dd47944), так
+ * что `eq false` («отметка нет») и `is_empty` («отметки нет») — разные наборы.
+ * Свойство-связь (`link`) хранит значение в рёбрах (links_v),
  * а не в property_values (ADR «проекция ребра»).
  *
  * Экспортируется для сторожа паритета с декларацией профилей
@@ -584,7 +585,7 @@ export const OPS_BY_VALUE_TYPE: Record<PropertyValueType, readonly ThoughtQueryP
   ],
   date: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'not_empty'],
   number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'not_empty'],
-  bool: ['eq', 'ne'],
+  bool: ['eq', 'ne', 'is_empty', 'not_empty'],
   link: ['eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty', 'any_of', 'all_of', 'none_of'],
   // Legacy thought_ref (миграция 040): одиночный id или JSON-массив id в
   // `value_thought_ref`; eq/in/not_in ищут обе формы, is_empty/not_empty —
@@ -3578,8 +3579,14 @@ function propertyClauses(
     }
 
     if (cond.operator === 'is_empty' || cond.operator === 'not_empty') {
-      // Присутствие значения решает строка + колонка; пустая строка — «пусто».
-      const filledExpr = `pv.${column} IS NOT NULL AND pv.${column} != ''`;
+      // Присутствие значения решает строка + колонка: пустая строка — «пусто»,
+      // а у нестроковых колонок (`value_number`/`value_bool`) значение есть
+      // всегда, включая `0`/`false` — «значения нет» там только отсутствие
+      // строки (задача 2dd47944: `false` ≠ «пусто»).
+      const filledExpr =
+        column === 'value_text' || column === 'value_date'
+          ? `pv.${column} IS NOT NULL AND pv.${column} != ''`
+          : `pv.${column} IS NOT NULL`;
       const filledSql = `SELECT 1 FROM property_values_v pv
          WHERE pv.owner_type = 'thought' AND pv.owner_id = t.id AND pv.property_id = ?
            AND ${filledExpr}`;

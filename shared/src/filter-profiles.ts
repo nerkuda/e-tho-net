@@ -329,9 +329,11 @@ export const PROPERTY_OPERATOR_SETS: Readonly<
   ],
   date: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'is_empty', 'not_empty'],
   number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'is_empty', 'not_empty'],
-  // Булево свойство: только «равно»/«не равно» — триада «да/нет/не важно»
-  // выражается значением, сравнения и «заполнено» избыточны (9bdddad6).
-  bool: ['eq', 'ne'],
+  // Булево свойство: «равно»/«не равно» + наличие значения (задача 2dd47944).
+  // `false` — ЗНАЧЕНИЕ, а не «пусто»: «значения нет» выражает отдельная
+  // `is_empty`, иначе мысль без отметки неотличима от отметки «нет»
+  // (`eq false` — только явный «нет»).
+  bool: ['eq', 'ne', 'is_empty', 'not_empty'],
   link: [
     'eq',
     'ne',

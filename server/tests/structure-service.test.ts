@@ -1228,26 +1228,31 @@ describe(
         }
       });
 
-      it('is_empty / not_empty are forbidden on bool values (0.6.3)', () => {
+      it('is_empty / not_empty on bool values: false is a value (0.16.2, 2dd47944)', () => {
         const ndb = createInMemoryNetworkDb();
         try {
           seedThought(ndb, { title: 'Home', is_root: 1 });
           const type = seedThoughtType(ndb, 'Лицо');
           const active = seedProperty(ndb, type, 'активен', 'bool');
+          const markedYes = seedThought(ndb, { title: 'Да' });
+          const markedNo = seedThought(ndb, { title: 'Нет' });
+          seedThought(ndb, { title: 'Без отметки' });
+          seedPropertyValue(ndb, markedYes, active, 'value_bool', 1);
+          seedPropertyValue(ndb, markedNo, active, 'value_bool', 0);
 
-          assert.throws(
-            () =>
-              queryThoughts(ndb, USER, query({
-                properties: [{ property_id: active, op: 'is_empty', value: '' }],
-              })),
-            (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
-          );
-          assert.throws(
-            () =>
-              queryThoughts(ndb, USER, query({
-                properties: [{ property_id: active, op: 'not_empty', value: '' }],
-              })),
-            (e: unknown) => e instanceof EtnError && e.code === 'VALIDATION_ERROR',
+          // «Заполнено» — обе отметки: false (0) — значение, а не пустота.
+          const notEmpty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: active, op: 'not_empty', value: '' }],
+          }));
+          assert.deepEqual(notEmpty.items.map((i) => i.title).sort(), ['Да', 'Нет']);
+
+          // «Не заполнено» — только мысли без строки значения (Home и «Без отметки»).
+          const isEmpty = queryThoughts(ndb, USER, query({
+            properties: [{ property_id: active, op: 'is_empty', value: '' }],
+          }));
+          assert.deepEqual(
+            isEmpty.items.map((i) => i.title).sort(),
+            ['Home', 'Без отметки'],
           );
         } finally {
           ndb.close();
