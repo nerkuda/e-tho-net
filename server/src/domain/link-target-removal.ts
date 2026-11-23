@@ -13,7 +13,10 @@
  *     корзина `marked_for_deletion` (событие `link.updated`);
  *   * **слой, ребро создано в текущем слое** (`layer_id` текущий,
  *     `base_version = 0`) — физическое удаление строки слоя (событие
- *     `link.deleted`);
+ *     `link.deleted`), но только если ребро не держит живая тень ни в одном
+ *     другом слое: иначе 422 `VALIDATION_ERROR` с `details.blocking.layers`
+ *     (та же проверка `listLinkHoldingLayers`, что у основы; ошибка 97b64a69 —
+ *     физическое удаление осиротило бы тень, и её слияние вернуло бы ребро);
  *   * уже помеченное ребро — no-op без события.
  *
  * Мысль-цель не удаляется и не помечается. Слияние слоя не меняется: это
@@ -84,6 +87,22 @@ function rowToLink(row: VisibleLinkRow): Link {
 }
 
 /**
+ * 422, если ребро держит живая тень другого слоя (основа — рабочие слои,
+ * рабочий слой — дочерние/соседние слои и основа). Физическое удаление
+ * вырвало бы землю из-под держателя: тень осиротела бы, а её слияние вернуло
+ * бы ребро в предка.
+ */
+function throwIfLinkHeld(ndb: NetworkDb, linkId: string): void {
+  const holdingLayers = listLinkHoldingLayers(ndb, linkId);
+  if (holdingLayers.length === 0) return;
+  throw new EtnError('VALIDATION_ERROR', 'link is held by a layer and cannot be deleted', {
+    entity: 'link',
+    id: linkId,
+    blocking: { layers: holdingLayers },
+  });
+}
+
+/**
  * Удалить ребро по правилу ADR a967d865. Возвращает `null`,
  * когда ребра уже нет или оно уже помечено (no-op без события). Вызывающий
  * публикует событие по `action`: `deleted` → `link.deleted`, `trashed` →
@@ -111,14 +130,7 @@ export function removeLinkTarget(
     // S13: физическое удаление в основе запрещено, пока ребро держит живая
     // тень в рабочем слое (docs/13-layers.md §6.5a) — та же защита, что у
     // `DELETE /links/{id}`.
-    const holdingLayers = listLinkHoldingLayers(ndb, linkId);
-    if (holdingLayers.length > 0) {
-      throw new EtnError('VALIDATION_ERROR', 'link is held by a layer and cannot be deleted', {
-        entity: 'link',
-        id: linkId,
-        blocking: { layers: holdingLayers },
-      });
-    }
+    throwIfLinkHeld(ndb, linkId);
     purgeOwnerDependants(ndb, 'link', [linkId]);
     // Физическое удаление логической строки во всех слоях — поведение основы
     // до S4 (`deleteLink`); держащих слоёв здесь уже нет.
@@ -133,7 +145,10 @@ export function removeLinkTarget(
   if (!existedAbove) {
     // Ребро создано в текущем слое и выше его нет — физически удаляем строку
     // слоя. Зависимости (комментарии/вложения/значения) принадлежат этому же
-    // слою: ребра выше не существует.
+    // слою: ребра выше не существует. Но живая тень ребра в дочернем слое
+    // удержит его (ошибка 97b64a69): после физического удаления она осиротеет,
+    // а её слияние вернёт ребро в этот слой.
+    throwIfLinkHeld(ndb, linkId);
     purgeOwnerDependants(ndb, 'link', [linkId]);
     ndb
       .prepare('DELETE FROM links WHERE id = ? AND layer_id = ?')

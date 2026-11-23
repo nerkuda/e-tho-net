@@ -790,9 +790,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: true,
     readOnly: false,
     effects:
-      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. A physical deletion happens only when no other layer holds a live shadow of the edge — a child-layer edit of a layer-created edge keeps it from being deleted (0.16.2, bug 97b64a69). The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
     errors:
-      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action), or the edge is held by a live layer and cannot be deleted from the base. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
+      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action), or the edge is held by a live shadow in a layer (base context — any working layer; a layer — its child layers) and cannot be deleted physically; the holders are listed in `details.blocking.layers`. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
     paramsContract: LinksDelete,
   },
   {
