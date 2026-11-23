@@ -20,6 +20,14 @@
  * иконка) и правки комментариев видимость субъекта не меняют — классификатор их
  * пропускает (граница ошибки `39d78d2a`: лишних пересчётов не добавляем).
  *
+ * **Создание публикации — не смена видимости.** Отдельного
+ * `publication.created` каталог не объявляет: создание приходит тем же
+ * `publication.updated`, но в `changes` лежит ПОЛНЫЙ созданный DTO (ошибка
+ * `4efb01bb`), а у DTO всегда есть `active` — без отсечения каждый клиент сети
+ * делал бы лишний `GET /reminders` на каждое создание публикации (замечание
+ * верификатора к `71cb791e`). Признак create — поле `id` в `changes`: в
+ * `PublicationUpdateInput` его нет.
+ *
  * Классификатор общий для всех потребителей счётчиков — как
  * `live/trash-events.ts` для проекции задач: правило видимости живёт в одном
  * месте, а не в четырёх подписках.
@@ -51,7 +59,13 @@ export function isReminderSubjectVisibilityEvent(event: AnyRealtimeEvent): boole
     case 'publication.purged':
       return true;
     case 'thought.updated':
+      return touchesVisibility(event.data.changes);
+    // Создание публикации приходит тем же `publication.updated` с ПОЛНЫМ DTO в
+    // `changes` (у DTO всегда есть `active`), поэтому create-payload отсекается
+    // по `id`: в `PublicationUpdateInput` такого поля нет (замечание
+    // верификатора к 71cb791e, ошибка 4efb01bb).
     case 'publication.updated':
+      if (Object.prototype.hasOwnProperty.call(event.data.changes, 'id')) return false;
       return touchesVisibility(event.data.changes);
     case 'user-preference.updated':
       return event.data.key === PREF_KEY.SHOW_INACTIVE;

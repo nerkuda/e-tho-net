@@ -55,6 +55,44 @@ describe('видимость субъекта напоминания (71cb791e)'
     }
   });
 
+  it('создание публикации — не смена видимости: changes несёт полный DTO (замечание к 71cb791e)', () => {
+    // Отдельного `publication.created` каталог не объявляет: создание приходит
+    // тем же `publication.updated`, но в `changes` лежит ПОЛНЫЙ созданный DTO
+    // (`server/src/routes/publications.ts`, ошибка 4efb01bb). У DTO всегда есть
+    // `active`/`marked_for_deletion`, поэтому без отсечения create-payload
+    // каждый клиент сети делал бы лишний `GET /reminders` на создание.
+    const created = event('publication.updated', {
+      id: 'p1',
+      version: 1,
+      changes: {
+        id: 'p1',
+        title: 'Публикация',
+        active: true,
+        marked_for_deletion: false,
+        version: 1,
+      },
+    });
+    assert.equal(
+      isReminderSubjectVisibilityEvent(created),
+      false,
+      'create-payload (в changes есть id) — не событие видимости',
+    );
+
+    // Правка той же публикации: `changes` — только изменённые поля, `id` нет.
+    const updated = event('publication.updated', { id: 'p1', version: 2, changes: { active: false } });
+    assert.equal(isReminderSubjectVisibilityEvent(updated), true, 'правка active — событие видимости');
+    const trashed = event('publication.updated', {
+      id: 'p1',
+      version: 3,
+      changes: { marked_for_deletion: true },
+    });
+    assert.equal(
+      isReminderSubjectVisibilityEvent(trashed),
+      true,
+      'правка marked_for_deletion — событие видимости',
+    );
+  });
+
   it('«показывать неактуальные» — сигнал, прочие настройки — нет', () => {
     assert.equal(
       isReminderSubjectVisibilityEvent(
