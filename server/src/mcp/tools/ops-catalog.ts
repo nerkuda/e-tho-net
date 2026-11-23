@@ -795,7 +795,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     effects:
       'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. A physical deletion happens only when no other layer holds a live shadow of the edge — a child-layer edit of a layer-created edge keeps it from being deleted (0.16.2, bug 97b64a69). A live duplicate triple (the same triple alive in several layers, bug 374c9776) is removed as a whole — the fresh layer row physically, the base/ancestor row to the layer basket — with one event and one journal row per row removed; rows already in the basket are not alive — they are neither counted nor re-marked. The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent, the action of the requested row first).',
     errors:
-      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action); the edge is held by a live shadow in a layer (base context — any working layer; a layer — its child layers) and cannot be deleted physically, the holders are in `details.blocking.layers`; a duplicate triple cannot be collapsed inside one layer (live rows in several layers above, or the triple slot in the current layer taken by a basket row), the rows are in `details.links` (bug 374c9776). A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
+      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action); the edge is held by a live shadow in a layer (base context — any working layer; a layer — its child layers) and cannot be deleted physically, the holders are in `details.blocking.layers`; a duplicate triple cannot be collapsed inside one layer (live rows in several layers above, or the triple slot in the current layer already taken by a row of this layer — a live duplicate or a basket row), the rows are in `details.links` (bugs 374c9776, a9615f9b). A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
     paramsContract: LinksDelete,
   },
   {
@@ -810,7 +810,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: false,
     effects: 'a reversible operation: clears the `marked_for_deletion` flag on the link, event `link.updated`, journal `restored` (parity with REST `PATCH /links/{id}` with `marked_for_deletion: false`). Works the same for the base and a layer, including edges marked by the smart deletion of a link property.',
-    errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
+    errors:
+      '`VALIDATION_ERROR` — restoring a base/ancestor row while the triple slot in the current layer is already taken by a live row of this layer (a live duplicate triple, bug a9615f9b; the rows are in `details.links`) — settle the duplicate first (`links.delete` removes it as a whole) or restore from another layer; `NOT_FOUND`.',
     paramsContract: LinksRestore,
   },
   {
@@ -1079,9 +1080,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: false,
     effects:
-      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`). Physical deletion of a layer row is refused while a live child-layer shadow holds it — 422 with `details.blocking.layers` (0.16.2, error 97b64a69). A live triple duplicated across layers (0.16.2, error 374c9776) is removed as a whole — the fresh layer row physically, the base/ancestor row to the layer basket — with one event per row. An already marked edge — no-op without an event. Returns `{ link_id }` (idempotent).',
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`). Physical deletion of a layer row is refused while a live child-layer shadow holds it — 422 with `details.blocking.layers` (0.16.2, error 97b64a69). A live triple duplicated across layers (0.16.2, error 374c9776) is removed as a whole — the fresh layer row physically, the base/ancestor row to the layer basket — with one event per row. When the triple slot of the layer is held by a live row of this layer, only the holder itself can be removed; a request for another row of the triple is refused with 422 (bugs 374c9776, a9615f9b). An already marked edge — no-op without an event. Returns `{ link_id }` (idempotent).',
     errors:
-      '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`; a physical deletion held by a live child-layer shadow (`details.blocking.layers`); a duplicate triple that cannot be collapsed inside one layer (`details.links` — merge or discard the extra layer). A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
+      '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`; a physical deletion held by a live child-layer shadow (`details.blocking.layers`); a duplicate triple that cannot be collapsed inside one layer (`details.links`: the slot is held by a live row of this layer — delete the duplicate wholly or merge/discard the extra layer; or by a basket row — empty the basket of the layer). A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
     paramsContract: PropertiesRemove,
   },
 
