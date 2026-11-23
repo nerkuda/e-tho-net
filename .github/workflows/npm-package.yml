@@ -1,0 +1,61 @@
+name: npm package (etn-mcp)
+
+# Матрица prebuilds MCP-пакета (задача 760402ba, DoD 6).
+#
+# На каждом хосте из матрицы (`os`/`cpu` опубликованного пакета) пакет
+# собирается из общего стейджинга, ставится в чистый каталог, и обёртка
+# проходит MCP-рукопожатие: это доказывает, что `better-sqlite3` 11.1.2
+# приезжает upstream-prebuild'ом и работает без локальной сборки.
+#
+# Публикация (`npm publish`) здесь не выполняется — только `npm pack` и
+# проверки (порядок публикации — ADR d17c3a29).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package & handshake (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+          - os: macos-14
+            target: darwin-arm64
+          - os: ubuntu-latest
+            target: linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build shared libraries and server
+        # Пакет собирается из server/dist и shared/dist/markdown/dist.
+        run: npm run build:shared && npm -w @etn/server run build
+
+      - name: Package etn-mcp
+        # Стейджинг prod-зависимостей + npm pack + npm ls в чистом каталоге.
+        run: npm -w @etn/server run package:npm -- --out release
+
+      - name: Clean-machine handshake
+        # Установка tarball в пустой HOME и MCP-сессия (initialize + tools/list +
+        # etn.guide) без ETN_DATA_DIR: личный каталог, маркер и mcp/key.
+        run: node server/scripts/verify-npm-package.mjs
