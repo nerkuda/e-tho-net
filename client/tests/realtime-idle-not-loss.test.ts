@@ -105,5 +105,15 @@ describe('закрытие вкладки сети — не потеря свя�
     const lost = noticeTexts();
     assert.equal(lost.length, 1, lost.join(' | '));
     assert.ok(lost[0]!.includes('Переподключение к серверу'), lost.join(' | '));
+
+    // Прямой обрыв в offline — свой текст (замечание верификатора к 3fa5f9ba):
+    // сужение `isLinkLoss` до `reconnecting` обязано покраснить здесь, иначе
+    // `offline` молча потерял бы сообщение о потере связи.
+    store.update({ rtStatusByNetwork: { [NET1]: 'connected', [NET2]: 'connected' } });
+    await settleAsync();
+    store.update({ rtStatusByNetwork: { [NET1]: 'offline', [NET2]: 'connected' } });
+    await settleAsync();
+    const offline = noticeTexts().filter((text) => text.includes('Соединение потеряно'));
+    assert.equal(offline.length, 1, noticeTexts().join(' | '));
   });
 });
