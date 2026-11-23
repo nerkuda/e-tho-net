@@ -30,7 +30,11 @@
  * it does not sweep other layers' shadow rows the way a direct base-layer
  * deletion does. Sibling overlays survive the merge and catch the divergence
  * via `base_version` when they merge themselves; this is also what keeps the
- * §6.4 residual case (a physically gone link endpoint) reachable.
+ * §6.4 residual case (a physically gone link endpoint) reachable. For a live
+ * sibling overlay whose base row the merge has just removed, that catch is the
+ * orphan rule in {@link detectVersionConflicts} (ошибка `6fd7eb5f`): replaying
+ * it would re-create deleted data, so the sibling's own merge fails with a
+ * conflict instead of inserting the shadow as new.
  *
  * Version semantics (§8.1 «с теми же правилами версий»): a replayed row keeps
  * its numbering — `version` moves to `P` verbatim, so a client that last saw
@@ -355,16 +359,39 @@ function loadMergeTarget(ndb: NetworkDb, layerId: string): MergeTarget {
  * diverges from the current version of the same logical id in the target chain.
  * Shared with the reset preview (§8.5) — one definition of «предстоящий
  * конфликт».
+ *
+ * A live row whose base row is **physically gone** from the chain is a
+ * divergence too (ошибка `6fd7eb5f`): `base_version > 0` says «I stand on a row
+ * of the ancestor», and that row no longer exists — the nearest legitimate
+ * explanation is «the ancestor deleted it», so replaying the shadow as a plain
+ * insert (`base_version = 0`) would silently resurrect deleted data. The
+ * requirement 24ca954b expects exactly this catch: «надгробие удаляет строку
+ * цели физически только в P … их собственные слияния позже поймают
+ * расхождение по `base_version`». A row created inside the layer
+ * (`base_version = 0`) and a tombstone with no winner (nothing to delete) stay
+ * legitimate: neither brings data back.
  */
 function detectVersionConflicts(ndb: NetworkDb, merged: MergedRow[]): LayerMergeConflict[] {
   const conflicts: LayerMergeConflict[] = [];
   for (const { table, row, winner } of merged) {
-    if (winner === undefined || !layoutOf(ndb, table).hasVersion) continue;
+    if (!layoutOf(ndb, table).hasVersion) continue;
+    const expected = row.base_version as number;
+    if (winner === undefined) {
+      if (row.deleted === 0 && expected > 0) {
+        conflicts.push({
+          table,
+          id: row.id as string,
+          expected_base_version: expected,
+          current_version: null,
+          reason: 'base_row_missing',
+        });
+      }
+      continue;
+    }
     // A tombstone that found nothing to delete is a no-op, not a conflict;
     // every other row with a resolvable winner goes through the check. A
     // winner that is itself a tombstone (deleted in an intermediate layer)
     // counts as a changed row — its version carries the deletion bump.
-    const expected = row.base_version as number;
     const current = winner.version as number;
     if (expected !== current) {
       conflicts.push({
@@ -798,9 +825,18 @@ function mergeLayerInner(
   // --- Phase A (read-only): conflict detection (§8.1) --------------------
   const conflicts = detectVersionConflicts(ndb, merged);
   if (conflicts.length > 0) {
+    const orphans = conflicts.filter((c) => c.reason === 'base_row_missing').length;
+    // Сирота и «предок правил строку» — разные диагнозы и разные действия,
+    // поэтому текст отказа называет случай, а не только число.
+    const message =
+      orphans === 0
+        ? `the ancestor changed after the layer was created: ${conflicts.length} divergences. The merge was rejected entirely.`
+        : orphans === conflicts.length
+          ? `the layer is based on ${orphans} row(s) the ancestor no longer has: replaying them would re-create deleted data. The merge was rejected entirely.`
+          : `the ancestor changed after the layer was created: ${conflicts.length} divergences, ${orphans} of them based on rows the ancestor no longer has. The merge was rejected entirely.`;
     throw new EtnError(
       'VALIDATION_ERROR',
-      `the ancestor changed after the layer was created: ${conflicts.length} divergences. The merge was rejected entirely.`,
+      message,
       // `how_to` — hint-навигатор уровня 2 (ADR b2eebf8b, задача 940a499d):
       // имя процедурного промпта, объясняющего ошибку. Агент узнаёт об
       // инструкции в момент, когда она нужна.
