@@ -320,6 +320,30 @@ function indexOfIn(haystack: string, needle: string): number {
   return haystack.indexOf(needle);
 }
 
+/**
+ * Текст составного оператора `begin … end`, следующего за `anchor` (например,
+ * `if <условие> then`). Нужен сторожам управления потоком: наличие фрагмента в
+ * теле ветки не доказывает, что она выходит из функции раньше записи файла.
+ * Код передаётся без комментариев (stripPascalComments), вложенность — по
+ * словам begin/end.
+ */
+function beginBlockAfter(body: string, anchor: string): string {
+  const anchorAt = body.indexOf(anchor);
+  if (anchorAt < 0) return '';
+  const beginAt = body.indexOf('begin', anchorAt + anchor.length);
+  if (beginAt < 0) return '';
+
+  const collected: string[] = [];
+  let depth = 0;
+  for (const line of body.slice(beginAt).split('\n')) {
+    collected.push(line);
+    depth += (line.match(/\bbegin\b/gi) ?? []).length;
+    depth -= (line.match(/\bend\b/gi) ?? []).length;
+    if (depth <= 0) break;
+  }
+  return collected.join('\n');
+}
+
 describe('guard: исходник установщика — высокоценные запреты', () => {
   it(`${ISS}: в [Code] нет MsgBox (только SuppressibleMsgBox)`, () => {
     const code = stripPascalComments(codeSection(readIss()));
@@ -721,6 +745,29 @@ describe('guard: исходник установщика — высокоцен�
       wanted,
       /not\s+GServiceConfigPreserved/,
       `${ISS}: ServiceConfigFileWanted ставит шаблон только когда правок пользователя нет.`,
+    );
+  });
+
+  it(`${ISS}: etn-service.xml — пользовательский файл выходит до записи (6c2fc89e)`, () => {
+    // Замечание верификатора к bddb146a: позиционная проверка «GServiceConfigPreserved
+    // раньше SaveStringToFile» остаётся зелёной и после точечного удаления
+    // `Result := True; Exit;` — текст ветки на месте, а поток идёт дальше к записи.
+    // Проверяется ФОРМА ветки: она обязана завершаться ранним выходом.
+    const code = stripPascalComments(codeSection(readIss()));
+    const install = functionBody(code, 'InstallServiceConfig');
+    const branch = beginBlockAfter(install, 'if GServiceConfigPreserved then');
+
+    assert.notEqual(
+      branch,
+      '',
+      `${ISS}: в InstallServiceConfig нет ветки if GServiceConfigPreserved then (6c2fc89e).`,
+    );
+    assert.match(
+      branch,
+      /Result\s*:=\s*True;\s*\n\s*Exit;\s*\n\s*end;?\s*$/,
+      `${ISS}: ветка GServiceConfigPreserved обязана завершаться ранним выходом ` +
+        '(Result := True; Exit;) — без него поток идёт к SaveStringToFile и перезаписывает ' +
+        'пользовательский etn-service.xml (6c2fc89e, замечание верификатора).',
     );
   });
 
