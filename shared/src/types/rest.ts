@@ -165,14 +165,19 @@ export interface UpdateJob {
   backup_path: string | null;
 }
 
+/** Каналы проверки обновлений сервера (`ETN_UPDATE_CHANNEL`). */
+export const UPDATE_CHANNELS = ['stable', 'prerelease'] as const;
 /** Канал проверки обновлений сервера (`ETN_UPDATE_CHANNEL`). */
-export type UpdateChannel = 'stable' | 'prerelease';
+export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
+
+/** Режимы развёртывания сервера (поле `deployment` кеша проверки). */
+export const SERVER_DEPLOYMENTS = ['windows-service', 'standalone', 'docker'] as const;
 
 /**
  * Режим развёртывания сервера (поле `deployment` кеша проверки, сущность
  * 6f79610d): служба Windows, обычный процесс или контейнер Docker.
  */
-export type ServerDeployment = 'windows-service' | 'standalone' | 'docker';
+export type ServerDeployment = (typeof SERVER_DEPLOYMENTS)[number];
 
 /**
  * `GET /api/v1/system/update` и `POST /api/v1/system/update/check` — снимок
@@ -203,6 +208,15 @@ export interface SystemUpdateStatus {
    */
   instruction: string | null;
 }
+
+/**
+ * Кеш проверки обновлений (форма сущности 6f79610d) — `SystemUpdateStatus`
+ * без `instruction`: сервер хранит ровно эти поля, а статус добавляет
+ * инструкцию обновления. Тип выведен из общего контракта, чтобы поле,
+ * случайно добавленное в кеш, не просочилось в ответ через spread
+ * (задача bdd17318).
+ */
+export type UpdateCache = Omit<SystemUpdateStatus, 'instruction'>;
 
 /**
  * `GET /api/v1/system/update/progress` — последнее задание обновления или

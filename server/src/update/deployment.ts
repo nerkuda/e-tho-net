@@ -23,11 +23,7 @@
 
 import { existsSync } from 'node:fs';
 
-/** Допустимые значения `ETN_DEPLOYMENT` и поля `deployment` кеша. */
-export const DEPLOYMENT_MODES = ['windows-service', 'standalone', 'docker'] as const;
-
-/** Режим развёртывания сервера. */
-export type Deployment = (typeof DEPLOYMENT_MODES)[number];
+import { SERVER_DEPLOYMENTS, type ServerDeployment } from '@etn/shared';
 
 /** Маркер запуска в Linux-контейнере (`docker run`/`docker compose`). */
 export const DOCKER_MARKER_PATH = '/.dockerenv';
@@ -90,25 +86,25 @@ export interface DeploymentProbe {
 }
 
 /** Type guard: строка — допустимый режим развёртывания. */
-export function isDeployment(value: string): value is Deployment {
-  return (DEPLOYMENT_MODES as readonly string[]).includes(value);
+export function isDeployment(value: string): value is ServerDeployment {
+  return (SERVER_DEPLOYMENTS as readonly string[]).includes(value);
 }
 
 /**
  * Определить режим развёртывания по окружению и пробам файловой системы.
  *
  * @throws {DeploymentConfigError} когда `ETN_DEPLOYMENT` задан, но не входит
- *   в {@link DEPLOYMENT_MODES}.
+ *   в {@link SERVER_DEPLOYMENTS}.
  */
 export function resolveDeployment(
   env: NodeJS.ProcessEnv = process.env,
   probe: DeploymentProbe = {},
-): Deployment {
+): ServerDeployment {
   const raw = env.ETN_DEPLOYMENT?.trim().toLowerCase();
   if (raw !== undefined && raw !== '') {
     if (!isDeployment(raw)) {
       throw new DeploymentConfigError(
-        `ETN_DEPLOYMENT must be one of ${DEPLOYMENT_MODES.join(', ')}, got: ${JSON.stringify(raw)}`,
+        `ETN_DEPLOYMENT must be one of ${SERVER_DEPLOYMENTS.join(', ')}, got: ${JSON.stringify(raw)}`,
       );
     }
     return raw;
