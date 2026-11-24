@@ -725,6 +725,26 @@ export const ru = {
     'значение по умолчанию для назначений задано неверно — проверьте выбранные мысли',
   /** Строгая проверка тела запроса: сервер перечисляет неизвестные поля (`details.fields`). */
   'errors.propertyUnknownFields': 'сервер не понимает эти поля: %1',
+  /**
+   * Остальные поля отказа записи свойства (замечание верификации 0033ea14):
+   * карта `PROPERTY_FIELD_ERROR_KEYS` покрывает все поля, которые сервер
+   * реально возвращает в `details.field` (`property-service.ts`, контракты
+   * реестра и привязок). Идентификаторы и служебные имена не выводятся.
+   */
+  'errors.propertyNameInvalid': 'имя свойства задано неверно — введите непустое имя',
+  'errors.propertyValueTypeInvalid': 'вид значения задан неверно — выберите вид заново',
+  'errors.propertyDescriptionInvalid': 'описание задано неверно — проверьте текст',
+  'errors.propertyDirectionInvalid':
+    'направление связи задано неверно — выберите направление заново',
+  'errors.propertyRefInvalid': 'свойство задано неверно или неоднозначно — выберите его заново',
+  'errors.propertyValueInvalid': 'значение задано неверно — проверьте выбранное',
+  'errors.propertyOwnerTypeInvalid': 'вид типа задан неверно — обновите клиент и повторите',
+  'errors.propertyModeInvalid': 'форма данных не совпала — обновите клиент и повторите',
+  'errors.propertyLinkDecorationInvalid':
+    'оформление связи задано неверно — выберите цвет, стиль и толщину заново',
+  'errors.propertyLinkParentInvalid': 'родительский тип связи задан неверно — выберите его заново',
+  'errors.propertyBindingFieldInvalid':
+    'параметры привязки заданы неверно — откройте тип и повторите',
   'errors.code.VALIDATION_ERROR': 'проверьте введённые данные',
   /** Уточнение `400 VALIDATION_ERROR` недостижимой серии (`details.issue`). */
   'errors.code.VALIDATION_ERROR.no-occurrence':

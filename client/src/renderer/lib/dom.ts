@@ -329,10 +329,33 @@ function propertySideErrorText(like: ErrorLike | null): string | null {
  * они ничего не говорят пользователю (см. `error-text.test.ts`).
  */
 const PROPERTY_FIELD_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
-  'config.allowed_target_type_ids': 'errors.propertyAllowedTargetTypeMissing',
-  'config.allowed_source_type_ids': 'errors.propertyAllowedSourceTypeMissing',
+  // Природа свойства и справочник (`server/src/domain/property-service.ts`).
+  key: 'errors.propertyNameInvalid',
+  name: 'errors.propertyNameInvalid',
+  name_forward: 'errors.propertyNameInvalid',
+  name_reverse: 'errors.propertyNameInvalid',
+  value_type: 'errors.propertyValueTypeInvalid',
+  description: 'errors.propertyDescriptionInvalid',
+  owner_type: 'errors.propertyOwnerTypeInvalid',
+  property: 'errors.propertyRefInvalid',
+  property_id: 'errors.propertyRefInvalid',
+  value: 'errors.propertyValueInvalid',
+  // Ограничения и оформление свойства-связи.
   'config.link_type_id': 'errors.propertyLinkTypeMissing',
+  parent_link_type_id: 'errors.propertyLinkParentInvalid',
+  'config.direction': 'errors.propertyDirectionInvalid',
+  'config.allowed_target_type_ids': 'errors.propertyAllowedTargetTypeMissing',
+  allowed_target_type_ids: 'errors.propertyAllowedTargetTypeMissing',
+  'config.allowed_source_type_ids': 'errors.propertyAllowedSourceTypeMissing',
+  allowed_source_type_ids: 'errors.propertyAllowedSourceTypeMissing',
   'config.default_value_target': 'errors.propertyDefaultTargetInvalid',
+  link_color: 'errors.propertyLinkDecorationInvalid',
+  link_style: 'errors.propertyLinkDecorationInvalid',
+  link_width: 'errors.propertyLinkDecorationInvalid',
+  // Роль привязки и форма тела подключения.
+  required: 'errors.propertyBindingFieldInvalid',
+  position: 'errors.propertyBindingFieldInvalid',
+  mode: 'errors.propertyModeInvalid',
 };
 
 /**

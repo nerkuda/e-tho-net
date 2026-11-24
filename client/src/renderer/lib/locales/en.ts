@@ -723,6 +723,24 @@ export const en = {
     'the default value for targets is invalid — check the selected thoughts',
   /** Strict request-body check: the server lists unknown fields (`details.fields`). */
   'errors.propertyUnknownFields': 'the server does not accept these request fields: %1',
+  /**
+   * The remaining fields of a failed property write (verification of
+   * 0033ea14): `PROPERTY_FIELD_ERROR_KEYS` covers every field the server
+   * really returns in `details.field` (`property-service.ts`, registry and
+   * binding contracts). Ids and internal names are never shown.
+   */
+  'errors.propertyNameInvalid': 'the property name is invalid — enter a non-empty name',
+  'errors.propertyValueTypeInvalid': 'the value type is invalid — choose the type again',
+  'errors.propertyDescriptionInvalid': 'the description is invalid — check the text',
+  'errors.propertyDirectionInvalid': 'the link direction is invalid — choose the direction again',
+  'errors.propertyRefInvalid': 'the property is invalid or ambiguous — choose it again',
+  'errors.propertyValueInvalid': 'the value is invalid — check the selection',
+  'errors.propertyOwnerTypeInvalid': 'the type kind is invalid — update the client and retry',
+  'errors.propertyModeInvalid': 'the data shape did not match — update the client and retry',
+  'errors.propertyLinkDecorationInvalid':
+    'the link decoration is invalid — choose the color, style and width again',
+  'errors.propertyLinkParentInvalid': 'the parent link type is invalid — choose it again',
+  'errors.propertyBindingFieldInvalid': 'the binding options are invalid — open the type and retry',
   'errors.code.VALIDATION_ERROR': 'check the entered data',
   /** Refinement of `400 VALIDATION_ERROR` for an unreachable series (`details.issue`). */
   'errors.code.VALIDATION_ERROR.no-occurrence':
