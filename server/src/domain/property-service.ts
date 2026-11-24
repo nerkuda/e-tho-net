@@ -1303,10 +1303,18 @@ function setLinkPropertyTargets(
   for (const targetId of targetIds) {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     if (src === dst) {
+      // Конкретная причина для отчёта массового изменения значений (ошибка
+      // 884919f6): клиент переводит `reason` в пользовательский текст, а не
+      // подставляет общий «проверьте введённые данные».
       throw new EtnError(
         'VALIDATION_ERROR',
         `property "${prop.name}" cannot link a thought to itself`,
-        { key: prop.name, ref: targetId },
+        {
+          key: prop.name,
+          ref: targetId,
+          field: 'value',
+          reason: PROPERTY_SIDE_ERROR_REASON.selfLink,
+        },
       );
     }
   }
@@ -1478,10 +1486,18 @@ function addLinkPropertyTarget(
   validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
   if (src === dst) {
+    // Конкретная причина для отчёта массового изменения значений (ошибка
+    // 884919f6): клиент переводит `reason` в пользовательский текст, а не
+    // подставляет общий «проверьте введённые данные».
     throw new EtnError(
       'VALIDATION_ERROR',
       `property "${prop.name}" cannot link a thought to itself`,
-      { key: prop.name, ref: targetId },
+      {
+        key: prop.name,
+        ref: targetId,
+        field: 'value',
+        reason: PROPERTY_SIDE_ERROR_REASON.selfLink,
+      },
     );
   }
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);

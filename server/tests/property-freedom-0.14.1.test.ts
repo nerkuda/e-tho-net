@@ -227,6 +227,38 @@ describe(
       }
     });
 
+    it('self-ссылка: 422 с field/reason для конкретного текста (884919f6)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'Прикреплено self 8849',
+            value_type: 'link',
+            name_forward: 'Прикреплено self 8849',
+            name_reverse: 'Прикреплено self 8849 обратно',
+          },
+          USER,
+        );
+        const owner = await createThought(ctx, 'Мысль self 8849');
+        const res = await putProperty(ctx, owner, 'Прикреплено self 8849', owner);
+        assert.equal(res.statusCode, 422, res.body);
+        const body = res.json() as {
+          error: {
+            message: string;
+            details: { key?: string; ref?: string; field?: string; reason?: string };
+          };
+        };
+        assert.equal(body.error.details.field, 'value');
+        assert.equal(body.error.details.reason, 'self-link');
+        assert.equal(body.error.details.key, 'Прикреплено self 8849');
+        assert.equal(body.error.details.ref, owner);
+        assert.match(body.error.message, /cannot link a thought to itself/);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('side адресует сторону симметричного свойства-связи; сверка при удалении', async () => {
       const ctx = await buildRestContext();
       try {

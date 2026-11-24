@@ -184,9 +184,10 @@ const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
  *   за недоступность сервера;
  * - `422` по адресу стороны свойства-связи (`details.field === 'side'`), при
  *   коллизии display-имён (`details.reason === 'property-ambiguous'`) и при
- *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) →
+ *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) и
+ *   попытке связать мысль с самой собой (`details.reason === 'self-link'`) →
  *   формулировка пользователя по `details.reason`: серверный текст адресован
- *   API/агентам и называет `side`/`source`/`target` (ошибка d9bc6012);
+ *   API/агентам и называет `side`/`source`/`target` (ошибки d9bc6012, 884919f6);
  * - серверные ошибки (`code` есть) — словарный текст по цепочке
  *   `code` → `details.reason`/`details.issue` → общий текст (ADR daab6ac4):
  *   `error.message` английский и пользователю не показывается, причина по
@@ -315,6 +316,7 @@ function propertySideErrorText(like: ErrorLike | null): string | null {
   const { field, reason } = details as { field?: unknown; reason?: unknown };
   if (reason === PROPERTY_SIDE_ERROR_REASON.ambiguous) return t('errors.propertyNameAmbiguous');
   if (reason === PROPERTY_SIDE_ERROR_REASON.targetType) return t('errors.propertyTargetType');
+  if (reason === PROPERTY_SIDE_ERROR_REASON.selfLink) return t('errors.propertySelfLink');
   if (field !== 'side') return null;
   return reason === PROPERTY_SIDE_ERROR_REASON.mismatch
     ? t('errors.propertySideMismatch')

@@ -703,6 +703,12 @@ export const en = {
    */
   'errors.propertyTargetType': 'value type is not allowed by the property',
   /**
+   * Link property write: a thought is being linked to itself
+   * (`details.reason === 'self-link'`, issue 884919f6). The bulk-change report
+   * must show this concrete reason instead of the generic validation text.
+   */
+  'errors.propertySelfLink': 'a thought cannot link to itself — choose another target',
+  /**
    * Server errors — user-facing text by code (ADR daab6ac4, §4):
    * `error.message` is English and never shown. Refining reasons
    * (`details.reason`/`details.issue`) use `errors.code.<code>.<token>` keys;

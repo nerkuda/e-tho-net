@@ -338,6 +338,7 @@ export const zh = {
   'errors.propertySideMismatch': '所选一侧没有链接——值已被更改，请刷新卡片',
   'errors.propertyNameAmbiguous': '属性名称不明确——网络中有多个属性使用该名称',
   'errors.propertyTargetType': '值的类型不符合属性允许的类型',
+  'errors.propertySelfLink': '不能将念头与自身关联——请选择其他目标',
   'errors.propertyAllowedTargetTypeMissing': '「目标类型」限制指向已不存在的类型——请重新选择类型',
   'errors.propertyAllowedSourceTypeMissing': '「源类型」限制指向已不存在的类型——请重新选择类型',
   'errors.propertyLinkTypeMissing': '未找到属性的关系类型——请重新选择关系类型',

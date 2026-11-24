@@ -217,6 +217,25 @@ describe('errText: дружелюбные сообщения', () => {
     assert.doesNotMatch(legacy, /thought|required type|[0-9a-f]{8}-[0-9a-f]{4}/i);
   });
 
+  it('422 self-ссылки — конкретная причина вместо общей (884919f6)', () => {
+    // Массовое изменение значений: сервер обязан назвать причину, клиент —
+    // показать её в отчёте, а не общий «проверьте введённые данные».
+    const text = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'property "Прикреплено" cannot link a thought to itself',
+        {
+          key: 'Прикреплено',
+          ref: '11111111-2222-4333-8444-555555555555',
+          field: 'value',
+          reason: 'self-link',
+        },
+      ),
+    );
+    assert.equal(text, 'нельзя связать мысль с самой собой — выберите другую цель');
+    assert.doesNotMatch(text, /cannot link|source|target|self/i);
+  });
+
   it('422 по стороне без details.reason (сервер старше 0.14.1) — всё равно без внутренних терминов', () => {
     const text = errText(
       new EtnError('VALIDATION_ERROR', 'имя свойства «X» адресует обе стороны — укажите side', {
