@@ -361,10 +361,46 @@ const PROPERTY_FIELD_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
 };
 
 /**
+ * Динамические имена `details.field` записи свойства (ошибка 84a39e75):
+ * сервер строит их из имени свойства или конфигурации —
+ * `<имя свойства>.default_value_target` и т. п. Разбираем ТОЛЬКО известные
+ * суффиксы и шаблоны элементов: неизвестное имя остаётся нераспознанным,
+ * чтобы общий текст не выдавал догадку за причину.
+ */
+const PROPERTY_CONFIG_FIELD_SUFFIX_KEYS: ReadonlyArray<readonly [string, MessageKey]> = [
+  ['.default_value_target', 'errors.propertyDefaultTargetInvalid'],
+  ['.link_type_id', 'errors.propertyLinkTypeMissing'],
+  ['.direction', 'errors.propertyDirectionInvalid'],
+  ['.allowed_target_type_ids', 'errors.propertyAllowedTargetTypeMissing'],
+  ['.allowed_source_type_ids', 'errors.propertyAllowedSourceTypeMissing'],
+];
+
+/** Элемент пакетной правки порядка свойств: `items[N].<поле>` (`property-order-service.ts`). */
+const PROPERTY_ORDER_FIELD_RE = /^items\[\d+]\.(position|property_id|side)$/;
+
+const PROPERTY_ORDER_FIELD_KEYS: Readonly<Record<string, MessageKey>> = {
+  position: 'errors.propertyOrderPositionInvalid',
+  property_id: 'errors.propertyOrderPropertyInvalid',
+  side: 'errors.propertyOrderSideInvalid',
+};
+
+/** Ключ подписи для точного или динамического имени поля записи свойства. */
+function propertyFieldErrorKey(field: string): MessageKey | undefined {
+  const exact = PROPERTY_FIELD_ERROR_KEYS[field];
+  if (exact !== undefined) return exact;
+  const order = PROPERTY_ORDER_FIELD_RE.exec(field);
+  if (order !== null) return PROPERTY_ORDER_FIELD_KEYS[order[1] as string];
+  for (const [suffix, key] of PROPERTY_CONFIG_FIELD_SUFFIX_KEYS) {
+    if (field.length > suffix.length && field.endsWith(suffix)) return key;
+  }
+  return undefined;
+}
+
+/**
  * Причина отказа записи свойства по `details.field` и `details.fields`
- * (ошибка 0033ea14, DoD 3). Неизвестные серверу поля тела — тоже конкретная
- * причина: перечисляем их, а не отдаём общий текст кода. `null` — причина
- * не про поля свойства: работает обычная цепочка `errText`.
+ * (ошибки 0033ea14, 84a39e75, DoD 3). Неизвестные серверу поля тела — тоже
+ * конкретная причина: перечисляем их, а не отдаём общий текст кода. `null` —
+ * причина не про поля свойства: работает обычная цепочка `errText`.
  */
 function propertyFieldErrorText(like: ErrorLike | null): string | null {
   if (like?.code !== 'VALIDATION_ERROR') return null;
@@ -372,7 +408,7 @@ function propertyFieldErrorText(like: ErrorLike | null): string | null {
   if (typeof details !== 'object' || details === null) return null;
   const record = details as { field?: unknown; fields?: unknown };
   if (typeof record.field === 'string') {
-    const key = PROPERTY_FIELD_ERROR_KEYS[record.field];
+    const key = propertyFieldErrorKey(record.field);
     if (key !== undefined) return t(key);
   }
   if (

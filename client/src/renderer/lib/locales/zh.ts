@@ -355,6 +355,10 @@ export const zh = {
   'errors.propertyLinkDecorationInvalid': '关系外观不正确——请重新选择颜色、样式和粗细',
   'errors.propertyLinkParentInvalid': '父关系类型不正确——请重新选择',
   'errors.propertyBindingFieldInvalid': '绑定参数不正确——请打开类型后重试',
+  'errors.propertyOrderPositionInvalid': '属性顺序不正确——位置必须是非负数',
+  'errors.propertyOrderPropertyInvalid':
+    '顺序中的属性当前无法排序(由思维类型决定,或该思维没有它的值)——请刷新顺序列表',
+  'errors.propertyOrderSideInvalid': '顺序中的关系方向不正确——请重新选择方向',
   'errors.code.VALIDATION_ERROR': '请检查输入的数据',
   'errors.code.VALIDATION_ERROR.no-occurrence':
     '按此间隔不会产生任何提醒：所选日期在该序列的月份或年份中不存在——请更改日期或步长',

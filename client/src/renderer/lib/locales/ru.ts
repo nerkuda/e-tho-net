@@ -751,6 +751,16 @@ export const ru = {
   'errors.propertyLinkParentInvalid': 'родительский тип связи задан неверно — выберите его заново',
   'errors.propertyBindingFieldInvalid':
     'параметры привязки заданы неверно — откройте тип и повторите',
+  /**
+   * Динамические имена `details.field` (ошибка 84a39e75): элемент пакетной
+   * правки порядка свойств — `items[N].position / property_id / side`.
+   */
+  'errors.propertyOrderPositionInvalid':
+    'порядок свойств задан неверно — позиция должна быть неотрицательным числом',
+  'errors.propertyOrderPropertyInvalid':
+    'в порядке указано свойство, которое сейчас нельзя упорядочить (его задаёт тип мысли или у мысли нет его значения) — обновите список порядка',
+  'errors.propertyOrderSideInvalid':
+    'сторона связи в порядке задана неверно — выберите сторону связи заново',
   'errors.code.VALIDATION_ERROR': 'проверьте введённые данные',
   /** Уточнение `400 VALIDATION_ERROR` недостижимой серии (`details.issue`). */
   'errors.code.VALIDATION_ERROR.no-occurrence':

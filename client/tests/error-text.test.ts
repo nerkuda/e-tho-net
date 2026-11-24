@@ -392,5 +392,58 @@ describe('errText: дружелюбные сообщения', () => {
     assert.equal(unknownFields, 'сервер не понимает эти поля: mode');
     assert.doesNotMatch(unknownFields, /Unknown|Allowed/);
     assertFriendly(unknownFields);
+
+  it('422 динамических имён details.field — конкретная причина (84a39e75)', () => {
+    // Сервер строит поле из имени свойства (`<имя>.default_value_target`,
+    // `normalizeLinkDefaultValueTarget`) и индекса элемента порядка
+    // (`items[N].position/property_id/side`, `property-order-service`).
+    // Статическая карта такие имена не знала и давала общий текст.
+    const dynamicCases: ReadonlyArray<readonly [string, string]> = [
+      [
+        'Принадлежит.default_value_target',
+        'значение по умолчанию для назначений задано неверно — проверьте выбранные мысли',
+      ],
+      ['Принадлежит.direction', 'направление связи задано неверно — выберите направление заново'],
+      [
+        'Принадлежит.allowed_target_type_ids',
+        'ограничение «Типы назначений» ссылается на несуществующий тип — выберите типы заново',
+      ],
+      [
+        'Принадлежит.allowed_source_type_ids',
+        'ограничение «Типы источников» ссылается на несуществующий тип — выберите типы заново',
+      ],
+      ['Принадлежит.link_type_id', 'тип связи свойства не найден — выберите тип связи заново'],
+      [
+        'items[0].position',
+        'порядок свойств задан неверно — позиция должна быть неотрицательным числом',
+      ],
+      [
+        'items[7].property_id',
+        'в порядке указано свойство, которое сейчас нельзя упорядочить (его задаёт тип мысли или у мысли нет его значения) — обновите список порядка',
+      ],
+      ['items[12].side', 'сторона связи в порядке задана неверно — выберите сторону связи заново'],
+    ];
+    for (const [field, expected] of dynamicCases) {
+      const text = errText(
+        new EtnError('VALIDATION_ERROR', 'server-authored English diagnostic', {
+          field,
+          property_id: '11111111-2222-4333-8444-555555555555',
+        }),
+      );
+      assert.equal(text, expected, `поле ${field}`);
+      assertFriendly(text);
+      // Имя свойства и идентификаторы пользователю не показываются.
+      assert.doesNotMatch(text, /Принадлежит|items\[|11111111-2222/);
+    }
+
+    // Незнакомый динамический суффикс не угадывается: остаётся общий текст
+    // (а не подпись «похожего» поля).
+    const unknownDynamic = errText(
+      new EtnError('VALIDATION_ERROR', 'server-authored English diagnostic', {
+        field: 'Принадлежит.unknown_suffix',
+      }),
+    );
+    assert.equal(unknownDynamic, 'проверьте введённые данные');
+  });
   });
 });

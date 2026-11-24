@@ -747,6 +747,12 @@ export const en = {
     'the link decoration is invalid — choose the color, style and width again',
   'errors.propertyLinkParentInvalid': 'the parent link type is invalid — choose it again',
   'errors.propertyBindingFieldInvalid': 'the binding options are invalid — open the type and retry',
+  'errors.propertyOrderPositionInvalid':
+    'the property order is invalid — a position must be a non-negative number',
+  'errors.propertyOrderPropertyInvalid':
+    'the order names a property that cannot be ordered now (it is set by the thought type or the thought has no value for it) — reload the order list',
+  'errors.propertyOrderSideInvalid':
+    'the link side in the order is invalid — choose the side again',
   'errors.code.VALIDATION_ERROR': 'check the entered data',
   /** Refinement of `400 VALIDATION_ERROR` for an unreachable series (`details.issue`). */
   'errors.code.VALIDATION_ERROR.no-occurrence':
