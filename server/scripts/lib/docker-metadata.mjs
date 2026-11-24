@@ -158,13 +158,17 @@ export function sourceUrl(registryName) {
  * сборка берёт их отсюда, чтобы метки не разошлись с релизными.
  *
  * @param {{ revision?: string, repoRoot?: string, registryName?: string }} [input]
- *   `revision` — коммит кода образа (в CI — `github.sha`), `registryName` —
- *   подмена для теста.
+ *   `revision` — коммит кода образа (в CI — HEAD после checkout, см.
+ *   docker-image.yml), `registryName` — подмена для теста.
  * @returns {Record<string, string>} build-args.
  */
 export function dockerBuildArgs(input = {}) {
   const repoRoot = input.repoRoot ?? REPO_ROOT;
   const registryName = input.registryName ?? readRegistryName(repoRoot);
+  // Локальная сборка без --revision оставляет unknown осознанно (замечание
+  // верификации t_docker): git-метаданные в контексте сборки могут быть
+  // недоступны, а подделывать коммит нельзя. CI обязан передавать ревизию —
+  // это проверяет сторож guard-release-docker.test.ts.
   const revision = (input.revision ?? '').trim() || 'unknown';
   return {
     VERSION: rootVersion(repoRoot),

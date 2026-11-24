@@ -17,6 +17,10 @@
  *     `workflow_call` (ошибка dd38a306, итерация 2). Поэтому релиз передаёт
  *     `source_ref: github.sha`, а ручной `workflow_dispatch` его не передаёт,
  *     и `||` уводит checkout на `inputs.tag`.
+ *     Метка `revision` берётся из скачанного HEAD (`git rev-parse HEAD`), а не
+ *     из `github.sha`: при `workflow_dispatch` с тегом `github.sha` — коммит
+ *     ветки, и метка расходилась с образом (замечание верификации t_docker,
+ *     хроника 8d7b7087).
  *     Настройки сверяются внутри своего шага (`checkout`, `login`,
  *     `build-push`): перенос `file:`/`push:`/`tags:` в чужой шаг сторож
  *     ловит. `if:` и `continue-on-error:` у джобы и у шага сборки запрещены —
@@ -333,12 +337,30 @@ describe('guard: Docker-образ сервера — обязательная �
       meta.some((line) => /--github-output "\$GITHUB_OUTPUT"/.test(line)),
       `${DOCKER_WORKFLOW}: шаг метаданных не пишет в $GITHUB_OUTPUT — шаги сборки не увидят значения.`,
     );
+    // Замечание верификации t_docker (хроника 8d7b7087): revision обязан
+    // указывать на тот же коммит, что скачал checkout. Checkout по inputs.tag
+    // разворачивается в sha тега, а github.sha/inputs.source_ref внутри
+    // reusable workflow — коммит события/ветки: при workflow_dispatch с тегом
+    // метка расходилась с образом. Поэтому берём HEAD после checkout.
+    const revisionLine = meta.find((line) => /--revision\s+/.test(line));
     assert.ok(
-      meta.some((line) =>
-        /--revision "\$\{\{ inputs\.source_ref \|\| github\.sha \}\}"/.test(line),
-      ),
-      `${DOCKER_WORKFLOW}: шаг метаданных не передаёт --revision из коммита релиза — ` +
+      revisionLine !== undefined,
+      `${DOCKER_WORKFLOW}: шаг метаданных не передаёт --revision — ` +
         'метка revision разойдётся с тегом.',
+    );
+    assert.equal(
+      revisionLine.replace(/.*--revision\s+/, '').trim(),
+      '"$(git rev-parse HEAD)"',
+      `${DOCKER_WORKFLOW}: revision должен быть коммитом, который скачал checkout ` +
+        '(`--revision "$(git rev-parse HEAD)"`), сейчас: ' +
+        `"${revisionLine.trim()}". ` +
+        'github.sha/inputs.tag при workflow_dispatch с тегом указывают на ветку.',
+    );
+    assert.doesNotMatch(
+      revisionLine,
+      /github\.sha|inputs\./,
+      `${DOCKER_WORKFLOW}: revision не может браться из github.sha/inputs.* — ` +
+        'при запуске по тегу он не совпадёт с checkout.',
     );
 
     const builds = stepsUsingPrefix(job, 'docker/build-push-action@');

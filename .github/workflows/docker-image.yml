@@ -27,6 +27,13 @@
 # `github.event_name` нельзя: внутри reusable workflow это событие
 # ВЫЗЫВАЮЩЕГО workflow (`workflow_dispatch`/`push`), а не `workflow_call`.
 #
+# Метка `org.opencontainers.image.revision` — коммит, который скачал
+# checkout: шаг метаданных берёт `git rev-parse HEAD` (замечание
+# верификации t_docker, хроника 8d7b7087). `github.sha` и `inputs.tag`
+# здесь не годятся: внутри reusable workflow `github.sha` — коммит
+# события ВЫЗЫВАЮЩЕГО workflow, поэтому при `workflow_dispatch` с тегом
+# метка указывала бы на ветку, а не на тег.
+#
 # Идентичность и метки образов не задаются здесь литералами: шаг «Docker
 # metadata» (`server/scripts/docker-metadata.mjs`) читает реестровое имя из
 # `server/src/mcp/server.ts`, версию — из корневого `package.json`, лицензию —
@@ -79,11 +86,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+      # revision обязан совпадать с тем, что скачал checkout (шапка файла):
+      # при workflow_dispatch с тегом github.sha — коммит ветки, а не тега.
       - name: Docker metadata from the single source
         id: meta
         run: >-
           node server/scripts/docker-metadata.mjs
-          --revision "${{ inputs.source_ref || github.sha }}"
+          --revision "$(git rev-parse HEAD)"
           --github-output "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
