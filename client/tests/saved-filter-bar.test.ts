@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { ShimElement } from './dom-shim.js';
 import {
   duplicateFilterName,
   filterSavedByName,
@@ -294,5 +295,77 @@ describe('однообразие: три места работают с отбо
     assert.ok(!activity.includes("id: 'apply'"), 'своя кнопка «Применить» убрана — стандартный набор');
     assert.ok(!activity.includes("id: 'clear'"), 'своя кнопка «Очистить» убрана — стандартный набор');
     assert.match(activity, /mountFilterPanelFrame\(\{/, 'общий каркас панели сохранён');
+  });
+
+  it('успешное сохранение показывает тост, даже если обновление панели падает (d6c8f1b7)', async () => {
+    // Ошибка d6c8f1b7: запись создана, но тост «Отбор сохранён» пропадал —
+    // исключение из onRefresh/reload после try/catch уходило в `void save()`.
+    // Контроллер обязан подтвердить успех независимо от побочных обновлений.
+    const body = new ShimElement('body');
+    const globals = globalThis as unknown as {
+      document: unknown;
+      window?: Record<string, unknown>;
+    };
+    globals.document = {
+      createElement: (tag: string) => new ShimElement(tag),
+      createElementNS: (_ns: string, tag: string) => new ShimElement(tag),
+      documentElement: new ShimElement('html'),
+      body,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      activeElement: null,
+      querySelector: () => null,
+    };
+    const win = (globals.window ??= {});
+    win['setTimeout'] = () => 1;
+    win['clearTimeout'] = () => undefined;
+    win['addEventListener'] = () => undefined;
+    win['removeEventListener'] = () => undefined;
+
+    const { createSavedFilterController } = await import(
+      '../src/renderer/lib/saved-filter-controller.js'
+    );
+    let listFails = false;
+    const store = {
+      list: async () => {
+        if (listFails) throw new Error('reload failed');
+        return [];
+      },
+      create: async (name: string, definition: unknown) => ({
+        id: `saved-${name}`,
+        name,
+        definition,
+      }),
+      update: async (id: string, patch: { name?: string; definition?: unknown }) => ({
+        id,
+        name: patch.name ?? 'Мой отбор',
+        definition: patch.definition,
+      }),
+      remove: async () => undefined,
+    };
+    const controller = createSavedFilterController({
+      store,
+      getName: () => 'Мой отбор',
+      setName: () => undefined,
+      buildDefinition: () => ({ tree: null }),
+      applyEntry: () => undefined,
+      getSelectedId: () => null,
+      setSelectedId: () => undefined,
+      onRefresh: () => {
+        throw new Error('refresh failed');
+      },
+    });
+
+    await controller.save({ name: 'Мой отбор', asCopy: false });
+    assert.match(body.flatText(), /Отбор «Мой отбор» сохранён/, 'тост не теряется при сбое onRefresh');
+
+    // Второй сценарий — падает перечитывание списка (reload): тост остаётся.
+    listFails = true;
+    await controller.save({ name: 'Второй отбор', asCopy: false });
+    assert.match(
+      body.flatText(),
+      /Отбор «Второй отбор» сохранён/,
+      'тост не теряется при сбое reload',
+    );
   });
 });
