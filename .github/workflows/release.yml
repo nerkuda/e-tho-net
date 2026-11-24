@@ -279,11 +279,11 @@ jobs:
   # на целевой ОС — отсюда матрица. win32-x64 — канонический бандл: только он
   # попадает в `server.json` (каталог реестра пока не выбирает файл по
   # платформе, вопрос c823f1df), остальные платформы — ассеты релиза.
-  # `macos-13` (образ x64) — как есть, пока GitHub держит метку в эксплуатации:
-  # бандл обязан собираться на целевой архитектуре. После снятия метки —
-  # `macos-14` + `arch -x86_64` (Rosetta) с обязательным smoke уже на x64-бандле;
-  # без Rosetta артефакт получится не под ту архитектуру, и клиент откажется
-  # его запускать (маркер цели). Проверять на PR.
+  # Бандл собирается на целевой архитектуре. GitHub вывел из Actions macOS 13 и
+  # все macOS 14 (02.11.2026, actions/runner-images#15226): актуальные метки —
+  # macOS 15. darwin-x64 — `macos-15-intel` (нативный x64, Rosetta не нужна),
+  # darwin-arm64 — `macos-15`. macOS 26 (macos-26/macos-26-intel) тоже доступен,
+  # но macOS 15 — минимально достаточный образ. Проверять на PR.
   mcpb-bundles:
     needs: version
     strategy:
@@ -292,9 +292,9 @@ jobs:
         include:
           - os: windows-latest
             target: win32-x64
-          - os: macos-13
+          - os: macos-15-intel
             target: darwin-x64
-          - os: macos-14
+          - os: macos-15
             target: darwin-arm64
           - os: ubuntu-latest
             target: linux-x64

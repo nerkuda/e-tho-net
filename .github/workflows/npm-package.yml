@@ -6,6 +6,8 @@ name: npm package (etn-mcp)
 # собирается из общего стейджинга, ставится в чистый каталог, и обёртка
 # проходит MCP-рукопожатие: это доказывает, что `better-sqlite3` 11.1.2
 # приезжает upstream-prebuild'ом и работает без локальной сборки.
+# macOS 14 выведен из GitHub Actions (02.11.2026), поэтому prebuild
+# darwin-arm64 собирается на поддерживаемом `macos-15`.
 #
 # Публикация (`npm publish`) здесь не выполняется — только `npm pack` и
 # проверки (порядок публикации — ADR d17c3a29).
@@ -29,7 +31,7 @@ jobs:
         include:
           - os: windows-latest
             target: win32-x64
-          - os: macos-14
+          - os: macos-15
             target: darwin-arm64
           - os: ubuntu-latest
             target: linux-x64

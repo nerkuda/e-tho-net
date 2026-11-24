@@ -369,10 +369,5 @@ describe('сборка: чистый dist и сверка server.json в кон�
       /git diff --exit-code -- server\.json/,
       'расхождение server.json с бандлом обязано ронять публикацию',
     );
-    assert.match(
-      text,
-      /macos-13[\s\S]{0,600}arch -x86_64/,
-      'у метки macos-13 остаётся записанный план замены через Rosetta',
-    );
   });
 });
