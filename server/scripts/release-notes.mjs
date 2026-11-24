@@ -193,7 +193,10 @@ function themeFromLead(lead) {
   const cut = lead.search(/[:;]|\s[—–]\s|\.\s/u);
   let theme = cut >= 0 ? lead.slice(0, cut) : lead;
   theme = theme.replace(/\s*\([^()]*\)\s*$/u, '');
-  theme = theme.replace(/[.,;:—–\-\s]+$/u, '').replace(/^\*+|\*+$/g, '').trim();
+  theme = theme
+    .replace(/[.,;:—–\-\s]+$/u, '')
+    .replace(/^\*+|\*+$/g, '')
+    .trim();
   if (theme === '') return null;
   return theme.charAt(0).toUpperCase() + theme.slice(1);
 }
@@ -201,7 +204,10 @@ function themeFromLead(lead) {
 /** Вывод git в текущем каталоге; пустая строка — команда не отработала. */
 function gitOutput(args) {
   try {
-    return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return execFileSync('git', args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
   } catch {
     return '';
   }
@@ -265,6 +271,8 @@ function buildFooter(version, prevTag, repo) {
     `- Windows: \`ETN-Setup-${version}.exe\` — установщик сервера и клиента`,
     `- Linux-клиент: \`ETN-Client-${version}-linux-x64.tar.gz\` — установка и обновление скриптом \`install.sh\``,
     `- Сервер Linux: \`etn-server-${version}.tar.gz\` — архив серверной поставки`,
+    `- MCP-сервер: \`etn-mcp-${version}-win32-x64.mcpb\` — бандл one-click для Claude Desktop; ` +
+      'для macOS и Linux — те же бандлы с `darwin-x64`, `darwin-arm64`, `linux-x64` в имени',
     '',
     'SHA-256 каждого ассета — в файле `SHA256SUMS` этого же релиза.',
   ];

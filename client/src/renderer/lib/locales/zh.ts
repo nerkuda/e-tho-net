@@ -338,6 +338,27 @@ export const zh = {
   'errors.propertySideMismatch': '所选一侧没有链接——值已被更改，请刷新卡片',
   'errors.propertyNameAmbiguous': '属性名称不明确——网络中有多个属性使用该名称',
   'errors.propertyTargetType': '值的类型不符合属性允许的类型',
+  'errors.propertySelfLink': '不能将念头与自身关联——请选择其他目标',
+  'errors.propertyAllowedTargetTypeMissing': '「目标类型」限制指向已不存在的类型——请重新选择类型',
+  'errors.propertyAllowedSourceTypeMissing': '「源类型」限制指向已不存在的类型——请重新选择类型',
+  'errors.propertyLinkTypeMissing': '未找到属性的关系类型——请重新选择关系类型',
+  'errors.propertyDefaultTargetInvalid': '目标侧的默认值不正确——请检查所选的念头',
+  'errors.propertyUnknownFields': '服务器不接受这些请求字段:%1',
+  'errors.propertyNameInvalid': '属性名称不正确——请输入非空名称',
+  'errors.propertyValueTypeInvalid': '值类型不正确——请重新选择类型',
+  'errors.propertyDescriptionInvalid': '描述不正确——请检查文本',
+  'errors.propertyDirectionInvalid': '关系方向不正确——请重新选择方向',
+  'errors.propertyRefInvalid': '属性不正确或不唯一——请重新选择',
+  'errors.propertyValueInvalid': '值不正确——请检查所选内容',
+  'errors.propertyOwnerTypeInvalid': '类型种类不正确——请更新客户端后重试',
+  'errors.propertyModeInvalid': '数据形式不匹配——请更新客户端后重试',
+  'errors.propertyLinkDecorationInvalid': '关系外观不正确——请重新选择颜色、样式和粗细',
+  'errors.propertyLinkParentInvalid': '父关系类型不正确——请重新选择',
+  'errors.propertyBindingFieldInvalid': '绑定参数不正确——请打开类型后重试',
+  'errors.propertyOrderPositionInvalid': '属性顺序不正确——位置必须是非负数',
+  'errors.propertyOrderPropertyInvalid':
+    '顺序中的属性当前无法排序(由思维类型决定,或该思维没有它的值)——请刷新顺序列表',
+  'errors.propertyOrderSideInvalid': '顺序中的关系方向不正确——请重新选择方向',
   'errors.code.VALIDATION_ERROR': '请检查输入的数据',
   'errors.code.VALIDATION_ERROR.no-occurrence':
     '按此间隔不会产生任何提醒：所选日期在该序列的月份或年份中不存在——请更改日期或步长',
@@ -429,8 +450,10 @@ export const zh = {
   'serverUpdate.progress.reconnect': '重启后客户端将自动重新连接，并在新版本上继续工作。',
   'serverUpdate.failure.reason': '原因：%1',
   'serverUpdate.failure.journal': '安装程序日志：%1',
-  'serverUpdate.failure.installerExit': '安装程序以代码 %1 退出；回滚由安装程序完成',
-  'serverUpdate.failure.installerExitNoCode': '安装程序异常退出；回滚由安装程序完成',
+  'serverUpdate.failure.installerExit':
+    '安装程序以代码 %1 退出；仅当失败发生在替换文件之后才会回滚——详情见安装程序日志',
+  'serverUpdate.failure.installerExitNoCode':
+    '安装程序异常退出；仅当失败发生在替换文件之后才会回滚——详情见安装程序日志',
   'serverUpdate.failure.installerPrecondition':
     '安装程序需要手动模式——请手动执行更新并查看安装程序日志',
   'serverUpdate.failure.installerTimeout':
@@ -2484,6 +2507,8 @@ export const zh = {
     '任意类型目标的默认值。可被上方表格行中的值覆盖',
   'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
     '属性描述：其含义及值格式（用于想法编辑器和 AI 代理的提示）',
+  'propertyManager.createRollbackFailed':
+    '无法保存类型限制，也无法回滚已创建的属性——请在属性列表中删除它。原因:%1',
   'propertyManager.propertyTakimNameAlreadyHas': '已存在同名属性。',
   'propertyManager.label.vidValues': '值类型',
   'propertyManager.label.description': '描述',

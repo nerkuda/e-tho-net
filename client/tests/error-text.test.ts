@@ -217,6 +217,25 @@ describe('errText: дружелюбные сообщения', () => {
     assert.doesNotMatch(legacy, /thought|required type|[0-9a-f]{8}-[0-9a-f]{4}/i);
   });
 
+  it('422 self-ссылки — конкретная причина вместо общей (884919f6)', () => {
+    // Массовое изменение значений: сервер обязан назвать причину, клиент —
+    // показать её в отчёте, а не общий «проверьте введённые данные».
+    const text = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'property "Прикреплено" cannot link a thought to itself',
+        {
+          key: 'Прикреплено',
+          ref: '11111111-2222-4333-8444-555555555555',
+          field: 'value',
+          reason: 'self-link',
+        },
+      ),
+    );
+    assert.equal(text, 'нельзя связать мысль с самой собой — выберите другую цель');
+    assert.doesNotMatch(text, /cannot link|source|target|self/i);
+  });
+
   it('422 по стороне без details.reason (сервер старше 0.14.1) — всё равно без внутренних терминов', () => {
     const text = errText(
       new EtnError('VALIDATION_ERROR', 'имя свойства «X» адресует обе стороны — укажите side', {
@@ -299,5 +318,132 @@ describe('errText: дружелюбные сообщения', () => {
       'проверьте введённые данные',
     );
     assert.equal(errText(new EtnError('VALIDATION_ERROR', 'bad input')), 'проверьте введённые данные');
+  });
+
+  it('422 ограничений свойства: причина по details.field и details.fields (ошибка 0033ea14)', () => {
+    // DoD 3: диалог записи свойства обязан назвать поле/правило, а не отдавать
+    // общий «проверьте введённые данные». Идентификаторы типов не показываем.
+    const missingTargetType = errText(
+      new EtnError(
+        'VALIDATION_ERROR',
+        'thought type 11111111-1111-4111-8111-111111111111 not found',
+        { field: 'config.allowed_target_type_ids', id: '11111111-1111-4111-8111-111111111111' },
+      ),
+    );
+    assert.equal(
+      missingTargetType,
+      'ограничение «Типы назначений» ссылается на несуществующий тип — выберите типы заново',
+    );
+    assert.doesNotMatch(missingTargetType, /[0-9a-f]{8}-[0-9a-f]{4}/i);
+    assertFriendly(missingTargetType);
+
+    const missingSourceType = errText(
+      new EtnError('VALIDATION_ERROR', 'thought type X not found', {
+        field: 'config.allowed_source_type_ids',
+        id: 'X',
+      }),
+    );
+    assert.equal(
+      missingSourceType,
+      'ограничение «Типы источников» ссылается на несуществующий тип — выберите типы заново',
+    );
+    assertFriendly(missingSourceType);
+
+    const missingLinkType = errText(
+      new EtnError('VALIDATION_ERROR', 'link type missing', { field: 'config.link_type_id' }),
+    );
+    assert.equal(missingLinkType, 'тип связи свойства не найден — выберите тип связи заново');
+    assertFriendly(missingLinkType);
+
+    // Остальные реальные поля отказа записи свойства — своя подпись, а не
+    // общий «проверьте введённые данные» (замечание верификации 0033ea14:
+    // property-service.ts плюс контракты реестра свойств и привязок).
+    const fieldCases: ReadonlyArray<readonly [string, string]> = [
+      ['key', 'имя свойства задано неверно — введите непустое имя'],
+      ['name_forward', 'имя свойства задано неверно — введите непустое имя'],
+      ['value_type', 'вид значения задан неверно — выберите вид заново'],
+      ['description', 'описание задано неверно — проверьте текст'],
+      ['config.direction', 'направление связи задано неверно — выберите направление заново'],
+      ['property_id', 'свойство задано неверно или неоднозначно — выберите его заново'],
+      ['value', 'значение задано неверно — проверьте выбранное'],
+      ['owner_type', 'вид типа задан неверно — обновите клиент и повторите'],
+      ['mode', 'форма данных не совпала — обновите клиент и повторите'],
+      ['link_style', 'оформление связи задано неверно — выберите цвет, стиль и толщину заново'],
+      ['parent_link_type_id', 'родительский тип связи задан неверно — выберите его заново'],
+      ['required', 'параметры привязки заданы неверно — откройте тип и повторите'],
+    ];
+    for (const [field, expected] of fieldCases) {
+      const text = errText(
+        new EtnError('VALIDATION_ERROR', 'server-authored English diagnostic', { field }),
+      );
+      assert.equal(text, expected, `поле ${field}`);
+      assertFriendly(text);
+    }
+
+    // Неизвестные поля тела запроса: конкретный список, без серверного
+    // английского сообщения (именно этот случай давал «Unknown fields: mode»
+    // при сохранении ограничений свойства-связи).
+    const unknownFields = errText(
+      new EtnError('VALIDATION_ERROR', 'Unknown fields: mode. Allowed: property_id, side.', {
+        fields: ['mode'],
+        allowed: ['property_id', 'side'],
+      }),
+    );
+    assert.equal(unknownFields, 'сервер не понимает эти поля: mode');
+    assert.doesNotMatch(unknownFields, /Unknown|Allowed/);
+    assertFriendly(unknownFields);
+
+  it('422 динамических имён details.field — конкретная причина (84a39e75)', () => {
+    // Сервер строит поле из имени свойства (`<имя>.default_value_target`,
+    // `normalizeLinkDefaultValueTarget`) и индекса элемента порядка
+    // (`items[N].position/property_id/side`, `property-order-service`).
+    // Статическая карта такие имена не знала и давала общий текст.
+    const dynamicCases: ReadonlyArray<readonly [string, string]> = [
+      [
+        'Принадлежит.default_value_target',
+        'значение по умолчанию для назначений задано неверно — проверьте выбранные мысли',
+      ],
+      ['Принадлежит.direction', 'направление связи задано неверно — выберите направление заново'],
+      [
+        'Принадлежит.allowed_target_type_ids',
+        'ограничение «Типы назначений» ссылается на несуществующий тип — выберите типы заново',
+      ],
+      [
+        'Принадлежит.allowed_source_type_ids',
+        'ограничение «Типы источников» ссылается на несуществующий тип — выберите типы заново',
+      ],
+      ['Принадлежит.link_type_id', 'тип связи свойства не найден — выберите тип связи заново'],
+      [
+        'items[0].position',
+        'порядок свойств задан неверно — позиция должна быть неотрицательным числом',
+      ],
+      [
+        'items[7].property_id',
+        'в порядке указано свойство, которое сейчас нельзя упорядочить (его задаёт тип мысли или у мысли нет его значения) — обновите список порядка',
+      ],
+      ['items[12].side', 'сторона связи в порядке задана неверно — выберите сторону связи заново'],
+    ];
+    for (const [field, expected] of dynamicCases) {
+      const text = errText(
+        new EtnError('VALIDATION_ERROR', 'server-authored English diagnostic', {
+          field,
+          property_id: '11111111-2222-4333-8444-555555555555',
+        }),
+      );
+      assert.equal(text, expected, `поле ${field}`);
+      assertFriendly(text);
+      // Имя свойства и идентификаторы пользователю не показываются.
+      assert.doesNotMatch(text, /Принадлежит|items\[|11111111-2222/);
+    }
+
+    // Незнакомый динамический суффикс не угадывается: остаётся общий текст
+    // (а не подпись «похожего» поля).
+    const unknownDynamic = errText(
+      new EtnError('VALIDATION_ERROR', 'server-authored English diagnostic', {
+        field: 'Принадлежит.unknown_suffix',
+      }),
+    );
+    assert.equal(unknownDynamic, 'проверьте введённые данные');
+  });
   });
 });

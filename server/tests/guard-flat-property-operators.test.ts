@@ -93,7 +93,7 @@ const CANON_BY_VALUE_TYPE: Record<string, readonly string[]> = {
   ],
   date: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'not_empty'],
   number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_empty', 'not_empty'],
-  bool: ['eq', 'ne'],
+  bool: ['eq', 'ne', 'is_empty', 'not_empty'],
   link: [
     'eq', 'ne', 'in', 'not_in', 'is_empty', 'not_empty', 'any_of', 'all_of',
     'none_of',

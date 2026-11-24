@@ -36,11 +36,17 @@
  * обслуживание и не реализует admin-эндпоинты: это задача 0a27a63b.
  */
 
-import { compareSemver, parseSemver } from '@etn/shared';
+import {
+  compareSemver,
+  parseSemver,
+  UPDATE_CHANNELS,
+  type ServerDeployment,
+  type UpdateCache,
+  type UpdateChannel,
+} from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import { ETN_REPOSITORY, SERVER_VERSION } from '../version.js';
-import type { Deployment } from './deployment.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -53,9 +59,9 @@ declare module 'fastify' {
   }
 }
 
-/** Каналы обновлений (`ETN_UPDATE_CHANNEL`). */
-export const UPDATE_CHANNELS = ['stable', 'prerelease'] as const;
-export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
+/** Каналы обновлений (`ETN_UPDATE_CHANNEL`) — общий контракт `@etn/shared`. */
+export { UPDATE_CHANNELS };
+export type { UpdateChannel };
 
 /** Канал по умолчанию: prerelease включается только явной настройкой. */
 export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'stable';
@@ -94,28 +100,12 @@ const MAX_SUMS_BYTES = 1024 * 1024;
 const SUMS_LINE_PATTERN = /^([0-9a-fA-F]{64})[ \t]+\*?(.+)$/;
 
 /**
- * Кеш проверки обновлений — форма сущности 6f79610d. Все поля присутствуют
+ * Кеш проверки обновлений — форма сущности 6f79610d: `SystemUpdateStatus`
+ * без `instruction` из `@etn/shared` (задача bdd17318). Все поля присутствуют
  * всегда; `checked_at` — `null` до первой завершённой проверки, остальные
- * nullable-поля — `null`, когда значения нет.
+ * nullable-поля — `null`, когда значения нет. Форма одна на сервер и клиент.
  */
-export interface UpdateCache {
-  /** Версия работающего сервера. */
-  current_version: string;
-  /** Доступная версия строго новее текущей; `null` — обновлений нет. */
-  available_version: string | null;
-  /** Канал проверки. */
-  channel: UpdateChannel;
-  /** ISO-8601 момента последней завершённой проверки (успешной или нет). */
-  checked_at: string | null;
-  /** Текст последней ошибки проверки; `null` — последняя проверка успешна. */
-  check_error: string | null;
-  /** Ссылка на `ETN-Setup-<version>.exe`; `null` — нет обновления или Docker. */
-  download_url: string | null;
-  /** SHA-256 установщика из `SHA256SUMS`; `null` — нет обновления или Docker. */
-  sha256: string | null;
-  /** Режим развёртывания; определяет доступность кнопки обновления. */
-  deployment: Deployment;
-}
+export type { UpdateCache };
 
 /** Ассет релиза в метаданных фида (формат GitHub Releases API). */
 export interface UpdateFeedAsset {
@@ -162,7 +152,7 @@ export interface UpdateCheckerOptions {
   /** Версия работающего сервера. */
   currentVersion: string;
   /** Режим развёртывания (для Docker ссылка и хеш не отдаются). */
-  deployment: Deployment;
+  deployment: ServerDeployment;
   /** HTTP-клиент (тесты); по умолчанию глобальный `fetch`. */
   fetchImpl?: UpdateFetch;
   /** Тайм-аут одного запроса, мс; по умолчанию {@link UPDATE_REQUEST_TIMEOUT_MS}. */

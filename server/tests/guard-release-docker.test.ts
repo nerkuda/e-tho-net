@@ -17,6 +17,10 @@
  *     `workflow_call` (ошибка dd38a306, итерация 2). Поэтому релиз передаёт
  *     `source_ref: github.sha`, а ручной `workflow_dispatch` его не передаёт,
  *     и `||` уводит checkout на `inputs.tag`.
+ *     Метка `revision` берётся из скачанного HEAD (`git rev-parse HEAD`), а не
+ *     из `github.sha`: при `workflow_dispatch` с тегом `github.sha` — коммит
+ *     ветки, и метка расходилась с образом (замечание верификации t_docker,
+ *     хроника 8d7b7087).
  *     Настройки сверяются внутри своего шага (`checkout`, `login`,
  *     `build-push`): перенос `file:`/`push:`/`tags:` в чужой шаг сторож
  *     ловит. `if:` и `continue-on-error:` у джобы и у шага сборки запрещены —
@@ -38,13 +42,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { buildOciRegistryPackage, dockerImageRef } from '../src/docker/registry.js';
+import { githubSlugFromRegistryName } from '../src/mcpb/manifest.js';
+import { MCP_REGISTRY_NAME } from '../src/mcp/server.js';
 
 const SERVER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = path.resolve(SERVER_ROOT, '..');
 
 const DOCKER_WORKFLOW = '.github/workflows/docker-image.yml';
 const RELEASE_WORKFLOW = '.github/workflows/release.yml';
+const DOCKERFILE = 'server/Dockerfile';
 
 /** Прочитать файл workflow с понятной ошибкой, если он пропал или переехал. */
 function readWorkflow(file: string, role: string): string {
@@ -244,9 +253,7 @@ function withValue(step: readonly string[], key: string): string | null {
  * `<основной> || <запасной>`. Пробелы внутри выражения не значимы.
  * `null` — выражение не такой формы.
  */
-function parseRefFallback(
-  ref: string,
-): { primary: string; fallback: string } | null {
+function parseRefFallback(ref: string): { primary: string; fallback: string } | null {
   const compact = ref.replace(/\s+/g, '');
   const body = /^\$\{\{(.+)\}\}$/.exec(compact)?.[1];
   if (!body) return null;
@@ -292,16 +299,16 @@ describe('guard: Docker-образ сервера — обязательная �
     }
   });
 
-  it(`${DOCKER_WORKFLOW}: пушит ghcr.io/<repo>/etn-server:<tag> из server/Dockerfile`, () => {
-    const text = stripComments(readWorkflow(DOCKER_WORKFLOW, 'переиспользуемая сборка образа'));
+  it(`${DOCKER_WORKFLOW}: собирает и пушит etn-server и etn-mcp в GHCR и Docker Hub`, () => {
+    const text = stripComments(readWorkflow(DOCKER_WORKFLOW, 'переиспользуемая сборка образов'));
     const job = singleJob(text);
 
     // Джоба сборки не отключается: `if: false` или `continue-on-error` дали бы
-    // зелёный прогон без образа, а `publish` дождался бы «успеха».
+    // зелёный прогон без образов, а `publish` дождался бы «успеха».
     assert.ok(
       !jobLevelKey(job, 'if'),
       `${DOCKER_WORKFLOW}: у джобы сборки есть if: — её можно отключить (if: false), ` +
-        'и образ молча не соберётся.',
+        'и образы молча не соберутся.',
     );
     assert.ok(
       !jobLevelKey(job, 'continue-on-error'),
@@ -312,65 +319,182 @@ describe('guard: Docker-образ сервера — обязательная �
     const checkout = stepUsing(job, 'actions/checkout@v7');
     assert.ok(
       checkout !== null,
-      `${DOCKER_WORKFLOW}: нет шага actions/checkout@v7 — код для образа не скачивается.`,
+      `${DOCKER_WORKFLOW}: нет шага actions/checkout@v7 — код для образов не скачивается.`,
     );
     // Источник кода (после какого ref идёт checkout) проверяется отдельным
-    // тестом ниже: он зависит от триггера, а не от факта пуша образа.
+    // тестом ниже: он зависит от триггера, а не от факта пуша образов.
 
-    const login = stepUsing(job, 'docker/login-action@v4');
-    assert.ok(
-      login !== null,
-      `${DOCKER_WORKFLOW}: нет шага docker/login-action@v4 — пуш в GHCR не авторизуется.`,
+    // Метаданные — из единственного источника (идентичность не литерал).
+    const meta = [...listItems(findBlock(job, 'steps', 4) ?? [])].find((item) =>
+      item.some((line) => /node server\/scripts\/docker-metadata\.mjs/.test(line)),
     );
     assert.ok(
-      login.some((line) => /^\s*registry:\s*ghcr\.io\s*$/.test(line)),
-      `${DOCKER_WORKFLOW}: шаг login не входит в ghcr.io (registry: ghcr.io).`,
+      meta !== undefined,
+      `${DOCKER_WORKFLOW}: нет шага server/scripts/docker-metadata.mjs — метки образов ` +
+        'пришлось бы писать литералами, и реестровое имя разошлось бы с кодом.',
     );
     assert.ok(
-      login.some((line) => /^\s*username:\s*\$\{\{\s*github\.actor\s*\}\}\s*$/.test(line)),
-      `${DOCKER_WORKFLOW}: шаг login должен использовать github.actor.`,
+      meta.some((line) => /--github-output "\$GITHUB_OUTPUT"/.test(line)),
+      `${DOCKER_WORKFLOW}: шаг метаданных не пишет в $GITHUB_OUTPUT — шаги сборки не увидят значения.`,
     );
+    // Замечание верификации t_docker (хроника 8d7b7087): revision обязан
+    // указывать на тот же коммит, что скачал checkout. Checkout по inputs.tag
+    // разворачивается в sha тега, а github.sha/inputs.source_ref внутри
+    // reusable workflow — коммит события/ветки: при workflow_dispatch с тегом
+    // метка расходилась с образом. Поэтому берём HEAD после checkout.
+    const revisionLine = meta.find((line) => /--revision\s+/.test(line));
     assert.ok(
-      login.some((line) => /^\s*password:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}\s*$/.test(line)),
-      `${DOCKER_WORKFLOW}: шаг login должен использовать secrets.GITHUB_TOKEN.`,
+      revisionLine !== undefined,
+      `${DOCKER_WORKFLOW}: шаг метаданных не передаёт --revision — ` +
+        'метка revision разойдётся с тегом.',
+    );
+    assert.equal(
+      revisionLine.replace(/.*--revision\s+/, '').trim(),
+      '"$(git rev-parse HEAD)"',
+      `${DOCKER_WORKFLOW}: revision должен быть коммитом, который скачал checkout ` +
+        '(`--revision "$(git rev-parse HEAD)"`), сейчас: ' +
+        `"${revisionLine.trim()}". ` +
+        'github.sha/inputs.tag при workflow_dispatch с тегом указывают на ветку.',
+    );
+    assert.doesNotMatch(
+      revisionLine,
+      /github\.sha|inputs\./,
+      `${DOCKER_WORKFLOW}: revision не может браться из github.sha/inputs.* — ` +
+        'при запуске по тегу он не совпадёт с checkout.',
     );
 
-    const build = stepUsing(job, 'docker/build-push-action@v7');
-    assert.ok(
-      build !== null,
-      `${DOCKER_WORKFLOW}: нет шага docker/build-push-action@v7 — образ не собирается.`,
+    const builds = stepsUsingPrefix(job, 'docker/build-push-action@');
+    assert.equal(
+      builds.length,
+      2,
+      `${DOCKER_WORKFLOW}: ожидаются два шага docker/build-push-action (etn-server и etn-mcp), ` +
+        `найдено ${builds.length}.`,
     );
-    // Проверки привязаны к шагу сборки: `file:`/`push:`/`tags:` в чужом шаге
-    // (например, в login) образ не собирают и не пушат.
-    assert.ok(
-      build.some((line) => /^\s*file:\s*server\/Dockerfile\s*$/.test(line)),
-      `${DOCKER_WORKFLOW}: в шаге build-push нет file: server/Dockerfile — ` +
-        'образ сервера не соберётся.',
-    );
-    assert.ok(
-      build.some((line) => /^\s*push:\s*true\s*$/.test(line)),
-      `${DOCKER_WORKFLOW}: в шаге build-push нет push: true — образ соберётся, ` +
-        'но не попадёт в GHCR.',
-    );
-    assert.ok(
-      build.some((line) =>
-        /^\s*tags:\s*ghcr\.io\/\$\{\{\s*github\.repository\s*\}\}\/etn-server:\$\{\{\s*inputs\.tag\s*\}\}\s*$/.test(
-          line,
+
+    const buildOf = (target: string): string[] => {
+      const step = builds.find(
+        (item) =>
+          blockValueLines(item, 'build-args').some((line) => line.includes('VERSION=')) &&
+          item.some((line) => new RegExp(`^\\s*target:\\s*${target}\\s*$`).test(line)),
+      );
+      assert.ok(step !== undefined, `${DOCKER_WORKFLOW}: нет шага сборки цели ${target}.`);
+      return step;
+    };
+
+    for (const target of ['server', 'mcp']) {
+      const build = buildOf(target);
+      assert.ok(
+        build.some((line) => /^\s*file:\s*server\/Dockerfile\s*$/.test(line)),
+        `${DOCKER_WORKFLOW}: в шаге ${target} нет file: server/Dockerfile — образ ` +
+          'сервера не соберётся.',
+      );
+      assert.ok(
+        build.some((line) => /^\s*push:\s*true\s*$/.test(line)),
+        `${DOCKER_WORKFLOW}: в шаге ${target} нет push: true — образ соберётся, но никуда не попадёт.`,
+      );
+      assert.ok(
+        withValue(build, 'platforms') === 'linux/amd64,linux/arm64',
+        `${DOCKER_WORKFLOW}: шаг ${target} обязан собирать linux/amd64 и linux/arm64 ` +
+          `(сейчас: ${withValue(build, 'platforms') ?? 'пусто'}).`,
+      );
+      assert.ok(
+        !stepKey(build, 'if'),
+        `${DOCKER_WORKFLOW}: у шага ${target} есть if: — сборку/пуш можно отключить.`,
+      );
+      assert.ok(
+        !stepKey(build, 'continue-on-error'),
+        `${DOCKER_WORKFLOW}: у шага ${target} есть continue-on-error: — провал пуша ` +
+          'не сделает джобу красной.',
+      );
+
+      const tags = blockValueLines(build, 'tags');
+      const image = target === 'server' ? 'server_image' : 'mcp_image';
+      assert.ok(
+        tags.includes(
+          `ghcr.io/\${{ github.repository }}/\${{ steps.meta.outputs.${image} }}:\${{ inputs.tag }}`,
         ),
+        `${DOCKER_WORKFLOW}: шаг ${target} не пушит ghcr.io/<repo>/<${image}>:<tag> — ` +
+          'зеркало в GHCR выпадает из релиза.',
+      );
+      assert.ok(
+        tags.includes(
+          `docker.io/\${{ steps.meta.outputs.dockerhub_namespace }}/\${{ steps.meta.outputs.${image} }}:\${{ inputs.tag }}`,
+        ),
+        `${DOCKER_WORKFLOW}: шаг ${target} не пушит docker.io/<namespace>/<${image}>:<tag> — ` +
+          'образ не попадёт в Docker Hub.',
+      );
+      assert.ok(
+        tags.every((line) => !/:latest$/.test(line)),
+        `${DOCKER_WORKFLOW}: шаг ${target} ставит тег latest — образ адресуется только версией.`,
+      );
+
+      const args = blockValueLines(build, 'build-args');
+      for (const key of ['VERSION', 'REVISION', 'SOURCE_URL', 'LICENSE']) {
+        assert.ok(
+          args.some((line) => line.startsWith(`${key}=`)),
+          `${DOCKER_WORKFLOW}: шаг ${target} не передаёт build-arg ${key} — метка OCI ` +
+            'останется пустой и Dockerfile упадёт (assert).',
+        );
+      }
+    }
+
+    // Реестровая метка — только у stdio-образа: HTTP-образ MCP не запускает.
+    const mcpArgs = blockValueLines(buildOf('mcp'), 'build-args');
+    assert.ok(
+      mcpArgs.includes('MCP_REGISTRY_NAME=${{ steps.meta.outputs.registry_name }}'),
+      `${DOCKER_WORKFLOW}: шаг mcp не передаёт MCP_REGISTRY_NAME из метаданных — ` +
+        'метка владения уедет в литерал или пропадёт.',
+    );
+    assert.ok(
+      !blockValueLines(buildOf('server'), 'build-args').some((line) =>
+        line.startsWith('MCP_REGISTRY_NAME='),
       ),
-      `${DOCKER_WORKFLOW}: в шаге build-push тег образа должен быть ` +
-        'ghcr.io/${{ github.repository }}/etn-server:${{ inputs.tag }} — ' +
-        'только версия тега, без latest.',
+      `${DOCKER_WORKFLOW}: шаг server передаёт MCP_REGISTRY_NAME — HTTP-образ не должен ` +
+        'нести реестровую метку (ADR d17c3a29 п. 2).',
+    );
+
+    const logins = stepsUsingPrefix(job, 'docker/login-action@');
+    assert.equal(
+      logins.length,
+      2,
+      `${DOCKER_WORKFLOW}: ожидаются входы в два реестра (ghcr.io и docker.io), ` +
+        `найдено ${logins.length}.`,
+    );
+    const ghcrLogin = logins.find((item) =>
+      item.some((line) => /^\s*registry:\s*ghcr\.io\s*$/.test(line)),
     );
     assert.ok(
-      !stepKey(build, 'if'),
-      `${DOCKER_WORKFLOW}: у шага build-push есть if: — сборку/пуш можно отключить, ` +
-        'и образ молча не соберётся.',
+      ghcrLogin !== undefined,
+      `${DOCKER_WORKFLOW}: нет входа в ghcr.io — пуш в GHCR не авторизуется.`,
     );
     assert.ok(
-      !stepKey(build, 'continue-on-error'),
-      `${DOCKER_WORKFLOW}: у шага build-push есть continue-on-error: — провал сборки/пуша ` +
-        'не сделает джобу красной.',
+      ghcrLogin.some((line) => /^\s*username:\s*\$\{\{\s*github\.actor\s*\}\}\s*$/.test(line)),
+      `${DOCKER_WORKFLOW}: вход в GHCR должен использовать github.actor.`,
+    );
+    assert.ok(
+      ghcrLogin.some((line) =>
+        /^\s*password:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}\s*$/.test(line),
+      ),
+      `${DOCKER_WORKFLOW}: вход в GHCR должен использовать secrets.GITHUB_TOKEN.`,
+    );
+    const dockerHubLogin = logins.find((item) =>
+      item.some((line) => /^\s*registry:\s*docker\.io\s*$/.test(line)),
+    );
+    assert.ok(
+      dockerHubLogin !== undefined,
+      `${DOCKER_WORKFLOW}: нет входа в docker.io — пуш в Docker Hub не авторизуется.`,
+    );
+    assert.ok(
+      dockerHubLogin.some((line) =>
+        /^\s*username:\s*\$\{\{\s*secrets\.DOCKERHUB_USERNAME\s*\}\}\s*$/.test(line),
+      ),
+      `${DOCKER_WORKFLOW}: вход в Docker Hub должен брать secrets.DOCKERHUB_USERNAME.`,
+    );
+    assert.ok(
+      dockerHubLogin.some((line) =>
+        /^\s*password:\s*\$\{\{\s*secrets\.DOCKERHUB_TOKEN\s*\}\}\s*$/.test(line),
+      ),
+      `${DOCKER_WORKFLOW}: вход в Docker Hub должен брать secrets.DOCKERHUB_TOKEN (не пароль).`,
     );
 
     assert.match(
@@ -495,7 +619,9 @@ describe('guard: Docker-образ сервера — обязательная �
     const withBlock = findBlock(job, 'with', 4);
     assert.ok(
       withBlock !== null &&
-        withBlock.some((line) => /^\s*tag:\s*\$\{\{\s*inputs\.tag\s*\|\|\s*github\.ref_name\s*\}\}\s*$/.test(line)),
+        withBlock.some((line) =>
+          /^\s*tag:\s*\$\{\{\s*inputs\.tag\s*\|\|\s*github\.ref_name\s*\}\}\s*$/.test(line),
+        ),
       `${RELEASE_WORKFLOW}: docker-image не передаёт тег релиза ` +
         '(with: tag: ${{ inputs.tag || github.ref_name }}) — ' +
         'ручной запуск и пуш тега собирали бы разные образы.',
@@ -509,6 +635,14 @@ describe('guard: Docker-образ сервера — обязательная �
       `${RELEASE_WORKFLOW}: docker-image не передаёт source_ref: github.sha — reusable ` +
         'workflow не знает коммит релиза и откатится на inputs.tag: prerelease до ' +
         'создания тега упадёт на checkout (ошибка dd38a306).',
+    );
+    // Docker Hub требует токен владельца namespace: reusable workflow получает
+    // секреты вызывающей джобы только явно.
+    const jobSecrets = findBlock(job, 'secrets', 4);
+    assert.ok(
+      jobSecrets !== null && /^ {4}secrets:\s*inherit\s*$/.test(jobSecrets[0] ?? ''),
+      `${RELEASE_WORKFLOW}: docker-image не передаёт secrets: inherit — вход в Docker Hub ` +
+        '(DOCKERHUB_USERNAME/DOCKERHUB_TOKEN) не получит токены, и релиз упадёт на login.',
     );
 
     const permissions = findBlock(job, 'permissions', 4);
@@ -540,6 +674,283 @@ describe('guard: Docker-образ сервера — обязательная �
 });
 
 /**
+ * Контракт содержимого образов (задача 3db76d75, ADR ad67950b, aa9507e6,
+ * d17c3a29).
+ *
+ * Dockerfile — единственное место, где собираются оба образа; метки OCI и
+ * реестровая метка `io.modelcontextprotocol.server.name` обязаны приходить из
+ * build-args (единственный источник — `server/src/mcp/server.ts`), а не быть
+ * литералами. Локальный сборщик не пушит: публикация — только в конвейере.
+ */
+
+interface DockerMetadataLib {
+  DOCKER_TARGETS: readonly string[];
+  readRegistryName(repoRoot?: string): string;
+  githubSlug(registryName: string): string;
+  dockerHubNamespace(registryName: string): string;
+  imageRefs(target: string, tag: string, registryName: string): { ghcr: string; dockerHub: string };
+  rootVersion(repoRoot?: string): string;
+  dockerBuildArgs(input?: { revision?: string; repoRoot?: string }): Record<string, string>;
+  licenseIdentifier(repoRoot?: string): string;
+  sourceUrl(registryName: string): string;
+}
+
+const dockerMetadata = (await import(
+  pathToFileURL(path.join(SERVER_ROOT, 'scripts', 'lib', 'docker-metadata.mjs')).href
+)) as DockerMetadataLib;
+
+/** Стадии Dockerfile: имя (`AS <stage>`) → текст стадии без строки `FROM`. */
+function dockerStages(text: string): Map<string, string> {
+  const stages = new Map<string, string>();
+  let current: string | null = null;
+  const body: string[] = [];
+  const flush = (): void => {
+    if (current !== null) stages.set(current, body.join('\n'));
+  };
+  for (const line of text.split('\n')) {
+    const match = /^FROM\s+\S+\s+AS\s+(\S+)\s*$/i.exec(line.trim());
+    if (match?.[1]) {
+      flush();
+      current = match[1];
+      body.length = 0;
+      continue;
+    }
+    if (current !== null) body.push(line);
+  }
+  flush();
+  return stages;
+}
+
+describe('guard: Dockerfile образов и метаданные из единственного источника', () => {
+  const dockerfile = fs.readFileSync(path.join(REPO_ROOT, 'server', 'Dockerfile'), 'utf8');
+  const stages = dockerStages(dockerfile);
+  const stage = (name: string): string => {
+    const text = stages.get(name);
+    assert.ok(text !== undefined, `${DOCKERFILE}: нет стадии ${name} — цель образа пропала.`);
+    return text;
+  };
+
+  it(`${DOCKERFILE}: две цели — HTTP-сервер и MCP stdio через общий cli.js mcp`, () => {
+    for (const name of ['builder', 'runtime', 'server', 'mcp']) {
+      assert.ok(stages.has(name), `${DOCKERFILE}: нет стадии ${name}.`);
+    }
+
+    const server = stage('server');
+    assert.match(
+      server,
+      /^ENTRYPOINT \["node", "server\/dist\/index\.js"\]$/m,
+      `${DOCKERFILE}: HTTP-цель обязана запускать node server/dist/index.js.`,
+    );
+
+    const mcp = stage('mcp');
+    assert.match(
+      mcp,
+      /^ENTRYPOINT \["node", "server\/dist\/cli\.js", "mcp"\]$/m,
+      `${DOCKERFILE}: MCP-цель обязана запускать node server/dist/cli.js mcp — ` +
+        'общий bootstrap каталога данных (ADR aa9507e6 п. 5), а не свою обёртку.',
+    );
+    assert.doesNotMatch(
+      mcp,
+      /bin\/etn-mcp/,
+      `${DOCKERFILE}: MCP-цель не должна идти через bin-обёртку пакета: ` +
+        'в контейнере каталог данных задан ETN_DATA_DIR, личный каталог не нужен.',
+    );
+
+    // Данные — всегда /data (ADR ad67950b): volume и классификация каталога.
+    const runtime = stage('runtime');
+    assert.match(runtime, /ETN_DATA_DIR=\/data/, `${DOCKERFILE}: ETN_DATA_DIR обязан быть /data.`);
+    assert.match(runtime, /^VOLUME \/data$/m, `${DOCKERFILE}: нет VOLUME /data — том не объявлен.`);
+    assert.match(server, /^EXPOSE 4321$/m, `${DOCKERFILE}: HTTP-цель обязана объявлять порт 4321.`);
+    assert.match(
+      server,
+      /ETN_HOST=0\.0\.0\.0/,
+      `${DOCKERFILE}: HTTP-цель обязана слушать 0.0.0.0 в контейнере — иначе ` +
+        '`docker run -p 4321:4321` не отвечает (сервер по умолчанию 127.0.0.1:3000).',
+    );
+    assert.match(
+      server,
+      /ETN_PORT=4321/,
+      `${DOCKERFILE}: HTTP-цель обязана по умолчанию слушать 4321.`,
+    );
+    assert.doesNotMatch(mcp, /^EXPOSE /m, `${DOCKERFILE}: MCP-цель не публикует TCP-порт (stdio).`);
+  });
+
+  it(`${DOCKERFILE}: метки OCI из build-args, MCP-метка только у stdio-образа`, () => {
+    for (const target of ['server', 'mcp']) {
+      const text = stage(target);
+      for (const label of ['version', 'revision', 'source', 'licenses']) {
+        assert.ok(
+          text.includes(`org.opencontainers.image.${label}="\${`),
+          `${DOCKERFILE}: у цели ${target} метка org.opencontainers.image.${label} ` +
+            'обязана подставлять build-arg, а не литерал.',
+        );
+      }
+      assert.match(
+        text,
+        /^ARG VERSION$/m,
+        `${DOCKERFILE}: цель ${target} не объявляет ARG VERSION — метка версии не соберётся.`,
+      );
+      assert.match(
+        text,
+        /RUN test -n "\$VERSION"/,
+        `${DOCKERFILE}: цель ${target} не проверяет переданные метки — образ уедет с пустыми ` +
+          'labels при сборке без build-args.',
+      );
+    }
+
+    const mcp = stage('mcp');
+    assert.match(
+      mcp,
+      /^ARG MCP_REGISTRY_NAME$/m,
+      `${DOCKERFILE}: MCP-цель не объявляет ARG MCP_REGISTRY_NAME.`,
+    );
+    assert.match(
+      mcp,
+      /^\s*io\.modelcontextprotocol\.server\.name="\$\{MCP_REGISTRY_NAME\}"$/m,
+      `${DOCKERFILE}: на stdio-образе нет метки io.modelcontextprotocol.server.name ` +
+        'из MCP_REGISTRY_NAME (ADR d17c3a29 п. 2) — реестр не подтвердит владение.',
+    );
+    assert.doesNotMatch(
+      stage('server'),
+      /^\s*io\.modelcontextprotocol\.server\.name=/m,
+      `${DOCKERFILE}: реестровая MCP-метка стоит на HTTP-образе — он не запускает MCP.`,
+    );
+    assert.doesNotMatch(
+      dockerfile,
+      /io\.github\./,
+      `${DOCKERFILE}: реестровое имя вписано литералом — источник один ` +
+        '(server/src/mcp/server.ts), значение приходит build-arg.',
+    );
+    assert.doesNotMatch(dockerfile, /:latest/, `${DOCKERFILE}: тег latest не публикуется.`);
+  });
+
+  it('метаданные образов совпадают с серверным кодом и манифестами', () => {
+    const version = dockerMetadata.rootVersion(REPO_ROOT);
+    const registryName = dockerMetadata.readRegistryName(REPO_ROOT);
+
+    assert.equal(registryName, MCP_REGISTRY_NAME, 'реестровое имя читается из src/mcp/server.ts');
+    assert.equal(
+      dockerMetadata.githubSlug(registryName),
+      githubSlugFromRegistryName(registryName),
+      'slug из скрипта совпадает со slug в src/mcpb/manifest.ts',
+    );
+    assert.equal(dockerMetadata.dockerHubNamespace(registryName), 'nerkuda');
+    assert.equal(dockerMetadata.sourceUrl(registryName), 'https://github.com/nerkuda/e-tho-net');
+
+    const refs = dockerMetadata.imageRefs('mcp', `v${version}`, registryName);
+    assert.deepEqual(refs, {
+      ghcr: `ghcr.io/nerkuda/e-tho-net/etn-mcp:v${version}`,
+      dockerHub: `docker.io/nerkuda/etn-mcp:v${version}`,
+    });
+    assert.equal(
+      dockerImageRef('etn-mcp', version),
+      refs.dockerHub,
+      'запись OCI в server.json и сборочный скрипт берут имя образа из одного расчёта',
+    );
+    assert.deepEqual(buildOciRegistryPackage(version), {
+      registryType: 'oci',
+      identifier: `docker.io/nerkuda/etn-mcp:v${version}`,
+      version,
+      transport: { type: 'stdio' },
+    });
+    assert.throws(
+      () => dockerMetadata.imageRefs('mcp', 'latest', registryName),
+      /latest не публикуется/,
+      'тег latest запрещён сборочным расчётом',
+    );
+    assert.throws(() => dockerMetadata.imageRefs('gateway', `v${version}`, registryName));
+    assert.throws(() => dockerImageRef('etn-mcp', '1.2'), /X\.Y\.Z/);
+
+    const args = dockerMetadata.dockerBuildArgs({ revision: 'deadbeef' });
+    assert.deepEqual(args, {
+      VERSION: version,
+      REVISION: 'deadbeef',
+      MCP_REGISTRY_NAME: MCP_REGISTRY_NAME,
+      SOURCE_URL: 'https://github.com/nerkuda/e-tho-net',
+      LICENSE: dockerMetadata.licenseIdentifier(REPO_ROOT),
+    });
+    assert.equal(args.LICENSE, 'MIT', 'лицензия читается из LICENSE');
+    assert.equal(
+      dockerMetadata.dockerBuildArgs({ revision: '' }).REVISION,
+      'unknown',
+      'без коммита revision не пустая метка',
+    );
+  });
+
+  it('локальный сборщик: цель обязательна, пуша нет, метки из общего расчёта', () => {
+    const script = fs.readFileSync(
+      path.join(SERVER_ROOT, 'scripts', 'build-docker-image.mjs'),
+      'utf8',
+    );
+    assert.match(
+      script,
+      /from '\.\/lib\/docker-metadata\.mjs'/,
+      'сборщик обязан брать метки и имена из общего модуля метаданных',
+    );
+    assert.match(script, /--target/, 'сборщик требует явную цель образа');
+    assert.match(
+      script,
+      /DOCKER_TARGETS\.includes\(options\.target\)/,
+      'сборщик проверяет цель по списку Dockerfile',
+    );
+    assert.ok(
+      script.includes("'--target',"),
+      'сборщик передаёт --target в docker build: цель адресуется явно',
+    );
+    assert.match(
+      script,
+      /'--build-arg'/,
+      'метки передаются build-arg, а не литералом в Dockerfile',
+    );
+    assert.doesNotMatch(
+      script,
+      /docker',\s*\['push'|--push\b|spawnSync\('docker', \['push'/,
+      'локальный сборщик не пушит образы: публикация — конвейер релиза с токенами владельца',
+    );
+
+    const pkg = JSON.parse(fs.readFileSync(path.join(SERVER_ROOT, 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>;
+    };
+    assert.equal(
+      pkg.scripts?.['docker:build'],
+      'node scripts/build-docker-image.mjs',
+      'скрипт docker:build ведёт к сборщику образа',
+    );
+  });
+
+  it('docker-compose.yml собирает HTTP-цель, а не последнюю стадию', () => {
+    const text = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
+    assert.match(
+      text,
+      /^ {6}dockerfile: server\/Dockerfile$/m,
+      'compose-пример обязан собирать образ из server/Dockerfile',
+    );
+    assert.match(
+      text,
+      /^ {6}target: server$/m,
+      'compose-пример без target соберёт последнюю стадию (mcp) — сервис HTTP не поднимется',
+    );
+  });
+
+  it('.dockerignore не пускает в контекст данные, артефакты и клиент', () => {
+    const file = path.join(REPO_ROOT, '.dockerignore');
+    assert.ok(fs.existsSync(file), 'нет .dockerignore — контекст утащит node_modules и данные');
+    const text = fs.readFileSync(file, 'utf8');
+    for (const pattern of ['node_modules', '**/dist', 'etn_data', '.env', 'release']) {
+      assert.ok(
+        text.split('\n').some((line) => line.trim() === pattern),
+        `.dockerignore: нет правила ${pattern}`,
+      );
+    }
+    assert.match(
+      text,
+      /^!client\/package\.json$/m,
+      '.dockerignore: манифест клиента нужен npm workspaces (исключение из client/*)',
+    );
+  });
+});
+
+/**
  * Сторож состава ассетов релиза (ошибка 054b0a66, 0.15.2).
  *
  * `docker/build-push-action` кладёт в артефакты прогона служебный
@@ -552,16 +963,18 @@ describe('guard: Docker-образ сервера — обязательная �
  *
  * Контракт:
  *   * в джобе `publish` ровно один шаг `actions/download-artifact`, и у него
- *     `pattern: release-*` — только артефакты трёх сборочных джоб;
- *   * `path: artifacts` и `merge-multiple: true` на месте — три файла лежат
- *     в одном каталоге, по которому считается `SHA256SUMS`;
+ *     `pattern: release-*` — только артефакты сборочных джоб;
+ *   * `path: artifacts` и `merge-multiple: true` на месте — все файлы лягут
+ *     в один каталог, по которому считается `SHA256SUMS`;
  *   * имена всех `actions/upload-artifact` в workflow начинаются с `release-`
  *     и читаются только из `with.name` (display name шага — не имя артефакта);
- *   * upload-шагов ровно три, их имена — точный контракт: `release-windows`,
- *     `release-linux-client`, `release-linux-server`. Четвёртый артефакт или
- *     переименование любого из трёх — красный прогон: `publish` скачивает
- *     `release-*`, и лишний/пропавший файл меняет состав релиза;
- *   * md-контракт в шапке файла: перечислены пять ожидаемых ассетов релиза
+ *   * upload-шагов ровно четыре: три фиксированных — `release-windows`,
+ *     `release-linux-client`, `release-linux-server` — и матричный
+ *     `release-mcpb-${{ matrix.target }}` (upload-artifact v4 не разрешает
+ *     грузить в артефакт одного имени из разных джоб matrix). Переименование
+ *     любого или лишний артефакт — красный прогон: `publish` скачивает
+ *     `release-*`, и состав релиза меняется молча;
+ *   * md-контракт в шапке файла: перечислены шесть ожидаемых ассетов релиза
  *     и зафиксировано, что `.dockerbuild` ассетом не является.
  *
  * Сторож статический, как и остальные проверки этого файла: YAML читается
@@ -692,9 +1105,10 @@ describe('guard: публикация релиза — только релизн
         `${RELEASE_WORKFLOW}: у upload-artifact в джобе ${entry.job} нет name — ` +
           'безымянный артефакт не попадёт под pattern: release-* и выпадет из релиза.',
       );
+      // Матричный артефакт несёт выражение: `release-mcpb-${{ matrix.target }}`.
       assert.match(
         entry.name,
-        /^release-[a-z0-9-]+$/,
+        /^release-[a-z0-9-]*(?:\$?\{\{[^}]+\}\})?$/,
         `${RELEASE_WORKFLOW}: артефакт «${entry.name}» (джоба ${entry.job}) не начинается ` +
           'с release-. publish качает только release-*, поэтому переименование ' +
           'артефакта молча исключит его из релиза.',
@@ -711,17 +1125,17 @@ describe('guard: публикация релиза — только релизн
     }
   });
 
-  it(`${RELEASE_WORKFLOW}: ровно три upload-artifact с контрактными именами`, () => {
+  it(`${RELEASE_WORKFLOW}: ровно четыре upload-artifact с контрактными именами`, () => {
     const text = stripComments(readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер'));
     const uploaded = uploadedArtifacts(text);
 
-    // Контракт состава: ровно три сборочные джобы и ровно три артефакта.
-    // Четвёртый upload попадает под pattern: release-* и уезжает в релиз
+    // Контракт состава: три фиксированных артефакта и матрица MCPB-бандлов.
+    // Лишний upload попадает под pattern: release-* и уезжает в релиз
     // лишним файлом; пропавший — оставляет релиз без ассета.
     assert.equal(
       uploaded.length,
-      3,
-      `${RELEASE_WORKFLOW}: ожидается ровно три шага actions/upload-artifact, ` +
+      4,
+      `${RELEASE_WORKFLOW}: ожидается ровно четыре шага actions/upload-artifact, ` +
         `найдено ${uploaded.length}: ` +
         `${uploaded.map((entry) => `${entry.name ?? '<без name>'} (${entry.job})`).join(', ') || 'ни одного'}.`,
     );
@@ -729,22 +1143,35 @@ describe('guard: публикация релиза — только релизн
     const names = uploaded.map((entry) => entry.name ?? '').sort();
     assert.deepEqual(
       names,
-      ['release-linux-client', 'release-linux-server', 'release-windows'],
+      [
+        'release-linux-client',
+        'release-linux-server',
+        'release-mcpb-${{ matrix.target }}',
+        'release-windows',
+      ],
       `${RELEASE_WORKFLOW}: имена артефактов — «${names.join(', ')}», ожидается точный ` +
-        'набор: release-windows, release-linux-client, release-linux-server. Имена — ' +
-        'контракт релиза (SHA256SUMS, install.sh, update-checker).',
+        'набор: release-windows, release-linux-client, release-linux-server, ' +
+        'release-mcpb-${{ matrix.target }}. Имена — контракт релиза (SHA256SUMS, ' +
+        'install.sh, update-checker).',
     );
   });
 
-  it(`${RELEASE_WORKFLOW}: md-контракт — пять ассетов релиза, .dockerbuild не ассет`, () => {
+  it(`${RELEASE_WORKFLOW}: md-контракт — шесть ассетов релиза, .dockerbuild не ассет`, () => {
     const text = readWorkflow(RELEASE_WORKFLOW, 'релизный конвейер');
     const header = headerComments(text);
-    assert.ok(header.length > 0, `${RELEASE_WORKFLOW}: нет шапки-комментария с контрактом ассетов.`);
+    assert.ok(
+      header.length > 0,
+      `${RELEASE_WORKFLOW}: нет шапки-комментария с контрактом ассетов.`,
+    );
 
     const assets: { label: string; pattern: RegExp }[] = [
       { label: 'ETN-Setup-<version>.exe', pattern: /ETN-Setup-[^\s]+\.exe/ },
-      { label: 'ETN-Client-<version>-linux-x64.tar.gz', pattern: /ETN-Client-[^\s]+-linux-x64\.tar\.gz/ },
+      {
+        label: 'ETN-Client-<version>-linux-x64.tar.gz',
+        pattern: /ETN-Client-[^\s]+-linux-x64\.tar\.gz/,
+      },
       { label: 'etn-server-<version>.tar.gz', pattern: /etn-server-[^\s]+\.tar\.gz/ },
+      { label: 'etn-mcp-<version>-<platform>-<arch>.mcpb', pattern: /etn-mcp-[^\s]+\.mcpb/ },
       { label: 'SHA256SUMS', pattern: /\bSHA256SUMS\b/ },
       { label: 'install.sh', pattern: /\binstall\.sh\b/ },
     ];
@@ -753,7 +1180,7 @@ describe('guard: публикация релиза — только релизн
         header,
         asset.pattern,
         `${RELEASE_WORKFLOW}: в шапке-контракте нет ассета ${asset.label}. В релизе ` +
-          'ровно пять ожидаемых ассетов; шапка — md-контракт, по которому сверяются ' +
+          'ровно шесть ожидаемых ассетов; шапка — md-контракт, по которому сверяются ' +
           'workflow, install.sh, тело релиза и update-checker.',
       );
     }

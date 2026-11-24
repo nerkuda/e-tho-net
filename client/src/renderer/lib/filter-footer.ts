@@ -11,13 +11,20 @@
  *
  * Компоновка футера — ДВУХРЯДНАЯ, как на прежней панели отборов (решение
  * заказчика 2026-10-14, ошибка 4258e694 п.2):
- *   • ВЕРХНИЙ ряд (`.ff-actions`) — действия над ТЕКУЩИМ отбором и его
- *     результатами: «Применить», «Очистить», кнопки места (`place: 'actions'`);
- *   • НИЖНИЙ ряд (`.ff-name`) — манипуляции с СОХРАНЁННЫМИ отборами: поле имени,
+ *   • ряд действий (`.ff-actions`) — действия над ТЕКУЩИМ отбором и его
+ *     результатами: «Применить», «Очистить»;
+ *   • ряд кнопок места (`.ff-place`) — кнопки с `place: 'actions'` («Команды ▾»);
+ *   • ряд имени (`.ff-name`) — манипуляции с СОХРАНЁННЫМИ отборами: поле имени,
  *     «Сохранить» (иконка 💾), ✕ очистки имени, кнопки места (`place: 'name'` —
  *     «…» выбора сохранённого отбора).
- * Оба ряда лежат в непрокручиваемом низу редактора (`.fe-foot`), с деревом
- * условий не уезжают.
+ *
+ * Ряды отдаются РАЗДЕЛЬНО ({@link FilterFooterHandle}): корень `root` — фраза,
+ * линия-разделитель и ряд имени (редактор кладёт их в `.fe-foot`), а ряд
+ * действий — `actions` (редактор кладёт его в полосу `.fe-actions`). Так футер
+ * приклеивается ДИНАМИЧЕСКИ (задача c20b26ef): при высоте окна выше порога
+ * неподвижна вся панель, как раньше (решение заказчика 2026-10-14); при низкой
+ * высоте прокручиваются вместе с деревом фраза, имя и кнопки места, а
+ * «Применить»/«Очистить» остаются приклеенными.
  *
  * Своей модели отбора модуль не ведёт: имя, определение и фраза-превью берутся
  * из единой модели хоста (`FilterCriteriaState` — ADR 30ff83bb), маркер ●
@@ -79,6 +86,20 @@ import { t } from './i18n.js';
 // ---------------------------------------------------------------------------
 
 export const FILTER_FOOTER_CLASS = 'ff';
+/**
+ * Ряд действий (`.ff-actions`): только «Применить» и «Очистить». Редактор
+ * выносит его в полосу `.fe-actions` (задача c20b26ef) — она одна приклеена при
+ * низкой высоте окна, поэтому класс — часть контракта футера.
+ */
+export const FILTER_FOOTER_ACTIONS_CLASS = 'ff-actions';
+/**
+ * Ряд кнопок места с `place: 'actions'` («Команды ▾» и т. п.). В компактном
+ * режиме (высота окна не выше порога) по постановке владельца приклеены ТОЛЬКО
+ * «Применить» и «Очистить», поэтому ряд переезжает в прокручиваемый низ
+ * `.fe-foot`; выше порога он стоит в полосе действий (задача c20b26ef, круг
+ * доработки).
+ */
+export const FILTER_FOOTER_PLACE_CLASS = 'ff-place';
 export const FILTER_FOOTER_CHANGED_CLASS = 'ff-changed';
 export const FILTER_FOOTER_PREVIEW_CLASS = 'ff-preview';
 /**
@@ -277,6 +298,20 @@ export interface FilterFooterHandle {
    * одна, футер лишь перестаёт ею владеть в разметке.
    */
   nameRow: HTMLElement | null;
+  /**
+   * Ряд действий (`.ff-actions`) — только «Применить» и «Очистить». Отдаётся
+   * отдельно от корня: редактор держит его в приклеенной полосе `.fe-actions`
+   * (задача c20b26ef), а корень уходит в низ редактора `.fe-foot` и при низкой
+   * высоте окна прокручивается с деревом. Кнопки места — в `placeButtons`.
+   */
+  actions: HTMLElement;
+  /**
+   * Ряд кнопок места `place: 'actions'` (`.ff-place`) — отдельно от полосы
+   * действий: в компактном режиме его место — прокручиваемый низ `.fe-foot`
+   * (задача c20b26ef, круг доработки). Пустой ряд возможен (у места нет таких
+   * кнопок) — тогда редактор его не показывает.
+   */
+  placeButtons: HTMLElement;
   /** Перечитать маркер, превью и состояния кнопок из модели хоста. */
   refresh: () => void;
 }
@@ -345,7 +380,9 @@ export function filterFooterTooltip(preview: FilterFooterPreview): string {
  * 58f77990). Пустая фраза — «превью нет»: отбор без условий и сортировки футер
  * не подписывает.
  */
-export function filterFooterPhrasePreview(source: FilterFooterPhraseSource): FilterFooterPreview | undefined {
+export function filterFooterPhrasePreview(
+  source: FilterFooterPhraseSource,
+): FilterFooterPreview | undefined {
   const tokens = filterPhraseTokens(source.state(), source.phrase);
   if (tokens.length === 0) return undefined;
   return { text: tokens.map((token) => token.text).join(''), tokens };
@@ -356,7 +393,11 @@ export function filterFooterPhrasePreview(source: FilterFooterPhraseSource): Fil
  * ошибок и подсказка о переходе (задача 58f77990, п.12в). Строку и тултип
  * собирает одна функция ({@link renderFilterPhrase}) — разойтись не могут.
  */
-function fillPreviewTip(tip: HTMLElement, preview: FilterFooterPreview, fixPath: string | null): void {
+function fillPreviewTip(
+  tip: HTMLElement,
+  preview: FilterFooterPreview,
+  fixPath: string | null,
+): void {
   const line = span('');
   renderFilterPhrase(line, preview.tokens, preview.text);
   const parts: Node[] = [line];
@@ -494,7 +535,7 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   });
 
   // --- Кнопки: стандартный набор + кнопки профиля места применения --------
-  const actions = div('ff-actions');
+  const actions = div(FILTER_FOOTER_ACTIONS_CLASS);
   let applyButton: HTMLButtonElement | null = null;
   if (opts.standardButtons !== false) {
     // «Сохранить» уже стоит в строке имени (если строка есть); иначе — здесь.
@@ -516,17 +557,20 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
     applyButton = applyNode;
     actions.append(applyNode, clearNode);
   }
-  // Кнопки места верхнего ряда: всё, что не ушло в строку имени (кнопки
-  // `place: 'name'` при наличии строки уже нарисованы там).
+  // Кнопки места `place: 'actions'`: всё, что не ушло в строку имени (кнопки
+  // `place: 'name'` при наличии строки уже нарисованы там). Свой ряд, а не
+  // ряд действий: в компакте приклеены только «Применить»/«Очистить», и ряд
+  // места редактор уводит в прокручиваемый низ (задача c20b26ef, круг доработки).
+  const placeRow = div(FILTER_FOOTER_PLACE_CLASS);
   for (const spec of opts.extraButtons ?? []) {
     if (nameRowButtons().includes(spec)) continue;
-    actions.append(footerExtraButton(spec));
+    placeRow.append(footerExtraButton(spec));
   }
-  // Порядок футера (сверху вниз): фраза-превью → линия-разделитель → строка
-  // имени → ряд кнопок (требование заказчика 2026-10-14, п.1). Фраза и линия уже
-  // добавлены; строка имени идёт перед кнопками.
+  // Порядок корня футера (сверху вниз): фраза-превью → линия-разделитель →
+  // строка имени (требование заказчика 2026-10-14, п.1). Фраза и линия уже
+  // добавлены, строка имени идёт последней. Ряд действий в корень НЕ входит:
+  // его размещает редактор в полосе `.fe-actions` (задача c20b26ef).
   if (nameRowEl !== null) root.append(nameRowEl);
-  root.append(actions);
 
   // --- Обновление представления из модели ---------------------------------
   function refresh(): void {
@@ -585,5 +629,5 @@ export function buildFilterFooter(opts: FilterFooterOptions): FilterFooterHandle
   }
 
   refresh();
-  return { root, nameRow: nameRowEl, refresh };
+  return { root, nameRow: nameRowEl, actions, placeButtons: placeRow, refresh };
 }

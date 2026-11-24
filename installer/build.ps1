@@ -278,6 +278,13 @@ function Test-PayloadFreshness {
     # (замечание приёмки 98ad5eec). Манифест пишется последним шагом
     # fetch-payload.ps1, поэтому его отсутствие — тоже признак недописанной
     # поставки.
+    #
+    # Проверка клиента — ТОЛЬКО МАНИФЕСТНАЯ (задача bdd17318): она доказывает,
+    # что client\ в payload не менялся после записи паспорта, но НЕ что payload
+    # собран из текущей client\release\win-unpacked — артефакт gitignored, его
+    # может не быть на машине, а пересобранный отличается от того, что
+    # копировал fetch-payload.ps1. Свежесть против текущей сборки обеспечивает
+    # сам fetch-payload.ps1: он копирует win-unpacked и тут же пишет манифест.
     $hashTotal = 0
     $hashCompared = 0
     $hashTotal++
@@ -410,16 +417,27 @@ if ($payloadProblems.Count -gt 0) {
         '(или запустите build.ps1 с -RefreshPayload).')
 }
 if ($freshness.HashCompared) {
-    Write-Host 'Payload свежий: файлы контракта, версии сервера и клиента, хэши клиента, весь server/dist, migrations и шаблон службы совпадают с репозиторием.'
+    Write-Host ('Payload свежий: файлы контракта, версии сервера и клиента, весь server/dist, migrations и шаблон службы совпадают с репозиторием; ' +
+        'client\ сверен с паспортом поставки (client.hashes), а не с client\release\win-unpacked.')
 } else {
-    Write-Host ('Payload проверен частично (server/dist или migrations не сравнивались): файлы контракта и версии проверены. ' +
+    Write-Host ('Payload проверен частично (server/dist или migrations не сравнивались): файлы контракта и версии проверены; ' +
+        'client\ сверен с паспортом поставки (client.hashes), а не с client\release\win-unpacked. ' +
         'Соберите server/dist (npm -w @etn/server run build) и обновите payload для полной проверки.')
 }
 if ($CheckPayloadOnly) {
     # Проверка без компиляции: на машине, где полная сборка недоступна
     # (занятый dev-клиентом better_sqlite3.node, нет права симлинков),
-    # можно убедиться, что payload свежий и годится для сборки.
-    Write-Host "OK: payload свежий — $PayloadRoot (компиляция пропущена: -CheckPayloadOnly)"
+    # можно убедиться, что payload свежий и годится для сборки. Вывод называет
+    # фактический объём проверки: при частичной проверке «свежий» не
+    # утверждается (задача bdd17318).
+    $scope = if ($freshness.HashCompared) {
+        'полная: состав и хэши server/dist, migrations и шаблона службы; версии и client\ - по паспорту поставки (client.hashes)'
+    } else {
+        'частичная: server/dist или migrations не сравнивались; версии и client\ - по паспорту поставки (client.hashes), а не с client\release\win-unpacked'
+    }
+    Write-Host "OK: payload годен для сборки по доступным проверкам — $PayloadRoot"
+    Write-Host "  объём проверки: $scope"
+    Write-Host '  компиляция установщика пропущена: -CheckPayloadOnly'
     exit 0
 }
 

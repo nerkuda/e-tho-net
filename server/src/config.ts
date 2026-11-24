@@ -21,16 +21,16 @@ import path from 'node:path';
 import { availableParallelism } from 'node:os';
 
 import { resolveClientChannel, type ClientChannel } from './version.js';
+import { UPDATE_CHANNELS, type ServerDeployment, type UpdateChannel } from '@etn/shared';
+
 import {
   DEFAULT_UPDATE_CHANNEL,
   DEFAULT_UPDATE_CHECK_INTERVAL_MS,
   DEFAULT_UPDATE_FEED_URL,
   MAX_UPDATE_CHECK_INTERVAL_MS,
   MIN_UPDATE_CHECK_INTERVAL_MS,
-  UPDATE_CHANNELS,
-  type UpdateChannel,
 } from './update/checker.js';
-import { DeploymentConfigError, resolveDeployment, type Deployment } from './update/deployment.js';
+import { DeploymentConfigError, resolveDeployment } from './update/deployment.js';
 
 /** TLS material pair (both fields required when TLS is enabled). */
 export interface TlsConfig {
@@ -118,7 +118,7 @@ export interface ServerConfig {
    * Режим развёртывания (`ETN_DEPLOYMENT`, маркер `/.dockerenv`; модуль
    * `update/deployment.ts`): поле `deployment` кеша проверки обновлений.
    */
-  deployment: Deployment;
+  deployment: ServerDeployment;
 }
 
 /** Настройки канала обновлений сервера (сущность fc0a99ba). */
@@ -151,7 +151,7 @@ export interface LoadConfigOptions {
    * файловой системы ({@link resolveDeployment}). Тесты передают явное
    * значение, чтобы результат не зависел от машины.
    */
-  deployment?: Deployment;
+  deployment?: ServerDeployment;
 }
 
 /** Настройки фонового чекпойнта WAL (ошибка dac92886). */
@@ -528,7 +528,7 @@ export function loadConfig(
     updateIntervalMs = Math.round(hours * HOUR_MS);
   }
 
-  let deployment: Deployment;
+  let deployment: ServerDeployment;
   if (options.deployment !== undefined) {
     deployment = options.deployment;
   } else {

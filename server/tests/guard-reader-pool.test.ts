@@ -15,6 +15,10 @@
  * Дополнительно (позитивная проверка) тест требует, чтобы соединение воркера
  * открывалось `readonly: true` и получало единый профиль прагм — иначе
  * «читатель» однажды превратится в второго писателя тихо.
+ *
+ * Проверки идут по коду без комментариев (`stripComments`): упомянутый в
+ * пояснении `DELETE /networks/:id` — не запись, а объяснение, и краснить
+ * сторожа не должен (замечание приёмки 0178253c, задача bdd17318).
  */
 
 import assert from 'node:assert/strict';
@@ -43,6 +47,8 @@ describe('guard: reader-пул не пишет и не запускает миг
         pattern: /['"`][^'"`]*(?:INSERT|UPDATE|DELETE|DROP|ALTER)[^'"`]*['"`]/i,
         filePattern: /['"`][^'"`]*(?:INSERT|UPDATE|DELETE|DROP|ALTER)[^'"`]*['"`]/i,
         include: inReaderPool,
+        // Комментарии не сканируются: пояснение с примером запроса — не запись.
+        stripComments: true,
       },
     ]);
   });
@@ -56,6 +62,7 @@ describe('guard: reader-пул не пишет и не запускает миг
           'применяет миграции и чистит object_locks — это запись.',
         pattern: /openNetworkDb\(/,
         include: (rel) => rel === WORKER_FILE,
+        stripComments: true,
       },
       {
         name: 'no-write-orchestration-in-reader-pool',
@@ -64,6 +71,7 @@ describe('guard: reader-пул не пишет и не запускает миг
           'живут только в домене записи, а не на пути чтения.',
         pattern: /(runWrite|emitDomainEvent)\(/,
         include: inReaderPool,
+        stripComments: true,
       },
     ]);
   });

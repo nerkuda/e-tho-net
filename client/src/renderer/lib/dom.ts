@@ -184,9 +184,10 @@ const ABORT_ERROR_RE = /\babort(?:ed)?\b/i;
  *   за недоступность сервера;
  * - `422` по адресу стороны свойства-связи (`details.field === 'side'`), при
  *   коллизии display-имён (`details.reason === 'property-ambiguous'`) и при
- *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) →
+ *   недопустимом типе значения (`details.reason === 'target-type-mismatch'`) и
+ *   попытке связать мысль с самой собой (`details.reason === 'self-link'`) →
  *   формулировка пользователя по `details.reason`: серверный текст адресован
- *   API/агентам и называет `side`/`source`/`target` (ошибка d9bc6012);
+ *   API/агентам и называет `side`/`source`/`target` (ошибки d9bc6012, 884919f6);
  * - серверные ошибки (`code` есть) — словарный текст по цепочке
  *   `code` → `details.reason`/`details.issue` → общий текст (ADR daab6ac4):
  *   `error.message` английский и пользователю не показывается, причина по
@@ -205,6 +206,8 @@ export function errText(err: unknown): string {
   if (RAW_NETWORK_ERROR_RE.test(message)) return t('errors.serverUnavailable');
   const sideText = propertySideErrorText(like);
   if (sideText !== null) return sideText;
+  const fieldText = propertyFieldErrorText(like);
+  if (fieldText !== null) return fieldText;
   const serverText = serverErrorText(like);
   if (serverText !== null) return serverText;
   return message;
@@ -313,10 +316,109 @@ function propertySideErrorText(like: ErrorLike | null): string | null {
   const { field, reason } = details as { field?: unknown; reason?: unknown };
   if (reason === PROPERTY_SIDE_ERROR_REASON.ambiguous) return t('errors.propertyNameAmbiguous');
   if (reason === PROPERTY_SIDE_ERROR_REASON.targetType) return t('errors.propertyTargetType');
+  if (reason === PROPERTY_SIDE_ERROR_REASON.selfLink) return t('errors.propertySelfLink');
   if (field !== 'side') return null;
   return reason === PROPERTY_SIDE_ERROR_REASON.mismatch
     ? t('errors.propertySideMismatch')
     : t('errors.propertySideRequired');
+}
+
+/**
+ * Поля записи свойства, которые сервер называет в `details.field`
+ * (`VALIDATION_ERROR`): у каждого — свой пользовательский текст. Ошибка
+ * 0033ea14: диалог показывал общий «проверьте введённые данные» и не давал
+ * понять, какое ограничение не принято. Идентификаторы типов не выводим —
+ * они ничего не говорят пользователю (см. `error-text.test.ts`).
+ */
+const PROPERTY_FIELD_ERROR_KEYS: Readonly<Record<string, MessageKey>> = {
+  // Природа свойства и справочник (`server/src/domain/property-service.ts`).
+  key: 'errors.propertyNameInvalid',
+  name: 'errors.propertyNameInvalid',
+  name_forward: 'errors.propertyNameInvalid',
+  name_reverse: 'errors.propertyNameInvalid',
+  value_type: 'errors.propertyValueTypeInvalid',
+  description: 'errors.propertyDescriptionInvalid',
+  owner_type: 'errors.propertyOwnerTypeInvalid',
+  property: 'errors.propertyRefInvalid',
+  property_id: 'errors.propertyRefInvalid',
+  value: 'errors.propertyValueInvalid',
+  // Ограничения и оформление свойства-связи.
+  'config.link_type_id': 'errors.propertyLinkTypeMissing',
+  parent_link_type_id: 'errors.propertyLinkParentInvalid',
+  'config.direction': 'errors.propertyDirectionInvalid',
+  'config.allowed_target_type_ids': 'errors.propertyAllowedTargetTypeMissing',
+  allowed_target_type_ids: 'errors.propertyAllowedTargetTypeMissing',
+  'config.allowed_source_type_ids': 'errors.propertyAllowedSourceTypeMissing',
+  allowed_source_type_ids: 'errors.propertyAllowedSourceTypeMissing',
+  'config.default_value_target': 'errors.propertyDefaultTargetInvalid',
+  link_color: 'errors.propertyLinkDecorationInvalid',
+  link_style: 'errors.propertyLinkDecorationInvalid',
+  link_width: 'errors.propertyLinkDecorationInvalid',
+  // Роль привязки и форма тела подключения.
+  required: 'errors.propertyBindingFieldInvalid',
+  position: 'errors.propertyBindingFieldInvalid',
+  mode: 'errors.propertyModeInvalid',
+};
+
+/**
+ * Динамические имена `details.field` записи свойства (ошибка 84a39e75):
+ * сервер строит их из имени свойства или конфигурации —
+ * `<имя свойства>.default_value_target` и т. п. Разбираем ТОЛЬКО известные
+ * суффиксы и шаблоны элементов: неизвестное имя остаётся нераспознанным,
+ * чтобы общий текст не выдавал догадку за причину.
+ */
+const PROPERTY_CONFIG_FIELD_SUFFIX_KEYS: ReadonlyArray<readonly [string, MessageKey]> = [
+  ['.default_value_target', 'errors.propertyDefaultTargetInvalid'],
+  ['.link_type_id', 'errors.propertyLinkTypeMissing'],
+  ['.direction', 'errors.propertyDirectionInvalid'],
+  ['.allowed_target_type_ids', 'errors.propertyAllowedTargetTypeMissing'],
+  ['.allowed_source_type_ids', 'errors.propertyAllowedSourceTypeMissing'],
+];
+
+/** Элемент пакетной правки порядка свойств: `items[N].<поле>` (`property-order-service.ts`). */
+const PROPERTY_ORDER_FIELD_RE = /^items\[\d+]\.(position|property_id|side)$/;
+
+const PROPERTY_ORDER_FIELD_KEYS: Readonly<Record<string, MessageKey>> = {
+  position: 'errors.propertyOrderPositionInvalid',
+  property_id: 'errors.propertyOrderPropertyInvalid',
+  side: 'errors.propertyOrderSideInvalid',
+};
+
+/** Ключ подписи для точного или динамического имени поля записи свойства. */
+function propertyFieldErrorKey(field: string): MessageKey | undefined {
+  const exact = PROPERTY_FIELD_ERROR_KEYS[field];
+  if (exact !== undefined) return exact;
+  const order = PROPERTY_ORDER_FIELD_RE.exec(field);
+  if (order !== null) return PROPERTY_ORDER_FIELD_KEYS[order[1] as string];
+  for (const [suffix, key] of PROPERTY_CONFIG_FIELD_SUFFIX_KEYS) {
+    if (field.length > suffix.length && field.endsWith(suffix)) return key;
+  }
+  return undefined;
+}
+
+/**
+ * Причина отказа записи свойства по `details.field` и `details.fields`
+ * (ошибки 0033ea14, 84a39e75, DoD 3). Неизвестные серверу поля тела — тоже
+ * конкретная причина: перечисляем их, а не отдаём общий текст кода. `null` —
+ * причина не про поля свойства: работает обычная цепочка `errText`.
+ */
+function propertyFieldErrorText(like: ErrorLike | null): string | null {
+  if (like?.code !== 'VALIDATION_ERROR') return null;
+  const details = like.details;
+  if (typeof details !== 'object' || details === null) return null;
+  const record = details as { field?: unknown; fields?: unknown };
+  if (typeof record.field === 'string') {
+    const key = propertyFieldErrorKey(record.field);
+    if (key !== undefined) return t(key);
+  }
+  if (
+    Array.isArray(record.fields) &&
+    record.fields.length > 0 &&
+    record.fields.every((field): field is string => typeof field === 'string')
+  ) {
+    return t('errors.propertyUnknownFields', record.fields.join(', '));
+  }
+  return null;
 }
 
 /** Formats an ISO date as a short date of the current UI language. */

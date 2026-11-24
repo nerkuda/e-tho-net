@@ -1,6 +1,6 @@
 {
   "name": "@etn/server",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -12,7 +12,13 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
-    "test": "node --test --test-timeout=120000 --import tsx tests/**/*.test.ts"
+    "test": "node --test --test-timeout=120000 --import tsx tests/**/*.test.ts",
+    "package:npm": "node scripts/build-npm-package.mjs",
+    "package:mcpb": "node scripts/build-mcpb.mjs",
+    "package:tarball": "node scripts/build-server-tarball.mjs",
+    "docker:build": "node scripts/build-docker-image.mjs",
+    "generate:server-json": "node scripts/generate-server-json.mjs",
+    "verify:npm-package": "node scripts/verify-npm-package.mjs"
   },
   "dependencies": {
     "@etn/markdown": "*",

@@ -103,10 +103,12 @@ export interface TabRealtimePoolOptions {
   onMaintenance?: (networkId: string, frame: RealtimeMaintenanceFrame) => void;
   /**
    * Optional main-process side-channel: соединение в режиме обслуживания
-   * прожило стабильное окно (`maintenanceStableMs`) — обновление завершено.
-   * ТОЛЬКО этот сигнал (либо успешный `GET /me`) снимает состояние
-   * обслуживания: открытие сокета ничего не доказывает — сервер в обслуживании
-   * принимает его и сразу закрывает кодом 1012.
+   * прожило стабильное окно (`maintenanceStableMs`, 10 с) — обновление
+   * завершено. Это ОДИН из двух признаков выхода; второй — успешный `GET /me`
+   * вместе со сменой версии процесса (`isMaintenanceEndedByVersion`), его
+   * проверяет REST-клиент. Ни открытие сокета, ни сам по себе `/me` выходом не
+   * являются: сервер в обслуживании принимает сокет и сразу закрывает его
+   * кодом 1012, а на чтение `/me` отвечает 200.
    */
   onMaintenanceStable?: (networkId: string) => void;
 }

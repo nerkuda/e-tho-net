@@ -227,6 +227,38 @@ describe(
       }
     });
 
+    it('self-ссылка: 422 с field/reason для конкретного текста (884919f6)', async () => {
+      const ctx = await buildRestContext();
+      try {
+        createNetworkProperty(
+          ctx.ndb,
+          {
+            name: 'Прикреплено self 8849',
+            value_type: 'link',
+            name_forward: 'Прикреплено self 8849',
+            name_reverse: 'Прикреплено self 8849 обратно',
+          },
+          USER,
+        );
+        const owner = await createThought(ctx, 'Мысль self 8849');
+        const res = await putProperty(ctx, owner, 'Прикреплено self 8849', owner);
+        assert.equal(res.statusCode, 422, res.body);
+        const body = res.json() as {
+          error: {
+            message: string;
+            details: { key?: string; ref?: string; field?: string; reason?: string };
+          };
+        };
+        assert.equal(body.error.details.field, 'value');
+        assert.equal(body.error.details.reason, 'self-link');
+        assert.equal(body.error.details.key, 'Прикреплено self 8849');
+        assert.equal(body.error.details.ref, owner);
+        assert.match(body.error.message, /cannot link a thought to itself/);
+      } finally {
+        await closeRestContext(ctx);
+      }
+    });
+
     it('side адресует сторону симметричного свойства-связи; сверка при удалении', async () => {
       const ctx = await buildRestContext();
       try {
@@ -1063,6 +1095,74 @@ describe(
           const ambiguous = await add('см. также', hall.id);
           assert.equal(ambiguous.isError, true, 'нужен side');
           assert.match(toolText(ambiguous), /side/);
+        } finally {
+          await handle.close();
+        }
+      } finally {
+        await closeMcpContext(ctx);
+      }
+    });
+
+    it('etn.properties.add: self-ссылка отдаёт field/reason для конкретного текста (9edcadc0)', async () => {
+      // Замечание верификации 9edcadc0 к 884919f6: set-путь (REST PUT) уже
+      // проверялся, add-путь (`addLinkPropertyTarget`) — нет. Отчёт массового
+      // изменения значений строится по тем же `field`/`reason`, поэтому
+      // add обязан отдавать их так же.
+      const ctx = await buildMcpContext();
+      try {
+        const ndb = openNetworkDb(ctx.dataDir, ctx.networkId);
+        const prop = createNetworkProperty(
+          ndb,
+          {
+            name: 'Прикреплено add 9edc',
+            value_type: 'link',
+            name_forward: 'Прикреплено add 9edc',
+            name_reverse: 'Прикреплено add 9edc обратно',
+          },
+          ctx.adminId,
+        );
+        const handle = await connectMcpClient(ctx, ctx.adminKey);
+        try {
+          const owner = await createThoughtViaWrite(handle.client, ctx.networkId, {
+            title: 'Мысль add 9edc',
+          });
+          const res = await handle.client.callTool({
+            name: 'etn.properties.add',
+            arguments: {
+              network_id: ctx.networkId,
+              owner_type: 'thought',
+              owner_id: owner.id,
+              key: 'Прикреплено add 9edc',
+              value: owner.id,
+            },
+          });
+          assert.equal(res.isError, true, toolText(res));
+          const text = toolText(res);
+          assert.match(text, /ETN error \[VALIDATION_ERROR\]/);
+          const marker = 'Details: ';
+          const at = text.indexOf(marker);
+          assert.notEqual(at, -1, text);
+          const details = JSON.parse(text.slice(at + marker.length)) as {
+            key?: string;
+            ref?: string;
+            field?: string;
+            reason?: string;
+          };
+          assert.equal(details.field, 'value');
+          assert.equal(details.reason, 'self-link');
+          assert.equal(details.key, 'Прикреплено add 9edc');
+          assert.equal(details.ref, owner.id);
+          assert.deepEqual(
+            getLinkPropertyValues(
+              ndb,
+              'thought',
+              owner.id,
+              prop.config?.link_type_id as string,
+              'out',
+            ),
+            [],
+            'ребро на себя не создано',
+          );
         } finally {
           await handle.close();
         }

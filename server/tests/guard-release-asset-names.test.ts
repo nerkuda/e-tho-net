@@ -48,13 +48,17 @@ const REPO_ROOT = path.resolve(SERVER_ROOT, '..');
 const VERSION_SLOT = String.raw`(?:\$\{[^}\n]+\}|\$\([^)\n]+\)|\$env:[A-Za-z_][A-Za-z0-9_]*|\*|<[^>\n]+>)`;
 
 /** Ключи ассетов контракта. */
-type AssetKey = 'setup' | 'server' | 'client' | 'sums';
+type AssetKey = 'setup' | 'server' | 'client' | 'mcpb' | 'sums';
+
+/** Платформы матрицы MCPB-бандлов (`<platform>-<arch>`). */
+const MCPB_TARGET_PATTERN = '(?:win32-x64|darwin-x64|darwin-arm64|linux-x64)';
 
 /** Канонические шаблоны имён (версия — слот, остальное неизменно). */
 const ASSET_TEMPLATES: Record<AssetKey, RegExp> = {
   setup: new RegExp(String.raw`ETN-Setup-${VERSION_SLOT}\.exe`, 'g'),
   server: new RegExp(String.raw`etn-server-${VERSION_SLOT}\.tar\.gz`, 'g'),
   client: new RegExp(String.raw`ETN-Client-${VERSION_SLOT}-linux-x64\.tar\.gz`, 'g'),
+  mcpb: new RegExp(String.raw`etn-mcp-${VERSION_SLOT}-${MCPB_TARGET_PATTERN}\.mcpb`, 'g'),
   sums: /\bSHA256SUMS\b/g,
 };
 
@@ -63,6 +67,7 @@ const ASSET_LABELS: Record<AssetKey, string> = {
   setup: 'ETN-Setup-<version>.exe',
   server: 'etn-server-<version>.tar.gz',
   client: 'ETN-Client-<version>-linux-x64.tar.gz',
+  mcpb: 'etn-mcp-<version>-<platform>-<arch>.mcpb',
   sums: 'SHA256SUMS',
 };
 
@@ -91,12 +96,12 @@ const RELEASE_FILES: readonly ReleaseFile[] = [
   {
     file: '.github/workflows/release.yml',
     role: 'собирает, проверяет и публикует ассеты',
-    requires: ['setup', 'server', 'client', 'sums'],
+    requires: ['setup', 'server', 'client', 'mcpb', 'sums'],
   },
   {
     file: 'server/scripts/release-notes.mjs',
     role: 'перечисляет ассеты в футере тела релиза',
-    requires: ['setup', 'server', 'client', 'sums'],
+    requires: ['setup', 'server', 'client', 'mcpb', 'sums'],
   },
   {
     file: 'server/src/update/checker.ts',
@@ -132,6 +137,13 @@ const ASSET_TOKENS: readonly AssetTokenPattern[] = [
     label: ASSET_LABELS.client,
     token: /ETN-Client-[^\s"'`\\]*\.(?:tar\.gz|tgz|zip|deb|dmg|AppImage)/g,
     canonical: new RegExp(String.raw`^ETN-Client-${VERSION_SLOT}-linux-x64\.tar\.gz$`),
+  },
+  {
+    // Бандл без платформы в имени (.mcpb, .zip) или с чужой арх не пройдёт:
+    // клиент выбирает файл по имени, arch в манифесте не описан.
+    label: ASSET_LABELS.mcpb,
+    token: /etn-mcp-[^\s"'`\\]*\.(?:mcpb|zip)$/gm,
+    canonical: new RegExp(String.raw`^etn-mcp-${VERSION_SLOT}-${MCPB_TARGET_PATTERN}\.mcpb$`),
   },
   {
     label: ASSET_LABELS.sums,
@@ -217,9 +229,51 @@ describe('guard: имена релизных ассетов', () => {
       `Найдены имена ассетов вне контракта (${problems.length}):\n` +
         `${problems.map((p) => `  • ${p}`).join('\n')}\n\n` +
         'Канон: ETN-Setup-<version>.exe, etn-server-<version>.tar.gz, ' +
-        'ETN-Client-<version>-linux-x64.tar.gz, SHA256SUMS. Устаревшие имена ' +
+        'ETN-Client-<version>-linux-x64.tar.gz, etn-mcp-<version>-<platform>-<arch>.mcpb, ' +
+        'SHA256SUMS. Устаревшие имена ' +
         '(ETN.Setup, .msi, .AppImage, .deb, .dmg, SHA256SUMS.txt) возвращать нельзя: ' +
         'их не ждут install.sh, тело релиза и update-checker.',
     );
+  });
+
+  it('release.yml: expected-массив и публикация знают все четыре MCPB-бандла', () => {
+    const text = readReleaseFile(
+      '.github/workflows/release.yml',
+      'собирает, проверяет и публикует',
+    );
+    for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64', 'linux-x64']) {
+      assert.ok(
+        text.includes(`etn-mcp-\${VERSION}-${target}.mcpb`),
+        `в expected-массиве публикации нет бандла цели ${target}: релиз выйдет без ассета`,
+      );
+      assert.ok(text.includes(`target: ${target}`), `в матрице сборки нет цели ${target}`);
+    }
+    assert.ok(
+      text.includes('release-mcpb-'),
+      'артефакт матрицы обязан попадать в шаблон скачивания release-*',
+    );
+    assert.match(
+      text,
+      /#expected\[@\]/,
+      'счётчик строк SHA256SUMS считается по массиву — новый ассет покрывается сам',
+    );
+  });
+
+  it('MCPB: четыре цели матрицы, имя без платформы и чужая арх отвергаются', () => {
+    const template = ASSET_TEMPLATES.mcpb;
+    const asset = (target: string): string => `etn-mcp-\${VERSION}-${target}.mcpb`;
+    for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64', 'linux-x64']) {
+      template.lastIndex = 0;
+      assert.ok(template.test(asset(target)), `каноническое имя цели ${target} обязано подходить`);
+    }
+    for (const wrong of [
+      'etn-mcp-${VERSION}.mcpb',
+      'etn-mcp-${VERSION}-win32-arm64.mcpb',
+      'etn-mcp-${VERSION}-win32-x64.zip',
+      'etn-mcp-${VERSION}-linux-musl-x64.mcpb',
+    ]) {
+      template.lastIndex = 0;
+      assert.equal(template.test(wrong), false, `имя ${wrong} не должно считаться каноническим`);
+    }
   });
 });

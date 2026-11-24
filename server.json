@@ -1,0 +1,49 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nerkuda/e-tho-net",
+  "description": "Self-hosted graph-of-thoughts knowledge base with MCP tools for AI agents.",
+  "version": "0.16.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "etn-mcp",
+      "version": "0.16.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ETN_DATA_DIR",
+          "description": "ETN data directory. When started via the etn-mcp wrapper, defaults to a personal per-user directory.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "ETN_API_KEY",
+          "description": "API key of an existing ETN server to attach to.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    },
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/nerkuda/e-tho-net/releases/download/v0.16.2/etn-mcp-0.16.2-win32-x64.mcpb",
+      "version": "0.16.2",
+      "fileSha256": "16abc3d1c507a6d7f14f69e032129ad60d2985facaa6903c508d7c33a58c452a",
+      "transport": {
+        "type": "stdio"
+      }
+    },
+    {
+      "registryType": "oci",
+      "identifier": "docker.io/nerkuda/etn-mcp:v0.16.2",
+      "version": "0.16.2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -51,14 +51,19 @@
 import { randomUUID } from 'node:crypto';
 
 import { compareSemver, isUpdateJobFailureReason, parseSemver } from '@etn/shared';
-import type { UpdateJob, UpdateJobFailureReason, UpdateJobStage } from '@etn/shared';
+import type {
+  ServerDeployment,
+  UpdateJob,
+  UpdateJobFailureReason,
+  UpdateJobStage,
+} from '@etn/shared';
 
 import type { Logger } from '../logger.js';
 import type { SystemDb, UpdateJobRecoveryOutcome, UpdateJobRow } from '../db/system-db.js';
 import type { MaintenanceService } from '../maintenance.js';
 import { SERVER_VERSION } from '../version.js';
 import type { UpdateCache } from './checker.js';
-import { DOCKER_APPLY_UNAVAILABLE_MESSAGE, type Deployment } from './deployment.js';
+import { DOCKER_APPLY_UNAVAILABLE_MESSAGE } from './deployment.js';
 import {
   InstallerDownloadError,
   InstallerHashError,
@@ -208,7 +213,7 @@ export interface UpdateApplyServiceOptions {
   /** Системная БД — хранилище прогресса (`update_jobs`). */
   systemDb: SystemDb;
   /** Режим развёртывания (`update/deployment.ts`): Docker и standalone не обновляются. */
-  deployment: Deployment;
+  deployment: ServerDeployment;
   /** Сервис обслуживания: `beginUpdating` переводит сервер в `updating`. */
   maintenance: Pick<MaintenanceService, 'beginUpdating'>;
   /** Текущий кеш проверки обновлений (`app.updateChecker.getCache()`). */
@@ -360,13 +365,19 @@ function toUpdateJob(row: UpdateJobRow): UpdateJob {
   };
 }
 
-/** Текст итога по ненулевому коду установщика. */
+/**
+ * Текст итога по ненулевому коду установщика. Код не говорит, был ли откат:
+ * сбой до замены файлов (например, бэкап) оставляет файлы как были, сбой после
+ * замены установщик откатывает из снимка этого запуска. Поэтому текст не
+ * утверждает откат, а отсылает за итогом в журнал.
+ */
 function describeFailureExit(result: InstallerRunResult): string {
   const journal =
     result.logPath === null ? "installer log not found" : `log: ${result.logPath}`;
   return (
     `The installer exited with code ${String(result.code)}; ` +
-    `the rollback was performed by the installer, ${journal}`
+    "files are restored from this run's snapshot only if the failure happened after replacement " +
+    `(the installer log tells which), ${journal}`
   );
 }
 

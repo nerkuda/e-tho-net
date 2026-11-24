@@ -32,9 +32,13 @@ import {
 } from '@etn/shared';
 
 import type { NetworkDb } from '../db/network-db.js';
-import { isBaseContext, materializeShadow, materializeTombstone } from '../db/layer-write.js';
+import { isBaseContext, materializeTombstone } from '../db/layer-write.js';
 import { listLinkHoldingLayers } from './holding-layers.js';
-import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
+import {
+  findLinkTripleRow,
+  materializeLiveLinkShadow,
+  restoreLinkRow,
+} from './link-live-triple.js';
 import { purgeOwnerDependants, tombstoneOwnerDependants } from './owner-cleanup.js';
 import { assertLinkTypeAssignable } from './link-type-service.js';
 import { createComment, listComments, updateComment } from './comment-service.js';
@@ -659,8 +663,10 @@ export function updateLink(
     sets.push('version = ?', 'updated_at = ?', 'updated_by = ?', 'updated_at_ms = ?');
     args.push(current.version + 1, now, actorUserId, nowMs);
     // S4 (13-layers.md §5.1): first edit in a working layer materialises a
-    // shadow copy; the UPDATE targets the connection's layer row only.
-    materializeShadow(ndb, 'links', id);
+    // shadow copy; the UPDATE targets the connection's layer row only. A live
+    // duplicate triple in the layer makes the shadow insert impossible — a clear
+    // 422 `duplicate edges` instead of a raw SQLite failure (bug a9615f9b).
+    materializeLiveLinkShadow(ndb, id);
     args.push(id, ndb.layerId);
     ndb
       .prepare(`UPDATE links SET ${sets.join(', ')} WHERE id = ? AND layer_id = ?`)

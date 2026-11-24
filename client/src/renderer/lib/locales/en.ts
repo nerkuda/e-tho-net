@@ -703,11 +703,56 @@ export const en = {
    */
   'errors.propertyTargetType': 'value type is not allowed by the property',
   /**
+   * Link property write: a thought is being linked to itself
+   * (`details.reason === 'self-link'`, issue 884919f6). The bulk-change report
+   * must show this concrete reason instead of the generic validation text.
+   */
+  'errors.propertySelfLink': 'a thought cannot link to itself — choose another target',
+  /**
    * Server errors — user-facing text by code (ADR daab6ac4, §4):
    * `error.message` is English and never shown. Refining reasons
    * (`details.reason`/`details.issue`) use `errors.code.<code>.<token>` keys;
    * an unknown code or reason falls back to the generic text.
    */
+  /**
+   * Precise reasons for a failed property write (ошибка 0033ea14, DoD 3):
+   * the server names the field in `details.field`, the dialog says what is
+   * wrong. Ids are not shown — only the field and the user's next step.
+   */
+  'errors.propertyAllowedTargetTypeMissing':
+    'the "Target types" restriction points to a type that no longer exists — pick the types again',
+  'errors.propertyAllowedSourceTypeMissing':
+    'the "Source types" restriction points to a type that no longer exists — pick the types again',
+  'errors.propertyLinkTypeMissing':
+    'the property link type was not found — choose the link type again',
+  'errors.propertyDefaultTargetInvalid':
+    'the default value for targets is invalid — check the selected thoughts',
+  /** Strict request-body check: the server lists unknown fields (`details.fields`). */
+  'errors.propertyUnknownFields': 'the server does not accept these request fields: %1',
+  /**
+   * The remaining fields of a failed property write (verification of
+   * 0033ea14): `PROPERTY_FIELD_ERROR_KEYS` covers every field the server
+   * really returns in `details.field` (`property-service.ts`, registry and
+   * binding contracts). Ids and internal names are never shown.
+   */
+  'errors.propertyNameInvalid': 'the property name is invalid — enter a non-empty name',
+  'errors.propertyValueTypeInvalid': 'the value type is invalid — choose the type again',
+  'errors.propertyDescriptionInvalid': 'the description is invalid — check the text',
+  'errors.propertyDirectionInvalid': 'the link direction is invalid — choose the direction again',
+  'errors.propertyRefInvalid': 'the property is invalid or ambiguous — choose it again',
+  'errors.propertyValueInvalid': 'the value is invalid — check the selection',
+  'errors.propertyOwnerTypeInvalid': 'the type kind is invalid — update the client and retry',
+  'errors.propertyModeInvalid': 'the data shape did not match — update the client and retry',
+  'errors.propertyLinkDecorationInvalid':
+    'the link decoration is invalid — choose the color, style and width again',
+  'errors.propertyLinkParentInvalid': 'the parent link type is invalid — choose it again',
+  'errors.propertyBindingFieldInvalid': 'the binding options are invalid — open the type and retry',
+  'errors.propertyOrderPositionInvalid':
+    'the property order is invalid — a position must be a non-negative number',
+  'errors.propertyOrderPropertyInvalid':
+    'the order names a property that cannot be ordered now (it is set by the thought type or the thought has no value for it) — reload the order list',
+  'errors.propertyOrderSideInvalid':
+    'the link side in the order is invalid — choose the side again',
   'errors.code.VALIDATION_ERROR': 'check the entered data',
   /** Refinement of `400 VALIDATION_ERROR` for an unreachable series (`details.issue`). */
   'errors.code.VALIDATION_ERROR.no-occurrence':
@@ -891,12 +936,16 @@ export const en = {
   'serverUpdate.failure.reason': 'Reason: %1',
   /** Журнал установщика: `%1` — путь. */
   'serverUpdate.failure.journal': 'Installer log: %1',
-  /** The installer exited with a non-zero code: `%1` — exit code. */
+  /**
+   * Установщик завершился ненулевым кодом: `%1` — код возврата. Откат
+   * выполняется только при сбое после замены файлов, поэтому текст не
+   * утверждает его, а отсылает за итогом в журнал.
+   */
   'serverUpdate.failure.installerExit':
-    'the installer exited with code %1; the rollback was performed by the installer',
+    'the installer exited with code %1; the rollback runs only if the failure happened after files were replaced - the installer log has the outcome',
   /** The installer exited without an exit code (signal/abnormal termination). */
   'serverUpdate.failure.installerExitNoCode':
-    'the installer terminated abnormally; the rollback was performed by the installer',
+    'the installer terminated abnormally; the rollback runs only if the failure happened after files were replaced - the installer log has the outcome',
   /** Exit code 20: the installer requires manual mode. */
   'serverUpdate.failure.installerPrecondition':
     'the installer requires manual mode — run the update manually and check the installer log',
@@ -3789,6 +3838,9 @@ export const en = {
     'Default value for targets of any types. It can be overridden by values in the table rows above',
   'propertyManager.descriptionPropertiesOnoZnachitKakomFormate':
     'Property description: what it means and what format the value has (a hint in the thought editor and for AI agents)',
+  /** Rolling back a just-created property when its bindings fail (0033ea14). */
+  'propertyManager.createRollbackFailed':
+    'the type restrictions were not saved, and the created property could not be rolled back — delete it in the property list. Reason: %1',
   'propertyManager.propertyTakimNameAlreadyHas': 'A property with this name already exists.',
   'propertyManager.label.vidValues': 'Value kind',
   'propertyManager.label.description': 'Description',

@@ -270,7 +270,13 @@ describe('реестр профилей контекста (задача 7a798b1
     // Скаляры: без под-выборочных наборов «все в выборке» у дат/чисел и булевых.
     assert.ok(byType['date']!.includes('between') && !byType['date']!.includes('all_of'));
     assert.ok(byType['number']!.includes('gt') && !byType['number']!.includes('all_of'));
-    assert.deepEqual(byType['bool'], ['eq', 'ne'], 'булево — триада без сравнений');
+    // Булево: «да/нет/не важно» значением + наличие значения (задача 2dd47944):
+    // `false` — значение, «значения нет» — отдельная `is_empty`.
+    assert.deepEqual(
+      byType['bool'],
+      ['eq', 'ne', 'is_empty', 'not_empty'],
+      'булево — триада + наличие значения',
+    );
     // Ссылочные: наборные операторы и «в иерархии» (требование aa7a2aea).
     for (const op of ['in', 'not_in', 'any_of', 'all_of', 'none_of', 'in_hierarchy'] as const) {
       assert.ok(byType['link']!.includes(op), `link: ${op}`);

@@ -758,7 +758,8 @@ describe('восстановление прогресса при повторн�
       exit_code: 10,
       log_path: 'C:\\ProgramData\\ETN\\logs\\install-from-field.log',
       error:
-        'The installer exited with code 10; the rollback was performed by the installer, ' +
+                'The installer exited with code 10; files are restored from this run\'s snapshot ' +
+        'only if the failure happened after replacement (the installer log tells which), ' +
         'log: C:\\ProgramData\\ETN\\logs\\install-from-field.log',
     });
     const harness = mount({ getProgress: async () => ({ job: failed }) });
@@ -781,7 +782,8 @@ describe('восстановление прогресса при повторн�
     // локализованный текст, путь к журналу — из старого серверного текста.
     const failed = job('failed', {
       error:
-        'The installer exited with code 10; the rollback was performed by the installer, ' +
+                'The installer exited with code 10; files are restored from this run\'s snapshot ' +
+        'only if the failure happened after replacement (the installer log tells which), ' +
         'log: C:\\ProgramData\\ETN\\logs\\install-old.log',
     });
     delete (failed as { reason?: unknown }).reason;

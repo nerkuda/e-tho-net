@@ -112,7 +112,7 @@ import { subgraphAsync, resolveThoughtRefsAsync } from '../../domain/heavy-read.
 import { getHomeThoughtId, getThoughtOrThrow, checkThoughtDeletion, deleteThought, updateThought } from '../../domain/thought-service.js';
 import { getLink, updateLink } from '../../domain/link-service.js';
 import {
-  removeLinkTarget,
+  removeLinkTargets,
   type LinkRemovalAction,
 } from '../../domain/link-target-removal.js';
 import { findMentions } from '../../domain/search-service.js';
@@ -1259,8 +1259,13 @@ const HANDLERS: Record<string, OpHandler> = {
         // Умное удаление (0.14.1, ADR a967d865) — та же процедура, что у удаления
         // цели свойства-связи: основа и свежее ребро слоя физически
         // (`link.deleted`); ребро основы/предка при работе в слое — корзина
-        // (`link.updated`), восстановление — `links.restore`.
-        const removed = removeLinkTarget(ndb, a.link_id, rt.deps.auth.userId);
+        // (`link.updated`), восстановление — `links.restore`. Физическое удаление
+        // строки слоя под живой тенью дочернего слоя — 422 `blocking.layers`
+        // (0.16.2, ошибка 97b64a69); живой дубль тройки в разных слоях снимается
+        // целиком (0.16.2, ошибка 374c9776) — событие по каждой строке, а строки,
+        // уже лежащие в корзине, живыми не считаются и повторно не помечаются.
+        const removals = removeLinkTargets(ndb, a.link_id, rt.deps.auth.userId);
+        const [removed] = removals;
         const audit = {
           action: 'etn.links.delete',
           targetType: 'link',
@@ -1269,37 +1274,37 @@ const HANDLERS: Record<string, OpHandler> = {
         };
         // Идемпотентность (ошибка 7df2b3d1): ребра нет или оно уже в корзине —
         // no-op без события и без строки журнала.
-        if (removed === null) {
+        if (removed === undefined) {
           return { result: { link_id: a.link_id, action: 'noop' as const }, audit };
         }
-        if (removed.action === 'deleted') {
-          return {
-            result: { link_id: removed.link_id, action: removed.action },
-            events: [{ type: 'link.deleted' as const, data: { id: removed.link_id } }],
-            activity: [{ kind: 'link' as const, action: 'deleted' as const, link: removed.link }],
-            audit,
-          };
+        // Живой дубль тройки снимается целиком (ошибка 374c9776): каждая снятая
+        // строка идёт своим событием и строкой журнала.
+        const events: AnyWriteEvent[] = [];
+        const activity: WriteActivityEntry[] = [];
+        for (const removal of removals) {
+          if (removal.action === 'deleted') {
+            events.push({ type: 'link.deleted', data: { id: removal.link_id } });
+            activity.push({ kind: 'link', action: 'deleted', link: removal.link });
+            continue;
+          }
+          // Корзина слоя: строка уже помечена — событие и журнал показывают
+          // итоговое состояние ребра, как у прочих пометок.
+          const marked = getLink(ndb, removal.link_id);
+          if (marked === null) continue;
+          events.push({
+            type: 'link.updated',
+            data: {
+              id: marked.id,
+              changes: { marked_for_deletion: true },
+              version: marked.version,
+            },
+          });
+          activity.push({ kind: 'link', action: 'trashed', link: marked });
         }
-        // Корзина слоя: строка уже помечена — событие и журнал показывают
-        // итоговое состояние ребра, как у прочих пометок.
-        const marked = getLink(ndb, removed.link_id);
         return {
           result: { link_id: removed.link_id, action: removed.action },
-          ...(marked === null
-            ? {}
-            : {
-                events: [
-                  {
-                    type: 'link.updated' as const,
-                    data: {
-                      id: marked.id,
-                      changes: { marked_for_deletion: true },
-                      version: marked.version,
-                    },
-                  },
-                ],
-                activity: [{ kind: 'link' as const, action: 'trashed' as const, link: marked }],
-              }),
+          ...(events.length === 0 ? {} : { events }),
+          ...(activity.length === 0 ? {} : { activity }),
           audit,
         };
       });
@@ -1814,43 +1819,38 @@ const HANDLERS: Record<string, OpHandler> = {
           rt.deps.auth.userId,
           a.side ?? null,
         );
-        const marked = result.link_id !== null ? getLink(ndb, result.link_id) : null;
         const audit = {
           action: 'etn.properties.remove',
           targetType: a.owner_type,
           targetId: a.owner_id,
           details: { key: a.key, value: a.value },
         };
-        // Умное удаление (0.14.1, ADR a967d865): основа/свежее ребро слоя —
-        // физически (`link.deleted`); ребро из основы в слое — корзина
-        // (`link.updated`). Уже помеченное — no-op без события.
-        if (result.action === 'deleted' && result.link_id !== null) {
-          return {
-            result,
-            events: [{ type: 'link.deleted' as const, data: { id: result.link_id } }],
-            ...(result.link === null
-              ? {}
-              : { activity: [{ kind: 'link' as const, action: 'deleted' as const, link: result.link }] }),
-            audit,
-          };
+        // Живой дубль тройки снимается целиком (ошибка 374c9776): событие и
+        // строка журнала — по каждой снятой строке.
+        const events: AnyWriteEvent[] = [];
+        const activity: WriteActivityEntry[] = [];
+        for (const removal of result.removals) {
+          if (removal.action === 'deleted') {
+            events.push({ type: 'link.deleted', data: { id: removal.link_id } });
+            activity.push({ kind: 'link', action: 'deleted', link: removal.link });
+            continue;
+          }
+          const marked = getLink(ndb, removal.link_id);
+          if (marked === null) continue;
+          events.push({
+            type: 'link.updated',
+            data: {
+              id: marked.id,
+              changes: { marked_for_deletion: true },
+              version: marked.version,
+            },
+          });
+          activity.push({ kind: 'link', action: 'trashed', link: marked });
         }
         return {
           result,
-          ...(marked === null
-            ? {}
-            : {
-                events: [
-                  {
-                    type: 'link.updated' as const,
-                    data: {
-                      id: marked.id,
-                      changes: { marked_for_deletion: true },
-                      version: marked.version,
-                    },
-                  },
-                ],
-                activity: [{ kind: 'link' as const, action: 'trashed' as const, link: marked }],
-              }),
+          ...(events.length === 0 ? {} : { events }),
+          ...(activity.length === 0 ? {} : { activity }),
           audit,
         };
       });

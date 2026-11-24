@@ -17,6 +17,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import type { ServerDeployment } from '@etn/shared';
+
 import { ConfigError, DEFAULT_UPDATE_CONFIG, loadConfig } from '../src/config.js';
 import {
   DEFAULT_UPDATE_CHECK_INTERVAL_MS,
@@ -43,7 +45,6 @@ import {
   DOCKER_MARKER_PATH,
   DeploymentConfigError,
   resolveDeployment,
-  type Deployment,
 } from '../src/update/deployment.js';
 
 /** Адрес тестового фида. */
@@ -225,7 +226,7 @@ describe('Конфигурация канала обновлений (ETN_UPDATE
   });
 
   it('ETN_DEPLOYMENT: известные значения принимаются, мусор отклоняется', () => {
-    for (const mode of ['docker', 'windows-service', 'standalone'] as Deployment[]) {
+    for (const mode of ['docker', 'windows-service', 'standalone'] as ServerDeployment[]) {
       const cfg = loadConfig({ ...ENV, ETN_DEPLOYMENT: mode });
       assert.equal(cfg.deployment, mode);
     }
@@ -451,7 +452,7 @@ describe('createUpdateChecker', () => {
     routes?: Routes;
     channel?: UpdateChannel;
     currentVersion?: string;
-    deployment?: Deployment;
+    deployment?: ServerDeployment;
     fetchImpl?: UpdateFetch;
     calls?: string[];
   }): {

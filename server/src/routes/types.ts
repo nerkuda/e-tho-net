@@ -205,6 +205,24 @@ function parseAttachBody(body: Record<string, unknown>, requestId: string): Atta
   const position = out.position as number | undefined;
   const side =
     out.side === undefined ? undefined : (out.side as unknown as LinkPropertySide | null);
+  // `mode` — явный селектор формы (ошибка 0033ea14): клиент шлёт его как
+  // часть `AttachPropertyInput` (`@etn/shared`), а форму сервер выводит из
+  // состава полей. Принимаем объявленное поле и сверяем его с фактическим
+  // набором, чтобы ошибка была про конкретное поле, а не про «лишний ключ».
+  const declaredMode = out.mode as 'attach' | 'create' | undefined;
+  if (declaredMode !== undefined) {
+    const byFields: 'attach' | 'create' = out.property_id !== undefined ? 'attach' : 'create';
+    if (declaredMode !== byFields) {
+      throw new EtnError(
+        'VALIDATION_ERROR',
+        declaredMode === 'attach'
+          ? "mode 'attach' requires property_id."
+          : "mode 'create' requires key and value_type and does not accept property_id.",
+        { field: 'mode', mode: declaredMode },
+        requestId,
+      );
+    }
+  }
   if (out.property_id !== undefined) {
     // Природа свойства живёт в справочнике — nature-поля не допускаются.
     if (

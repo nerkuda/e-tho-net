@@ -36,6 +36,8 @@ import { fileURLToPath } from 'node:url';
 import { BASE_LAYER_ID, filterProfileHasTime, type PublicationExportFormat } from '@etn/shared';
 
 import { ConfigError, loadConfig, type ServerConfig } from './config.js';
+import { bootstrapDataDir } from './bootstrap/data-dir.js';
+import { initializeFirstUser } from './bootstrap/first-user.js';
 import { logger } from './logger.js';
 import { SystemDb } from './db/system-db.js';
 import { closeNetworkDb, openNetworkDb } from './db/network-db.js';
@@ -658,8 +660,6 @@ function runInit(args: InitArgs, config: ServerConfig): number {
     }
 
     const gen = generateApiKey();
-    const userId = randomUUID();
-    const apiKeyId = randomUUID();
 
     let keyPath: string | null = null;
     if (args.keyOut !== null) {
@@ -668,29 +668,19 @@ function runInit(args: InitArgs, config: ServerConfig): number {
     }
 
     try {
-      sys.transaction(() => {
-        const user = sys.createUser({
-          id: userId,
-          username: args.username,
-          displayName: args.displayName,
-          isAdmin: true,
-          isFirstUser: true,
-        });
-        sys.createApiKey({
-          id: apiKeyId,
-          userId: user.id,
-          label: 'primary',
-          keyHash: gen.keyHash,
-          keyPrefix: gen.keyPrefix,
-        });
-        sys.insertAuditLog({
-          category: 'system',
-          action: 'init',
-          actorUserId: user.id,
-          targetType: 'user',
-          targetId: user.id,
-        });
-      });
+      // Пользователь + ключ + аудит — одним кодом с bootstrap пакета etn-mcp
+      // (`bootstrap/first-user.ts`), чтобы входы не разошлись.
+      sys.transaction(() =>
+        initializeFirstUser(
+          sys,
+          {
+            username: args.username,
+            displayName: args.displayName,
+            keyLabel: 'primary',
+          },
+          gen,
+        ),
+      );
     } catch (err) {
       if (keyPath !== null) rmSync(keyPath, { force: true });
       throw err;
@@ -825,8 +815,15 @@ export async function main(opts: MainOptions = {}): Promise<number> {
       );
       return 1;
     }
-    const apiKey = parsed.apiKey ?? env.ETN_API_KEY?.trim() ?? null;
     try {
+      // Единая точка bootstrap (ADR aa9507e6 п. 5): классификация каталога,
+      // маркер/ключ и тихая инициализация — до открытия MCP-сессии. Только
+      // stderr: stdout занят MCP-кадрами.
+      const boot = bootstrapDataDir({
+        dataDir: config.dataDir,
+        env,
+        explicitApiKey: parsed.apiKey,
+      });
       // Тяжёлые чтения агента тоже не должны морозить stdio-процесс: тот же
       // пул reader-воркеров, что в HTTP-сервере (ADR bec191e6).
       configureReaderPool({
@@ -842,7 +839,7 @@ export async function main(opts: MainOptions = {}): Promise<number> {
         idleEvictionMs: config.writePool.idleEvictionMs,
       });
       // Logger is built inside runStdioMcp (stderr-bound) to keep stdout clean.
-      await runStdioMcp({ dataDir: config.dataDir, apiKey });
+      await runStdioMcp({ dataDir: config.dataDir, apiKey: boot.apiKey });
       return 0;
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));

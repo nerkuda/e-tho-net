@@ -1,0 +1,103 @@
+{
+  "name": "eb6f5794-status-bar-network-scope",
+  "description": "Ошибка eb6f5794: статусная строка показывает события из всех сетей соединения, а не только активной вкладки. Гейт: открыты две вкладки (A — активна, B — фоном), сокет B подключён; событие из B доставлено клиенту (невакуумность — маркер «*» на вкладке B), но текст статусной строки не меняется; событие из A текст показывает. Красная фаза на дофиксовой сборке — шаг «status-bar-unchanged». Команда: npm -w @etn/client run build -- --mode test && node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.eb6f5794-status-bar-network.scenario.json --scenario-seed client/scripts/ui-probe.eb6f5794-seed.mjs --seed-name \"Сеть A eb6f5794\"",
+  "timeout": 240000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network-a",
+      "timeout": 40000,
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('{{networkName}}')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "workspace-ready",
+      "timeout": 40000,
+      "waitFor": "document.querySelector('.statusbar .sb-event') !== null"
+    },
+    {
+      "name": "open-picker",
+      "eval": "(() => { const plus = document.querySelector('.tab-plus'); if (plus === null) return 'no-plus'; plus.click(); return 'ok'; })()"
+    },
+    {
+      "name": "picker-has-b",
+      "timeout": 30000,
+      "waitFor": "[...document.querySelectorAll('.network-item')].some((e) => (e.textContent || '').includes('{{nameB}}'))"
+    },
+    {
+      "name": "open-network-b",
+      "probe": "(() => { const item = [...document.querySelectorAll('.network-item')].find((e) => (e.textContent || '').includes('{{nameB}}')); if (item === undefined) return 'no-item'; item.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-b-active",
+      "timeout": 60000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{nameB}}'))"
+    },
+    {
+      "name": "b-socket-connected",
+      "timeout": 30000,
+      "probe": "(async () => { for (let i = 0; i < 150; i += 1) { const list = await window.etn.realtime.getStatuses(); const entry = list.find((x) => x.networkId === '{{netB}}'); if (entry !== undefined && entry.status === 'connected') return true; await new Promise((r) => setTimeout(r, 100)); } return false; })()",
+      "expect": true
+    },
+    {
+      "name": "back-to-tab-a",
+      "probe": "(() => { const tab = [...document.querySelectorAll('.tab')].find((e) => !e.classList.contains('tab-plus') && (e.textContent || '').includes('{{networkName}}')); if (tab === undefined) return 'no-tab'; tab.click(); return 'ok'; })()",
+      "expect": "ok"
+    },
+    {
+      "name": "tab-a-active",
+      "timeout": 40000,
+      "waitFor": "[...document.querySelectorAll('.tab.tab-active')].some((e) => (e.textContent || '').includes('{{networkName}}'))"
+    },
+    {
+      "name": "baseline-event-text",
+      "probe": "document.querySelector('.statusbar .sb-event')?.textContent ?? ''"
+    },
+    {
+      "name": "event-in-b",
+      "api": {
+        "name": "createThoughtInB",
+        "method": "POST",
+        "path": "/networks/{{netB}}/thoughts",
+        "body": { "title": "Событие из сети B eb6f5794" }
+      }
+    },
+    {
+      "name": "b-event-delivered",
+      "timeout": 30000,
+      "waitFor": "document.querySelector('.tab.tab-dirty') !== null"
+    },
+    {
+      "name": "status-bar-unchanged",
+      "probe": "document.querySelector('.statusbar .sb-event')?.textContent ?? ''",
+      "expectFrom": "baseline-event-text"
+    },
+    {
+      "name": "event-in-a",
+      "api": {
+        "name": "createThoughtInA",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts",
+        "body": { "title": "Событие из сети A eb6f5794" }
+      }
+    },
+    {
+      "name": "own-event-shown",
+      "timeout": 30000,
+      "waitFor": "(document.querySelector('.statusbar .sb-event')?.textContent ?? '') !== ''"
+    }
+  ]
+}

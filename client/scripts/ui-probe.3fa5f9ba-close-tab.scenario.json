@@ -1,0 +1,57 @@
+{
+  "name": "3fa5f9ba-close-tab-no-false-offline",
+  "description": "Ошибка 3fa5f9ba: закрытие вкладки мыслесети не должно давать ложное «Нет соединения — правка сохранена как черновик…». Сценарий подключается к стенду, открывает сеть (вкладка + сокет), дожидается зелёного индикатора связи, ставит наблюдатель за стеком тостов и закрывает вкладку крестиком. Проба — тексты стека тостов после закрытия: при исправлении пусто, на дофиксовой сборке сюда попадает ложное сообщение о потере связи.",
+  "timeout": 120000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "link-connected",
+      "waitFor": "document.querySelector('.workspace .status-light.ok') !== null"
+    },
+    {
+      "name": "tab-visible",
+      "waitFor": "document.querySelector('.tab .tab-close') !== null"
+    },
+    {
+      "name": "watch-notices",
+      "eval": "window.__notices = []; window.__noticeWatch = () => { const s = document.querySelector('.notice-stack'); window.__notices = s ? Array.from(s.children).map((c) => c.textContent) : []; }; new MutationObserver(window.__noticeWatch).observe(document.body, { childList: true, subtree: true }); window.__noticeWatch();"
+    },
+    {
+      "name": "notices-before-close",
+      "probe": "window.__notices.join(' | ')",
+      "expect": ""
+    },
+    { "name": "close-tab", "click": ".tab .tab-close" },
+    {
+      "name": "tab-gone",
+      "waitFor": "document.querySelector('.tab .tab-close') === null"
+    },
+    {
+      "name": "settle-window",
+      "eval": "window.__settleAt = Date.now()"
+    },
+    {
+      "name": "notices-after-close",
+      "waitFor": "Date.now() - window.__settleAt > 700",
+      "timeout": 5000
+    },
+    {
+      "name": "notices-after",
+      "probe": "window.__notices.join(' | ')",
+      "expect": ""
+    }
+  ]
+}

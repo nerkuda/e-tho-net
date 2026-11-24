@@ -176,6 +176,7 @@ async function mount(
   autoRefresh: boolean,
   actions: Record<string, unknown> = {},
   source: TaskListSource = { kind: 'thought', ownerId: 't1' },
+  extraView: Record<string, unknown> = {},
 ): Promise<{ handle: any; host: ShimElement; destroy: () => void }> {
   store.update({ networkId: 'n1', network: { first_day_of_week: 1 } } as any);
   const host = new ShimElement('div');
@@ -184,6 +185,7 @@ async function mount(
     view: {
       headless: true,
       autoRefreshOnCommentChange: autoRefresh,
+      ...extraView,
       renderText: (node, row) => {
         node.textContent = row.text;
       },
@@ -403,6 +405,46 @@ describe('панель задач: корзина и удаление мысли
     await wait(250);
     assert.equal(api.listCalls(), initial, 'смена синонимов — не событие корзины/визуала');
     destroy();
+  });
+});
+
+describe('панель задач: смена видимости субъекта напоминания (ошибка 71cb791e)', () => {
+  it('неактуальность субъекта вне строк панели и «показывать неактуальные» перечитывают её', async (t) => {
+    const api = shim([taskRow(0)]);
+    const { destroy } = await mount(
+      false,
+      {},
+      { kind: 'thought', ownerId: 't1' },
+      { reminders: true },
+    );
+    t.after(destroy);
+    const initial = api.listCalls();
+
+    // Субъект напоминания ('t9') НЕ входит в строки панели: ветка визуала его
+    // пропускает по `subjectData`, а состав напоминаний владельца меняется
+    // (listReminders не отдаёт неактуальные при выключенном show_inactive).
+    trashEvent(1, 'thought.updated', { id: 't9', version: 2, changes: { active: false } });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 1, 'неактуальность субъекта — перечитывание');
+
+    trashEvent(2, 'user-preference.updated', { key: 'show_inactive', value: true });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 2, 'смена show_inactive — перечитывание');
+
+    // Заголовок субъекта видимость напоминаний не меняет — лишнего запроса нет.
+    trashEvent(3, 'thought.updated', { id: 't9', version: 3, changes: { title: 'Имя' } });
+    await wait(250);
+    assert.equal(api.listCalls(), initial + 2, 'событие вне видимости субъекта — без запроса');
+  });
+
+  it('панель без напоминаний на смену активности вне строк не реагирует', async (t) => {
+    const api = shim([taskRow(0)]);
+    const { destroy } = await mount(false);
+    t.after(destroy);
+    const initial = api.listCalls();
+    trashEvent(1, 'thought.updated', { id: 't9', version: 2, changes: { active: false } });
+    await wait(250);
+    assert.equal(api.listCalls(), initial, 'напоминаний нет — пересчитывать нечего (39d78d2a)');
   });
 });
 

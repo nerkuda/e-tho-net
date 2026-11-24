@@ -188,8 +188,9 @@ describe('футер отбора: имя, маркер ● и сохранен�
       'смена имени + «Сохранить» = сохранение КОПИЕЙ',
     );
 
-    (exactOne(root, 'ff-apply')!).emit('click', {});
-    (exactOne(root, 'ff-clear')!).emit('click', {});
+    const actions = handle.actions as unknown as ShimElement;
+    (exactOne(actions, 'ff-apply')!).emit('click', {});
+    (exactOne(actions, 'ff-clear')!).emit('click', {});
     assert.equal(calls.apply, 1);
     assert.equal(calls.clear, 1);
   });
@@ -204,10 +205,16 @@ describe('футер отбора: имя, маркер ● и сохранен�
       ],
     });
     const root = handle.root as unknown as ShimElement;
+    const actions = handle.actions as unknown as ShimElement;
+    // Свои кнопки места — отдельный ряд `.ff-place`: в компакте приклеены
+    // только «Применить»/«Очистить», поэтому ряд места редактор уводит в
+    // прокручиваемый низ (задача c20b26ef, круг доработки).
+    const place = handle.placeButtons as unknown as ShimElement;
     assert.equal(exactOne(root, 'ff-save'), null, 'стандартный набор отключён');
-    buttonByText(root, 'Готово')!.emit('click', {});
+    buttonByText(place, 'Готово')!.emit('click', {});
     assert.equal(done, 1);
-    assert.ok(exactOne(root, 'ff-extra--cancel') !== null, 'кнопки профиля помечены своим id');
+    assert.ok(exactOne(place, 'ff-extra--cancel') !== null, 'кнопки профиля помечены своим id');
+    assert.equal(exactOne(actions, 'ff-extra--cancel'), null, 'ряд места — не в полосе действий');
   });
 
   it('двухрядная компоновка: действия над отбором сверху, имя и сохранённые снизу', () => {
@@ -219,12 +226,19 @@ describe('футер отбора: имя, маркер ● и сохранен�
       ],
     });
     const root = handle.root as unknown as ShimElement;
-    const actions = exactOne(root, 'ff-actions')!;
+    // Ряд действий отдаётся ОТДЕЛЬНО от корня: редактор держит его в полосе
+    // `.fe-actions` — она одна приклеена при низкой высоте окна (c20b26ef).
+    const actions = handle.actions as unknown as ShimElement;
+    assert.equal(exactOne(root, 'ff-actions'), null, 'ряд действий — не в корне футера');
     const nameRow = exactOne(root, 'ff-name')!;
     // Верхний ряд — действия над текущим отбором и его результатами.
     assert.ok(exactOne(actions, 'ff-apply') !== null, '«Применить» — в верхнем ряду');
     assert.ok(exactOne(actions, 'ff-clear') !== null, '«Очистить» — в верхнем ряду');
-    assert.ok(exactOne(actions, 'ff-extra--commands') !== null, '«Команды ▾» — в верхнем ряду');
+    // «Команды ▾» — кнопка МЕСТА: свой ряд `.ff-place`, чтобы в компакте уехать
+    // в прокручиваемый низ (приклеены только «Применить»/«Очистить», c20b26ef).
+    const place = handle.placeButtons as unknown as ShimElement;
+    assert.equal(exactOne(actions, 'ff-extra--commands'), null, '«Команды ▾» — не в ряду действий');
+    assert.ok(exactOne(place, 'ff-extra--commands') !== null, '«Команды ▾» — в ряду места');
     assert.equal(exactOne(actions, 'ff-extra--saved'), null, 'кнопка сохранённых — не в верхнем ряду');
     // Нижний ряд — манипуляции с сохранёнными отборами: имя + «Сохранить» + «…».
     assert.ok(exactOne(nameRow, 'ff-name__input') !== null, 'поле имени — в нижнем ряду');
@@ -234,19 +248,21 @@ describe('футер отбора: имя, маркер ● и сохранен�
     assert.equal(savedPicked, 1, 'кнопка нижнего ряда кликабельна');
   });
 
-  it('кнопка нижнего ряда без строки имени не теряется — уходит в верхний ряд', () => {
+  it('кнопка нижнего ряда без строки имени не теряется — уходит в ряд места', () => {
     const { handle } = buildFooter({
       getName: undefined,
       setName: undefined,
       extraButtons: [{ id: 'saved', label: 'Отборы…', place: 'name', onClick: () => undefined }],
     });
     const root = handle.root as unknown as ShimElement;
+    const actions = handle.actions as unknown as ShimElement;
+    const place = handle.placeButtons as unknown as ShimElement;
     assert.equal(exactOne(root, 'ff-name'), null, 'строки имени нет — футер без имени');
-    assert.ok(exactOne(root, 'ff-extra--saved') !== null, 'кнопка сохранена, не потеряна');
-    assert.ok(exactOne(root, 'ff-save') !== null, '«Сохранить» ушло в верхний ряд');
+    assert.ok(exactOne(place, 'ff-extra--saved') !== null, 'кнопка сохранена, не потеряна');
+    assert.ok(exactOne(actions, 'ff-save') !== null, '«Сохранить» ушло в ряд действий');
   });
 
-  it('компоновка: фраза → линия-разделитель → имя → кнопки (п.1)', () => {
+  it('компоновка: фраза → линия-разделитель → имя, кнопки — в ряду действий (п.1)', () => {
     const { handle, state } = buildFooter();
     const root = handle.root as unknown as ShimElement;
     state.preview = { text: 'Город = Москва', issues: [] };
@@ -256,11 +272,15 @@ describe('футер отбора: имя, маркер ● и сохранен�
     const previewIdx = idx(mod.FILTER_FOOTER_PREVIEW_CLASS);
     const dividerIdx = idx(mod.FILTER_FOOTER_DIVIDER_CLASS);
     const nameIdx = idx('ff-name');
-    const actionsIdx = idx('ff-actions');
-    assert.ok(previewIdx >= 0 && dividerIdx >= 0 && nameIdx >= 0 && actionsIdx >= 0, 'все секции на месте');
+    assert.ok(previewIdx >= 0 && dividerIdx >= 0 && nameIdx >= 0, 'все секции корня на месте');
     assert.ok(previewIdx < dividerIdx, 'фраза над линией');
     assert.ok(dividerIdx < nameIdx, 'линия между фразой и именем');
-    assert.ok(nameIdx < actionsIdx, 'имя над кнопками');
+    // Ряд кнопок — отдельный элемент футера: порядок «имя → кнопки» задаёт
+    // редактор, ставя приклеенную полосу после низа редактора (задача c20b26ef).
+    assert.ok(
+      exactOne(handle.actions as unknown as ShimElement, 'ff-apply') !== null,
+      'кнопки — в ряду действий',
+    );
     // Пустая фраза прячет линию — отделять нечего.
     state.preview = { text: '', issues: [] };
     handle.refresh();
@@ -318,7 +338,7 @@ describe('футер отбора: фраза-превью и запрет пр�
     const { handle, state } = buildFooter();
     const root = handle.root as unknown as ShimElement;
     const box = exactOne(root, mod.FILTER_FOOTER_PREVIEW_CLASS)!;
-    const apply = exactOne(root, 'ff-apply')!;
+    const apply = exactOne(handle.actions as unknown as ShimElement, 'ff-apply')!;
 
     state.preview = {
       text: 'битый отбор',

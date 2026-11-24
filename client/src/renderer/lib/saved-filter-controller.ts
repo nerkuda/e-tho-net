@@ -18,7 +18,7 @@
 import { confirmDialog, errorDialog, promptDialog } from './dialog.js';
 import { duplicateFilterName } from './pure.js';
 import { openSavedFilterDialog } from './saved-filter-bar.js';
-import { notice } from './notice.js';
+import { notice, toast } from './notice.js';
 import { t } from './i18n.js';
 
 /** Запись сохранённого отбора; `definition` — непрозрачное определение вида. */
@@ -149,10 +149,22 @@ export function createSavedFilterController(
       errorDialog(t('savedFilters.saveView'), err);
       return;
     }
-    opts.onPersist?.();
-    opts.onRefresh?.();
-    await reload();
-    notice(t('savedFilters.viewSaved', name));
+    // Подтверждение успеха не должно зависеть от побочного обновления панели:
+    // исключение из onPersist/onRefresh/reload раньше уходило в `void save()`
+    // и тост «Отбор сохранён» терялся (ошибка d6c8f1b7).
+    try {
+      opts.onPersist?.();
+      opts.onRefresh?.();
+      await reload();
+    } catch (err) {
+      console.error(
+        '[saved-filter-controller] не удалось обновить панель после сохранения', // i18n: technical — диагностика для разработчика
+        err,
+      );
+    }
+    // Успешное сохранение подтверждаем тостом в стеке уведомлений: по решению
+    // 28d22b8a `notice` уводит успех в строку состояния, а сценарий ждёт тост.
+    toast(t('savedFilters.viewSaved', name), 'success');
   }
 
   async function openPicker(): Promise<void> {

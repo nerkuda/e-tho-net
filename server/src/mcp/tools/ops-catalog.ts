@@ -556,7 +556,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     readOnly: false,
     effects:
       'applies the layer changes to the parent; on a conflict — reject entirely (except a thought merge: `base_version` mismatches on its rows are cleared — the chosen "layer version wins" variant); creates a reserve layer.',
-    errors: '`VALIDATION_ERROR` (`conflicts`/`missing_closure`), `NOT_FOUND`.',
+    errors:
+      '`VALIDATION_ERROR` (`conflicts` — including `reason: "base_row_missing"` for a layer shadow based on a row the parent no longer has; `missing_closure`), `NOT_FOUND`.',
     paramsContract: LayersMerge,
   },
   {
@@ -582,7 +583,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.conflicts',
     tool: 'etn.layers.conflicts',
     group: 'layers',
-    when: 'upcoming merge conflicts of the layer: rows whose base_version lags behind the base (read-only preview)',
+    when:
+      'upcoming merge conflicts of the layer: rows whose base_version lags behind the base or whose base row the base no longer has (read-only preview)',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'layer_id', required: true, desc: 'layer' },
@@ -599,7 +601,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'layers.reset_override',
     tool: 'etn.layers.reset_override',
     group: 'layers',
-    when: 'reset the overlap of selected layer rows: rebind base_version to the current base so the merge passes',
+    when:
+      'reset the overlap of selected layer rows: rebind base_version to the current base so the merge passes; for a row based on a base row that no longer exists this is the explicit way to re-create it (the row becomes a new insert)',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'layer_id', required: true, desc: 'layer' },
@@ -658,7 +661,10 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'thoughts.backlinks',
     tool: 'etn.thoughts.backlinks',
     group: 'thoughts',
-    when: 'explicit ID references `[[#<id>]]` to the thought in comment texts',
+    when:
+      'explicit ID references to the thought in comment texts: `[[#<id>]]`, `[[n:<net>#<id>]]` and' +
+      ' the transclusion of its comment (`!` prefix, optional section anchor — the same' +
+      ' reference; error 0afd8419)',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'thought_id', required: true, desc: 'thought' },
@@ -758,7 +764,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     ],
     destructive: false,
     readOnly: false,
-    effects: 'marks the usage edges for deletion; returns `{ cleared }`.',
+    effects: 'marks the usage edges for deletion: a live duplicate triple is removed as a whole and still counts as ONE cleared reference; returns `{ cleared }`.',
     errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
     paramsContract: ThoughtsUsageClear,
   },
@@ -782,7 +788,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'links.delete',
     tool: 'etn.links.delete',
     group: 'links',
-    when: 'delete one edge by `link_id` — precise address of exactly one edge (for example one of several edges between the same pair of thoughts) with smart deletion by layers; the bulk ops `unlink_parents`/`unlink_children` remove edges of a named thought PAIR (structural ones included) and cannot address one specific edge',
+    when: 'delete one edge (or its whole live duplicate triple) by `link_id` with smart deletion by layers: the address names one edge, and if the same triple is alive in several layers, the duplicate is removed as a whole; the bulk ops `unlink_parents`/`unlink_children` remove edges of a named thought PAIR (structural ones included) and cannot address one specific edge',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'link_id', required: true, desc: 'link id' },
@@ -790,9 +796,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: true,
     readOnly: false,
     effects:
-      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent).',
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`, irreversible: the edge disappears together with its comments, attachments and property values, there is no basket); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`), reversible by `links.restore`. A physical deletion happens only when no other layer holds a live shadow of the edge — a child-layer edit of a layer-created edge keeps it from being deleted (0.16.2, bug 97b64a69). A live duplicate triple (the same triple alive in several layers, bug 374c9776) is removed as a whole — the fresh layer row physically, the base/ancestor row to the layer basket — with one event and one journal row per row removed; rows already in the basket are not alive — they are neither counted nor re-marked. The physical branch is irreversible, so the action is destructive and requires `confirm: true`. The edge endpoints are not touched. Returns `{ link_id, action }` — `deleted` | `trashed` | `noop` (idempotent, the action of the requested row first).',
     errors:
-      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action), or the edge is held by a live layer and cannot be deleted from the base. A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
+      '`VALIDATION_ERROR` — `confirm: true` is missing (destructive action); the edge is held by a live shadow in a layer (base context — any working layer; a layer — its child layers) and cannot be deleted physically, the holders are in `details.blocking.layers`; a duplicate triple cannot be collapsed inside one layer (live rows in several layers above, or the triple slot in the current layer already taken by a row of this layer — a live duplicate or a basket row), the rows are in `details.links` (bugs 374c9776, a9615f9b). A missing or already marked edge — an idempotent no-op (`action: "noop"`).',
     paramsContract: LinksDelete,
   },
   {
@@ -807,7 +813,8 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: false,
     effects: 'a reversible operation: clears the `marked_for_deletion` flag on the link, event `link.updated`, journal `restored` (parity with REST `PATCH /links/{id}` with `marked_for_deletion: false`). Works the same for the base and a layer, including edges marked by the smart deletion of a link property.',
-    errors: '`VALIDATION_ERROR`, `NOT_FOUND`.',
+    errors:
+      '`VALIDATION_ERROR` — restoring a base/ancestor row while the triple slot in the current layer is already taken by a live row of this layer (a live duplicate triple, bug a9615f9b; the rows are in `details.links`) — settle the duplicate first (`links.delete` removes it as a whole) or restore from another layer; `NOT_FOUND`.',
     paramsContract: LinksRestore,
   },
   {
@@ -1061,7 +1068,7 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     action: 'properties.remove',
     tool: 'etn.properties.remove',
     group: 'properties',
-    when: 'remove one target from a link property: a live edge is deleted by the "base/layer" rule, an already marked one — no-op',
+    when: 'remove one target from a link property: a live edge is deleted by the "base/layer" rule (422 when a live child-layer shadow holds it), an already marked one — no-op',
     params: [
       { name: 'network_id', required: true, desc: 'network' },
       { name: 'owner_type', required: true, desc: '`thought` | `link`' },
@@ -1076,9 +1083,9 @@ export const OPS_ACTIONS: readonly OpEntry[] = [
     destructive: false,
     readOnly: false,
     effects:
-      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`). An already marked edge — no-op without an event. Returns `{ link_id }` (idempotent).',
+      'Smart deletion (0.14.1, ADR a967d865): in the base and for an edge created in the current layer — a physical deletion (`link.deleted`); for an edge from the base/ancestor in a layer — a basket mark (`link.updated`, `marked_for_deletion: true`). Physical deletion of a layer row is refused while a live child-layer shadow holds it — 422 with `details.blocking.layers` (0.16.2, error 97b64a69). A live triple duplicated across layers (0.16.2, error 374c9776) is removed as a whole — the fresh layer row physically, the base/ancestor row to the layer basket — with one event per row. When the triple slot of the layer is held by a live row of this layer, only the holder itself can be removed; a request for another row of the triple is refused with 422 (bugs 374c9776, a9615f9b). An already marked edge — no-op without an event. Returns `{ link_id }` (idempotent).',
     errors:
-      '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`. A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
+      '`VALIDATION_ERROR` — unknown property, a property not of the `link` kind, the target connected by edges of both sides of the property — specify `side`; a physical deletion held by a live child-layer shadow (`details.blocking.layers`); a duplicate triple that cannot be collapsed inside one layer (`details.links`: the slot is held by a live row of this layer — delete the duplicate wholly or merge/discard the extra layer; or by a basket row — empty the basket of the layer). A missing edge to the target — an idempotent no-op (`link_id: null`, `action: null`).',
     paramsContract: PropertiesRemove,
   },
 
@@ -2003,6 +2010,9 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '# thoughts.query — filter reference',
       '',
       'Structural thought query without a text query; filters combine with AND.',
+      'To combine conditions by OR (for example, the statuses of several work kinds in ONE view) or to state',
+      '"the thought has NO link of a type", pass the `ast` body — an `or` group / the `link_type` operand with',
+      '`not_in` (both below); the flat form has no such combinator.',
       '',
       '| Filter | What it does |',
       '|---|---|',
@@ -2028,7 +2038,8 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '`is_empty`/`not_empty` — value presence: `value` is NOT needed (a passed one of any shape is ignored);',
       '`is_empty` — there is no value (no `property_values` row with a non-empty column; for a link property —',
       'no live `links_v` edge, rather than an empty value string), `not_empty` — there is one. For `bool`',
-      'the pair is forbidden — `eq true`/`eq false` carry the same meaning. For the "Type" operand presence exists',
+      '`false` is a VALUE (a row with `value_bool` 0): `is_empty` means "no mark at all" while `eq false` means',
+      '"the mark is explicitly false" — different selections (task 2dd47944). For the "Type" operand presence exists',
       'ONLY in AST (`type: is_empty/not_empty`); the flat form has no type one (decision 40c76144).',
       'Known discrepancy (outside the DoD of 40c76144): for multiple `url`/`cross_network_ref`/',
       "`publication` the `'[]'` string is treated by the flat form as a value (it looks at the string),",
@@ -2089,13 +2100,13 @@ export const GUIDE_TOPICS: readonly GuideTopic[] = [
       '',
       '- `id` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy` (identity: a thought id or a sub-selection; `in_hierarchy`/`not_in_hierarchy` — the selected thoughts and their descendants over structural links);',
       '- `type` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy/is_empty/not_empty/has/not_has/any_of/none_of` (`eq/ne/in/not_in/any_of/none_of` — an EXACT type match by id; `in_hierarchy`/`not_in_hierarchy` — the type and its subtypes; `is_empty`/`not_empty` — the thought has NO/ANY type (`type_id IS NULL`/`NOT NULL`), a value is not required; `has`/`not_has` — the value is ids/names of properties: the effective properties of the type; `any_of`/`none_of` — a list of types: "any of"/"none of" (a thought has one type, the set is identical to `in`/`not_in`), `all_of` is not applicable to a type);',
-      '- `link_type` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy/is_empty/not_empty` (`eq/ne/in/not_in` — an EXACT link type; `in_hierarchy`/`not_in_hierarchy` — the link type and the `link_types` subtypes; `mode` is not applicable; `is_empty`/`not_empty` — there are no/are typed incident links; the single operand of the link type filter and `link_filter`, task f7da04d6);',
+      '- `link_type` — `eq/ne/in/not_in/in_hierarchy/not_in_hierarchy/is_empty/not_empty` (`eq/ne/in/not_in` — an EXACT link type; `in_hierarchy`/`not_in_hierarchy` — the link type and the `link_types` subtypes; `mode` is not applicable; `not_in` is also the NEGATIVE link filter — "the thought has NO live incident link of the type" (for example, scenarios without task coverage, task 2dd47944); `is_empty`/`not_empty` — there are no/are typed incident links; the single operand of the link type filter and `link_filter`, task f7da04d6);',
       '- `property` — addressing by `property_id` or `property` (plus `direction`: `out`/`in`); the operator set — by the nature of the property (`value_type`), bullets below;',
       '- `property: text` — `contains/not_contains/eq/ne/gt/gte/lt/lte/between/not_between/in/not_in/any_of/all_of/none_of/is_empty/not_empty`;',
       '- `property: url` — `contains/not_contains/eq/ne/gt/gte/lt/lte/between/not_between/in/not_in/any_of/all_of/none_of/is_empty/not_empty`;',
       '- `property: date` — `eq/ne/gt/gte/lt/lte/between/not_between/is_empty/not_empty`;',
       '- `property: number` — `eq/ne/gt/gte/lt/lte/between/not_between/is_empty/not_empty`;',
-      '- `property: bool` — `eq/ne`;',
+      '- `property: bool` — `eq/ne/is_empty/not_empty` (`false` is a value: `is_empty` is "no value at all", `eq false` — "the value is false", task 2dd47944);',
       '- `property: link` — `eq/ne/in/not_in/any_of/all_of/none_of/in_hierarchy/not_in_hierarchy/gt/gte/lt/lte/between/not_between/is_empty/not_empty`;',
       '- `property: thought_ref` — `eq/ne/in/not_in/any_of/all_of/none_of/is_empty/not_empty`;',
       '- `property: cross_network_ref` — `eq/ne/any_of/all_of/none_of/is_empty/not_empty` (`is_empty`/`not_empty` — the address is not set/is set; bug 0e976df4);',

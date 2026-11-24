@@ -13,7 +13,8 @@
  * владельца на сеть (`GET /reminders` без периода). Второй механизм подписок на
  * те же облачка ради другого источника данных только раздвоил бы жизненный
  * цикл; здесь источник один — кэш списка, обновляемый событием
- * `reminders.changed`.
+ * `reminders.changed` и событиями видимости субъекта (корзина, `active`,
+ * `show_inactive`; ошибка 71cb791e).
  *
  * Напоминания per-user (ADR 03e429ed), поэтому в DOM они появляются только у
  * владельца — остальным сервер их не отдаёт.
@@ -27,6 +28,7 @@ import { registerHoverPreviewResolver, markReminderPreview } from './hover-previ
 import { t } from './i18n.js';
 import { reminderPreviewLines } from './reminder-label.js';
 import { onRoutedRealtimeEvent } from './live/index.js';
+import { isReminderSubjectVisibilityEvent } from './live/reminder-events.js';
 import { store } from '../state.js';
 
 /** Класс ячейки индикатора напоминаний. */
@@ -120,13 +122,15 @@ export async function refreshReminderIndicators(): Promise<void> {
 
 /**
  * Подписка на события: `reminders.changed` приходит только владельцу и
- * перерисовывает индикаторы без захода в календарь (сценарий S4).
+ * перерисовывает индикаторы без захода в календарь (сценарий S4). Видимость
+ * субъекта (корзина, `active`, `show_inactive`) меняет набор строк без этого
+ * события — общий классификатор `live/reminder-events.ts` (ошибка 71cb791e).
  */
 export function startReminderIndicatorEvents(): void {
   if (unsubscribe !== null) return;
   unsubscribe = onRoutedRealtimeEvent((event) => {
-    if (event.type !== 'reminders.changed') return;
     if (event.network_id !== store.state.networkId) return;
+    if (event.type !== 'reminders.changed' && !isReminderSubjectVisibilityEvent(event)) return;
     void refreshReminderIndicators();
   });
 }

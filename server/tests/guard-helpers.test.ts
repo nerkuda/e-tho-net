@@ -107,6 +107,39 @@ describe('guard-helpers: скан источников на запрещённы
     assert.equal(excluded.length, 0);
   });
 
+  it('stripComments: конструкция в комментарии нарушением не считается, номера строк сохраняются', () => {
+    const dir = makeFixture();
+    fs.writeFileSync(
+      path.join(dir, 'sql.ts'),
+      [
+        '// В комментарии `DELETE /networks/:id` — пояснение, не запись.',
+        'const sql = `DELETE FROM object_locks`;',
+        '/* Блок: `DELETE FROM object_locks` —',
+        '   и ещё строка пояснения. */',
+        'export const done = true;',
+      ].join('\n'),
+    );
+    const rule = {
+      name: 'no-delete-sql',
+      description: 'запрещён DELETE в строковом литерале',
+      pattern: /['"`][^'"`]*DELETE[^'"`]*['"`]/,
+    };
+    const raw = collectViolations(dir, [rule]).filter((v) => v.file === 'sql.ts');
+    assert.deepEqual(
+      raw.map((v) => v.line),
+      [1, 2, 3],
+      'без stripComments упоминания в комментариях считаются нарушением',
+    );
+    const stripped = collectViolations(dir, [{ ...rule, stripComments: true }]).filter(
+      (v) => v.file === 'sql.ts',
+    );
+    assert.deepEqual(
+      stripped.map((v) => v.line),
+      [2],
+      'с stripComments остаётся только настоящий SQL в строке, номер строки не съезжает',
+    );
+  });
+
   it('allow получает содержимое файла для контекстных исключений', () => {
     const dir = makeFixture();
     fs.writeFileSync(

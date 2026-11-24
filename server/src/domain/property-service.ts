@@ -77,9 +77,13 @@ import { propertyValueId } from '../db/property-value-id.js';
 import { reorderOutsideTypeProperties } from './property-order.js';
 import { getLinkType, createLinkType, updateLinkType, deleteLinkType } from './link-type-service.js';
 import { listThoughtHoldingLayers } from './holding-layers.js';
-import { findLinkTripleRow, restoreLinkRow } from './link-live-triple.js';
 import {
-  removeLinkTarget,
+  findLinkTripleRow,
+  materializeLiveLinkShadow,
+  restoreLinkRow,
+} from './link-live-triple.js';
+import {
+  removeLinkTargets,
   type LinkRemoval,
   type LinkRemovalAction,
 } from './link-target-removal.js';
@@ -1299,10 +1303,18 @@ function setLinkPropertyTargets(
   for (const targetId of targetIds) {
     const [src, dst] = linkEndpoints(ownerId, direction, targetId);
     if (src === dst) {
+      // Конкретная причина для отчёта массового изменения значений (ошибка
+      // 884919f6): клиент переводит `reason` в пользовательский текст, а не
+      // подставляет общий «проверьте введённые данные».
       throw new EtnError(
         'VALIDATION_ERROR',
         `property "${prop.name}" cannot link a thought to itself`,
-        { key: prop.name, ref: targetId },
+        {
+          key: prop.name,
+          ref: targetId,
+          field: 'value',
+          reason: PROPERTY_SIDE_ERROR_REASON.selfLink,
+        },
       );
     }
   }
@@ -1313,9 +1325,9 @@ function setLinkPropertyTargets(
   for (const [targetId, link] of existing) {
     if (wanted.has(targetId)) continue;
     // Умное удаление цели (0.14.1, ADR a967d865): основа — физически, слой —
-    // корзина для ребра из основы/предков и физически для свежесозданного.
-    const removal = removeLinkTarget(ndb, link.id, actorUserId);
-    if (removal !== null) removals.push(removal);
+    // корзина для ребра из основы/предков и физически для свежесозданного;
+    // живой дубль тройки снимается целиком (ошибка 374c9776).
+    removals.push(...removeLinkTargets(ndb, link.id, actorUserId));
   }
 
   const result: string[] = [];
@@ -1387,8 +1399,8 @@ export function setLinkPropertySourcesForTarget(
     const removals: LinkRemoval[] = [];
     for (const [sourceId, link] of existing) {
       if (wanted.has(sourceId)) continue;
-      const removal = removeLinkTarget(ndb, link.id, actorUserId);
-      if (removal !== null) removals.push(removal);
+      // Дубль тройки снимается целиком той же процедурой (ошибка 374c9776).
+      removals.push(...removeLinkTargets(ndb, link.id, actorUserId));
     }
     const result: string[] = [];
     const createdLinkIds: string[] = [];
@@ -1412,7 +1424,9 @@ function setLinkPosition(
   position: number,
   actorUserId: string,
 ): void {
-  materializeShadow(ndb, 'links', linkId);
+  // Живой дубль тройки в слое делает вставку тени невозможной — внятная 422
+  // `duplicate edges` вместо сырого сбоя SQLite (ошибка a9615f9b).
+  materializeLiveLinkShadow(ndb, linkId);
   ndb
     .prepare(
       `UPDATE links SET position = ?, updated_at = ?, updated_by = ?, updated_at_ms = ?, version = version + 1
@@ -1472,10 +1486,18 @@ function addLinkPropertyTarget(
   validateLinkTargetType(ndb, prop, targetId, side);
   const [src, dst] = linkEndpoints(ownerId, direction, targetId);
   if (src === dst) {
+    // Конкретная причина для отчёта массового изменения значений (ошибка
+    // 884919f6): клиент переводит `reason` в пользовательский текст, а не
+    // подставляет общий «проверьте введённые данные».
     throw new EtnError(
       'VALIDATION_ERROR',
       `property "${prop.name}" cannot link a thought to itself`,
-      { key: prop.name, ref: targetId },
+      {
+        key: prop.name,
+        ref: targetId,
+        field: 'value',
+        reason: PROPERTY_SIDE_ERROR_REASON.selfLink,
+      },
     );
   }
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
@@ -1492,7 +1514,8 @@ function addLinkPropertyTarget(
 /**
  * Убрать одну цель из набора свойства-связи (операция `remove`): применяет
  * единое умное удаление (ADR a967d865 — основа физически, слой по
- * происхождению ребра). Отсутствующее/уже помеченное ребро — no-op.
+ * происхождению ребра; живой дубль тройки снимается целиком, ошибка
+ * 374c9776). Отсутствующее/уже помеченное ребро — no-op (пустой список).
  */
 function removeLinkPropertyTarget(
   ndb: NetworkDb,
@@ -1501,7 +1524,7 @@ function removeLinkPropertyTarget(
   targetId: string,
   actorUserId: string,
   nameDirection: LinkPropertyDirection | null = null,
-): LinkRemoval | null {
+): LinkRemoval[] {
   const cfg = prop.config ?? {};
   const linkTypeId = linkPropertyLinkTypeId(cfg);
   // Направление — из display-имени (748b80fd), иначе сторона привязки
@@ -1510,8 +1533,8 @@ function removeLinkPropertyTarget(
     nameDirection ??
     linkPropertyDirection(cfg, resolveOwnerBindingSide(ndb, ownerId, prop.id));
   const existing = listLiveLinkTargets(ndb, ownerId, linkTypeId, direction).get(targetId);
-  if (existing === undefined) return null;
-  return removeLinkTarget(ndb, existing.id, actorUserId);
+  if (existing === undefined) return [];
+  return removeLinkTargets(ndb, existing.id, actorUserId);
 }
 
 // ===========================================================================
@@ -4813,7 +4836,9 @@ function listBlockingLinkProperties(ndb: NetworkDb): LinkPropertyEdge[] {
  * edges with `blocks_target_deletion = true` (0.8.1, dbf1e4aa; до — через
  * `thought_ref`-значения, упразднены миграцией 040). Backs the "использование
  * в свойствах" blocking arm of the S13 deletion check. The check must see
- * live edges of every layer; tombstones do not block.
+ * live edges of every layer; tombstones do not block. Счёт — по ЛОГИЧЕСКИМ
+ * ссылкам: живой дубль тройки в разных слоях (ошибка 374c9776) — одна ссылка,
+ * как и в `clearThoughtRefUsages`.
  */
 export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
   let total = 0;
@@ -4833,14 +4858,17 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
     .get(thoughtId, refLikePattern(thoughtId)) as { c: number };
   total += legacy.c;
   // Свойства-связи с blocks_target_deletion: блокирует цель (противоположный
-  // конец от владельца). Считаем рёбра, где мысль — цель ссылки.
+  // конец от владельца). Считаем ЛОГИЧЕСКИЕ ссылки: живой дубль тройки в разных
+  // слоях (374c9776) — одна ссылка, а не две строки (иначе счётчик расходился с
+  // `clearThoughtRefUsages` и с контрактом `blocking.properties`).
   for (const bp of listBlockingLinkProperties(ndb)) {
     const ownerCol = bp.direction === 'out' ? 'target_id' : 'source_id';
+    const refCol = bp.direction === 'out' ? 'source_id' : 'target_id';
     const typeClause = bp.link_type_id === null ? 'type_id IS NULL' : 'type_id = ?';
     const params = bp.link_type_id === null ? [thoughtId] : [thoughtId, bp.link_type_id];
     const lrow = ndb
       .prepare(
-        `SELECT COUNT(*) AS c FROM links_v l -- layers:physical-read
+        `SELECT COUNT(DISTINCT l.${refCol}) AS c FROM links_v l -- layers:physical-read
           WHERE l.${ownerCol} = ? AND ${typeClause} AND l.active = 1 AND l.marked_for_deletion = 0`,
       )
       .get(...params) as { c: number };
@@ -4852,8 +4880,10 @@ export function countThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
 /**
  * Mark every blocking link-property edge to `thoughtId` for deletion
  * (0.8.1, dbf1e4aa) — «Очистить использование» (03-server-api.md §9.2).
- * Returns how many references were cleared. Плечо `thought_ref`-значений
- * исчезло вместе с видом значения (миграция 040) — все ссылки рёбра.
+ * Returns how many references were cleared — по ЛОГИЧЕСКИМ ссылкам: живой дубль
+ * тройки снимается целиком (ошибка 374c9776), но считается одной ссылкой, а не
+ * двумя строками. Плечо `thought_ref`-значений исчезло вместе с видом значения
+ * (миграция 040) — все ссылки рёбра.
  */
 export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number {
   let cleared = 0;
@@ -4890,8 +4920,10 @@ export function clearThoughtRefUsages(ndb: NetworkDb, thoughtId: string): number
       .all(...params) as Array<{ id: string }>;
     for (const link of links) {
       // Единое умное удаление (ADR a967d865): основа — физически, слой —
-      // корзина для ребра из основы/предков.
-      if (removeLinkTarget(ndb, link.id, 'system') !== null) cleared += 1;
+      // корзина для ребра из основы/предков. Живой дубль тройки снимается
+      // целиком (ошибка 374c9776), но счёт — по логическим ссылкам: вторая
+      // строка того же ребра ничего не добавляет, это одна снятая ссылка.
+      if (removeLinkTargets(ndb, link.id, 'system').length > 0) cleared += 1;
     }
   }
   return cleared;
@@ -5689,6 +5721,10 @@ export function addLinkPropertyValue(
  * сторон симметричного типа. Без `side` направление ищется по живому ребру к
  * конкретной цели (owner→target однозначно задаёт направление) — до 0.14.1
  * `properties.remove` работал именно так.
+ *
+ * `removals` — все снятые строки: живой дубль тройки в разных слоях снимается
+ * целиком (ошибка 374c9776), и фасады публикуют событие по каждой строке;
+ * `link_id`/`action`/`link` описывают запрошенную строку (она идёт первой).
  */
 export function removeLinkPropertyValue(
   ndb: NetworkDb,
@@ -5698,7 +5734,12 @@ export function removeLinkPropertyValue(
   targetId: string,
   actorUserId: string,
   side: LinkPropertySide | null = null,
-): { link_id: string | null; action: LinkRemovalAction | null; link: Link | null } {
+): {
+  link_id: string | null;
+  action: LinkRemovalAction | null;
+  link: Link | null;
+  removals: LinkRemoval[];
+} {
   if (ownerType !== 'thought') {
     throw new EtnError('VALIDATION_ERROR', "link properties are filled on thoughts only", {
       owner_type: ownerType,
@@ -5742,10 +5783,12 @@ export function removeLinkPropertyValue(
           { field: 'side', key, target: targetId, allowed: LINK_PROPERTY_SIDES },
         );
       }
-      if (!outLive && !inLive) return { link_id: null, action: null, link: null };
+      if (!outLive && !inLive) {
+        return { link_id: null, action: null, link: null, removals: [] };
+      }
       direction = outLive ? 'out' : 'in';
     }
-    const removal = removeLinkPropertyTarget(
+    const removals = removeLinkPropertyTarget(
       ndb,
       ownerId,
       prop,
@@ -5753,11 +5796,13 @@ export function removeLinkPropertyValue(
       actorUserId,
       direction,
     );
-    if (removal !== null) touchOwner(ndb, ownerType, ownerId, actorUserId);
+    if (removals.length > 0) touchOwner(ndb, ownerType, ownerId, actorUserId);
+    const primary = removals[0] ?? null;
     return {
-      link_id: removal?.link_id ?? null,
-      action: removal?.action ?? null,
-      link: removal?.link ?? null,
+      link_id: primary?.link_id ?? null,
+      action: primary?.action ?? null,
+      link: primary?.link ?? null,
+      removals,
     };
   });
 }

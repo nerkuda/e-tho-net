@@ -110,7 +110,19 @@ export interface LayerMergeConflict {
   table: string;
   id: string;
   expected_base_version: number;
-  current_version: number;
+  /**
+   * Current version of the same logical row in the merge target's chain;
+   * `null` — the chain has no such row at all: the row the layer's shadow was
+   * based on is physically gone (ошибка `6fd7eb5f`).
+   */
+  current_version: number | null;
+  /**
+   * Why the expectation does not hold when it is not a plain version mismatch.
+   * `base_row_missing` — the ancestor deleted the row physically, so the layer
+   * shadow is orphaned: replaying it would re-create deleted data under a new
+   * `base_version = 0` (ошибка `6fd7eb5f`).
+   */
+  reason?: 'base_row_missing';
 }
 
 /** One reference that kept a merge set from being closed (§8.1). */

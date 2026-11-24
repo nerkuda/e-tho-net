@@ -12,7 +12,9 @@
     паспорта поставки. Свежий payload проверку проходит и собирается.
 
     Восемь проверок build:* — дефект 3 приёмки каркаса 9b310991 и задача
-    98ad5eec (проверка версии и хэшей клиента). Запуск:
+    98ad5eec (проверка версии и хэшей клиента). Девятая — вывод
+    `build.ps1 -CheckPayloadOnly`: он называет фактический объём проверки
+    (задача bdd17318). Запуск:
 
         pwsh installer/tests/payload-freshness.ps1
 
@@ -122,9 +124,9 @@ function Write-FreshnessManifest {
 }
 
 function Invoke-PayloadBuild {
-    param([string]$Payload, [string]$OutputName)
+    param([string]$Payload, [string]$OutputName, [string[]]$ExtraArgs = @())
     $out = & $psExeForBuild -NoProfile -ExecutionPolicy Bypass -File $buildScript `
-        -PayloadRoot $Payload -OutputDir (Join-Path $workRoot $OutputName) 2>&1 | Out-String
+        -PayloadRoot $Payload -OutputDir (Join-Path $workRoot $OutputName) @ExtraArgs 2>&1 | Out-String
     return [pscustomobject]@{ Code = $LASTEXITCODE; Output = $out }
 }
 
@@ -206,6 +208,19 @@ $noManifestBuild = Invoke-PayloadBuild -Payload $noManifestPayload -OutputName '
 Add-FreshnessResult -Name 'build:manifest-required' `
     -Ok (($noManifestBuild.Code -ne 0) -and ($noManifestBuild.Output -match 'server-manifest\.json')) `
     -Note 'без паспорта поставки сборка не начинается'
+
+# H. -CheckPayloadOnly: проверка без компиляции, вывод называет фактический
+# объём проверки (полная/частичная) и не выдаёт себя за сборку.
+$checkOnlyBuild = Invoke-PayloadBuild -Payload $freshPayload -OutputName 'check-only-out' `
+    -ExtraArgs @('-CheckPayloadOnly')
+Add-FreshnessResult -Name 'build:check-payload-only-scope' `
+    -Ok (($checkOnlyBuild.Code -eq 0) -and
+         ($checkOnlyBuild.Output -match 'OK: payload годен для сборки по доступным проверкам') -and
+         ($checkOnlyBuild.Output -match 'объём проверки: полная') -and
+         ($checkOnlyBuild.Output -match 'client\\ - по паспорту поставки') -and
+         ($checkOnlyBuild.Output -match 'компиляция установщика пропущена') -and
+         ($checkOnlyBuild.Output -notmatch 'ISCC:')) `
+    -Note 'вывод -CheckPayloadOnly называет объём проверки, компиляция не запускается'
 
 $failed = @($results | Where-Object { -not $_.Ok })
 Write-Host ''

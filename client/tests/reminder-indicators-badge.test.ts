@@ -5,7 +5,11 @@
  * Индикатор: одна ячейка ⏰ на все напоминания субъекта, первая в ряду; её
  * состояние берётся из кэша списка владельца. Бейдж: число «сегодня +
  * просрочено» по тому же списку, ноль — скрыт, клик — переход на сегодня,
- * `reminders.changed` и `comment.updated` — пересчёт.
+ * пересчёт — ТОЛЬКО по `reminders.changed` (персональное событие владельца).
+ * `comment.*` набор строк владельца не меняет: напоминание адресует
+ * мысль/публикацию (`reminder-service.ts`, видимость — `active`/
+ * `marked_for_deletion` субъекта), текст комментария в счёт не входит
+ * (ошибка 39d78d2a).
  */
 
 import assert from 'node:assert/strict';
@@ -13,11 +17,12 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import type { AnyRealtimeEvent, Reminder, ReminderListResult } from '@etn/shared';
 
-import { routeRealtimeEvent } from '../src/renderer/lib/live/event-router.js';
+import { resetEventRouter, routeRealtimeEvent } from '../src/renderer/lib/live/event-router.js';
 import {
   REMINDER_INDICATOR_CLASS,
   reminderIndicatorCell,
   reminderIndicatorInternals,
+  refreshReminderIndicators,
   resetReminderIndicators,
   syncReminderIndicatorCells,
 } from '../src/renderer/lib/reminder-indicators.js';
@@ -95,7 +100,7 @@ function remindersChanged(networkId = NET): AnyRealtimeEvent {
   } as unknown as AnyRealtimeEvent;
 }
 
-/** Событие `comment.updated` — активность владельца (DoD 173f1540). */
+/** Событие `comment.updated` — правка «самого релевантного на вид» вида. */
 function commentUpdated(networkId = NET): AnyRealtimeEvent {
   return {
     type: 'comment.updated',
@@ -116,6 +121,48 @@ function commentUpdated(networkId = NET): AnyRealtimeEvent {
   } as unknown as AnyRealtimeEvent;
 }
 
+/** Событие `thought.updated` с полями видимости субъекта напоминания. */
+function thoughtUpdated(changes: Record<string, unknown>, networkId = NET): AnyRealtimeEvent {
+  return {
+    type: 'thought.updated',
+    seq: 11,
+    ts: new Date().toISOString(),
+    actor: { user_id: 'u1', client_id: 'c1' },
+    network_id: networkId,
+    audience: 'network',
+    data: { id: 't1', changes, version: 2 },
+    layer_id: '00000000-0000-0000-0000-000000000000',
+  } as unknown as AnyRealtimeEvent;
+}
+
+/** Событие `publication.trashed`/`.restored` — корзина субъекта-публикации. */
+function publicationLifecycle(type: 'publication.trashed' | 'publication.restored'): AnyRealtimeEvent {
+  return {
+    type,
+    seq: 12,
+    ts: new Date().toISOString(),
+    actor: { user_id: 'u1', client_id: 'c1' },
+    network_id: NET,
+    audience: 'network',
+    data: { id: 'p1' },
+    layer_id: '00000000-0000-0000-0000-000000000000',
+  } as unknown as AnyRealtimeEvent;
+}
+
+/** Событие `user-preference.updated` — пользовательская настройка сети. */
+function prefUpdated(key: string, value: unknown): AnyRealtimeEvent {
+  return {
+    type: 'user-preference.updated',
+    seq: 13,
+    ts: new Date().toISOString(),
+    actor: { user_id: 'u1', client_id: 'c1' },
+    network_id: NET,
+    audience: 'user',
+    data: { key, value },
+    layer_id: '00000000-0000-0000-0000-000000000000',
+  } as unknown as AnyRealtimeEvent;
+}
+
 /** Дождаться промисов запроса списка. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
@@ -125,6 +172,9 @@ beforeEach(() => {
   body.replaceChildren();
   installDom();
   store.update({ networkId: NET });
+  // Дедуп по seq — модульное состояние: без сброса событие теста с тем же seq,
+  // что у предыдущего, считалось бы опоздавшим и не дошло до подписок.
+  resetEventRouter();
   resetReminderIndicators();
 });
 
@@ -151,6 +201,27 @@ describe('индикатор напоминаний в облачке (ba827eb6)
     assert.equal(cell.dataset['hpOwnerType'], 'thought');
     assert.equal(cell.dataset['hpOwnerId'], 't1');
     assert.equal(cell.dataset['hpTitle'], 'Мысль');
+  });
+
+  it('смена видимости субъекта перечитывает индикаторы облачка (ошибка 71cb791e)', async () => {
+    let loads = 0;
+    let current: Reminder[] = [reminder()];
+    (globalThis as any).window.etn = {
+      reminders: {
+        list: async () => {
+          loads += 1;
+          return { reminders: current, from: null, to: null };
+        },
+      },
+    };
+    // Стартовая загрузка ставит подписку; корзина субъекта приходит штатным
+    // `thought.updated`, а `reminders.changed` на неё сервер не публикует.
+    await refreshReminderIndicators();
+    const before = loads;
+    current = [];
+    routeRealtimeEvent(thoughtUpdated({ marked_for_deletion: true }));
+    await flush();
+    assert.equal(loads, before + 1, 'видимость субъекта изменилась — кэш перечитан');
   });
 
   it('покраска перерисовывает уже отрисованные облачка из кэша', () => {
@@ -237,7 +308,7 @@ describe('бейдж «сегодня» на закладке «Дневник»
     assert.ok(calls.length >= 1, 'окно запроса передано списку');
   });
 
-  it('правка комментария освежает счётчик (DoD: reminders.changed, comment.updated)', async () => {
+  it('правка комментария счётчик не пересчитывает (ошибка 39d78d2a)', async () => {
     let loads = 0;
     (globalThis as any).window.etn = {
       reminders: {
@@ -253,9 +324,155 @@ describe('бейдж «сегодня» на закладке «Дневник»
     });
     await flush();
     const before = loads;
+    // «Самая релевантная на вид» правка: СВОЙ постоянный комментарий и
+    // `changes.body_md`. Счёт бейджа идёт по строкам `reminders` (субъект —
+    // мысль/публикация), текст комментария в него не входит — пересчёт был
+    // вхолостую на каждое событие каждого участника сети.
     routeRealtimeEvent(commentUpdated());
     await flush();
-    assert.equal(loads, before + 1, 'comment.updated перечитывает список владельца');
+    assert.equal(loads, before, 'comment.updated не перечитывает список владельца');
+    teardown();
+  });
+
+  it('корзина субъекта пересчитывает бейдж (ошибка 71cb791e)', async (t) => {
+    let loads = 0;
+    let current = listResult([
+      {
+        occurrence_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        status: 'active',
+        until: null,
+      },
+    ]);
+    (globalThis as any).window.etn = {
+      reminders: {
+        list: async () => {
+          loads += 1;
+          return current;
+        },
+      },
+    };
+    const button = new ShimElement('button');
+    const teardown = mountReminderTodayBadge(button as unknown as HTMLElement, {
+      openToday: () => undefined,
+    });
+    t.after(teardown);
+    await flush();
+    const node = button.querySelectorAll('.view-tab-badge')[0];
+    assert.equal(node?.textContent, '1', 'напоминание видимо — счёт 1');
+
+    // Корзина субъекта: сервер уже не отдаёт строку (listReminders фильтрует
+    // marked_for_deletion), но `reminders.changed` на это действие не приходит.
+    current = listResult([]);
+    const before = loads;
+    routeRealtimeEvent(thoughtUpdated({ marked_for_deletion: true }));
+    await flush();
+    assert.equal(loads, before + 1, 'thought.updated с marked_for_deletion перечитывает список');
+    assert.equal(node?.hidden, true, 'счётчик обнулился — бейдж скрыт');
+  });
+
+  it('корзина субъекта-публикации пересчитывает бейдж (ошибка 71cb791e)', async (t) => {
+    let loads = 0;
+    (globalThis as any).window.etn = {
+      reminders: {
+        list: async () => {
+          loads += 1;
+          return listResult([]);
+        },
+      },
+    };
+    const button = new ShimElement('button');
+    const teardown = mountReminderTodayBadge(button as unknown as HTMLElement, {
+      openToday: () => undefined,
+    });
+    t.after(teardown);
+    await flush();
+    const before = loads;
+    // Напоминание адресует и публикацию: её корзина меняет набор строк тем же
+    // правилом видимости — класс, а не случай (reminder-service subjectVisibility).
+    routeRealtimeEvent(publicationLifecycle('publication.trashed'));
+    await flush();
+    assert.equal(loads, before + 1, 'publication.trashed перечитывает список владельца');
+  });
+
+  it('«показывать неактуальные» пересчитывает бейдж (ошибка 71cb791e)', async (t) => {
+    let loads = 0;
+    let current = listResult([]);
+    (globalThis as any).window.etn = {
+      reminders: {
+        list: async () => {
+          loads += 1;
+          return current;
+        },
+      },
+    };
+    const button = new ShimElement('button');
+    const teardown = mountReminderTodayBadge(button as unknown as HTMLElement, {
+      openToday: () => undefined,
+    });
+    t.after(teardown);
+    await flush();
+    const node = button.querySelectorAll('.view-tab-badge')[0];
+    assert.equal(node?.hidden, true, 'неактуальные скрыты — счёт 0');
+
+    // Настройка сети решает, отдаёт ли сервер строки неактуальных субъектов
+    // (show_inactive в listReminders) — счётчик обязан перечитаться.
+    current = listResult([
+      {
+        occurrence_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        status: 'active',
+        until: null,
+      },
+    ]);
+    const before = loads;
+    routeRealtimeEvent(prefUpdated('show_inactive', true));
+    await flush();
+    assert.equal(loads, before + 1, 'смена show_inactive перечитывает список владельца');
+    assert.equal(node?.textContent, '1', 'счётчик обновился по настройке');
+  });
+
+  it('правка без смены видимости субъекта счётчик не пересчитывает (граница 39d78d2a)', async (t) => {
+    let loads = 0;
+    (globalThis as any).window.etn = {
+      reminders: {
+        list: async () => {
+          loads += 1;
+          return listResult([]);
+        },
+      },
+    };
+    const button = new ShimElement('button');
+    const teardown = mountReminderTodayBadge(button as unknown as HTMLElement, {
+      openToday: () => undefined,
+    });
+    t.after(teardown);
+    await flush();
+    const before = loads;
+    // Заголовок/синонимы видимость субъекта не меняют: лишнего запроса нет.
+    routeRealtimeEvent(thoughtUpdated({ title: 'Новое имя', synonyms: ['x'] }));
+    routeRealtimeEvent(prefUpdated('show_trash', true));
+    await flush();
+    assert.equal(loads, before, 'события вне видимости субъекта список не перечитывают');
+  });
+
+  it('reminders.changed пересчитывает счётчик (персональное событие владельца)', async () => {
+    let loads = 0;
+    (globalThis as any).window.etn = {
+      reminders: {
+        list: async () => {
+          loads += 1;
+          return listResult([]);
+        },
+      },
+    };
+    const button = new ShimElement('button');
+    const teardown = mountReminderTodayBadge(button as unknown as HTMLElement, {
+      openToday: () => undefined,
+    });
+    await flush();
+    const before = loads;
+    routeRealtimeEvent(remindersChanged());
+    await flush();
+    assert.equal(loads, before + 1, 'reminders.changed перечитывает список владельца');
     teardown();
   });
 

@@ -1,0 +1,119 @@
+{
+  "name": "md-parse-cache-no-reparse (83785f1e)",
+  "description": "Ошибка 83785f1e: buildDecorations в md-live.ts пересобирается на каждую транзакцию (ввод, движение каретки, доразбор дерева), и markdown-it разбирал HTML-блоки (fence/таблица/картинка) заново, хотя их исходник не менялся. Сценарий: api POST засевает тело постоянного комментария (абзац, fence, таблица), вход в правку, каретка в начало документа, два символа печати ВЫШЕ блоков. Проверки: (1) невакуумный гейт — счётчик кеша доступен и на первой сборке блоки реально разобраны (parses >= 2, entries >= 2); (2) печать действительно сдвинула документ (data-md-from виджета +2, первая строка содержит AB); (3) после печати parses НЕ вырос (неизменённые блоки не разбираются заново), а hits вырос не менее чем на 2 — то есть блоки перезапрашивались и получили готовый HTML из кеша, а не «пересборки не было». На дофиксовой сборке (разбор без кеша) шаг parse-delta падает: parses растёт на каждый пересбор. Счётчик живёт в тестовой сборке (window.__etnMdRenderCache, app.ts MODE==='test'): npm -w @etn/client run build -- --mode test; после прогона вернуть обычную сборку npm -w @etn/client run build. Запуск: node client/scripts/ui-probe-stand.mjs --scenario client/scripts/ui-probe.83785f1e-md-parse-cache.scenario.json --out .tmp/83785f1e.",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    {
+      "name": "fill-server-url",
+      "click": "input[placeholder^='http']"
+    },
+    {
+      "name": "server-url-typed",
+      "text": "{{serverUrl}}"
+    },
+    {
+      "name": "fill-api-key",
+      "click": "input[type=password]"
+    },
+    {
+      "name": "api-key-typed",
+      "text": "{{apiKey}}"
+    },
+    {
+      "name": "connect",
+      "click": ".onboarding-card .ui-btn--primary"
+    },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    {
+      "name": "open-network",
+      "click": ".networks-list .network-item"
+    },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "Вступление\n\n```\nкод\n```\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nКонец"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "open-comment-owner",
+      "click": "[data-id=\"{{homeId}}\"].cloud"
+    },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view') !== null",
+      "timeout": 15000
+    },
+    {
+      "name": "enter-edit",
+      "click": "[data-action=\"edit\"]"
+    },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "blocks-rendered",
+      "waitFor": "document.querySelectorAll('.md-field--editing .md-widget').length >= 2",
+      "timeout": 30000
+    },
+    {
+      "name": "caret-to-doc-start",
+      "key": "Home",
+      "modifiers": ["ctrl"]
+    },
+    {
+      "name": "install-helpers",
+      "eval": "(() => { const api = window.__etnMdRenderCache; window.__mdParseArmed = api === undefined || api === null ? null : api.stats(); const firstWidget = () => document.querySelector('.md-field--editing .md-widget'); const box = firstWidget(); window.__mdWidgetFrom = box === null ? null : Number(box.dataset.mdFrom); window.__mdParseDelta = () => { const apiNow = window.__etnMdRenderCache; if (apiNow === undefined || apiNow === null || window.__mdParseArmed === null) return { dParses: null, dHits: null }; const before = window.__mdParseArmed; const now = apiNow.stats(); return { dParses: now.parses - before.parses, dHits: now.hits - before.hits }; }; window.__mdAfterTyping = () => { const boxNow = firstWidget(); const line = document.querySelector('.md-field--editing .cm-line'); const delta = window.__mdParseDelta(); return { available: window.__etnMdRenderCache !== undefined && window.__etnMdRenderCache !== null, parsesUnchanged: delta.dParses === 0, hitsGrew: delta.dHits !== null && delta.dHits >= 2, shifted: boxNow !== null && window.__mdWidgetFrom !== null && Number(boxNow.dataset.mdFrom) - window.__mdWidgetFrom === 2, typed: line !== null && (line.textContent ?? '').includes('AB') }; }; return { available: window.__mdParseArmed !== null, parses: window.__mdParseArmed === null ? null : window.__mdParseArmed.parses, entries: window.__mdParseArmed === null ? null : window.__mdParseArmed.entries, from: window.__mdWidgetFrom }; })()"
+    },
+    {
+      "name": "baseline-non-vacuum",
+      "expect": true,
+      "probe": {
+        "name": "baseline",
+        "expression": "(() => { const armed = window.__mdParseArmed; return armed !== null && armed.parses >= 2; })()"
+      }
+    },
+    {
+      "name": "type-a-above",
+      "key": "A"
+    },
+    {
+      "name": "type-b-above",
+      "key": "B"
+    },
+    {
+      "name": "parse-not-repeated",
+      "expect": {
+        "available": true,
+        "parsesUnchanged": true,
+        "hitsGrew": true,
+        "shifted": true,
+        "typed": true
+      },
+      "probe": {
+        "name": "afterTyping",
+        "expression": "window.__mdAfterTyping()"
+      }
+    }
+  ]
+}

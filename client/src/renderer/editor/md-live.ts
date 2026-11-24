@@ -10,13 +10,17 @@
  *
  * Декорации выдаёт StateField (block-декорации, пересекающие переносы строк,
  * из ViewPlugin запрещены); клики по виджетам обрабатывает domEventHandlers.
+ *
+ * Разбор HTML блоков-виджетов идёт через кеш `md-render-cache.ts` (ошибка
+ * 83785f1e): `buildDecorations` пересобирается на каждую транзакцию, а исходник
+ * неактивного блока при правке в другом месте не меняется — без кеша
+ * markdown-it разбирал его заново на каждый введённый символ.
  */
 
 import { syntaxTree } from '@codemirror/language';
 import { EditorState, Facet, StateField, type Range, type SelectionRange } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 
-import { renderMarkdown } from '@etn/markdown';
 import {
   TASK_MARKER_PATTERN,
   WIKI_LINK_CLASS,
@@ -33,6 +37,7 @@ import { t } from '../lib/i18n.js';
 import { choiceControl } from '../lib/ui/choice-row.js';
 import { isCollapsedHiddenAt, setCollapseEffect } from './comment-collapse.js';
 import { renderMermaidBlocks } from './md-mermaid.js';
+import { cachedRenderMarkdown } from './md-render-cache.js';
 
 /** Корневой класс всех виджетов live preview. */
 export const MD_WIDGET_CLASS = 'md-widget';
@@ -153,6 +158,11 @@ class HtmlWidget extends WidgetType {
    * Пересборка содержимого — только при смене `html` (см. {@link renderedHtml});
    * `renderMermaidBlocks` вызывается лишь на этом пути, чтобы диаграмма не
    * гасла и не перерисовывалась на каждый символ (ошибка `4df5e284`).
+   *
+   * Тот же приём обязателен и лёгким виджетам ниже (`WikiLinkWidget`,
+   * `WikiDateWidget`, `HrWidget`, `TaskCheckboxWidget`, `ListMarkerWidget`,
+   * ошибка `65bd3e81`): их `eq` различает смещения, поэтому без `updateDOM`
+   * любой ввод текста выше блока пересоздавал DOM.
    */
   override updateDOM(dom: HTMLElement): boolean {
     dom.dataset.mdFrom = String(this.from);
@@ -210,6 +220,18 @@ class WikiLinkWidget extends WidgetType {
     return span;
   }
 
+  /**
+   * Сдвиг правкой выше меняет только смещения — узел остаётся (ошибка
+   * 65bd3e81). `data-md-from/to` пишутся всегда: `mdWidgetMouseDown` читает
+   * смещения из DOM, протухшие атрибуты увели бы каретку в старый диапазон.
+   * Смена подписи или цели — повод пересобрать DOM.
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return dom.textContent === this.label && dom.dataset.wikiTarget === this.target;
+  }
+
   override ignoreEvent(): boolean {
     return false;
   }
@@ -251,6 +273,20 @@ class WikiDateWidget extends WidgetType {
     return span;
   }
 
+  /**
+   * Тот же класс, что у остальных лёгких виджетов (ошибка 65bd3e81): сдвиг
+   * обновляет смещения на месте; смена даты, времени или подписи — пересборка.
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return (
+      dom.textContent === this.label &&
+      dom.getAttribute(WIKI_LINK_DATE_ATTR) === this.date &&
+      (dom.getAttribute(WIKI_LINK_TIME_ATTR) ?? null) === this.time
+    );
+  }
+
   override ignoreEvent(): boolean {
     return false;
   }
@@ -282,6 +318,13 @@ class HrWidget extends WidgetType {
     line.className = 'md-hr-line';
     box.append(line);
     return box;
+  }
+
+  /** Линейка неизменна: сдвиг только обновляет смещения (ошибка 65bd3e81). */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return true;
   }
 
   override ignoreEvent(): boolean {
@@ -318,6 +361,17 @@ class TaskCheckboxWidget extends WidgetType {
     return input;
   }
 
+  /**
+   * Сдвиг обновляет смещения на месте (ошибка 65bd3e81). Смена состояния
+   * (`checked`) — пересборка: живой контрол пересоздаётся из нового значения,
+   * а не правится втихую.
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.dataset.mdFrom = String(this.from);
+    dom.dataset.mdTo = String(this.to);
+    return (dom as HTMLInputElement).checked === this.checked;
+  }
+
   override ignoreEvent(): boolean {
     return false;
   }
@@ -343,6 +397,16 @@ class ListMarkerWidget extends WidgetType {
     span.className = 'cm-md-list-marker';
     span.textContent = this.marker;
     return span;
+  }
+
+  /**
+   * Смещений виджет не несёт (в `eq` только маркер), поэтому сдвиг выше его
+   * не трогает вовсе. `updateDOM` нужен смене нумерации в исходнике: текст
+   * маркера обновляется на прежнем узле (ошибка 65bd3e81).
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    dom.textContent = this.marker;
+    return true;
   }
 
   override ignoreEvent(): boolean {
@@ -766,7 +830,7 @@ function buildDecorations(state: EditorState): DecorationSet {
               value: Decoration.replace({
                 // Блок занимает несколько строк — обязателен block: true.
                 block: true,
-                widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
+                widget: new HtmlWidget(from, to, cachedRenderMarkdown(state.sliceDoc(from, to))),
               }),
             });
             return false;
@@ -779,7 +843,7 @@ function buildDecorations(state: EditorState): DecorationSet {
               from,
               to,
               value: Decoration.replace({
-                widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
+                widget: new HtmlWidget(from, to, cachedRenderMarkdown(state.sliceDoc(from, to))),
               }),
             });
             return false;
@@ -794,7 +858,7 @@ function buildDecorations(state: EditorState): DecorationSet {
               value: Decoration.replace({
                 // Таблица занимает несколько строк — обязателен block: true.
                 block: true,
-                widget: new HtmlWidget(from, to, renderMarkdown(state.sliceDoc(from, to))),
+                widget: new HtmlWidget(from, to, cachedRenderMarkdown(state.sliceDoc(from, to))),
               }),
             });
             return false;

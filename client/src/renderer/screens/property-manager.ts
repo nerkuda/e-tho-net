@@ -1750,7 +1750,26 @@ export function openPropertyManagerEditor(
           values_count: 0,
         };
         // Создать привязки к типам мыслей.
-        await applyTypeRows(created.id);
+        // Привязки типов пишутся отдельными запросами после создания свойства
+        // (ошибка 0033ea14, DoD 2): если хоть одна операция упала, свойство-
+        // связь не должно остаться «созданным без ограничений». Откат снимает
+        // созданные привязки и удаляет само свойство — см.
+        // {@link rollbackCreatedProperty}.
+        const createdBindings: Array<{ thoughtTypeId: string; id: string }> = [];
+        try {
+          await applyTypeRows(created.id, createdBindings);
+        } catch (err) {
+          current = null;
+          const rolledBack = await rollbackCreatedProperty(
+            networkId,
+            created.id,
+            createdBindings,
+          );
+          if (!rolledBack) {
+            throw new Error(t('propertyManager.createRollbackFailed', errText(err)));
+          }
+          throw err;
+        }
         onCreated?.(created);
       } else {
         // Сбор PATCH-тела вынесен в чистую функцию {@link buildUpdateChanges}
@@ -1857,7 +1876,10 @@ export function openPropertyManagerEditor(
    *  значения, а для добавленных строк — заполненный дефолт сразу после
    *  создания привязки. Общие значения сторон уезжают в `PATCH /properties`
    *  (тело собирает {@link buildUpdateChanges}). */
-  async function applyTypeRows(propertyId: string): Promise<void> {
+  async function applyTypeRows(
+    propertyId: string,
+    trackCreated?: Array<{ thoughtTypeId: string; id: string }>,
+  ): Promise<void> {
     // Снятые строки: есть в снимке загрузки, нет в черновике (✕ в таблице).
     // Перенос типа между сторонами — это снятие привязки одной стороны плюс
     // создание другой; без этих `DELETE` снятие терялось (ошибка c83f0215).
@@ -1913,6 +1935,9 @@ export function openPropertyManagerEditor(
                 ...(row.side !== null ? { side: row.side } : {}),
               },
             );
+            // Id созданной привязки — для отката, если следующая операция
+            // прохода упадёт (ошибка 0033ea14, DoD 2).
+            trackCreated?.push({ thoughtTypeId: row.thoughtTypeId, id: def.id });
             const value = overrideByRow.get(row);
             if (value !== undefined) {
               await etn.types.setPropertyDefaultOverride(
@@ -1949,7 +1974,14 @@ export function openPropertyManagerEditor(
         );
       }
     }
-    await Promise.all(ops);
+    // Ждём все операции даже при отказе: отклонённый Promise.all бросал бы
+    // ошибку сразу, «догоняющие» запросы продолжали бы идти, и откат создания
+    // свойства (ошибка 0033ea14) гонялся бы с ними. Наружу — первая причина.
+    const results = await Promise.allSettled(ops);
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failed !== undefined) throw failed.reason;
     for (const thoughtTypeId of touchedTypeIds) {
       notifyTypeDefinitionsChanged({ ownerType: 'thought_type', ownerId: thoughtTypeId });
     }
@@ -2071,6 +2103,34 @@ export function buildUpdateChanges(
     if (draft.linkWidth !== null) changes.link_width = draft.linkWidth;
   }
   return changes;
+}
+
+/**
+ * Откат только что созданного свойства, если запись привязок типов не удалась
+ * (ошибка 0033ea14, DoD 2: «либо сохраняется целиком, либо частичных
+ * состояний быть не должно»). Сначала снимаются привязки, созданные этим
+ * проходом, затем удаляется свойство: DELETE /properties/{id} отказывает
+ * (409), пока свойство привязано к типам. Возвращает true, если свойство
+ * удалено; false — откат не удался (вызывающий показывает причину отказа и
+ * просит удалить свойство вручную).
+ *
+ * Экспортируется ради автотеста (регрессия DoD 2): порядок «привязки →
+ * свойство» и устойчивость к отказам снятия фиксируются отдельно от DOM.
+ */
+export async function rollbackCreatedProperty(
+  networkId: string,
+  propertyId: string,
+  createdBindings: ReadonlyArray<{ thoughtTypeId: string; id: string }>,
+): Promise<boolean> {
+  for (const binding of createdBindings) {
+    await etn.types
+      .removeTypeProperty(networkId, 'thought_type', binding.thoughtTypeId, binding.id)
+      .catch(() => {});
+  }
+  return etn.propertyRegistry.remove(networkId, propertyId).then(
+    () => true,
+    () => false,
+  );
 }
 
 /**

@@ -1,0 +1,89 @@
+{
+  "name": "65bd3e81-light-widgets-survive-shift",
+  "description": "Ошибка 65bd3e81: лёгкие виджеты live-preview (WikiLink, Hr, TaskCheckbox, ListMarker) не должны пересоздаваться при вводе текста выше блока. Сценарий засевает постоянный комментарий HOME (шапка, вики-ссылка, линейка, задача, список), входит в правку, дожидается всех четырёх виджетов, ставит каретку в начало документа, запоминает DOM-узлы и их data-md-from, печатает один символ выше блока и проверяет: узлы те же (идентичность), смещения виджетов с позицией сдвинулись на 1, текст введён. На дофиксовой сборке WikiLink/Hr/TaskCheckbox пересоздаются — проба красная.",
+  "timeout": 180000,
+  "steps": [
+    {
+      "name": "onboarding-visible",
+      "waitFor": "document.querySelector(\"input[placeholder^='http']\") !== null"
+    },
+    { "name": "fill-server-url", "click": "input[placeholder^='http']" },
+    { "name": "server-url-typed", "text": "{{serverUrl}}" },
+    { "name": "fill-api-key", "click": "input[type=password]" },
+    { "name": "api-key-typed", "text": "{{apiKey}}" },
+    { "name": "connect", "click": ".onboarding-card .ui-btn--primary" },
+    {
+      "name": "networks-visible",
+      "waitFor": "document.querySelectorAll('.network-item').length > 0"
+    },
+    { "name": "open-network", "click": ".networks-list .network-item" },
+    {
+      "name": "seed-comment-api",
+      "api": {
+        "name": "seededComment",
+        "method": "POST",
+        "path": "/networks/{{networkId}}/thoughts/{{homeId}}/comments",
+        "body": {
+          "kind": "permanent",
+          "body_md": "шапка\n\n[[Цель]]\n\n---\n\n- [ ] задача\n\n- пункт\n\nхвост"
+        },
+        "expression": "data.kind"
+      },
+      "expect": "permanent"
+    },
+    {
+      "name": "home-visible",
+      "waitFor": "document.querySelector('[data-id=\"{{homeId}}\"]') !== null",
+      "timeout": 15000
+    },
+    { "name": "open-comment-owner", "click": "[data-id=\"{{homeId}}\"].cloud" },
+    {
+      "name": "comment-view-visible",
+      "waitFor": "document.querySelector('.ui-comment .md-field-view') !== null",
+      "timeout": 15000
+    },
+    { "name": "enter-edit", "click": "[data-action=\"edit\"]" },
+    {
+      "name": "edit-mode",
+      "waitFor": "document.querySelector('.md-field--editing .cm-content') !== null"
+    },
+    {
+      "name": "light-widgets-rendered",
+      "waitFor": "document.querySelector('.md-field--editing .md-widget.wiki-link') !== null && document.querySelector('.md-field--editing .md-hr') !== null && document.querySelector('.md-field--editing .cm-md-task-checkbox') !== null && document.querySelector('.md-field--editing .cm-md-list-marker') !== null",
+      "timeout": 30000
+    },
+    { "name": "caret-to-doc-start", "key": "Home", "modifiers": ["ctrl"] },
+    {
+      "name": "remember-widgets",
+      "eval": "(() => { const q = (sel) => document.querySelector('.md-field--editing ' + sel); const sel = { wiki: '.md-widget.wiki-link', hr: '.md-hr', task: '.cm-md-task-checkbox', marker: '.cm-md-list-marker' }; window.__lwSel = sel; window.__lw = Object.fromEntries(Object.entries(sel).map(([k, s]) => [k, q(s)])); window.__lwFrom = Object.fromEntries(Object.entries(window.__lw).map(([k, n]) => [k, n === null ? null : Number(n.dataset.mdFrom)])); window.__lwRead = () => { const now = Object.fromEntries(Object.entries(window.__lwSel).map(([k, s]) => [k, q(s)])); const identity = Object.fromEntries(Object.keys(window.__lw).map((k) => [k, window.__lw[k] !== null && now[k] === window.__lw[k]])); const shifted = Object.fromEntries(['wiki', 'hr', 'task'].map((k) => [k, now[k] === undefined || now[k] === null || window.__lwFrom[k] === null ? null : Number(now[k].dataset.mdFrom) - window.__lwFrom[k]])); const line = document.querySelector('.md-field--editing .cm-line'); return { identity, shifted, same: Object.values(identity).every(Boolean), shiftedByOne: Object.values(shifted).every((d) => d === 1), typed: line !== null && (line.textContent ?? '').startsWith('A') }; }; return { captured: Object.values(window.__lw).every((n) => n !== null), from: window.__lwFrom }; })()"
+    },
+    {
+      "name": "baseline-non-vacuum",
+      "expect": { "captured": true },
+      "probe": {
+        "name": "baseline",
+        "expression": "(() => ({ captured: Object.values(window.__lw).every((n) => n !== null) }))()"
+      }
+    },
+    { "name": "type-above", "key": "A" },
+    {
+      "name": "typed-applied",
+      "waitFor": "window.__lwRead().typed === true",
+      "timeout": 5000
+    },
+    {
+      "name": "after-typing",
+      "expect": {
+        "identity": { "hr": true, "marker": true, "task": true, "wiki": true },
+        "shifted": { "hr": 1, "task": 1, "wiki": 1 },
+        "same": true,
+        "shiftedByOne": true,
+        "typed": true
+      },
+      "probe": {
+        "name": "afterTyping",
+        "expression": "window.__lwRead()"
+      }
+    }
+  ]
+}

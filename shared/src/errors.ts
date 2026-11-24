@@ -114,13 +114,17 @@ export class EtnError extends Error {
  *   * `target-type-mismatch` — значение свойства-связи не того типа, который
  *     допускает привязка целевой стороны (`field = "value"`; 0.14.1, круг 3
  *     ошибки d9bc6012). Серверный текст русский и без GUID, причина нужна для
- *     централизованного перевода в клиенте.
+ *     централизованного перевода в клиенте;
+ *   * `self-link` — попытка связать мысль с самой собой (`field = "value"`;
+ *     0.16.2, ошибка 884919f6). Серверный текст английский и адресован API;
+ *     клиент переводит причину в текст отчёта массового изменения значений.
  */
 export const PROPERTY_SIDE_ERROR_REASON = {
   required: 'side-required',
   mismatch: 'side-mismatch',
   ambiguous: 'property-ambiguous',
   targetType: 'target-type-mismatch',
+  selfLink: 'self-link',
 } as const;
 export type PropertySideErrorReason =
   (typeof PROPERTY_SIDE_ERROR_REASON)[keyof typeof PROPERTY_SIDE_ERROR_REASON];

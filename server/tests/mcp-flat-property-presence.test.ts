@@ -12,7 +12,7 @@
  * Тест закрывает обе формы входа одного и того же отбора (общий движок
  * `queryThoughts`, ADR 8c93f03a):
  *   * пара наличия (`is_empty`/`not_empty`) — скаляр, отсутствующее свойство,
- *     свойство-связь, `bool` → `VALIDATION_ERROR`, переданный `value` игнорируется;
+ *     свойство-связь, `bool` (`false` — значение, задача 2dd47944), переданный `value` игнорируется;
  *   * `in`/`not_in` — массив, пустой массив → понятная `VALIDATION_ERROR`;
  *   * `gte`/`lte` — number и date включительно; text в плоской форме
  *     недопустим (`VALIDATION_ERROR`), а AST-лист по text работает;
@@ -227,7 +227,7 @@ describe(
   'плоская форма условий по свойству: паритет операторов MCP ↔ REST (40c76144)',
   { skip: !nativeAvailable() },
   () => {
-    it('presence: text/number/date/link — одинаковый набор MCP, REST и AST; value не нужен; bool → VALIDATION_ERROR', async () => {
+    it('presence: text/number/date/bool/link — одинаковый набор MCP, REST и AST; value не нужен', async () => {
       const world = await buildWorld();
       try {
         const text = await createProperty(world.rest, { name: 'Текст', value_type: 'text' });
@@ -257,6 +257,8 @@ describe(
         insertValue(world.ndb, filled, bool.id, 'value_bool', 1);
         insertLink(world.ndb, filled, root, linkTypeId);
         insertValue(world.ndb, partial, text.id, 'value_text', 'beta');
+        // Отметка «нет» (false) — законное ЗНАЧЕНИЕ bool-свойства (2dd47944).
+        insertValue(world.ndb, partial, bool.id, 'value_bool', 0);
 
         const expectations: Array<{
           label: string;
@@ -285,6 +287,15 @@ describe(
             name: 'Дата',
             notEmpty: [filled],
             isEmpty: [root, partial, empty],
+          },
+          {
+            label: 'bool',
+            property: bool,
+            name: 'Флаг',
+            // `false` — значение: «заполнено» — обе отметки, «не заполнено» —
+            // только отсутствие строки значения (задача 2dd47944).
+            notEmpty: [filled, partial],
+            isEmpty: [root, empty],
           },
           {
             label: 'link',
@@ -351,26 +362,8 @@ describe(
           }
         }
 
-        // `bool` + presence запрещено (требование 9bdddad6): оба фасада дают
-        // понятную VALIDATION_ERROR, а не тихий пустой результат.
-        const boolRest = await restQuery(world.rest, {
-          parent_ids: [root],
-          properties: [{ property_id: bool.id, op: 'is_empty' }],
-        });
-        assert.equal(boolRest.statusCode, 422, `bool is_empty REST: ${boolRest.statusCode}`);
-        const boolRestError = (boolRest.body as { error: { code: string; message: string } }).error;
-        assert.equal(boolRestError.code, 'VALIDATION_ERROR');
-        assert.match(boolRestError.message, /is_empty/);
-        assert.match(boolRestError.message, /bool/);
-
-        const boolMcp = await mcpQuery(world.handle, world.rest.networkId, {
-          in_subtree_of: root,
-          properties: [{ property: 'Флаг', operator: 'is_empty' }],
-        });
-        assert.equal(boolMcp.isError, true, 'bool is_empty MCP обязан падать');
-        assert.match(boolMcp.text, /VALIDATION_ERROR/);
-        assert.match(boolMcp.text, /is_empty/);
-        assert.match(boolMcp.text, /bool/);
+        // `bool` в присутствии идёт общим путём (задача 2dd47944): пара
+        // наличия проверена выше общей матрицей, `false` — законное значение.
 
         // Отсутствие `value` у сравнения — VALIDATION_ERROR на обоих фасадах
         // (молчаливое «сравнение с undefined» запрещено).

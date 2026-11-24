@@ -461,6 +461,35 @@ describe('system/update — администратор и статус', { skip:
     }
   });
 
+  it('ответ статуса не несёт полей сверх общего контракта (spread кеша)', async () => {
+    // `statusPayload` собирает ответ как `{ ...cache, instruction }`: лишнее
+    // поле кеша прошло бы excess-property проверку насквозь. Набор ключей
+    // ответа — ровно контракт `SystemUpdateStatus` (задача bdd17318).
+    const harness = makeRunnerHarness();
+    const ctx = await buildUpdateContext(harness);
+    try {
+      const res = await ctx.app.inject({
+        method: 'GET',
+        url: '/api/v1/system/update',
+        headers: authHeaders(ctx),
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.deepEqual(Object.keys(res.json().data as object).sort(), [
+        'available_version',
+        'channel',
+        'check_error',
+        'checked_at',
+        'current_version',
+        'deployment',
+        'download_url',
+        'instruction',
+        'sha256',
+      ]);
+    } finally {
+      await closeRestContext(ctx);
+    }
+  });
+
   it('instruction: команда обновления только у Docker; служба и standalone — null', async () => {
     const harness = makeRunnerHarness();
     const docker = await buildUpdateContext(harness, 'docker');

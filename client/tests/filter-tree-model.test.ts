@@ -502,11 +502,16 @@ describe('профиль контекста задаёт словарь опер
   });
 
   it('состав свойства — по природе (9bdddad6): скаляр без «все в выборке», ссылка с ним', () => {
-    // Скаляры: даты/числа — сравнения без наборов; булево — только равно/не равно.
+    // Скаляры: даты/числа — сравнения без наборов; булево — равно/не равно
+    // плюс пара наличия: `false` — значение, «отметки нет» — `is_empty`
+    // (задача 2dd47944).
     assert.ok(filterProfileOperators('thoughts', 'property', 'date').includes('between'));
     assert.ok(!filterProfileOperators('thoughts', 'property', 'date').includes('all_of'));
     assert.ok(!filterProfileOperators('thoughts', 'property', 'number').includes('all_of'));
-    assert.deepEqual(filterProfileOperators('thoughts', 'property', 'bool'), ['eq', 'ne']);
+    assert.deepEqual(
+      filterProfileOperators('thoughts', 'property', 'bool'),
+      ['eq', 'ne', 'is_empty', 'not_empty'],
+    );
     // Свойство-ссылка: наборные («все в выборке») и «в иерархии».
     for (const op of ['in', 'not_in', 'any_of', 'all_of', 'none_of', 'in_hierarchy'] as const) {
       assert.ok(filterProfileOperators('thoughts', 'property', 'link').includes(op), `link: ${op}`);
