@@ -206,10 +206,15 @@ describe('футер отбора: имя, маркер ● и сохранен�
     });
     const root = handle.root as unknown as ShimElement;
     const actions = handle.actions as unknown as ShimElement;
+    // Свои кнопки места — отдельный ряд `.ff-place`: в компакте приклеены
+    // только «Применить»/«Очистить», поэтому ряд места редактор уводит в
+    // прокручиваемый низ (задача c20b26ef, круг доработки).
+    const place = handle.placeButtons as unknown as ShimElement;
     assert.equal(exactOne(root, 'ff-save'), null, 'стандартный набор отключён');
-    buttonByText(actions, 'Готово')!.emit('click', {});
+    buttonByText(place, 'Готово')!.emit('click', {});
     assert.equal(done, 1);
-    assert.ok(exactOne(actions, 'ff-extra--cancel') !== null, 'кнопки профиля помечены своим id');
+    assert.ok(exactOne(place, 'ff-extra--cancel') !== null, 'кнопки профиля помечены своим id');
+    assert.equal(exactOne(actions, 'ff-extra--cancel'), null, 'ряд места — не в полосе действий');
   });
 
   it('двухрядная компоновка: действия над отбором сверху, имя и сохранённые снизу', () => {
@@ -229,7 +234,11 @@ describe('футер отбора: имя, маркер ● и сохранен�
     // Верхний ряд — действия над текущим отбором и его результатами.
     assert.ok(exactOne(actions, 'ff-apply') !== null, '«Применить» — в верхнем ряду');
     assert.ok(exactOne(actions, 'ff-clear') !== null, '«Очистить» — в верхнем ряду');
-    assert.ok(exactOne(actions, 'ff-extra--commands') !== null, '«Команды ▾» — в верхнем ряду');
+    // «Команды ▾» — кнопка МЕСТА: свой ряд `.ff-place`, чтобы в компакте уехать
+    // в прокручиваемый низ (приклеены только «Применить»/«Очистить», c20b26ef).
+    const place = handle.placeButtons as unknown as ShimElement;
+    assert.equal(exactOne(actions, 'ff-extra--commands'), null, '«Команды ▾» — не в ряду действий');
+    assert.ok(exactOne(place, 'ff-extra--commands') !== null, '«Команды ▾» — в ряду места');
     assert.equal(exactOne(actions, 'ff-extra--saved'), null, 'кнопка сохранённых — не в верхнем ряду');
     // Нижний ряд — манипуляции с сохранёнными отборами: имя + «Сохранить» + «…».
     assert.ok(exactOne(nameRow, 'ff-name__input') !== null, 'поле имени — в нижнем ряду');
@@ -239,7 +248,7 @@ describe('футер отбора: имя, маркер ● и сохранен�
     assert.equal(savedPicked, 1, 'кнопка нижнего ряда кликабельна');
   });
 
-  it('кнопка нижнего ряда без строки имени не теряется — уходит в верхний ряд', () => {
+  it('кнопка нижнего ряда без строки имени не теряется — уходит в ряд места', () => {
     const { handle } = buildFooter({
       getName: undefined,
       setName: undefined,
@@ -247,8 +256,9 @@ describe('футер отбора: имя, маркер ● и сохранен�
     });
     const root = handle.root as unknown as ShimElement;
     const actions = handle.actions as unknown as ShimElement;
+    const place = handle.placeButtons as unknown as ShimElement;
     assert.equal(exactOne(root, 'ff-name'), null, 'строки имени нет — футер без имени');
-    assert.ok(exactOne(actions, 'ff-extra--saved') !== null, 'кнопка сохранена, не потеряна');
+    assert.ok(exactOne(place, 'ff-extra--saved') !== null, 'кнопка сохранена, не потеряна');
     assert.ok(exactOne(actions, 'ff-save') !== null, '«Сохранить» ушло в ряд действий');
   });
 

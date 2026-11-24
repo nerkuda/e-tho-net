@@ -453,6 +453,8 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   const foot = div(FILTER_EDITOR_FOOT_CLASS);
   /** Полоса действий (`.fe-actions`); появляется только при включённом футере. */
   let actionsBar: HTMLElement | null = null;
+  /** Ряд кнопок места `place: 'actions'`; место рендера зависит от порога. */
+  let placeButtons: HTMLElement | null = null;
   // Управление места НАД футером (над фразой-превью) — первым в низу редактора,
   // который при низкой высоте окна прокручивается вместе с деревом (ошибка
   // 609deba0 п.3; задача c20b26ef).
@@ -529,9 +531,15 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
     });
     foot.append(footer.root);
     // Ряд действий — в отдельную полосу под футером: при низкой высоте окна она
-    // единственная остаётся приклеенной (задача c20b26ef).
-    actionsBar = div(FILTER_EDITOR_ACTIONS_CLASS);
-    actionsBar.append(footer.actions);
+    // единственная остаётся приклеенной (задача c20b26ef). Полоса без кнопок не
+    // создаётся: у модальных мест (диалог отбора типа, рецепт публикации) ряд
+    // действий пуст, и пустая приклеенная полоса давала лишний шов (замечание
+    // верификации).
+    if (footer.actions.childElementCount > 0) {
+      actionsBar = div(FILTER_EDITOR_ACTIONS_CLASS);
+      actionsBar.append(footer.actions);
+    }
+    placeButtons = footer.placeButtons;
     // Фраза-превью — имена сущностей по id: при наполнении кэшей (участники,
     // имена мыслей) перерисовываем фразу, чтобы id не «застыл» (ошибка части 6,
     // п.7; ошибка d17a8bfd).
@@ -539,6 +547,29 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   }
   if (foot.children.length > 0) root.append(foot);
   if (actionsBar !== null) root.append(actionsBar);
+
+  // --- Место кнопок места и порог приклеивания (задача c20b26ef) -----------
+  // Постановка владельца: в компактном режиме приклеены ТОЛЬКО «Применить» и
+  // «Очистить», кнопки места остаются доступными в прокручиваемом низу. Порог
+  // — тот же, что у медиазапроса (`styles/filter-editor.css`): высота окна
+  // Electron равна высоте вьюпорта, поэтому класс раскладки берётся из того же
+  // медиазапроса, а не из JS-обсчёта размеров.
+  const compactQuery: MediaQueryList | null =
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(`(max-height: ${FILTER_EDITOR_COMPACT_MAX_HEIGHT}px)`)
+      : null;
+  const placeButtonsInCompact = (compact: boolean): void => {
+    if (placeButtons === null || placeButtons.childElementCount === 0) return;
+    if (compact || actionsBar === null) foot.append(placeButtons);
+    else actionsBar.append(placeButtons);
+  };
+  placeButtonsInCompact(compactQuery !== null && compactQuery.matches);
+  const onCompactChange = (event: MediaQueryListEvent): void => {
+    placeButtonsInCompact(event.matches);
+  };
+  if (compactQuery !== null && typeof compactQuery.addEventListener === 'function') {
+    compactQuery.addEventListener('change', onCompactChange);
+  }
 
   const refresh = (): void => {
     tree.rerender();
@@ -581,6 +612,9 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   };
 
   const destroy = (): void => {
+    if (compactQuery !== null && typeof compactQuery.removeEventListener === 'function') {
+      compactQuery.removeEventListener('change', onCompactChange);
+    }
     unsubscribeCatalogue?.();
     unsubscribeCatalogue = null;
     unsubscribePhraseRefresh?.();
