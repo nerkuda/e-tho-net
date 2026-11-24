@@ -118,6 +118,21 @@ function subscribePhraseRefresh(entry: { root: HTMLElement; refresh: () => void 
 export const FILTER_EDITOR_CLASS = 'fe';
 /** Полоса секции сортировки и футера (низ редактора). */
 export const FILTER_EDITOR_FOOT_CLASS = 'fe-foot';
+/**
+ * Полоса действий (`.fe-actions`): ряд `.ff-actions` живёт здесь отдельно от
+ * прочего футера. При высоте окна не выше {@link FILTER_EDITOR_COMPACT_MAX_HEIGHT}
+ * полоса — единственное, что остаётся приклеенным к низу; фраза, имя, кнопки
+ * места и секция сортировки прокручиваются вместе с деревом (задача c20b26ef).
+ */
+export const FILTER_EDITOR_ACTIONS_CLASS = 'fe-actions';
+/**
+ * Порог высоты окна для динамического приклеивания футера, px (задача c20b26ef).
+ * Высота окна Electron — это высота вьюпорта, поэтому порог выражен
+ * медиазапросом (`styles/filter-editor.css`) и раскладка переключается при
+ * ресайзе без перезапуска клиента. Литерал медиазапроса обязан совпадать со
+ * значением — это стережёт `client/tests/filter-editor-pinning.test.ts`.
+ */
+export const FILTER_EDITOR_COMPACT_MAX_HEIGHT = 1100;
 
 /**
  * Кнопки места применения: стандартный набор футера и/или свои. Модальные места
@@ -436,8 +451,11 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
   root.append(tree.root);
 
   const foot = div(FILTER_EDITOR_FOOT_CLASS);
-  // Управление места НАД футером (над фразой-превью) — первым в непрокручиваемом
-  // низу редактора (ошибка 609deba0 п.3).
+  /** Полоса действий (`.fe-actions`); появляется только при включённом футере. */
+  let actionsBar: HTMLElement | null = null;
+  // Управление места НАД футером (над фразой-превью) — первым в низу редактора,
+  // который при низкой высоте окна прокручивается вместе с деревом (ошибка
+  // 609deba0 п.3; задача c20b26ef).
   if (opts.aboveFooter !== undefined) foot.append(opts.aboveFooter);
 
   // Секция сортировки — отдельное поле модели (`state.sortKeys`), не узел AST.
@@ -510,12 +528,17 @@ export function buildFilterEditor(opts: FilterEditorOptions): FilterEditorHandle
       ...(opts.buttons?.standard !== undefined ? { standardButtons: opts.buttons.standard } : {}),
     });
     foot.append(footer.root);
+    // Ряд действий — в отдельную полосу под футером: при низкой высоте окна она
+    // единственная остаётся приклеенной (задача c20b26ef).
+    actionsBar = div(FILTER_EDITOR_ACTIONS_CLASS);
+    actionsBar.append(footer.actions);
     // Фраза-превью — имена сущностей по id: при наполнении кэшей (участники,
     // имена мыслей) перерисовываем фразу, чтобы id не «застыл» (ошибка части 6,
     // п.7; ошибка d17a8bfd).
     unsubscribePhraseRefresh = subscribePhraseRefresh({ root, refresh: () => footer?.refresh() });
   }
   if (foot.children.length > 0) root.append(foot);
+  if (actionsBar !== null) root.append(actionsBar);
 
   const refresh = (): void => {
     tree.rerender();
