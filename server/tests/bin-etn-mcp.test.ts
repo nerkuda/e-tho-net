@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+import { isEntryPoint } from '../src/bin/entry-point.js';
 import { isNativeLoadFailure, nativeLoadErrorMessage, runEtnMcp } from '../src/bin/etn-mcp.js';
 import {
   assertBundleTarget,
@@ -204,6 +205,7 @@ describe('стражи платформы etn-mcp', () => {
       // входа и его собственных импортов (до `../cli.js` дело не доходит).
       for (const relative of [
         'src/bin/etn-mcp.ts',
+        'src/bin/entry-point.ts',
         'src/bin/platform.ts',
         'src/bootstrap/personal-dir.ts',
       ]) {
@@ -428,3 +430,77 @@ describe(
     });
   },
 );
+
+/**
+ * Ошибка 06f03d71: точка входа сравнивалась по `path.resolve`, а ESM-загрузчик
+ * Node раскрывает символические ссылки в `import.meta.url`. Запуск через
+ * симлинк (macOS `/var/folders` во временном каталоге, npm-шим `.bin` на POSIX)
+ * молча ничего не делал: процесс выходил с кодом 0 без вывода, MCP-клиент видел
+ * `MCP error -32000: Connection closed`.
+ */
+describe('точка входа: распознавание через символическую ссылку в пути', () => {
+  /** Ссылка на каталог: на Windows — junction (не требует прав администратора). */
+  function linkDirectory(target: string, link: string): void {
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+
+  it('isEntryPoint: ссылка в пути не мешает, чужой файл — не точка входа', () => {
+    const root = tempDir('etn-entry-');
+    try {
+      const real = path.join(root, 'real');
+      fs.mkdirSync(real, { recursive: true });
+      fs.writeFileSync(path.join(real, 'entry.js'), '// entry\n');
+      const link = path.join(root, 'link');
+      linkDirectory(real, link);
+
+      const moduleFile = path.join(real, 'entry.js');
+      assert.equal(
+        isEntryPoint(path.join(link, 'entry.js'), moduleFile),
+        true,
+        'запуск через ссылку — та же точка входа',
+      );
+      assert.equal(isEntryPoint(moduleFile, moduleFile), true);
+      assert.equal(isEntryPoint(path.join(link, 'other.js'), moduleFile), false);
+      assert.equal(isEntryPoint(path.join(real, 'other.js'), moduleFile), false);
+      assert.equal(isEntryPoint(undefined, moduleFile), false);
+      assert.equal(isEntryPoint('', moduleFile), false);
+      assert.equal(
+        isEntryPoint('C:\\ETN\\ENTRY.JS', 'c:\\etn\\entry.js', 'win32'),
+        true,
+        'на Windows сравнение без учёта регистра',
+      );
+      assert.equal(
+        isEntryPoint('C:\\ETN\\ENTRY.JS', 'c:\\etn\\entry.js', 'linux'),
+        false,
+        'на POSIX регистр значим',
+      );
+    } finally {
+      removeDir(root);
+    }
+  });
+
+  it(
+    'bin через ссылку в пути исполняется, а не выходит молча',
+    { skip: !nativeAvailable() },
+    () => {
+      const root = tempDir('etn-entry-bin-');
+      try {
+        const link = path.join(root, 'linked-bin');
+        linkDirectory(path.join(SERVER_ROOT, 'src', 'bin'), link);
+        const run = spawnSync(
+          process.execPath,
+          ['--import', 'tsx', path.join(link, 'etn-mcp.ts'), '--help'],
+          { cwd: SERVER_ROOT, env: cleanEnv(path.join(root, 'home')), encoding: 'utf8' },
+        );
+        assert.equal(run.status, 0, run.stderr);
+        assert.match(
+          run.stdout,
+          /Usage: etn <command>/,
+          'обёртка обязана отработать: пустой вывод = точка входа не распознана',
+        );
+      } finally {
+        removeDir(root);
+      }
+    },
+  );
+});

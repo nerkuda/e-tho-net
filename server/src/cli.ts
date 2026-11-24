@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { BASE_LAYER_ID, filterProfileHasTime, type PublicationExportFormat } from '@etn/shared';
 
 import { ConfigError, loadConfig, type ServerConfig } from './config.js';
+import { isEntryPoint } from './bin/entry-point.js';
 import { bootstrapDataDir } from './bootstrap/data-dir.js';
 import { initializeFirstUser } from './bootstrap/first-user.js';
 import { logger } from './logger.js';
@@ -892,9 +893,7 @@ export async function main(opts: MainOptions = {}): Promise<number> {
 }
 
 // Run when invoked directly as the process entry point.
-const invokedScript = process.argv[1];
-const thisFile = fileURLToPath(import.meta.url);
-if (invokedScript === thisFile) {
+if (isEntryPoint(process.argv[1], fileURLToPath(import.meta.url))) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {

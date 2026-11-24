@@ -26,6 +26,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defaultDataDir } from '../bootstrap/personal-dir.js';
+import { isEntryPoint } from './entry-point.js';
 import {
   assertBundleTarget,
   assertSupportedHost,
@@ -180,11 +181,7 @@ export async function runEtnMcp(
 }
 
 /** Запуск как bin-файл (npm создаёт шим на этот файл). */
-const invoked = process.argv[1];
-if (
-  invoked !== undefined &&
-  path.resolve(invoked) === path.resolve(fileURLToPath(import.meta.url))
-) {
+if (isEntryPoint(process.argv[1], fileURLToPath(import.meta.url))) {
   runEtnMcp()
     .then((code) => process.exit(code))
     .catch((err: unknown) => {

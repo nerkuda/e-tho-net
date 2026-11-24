@@ -1304,11 +1304,27 @@ export async function dbToolMain(
   return 1;
 }
 
-/** Прямой запуск: инструмент из payload или `node dist/db/db-backup.js`. */
+/**
+ * Прямой запуск: инструмент из payload или `node dist/db/db-backup.js`.
+ *
+ * Сравнение — по реальным путям: ESM-загрузчик Node раскрывает символические
+ * ссылки в `import.meta.url`, но не в `process.argv[1]`, поэтому `path.resolve`
+ * не распознаёт запуск через симлинк (macOS `/var/folders`, junction в `%TEMP%`)
+ * и модуль молча ничего не делает (ошибка 06f03d71). Общий помощник
+ * `src/bin/entry-point.ts` сюда импортировать нельзя: файл обязан оставаться
+ * самодостаточным (см. шапку).
+ */
 const invokedScript = process.argv[1];
-if (invokedScript !== undefined) {
-  const invoked = path.resolve(invokedScript);
-  const self = path.resolve(fileURLToPath(import.meta.url));
+if (invokedScript !== undefined && invokedScript !== '') {
+  const realpathOrSelf = (file: string): string => {
+    try {
+      return fs.realpathSync(file);
+    } catch {
+      return path.resolve(file);
+    }
+  };
+  const invoked = realpathOrSelf(invokedScript);
+  const self = realpathOrSelf(fileURLToPath(import.meta.url));
   if (process.platform === 'win32' ? invoked.toLowerCase() === self.toLowerCase() : invoked === self) {
     dbToolMain()
       .then((code) => process.exit(code))

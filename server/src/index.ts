@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 
 import { ConfigError, loadConfig } from './config.js';
+import { isEntryPoint } from './bin/entry-point.js';
 import { SystemDb } from './db/system-db.js';
 import { closeReaderPool, configureReaderPool } from './db/reader-pool.js';
 import { closeWritePool, configureWritePool, drainWritePool } from './db/write-pool.js';
@@ -203,9 +204,7 @@ export async function startServer(env: NodeJS.ProcessEnv = process.env): Promise
 }
 
 // Run when invoked directly as the process entry point.
-const invokedScript = process.argv[1];
-const thisFile = fileURLToPath(import.meta.url);
-if (invokedScript === thisFile) {
+if (isEntryPoint(process.argv[1], fileURLToPath(import.meta.url))) {
   startServer().catch((err) => {
     logger.fatal({ err }, err instanceof Error ? err.message : String(err));
     process.exit(1);

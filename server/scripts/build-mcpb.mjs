@@ -31,9 +31,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-
 import {
   assertBundleContents,
   cleanEnv,
@@ -42,6 +39,7 @@ import {
   writeBundleMetadata,
   zipDirectory,
 } from './lib/mcpb-bundle.mjs';
+import { withBundleHandshake } from './lib/mcpb-smoke.mjs';
 import {
   assertBuildArtifacts,
   assertServerTree,
@@ -109,29 +107,28 @@ function hostTarget() {
 /**
  * MCP-рукопожатие с бандлом: `initialize` + `tools/list` + чтение инструмента.
  *
+ * Транспорт, stderr и диагностика смерти — в `lib/mcpb-smoke.mjs`: при отказе
+ * в лог сборки попадают код выхода/сигнал сервера и хвост его stderr
+ * (иначе сборка падала бы с одним «Connection closed», ошибка 06f03d71).
+ *
  * @returns {Promise<number>} число инструментов.
  */
 async function handshake(entryPoint, env, label) {
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [entryPoint],
-    env: { ...env },
-    stderr: 'pipe',
+  return withBundleHandshake({
+    entryPoint,
+    env,
+    label,
+    run: async (client) => {
+      const tools = await client.listTools();
+      const names = tools.tools.map((tool) => tool.name);
+      if (!names.includes('etn.guide')) {
+        fail(`${label}: в tools/list нет etn.guide (получено ${names.length} инструментов)`);
+      }
+      const guide = await client.callTool({ name: 'etn.guide', arguments: {} });
+      if (guide.isError === true) fail(`${label}: etn.guide вернул ошибку`);
+      return names.length;
+    },
   });
-  const client = new Client({ name: 'etn-mcpb-smoke', version: '1.0.0' }, { capabilities: {} });
-  try {
-    await client.connect(transport);
-    const tools = await client.listTools();
-    const names = tools.tools.map((tool) => tool.name);
-    if (!names.includes('etn.guide')) {
-      fail(`${label}: в tools/list нет etn.guide (получено ${names.length} инструментов)`);
-    }
-    const guide = await client.callTool({ name: 'etn.guide', arguments: {} });
-    if (guide.isError === true) fail(`${label}: etn.guide вернул ошибку`);
-    return names.length;
-  } finally {
-    await client.close();
-  }
 }
 
 /** Личный каталог бандла: та же логика, что в обёртке пакета. */
