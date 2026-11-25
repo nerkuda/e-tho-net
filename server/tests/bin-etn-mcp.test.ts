@@ -91,6 +91,44 @@ describe('стражи платформы etn-mcp', () => {
     );
   });
 
+  it('darwin и linux-фолбэк следуют за env.HOME (подставной HOME smoke-теста)', () => {
+    // macOS: путь строился от параметра homedir (os.homedir() вызывающего
+    // процесса) и игнорировал HOME, поэтому smoke бандла проверял реальный дом
+    // раннера, а не подставной каталог ребёнка (ошибка 40959532).
+    assert.equal(
+      defaultDataDir({ HOME: '/fake/home' }, 'darwin', '/Users/real'),
+      path.join('/fake/home', 'Library', 'Application Support', 'etn-mcp'),
+    );
+    assert.equal(
+      defaultDataDir({ HOME: '/fake/home' }, 'linux', '/home/real'),
+      path.join('/fake/home', '.local', 'share', 'etn-mcp'),
+    );
+    // XDG_DATA_HOME остаётся приоритетнее HOME.
+    assert.equal(
+      defaultDataDir({ HOME: '/fake/home', XDG_DATA_HOME: '/xdg' }, 'linux', '/home/real'),
+      path.join('/xdg', 'etn-mcp'),
+    );
+    // Пустой и пробельный HOME — прежний параметр homedir.
+    for (const home of [undefined, '', '   ']) {
+      const env: NodeJS.ProcessEnv = home === undefined ? {} : { HOME: home };
+      assert.equal(
+        defaultDataDir(env, 'darwin', '/Users/real'),
+        path.join('/Users/real', 'Library', 'Application Support', 'etn-mcp'),
+        `darwin без HOME (${JSON.stringify(home)}) — fallback на homedir`,
+      );
+      assert.equal(
+        defaultDataDir(env, 'linux', '/home/real'),
+        path.join('/home/real', '.local', 'share', 'etn-mcp'),
+        `linux без HOME (${JSON.stringify(home)}) — fallback на homedir`,
+      );
+    }
+    // Windows не меняется: LOCALAPPDATA, fallback — от параметра homedir.
+    assert.equal(
+      defaultDataDir({ HOME: '/fake/home' }, 'win32', 'C:\\Users\\u'),
+      path.join('C:\\Users\\u', 'AppData', 'Local', 'etn-mcp'),
+    );
+  });
+
   it('хост из матрицы проходит, идентификатор цели стабилен', () => {
     assert.equal(targetId('win32', 'x64'), 'win32-x64');
     assert.ok((SUPPORTED_TARGETS as readonly string[]).includes('win32-x64'));

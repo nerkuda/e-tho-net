@@ -19,30 +19,52 @@ import path from 'node:path';
 export const PERSONAL_DIR_NAME = 'etn-mcp';
 
 /**
+ * Домашний каталог по правилу POSIX: непустой `$HOME` процесса, иначе `null`.
+ *
+ * Подставной `$HOME` обязан побеждать `homedir`-параметр: smoke-тест бандла
+ * (`scripts/build-mcpb.mjs`) и проверка npm-пакета
+ * (`scripts/verify-npm-package.mjs`) запускают дочерний сервер с чужим `HOME`
+ * и тем же окружением считают ожидаемый путь (ошибка 40959532).
+ */
+function homeFromEnv(env: NodeJS.ProcessEnv): string | null {
+  const home = env.HOME?.trim();
+  return home !== undefined && home !== '' ? home : null;
+}
+
+/**
  * Абсолютный путь личного каталога данных для текущей платформы.
  *
  * - Windows: `%LOCALAPPDATA%\etn-mcp` (fallback — `%USERPROFILE%\AppData\Local`);
- * - macOS: `~/Library/Application Support/etn-mcp`;
- * - Linux/прочие: `${XDG_DATA_HOME:-~/.local/share}/etn-mcp`.
+ * - macOS: `$HOME/Library/Application Support/etn-mcp`;
+ * - Linux/прочие: `${XDG_DATA_HOME:-$HOME/.local/share}/etn-mcp`.
+ *
+ * На POSIX база пути — `HOME` **окружения** (как у `os.homedir()`), а параметр
+ * `homedir` — только запасной вариант для пустого/отсутствующего `HOME`: smoke
+ * бандла и проверка npm-пакета запускают дочерний сервер с подставным `HOME` и
+ * тем же окружением считают ожидаемый путь (ошибка 40959532 — на macOS путь
+ * строился от реального дома вызывающего процесса, и smoke проверял не тот
+ * каталог).
  *
  * @param env - окружение (для тестов и обёртки подменяется целиком).
  * @param platform - целевая платформа (`process.platform` по умолчанию).
- * @param homedir - домашний каталог (для тестов).
+ * @param homedir - домашний каталог-запасной вариант (для тестов).
  */
 export function defaultDataDir(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   homedir: string = os.homedir(),
 ): string {
-  const home = homedir;
   if (platform === 'win32') {
     const localAppData = env.LOCALAPPDATA?.trim();
     const base =
       localAppData !== undefined && localAppData !== ''
         ? localAppData
-        : path.join(home, 'AppData', 'Local');
+        : path.join(homedir, 'AppData', 'Local');
     return path.join(base, PERSONAL_DIR_NAME);
   }
+  // POSIX: база — HOME процесса (как у самого Node в `os.homedir()`), а
+  // homedir-параметр — только запасной вариант, когда HOME пуст.
+  const home = homeFromEnv(env) ?? homedir;
   if (platform === 'darwin') {
     return path.join(home, 'Library', 'Application Support', PERSONAL_DIR_NAME);
   }
